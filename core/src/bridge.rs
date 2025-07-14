@@ -10,6 +10,7 @@ use crate::models::WorkflowDefinition;
 use crate::job::Job;
 use crate::triggers::{TriggerManager, WebhookTrigger, ScheduleTrigger};
 use crate::trigger_executor::TriggerExecutor;
+use crate::dispatcher::Dispatcher;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -19,6 +20,7 @@ pub struct Bridge {
     state_manager: Arc<Mutex<StateManager>>,
     trigger_manager: Arc<Mutex<TriggerManager>>,
     trigger_executor: TriggerExecutor,
+    job_dispatcher: Arc<Mutex<Dispatcher>>,
 }
 
 impl Bridge {
@@ -26,13 +28,30 @@ impl Bridge {
     pub fn new(db_path: &str) -> CoreResult<Self> {
         let state_manager = Arc::new(Mutex::new(StateManager::new(db_path)?));
         let trigger_manager = Arc::new(Mutex::new(TriggerManager::new()));
-        let trigger_executor = TriggerExecutor::new(state_manager.clone(), trigger_manager.clone());
+        
+        // Create job dispatcher with default configuration
+        let dispatcher_config = crate::dispatcher::WorkerPoolConfig::default();
+        let job_dispatcher = Arc::new(Mutex::new(Dispatcher::new(dispatcher_config)));
+        
+        let trigger_executor = TriggerExecutor::new(
+            state_manager.clone(), 
+            trigger_manager.clone(),
+            job_dispatcher.clone()
+        );
         
         Ok(Bridge { 
             state_manager,
             trigger_manager,
             trigger_executor,
+            job_dispatcher,
         })
+    }
+
+    /// Create a dummy bridge for the dispatcher (temporary workaround)
+    fn create_dummy_bridge() -> CoreResult<Bridge> {
+        // This is a temporary workaround to create a bridge for the dispatcher
+        // In a real implementation, we'd need to handle this circular dependency properly
+        Bridge::new(":memory:")
     }
 
     /// Register a workflow from Node.js

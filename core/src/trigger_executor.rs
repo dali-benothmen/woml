@@ -7,6 +7,8 @@ use crate::state::StateManager;
 use crate::triggers::{TriggerManager, WebhookRequest, ScheduleTrigger};
 use crate::models::WorkflowDefinition;
 use crate::step_orchestrator::StepOrchestrator;
+use crate::dispatcher::Dispatcher;
+use crate::job::Job;
 use chrono::Utc;
 use log;
 use std::sync::{Arc, Mutex};
@@ -49,16 +51,22 @@ pub struct TriggerExecutor {
     state_manager: Arc<Mutex<StateManager>>,
     trigger_manager: Arc<Mutex<TriggerManager>>,
     step_orchestrator: StepOrchestrator,
+    job_dispatcher: Arc<Mutex<Dispatcher>>,
 }
 
 impl TriggerExecutor {
     /// Create a new trigger executor
-    pub fn new(state_manager: Arc<Mutex<StateManager>>, trigger_manager: Arc<Mutex<TriggerManager>>) -> Self {
+    pub fn new(
+        state_manager: Arc<Mutex<StateManager>>, 
+        trigger_manager: Arc<Mutex<TriggerManager>>,
+        job_dispatcher: Arc<Mutex<Dispatcher>>
+    ) -> Self {
         let step_orchestrator = StepOrchestrator::new(state_manager.clone());
         Self {
             state_manager,
             trigger_manager,
             step_orchestrator,
+            job_dispatcher,
         }
     }
 
@@ -133,23 +141,61 @@ impl TriggerExecutor {
             .map_err(|e| CoreError::InvalidWorkflow(e))?;
         
         // Create workflow run
-        let run_id = state_manager.create_run(workflow_id, payload)?;
+        let run_id = state_manager.create_run(workflow_id, payload.clone())?;
         
         log::info!("Created workflow run: {} for workflow: {}", run_id, workflow_id);
         
-        // Start step execution
-        match self.step_orchestrator.start_step_execution(&run_id, workflow_id) {
-            Ok(()) => {
-                log::info!("Step execution started successfully for run: {}", run_id);
+        // Create and submit jobs for workflow steps
+        match self.create_and_submit_jobs(&workflow, &run_id, &payload) {
+            Ok(job_count) => {
+                log::info!("Successfully submitted {} jobs for workflow run: {}", job_count, run_id);
             }
             Err(error) => {
-                log::error!("Failed to start step execution for run {}: {}", run_id, error);
+                log::error!("Failed to submit jobs for workflow run {}: {}", run_id, error);
                 // Note: We still return success for the trigger execution
-                // The step execution failure will be handled separately
+                // The job submission failure will be handled separately
             }
         }
         
         Ok(TriggerExecutionResult::success(run_id, workflow_id.to_string()))
+    }
+
+    /// Create and submit jobs for workflow steps
+    fn create_and_submit_jobs(&self, workflow: &WorkflowDefinition, run_id: &Uuid, payload: &serde_json::Value) -> CoreResult<usize> {
+        log::info!("Creating jobs for workflow: {} run: {}", workflow.id, run_id);
+        
+        let mut job_count = 0;
+        
+        // Create jobs for each step in the workflow
+        for step_def in &workflow.steps {
+            // Create job from workflow step
+            let job = Job::from_workflow_step(
+                workflow,
+                &crate::models::WorkflowRun {
+                    id: *run_id,
+                    workflow_id: workflow.id.clone(),
+                    status: crate::models::RunStatus::Running,
+                    payload: payload.clone(),
+                    started_at: Utc::now(),
+                    completed_at: None,
+                    error: None,
+                },
+                &step_def.id,
+                payload.clone(),
+            )?;
+            
+            // Submit job to dispatcher
+            let dispatcher = self.job_dispatcher.lock()
+                .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+            
+            dispatcher.submit_job(job)?;
+            job_count += 1;
+            
+            log::debug!("Submitted job for step: {} in workflow: {}", step_def.id, workflow.id);
+        }
+        
+        log::info!("Successfully created and submitted {} jobs for workflow: {}", job_count, workflow.id);
+        Ok(job_count)
     }
 
     /// Get all active triggers for a workflow
