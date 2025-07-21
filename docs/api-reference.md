@@ -59,22 +59,61 @@ Defines a new, isolated Workflow instance with its configuration, services, and 
 | `onSuccess` | `(ctx) => void` | Called when a run completes successfully                                 |
 | `onFailure` | `(ctx) => void` | Called when a run fails or times out. `ctx` contains an `error` property |
 
+#### Rate Limit Configuration
+
+The `rateLimit` option accepts an object with the following properties:
+
+| Property | Type     | Required | Description                                    |
+| -------- | -------- | -------- | ---------------------------------------------- |
+| `count`  | `number` | ✅       | Maximum number of executions allowed           |
+| `per`    | `string` | ✅       | Time period for the limit (e.g., '1m', '1h') |
+
+#### Secrets Configuration
+
+The `secrets` option allows you to configure secret management for the workflow:
+
+```typescript
+{
+  secrets: {
+    // Configuration for fetching secrets from a vault
+    // Implementation details depend on your secret management system
+  }
+}
+```
+
 #### Example
 
 ```typescript
 const orderWorkflow = cronflow.define({
   id: "v1-order-processor",
   name: "Order Processor",
-  tags: ["ecommerce", "finance"],
-  services: [stripeService, slackService], // Pre-configured services
+  description: "Processes incoming orders with payment validation",
+  tags: ["ecommerce", "finance", "critical"],
+  services: [stripeService, slackService, emailService], // Pre-configured services
   concurrency: 10,
   timeout: "5m",
+  rateLimit: {
+    count: 100,
+    per: "1h"
+  },
+  queue: "high-priority",
+  version: "v1.0.0",
+  secrets: {
+    // Secret management configuration
+  },
   hooks: {
+    onSuccess: (ctx) => {
+      console.log(`✅ Workflow ${ctx.run.id} completed successfully`);
+      ctx.services.slack.sendMessage(
+        "#success",
+        `Order processing completed for run ${ctx.run.id}`
+      );
+    },
     onFailure: (ctx) => {
-      console.error(`Run ${ctx.run.id} failed!`, ctx.error);
+      console.error(`❌ Run ${ctx.run.id} failed!`, ctx.error);
       ctx.services.slack.sendMessage(
         "#alerts",
-        `Order processing failed for run ${ctx.run.id}`
+        `Order processing failed for run ${ctx.run.id}: ${ctx.error?.message}`
       );
     },
   },

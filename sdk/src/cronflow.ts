@@ -192,16 +192,129 @@ export function define(
     throw new Error(`Workflow with ID '${options.id}' already exists`);
   }
 
-  // Validate services if provided
+  if (options.timeout !== undefined) {
+    if (typeof options.timeout === 'string') {
+      const timeoutRegex = /^(\d+)(s|m|h|d)$/;
+      if (!timeoutRegex.test(options.timeout)) {
+        throw new Error(
+          'Invalid timeout format. Use format like "5m", "1h", "30s"'
+        );
+      }
+    } else if (typeof options.timeout === 'number') {
+      if (options.timeout <= 0) {
+        throw new Error('Timeout must be a positive number');
+      }
+    } else {
+      throw new Error('Timeout must be a string or number');
+    }
+  }
+
+  if (options.concurrency !== undefined) {
+    if (!Number.isInteger(options.concurrency) || options.concurrency <= 0) {
+      throw new Error('Concurrency must be a positive integer');
+    }
+  }
+
+  if (options.rateLimit) {
+    if (
+      !options.rateLimit.count ||
+      !Number.isInteger(options.rateLimit.count) ||
+      options.rateLimit.count <= 0
+    ) {
+      throw new Error('Rate limit count must be a positive integer');
+    }
+
+    if (!options.rateLimit.per || typeof options.rateLimit.per !== 'string') {
+      throw new Error('Rate limit per must be a string (e.g., "1m", "1h")');
+    }
+
+    const rateLimitRegex = /^(\d+)(s|m|h|d)$/;
+    if (!rateLimitRegex.test(options.rateLimit.per)) {
+      throw new Error(
+        'Invalid rate limit time format. Use format like "1m", "1h"'
+      );
+    }
+  }
+
+  if (options.queue !== undefined) {
+    if (typeof options.queue !== 'string' || options.queue.trim() === '') {
+      throw new Error('Queue must be a non-empty string');
+    }
+  }
+
+  if (options.version !== undefined) {
+    if (typeof options.version !== 'string' || options.version.trim() === '') {
+      throw new Error('Version must be a non-empty string');
+    }
+
+    const versionRegex =
+      /^v?\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/;
+    if (!versionRegex.test(options.version)) {
+      console.warn(
+        `Warning: Version '${options.version}' may not follow semantic versioning format`
+      );
+    }
+  }
+
+  if (options.tags) {
+    if (!Array.isArray(options.tags)) {
+      throw new Error('Tags must be an array');
+    }
+    for (const tag of options.tags) {
+      if (typeof tag !== 'string' || tag.trim() === '') {
+        throw new Error('All tags must be non-empty strings');
+      }
+    }
+  }
+
   if (options.services) {
+    if (!Array.isArray(options.services)) {
+      throw new Error('Services must be an array');
+    }
     for (const service of options.services) {
       if (!service || typeof service !== 'object') {
         throw new Error('Invalid service provided to workflow definition');
       }
 
-      if (!service.id || !service.actions) {
-        throw new Error('Service must have id and actions properties');
+      if (!service.id || typeof service.id !== 'string') {
+        throw new Error('Service must have a valid id property');
       }
+
+      if (!service.actions || typeof service.actions !== 'object') {
+        throw new Error('Service must have actions property');
+      }
+
+      for (const [actionName, actionFn] of Object.entries(service.actions)) {
+        if (typeof actionFn !== 'function') {
+          throw new Error(`Service action '${actionName}' must be a function`);
+        }
+      }
+    }
+  }
+
+  if (options.hooks) {
+    if (typeof options.hooks !== 'object') {
+      throw new Error('Hooks must be an object');
+    }
+
+    if (
+      options.hooks.onSuccess !== undefined &&
+      typeof options.hooks.onSuccess !== 'function'
+    ) {
+      throw new Error('onSuccess hook must be a function');
+    }
+
+    if (
+      options.hooks.onFailure !== undefined &&
+      typeof options.hooks.onFailure !== 'function'
+    ) {
+      throw new Error('onFailure hook must be a function');
+    }
+  }
+
+  if (options.secrets !== undefined) {
+    if (typeof options.secrets !== 'object' || options.secrets === null) {
+      throw new Error('Secrets must be an object');
     }
   }
 
