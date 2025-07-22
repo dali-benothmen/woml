@@ -229,6 +229,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ⭐ Star us on GitHub if Cronflow helps you build better automation!
 
-[![GitHub stars](https://img.shields.io/github/stars/your-org/node-cronflow.svg?style=social)](https://github.com/dali-benothmen/cronflow)
+[![GitHub stars](https://img.shields.io/github/stars/your-org/node-cronflow.svg?style=social)]([https://github.com/dali-benothmen/cronflow])
 
 </div>
