@@ -3,10 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::error::CoreError;
 use crate::job::{Job, JobQueue, JobState};
-use crate::models::{StepResult, StepStatus};
+use crate::models::{StepResult, StepStatus, WorkflowDefinition, WorkflowRun, RunStatus};
+use crate::state::StateManager;
 use serde_json;
 
 /// Worker pool configuration
@@ -123,11 +125,12 @@ pub struct Dispatcher {
     completed_jobs: Arc<Mutex<Vec<String>>>,
     running_jobs: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     shutdown_flag: Arc<Mutex<bool>>,
+    state_manager: Arc<Mutex<StateManager>>, // Added for workflow state updates
 }
 
 impl Dispatcher {
     /// Create a new job dispatcher
-    pub fn new(config: WorkerPoolConfig) -> Self {
+    pub fn new(config: WorkerPoolConfig, state_manager: Arc<Mutex<StateManager>>) -> Self {
         Self {
             job_queue: Arc::new(Mutex::new(JobQueue::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -136,6 +139,7 @@ impl Dispatcher {
             completed_jobs: Arc::new(Mutex::new(Vec::new())),
             running_jobs: Arc::new(Mutex::new(HashMap::new())),
             shutdown_flag: Arc::new(Mutex::new(false)),
+            state_manager,
         }
     }
 
@@ -263,6 +267,7 @@ impl Dispatcher {
         let stats = Arc::clone(&self.stats);
         let completed_jobs = Arc::clone(&self.completed_jobs);
         let running_jobs = Arc::clone(&self.running_jobs);
+        let state_manager = Arc::clone(&self.state_manager);
         
         // Add worker to pool
         {
@@ -314,13 +319,23 @@ impl Dispatcher {
                     let result = Self::process_job(&mut job);
                     let processing_time = start_time.elapsed().as_millis() as u64;
                     
-                    // Update job with result
+                    // Update job with result and process it
                     let success = result.is_ok();
                     if let Ok(step_result) = result {
-                        let _ = job.complete(step_result);
+                        let _ = job.complete(step_result.clone());
+                        
+                        // Process the job result
+                        if let Err(e) = Self::process_job_result_internal(&state_manager, &job, &step_result) {
+                            log::error!("Failed to process job result for {}: {}", job.id, e);
+                        }
                     } else {
                         let error = result.err().unwrap().to_string();
-                        let _ = job.fail(error);
+                        let _ = job.fail(error.clone());
+                        
+                        // Handle job failure
+                        if let Err(e) = Self::handle_job_failure_internal(&state_manager, &mut job, &error) {
+                            log::error!("Failed to handle job failure for {}: {}", job.id, e);
+                        }
                     }
                     
                     // Update worker status
@@ -502,6 +517,338 @@ impl Dispatcher {
         
         Ok(())
     }
+
+    /// Process completed job results and update workflow state
+    pub fn process_job_result(&self, job: &Job, step_result: &StepResult) -> Result<(), CoreError> {
+        log::info!("Processing result for job: {} (step: {})", job.id, job.step_name);
+        
+        // Parse job ID to get workflow and run information
+        let (workflow_id, run_id, step_id) = Job::parse_job_id(&job.id)?;
+        let run_uuid = uuid::Uuid::parse_str(&run_id)
+            .map_err(|e| CoreError::Validation(format!("Invalid run ID: {}", e)))?;
+        
+        // Update workflow state
+        self.update_workflow_state(&workflow_id, &run_uuid, step_result)?;
+        
+        // Check if workflow is complete
+        self.check_workflow_completion(&workflow_id, &run_uuid)?;
+        
+        // Determine next steps to execute
+        self.determine_next_steps(&workflow_id, &run_uuid)?;
+        
+        log::info!("Successfully processed result for job: {}", job.id);
+        Ok(())
+    }
+
+    /// Update workflow state with step result
+    fn update_workflow_state(&self, workflow_id: &str, run_id: &uuid::Uuid, step_result: &StepResult) -> Result<(), CoreError> {
+        let mut state_manager = self.state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        // Save the step result
+        state_manager.save_step_result(run_id, step_result.clone())?;
+        
+        // Update run status to Running if it's still Pending
+        if let Some(run) = state_manager.get_run(run_id)? {
+            if run.status == RunStatus::Pending {
+                state_manager.update_run_status(run_id, RunStatus::Running)?;
+            }
+        }
+        
+        log::debug!("Updated workflow state for run: {} step: {}", run_id, step_result.step_id);
+        Ok(())
+    }
+
+    /// Check if workflow run is complete
+    fn check_workflow_completion(&self, workflow_id: &str, run_id: &Uuid) -> Result<(), CoreError> {
+        let mut state_manager = self.state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        // Get workflow definition
+        let workflow = state_manager.get_workflow(workflow_id)?
+            .ok_or_else(|| CoreError::WorkflowNotFound(workflow_id.to_string()))?;
+        
+        // Get completed steps
+        let completed_steps = state_manager.get_completed_steps(run_id)?;
+        
+        // Check if all steps are completed
+        let all_steps_completed = workflow.steps.iter().all(|step| {
+            completed_steps.iter().any(|result| result.step_id == step.id)
+        });
+        
+        if all_steps_completed {
+            // Check if any steps failed
+            let has_failures = completed_steps.iter().any(|result| {
+                matches!(result.status, StepStatus::Failed)
+            });
+            
+            let final_status = if has_failures {
+                RunStatus::Failed
+            } else {
+                RunStatus::Completed
+            };
+            
+            let error_message = if has_failures {
+                let failed_steps: Vec<_> = completed_steps.iter()
+                    .filter(|result| matches!(result.status, StepStatus::Failed))
+                    .map(|result| format!("{}: {}", result.step_id, result.error.as_deref().unwrap_or("Unknown error")))
+                    .collect();
+                Some(format!("Workflow failed: {}", failed_steps.join(", ")))
+            } else {
+                None
+            };
+            
+            state_manager.complete_run(run_id, final_status.clone(), error_message)?;
+            log::info!("Workflow run {} completed with status: {:?}", run_id, final_status);
+        }
+        
+        Ok(())
+    }
+
+    /// Determine next steps to execute based on dependencies
+    fn determine_next_steps(&self, workflow_id: &str, run_id: &uuid::Uuid) -> Result<(), CoreError> {
+        let state_manager = self.state_manager.lock()
+            .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+        
+        // Get workflow definition
+        let workflow = state_manager.get_workflow(workflow_id)?
+            .ok_or_else(|| CoreError::WorkflowNotFound(workflow_id.to_string()))?;
+        
+        // Get completed steps
+        let completed_steps = state_manager.get_completed_steps(run_id)?;
+        let completed_step_ids: Vec<_> = completed_steps.iter().map(|s| s.step_id.clone()).collect();
+        
+        // Find steps that are ready to execute
+        let ready_steps: Vec<_> = workflow.steps.iter()
+            .filter(|step| {
+                // Skip already completed steps
+                if completed_step_ids.contains(&step.id) {
+                    return false;
+                }
+                
+                // Check if all dependencies are satisfied
+                step.depends_on.iter().all(|dep_id| {
+                    completed_step_ids.contains(dep_id)
+                })
+            })
+            .collect();
+        
+        // For now, we'll just log the ready steps
+        // In a future implementation, we could create new jobs for these steps
+        if !ready_steps.is_empty() {
+            log::info!("Steps ready for execution in workflow {} run {}: {:?}", 
+                workflow_id, run_id, 
+                ready_steps.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+            );
+        }
+        
+        Ok(())
+    }
+
+    /// Handle job failure and retry logic
+    pub fn handle_job_failure(&self, job: &mut Job, error: &str) -> Result<(), CoreError> {
+        log::warn!("Handling failure for job: {} - {}", job.id, error);
+        
+        if job.can_retry() {
+            log::info!("Retrying job: {} (attempt {}/{})", 
+                job.id, job.metadata.attempt_count + 1, job.retry_config.max_attempts);
+            
+            job.retry()?;
+            
+            // Re-queue the job for retry
+            let mut queue = self.job_queue.lock()
+                .map_err(|_| CoreError::Internal("Failed to acquire queue lock".to_string()))?;
+            
+            // Remove from completed jobs if it was there
+            let mut completed = self.completed_jobs.lock()
+                .map_err(|_| CoreError::Internal("Failed to acquire completed jobs lock".to_string()))?;
+            completed.retain(|id| id != &job.id);
+            
+            // Re-enqueue the job
+            queue.enqueue(job.clone())?;
+            
+            log::info!("Job {} re-queued for retry", job.id);
+        } else {
+            log::error!("Job {} failed permanently after {} attempts", 
+                job.id, job.metadata.attempt_count);
+            
+            // Update workflow state with failure
+            let step_result = StepResult {
+                step_id: job.step_name.clone(),
+                status: StepStatus::Failed,
+                output: None,
+                error: Some(error.to_string()),
+                started_at: job.metadata.started_at.unwrap_or_else(Utc::now),
+                completed_at: Some(Utc::now()),
+                duration_ms: job.metadata.completed_at.and_then(|completed| {
+                    job.metadata.started_at.map(|started| {
+                        (completed - started).num_milliseconds() as u64
+                    })
+                }),
+            };
+            
+            self.process_job_result(job, &step_result)?;
+        }
+        
+        Ok(())
+    }
+
+    /// Get workflow run status
+    pub fn get_workflow_run_status(&self, run_id: &str) -> Result<Option<RunStatus>, CoreError> {
+        let run_uuid = uuid::Uuid::parse_str(run_id)
+            .map_err(|e| CoreError::Validation(format!("Invalid run ID: {}", e)))?;
+        
+        let state_manager = self.state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        if let Some(run) = state_manager.get_run(&run_uuid)? {
+            Ok(Some(run.status))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get completed steps for a workflow run
+    pub fn get_workflow_completed_steps(&self, run_id: &str) -> Result<Vec<StepResult>, CoreError> {
+        let run_uuid = uuid::Uuid::parse_str(run_id)
+            .map_err(|e| CoreError::Validation(format!("Invalid run ID: {}", e)))?;
+        
+        let state_manager = self.state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        state_manager.get_completed_steps(&run_uuid)
+    }
+
+    /// Internal method to process job result (for worker threads)
+    fn process_job_result_internal(
+        state_manager: &Arc<Mutex<StateManager>>, 
+        job: &Job, 
+        step_result: &StepResult
+    ) -> Result<(), CoreError> {
+        log::info!("Processing result for job: {} (step: {})", job.id, job.step_name);
+        
+        // Parse job ID to get workflow and run information
+        let (workflow_id, run_id, _step_id) = Job::parse_job_id(&job.id)?;
+        let run_uuid = uuid::Uuid::parse_str(&run_id)
+            .map_err(|e| CoreError::Validation(format!("Invalid run ID: {}", e)))?;
+        
+        let mut state_manager_guard = state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        // Save the step result
+        state_manager_guard.save_step_result(&run_uuid, step_result.clone())?;
+        
+        // Update run status to Running if it's still Pending
+        if let Some(run) = state_manager_guard.get_run(&run_uuid)? {
+            if run.status == RunStatus::Pending {
+                state_manager_guard.update_run_status(&run_uuid, RunStatus::Running)?;
+            }
+        }
+        
+        // Check if workflow is complete
+        Self::check_workflow_completion_internal(&mut state_manager_guard, &workflow_id, &run_uuid)?;
+        
+        log::debug!("Updated workflow state for run: {} step: {}", run_uuid, step_result.step_id);
+        Ok(())
+    }
+
+    /// Internal method to handle job failure (for worker threads)
+    fn handle_job_failure_internal(
+        state_manager: &Arc<Mutex<StateManager>>, 
+        job: &mut Job, 
+        error: &str
+    ) -> Result<(), CoreError> {
+        log::warn!("Handling failure for job: {} - {}", job.id, error);
+        
+        if job.can_retry() {
+            log::info!("Retrying job: {} (attempt {}/{})", 
+                job.id, job.metadata.attempt_count + 1, job.retry_config.max_attempts);
+            
+            job.retry()?;
+            // Note: Re-queuing is handled by the worker thread
+        } else {
+            log::error!("Job {} failed permanently after {} attempts", 
+                job.id, job.metadata.attempt_count);
+            
+            // Update workflow state with failure
+            let step_result = StepResult {
+                step_id: job.step_name.clone(),
+                status: StepStatus::Failed,
+                output: None,
+                error: Some(error.to_string()),
+                started_at: job.metadata.started_at.unwrap_or_else(Utc::now),
+                completed_at: Some(Utc::now()),
+                duration_ms: job.metadata.completed_at.and_then(|completed| {
+                    job.metadata.started_at.map(|started| {
+                        (completed - started).num_milliseconds() as u64
+                    })
+                }),
+            };
+            
+            let mut state_manager_guard = state_manager.lock()
+                .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+            
+            // Parse job ID to get workflow and run information
+            let (workflow_id, run_id, _step_id) = Job::parse_job_id(&job.id)?;
+            let run_uuid = uuid::Uuid::parse_str(&run_id)
+                .map_err(|e| CoreError::Validation(format!("Invalid run ID: {}", e)))?;
+            
+            // Save the step result
+            state_manager_guard.save_step_result(&run_uuid, step_result.clone())?;
+            
+            // Check if workflow is complete
+            Self::check_workflow_completion_internal(&mut state_manager_guard, &workflow_id, &run_uuid)?;
+        }
+        
+        Ok(())
+    }
+
+    /// Internal method to check workflow completion (for worker threads)
+    fn check_workflow_completion_internal(
+        state_manager: &mut StateManager, 
+        workflow_id: &str, 
+        run_id: &Uuid
+    ) -> Result<(), CoreError> {
+        // Get workflow definition
+        let workflow = state_manager.get_workflow(workflow_id)?
+            .ok_or_else(|| CoreError::WorkflowNotFound(workflow_id.to_string()))?;
+        
+        // Get completed steps
+        let completed_steps = state_manager.get_completed_steps(run_id)?;
+        
+        // Check if all steps are completed
+        let all_steps_completed = workflow.steps.iter().all(|step| {
+            completed_steps.iter().any(|result| result.step_id == step.id)
+        });
+        
+        if all_steps_completed {
+            // Check if any steps failed
+            let has_failures = completed_steps.iter().any(|result| {
+                matches!(result.status, StepStatus::Failed)
+            });
+            
+            let final_status = if has_failures {
+                RunStatus::Failed
+            } else {
+                RunStatus::Completed
+            };
+            
+            let error_message = if has_failures {
+                let failed_steps: Vec<_> = completed_steps.iter()
+                    .filter(|result| matches!(result.status, StepStatus::Failed))
+                    .map(|result| format!("{}: {}", result.step_id, result.error.as_deref().unwrap_or("Unknown error")))
+                    .collect();
+                Some(format!("Workflow failed: {}", failed_steps.join(", ")))
+            } else {
+                None
+            };
+            
+            state_manager.complete_run(run_id, final_status.clone(), error_message)?;
+            log::info!("Workflow run {} completed with status: {:?}", run_id, final_status);
+        }
+        
+        Ok(())
+    }
 }
 
 impl Drop for Dispatcher {
@@ -519,7 +866,8 @@ mod tests {
     #[test]
     fn test_dispatcher_creation() {
         let config = WorkerPoolConfig::default();
-        let dispatcher = Dispatcher::new(config);
+        let state_manager = Arc::new(Mutex::new(StateManager::new("test_dispatcher.db").unwrap()));
+        let dispatcher = Dispatcher::new(config, state_manager);
         
         assert_eq!(dispatcher.config.min_workers, 2);
         assert_eq!(dispatcher.config.max_workers, 10);
@@ -528,7 +876,8 @@ mod tests {
     #[test]
     fn test_job_submission() {
         let config = WorkerPoolConfig::default();
-        let dispatcher = Dispatcher::new(config);
+        let state_manager = Arc::new(Mutex::new(StateManager::new("test_dispatcher.db").unwrap()));
+        let dispatcher = Dispatcher::new(config, state_manager);
         
         let job = Job::new(
             "workflow-1".to_string(),
@@ -544,7 +893,8 @@ mod tests {
     #[test]
     fn test_dispatcher_stats() {
         let config = WorkerPoolConfig::default();
-        let dispatcher = Dispatcher::new(config);
+        let state_manager = Arc::new(Mutex::new(StateManager::new("test_dispatcher.db").unwrap()));
+        let dispatcher = Dispatcher::new(config, state_manager);
         
         let stats = dispatcher.get_stats().unwrap();
         assert_eq!(stats.total_jobs_processed, 0);

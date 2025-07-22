@@ -810,11 +810,17 @@ mod tests {
         assert_eq!(job.state, JobState::Retrying);
         assert_eq!(job.metadata.attempt_count, 1); // First retry attempt
 
+        // Start the retrying job
+        job.start().unwrap();
+        assert_eq!(job.state, JobState::Running);
+
         // Check retry limits
         job.fail("Test error".to_string()).unwrap();
         job.retry().unwrap();
+        job.start().unwrap();
         job.fail("Test error".to_string()).unwrap();
         job.retry().unwrap();
+        job.start().unwrap();
         job.fail("Test error".to_string()).unwrap();
 
         // Should not be able to retry anymore

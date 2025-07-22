@@ -29,9 +29,9 @@ impl Bridge {
         let state_manager = Arc::new(Mutex::new(StateManager::new(db_path)?));
         let trigger_manager = Arc::new(Mutex::new(TriggerManager::new()));
         
-        // Create job dispatcher with default configuration
+        // Create job dispatcher with default configuration and state manager
         let dispatcher_config = crate::dispatcher::WorkerPoolConfig::default();
-        let job_dispatcher = Arc::new(Mutex::new(Dispatcher::new(dispatcher_config)));
+        let job_dispatcher = Arc::new(Mutex::new(Dispatcher::new(dispatcher_config, state_manager.clone())));
         
         let trigger_executor = TriggerExecutor::new(
             state_manager.clone(), 
