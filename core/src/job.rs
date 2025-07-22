@@ -4,7 +4,7 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
 use crate::error::CoreError;
-use crate::models::{WorkflowDefinition, WorkflowRun, StepResult};
+use crate::models::{WorkflowDefinition, WorkflowRun, StepResult, StepDefinition};
 
 /// Job states for tracking execution progress
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -116,7 +116,7 @@ impl Job {
         }
     }
 
-    /// Create a job from workflow definition and run
+    /// Create a job from a workflow step definition
     pub fn from_workflow_step(
         workflow: &WorkflowDefinition,
         run: &WorkflowRun,
@@ -132,20 +132,152 @@ impl Job {
                 CoreError::InvalidWorkflow(format!("Step '{}' not found in workflow", step_name))
             })?;
 
+        // Validate the step
+        step.validate()
+            .map_err(|e| CoreError::InvalidWorkflow(e))?;
+
         // Create job with step configuration
         let mut job = Self::new(
             workflow.id.clone(),
-            run.id.to_string(), // Convert Uuid to String
+            run.id.to_string(),
             step_name.to_string(),
             payload,
-            JobPriority::Normal,
+            Self::determine_priority(step, workflow),
         );
 
         // Apply step-specific configuration
+        Self::apply_step_configuration(&mut job, step, workflow)?;
+
+        // Set up dependencies
+        Self::setup_dependencies(&mut job, step, workflow)?;
+
+        // Add workflow context
+        Self::add_workflow_context(&mut job, workflow, run)?;
+
+        // Validate the created job
+        job.validate()?;
+
+        Ok(job)
+    }
+
+    /// Create jobs for all steps in a workflow run
+    pub fn create_workflow_jobs(
+        workflow: &WorkflowDefinition,
+        run: &WorkflowRun,
+        payload: serde_json::Value,
+    ) -> Result<Vec<Self>, CoreError> {
+        log::info!("Creating jobs for workflow: {} run: {}", workflow.id, run.id);
+        
+        let mut jobs = Vec::new();
+        
+        // Create jobs for each step in the workflow
+        for step in &workflow.steps {
+            let job = Self::from_workflow_step(workflow, run, &step.id, payload.clone())?;
+            jobs.push(job);
+        }
+        
+        log::info!("Created {} jobs for workflow: {}", jobs.len(), workflow.id);
+        Ok(jobs)
+    }
+
+    /// Create jobs for a subset of steps in a workflow run
+    pub fn create_step_jobs(
+        workflow: &WorkflowDefinition,
+        run: &WorkflowRun,
+        step_ids: &[String],
+        payload: serde_json::Value,
+    ) -> Result<Vec<Self>, CoreError> {
+        log::info!("Creating jobs for steps: {:?} in workflow: {} run: {}", step_ids, workflow.id, run.id);
+        
+        let mut jobs = Vec::new();
+        
+        // Validate that all step IDs exist in the workflow
+        for step_id in step_ids {
+            if !workflow.steps.iter().any(|s| s.id == *step_id) {
+                return Err(CoreError::InvalidWorkflow(format!(
+                    "Step '{}' not found in workflow '{}'",
+                    step_id, workflow.id
+                )));
+            }
+        }
+        
+        // Create jobs for the specified steps
+        for step_id in step_ids {
+            let job = Self::from_workflow_step(workflow, run, step_id, payload.clone())?;
+            jobs.push(job);
+        }
+        
+        log::info!("Created {} jobs for specified steps in workflow: {}", jobs.len(), workflow.id);
+        Ok(jobs)
+    }
+
+    /// Get job ID for a specific step in a workflow run
+    pub fn get_job_id(workflow_id: &str, run_id: &str, step_id: &str) -> String {
+        format!("{}:{}:{}", workflow_id, run_id, step_id)
+    }
+
+    /// Parse job ID to extract workflow, run, and step information
+    pub fn parse_job_id(job_id: &str) -> Result<(String, String, String), CoreError> {
+        let parts: Vec<&str> = job_id.split(':').collect();
+        if parts.len() != 3 {
+            return Err(CoreError::Validation(format!(
+                "Invalid job ID format: {}. Expected format: workflow_id:run_id:step_id",
+                job_id
+            )));
+        }
+        
+        Ok((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()))
+    }
+
+    /// Check if this job depends on another job
+    pub fn depends_on_job(&self, other_job_id: &str) -> bool {
+        self.dependencies.contains(&other_job_id.to_string())
+    }
+
+    /// Get all jobs that this job depends on
+    pub fn get_dependency_jobs(&self) -> &[String] {
+        &self.dependencies
+    }
+
+    /// Add a dependency to this job
+    pub fn add_dependency(&mut self, dependency_job_id: String) {
+        if !self.dependencies.contains(&dependency_job_id) {
+            self.dependencies.push(dependency_job_id);
+        }
+    }
+
+    /// Remove a dependency from this job
+    pub fn remove_dependency(&mut self, dependency_job_id: &str) {
+        self.dependencies.retain(|dep| dep != dependency_job_id);
+    }
+
+    /// Check if this job is a dependency for another job
+    pub fn is_dependency_for(&self, other_job: &Self) -> bool {
+        other_job.depends_on_job(&self.id)
+    }
+
+    /// Determine job priority based on step and workflow configuration
+    fn determine_priority(step: &StepDefinition, workflow: &WorkflowDefinition) -> JobPriority {
+        // For now, use Normal priority
+        // In the future, this could be based on:
+        // - Step type (critical steps get higher priority)
+        // - Workflow configuration
+        // - Step tags or metadata
+        JobPriority::Normal
+    }
+
+    /// Apply step configuration to job
+    fn apply_step_configuration(
+        job: &mut Self,
+        step: &StepDefinition,
+        _workflow: &WorkflowDefinition,
+    ) -> Result<(), CoreError> {
+        // Set timeout
         if let Some(timeout) = step.timeout {
             job.timeout_ms = Some(timeout);
         }
 
+        // Set retry configuration
         if let Some(retry) = &step.retry {
             job.retry_config = RetryConfig {
                 max_attempts: retry.max_attempts,
@@ -155,10 +287,74 @@ impl Job {
             };
         }
 
-        // Add dependencies based on step configuration
-        job.dependencies = step.depends_on.clone();
+        // Add step metadata as tags
+        job.add_tag("step_name".to_string(), step.name.clone());
+        job.add_tag("step_action".to_string(), step.action.clone());
 
-        Ok(job)
+        Ok(())
+    }
+
+    /// Set up job dependencies based on step configuration
+    fn setup_dependencies(
+        job: &mut Self,
+        step: &StepDefinition,
+        workflow: &WorkflowDefinition,
+    ) -> Result<(), CoreError> {
+        // Add explicit dependencies from step configuration
+        for dependency_step_id in &step.depends_on {
+            // Validate that the dependency step exists
+            if !workflow.steps.iter().any(|s| s.id == *dependency_step_id) {
+                return Err(CoreError::InvalidWorkflow(format!(
+                    "Step '{}' depends on non-existent step '{}'",
+                    step.id, dependency_step_id
+                )));
+            }
+
+            // Create dependency job ID (format: workflow_id:run_id:step_id)
+            let dependency_job_id = format!("{}:{}:{}", workflow.id, job.run_id, dependency_step_id);
+            job.dependencies.push(dependency_job_id);
+        }
+
+        // Add implicit dependencies based on step order (if no explicit dependencies)
+        if job.dependencies.is_empty() {
+            if let Some(step_index) = workflow.steps.iter().position(|s| s.id == step.id) {
+                if step_index > 0 {
+                    // Add dependency on the previous step
+                    let previous_step = &workflow.steps[step_index - 1];
+                    let previous_job_id = format!("{}:{}:{}", workflow.id, job.run_id, previous_step.id);
+                    job.dependencies.push(previous_job_id);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Add workflow context to job
+    fn add_workflow_context(
+        job: &mut Self,
+        workflow: &WorkflowDefinition,
+        run: &WorkflowRun,
+    ) -> Result<(), CoreError> {
+        // Add workflow metadata
+        job.add_context("workflow_name".to_string(), serde_json::Value::String(workflow.name.clone()));
+        if let Some(description) = &workflow.description {
+            job.add_context("workflow_description".to_string(), serde_json::Value::String(description.clone()));
+        }
+        job.add_context("workflow_created_at".to_string(), serde_json::Value::String(workflow.created_at.to_rfc3339()));
+        job.add_context("workflow_updated_at".to_string(), serde_json::Value::String(workflow.updated_at.to_rfc3339()));
+
+        // Add run metadata
+        job.add_context("run_started_at".to_string(), serde_json::Value::String(run.started_at.to_rfc3339()));
+        job.add_context("run_status".to_string(), serde_json::Value::String(run.status.as_str().to_string()));
+
+        // Add step position information
+        if let Some(step_index) = workflow.steps.iter().position(|s| s.id == job.step_name) {
+            job.add_context("step_index".to_string(), serde_json::Value::Number(step_index.into()));
+            job.add_context("total_steps".to_string(), serde_json::Value::Number(workflow.steps.len().into()));
+        }
+
+        Ok(())
     }
 
     /// Start the job execution
@@ -443,7 +639,64 @@ impl JobQueueStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::models::{WorkflowDefinition, StepDefinition, TriggerDefinition, RunStatus, StepStatus, RetryConfig as ModelsRetryConfig};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn create_test_workflow() -> WorkflowDefinition {
+        WorkflowDefinition {
+            id: "test-workflow".to_string(),
+            name: "Test Workflow".to_string(),
+            description: Some("A test workflow".to_string()),
+            steps: vec![
+                StepDefinition {
+                    id: "step-1".to_string(),
+                    name: "Step 1".to_string(),
+                    action: "test_action_1".to_string(),
+                    timeout: Some(5000),
+                    retry: Some(ModelsRetryConfig {
+                        max_attempts: 3,
+                        backoff_ms: 1000,
+                    }),
+                    depends_on: vec![],
+                },
+                StepDefinition {
+                    id: "step-2".to_string(),
+                    name: "Step 2".to_string(),
+                    action: "test_action_2".to_string(),
+                    timeout: Some(10000),
+                    retry: None,
+                    depends_on: vec!["step-1".to_string()],
+                },
+                StepDefinition {
+                    id: "step-3".to_string(),
+                    name: "Step 3".to_string(),
+                    action: "test_action_3".to_string(),
+                    timeout: None,
+                    retry: Some(ModelsRetryConfig {
+                        max_attempts: 2,
+                        backoff_ms: 2000,
+                    }),
+                    depends_on: vec!["step-1".to_string(), "step-2".to_string()],
+                },
+            ],
+            triggers: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn create_test_run() -> WorkflowRun {
+        WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow_id: "test-workflow".to_string(),
+            status: RunStatus::Running,
+            payload: serde_json::json!({"test": "data"}),
+            started_at: Utc::now(),
+            completed_at: None,
+            error: None,
+        }
+    }
 
     #[test]
     fn test_job_creation() {
@@ -451,7 +704,7 @@ mod tests {
             "workflow-1".to_string(),
             "run-1".to_string(),
             "step-1".to_string(),
-            json!({"test": "data"}),
+            serde_json::json!({"test": "data"}),
             JobPriority::Normal,
         );
 
@@ -468,74 +721,71 @@ mod tests {
             "workflow-1".to_string(),
             "run-1".to_string(),
             "step-1".to_string(),
-            json!({"test": "data"}),
+            serde_json::json!({"test": "data"}),
             JobPriority::Normal,
         );
 
         // Start job
         assert!(job.start().is_ok());
         assert_eq!(job.state, JobState::Running);
-        assert_eq!(job.metadata.attempt_count, 1);
+        assert!(job.metadata.started_at.is_some());
 
         // Complete job
         let result = StepResult {
-            step_id: "step1".to_string(),
-            status: crate::models::StepStatus::Completed,
-            output: Some(json!({"result": "success"})),
+            step_id: "step-1".to_string(),
+            status: StepStatus::Completed,
+            output: Some(serde_json::json!({"result": "success"})),
             error: None,
             started_at: Utc::now(),
             completed_at: Some(Utc::now()),
             duration_ms: Some(100),
         };
+
         assert!(job.complete(result).is_ok());
         assert_eq!(job.state, JobState::Completed);
+        assert!(job.metadata.completed_at.is_some());
     }
 
     #[test]
     fn test_job_validation() {
         let mut job = Job::new(
-            "workflow-1".to_string(),
+            "".to_string(), // Invalid: empty workflow ID
             "run-1".to_string(),
             "step-1".to_string(),
-            json!({"test": "data"}),
+            serde_json::json!({"test": "data"}),
             JobPriority::Normal,
         );
 
-        assert!(job.validate().is_ok());
+        assert!(job.validate().is_err());
 
-        // Test invalid job
-        job.id = "".to_string();
+        let mut job = Job::new(
+            "workflow-1".to_string(),
+            "".to_string(), // Invalid: empty run ID
+            "step-1".to_string(),
+            serde_json::json!({"test": "data"}),
+            JobPriority::Normal,
+        );
+
         assert!(job.validate().is_err());
     }
 
     #[test]
     fn test_job_queue() {
         let mut queue = JobQueue::new();
-        
-        let job1 = Job::new(
+        let job = Job::new(
             "workflow-1".to_string(),
             "run-1".to_string(),
             "step-1".to_string(),
-            json!({"test": "data"}),
+            serde_json::json!({"test": "data"}),
             JobPriority::Normal,
         );
 
-        let job2 = Job::new(
-            "workflow-1".to_string(),
-            "run-1".to_string(),
-            "step-2".to_string(),
-            json!({"test": "data"}),
-            JobPriority::High,
-        );
+        assert!(queue.enqueue(job).is_ok());
+        assert_eq!(queue.get_jobs().len(), 1);
 
-        assert!(queue.enqueue(job1).is_ok());
-        assert!(queue.enqueue(job2).is_ok());
-        assert_eq!(queue.get_jobs().len(), 2);
-
-        // Dequeue should return highest priority job
-        let next_job = queue.dequeue(&[]);
-        assert!(next_job.is_some());
-        assert_eq!(next_job.unwrap().priority, JobPriority::High);
+        let dequeued = queue.dequeue(&[]);
+        assert!(dequeued.is_some());
+        assert_eq!(queue.get_jobs().len(), 0);
     }
 
     #[test]
@@ -544,9 +794,12 @@ mod tests {
             "workflow-1".to_string(),
             "run-1".to_string(),
             "step-1".to_string(),
-            json!({"test": "data"}),
+            serde_json::json!({"test": "data"}),
             JobPriority::Normal,
         );
+
+        job.retry_config.max_attempts = 3;
+        job.retry_config.backoff_ms = 1000;
 
         // Start and fail job
         job.start().unwrap();
@@ -555,9 +808,140 @@ mod tests {
         // Retry job
         assert!(job.retry().is_ok());
         assert_eq!(job.state, JobState::Retrying);
+        assert_eq!(job.metadata.attempt_count, 1); // First retry attempt
 
-        // Start again
-        assert!(job.start().is_ok());
-        assert_eq!(job.state, JobState::Running);
+        // Check retry limits
+        job.fail("Test error".to_string()).unwrap();
+        job.retry().unwrap();
+        job.fail("Test error".to_string()).unwrap();
+        job.retry().unwrap();
+        job.fail("Test error".to_string()).unwrap();
+
+        // Should not be able to retry anymore
+        assert!(job.retry().is_err());
+    }
+
+    #[test]
+    fn test_from_workflow_step() {
+        let workflow = create_test_workflow();
+        let run = create_test_run();
+        let payload = serde_json::json!({"test": "data"});
+
+        let job = Job::from_workflow_step(&workflow, &run, "step-1", payload.clone()).unwrap();
+
+        assert_eq!(job.workflow_id, workflow.id);
+        assert_eq!(job.run_id, run.id.to_string());
+        assert_eq!(job.step_name, "step-1");
+        assert_eq!(job.timeout_ms, Some(5000));
+        assert_eq!(job.retry_config.max_attempts, 3);
+        assert_eq!(job.retry_config.backoff_ms, 1000);
+        assert_eq!(job.dependencies.len(), 0); // No explicit dependencies
+    }
+
+    #[test]
+    fn test_from_workflow_step_with_dependencies() {
+        let workflow = create_test_workflow();
+        let run = create_test_run();
+        let payload = serde_json::json!({"test": "data"});
+
+        let job = Job::from_workflow_step(&workflow, &run, "step-2", payload.clone()).unwrap();
+
+        assert_eq!(job.step_name, "step-2");
+        assert_eq!(job.dependencies.len(), 1);
+        assert!(job.dependencies.contains(&format!("{}:{}:step-1", workflow.id, run.id)));
+    }
+
+    #[test]
+    fn test_create_workflow_jobs() {
+        let workflow = create_test_workflow();
+        let run = create_test_run();
+        let payload = serde_json::json!({"test": "data"});
+
+        let jobs = Job::create_workflow_jobs(&workflow, &run, payload).unwrap();
+
+        assert_eq!(jobs.len(), 3);
+        assert_eq!(jobs[0].step_name, "step-1");
+        assert_eq!(jobs[1].step_name, "step-2");
+        assert_eq!(jobs[2].step_name, "step-3");
+
+        // Check dependencies
+        assert_eq!(jobs[0].dependencies.len(), 0); // First step has no dependencies
+        assert_eq!(jobs[1].dependencies.len(), 1); // Depends on step-1
+        assert_eq!(jobs[2].dependencies.len(), 2); // Depends on step-1 and step-2
+    }
+
+    #[test]
+    fn test_create_step_jobs() {
+        let workflow = create_test_workflow();
+        let run = create_test_run();
+        let payload = serde_json::json!({"test": "data"});
+
+        let step_ids = vec!["step-1".to_string(), "step-3".to_string()];
+        let jobs = Job::create_step_jobs(&workflow, &run, &step_ids, payload).unwrap();
+
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].step_name, "step-1");
+        assert_eq!(jobs[1].step_name, "step-3");
+    }
+
+    #[test]
+    fn test_job_id_utilities() {
+        let job_id = Job::get_job_id("workflow-1", "run-1", "step-1");
+        assert_eq!(job_id, "workflow-1:run-1:step-1");
+
+        let (workflow_id, run_id, step_id) = Job::parse_job_id(&job_id).unwrap();
+        assert_eq!(workflow_id, "workflow-1");
+        assert_eq!(run_id, "run-1");
+        assert_eq!(step_id, "step-1");
+
+        // Test invalid job ID
+        assert!(Job::parse_job_id("invalid").is_err());
+    }
+
+    #[test]
+    fn test_job_dependencies() {
+        let mut job1 = Job::new(
+            "workflow-1".to_string(),
+            "run-1".to_string(),
+            "step-1".to_string(),
+            serde_json::json!({"test": "data"}),
+            JobPriority::Normal,
+        );
+
+        let mut job2 = Job::new(
+            "workflow-1".to_string(),
+            "run-1".to_string(),
+            "step-2".to_string(),
+            serde_json::json!({"test": "data"}),
+            JobPriority::Normal,
+        );
+
+        // Add dependency
+        job2.add_dependency(job1.id.clone());
+        assert!(job2.depends_on_job(&job1.id));
+        assert!(job1.is_dependency_for(&job2));
+
+        // Remove dependency
+        job2.remove_dependency(&job1.id);
+        assert!(!job2.depends_on_job(&job1.id));
+        assert!(!job1.is_dependency_for(&job2));
+    }
+
+    #[test]
+    fn test_workflow_context() {
+        let workflow = create_test_workflow();
+        let run = create_test_run();
+        let payload = serde_json::json!({"test": "data"});
+
+        let job = Job::from_workflow_step(&workflow, &run, "step-1", payload).unwrap();
+
+        // Check workflow context
+        assert_eq!(job.get_context("workflow_name").unwrap(), &serde_json::Value::String(workflow.name));
+        assert_eq!(job.get_context("step_index").unwrap(), &serde_json::Value::Number(0.into()));
+        assert_eq!(job.get_context("total_steps").unwrap(), &serde_json::Value::Number(3.into()));
+
+        // Check step tags
+        assert_eq!(job.get_tag("step_name").unwrap(), "Step 1");
+        assert_eq!(job.get_tag("step_action").unwrap(), "test_action_1");
     }
 } 

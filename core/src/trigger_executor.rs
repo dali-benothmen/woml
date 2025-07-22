@@ -164,34 +164,30 @@ impl TriggerExecutor {
     fn create_and_submit_jobs(&self, workflow: &WorkflowDefinition, run_id: &Uuid, payload: &serde_json::Value) -> CoreResult<usize> {
         log::info!("Creating jobs for workflow: {} run: {}", workflow.id, run_id);
         
-        let mut job_count = 0;
+        // Create a workflow run object for job creation
+        let run = crate::models::WorkflowRun {
+            id: *run_id,
+            workflow_id: workflow.id.clone(),
+            status: crate::models::RunStatus::Running,
+            payload: payload.clone(),
+            started_at: Utc::now(),
+            completed_at: None,
+            error: None,
+        };
         
-        // Create jobs for each step in the workflow
-        for step_def in &workflow.steps {
-            // Create job from workflow step
-            let job = Job::from_workflow_step(
-                workflow,
-                &crate::models::WorkflowRun {
-                    id: *run_id,
-                    workflow_id: workflow.id.clone(),
-                    status: crate::models::RunStatus::Running,
-                    payload: payload.clone(),
-                    started_at: Utc::now(),
-                    completed_at: None,
-                    error: None,
-                },
-                &step_def.id,
-                payload.clone(),
-            )?;
-            
-            // Submit job to dispatcher
-            let dispatcher = self.job_dispatcher.lock()
-                .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
-            
+        // Create all jobs for the workflow using the new method
+        let jobs = Job::create_workflow_jobs(workflow, &run, payload.clone())?;
+        
+        // Submit all jobs to the dispatcher
+        let dispatcher = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        
+        let job_count = jobs.len();
+        for job in jobs {
+            let job_id = job.id.clone();
+            let step_name = job.step_name.clone();
             dispatcher.submit_job(job)?;
-            job_count += 1;
-            
-            log::debug!("Submitted job for step: {} in workflow: {}", step_def.id, workflow.id);
+            log::debug!("Submitted job: {} for step: {}", job_id, step_name);
         }
         
         log::info!("Successfully created and submitted {} jobs for workflow: {}", job_count, workflow.id);

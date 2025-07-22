@@ -516,10 +516,6 @@ mod tests {
     use crate::job::{Job, JobPriority};
     use serde_json::json;
 
-    fn create_test_bridge() -> Bridge {
-        Bridge::new("test_dispatcher.db").expect("Failed to create test bridge")
-    }
-
     #[test]
     fn test_dispatcher_creation() {
         let config = WorkerPoolConfig::default();
