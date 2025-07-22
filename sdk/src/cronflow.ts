@@ -22,6 +22,15 @@ interface CronflowState {
   webhookServer?: http.Server;
 }
 
+interface StepHandler {
+  workflowId: string;
+  stepId: string;
+  handler: (ctx: Context) => any | Promise<any>;
+  type: 'step' | 'action';
+}
+
+let stepRegistry: Map<string, StepHandler> = new Map();
+
 let state: CronflowState = {
   workflows: new Map(),
   engineState: 'STOPPED',
@@ -34,6 +43,30 @@ function getCurrentState(): CronflowState {
 
 function setState(newState: Partial<CronflowState>): void {
   state = { ...state, ...newState };
+}
+
+function registerStepHandler(
+  workflowId: string,
+  stepId: string,
+  handler: (ctx: Context) => any | Promise<any>,
+  type: 'step' | 'action'
+): void {
+  const key = `${workflowId}:${stepId}`;
+  stepRegistry.set(key, {
+    workflowId,
+    stepId,
+    handler,
+    type,
+  });
+  console.log(`📝 Registered step handler: ${key} (${type})`);
+}
+
+function getStepHandler(
+  workflowId: string,
+  stepId: string
+): StepHandler | undefined {
+  const key = `${workflowId}:${stepId}`;
+  return stepRegistry.get(key);
 }
 
 function initialize(dbPath?: string): void {
@@ -338,6 +371,14 @@ export function define(
     stop,
     trigger,
     inspect,
+    registerStepHandler: (
+      workflowId: string,
+      stepId: string,
+      handler: (ctx: Context) => any | Promise<any>,
+      type: 'step' | 'action'
+    ) => {
+      registerStepHandler(workflowId, stepId, handler, type);
+    },
   });
 }
 
@@ -676,27 +717,84 @@ export async function executeStepFunction(
   }
 
   try {
-    const result = core.executeStep(
-      runId,
-      stepName,
-      getCurrentState().dbPath,
-      contextJson
+    const stepHandler = getStepHandler(workflowId, stepName);
+
+    if (!stepHandler) {
+      throw new Error(`Step handler not found: ${workflowId}:${stepName}`);
+    }
+
+    const contextData = JSON.parse(contextJson);
+
+    const ctx: Context = {
+      payload: contextData.payload || {},
+      steps: contextData.steps || {},
+      services: contextData.services || {},
+      run: {
+        id: contextData.run_id,
+        workflowId: contextData.workflow_id,
+      },
+      state: {
+        get: async (key: string, defaultValue?: any) => {
+          return await getWorkflowState(workflowId, key, defaultValue);
+        },
+        set: async (key: string, value: any, options?: { ttl?: string }) => {
+          return await setWorkflowState(workflowId, key, value, options);
+        },
+        incr: async (key: string, amount: number = 1) => {
+          return await incrWorkflowState(workflowId, key, amount);
+        },
+      },
+      last: null,
+      trigger: {
+        headers: {},
+        rawBody: undefined,
+      },
+      cancel: (reason?: string) => {
+        throw new Error(
+          `Workflow cancelled: ${reason || 'No reason provided'}`
+        );
+      },
+    };
+
+    const startTime = Date.now();
+    const result = await stepHandler.handler(ctx);
+    const duration = Date.now() - startTime;
+
+    console.log(
+      `✅ Step function executed successfully: ${workflowId}:${stepName} (${duration}ms)`
     );
 
-    if (result.success && result.result) {
-      console.log(
-        `✅ Step function ${stepName} executed successfully for workflow ${workflowId} run ${runId}`
-      );
-      return JSON.parse(result.result);
-    } else {
-      throw new Error(`Failed to execute step function: ${result.message}`);
-    }
+    return {
+      success: true,
+      result: {
+        step_name: stepName,
+        workflow_id: workflowId,
+        run_id: runId,
+        status: 'completed',
+        output: result,
+        duration_ms: duration,
+        message: 'Step function executed successfully',
+      },
+      message: 'Step function executed successfully',
+    };
   } catch (error) {
     console.error(
-      `❌ Failed to execute step function ${stepName} for workflow ${workflowId} run ${runId}:`,
+      `❌ Step function execution failed: ${workflowId}:${stepName}`,
       error
     );
-    throw error;
+
+    return {
+      success: false,
+      result: {
+        step_name: stepName,
+        workflow_id: workflowId,
+        run_id: runId,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        message: 'Step function execution failed',
+      },
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

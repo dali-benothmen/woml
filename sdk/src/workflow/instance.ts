@@ -59,6 +59,15 @@ export class WorkflowInstance {
     this._currentStep = step;
     this._stepStack.push(step);
 
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        name,
+        handlerFn,
+        'step'
+      );
+    }
+
     return this;
   }
 
@@ -78,6 +87,15 @@ export class WorkflowInstance {
     this._workflow.steps.push(step);
     this._currentStep = step;
     this._stepStack.push(step);
+
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        name,
+        handlerFn,
+        'action'
+      );
+    }
 
     return this;
   }
