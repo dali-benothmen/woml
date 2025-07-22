@@ -240,6 +240,7 @@ impl WorkflowRun {
 
 /// Run status enumeration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum RunStatus {
     Pending,
     Running,
@@ -320,6 +321,7 @@ impl StepResult {
 
 /// Step status enumeration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum StepStatus {
     Pending,
     Running,

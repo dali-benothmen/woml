@@ -41,6 +41,10 @@ export const cronflow = {
 
   publishEvent: cronflowFunctions.publishEvent,
 
+  executeStep: cronflowFunctions.executeStep,
+  executeStepFunction: cronflowFunctions.executeStepFunction,
+  executeJobFunction: cronflowFunctions.executeJobFunction,
+
   // State management functions
   getGlobalState: cronflowFunctions.getGlobalState,
   setGlobalState: cronflowFunctions.setGlobalState,
@@ -69,3 +73,5 @@ export * from './workflow';
 export * from './state';
 
 export * from './testing';
+
+export { createValidContext } from './cronflow';

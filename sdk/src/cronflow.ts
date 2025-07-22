@@ -553,18 +553,17 @@ export async function trigger(
     const payloadJson = JSON.stringify(payload);
     const result = core.createRun(workflowId, payloadJson, currentState.dbPath);
 
-    if (result.success && result.run_id) {
+    if (result.success && result.runId) {
       console.log(
-        `✅ Workflow triggered successfully: ${workflowId} -> ${result.run_id}`
+        `✅ Workflow triggered successfully: ${workflowId} -> ${result.runId}`
       );
-      return result.run_id;
-    } else if (result.success && result.message) {
+      return result.runId;
+    } else if (result.success) {
       console.log(
-        `✅ Workflow triggered successfully: ${workflowId} -> ${result.message}`
+        `⚠️  Workflow triggered but no runId returned: ${workflowId} -> ${result.message}`
       );
-      return result.message.includes('Run created successfully')
-        ? `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-        : result.message;
+      // Fallback to generating a run ID if none was returned
+      return `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     } else {
       throw new Error(`Failed to trigger workflow: ${result.message}`);
     }
@@ -609,6 +608,135 @@ export async function cancelRun(runId: string): Promise<void> {
 export async function publishEvent(name: string, payload: any): Promise<void> {
   console.log(`Publishing event: ${name}`, payload);
   // TODO: Implement event publishing
+}
+
+export async function executeStep(
+  runId: string,
+  stepId: string,
+  contextJson?: string
+): Promise<any> {
+  if (!core) {
+    console.log(`⚠️  Simulation: Executing step ${stepId} for run ${runId}`);
+    return {
+      success: true,
+      result: {
+        run_id: runId,
+        step_id: stepId,
+        status: 'simulation',
+        message: 'Step executed in simulation mode',
+      },
+      message: 'Step executed successfully in simulation mode',
+    };
+  }
+
+  try {
+    const result = core.executeStep(
+      runId,
+      stepId,
+      getCurrentState().dbPath,
+      contextJson || ''
+    );
+
+    if (result.success && result.result) {
+      console.log(`✅ Step ${stepId} executed successfully for run ${runId}`);
+      return JSON.parse(result.result);
+    } else {
+      throw new Error(`Failed to execute step: ${result.message}`);
+    }
+  } catch (error) {
+    console.error(
+      `❌ Failed to execute step ${stepId} for run ${runId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+export async function executeStepFunction(
+  stepName: string,
+  contextJson: string,
+  workflowId: string,
+  runId: string
+): Promise<any> {
+  if (!core) {
+    console.log(
+      `⚠️  Simulation: Executing step function ${stepName} for workflow ${workflowId} run ${runId}`
+    );
+    return {
+      success: true,
+      result: {
+        step_name: stepName,
+        workflow_id: workflowId,
+        run_id: runId,
+        status: 'simulation',
+        message: 'Step function executed in simulation mode',
+      },
+      message: 'Step function executed successfully in simulation mode',
+    };
+  }
+
+  try {
+    const result = core.executeStep(
+      runId,
+      stepName,
+      getCurrentState().dbPath,
+      contextJson
+    );
+
+    if (result.success && result.result) {
+      console.log(
+        `✅ Step function ${stepName} executed successfully for workflow ${workflowId} run ${runId}`
+      );
+      return JSON.parse(result.result);
+    } else {
+      throw new Error(`Failed to execute step function: ${result.message}`);
+    }
+  } catch (error) {
+    console.error(
+      `❌ Failed to execute step function ${stepName} for workflow ${workflowId} run ${runId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+export async function executeJobFunction(
+  jobJson: string,
+  servicesJson: string
+): Promise<any> {
+  if (!core) {
+    console.log(`⚠️  Simulation: Executing job function with job: ${jobJson}`);
+    return {
+      success: true,
+      job_id: 'simulation-job-id',
+      run_id: 'simulation-run-id',
+      step_id: 'simulation-step-id',
+      context: servicesJson,
+      result: {
+        status: 'simulation',
+        message: 'Job function executed in simulation mode',
+      },
+      message: 'Job function executed successfully in simulation mode',
+    };
+  }
+
+  try {
+    const result = core.executeJobFunction(
+      jobJson,
+      servicesJson,
+      getCurrentState().dbPath
+    );
+
+    if (result.success && result.result) {
+      console.log(`✅ Job function executed successfully`);
+      return JSON.parse(result.result);
+    } else {
+      throw new Error(`Failed to execute job function: ${result.message}`);
+    }
+  } catch (error) {
+    console.error(`❌ Failed to execute job function:`, error);
+    throw error;
+  }
 }
 
 export function getWorkflows(): WorkflowDefinition[] {
@@ -995,6 +1123,49 @@ export async function getScheduleTriggers(): Promise<any> {
     console.error(`❌ Failed to get schedule triggers:`, error);
     throw error;
   }
+}
+
+export function createValidContext(
+  runId: string,
+  workflowId: string,
+  stepName: string,
+  payload: any = {},
+  steps: Record<string, any> = {},
+  services: Record<string, any> = {},
+  stepIndex: number = 0,
+  totalSteps: number = 1
+): string {
+  const validRunId = runId.includes('-')
+    ? runId
+    : `${runId.slice(0, 8)}-${runId.slice(8, 12)}-${runId.slice(12, 16)}-${runId.slice(16, 20)}-${runId.slice(20, 32)}`;
+
+  const context = {
+    run_id: validRunId,
+    workflow_id: workflowId,
+    step_name: stepName,
+    payload: payload,
+    steps: {}, // Empty object for now - StepResult requires complex structure
+    services: services,
+    run: {
+      id: validRunId,
+      workflow_id: workflowId,
+      status: 'Running',
+      payload: payload,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      error: null,
+    },
+    metadata: {
+      created_at: new Date().toISOString(),
+      step_index: stepIndex,
+      total_steps: totalSteps,
+      timeout: null,
+      retry_count: 0,
+      max_retries: 3,
+    },
+  };
+
+  return JSON.stringify(context);
 }
 
 initialize();

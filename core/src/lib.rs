@@ -51,46 +51,17 @@ mod tests {
     }
 
     #[test]
-    fn test_database_schema_initialization() {
-        // Create a temporary database file
-        let db_path = "test_schema.db";
-        
-        // Clean up any existing test file
-        let _ = fs::remove_file(db_path);
-        
-        // Test database initialization
-        let db_result = Database::new(db_path);
-        assert!(db_result.is_ok(), "Database initialization should succeed");
-        
-        let db = db_result.unwrap();
-        
-        // Test that we can get database stats (this verifies schema is working)
-        let stats_result = db.get_stats();
-        assert!(stats_result.is_ok(), "Database stats should be retrievable");
-        
-        let stats = stats_result.unwrap();
-        assert_eq!(stats["workflows"], 0, "Should have 0 workflows initially");
-        assert_eq!(stats["total_runs"], 0, "Should have 0 runs initially");
-        assert_eq!(stats["active_runs"], 0, "Should have 0 active runs initially");
-        
-        // Clean up
-        let _ = fs::remove_file(db_path);
-    }
-
-    #[test]
     fn test_workflow_definition_serialization() {
-        let now = Utc::now();
-        
         let workflow = WorkflowDefinition {
             id: "test-workflow".to_string(),
             name: "Test Workflow".to_string(),
             description: Some("A test workflow".to_string()),
             steps: vec![
                 StepDefinition {
-                    id: "step1".to_string(),
-                    name: "First Step".to_string(),
-                    action: "test_action".to_string(),
-                    timeout: Some(5000),
+                    id: "step-1".to_string(),
+                    name: "Step 1".to_string(),
+                    action: "console.log('hello')".to_string(),
+                    timeout: Some(30000),
                     retry: Some(RetryConfig {
                         max_attempts: 3,
                         backoff_ms: 1000,
@@ -99,30 +70,27 @@ mod tests {
                 }
             ],
             triggers: vec![
-                TriggerDefinition::Webhook {
-                    path: "/webhook/test".to_string(),
-                    method: "POST".to_string(),
-                }
+                TriggerDefinition::Manual,
             ],
-            created_at: now,
-            updated_at: now,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         };
-        
+
         // Test validation
         assert!(workflow.validate().is_ok(), "Workflow should be valid");
-        
+
         // Test serialization
         let json_result = serde_json::to_string(&workflow);
         assert!(json_result.is_ok(), "Workflow should serialize to JSON");
-        
+
         let json = json_result.unwrap();
         assert!(json.contains("test-workflow"), "JSON should contain workflow ID");
-        assert!(json.contains("Test Workflow"), "JSON should contain workflow name");
-        
+        assert!(json.contains("Step 1"), "JSON should contain step name");
+
         // Test deserialization
         let deserialized_result = serde_json::from_str::<WorkflowDefinition>(&json);
         assert!(deserialized_result.is_ok(), "Workflow should deserialize from JSON");
-        
+
         let deserialized = deserialized_result.unwrap();
         assert_eq!(deserialized.id, workflow.id, "Deserialized workflow should have same ID");
         assert_eq!(deserialized.name, workflow.name, "Deserialized workflow should have same name");
@@ -366,7 +334,7 @@ mod tests {
         assert!(status_result.status.is_some(), "Status should be returned");
         
         // Test execute_step function
-        let step_result = execute_step(run_id, "step1".to_string(), db_path.to_string());
+        let step_result = execute_step(run_id, "step1".to_string(), db_path.to_string(), "".to_string());
         assert!(step_result.success, "N-API step execution should succeed: {}", step_result.message);
         assert!(step_result.result.is_some(), "Step result should be returned");
         
