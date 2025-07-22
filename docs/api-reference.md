@@ -120,20 +120,44 @@ const orderWorkflow = cronflow.define({
 });
 ```
 
-### `cronflow.start()`
+### `cronflow.start(options?)`
 
 Boots the engine, registers all defined workflows, and begins listening for triggers.
 
-#### Example
+#### Parameters
 
+- `options` (object): Optional configuration for the engine startup
+  - `webhookServer` (object): Configuration for the webhook HTTP server
+    - `host` (string): Host address to bind to (default: '127.0.0.1')
+    - `port` (number): Port number to listen on (default: 3000)
+    - `maxConnections` (number): Maximum concurrent connections (default: 1000)
+
+#### Examples
+
+**Basic startup (localhost only):**
 ```typescript
-// In your application's main file (e.g., index.ts)
-// Define all your workflows above...
+await cronflow.start();
+```
 
-cronflow
-  .start()
-  .then(() => console.log("cronflow engine started successfully."))
-  .catch((err) => console.error("Failed to start cronflow engine:", err));
+**External access configuration:**
+```typescript
+await cronflow.start({
+  webhookServer: {
+    host: '0.0.0.0',        // Allow external connections
+    port: 3000,              // Standard HTTP port
+    maxConnections: 1000,    // Handle concurrent requests
+  },
+});
+```
+
+**Custom port configuration:**
+```typescript
+await cronflow.start({
+  webhookServer: {
+    host: '0.0.0.0',
+    port: 8080,              // Custom port
+  },
+});
 ```
 
 ### `cronflow.stop()`

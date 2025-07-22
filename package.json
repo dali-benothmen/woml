@@ -70,7 +70,8 @@
     "examples:scheduled": "bun run examples/run-scheduled-workflow.ts",
     "examples:robust": "bun run examples/run-robust-workflow.ts",
     "examples:complex": "bun run examples/run-complex-workflow.ts",
-    "examples:control-flow": "bun run examples/run-control-flow-workflow.ts"
+    "examples:control-flow": "bun run examples/run-control-flow-workflow.ts",
+    "examples:external": "bun run examples/external-webhook-access.ts"
   },
   "keywords": [
     "workflow",

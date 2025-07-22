@@ -54,6 +54,9 @@ export const cronflow = {
   cleanupExpiredState: cronflowFunctions.cleanupExpiredState,
 };
 
+// Export types
+export type { WebhookServerConfig, StartOptions } from './cronflow';
+
 export type { WorkflowDefinition } from './workflow/types';
 export type { Context } from './workflow/types';
 export type { StepDefinition, StepOptions } from './workflow/types';

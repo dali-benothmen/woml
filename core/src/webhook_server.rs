@@ -24,9 +24,16 @@ pub struct WebhookServerConfig {
 impl Default for WebhookServerConfig {
     fn default() -> Self {
         Self {
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-            max_connections: 1000,
+            host: std::env::var("CRONFLOW_WEBHOOK_HOST")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            port: std::env::var("CRONFLOW_WEBHOOK_PORT")
+                .unwrap_or_else(|_| "3000".to_string())
+                .parse()
+                .unwrap_or(3000),
+            max_connections: std::env::var("CRONFLOW_WEBHOOK_MAX_CONNECTIONS")
+                .unwrap_or_else(|_| "1000".to_string())
+                .parse()
+                .unwrap_or(1000),
         }
     }
 }

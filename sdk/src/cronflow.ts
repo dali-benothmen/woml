@@ -338,7 +338,17 @@ export function define(
   });
 }
 
-export async function start(): Promise<void> {
+export interface WebhookServerConfig {
+  host?: string;
+  port?: number;
+  maxConnections?: number;
+}
+
+export interface StartOptions {
+  webhookServer?: WebhookServerConfig;
+}
+
+export async function start(options?: StartOptions): Promise<void> {
   const currentState = getCurrentState();
 
   if (
@@ -353,6 +363,31 @@ export async function start(): Promise<void> {
 
   if (core) {
     try {
+      if (options?.webhookServer) {
+        const webhookConfig = {
+          host: options.webhookServer.host || '127.0.0.1',
+          port: options.webhookServer.port || 3000,
+          max_connections: options.webhookServer.maxConnections || 1000,
+        };
+
+        console.log(
+          `🔧 Configuring webhook server: ${webhookConfig.host}:${webhookConfig.port}`
+        );
+
+        // TODO: Expose webhook server configuration through N-API
+        // For now, we'll use environment variables as a workaround
+        if (webhookConfig.host !== '127.0.0.1') {
+          process.env.CRONFLOW_WEBHOOK_HOST = webhookConfig.host;
+        }
+        if (webhookConfig.port !== 3000) {
+          process.env.CRONFLOW_WEBHOOK_PORT = webhookConfig.port.toString();
+        }
+        if (webhookConfig.max_connections !== 1000) {
+          process.env.CRONFLOW_WEBHOOK_MAX_CONNECTIONS =
+            webhookConfig.max_connections.toString();
+        }
+      }
+
       for (const workflow of currentState.workflows.values()) {
         await registerWorkflowWithRust(workflow);
       }
