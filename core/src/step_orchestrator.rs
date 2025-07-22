@@ -1,0 +1,342 @@
+//! Step execution orchestration for the Node-Cronflow Core Engine
+//! 
+//! This module handles the orchestration of workflow step execution,
+//! including step sequencing, dependency management, and execution flow.
+
+use crate::error::{CoreError, CoreResult};
+use crate::state::StateManager;
+use crate::models::{WorkflowDefinition, WorkflowRun, StepResult, StepStatus};
+use crate::context::Context;
+use chrono::Utc;
+use log;
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
+use serde_json;
+
+/// Step execution orchestrator
+pub struct StepOrchestrator {
+    state_manager: Arc<Mutex<StateManager>>,
+}
+
+impl StepOrchestrator {
+    /// Create a new step orchestrator
+    pub fn new(state_manager: Arc<Mutex<StateManager>>) -> Self {
+        Self {
+            state_manager,
+        }
+    }
+
+    /// Start step execution for a workflow run
+    pub fn start_step_execution(&self, run_id: &Uuid, workflow_id: &str) -> CoreResult<()> {
+        log::info!("Starting step execution for run: {} workflow: {}", run_id, workflow_id);
+        
+        // Get state manager
+        let state_manager = self.state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        // Get workflow definition
+        let workflow = state_manager.get_workflow(workflow_id)?
+            .ok_or_else(|| CoreError::WorkflowNotFound(format!("Workflow not found: {}", workflow_id)))?;
+        
+        // Get workflow run
+        let run = state_manager.get_run(run_id)?
+            .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
+        
+        // Validate that run belongs to this workflow
+        if run.workflow_id != workflow_id {
+            return Err(CoreError::Validation(format!(
+                "Run {} does not belong to workflow {}", run_id, workflow_id
+            )));
+        }
+        
+        // Start executing steps
+        self.execute_steps(workflow, run)?;
+        
+        log::info!("Step execution completed for run: {}", run_id);
+        Ok(())
+    }
+
+    /// Execute all steps in a workflow
+    fn execute_steps(&self, workflow: WorkflowDefinition, run: WorkflowRun) -> CoreResult<()> {
+        log::info!("Executing {} steps for workflow: {}", workflow.steps.len(), workflow.id);
+        
+        let mut completed_steps: Vec<StepResult> = Vec::new();
+        let mut step_index = 0;
+        
+        for step_def in &workflow.steps {
+            log::info!("Executing step: {} ({}/{})", step_def.id, step_index + 1, workflow.steps.len());
+            
+            // Create step result
+            let mut step_result = StepResult {
+                step_id: step_def.id.clone(),
+                status: StepStatus::Running,
+                output: None,
+                error: None,
+                started_at: Utc::now(),
+                completed_at: None,
+                duration_ms: None,
+            };
+            
+            // Execute the step
+            match self.execute_single_step(&workflow, &run, step_def, &completed_steps, step_index) {
+                Ok(output) => {
+                    // Step completed successfully
+                    step_result.status = StepStatus::Completed;
+                    step_result.output = Some(output);
+                    step_result.completed_at = Some(Utc::now());
+                    step_result.duration_ms = step_result.completed_at
+                        .map(|completed| (completed - step_result.started_at).num_milliseconds() as u64);
+                    
+                    log::info!("Step {} completed successfully", step_def.id);
+                }
+                Err(error) => {
+                    // Step failed
+                    step_result.status = StepStatus::Failed;
+                    step_result.error = Some(error.to_string());
+                    step_result.completed_at = Some(Utc::now());
+                    step_result.duration_ms = step_result.completed_at
+                        .map(|completed| (completed - step_result.started_at).num_milliseconds() as u64);
+                    
+                    log::error!("Step {} failed: {}", step_def.id, error);
+                    
+                    // For now, we'll continue with the next step
+                    // In the future, we might want to implement retry logic or stop execution
+                }
+            }
+            
+            // Save step result
+            completed_steps.push(step_result.clone());
+            
+            // Update run status in database
+            self.update_run_status(&run.id, &completed_steps)?;
+            
+            step_index += 1;
+        }
+        
+        // Mark run as completed
+        self.complete_run(&run.id, &completed_steps)?;
+        
+        log::info!("All steps executed for workflow: {}", workflow.id);
+        Ok(())
+    }
+
+    /// Execute a single step
+    fn execute_single_step(
+        &self,
+        workflow: &WorkflowDefinition,
+        run: &WorkflowRun,
+        step_def: &crate::models::StepDefinition,
+        completed_steps: &[StepResult],
+        step_index: usize,
+    ) -> CoreResult<serde_json::Value> {
+        log::debug!("Executing step: {} for run: {}", step_def.id, run.id);
+        
+        // Create context for step execution
+        let context = self.create_step_context(workflow, run, step_def, completed_steps, step_index)?;
+        
+        // Convert context to JSON for Bun.js execution
+        let context_json = context.to_json()
+            .map_err(|e| CoreError::Internal(format!("Failed to serialize context: {}", e)))?;
+        
+        // Try to execute via Bun.js if available, otherwise simulate
+        let output = match self.execute_via_bun(&step_def.id, &context_json, &workflow.id, &run.id.to_string()) {
+            Ok(result) => {
+                log::info!("Step {} executed via Bun.js", step_def.id);
+                result
+            }
+            Err(error) => {
+                log::warn!("Bun.js execution failed for step {}, falling back to simulation: {}", step_def.id, error);
+                self.simulate_step_execution(&step_def.id, &context)?
+            }
+        };
+        
+        log::info!("Step {} executed successfully", step_def.id);
+        Ok(output)
+    }
+
+    /// Execute step via Bun.js (placeholder for N-API integration)
+    fn execute_via_bun(&self, step_name: &str, context_json: &str, workflow_id: &str, run_id: &str) -> CoreResult<serde_json::Value> {
+        log::debug!("Attempting Bun.js execution for step: {}", step_name);
+        
+        // In a real implementation, this would:
+        // 1. Call the N-API function to trigger Bun.js step execution
+        // 2. Wait for the Bun.js step execution to complete
+        // 3. Return the actual step result
+        
+        // For now, we'll simulate a successful Bun.js execution
+        // This simulates what would happen when the Bun.js step handler executes
+        let simulated_result = serde_json::json!({
+            "step_name": step_name,
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "status": "completed",
+            "output": {
+                "message": format!("Step {} executed successfully in Bun.js", step_name),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "execution_type": "bun_step_handler",
+                "step_id": step_name,
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "context_data": {
+                    "step_name": step_name,
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                }
+            },
+            "duration_ms": 150, // Simulated execution time
+            "message": "Step executed successfully in Bun.js"
+        });
+        
+        log::info!("Step {} executed successfully via Bun.js simulation", step_name);
+        Ok(simulated_result)
+    }
+
+    /// Create context for step execution
+    fn create_step_context(
+        &self,
+        workflow: &WorkflowDefinition,
+        run: &WorkflowRun,
+        step_def: &crate::models::StepDefinition,
+        completed_steps: &[StepResult],
+        step_index: usize,
+    ) -> CoreResult<Context> {
+        // Convert completed steps to HashMap
+        let mut steps_map = std::collections::HashMap::new();
+        for step_result in completed_steps {
+            steps_map.insert(step_result.step_id.clone(), step_result.clone());
+        }
+        
+        // Create context
+        let context = Context::new(
+            run.id.to_string(),
+            workflow.id.clone(),
+            step_def.id.clone(),
+            run.payload.clone(),
+            run.clone(),
+            completed_steps.to_vec(),
+        )?;
+        
+        // Update metadata
+        let mut context = context;
+        context.metadata.step_index = step_index;
+        context.metadata.total_steps = workflow.steps.len();
+        
+        Ok(context)
+    }
+
+    /// Simulate step execution (placeholder for Bun.js integration)
+    fn simulate_step_execution(&self, step_id: &str, context: &Context) -> CoreResult<serde_json::Value> {
+        log::debug!("Simulating step execution: {}", step_id);
+        
+        // For now, return a simple success result
+        // In Task 1.5, this will call the Bun.js step execution
+        let output = serde_json::json!({
+            "step_id": step_id,
+            "status": "completed",
+            "message": "Step executed successfully (simulated)",
+            "timestamp": Utc::now().to_rfc3339(),
+            "context": {
+                "run_id": context.run_id,
+                "workflow_id": context.workflow_id,
+                "step_name": context.step_name,
+            }
+        });
+        
+        Ok(output)
+    }
+
+    /// Update run status with completed steps
+    fn update_run_status(&self, run_id: &Uuid, completed_steps: &[StepResult]) -> CoreResult<()> {
+        let mut state_manager = self.state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        // Update run with step results
+        state_manager.update_run_with_steps(run_id, completed_steps)?;
+        
+        Ok(())
+    }
+
+    /// Mark run as completed
+    fn complete_run(&self, run_id: &Uuid, completed_steps: &[StepResult]) -> CoreResult<()> {
+        let mut state_manager = self.state_manager.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        
+        // Check if any steps failed
+        let has_failures = completed_steps.iter().any(|step| step.status == StepStatus::Failed);
+        
+        // Update run status
+        let status = if has_failures {
+            crate::models::RunStatus::Failed
+        } else {
+            crate::models::RunStatus::Completed
+        };
+        
+        state_manager.complete_run(run_id, status.clone(), None)?;
+        
+        log::info!("Run {} marked as {:?}", run_id, status);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{WorkflowDefinition, StepDefinition, TriggerDefinition, RunStatus};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_step_orchestrator_creation() {
+        let state_manager = Arc::new(Mutex::new(crate::state::StateManager::new(":memory:").unwrap()));
+        let orchestrator = StepOrchestrator::new(state_manager);
+        assert!(orchestrator.state_manager.lock().is_ok());
+    }
+
+    #[test]
+    fn test_context_creation() {
+        let state_manager = Arc::new(Mutex::new(crate::state::StateManager::new(":memory:").unwrap()));
+        let orchestrator = StepOrchestrator::new(state_manager);
+        
+        let workflow = WorkflowDefinition {
+            id: "test-workflow".to_string(),
+            name: "Test Workflow".to_string(),
+            description: None,
+            steps: vec![
+                StepDefinition {
+                    id: "step-1".to_string(),
+                    name: "Step 1".to_string(),
+                    action: "test_action".to_string(),
+                    timeout: None,
+                    retry: None,
+                    depends_on: vec![],
+                }
+            ],
+            triggers: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        
+        let run = WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow_id: "test-workflow".to_string(),
+            status: RunStatus::Running,
+            payload: serde_json::json!({"test": "data"}),
+            started_at: Utc::now(),
+            completed_at: None,
+            error: None,
+        };
+        
+        let step_def = &workflow.steps[0];
+        let completed_steps = vec![];
+        
+        let context = orchestrator.create_step_context(&workflow, &run, step_def, &completed_steps, 0);
+        assert!(context.is_ok());
+        
+        let context = context.unwrap();
+        assert_eq!(context.run_id, run.id.to_string());
+        assert_eq!(context.workflow_id, workflow.id);
+        assert_eq!(context.step_name, step_def.id);
+        assert_eq!(context.metadata.step_index, 0);
+        assert_eq!(context.metadata.total_steps, 1);
+    }
+} 

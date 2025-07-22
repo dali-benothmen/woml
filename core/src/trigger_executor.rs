@@ -6,6 +6,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::state::StateManager;
 use crate::triggers::{TriggerManager, WebhookRequest, ScheduleTrigger};
 use crate::models::WorkflowDefinition;
+use crate::step_orchestrator::StepOrchestrator;
 use chrono::Utc;
 use log;
 use std::sync::{Arc, Mutex};
@@ -47,14 +48,17 @@ impl TriggerExecutionResult {
 pub struct TriggerExecutor {
     state_manager: Arc<Mutex<StateManager>>,
     trigger_manager: Arc<Mutex<TriggerManager>>,
+    step_orchestrator: StepOrchestrator,
 }
 
 impl TriggerExecutor {
     /// Create a new trigger executor
     pub fn new(state_manager: Arc<Mutex<StateManager>>, trigger_manager: Arc<Mutex<TriggerManager>>) -> Self {
+        let step_orchestrator = StepOrchestrator::new(state_manager.clone());
         Self {
             state_manager,
             trigger_manager,
+            step_orchestrator,
         }
     }
 
@@ -132,6 +136,18 @@ impl TriggerExecutor {
         let run_id = state_manager.create_run(workflow_id, payload)?;
         
         log::info!("Created workflow run: {} for workflow: {}", run_id, workflow_id);
+        
+        // Start step execution
+        match self.step_orchestrator.start_step_execution(&run_id, workflow_id) {
+            Ok(()) => {
+                log::info!("Step execution started successfully for run: {}", run_id);
+            }
+            Err(error) => {
+                log::error!("Failed to start step execution for run {}: {}", run_id, error);
+                // Note: We still return success for the trigger execution
+                // The step execution failure will be handled separately
+            }
+        }
         
         Ok(TriggerExecutionResult::success(run_id, workflow_id.to_string()))
     }

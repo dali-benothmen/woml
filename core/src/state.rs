@@ -117,4 +117,36 @@ impl StateManager {
     pub fn get_completed_steps(&self, run_id: &Uuid) -> CoreResult<Vec<StepResult>> {
         self.db.get_step_results(&run_id.to_string())
     }
+
+    /// Update run with step results
+    pub fn update_run_with_steps(&mut self, run_id: &Uuid, completed_steps: &[StepResult]) -> CoreResult<()> {
+        // Save each step result
+        for step_result in completed_steps {
+            self.save_step_result(run_id, step_result.clone())?;
+        }
+        
+        // Update run status to Running if it's still Pending
+        if let Some(run) = self.active_runs.get_mut(run_id) {
+            if run.status == crate::models::RunStatus::Pending {
+                run.status = crate::models::RunStatus::Running;
+                self.db.save_run(run)?;
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Complete a run with final status
+    pub fn complete_run(&mut self, run_id: &Uuid, status: RunStatus, error: Option<String>) -> CoreResult<()> {
+        if let Some(run) = self.active_runs.get_mut(run_id) {
+            run.status = status.clone();
+            run.completed_at = Some(Utc::now());
+            run.error = error;
+            
+            self.db.save_run(run)?;
+            log::info!("Completed run {} with status {:?}", run_id, status);
+        }
+        
+        Ok(())
+    }
 } 

@@ -20,6 +20,9 @@ pub enum CoreError {
     #[error("Workflow not found: {0}")]
     WorkflowNotFound(String),
 
+    #[error("Run not found: {0}")]
+    RunNotFound(String),
+
     #[error("Step execution failed: {0}")]
     StepExecution(String),
 
