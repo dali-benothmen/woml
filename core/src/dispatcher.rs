@@ -461,15 +461,25 @@ impl Dispatcher {
 
     /// Process a job (simplified version without bridge dependency)
     fn process_job(job: &mut Job) -> Result<StepResult, CoreError> {
-        log::info!("Processing job: {} for step: {}", job.id, job.step_name);
+        log::info!("Processing job: {}", job.id);
         
-        // For now, we'll simulate job processing
-        // In a real implementation, this would call the Bun.js step execution
+        // Simulate job processing
+        let start_time = std::time::Instant::now();
         
-        // Simulate processing time
+        // Check if this is a test job that should fail
+        if let Some(should_fail) = job.payload.get("should_fail") {
+            if should_fail.as_bool().unwrap_or(false) {
+                log::warn!("Test job configured to fail: {}", job.id);
+                return Err(CoreError::Internal("Test job failure".to_string()));
+            }
+        }
+        
+        // Simulate some processing time
         std::thread::sleep(std::time::Duration::from_millis(100));
         
-        // Create a simulated step result
+        let processing_time = start_time.elapsed();
+        
+        // Create a mock step result
         let step_result = StepResult {
             step_id: job.step_name.clone(),
             status: StepStatus::Completed,
@@ -478,17 +488,17 @@ impl Dispatcher {
                 "step_name": job.step_name,
                 "workflow_id": job.workflow_id,
                 "run_id": job.run_id,
-                "status": "completed",
+                "processing_time_ms": processing_time.as_millis(),
                 "message": "Job processed successfully",
-                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "test_data": job.payload
             })),
             error: None,
             started_at: chrono::Utc::now(),
             completed_at: Some(chrono::Utc::now()),
-            duration_ms: Some(100),
+            duration_ms: Some(processing_time.as_millis() as u64),
         };
         
-        log::info!("Job {} processed successfully", job.id);
+        log::info!("Job {} processed successfully in {}ms", job.id, processing_time.as_millis());
         Ok(step_result)
     }
 
@@ -919,5 +929,145 @@ mod tests {
         assert!(worker.is_idle());
         assert_eq!(worker.jobs_processed, 1);
         assert_eq!(worker.total_processing_time_ms, 100);
+    }
+
+    #[test]
+    fn test_job_execution_flow() {
+        let state_manager = Arc::new(Mutex::new(StateManager::new("test_job_execution_flow.db").unwrap()));
+        let config = WorkerPoolConfig::default();
+        let mut dispatcher = Dispatcher::new(config, state_manager);
+        
+        // Start the dispatcher
+        dispatcher.start().unwrap();
+        
+        // Create a test job
+        let job = Job::new(
+            "test-workflow".to_string(),
+            "test-run".to_string(),
+            "test-step".to_string(),
+            serde_json::json!({"test": "data"}),
+            JobPriority::Normal,
+        );
+        
+        // Test 1: Job submission
+        println!("🧪 Test 1: Job submission");
+        dispatcher.submit_job(job.clone()).unwrap();
+        
+        // Test 2: Verify job is in queue
+        println!("🧪 Test 2: Verify job is in queue");
+        let stats = dispatcher.get_stats().unwrap();
+        assert_eq!(stats.queue_depth, 1);
+        
+        // Test 3: Wait for job execution
+        println!("🧪 Test 3: Wait for job execution");
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        
+        // Test 4: Verify job status
+        println!("🧪 Test 4: Verify job status");
+        let job_status = dispatcher.get_job_status(&job.id).unwrap();
+        assert!(job_status.is_some());
+        
+        // Test 5: Check dispatcher stats
+        println!("🧪 Test 5: Check dispatcher stats");
+        let final_stats = dispatcher.get_stats().unwrap();
+        assert!(final_stats.total_jobs_processed > 0);
+        
+        // Stop the dispatcher
+        dispatcher.stop().unwrap();
+        
+        println!("✅ Job execution flow test completed successfully");
+    }
+
+    #[test]
+    fn test_job_result_processing_flow() {
+        let state_manager = Arc::new(Mutex::new(StateManager::new("test_job_result_processing_flow.db").unwrap()));
+        let config = WorkerPoolConfig::default();
+        let mut dispatcher = Dispatcher::new(config, state_manager);
+        
+        // Start the dispatcher
+        dispatcher.start().unwrap();
+        
+        // Create a test job with proper UUID
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let mut job = Job::new(
+            "test-workflow".to_string(),
+            run_id.clone(),
+            "test-step".to_string(),
+            serde_json::json!({"test": "data"}),
+            JobPriority::Normal,
+        );
+        
+        // Submit the job
+        dispatcher.submit_job(job.clone()).unwrap();
+        
+        // Wait for job to be processed
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        
+        // Test 1: Verify job was processed
+        println!("🧪 Test 1: Verify job was processed");
+        let stats = dispatcher.get_stats().unwrap();
+        assert!(stats.total_jobs_processed > 0);
+        
+        // Test 2: Check job status
+        println!("🧪 Test 2: Check job status");
+        let job_status = dispatcher.get_job_status(&job.id).unwrap();
+        assert!(job_status.is_some());
+        
+        // Test 3: Verify workflow run status
+        println!("🧪 Test 3: Verify workflow run status");
+        let run_status = dispatcher.get_workflow_run_status(&run_id).unwrap();
+        assert!(run_status.is_some());
+        
+        // Stop the dispatcher
+        dispatcher.stop().unwrap();
+        
+        println!("✅ Job result processing flow test completed successfully");
+    }
+
+    #[test]
+    fn test_job_error_handling_flow() {
+        let state_manager = Arc::new(Mutex::new(StateManager::new("test_job_error_handling_flow.db").unwrap()));
+        let config = WorkerPoolConfig::default();
+        let mut dispatcher = Dispatcher::new(config, state_manager);
+        
+        // Start the dispatcher
+        dispatcher.start().unwrap();
+        
+        // Create a test job that will fail
+        let mut job = Job::new(
+            "test-workflow".to_string(),
+            "test-run".to_string(),
+            "test-step".to_string(),
+            serde_json::json!({"test": "data", "should_fail": true}),
+            JobPriority::Normal,
+        );
+        
+        // Set retry configuration
+        job.retry_config.max_attempts = 2;
+        
+        // Submit the job
+        dispatcher.submit_job(job.clone()).unwrap();
+        
+        // Wait for job to be processed
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+        
+        // Test 1: Verify job failure was handled
+        println!("🧪 Test 1: Verify job failure was handled");
+        let stats = dispatcher.get_stats().unwrap();
+        assert!(stats.total_jobs_processed > 0);
+        
+        // Test 2: Check failed jobs count
+        println!("🧪 Test 2: Check failed jobs count");
+        assert!(stats.failed_jobs > 0);
+        
+        // Test 3: Verify job status after failure
+        println!("🧪 Test 3: Verify job status after failure");
+        let job_status = dispatcher.get_job_status(&job.id).unwrap();
+        assert!(job_status.is_some());
+        
+        // Stop the dispatcher
+        dispatcher.stop().unwrap();
+        
+        println!("✅ Job error handling flow test completed successfully");
     }
 } 
