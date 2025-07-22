@@ -14,6 +14,7 @@ use crate::dispatcher::Dispatcher;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use uuid::Uuid;
+use serde::Serialize;
 
 /// N-API bridge for Node.js communication
 pub struct Bridge {
@@ -456,15 +457,125 @@ impl Bridge {
     
     /// Stop the webhook server
     pub fn stop_webhook_server(&mut self) -> CoreResult<()> {
-        log::info!("Stopping webhook server...");
-        
-        // Clean up any server state
-        // self.webhook_server = None; // Removed as per edit hint
-        // self.runtime = None; // Removed as per edit hint
-        
-        log::info!("Webhook server stopped successfully");
+        log::info!("Stopping webhook server");
+        // TODO: Implement webhook server stop
         Ok(())
     }
+
+    /// Get job status
+    pub fn get_job_status(&self, job_id: &str) -> CoreResult<Option<String>> {
+        log::info!("Getting job status for: {}", job_id);
+        
+        let dispatcher = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        
+        match dispatcher.get_job_status(job_id)? {
+            Some(state) => Ok(Some(format!("{:?}", state))),
+            None => Ok(None),
+        }
+    }
+
+    /// Cancel a job
+    pub fn cancel_job(&self, job_id: &str) -> CoreResult<bool> {
+        log::info!("Cancelling job: {}", job_id);
+        
+        let dispatcher = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        
+        dispatcher.cancel_job(job_id)
+    }
+
+    /// Get dispatcher statistics
+    pub fn get_dispatcher_stats(&self) -> CoreResult<crate::dispatcher::DispatcherStats> {
+        log::info!("Getting dispatcher statistics");
+        
+        let dispatcher = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        
+        dispatcher.get_stats()
+    }
+
+    /// Get workflow run status
+    pub fn get_workflow_run_status(&self, run_id: &str) -> CoreResult<Option<crate::models::RunStatus>> {
+        log::info!("Getting workflow run status for: {}", run_id);
+        
+        let dispatcher = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        
+        dispatcher.get_workflow_run_status(run_id)
+    }
+
+    /// Get completed steps for a workflow run
+    pub fn get_workflow_completed_steps(&self, run_id: &str) -> CoreResult<Vec<crate::models::StepResult>> {
+        log::info!("Getting completed steps for workflow run: {}", run_id);
+        
+        let dispatcher = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        
+        dispatcher.get_workflow_completed_steps(run_id)
+    }
+}
+
+/// Result for job execution
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct JobExecutionResult {
+    pub success: bool,
+    pub job_id: Option<String>,
+    pub run_id: Option<String>,
+    pub step_id: Option<String>,
+    pub context: Option<String>,
+    pub result: Option<String>,
+    pub message: String,
+}
+
+/// Result for job status retrieval
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct JobStatusResult {
+    pub success: bool,
+    pub job_id: Option<String>,
+    pub status: Option<String>,
+    pub message: String,
+}
+
+/// Result for job cancellation
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct JobCancellationResult {
+    pub success: bool,
+    pub job_id: Option<String>,
+    pub cancelled: bool,
+    pub message: String,
+}
+
+/// Result for dispatcher statistics
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct DispatcherStatsResult {
+    pub success: bool,
+    pub stats: Option<String>,
+    pub message: String,
+}
+
+/// Result for workflow run status
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct WorkflowRunStatusResult {
+    pub success: bool,
+    pub run_id: Option<String>,
+    pub status: Option<String>,
+    pub message: String,
+}
+
+/// Result for workflow completed steps
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct WorkflowStepsResult {
+    pub success: bool,
+    pub run_id: Option<String>,
+    pub steps: Option<String>,
+    pub message: String,
 }
 
 // N-API module setup
@@ -491,17 +602,6 @@ pub struct RunStatusResult {
 #[napi(object)]
 pub struct StepExecutionResult {
     pub success: bool,
-    pub result: Option<String>,
-    pub message: String,
-}
-
-#[napi(object)]
-pub struct JobExecutionResult {
-    pub success: bool,
-    pub job_id: Option<String>,
-    pub run_id: Option<String>,
-    pub step_id: Option<String>,
-    pub context: Option<String>,
     pub result: Option<String>,
     pub message: String,
 }
@@ -983,7 +1083,7 @@ pub fn execute_step_via_bun(
     }
 }
 
-/// Execute a job function in Bun.js via N-API
+/// Execute a job function via N-API (enhanced for Task 2.4)
 #[napi]
 pub fn execute_job_function(
     job_json: String,
@@ -992,7 +1092,7 @@ pub fn execute_job_function(
 ) -> JobExecutionResult {
     log::info!("Executing job function with job: {}", job_json);
     
-    let _bridge = match Bridge::new(&db_path) {
+    let bridge = match Bridge::new(&db_path) {
         Ok(bridge) => bridge,
         Err(e) => {
             return JobExecutionResult {
@@ -1024,7 +1124,7 @@ pub fn execute_job_function(
     };
     
     // Parse services from JSON
-    let _services: HashMap<String, serde_json::Value> = match serde_json::from_str(&services_json) {
+    let services: HashMap<String, serde_json::Value> = match serde_json::from_str(&services_json) {
         Ok(services) => services,
         Err(e) => {
             return JobExecutionResult {
@@ -1039,35 +1139,54 @@ pub fn execute_job_function(
         }
     };
     
-    // For now, return a simple result
-    // TODO: In Task 1.3, we'll implement the actual Bun.js job execution
-    let result = serde_json::json!({
-        "job_id": job.id,
-        "run_id": job.run_id,
-        "step_id": job.step_name,
-        "services": services_json,
-        "status": "ready_for_bun_execution",
-        "message": "Job function ready for Bun.js execution"
-    });
-    
-    let result_json = serde_json::to_string(&result)
-        .map_err(|e| CoreError::Serialization(e))
-        .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
-    
-    JobExecutionResult {
-        success: true,
-        job_id: Some(job.id),
-        run_id: Some(job.run_id),
-        step_id: Some(job.step_name),
-        context: Some(services_json),
-        result: Some(result_json),
-        message: "Job function prepared for Bun.js execution".to_string(),
+    // Execute the job using the bridge
+    match bridge.execute_job(&job, services) {
+        Ok(result_json) => {
+            // Parse the result to extract individual fields
+            let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                Ok(result) => result,
+                Err(_) => {
+                    return JobExecutionResult {
+                        success: false,
+                        job_id: None,
+                        run_id: None,
+                        step_id: None,
+                        context: None,
+                        result: None,
+                        message: "Failed to parse execution result".to_string(),
+                    };
+                }
+            };
+            
+            JobExecutionResult {
+                success: true,
+                job_id: result["job_id"].as_str().map(|s| s.to_string()),
+                run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                step_id: result["step_id"].as_str().map(|s| s.to_string()),
+                context: result["context"].as_str().map(|s| s.to_string()),
+                result: Some(result_json),
+                message: "Job function executed successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            JobExecutionResult {
+                success: false,
+                job_id: None,
+                run_id: None,
+                step_id: None,
+                context: None,
+                result: None,
+                message: format!("Failed to execute job: {}", e),
+            }
+        }
     }
 }
 
-/// Execute a job with context via N-API
+/// Execute a job with context via N-API (enhanced for Task 2.4)
 #[napi]
 pub fn execute_job(job_json: String, services_json: String, db_path: String) -> JobExecutionResult {
+    log::info!("Executing job with context: {}", job_json);
+    
     let bridge = match Bridge::new(&db_path) {
         Ok(bridge) => bridge,
         Err(e) => {
@@ -1155,7 +1274,209 @@ pub fn execute_job(job_json: String, services_json: String, db_path: String) -> 
             }
         }
     }
-} 
+}
+
+/// Get job status via N-API
+#[napi]
+pub fn get_job_status(job_id: String, db_path: String) -> JobStatusResult {
+    log::info!("Getting job status for: {}", job_id);
+    
+    let bridge = match Bridge::new(&db_path) {
+        Ok(bridge) => bridge,
+        Err(e) => {
+            return JobStatusResult {
+                success: false,
+                job_id: None,
+                status: None,
+                message: format!("Failed to create bridge: {}", e),
+            };
+        }
+    };
+    
+    match bridge.get_job_status(&job_id) {
+        Ok(status) => {
+            let status_str = match status {
+                Some(s) => format!("{:?}", s),
+                None => "not_found".to_string(),
+            };
+            
+            JobStatusResult {
+                success: true,
+                job_id: Some(job_id),
+                status: Some(status_str),
+                message: "Job status retrieved successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            JobStatusResult {
+                success: false,
+                job_id: None,
+                status: None,
+                message: format!("Failed to get job status: {}", e),
+            }
+        }
+    }
+}
+
+/// Cancel a job via N-API
+#[napi]
+pub fn cancel_job(job_id: String, db_path: String) -> JobCancellationResult {
+    log::info!("Cancelling job: {}", job_id);
+    
+    let bridge = match Bridge::new(&db_path) {
+        Ok(bridge) => bridge,
+        Err(e) => {
+            return JobCancellationResult {
+                success: false,
+                job_id: None,
+                cancelled: false,
+                message: format!("Failed to create bridge: {}", e),
+            };
+        }
+    };
+    
+    match bridge.cancel_job(&job_id) {
+        Ok(cancelled) => {
+            JobCancellationResult {
+                success: true,
+                job_id: Some(job_id),
+                cancelled,
+                message: if cancelled {
+                    "Job cancelled successfully".to_string()
+                } else {
+                    "Job not found or already completed".to_string()
+                },
+            }
+        }
+        Err(e) => {
+            JobCancellationResult {
+                success: false,
+                job_id: None,
+                cancelled: false,
+                message: format!("Failed to cancel job: {}", e),
+            }
+        }
+    }
+}
+
+/// Get dispatcher statistics via N-API
+#[napi]
+pub fn get_dispatcher_stats(db_path: String) -> DispatcherStatsResult {
+    log::info!("Getting dispatcher statistics");
+    
+    let bridge = match Bridge::new(&db_path) {
+        Ok(bridge) => bridge,
+        Err(e) => {
+            return DispatcherStatsResult {
+                success: false,
+                stats: None,
+                message: format!("Failed to create bridge: {}", e),
+            };
+        }
+    };
+    
+    match bridge.get_dispatcher_stats() {
+        Ok(stats) => {
+            let stats_json = serde_json::to_string(&stats)
+                .unwrap_or_else(|_| "{}".to_string());
+            
+            DispatcherStatsResult {
+                success: true,
+                stats: Some(stats_json),
+                message: "Dispatcher statistics retrieved successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            DispatcherStatsResult {
+                success: false,
+                stats: None,
+                message: format!("Failed to get dispatcher stats: {}", e),
+            }
+        }
+    }
+}
+
+/// Get workflow run status via N-API
+#[napi]
+pub fn get_workflow_run_status(run_id: String, db_path: String) -> WorkflowRunStatusResult {
+    log::info!("Getting workflow run status for: {}", run_id);
+    
+    let bridge = match Bridge::new(&db_path) {
+        Ok(bridge) => bridge,
+        Err(e) => {
+            return WorkflowRunStatusResult {
+                success: false,
+                run_id: None,
+                status: None,
+                message: format!("Failed to create bridge: {}", e),
+            };
+        }
+    };
+    
+    match bridge.get_workflow_run_status(&run_id) {
+        Ok(status) => {
+            let status_str = match status {
+                Some(s) => format!("{:?}", s),
+                None => "not_found".to_string(),
+            };
+            
+            WorkflowRunStatusResult {
+                success: true,
+                run_id: Some(run_id),
+                status: Some(status_str),
+                message: "Workflow run status retrieved successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            WorkflowRunStatusResult {
+                success: false,
+                run_id: None,
+                status: None,
+                message: format!("Failed to get workflow run status: {}", e),
+            }
+        }
+    }
+}
+
+/// Get completed steps for a workflow run via N-API
+#[napi]
+pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> WorkflowStepsResult {
+    log::info!("Getting completed steps for workflow run: {}", run_id);
+    
+    let bridge = match Bridge::new(&db_path) {
+        Ok(bridge) => bridge,
+        Err(e) => {
+            return WorkflowStepsResult {
+                success: false,
+                run_id: None,
+                steps: None,
+                message: format!("Failed to create bridge: {}", e),
+            };
+        }
+    };
+    
+    match bridge.get_workflow_completed_steps(&run_id) {
+        Ok(steps) => {
+            let steps_json = serde_json::to_string(&steps)
+                .unwrap_or_else(|_| "[]".to_string());
+            
+            WorkflowStepsResult {
+                success: true,
+                run_id: Some(run_id),
+                steps: Some(steps_json),
+                message: "Workflow completed steps retrieved successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            WorkflowStepsResult {
+                success: false,
+                run_id: None,
+                steps: None,
+                message: format!("Failed to get workflow completed steps: {}", e),
+            }
+        }
+    }
+}
 
 /// Execute a webhook trigger via N-API
 #[napi]

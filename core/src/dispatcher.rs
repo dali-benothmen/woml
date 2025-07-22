@@ -10,6 +10,7 @@ use crate::job::{Job, JobQueue, JobState};
 use crate::models::{StepResult, StepStatus, WorkflowDefinition, WorkflowRun, RunStatus};
 use crate::state::StateManager;
 use serde_json;
+use serde::Serialize;
 
 /// Worker pool configuration
 #[derive(Debug, Clone)]
@@ -104,7 +105,7 @@ pub struct JobExecutionResult {
 }
 
 /// Dispatcher statistics
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DispatcherStats {
     pub total_jobs_processed: u64,
     pub successful_jobs: u64,

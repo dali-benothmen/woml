@@ -814,16 +814,16 @@ mod tests {
         job.start().unwrap();
         assert_eq!(job.state, JobState::Running);
 
-        // Check retry limits
+        // Check retry limits - only retry twice more (total 3 attempts)
         job.fail("Test error".to_string()).unwrap();
-        job.retry().unwrap();
+        assert!(job.retry().is_ok()); // Second retry
         job.start().unwrap();
         job.fail("Test error".to_string()).unwrap();
-        job.retry().unwrap();
+        assert!(job.retry().is_ok()); // Third retry
         job.start().unwrap();
         job.fail("Test error".to_string()).unwrap();
 
-        // Should not be able to retry anymore
+        // Should not be able to retry anymore (max attempts reached)
         assert!(job.retry().is_err());
     }
 
