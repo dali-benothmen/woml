@@ -1,5 +1,7 @@
 import { WorkflowInstance, WorkflowDefinition, Context } from './workflow';
 import { createStateManager } from './state';
+import * as http from 'http';
+import * as url from 'url';
 
 // Import the Rust addon
 let core: any;
@@ -17,6 +19,7 @@ interface CronflowState {
   engineState: 'STOPPED' | 'STARTING' | 'STARTED';
   dbPath: string;
   stateManager?: any;
+  webhookServer?: http.Server;
 }
 
 let state: CronflowState = {
@@ -392,6 +395,108 @@ export async function start(options?: StartOptions): Promise<void> {
         await registerWorkflowWithRust(workflow);
       }
       console.log('✅ All workflows registered with Rust engine');
+
+      if (options?.webhookServer) {
+        const result = core.startWebhookServer(currentState.dbPath);
+        if (!result.success) {
+          throw new Error(`Failed to start webhook server: ${result.message}`);
+        }
+        console.log('✅ Webhook server started successfully');
+
+        const server = http.createServer(async (req, res) => {
+          try {
+            const parsedUrl = url.parse(req.url || '', true);
+            const path = parsedUrl.pathname || '';
+
+            if (path === '/health') {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  status: 'healthy',
+                  service: 'node-cronflow-webhook-server',
+                  timestamp: new Date().toISOString(),
+                })
+              );
+              return;
+            }
+
+            if (path.startsWith('/webhook/')) {
+              const webhookPath = path.replace('/webhook', '');
+
+              const workflow = Array.from(currentState.workflows.values()).find(
+                w =>
+                  w.triggers.some(
+                    t => t.type === 'webhook' && t.path === webhookPath
+                  )
+              );
+
+              if (!workflow) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Webhook not found' }));
+                return;
+              }
+
+              let body = '';
+              req.on('data', chunk => {
+                body += chunk.toString();
+              });
+
+              req.on('end', async () => {
+                try {
+                  const payload = body ? JSON.parse(body) : {};
+
+                  const runId = await trigger(workflow.id, payload);
+
+                  res.writeHead(200, { 'Content-Type': 'application/json' });
+                  res.end(
+                    JSON.stringify({
+                      status: 'success',
+                      message: 'Webhook processed successfully',
+                      workflow_triggered: true,
+                      run_id: runId,
+                    })
+                  );
+                } catch (error) {
+                  console.error('Webhook processing error:', error);
+                  res.writeHead(500, { 'Content-Type': 'application/json' });
+                  res.end(
+                    JSON.stringify({
+                      status: 'error',
+                      message:
+                        error instanceof Error
+                          ? error.message
+                          : 'Unknown error',
+                      workflow_triggered: false,
+                    })
+                  );
+                }
+              });
+
+              return;
+            }
+
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Not found' }));
+          } catch (error) {
+            console.error('HTTP server error:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Internal server error' }));
+          }
+        });
+
+        const host = options.webhookServer.host || '127.0.0.1';
+        const port = options.webhookServer.port || 3000;
+
+        server.listen(port, host, () => {
+          console.log(`🌐 Webhook server running on: http://${host}:${port}`);
+          console.log(
+            `📡 Webhook endpoint: http://${host}:${port}/webhook/webhooks/simple`
+          );
+          console.log(`🏥 Health check: http://${host}:${port}/health`);
+        });
+
+        setState({ webhookServer: server });
+      }
     } catch (error) {
       console.error('❌ Failed to register workflows with Rust engine:', error);
       throw error;
@@ -405,7 +510,28 @@ export async function start(options?: StartOptions): Promise<void> {
 }
 
 export async function stop(): Promise<void> {
-  setState({ engineState: 'STOPPED' });
+  const currentState = getCurrentState();
+
+  if (currentState.webhookServer) {
+    currentState.webhookServer.close(() => {
+      console.log('✅ Webhook HTTP server closed successfully');
+    });
+  }
+
+  if (core) {
+    try {
+      const result = core.stopWebhookServer(currentState.dbPath);
+      if (!result.success) {
+        console.warn(`⚠️  Failed to stop webhook server: ${result.message}`);
+      } else {
+        console.log('✅ Webhook server stopped successfully');
+      }
+    } catch (error) {
+      console.warn('⚠️  Error stopping webhook server:', error);
+    }
+  }
+
+  setState({ engineState: 'STOPPED', webhookServer: undefined });
   console.log('Node-Cronflow engine stopped');
 }
 
@@ -551,17 +677,19 @@ function convertToRustFormat(workflow: WorkflowDefinition): any {
     triggers: workflow.triggers.map(trigger => {
       if (trigger.type === 'webhook') {
         return {
-          type: 'webhook',
-          path: trigger.path,
-          method: trigger.options?.method || 'POST',
+          Webhook: {
+            path: trigger.path,
+            method: trigger.options?.method || 'POST',
+          },
         };
       } else if (trigger.type === 'schedule') {
         return {
-          type: 'schedule',
-          cron_expression: trigger.cron_expression,
+          Schedule: {
+            cron_expression: trigger.cron_expression,
+          },
         };
       } else {
-        return { type: 'manual' };
+        return { Manual: {} };
       }
     }),
     // Note: Services are not serialized to Rust as they contain functions
