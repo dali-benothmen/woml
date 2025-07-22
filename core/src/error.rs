@@ -23,11 +23,17 @@ pub enum CoreError {
     #[error("Run not found: {0}")]
     RunNotFound(String),
 
+    #[error("Step not found: {0}")]
+    StepNotFound(String),
+
     #[error("Step execution failed: {0}")]
     StepExecution(String),
 
     #[error("State management error: {0}")]
     State(String),
+
+    #[error("Invalid state transition: {0}")]
+    InvalidState(String),
 
     #[error("Configuration error: {0}")]
     Configuration(String),

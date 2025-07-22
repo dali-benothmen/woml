@@ -7,6 +7,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::state::StateManager;
 use crate::models::{WorkflowDefinition, WorkflowRun, StepResult, StepStatus};
 use crate::context::Context;
+use crate::workflow_state_machine::{WorkflowStateMachine, WorkflowExecutionState};
 use chrono::Utc;
 use log;
 use std::sync::{Arc, Mutex};
@@ -30,33 +31,95 @@ impl StepOrchestrator {
     pub fn start_step_execution(&self, run_id: &Uuid, workflow_id: &str) -> CoreResult<()> {
         log::info!("Starting step execution for run: {} workflow: {}", run_id, workflow_id);
         
-        // Get state manager
-        let state_manager = self.state_manager.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        // Create workflow state machine
+        let mut state_machine = WorkflowStateMachine::new(
+            self.state_manager.clone(),
+            workflow_id.to_string(),
+            *run_id,
+        );
         
-        // Get workflow definition
-        let workflow = state_manager.get_workflow(workflow_id)?
-            .ok_or_else(|| CoreError::WorkflowNotFound(format!("Workflow not found: {}", workflow_id)))?;
+        // Initialize the state machine
+        state_machine.initialize()?;
         
-        // Get workflow run
-        let run = state_manager.get_run(run_id)?
-            .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
-        
-        // Validate that run belongs to this workflow
-        if run.workflow_id != workflow_id {
-            return Err(CoreError::Validation(format!(
-                "Run {} does not belong to workflow {}", run_id, workflow_id
-            )));
-        }
-        
-        // Start executing steps
-        self.execute_steps(workflow, run)?;
+        // Execute steps using the state machine
+        self.execute_steps_with_state_machine(state_machine)?;
         
         log::info!("Step execution completed for run: {}", run_id);
         Ok(())
     }
 
-    /// Execute all steps in a workflow
+    /// Execute steps using the workflow state machine
+    fn execute_steps_with_state_machine(&self, mut state_machine: WorkflowStateMachine) -> CoreResult<()> {
+        log::info!("Executing steps using state machine for workflow: {}", state_machine.get_workflow_definition().unwrap().id);
+        
+        // Get workflow definition
+        let workflow = state_machine.get_workflow_definition()
+            .ok_or_else(|| CoreError::Internal("Workflow definition not found in state machine".to_string()))?;
+        
+        // Get workflow run
+        let run = state_machine.get_workflow_run()
+            .ok_or_else(|| CoreError::Internal("Workflow run not found in state machine".to_string()))?;
+        
+        // Execute steps until completion
+        while !state_machine.check_workflow_completion()? {
+            // Get ready steps
+            let ready_steps = state_machine.get_ready_steps();
+            
+            if ready_steps.is_empty() {
+                log::warn!("No ready steps found, but workflow is not complete");
+                break;
+            }
+            
+            // Execute each ready step
+            for step_id in ready_steps {
+                log::info!("Executing ready step: {}", step_id);
+                
+                // Mark step as running
+                state_machine.mark_step_running(&step_id)?;
+                
+                // Get step definition
+                let step_def = workflow.get_step(&step_id)
+                    .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?;
+                
+                // Get completed steps for context
+                let completed_steps = state_machine.get_completed_steps().to_vec();
+                
+                // Execute the step
+                match self.execute_single_step(workflow, run, step_def, &completed_steps, 0) {
+                    Ok(output) => {
+                        // Mark step as completed
+                        state_machine.mark_step_completed(&step_id, output)?;
+                        log::info!("Step {} completed successfully", step_id);
+                    }
+                    Err(error) => {
+                        // Mark step as failed
+                        state_machine.mark_step_failed(&step_id, error.to_string())?;
+                        log::error!("Step {} failed: {}", step_id, error);
+                        
+                        // Check if we should continue or stop
+                        if !step_def.can_retry() {
+                            log::error!("Step {} cannot be retried, stopping workflow", step_id);
+                            break;
+                        }
+                    }
+                }
+                
+                // Save state to database
+                state_machine.save_state()?;
+            }
+        }
+        
+        // Check final completion
+        let is_complete = state_machine.check_workflow_completion()?;
+        let final_state = state_machine.get_execution_state();
+        let stats = state_machine.get_stats();
+        
+        log::info!("Workflow execution completed. State: {:?}, Stats: {:?}", final_state, stats);
+        
+        Ok(())
+    }
+
+    /// Execute all steps in a workflow (legacy method - kept for backward compatibility)
     fn execute_steps(&self, workflow: WorkflowDefinition, run: WorkflowRun) -> CoreResult<()> {
         log::info!("Executing {} steps for workflow: {}", workflow.steps.len(), workflow.id);
         

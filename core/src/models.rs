@@ -104,6 +104,13 @@ impl StepDefinition {
     pub fn get_timeout_ms(&self) -> Option<u64> {
         self.timeout
     }
+    
+    /// Check if step can be retried (placeholder - will be implemented with retry count tracking)
+    pub fn can_retry(&self) -> bool {
+        // For now, always return true if retry config exists
+        // In the future, this will check against the actual retry count
+        self.retry.is_some()
+    }
 }
 
 /// Retry configuration

@@ -16,6 +16,7 @@ pub mod trigger_executor;
 pub mod webhook_server;
 pub mod scheduler;
 pub mod step_orchestrator;
+pub mod workflow_state_machine;
 
 /// Core engine version
 pub const VERSION: &str = "0.1.0";
