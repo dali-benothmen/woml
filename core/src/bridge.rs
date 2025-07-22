@@ -202,7 +202,7 @@ impl Bridge {
         Ok(result)
     }
 
-    /// Execute a workflow step
+    /// Execute a step for a workflow run
     pub fn execute_step(&self, run_id: &str, step_id: &str) -> CoreResult<String> {
         log::info!("Executing step {} for run {}", step_id, run_id);
         
@@ -210,26 +210,65 @@ impl Bridge {
         let run_uuid = uuid::Uuid::parse_str(run_id)
             .map_err(|e| CoreError::UuidParse(e))?;
         
-        // Get run from state manager
+        // Get state manager
         let state_manager = self.state_manager.lock()
             .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
         
-        let _run = state_manager.get_run(&run_uuid)?
+        // Get run from state manager
+        let run = state_manager.get_run(&run_uuid)?
             .ok_or_else(|| CoreError::WorkflowNotFound(format!("Run not found: {}", run_id)))?;
         
-        // For now, return a simple result
-        // TODO: Implement actual step execution logic
+        // Get workflow definition
+        let workflow = state_manager.get_workflow(&run.workflow_id)?
+            .ok_or_else(|| CoreError::WorkflowNotFound(format!("Workflow not found: {}", run.workflow_id)))?;
+        
+        // Find the step to execute
+        let step = workflow.get_step(step_id)
+            .ok_or_else(|| CoreError::InvalidWorkflow(format!("Step '{}' not found in workflow '{}'", step_id, workflow.id)))?;
+        
+        // Get completed steps for this run
+        let completed_steps = state_manager.get_completed_steps(&run_uuid)?;
+        
+        // Create context object for Bun.js execution
+        let mut context = crate::context::Context::new(
+            run_id.to_string(),
+            run.workflow_id.clone(),
+            step_id.to_string(),
+            run.payload.clone(),
+            run.clone(),
+            completed_steps,
+        )?;
+        
+        // Update context metadata
+        let step_index = workflow.steps.iter().position(|s| s.id == step_id).unwrap_or(0);
+        context.update_step_metadata(step_index, workflow.steps.len());
+        
+        // Set timeout if configured
+        if let Some(timeout) = step.timeout {
+            context.set_timeout(timeout);
+        }
+        
+        // Add services to context (for now, empty - will be implemented in Phase 4)
+        // TODO: Load services from workflow configuration
+        
+        // Serialize context for Bun.js
+        let context_json = context.to_json()?;
+        
+        // For now, return the context as a result
+        // TODO: In Task 1.2, we'll add the N-API call to Bun.js
         let result = serde_json::json!({
             "run_id": run_id,
             "step_id": step_id,
-            "status": "pending",
-            "message": "Step execution not yet implemented"
+            "workflow_id": run.workflow_id,
+            "context": context_json,
+            "status": "ready_for_execution",
+            "message": "Step context prepared for Bun.js execution"
         });
         
         let result_json = serde_json::to_string(&result)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        log::info!("Step execution result for {}: {}", step_id, result_json);
+        log::info!("Step execution context prepared for {}: {}", step_id, result_json);
         Ok(result_json)
     }
 
