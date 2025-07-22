@@ -906,41 +906,61 @@ pub fn execute_step_function(
     }
 }
 
-/// Execute a step function in Bun.js via N-API
+/// Execute step in Bun.js (called from Rust step orchestrator)
 #[napi]
 pub fn execute_step_in_bun(
-    step_name: String,
-    context_json: String,
-    workflow_id: String,
-    run_id: String,
-    db_path: String
+    step_name: String, context_json: String, workflow_id: String, run_id: String, db_path: String
 ) -> StepExecutionResult {
-    // This function will be called from the Node.js layer
-    // The actual step execution happens in Bun.js
+    let result = serde_json::json!({
+        "step_name": step_name, "workflow_id": workflow_id, "run_id": run_id,
+        "context": context_json, "status": "executing_in_bun",
+        "message": "Step execution delegated to Bun.js"
+    });
+    match serde_json::to_string(&result) {
+        Ok(result_json) => StepExecutionResult {
+            success: true,
+            result: Some(result_json),
+            message: "Step execution delegated to Bun.js".to_string(),
+        },
+        Err(e) => StepExecutionResult {
+            success: false,
+            result: None,
+            message: format!("Failed to serialize result: {}", e),
+        },
+    }
+}
+
+/// Execute step via Bun.js step execution handler (for Rust orchestrator)
+#[napi]
+pub fn execute_step_via_bun(
+    step_name: String, context_json: String, workflow_id: String, run_id: String, db_path: String
+) -> StepExecutionResult {
+    // This function will be called from the Rust step orchestrator
+    // It should trigger the Bun.js step execution handler
+    
+    // For now, we'll return a success result indicating the step should be executed
+    // In a real implementation, this would trigger the Bun.js step execution
     let result = serde_json::json!({
         "step_name": step_name,
         "workflow_id": workflow_id,
         "run_id": run_id,
         "context": context_json,
-        "status": "executing_in_bun",
-        "message": "Step execution delegated to Bun.js"
+        "status": "ready_for_bun_execution",
+        "message": "Step ready for Bun.js execution",
+        "execution_type": "bun_step_handler"
     });
-
+    
     match serde_json::to_string(&result) {
-        Ok(result_json) => {
-            StepExecutionResult {
-                success: true,
-                result: Some(result_json),
-                message: "Step execution delegated to Bun.js".to_string(),
-            }
-        }
-        Err(e) => {
-            StepExecutionResult {
-                success: false,
-                result: None,
-                message: format!("Failed to serialize result: {}", e),
-            }
-        }
+        Ok(result_json) => StepExecutionResult {
+            success: true,
+            result: Some(result_json),
+            message: "Step ready for Bun.js execution".to_string(),
+        },
+        Err(e) => StepExecutionResult {
+            success: false,
+            result: None,
+            message: format!("Failed to serialize result: {}", e),
+        },
     }
 }
 
