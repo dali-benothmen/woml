@@ -237,17 +237,22 @@ impl WorkflowStateMachine {
     pub fn initialize(&mut self) -> CoreResult<()> {
         log::info!("Initializing workflow state machine for run: {}", self.run_id);
         
-        // Get state manager
-        let state_manager = self.state_manager.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+        // Get workflow definition and run
+        let workflow = {
+            let state_manager = self.state_manager.lock()
+                .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+            
+            state_manager.get_workflow(&self.workflow_id)?
+                .ok_or_else(|| CoreError::WorkflowNotFound(self.workflow_id.clone()))?
+        };
         
-        // Get workflow definition
-        let workflow = state_manager.get_workflow(&self.workflow_id)?
-            .ok_or_else(|| CoreError::WorkflowNotFound(self.workflow_id.clone()))?;
-        
-        // Get workflow run
-        let run = state_manager.get_run(&self.run_id)?
-            .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", self.run_id)))?;
+        let run = {
+            let state_manager = self.state_manager.lock()
+                .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
+            
+            state_manager.get_run(&self.run_id)?
+                .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", self.run_id)))?
+        };
         
         // Store workflow and run
         self.workflow_definition = Some(workflow.clone());

@@ -52,13 +52,14 @@ impl StepOrchestrator {
     fn execute_steps_with_state_machine(&self, mut state_machine: WorkflowStateMachine) -> CoreResult<()> {
         log::info!("Executing steps using state machine for workflow: {}", state_machine.get_workflow_definition().unwrap().id);
         
-        // Get workflow definition
+        // Get workflow definition and run - clone them to avoid borrow checker issues
         let workflow = state_machine.get_workflow_definition()
-            .ok_or_else(|| CoreError::Internal("Workflow definition not found in state machine".to_string()))?;
+            .ok_or_else(|| CoreError::Internal("Workflow definition not found in state machine".to_string()))?
+            .clone();
         
-        // Get workflow run
         let run = state_machine.get_workflow_run()
-            .ok_or_else(|| CoreError::Internal("Workflow run not found in state machine".to_string()))?;
+            .ok_or_else(|| CoreError::Internal("Workflow run not found in state machine".to_string()))?
+            .clone();
         
         // Execute steps until completion
         while !state_machine.check_workflow_completion()? {
@@ -79,13 +80,14 @@ impl StepOrchestrator {
                 
                 // Get step definition
                 let step_def = workflow.get_step(&step_id)
-                    .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?;
+                    .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?
+                    .clone();
                 
                 // Get completed steps for context
                 let completed_steps = state_machine.get_completed_steps().to_vec();
                 
                 // Execute the step
-                match self.execute_single_step(workflow, run, step_def, &completed_steps, 0) {
+                match self.execute_single_step(&workflow, &run, &step_def, &completed_steps, 0) {
                     Ok(output) => {
                         // Mark step as completed
                         state_machine.mark_step_completed(&step_id, output)?;
@@ -110,12 +112,14 @@ impl StepOrchestrator {
         }
         
         // Check final completion
-        let is_complete = state_machine.check_workflow_completion()?;
+        let _is_complete = state_machine.check_workflow_completion()?;
         let final_state = state_machine.get_execution_state();
         let stats = state_machine.get_stats();
         
-        log::info!("Workflow execution completed. State: {:?}, Stats: {:?}", final_state, stats);
+        // Save final state to database
+        state_machine.save_state()?;
         
+        log::info!("Workflow execution completed with state: {:?}, stats: {:?}", final_state, stats);
         Ok(())
     }
 

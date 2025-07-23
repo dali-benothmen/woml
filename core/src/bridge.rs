@@ -514,6 +514,35 @@ impl Bridge {
         
         dispatcher.get_workflow_completed_steps(run_id)
     }
+
+    /// Execute workflow steps using step orchestrator and state machine
+    pub fn execute_workflow_steps(&self, run_id: &str, workflow_id: &str) -> CoreResult<String> {
+        log::info!("Executing workflow steps for run: {} workflow: {}", run_id, workflow_id);
+        
+        // Parse run ID
+        let run_uuid = Uuid::parse_str(run_id)
+            .map_err(|e| CoreError::Validation(format!("Invalid run ID: {}", e)))?;
+        
+        // Create step orchestrator
+        let step_orchestrator = crate::step_orchestrator::StepOrchestrator::new(self.state_manager.clone());
+        
+        // Start step execution using the orchestrator
+        match step_orchestrator.start_step_execution(&run_uuid, workflow_id) {
+            Ok(()) => {
+                log::info!("Successfully executed workflow steps for run: {}", run_id);
+                Ok(serde_json::json!({
+                    "success": true,
+                    "run_id": run_id,
+                    "workflow_id": workflow_id,
+                    "message": "Workflow steps executed successfully"
+                }).to_string())
+            }
+            Err(error) => {
+                log::error!("Failed to execute workflow steps for run {}: {}", run_id, error);
+                Err(error)
+            }
+        }
+    }
 }
 
 /// Result for job execution
@@ -1037,11 +1066,10 @@ pub fn execute_step_function(
         output: None,
         error: None,
         duration_ms: None,
-        retry_count: 0,
     };
     
     // Save step result to database
-    if let Err(e) = state_manager.save_step_result(&run_uuid, &step_result) {
+    if let Err(e) = state_manager.save_step_result(&run_uuid, step_result) {
         log::warn!("Failed to save step result: {}", e);
     }
     
@@ -1819,4 +1847,35 @@ pub fn stop_webhook_server(db_path: String) -> WebhookServerResult {
 pub struct WebhookServerResult {
     pub success: bool,
     pub message: String,
+} 
+
+#[napi]
+pub fn execute_workflow_steps(run_id: String, workflow_id: String, db_path: String) -> StepExecutionResult {
+    match Bridge::new(&db_path) {
+        Ok(bridge) => {
+            match bridge.execute_workflow_steps(&run_id, &workflow_id) {
+                Ok(result) => {
+                    StepExecutionResult {
+                        success: true,
+                        result: Some(result),
+                        message: "Workflow steps executed successfully".to_string(),
+                    }
+                }
+                Err(error) => {
+                    StepExecutionResult {
+                        success: false,
+                        result: None,
+                        message: format!("Failed to execute workflow steps: {}", error),
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            StepExecutionResult {
+                success: false,
+                result: None,
+                message: format!("Failed to create bridge: {}", error),
+            }
+        }
+    }
 } 

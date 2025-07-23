@@ -638,53 +638,29 @@ async function executeWorkflowSteps(
   payload: any
 ): Promise<void> {
   const currentState = getCurrentState();
-  const workflow = currentState.workflows.get(workflowId);
 
-  if (!workflow) {
-    throw new Error(`Workflow not found: ${workflowId}`);
+  if (!core) {
+    console.log(
+      `⚠️  Simulation: Executing workflow steps for ${workflowId} run ${runId}`
+    );
+    return;
   }
 
-  const steps = workflow.steps;
-  const completedSteps: Record<string, any> = {};
-  let lastStepResult: any = null;
-
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
-
-    const context = {
-      run_id: runId,
-      workflow_id: workflowId,
-      step_name: step.id,
-      payload: payload,
-      steps: completedSteps,
-      services: {},
-      run: {
-        id: runId,
-        workflow_id: workflowId,
-      },
-      last: lastStepResult,
-      metadata: {
-        created_at: new Date().toISOString(),
-        step_index: i,
-        total_steps: steps.length,
-        timeout: null,
-        retry_count: 0,
-        max_retries: 3,
-      },
-    };
-
-    const stepResult = await executeStepFunction(
-      step.id,
-      JSON.stringify(context),
+  try {
+    // Use the new step orchestrator function that properly tracks workflow state
+    const result = core.executeWorkflowSteps(
+      runId,
       workflowId,
-      runId
+      currentState.dbPath
     );
 
-    if (stepResult.success) {
-      completedSteps[step.id] = stepResult.result.output;
-      lastStepResult = stepResult.result.output;
-      throw new Error(`Step ${step.id} failed: ${stepResult.message}`);
+    if (result.success && result.result) {
+      console.log(`✅ Workflow steps executed successfully for run ${runId}`);
+    } else {
+      console.error(`❌ Failed to execute workflow steps: ${result.message}`);
     }
+  } catch (error) {
+    console.error(`❌ Error executing workflow steps:`, error);
   }
 }
 
