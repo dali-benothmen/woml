@@ -920,7 +920,6 @@ export async function executeStepFunction(
 
     console.log(`   - Executing step function ${stepName}...`);
 
-    // Capture console output from step execution
     const originalConsoleLog = console.log;
     const originalConsoleError = console.error;
     const originalConsoleWarn = console.warn;
@@ -928,7 +927,6 @@ export async function executeStepFunction(
 
     const capturedLogs: string[] = [];
 
-    // Override console methods to capture output
     console.log = (...args: any[]) => {
       const message = args
         .map(arg =>
@@ -972,16 +970,13 @@ export async function executeStepFunction(
     try {
       const result = await stepHandler.handler(enhancedContext);
 
-      // Restore original console methods
       console.log = originalConsoleLog;
       console.error = originalConsoleError;
       console.warn = originalConsoleWarn;
       console.info = originalConsoleInfo;
 
-      // Display captured logs directly (no extra formatting)
       if (capturedLogs.length > 0) {
         capturedLogs.forEach(log => {
-          // Extract just the message part and display it directly
           const message = log.replace(/^\[LOG\] /, '');
           console.log(message);
         });
@@ -1016,16 +1011,13 @@ export async function executeStepFunction(
         message: 'Step function executed successfully',
       };
     } catch (error) {
-      // Restore original console methods
       console.log = originalConsoleLog;
       console.error = originalConsoleError;
       console.warn = originalConsoleWarn;
       console.info = originalConsoleInfo;
 
-      // Display captured logs even if there was an error (no extra formatting)
       if (capturedLogs.length > 0) {
         capturedLogs.forEach(log => {
-          // Extract just the message part and display it directly
           const message = log.replace(/^\[LOG\] /, '');
           console.log(message);
         });
