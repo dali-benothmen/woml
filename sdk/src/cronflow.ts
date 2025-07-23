@@ -801,6 +801,8 @@ export async function executeStepFunction(
     };
   }
 
+  const startTime = process.hrtime.bigint();
+
   try {
     const stepHandler = getStepHandler(workflowId, stepName);
 
@@ -808,7 +810,39 @@ export async function executeStepFunction(
       throw new Error(`Step handler not found: ${workflowId}:${stepName}`);
     }
 
-    const contextData = JSON.parse(contextJson);
+    let contextData: any;
+    try {
+      contextData = JSON.parse(contextJson);
+    } catch (error: any) {
+      throw new Error(`Failed to parse context JSON: ${error.message}`);
+    }
+
+    if (!contextData || typeof contextData !== 'object') {
+      throw new Error('Invalid context: must be an object');
+    }
+
+    const requiredFields = ['run_id', 'workflow_id', 'step_name', 'payload'];
+    for (const field of requiredFields) {
+      if (!contextData[field]) {
+        throw new Error(`Missing required context field: ${field}`);
+      }
+    }
+
+    const contextSize = contextJson.length;
+    const maxContextSize = 10 * 1024 * 1024; // 10MB limit
+    if (contextSize > maxContextSize) {
+      throw new Error(
+        `Context too large: ${contextSize} bytes (max: ${maxContextSize} bytes)`
+      );
+    }
+
+    if (contextData.metadata?.checksum) {
+      const expectedChecksum = contextData.metadata.checksum;
+      const actualChecksum = generateContextChecksum(contextData);
+      if (expectedChecksum !== actualChecksum) {
+        throw new Error('Context checksum validation failed');
+      }
+    }
 
     const currentState = getCurrentState();
     const workflow = currentState.workflows.get(workflowId);
@@ -834,43 +868,26 @@ export async function executeStepFunction(
       }
     }
 
-    const ctx: Context = {
-      payload: contextData.payload || {},
-      steps: contextData.steps || {},
-      services: services,
-      run: {
-        id: contextData.run_id,
-        workflowId: contextData.workflow_id,
-      },
-      state: {
-        get: async (key: string, defaultValue?: any) => {
-          return await getWorkflowState(workflowId, key, defaultValue);
-        },
-        set: async (key: string, value: any, options?: { ttl?: string }) => {
-          return await setWorkflowState(workflowId, key, value, options);
-        },
-        incr: async (key: string, amount: number = 1) => {
-          return await incrWorkflowState(workflowId, key, amount);
-        },
-      },
-      last: contextData.last,
-      trigger: {
-        headers: {},
-        rawBody: undefined,
-      },
-      cancel: (reason?: string) => {
-        throw new Error(
-          `Workflow cancelled: ${reason || 'No reason provided'}`
-        );
-      },
-    };
+    const enhancedContext = createEnhancedContext(
+      contextData,
+      services,
+      workflowId,
+      runId
+    );
 
-    const startTime = Date.now();
-    const result = await stepHandler.handler(ctx);
-    const duration = Date.now() - startTime;
+    console.log(`   - Executing step function ${stepName}...`);
+    const result = await stepHandler.handler(enhancedContext);
+    console.log(`   ✅ Step function ${stepName} executed successfully`);
 
+    const endTime = process.hrtime.bigint();
+    const duration = Number(endTime - startTime) / 1000000; // Convert to milliseconds
+
+    console.log(`   📊 Step execution metrics:`);
+    console.log(`      - Duration: ${duration.toFixed(2)}ms`);
+    console.log(`      - Context size: ${contextSize} bytes`);
+    console.log(`      - Services: ${Object.keys(services).length}`);
     console.log(
-      `✅ Step function executed successfully: ${workflowId}:${stepName} (${duration}ms)`
+      `      - Steps completed: ${Object.keys(contextData.steps || {}).length}`
     );
 
     return {
@@ -879,18 +896,22 @@ export async function executeStepFunction(
         step_name: stepName,
         workflow_id: workflowId,
         run_id: runId,
-        status: 'completed',
         output: result,
         duration_ms: duration,
-        message: 'Step function executed successfully',
+        context_size_bytes: contextSize,
+        services_count: Object.keys(services).length,
+        steps_completed: Object.keys(contextData.steps || {}).length,
       },
       message: 'Step function executed successfully',
     };
-  } catch (error) {
-    console.error(
-      `❌ Step function execution failed: ${workflowId}:${stepName}`,
-      error
-    );
+  } catch (error: any) {
+    const endTime = process.hrtime.bigint();
+    const duration = Number(endTime - startTime) / 1000000;
+
+    console.error(`   ❌ Error executing step function ${stepName}:`, error);
+    console.error(`   📊 Error metrics:`);
+    console.error(`      - Duration: ${duration.toFixed(2)}ms`);
+    console.error(`      - Context size: ${contextJson.length} bytes`);
 
     return {
       success: false,
@@ -898,13 +919,81 @@ export async function executeStepFunction(
         step_name: stepName,
         workflow_id: workflowId,
         run_id: runId,
-        status: 'failed',
-        error: error instanceof Error ? error.message : String(error),
-        message: 'Step function execution failed',
+        error: error.message,
+        duration_ms: duration,
+        context_size_bytes: contextJson.length,
       },
-      message: error instanceof Error ? error.message : String(error),
+      message: `Step function execution failed: ${error.message}`,
     };
   }
+}
+
+function createEnhancedContext(
+  contextData: any,
+  services: Record<string, any>,
+  workflowId: string,
+  runId: string
+): Context {
+  const complexityScore = calculateContextComplexity(contextData);
+
+  const enhancedContext: Context = {
+    ...contextData,
+    services,
+    _metadata: {
+      ...contextData.metadata,
+      complexity_score: complexityScore,
+      execution_timestamp: new Date().toISOString(),
+      context_version: '1.0.0',
+      validation_passed: true,
+    },
+  };
+
+  return enhancedContext;
+}
+
+function calculateContextComplexity(contextData: any): number {
+  let score = 1;
+
+  const payloadSize = JSON.stringify(contextData.payload || {}).length;
+  if (payloadSize > 100000) score += 2;
+  else if (payloadSize > 10000) score += 1;
+
+  const stepsCount = Object.keys(contextData.steps || {}).length;
+  if (stepsCount > 50) score += 2;
+  else if (stepsCount > 10) score += 1;
+
+  const servicesCount = Object.keys(contextData.services || {}).length;
+  if (servicesCount > 10) score += 2;
+  else if (servicesCount > 5) score += 1;
+
+  if (hasDeepNesting(contextData.payload, 0)) score += 1;
+
+  return Math.min(score, 10);
+}
+
+function hasDeepNesting(obj: any, depth: number): boolean {
+  if (depth > 5) return true;
+  if (!obj || typeof obj !== 'object') return false;
+
+  if (Array.isArray(obj)) {
+    return obj.some(item => hasDeepNesting(item, depth + 1));
+  }
+
+  return Object.values(obj).some(value => hasDeepNesting(value, depth + 1));
+}
+
+function generateContextChecksum(contextData: any): string {
+  const crypto = require('crypto');
+
+  const checksumData = {
+    run_id: contextData.run_id,
+    workflow_id: contextData.workflow_id,
+    step_name: contextData.step_name,
+    payload: contextData.payload,
+  };
+
+  const checksumString = JSON.stringify(checksumData);
+  return crypto.createHash('sha256').update(checksumString).digest('hex');
 }
 
 export async function executeJobFunction(
