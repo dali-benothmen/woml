@@ -395,7 +395,6 @@ export interface WebhookServerConfig {
 
 export interface StartOptions {
   webhookServer?: WebhookServerConfig;
-  dbPath?: string;
 }
 
 export async function start(options?: StartOptions): Promise<void> {
@@ -411,13 +410,14 @@ export async function start(options?: StartOptions): Promise<void> {
   setState({ engineState: 'STARTING' });
   console.log('Starting Node-Cronflow engine...');
 
+  if (!currentState.dbPath) {
+    const defaultDbPath = './cronflow.db';
+    setState({ dbPath: defaultDbPath });
+    console.log(`🔧 Using default database path: ${defaultDbPath}`);
+  }
+
   if (core) {
     try {
-      if (options?.dbPath) {
-        setState({ dbPath: options.dbPath });
-        console.log(`🔧 Using custom database path: ${options.dbPath}`);
-      }
-
       if (options?.webhookServer) {
         const webhookConfig = {
           host: options.webhookServer.host || '127.0.0.1',
@@ -609,19 +609,82 @@ export async function trigger(
       console.log(
         `✅ Workflow triggered successfully: ${workflowId} -> ${result.runId}`
       );
+
+      await executeWorkflowSteps(workflowId, result.runId, payload);
+
       return result.runId;
     } else if (result.success) {
       console.log(
         `⚠️  Workflow triggered but no runId returned: ${workflowId} -> ${result.message}`
       );
       // Fallback to generating a run ID if none was returned
-      return `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const fallbackRunId = `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      await executeWorkflowSteps(workflowId, fallbackRunId, payload);
+
+      return fallbackRunId;
     } else {
       throw new Error(`Failed to trigger workflow: ${result.message}`);
     }
   } catch (error) {
     console.error(`❌ Failed to trigger workflow ${workflowId}:`, error);
     throw error;
+  }
+}
+
+async function executeWorkflowSteps(
+  workflowId: string,
+  runId: string,
+  payload: any
+): Promise<void> {
+  const currentState = getCurrentState();
+  const workflow = currentState.workflows.get(workflowId);
+
+  if (!workflow) {
+    throw new Error(`Workflow not found: ${workflowId}`);
+  }
+
+  const steps = workflow.steps;
+  const completedSteps: Record<string, any> = {};
+  let lastStepResult: any = null;
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+
+    const context = {
+      run_id: runId,
+      workflow_id: workflowId,
+      step_name: step.id,
+      payload: payload,
+      steps: completedSteps,
+      services: {},
+      run: {
+        id: runId,
+        workflow_id: workflowId,
+      },
+      last: lastStepResult,
+      metadata: {
+        created_at: new Date().toISOString(),
+        step_index: i,
+        total_steps: steps.length,
+        timeout: null,
+        retry_count: 0,
+        max_retries: 3,
+      },
+    };
+
+    const stepResult = await executeStepFunction(
+      step.id,
+      JSON.stringify(context),
+      workflowId,
+      runId
+    );
+
+    if (stepResult.success) {
+      completedSteps[step.id] = stepResult.result.output;
+      lastStepResult = stepResult.result.output;
+      throw new Error(`Step ${step.id} failed: ${stepResult.message}`);
+    }
   }
 }
 
@@ -773,7 +836,7 @@ export async function executeStepFunction(
           return await incrWorkflowState(workflowId, key, amount);
         },
       },
-      last: null,
+      last: contextData.last,
       trigger: {
         headers: {},
         rawBody: undefined,
@@ -1027,6 +1090,308 @@ export async function resume(token: string, payload: any): Promise<void> {
 
 export function isRustCoreAvailable(): boolean {
   return core !== null;
+}
+
+function getMemoryUsage() {
+  const usage = process.memoryUsage();
+  return {
+    rss: Math.round(usage.rss / 1024 / 1024), // MB
+    heapTotal: Math.round(usage.heapTotal / 1024 / 1024), // MB
+    heapUsed: Math.round(usage.heapUsed / 1024 / 1024), // MB
+    external: Math.round(usage.external / 1024 / 1024), // MB
+  };
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1) return `${(ms * 1000).toFixed(2)}μs`;
+  if (ms < 1000) return `${ms.toFixed(2)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${(ms / 60000).toFixed(2)}m`;
+}
+
+function calculateStats(values: number[]) {
+  const sorted = values.sort((a, b) => a - b);
+  const sum = values.reduce((a, b) => a + b, 0);
+  const mean = sum / values.length;
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  const variance =
+    values.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) /
+    values.length;
+  const stdDev = Math.sqrt(variance);
+
+  return {
+    count: values.length,
+    mean,
+    median,
+    min,
+    max,
+    stdDev,
+    p95: sorted[Math.floor(sorted.length * 0.95)],
+    p99: sorted[Math.floor(sorted.length * 0.99)],
+  };
+}
+
+export interface BenchmarkOptions {
+  iterations?: number;
+  stepsPerWorkflow?: number;
+  payloadSize?: number;
+  delayBetweenRuns?: number;
+  verbose?: boolean;
+}
+
+export interface BenchmarkResult {
+  success: boolean;
+  statistics: {
+    duration: {
+      count: number;
+      mean: number;
+      median: number;
+      min: number;
+      max: number;
+      stdDev: number;
+      p95: number;
+      p99: number;
+    };
+    memory: {
+      count: number;
+      mean: number;
+      median: number;
+      min: number;
+      max: number;
+      stdDev: number;
+      p95: number;
+      p99: number;
+    };
+    successRate: number;
+    throughput: number;
+    stepsPerSecond: number;
+    averageStepTime: number;
+  };
+  results: Array<{
+    iteration: number;
+    success: boolean;
+    runId?: string;
+    duration: number;
+    error?: string;
+    memory?: {
+      start: any;
+      end: any;
+      delta: {
+        rss: number;
+        heapUsed: number;
+      };
+    };
+  }>;
+}
+
+export async function benchmark(
+  options: BenchmarkOptions = {}
+): Promise<BenchmarkResult> {
+  const {
+    iterations = 10,
+    stepsPerWorkflow = 3,
+    payloadSize = 100,
+    delayBetweenRuns = 100,
+    verbose = true,
+  } = options;
+
+  if (verbose) {
+    console.log('🚀 Node-Cronflow Performance Benchmark');
+    console.log('='.repeat(60));
+    console.log(`📊 Running ${iterations} iterations...`);
+    console.log(`⏱️  Start Time: ${new Date().toISOString()}`);
+    console.log(
+      `🔧 Configuration: ${stepsPerWorkflow} steps/workflow, ${payloadSize} items/payload`
+    );
+    console.log('─'.repeat(60));
+  }
+
+  const results: any[] = [];
+  const durations: number[] = [];
+  const memoryDeltas: number[] = [];
+  const benchmarkId = Date.now().toString();
+
+  for (let i = 1; i <= iterations; i++) {
+    if (verbose) {
+      console.log(`🔄 Running iteration ${i}/${iterations}...`);
+    }
+
+    const startTime = process.hrtime.bigint();
+    const startMemory = getMemoryUsage();
+
+    try {
+      const workflow = define({
+        id: `benchmark-${benchmarkId}-${i}`,
+        name: `Benchmark Workflow ${i}`,
+        description: 'Performance test workflow',
+      });
+
+      for (let stepNum = 1; stepNum <= stepsPerWorkflow; stepNum++) {
+        workflow.step(`step${stepNum}`, async (ctx: Context) => {
+          return {
+            message: `Step ${stepNum} completed`,
+            previous: ctx.last,
+            timestamp: Date.now(),
+            stepNumber: stepNum,
+          };
+        });
+      }
+
+      await start();
+
+      const payload = {
+        iteration: i,
+        timestamp: Date.now(),
+        data: Array.from({ length: payloadSize }, (_, j) => `item-${j}`),
+      };
+
+      const runId = await trigger(`benchmark-${benchmarkId}-${i}`, payload);
+
+      const endTime = process.hrtime.bigint();
+      const endMemory = getMemoryUsage();
+      const duration = Number(endTime - startTime) / 1000000; // Convert to ms
+
+      const result = {
+        iteration: i,
+        success: true,
+        runId,
+        duration,
+        memory: {
+          start: startMemory,
+          end: endMemory,
+          delta: {
+            rss: endMemory.rss - startMemory.rss,
+            heapUsed: endMemory.heapUsed - startMemory.heapUsed,
+          },
+        },
+      };
+
+      results.push(result);
+      durations.push(duration);
+      memoryDeltas.push(result.memory.delta.heapUsed);
+    } catch (error) {
+      const endTime = process.hrtime.bigint();
+      const duration = Number(endTime - startTime) / 1000000;
+
+      const result = {
+        iteration: i,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        duration,
+      };
+
+      results.push(result);
+    } finally {
+      await stop();
+    }
+
+    if (delayBetweenRuns > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayBetweenRuns));
+    }
+  }
+
+  const successfulRuns = results.filter(r => r.success).length;
+  const successRate = (successfulRuns / iterations) * 100;
+
+  let durationStats, memoryStats, stepsPerSecond, averageStepTime, throughput;
+
+  if (successfulRuns > 0) {
+    durationStats = calculateStats(durations);
+    memoryStats = calculateStats(memoryDeltas);
+    const totalSteps = successfulRuns * stepsPerWorkflow;
+    stepsPerSecond = totalSteps / (durationStats.mean / 1000);
+    averageStepTime = durationStats.mean / stepsPerWorkflow;
+    throughput = iterations / (durationStats.mean / 1000);
+  } else {
+    durationStats = {
+      count: 0,
+      mean: 0,
+      median: 0,
+      min: 0,
+      max: 0,
+      stdDev: 0,
+      p95: 0,
+      p99: 0,
+    };
+    memoryStats = {
+      count: 0,
+      mean: 0,
+      median: 0,
+      min: 0,
+      max: 0,
+      stdDev: 0,
+      p95: 0,
+      p99: 0,
+    };
+    stepsPerSecond = 0;
+    averageStepTime = 0;
+    throughput = 0;
+  }
+
+  if (verbose) {
+    console.log('─'.repeat(60));
+    console.log('📈 PERFORMANCE BENCHMARK RESULTS');
+    console.log('─'.repeat(60));
+
+    if (successfulRuns > 0) {
+      console.log('⏱️  Execution Time Statistics:');
+      console.log(`   - Iterations: ${durationStats.count}`);
+      console.log(`   - Mean: ${formatDuration(durationStats.mean)}`);
+      console.log(`   - Median: ${formatDuration(durationStats.median)}`);
+      console.log(`   - Min: ${formatDuration(durationStats.min)}`);
+      console.log(`   - Max: ${formatDuration(durationStats.max)}`);
+      console.log(`   - Std Dev: ${formatDuration(durationStats.stdDev)}`);
+      console.log(`   - 95th Percentile: ${formatDuration(durationStats.p95)}`);
+      console.log(`   - 99th Percentile: ${formatDuration(durationStats.p99)}`);
+
+      console.log('\n📊 Memory Usage Statistics:');
+      console.log(`   - Mean Heap Delta: ${memoryStats.mean.toFixed(2)} MB`);
+      console.log(
+        `   - Median Heap Delta: ${memoryStats.median.toFixed(2)} MB`
+      );
+      console.log(`   - Min Heap Delta: ${memoryStats.min.toFixed(2)} MB`);
+      console.log(`   - Max Heap Delta: ${memoryStats.max.toFixed(2)} MB`);
+
+      console.log('\n🚀 Performance Metrics:');
+      console.log(`   - Average Steps/Second: ${stepsPerSecond.toFixed(2)}`);
+      console.log(`   - Average Step Time: ${formatDuration(averageStepTime)}`);
+      console.log(`   - Throughput: ${throughput.toFixed(2)} workflows/second`);
+    } else {
+      console.log('❌ No successful runs to analyze');
+    }
+
+    console.log('\n📋 Success Rate:');
+    console.log(
+      `   - Successful: ${successfulRuns}/${iterations} (${successRate.toFixed(1)}%)`
+    );
+
+    if (successfulRuns < iterations) {
+      console.log('\n❌ Failed Runs:');
+      results
+        .filter(r => !r.success)
+        .forEach(r => {
+          console.log(`   - Iteration ${r.iteration}: ${r.error}`);
+        });
+    }
+
+    console.log('─'.repeat(60));
+    console.log('✅ Benchmark completed');
+  }
+
+  return {
+    success: successfulRuns > 0,
+    statistics: {
+      duration: durationStats,
+      memory: memoryStats,
+      successRate,
+      throughput,
+      stepsPerSecond,
+      averageStepTime,
+    },
+    results,
+  };
 }
 
 export async function executeManualTrigger(

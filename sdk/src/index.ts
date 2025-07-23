@@ -56,6 +56,9 @@ export const cronflow = {
   deleteWorkflowState: cronflowFunctions.deleteWorkflowState,
   getStateStats: cronflowFunctions.getStateStats,
   cleanupExpiredState: cronflowFunctions.cleanupExpiredState,
+
+  // Performance benchmarking
+  benchmark: cronflowFunctions.benchmark,
 };
 
 // Export types
@@ -65,6 +68,7 @@ export type { WorkflowDefinition } from './workflow/types';
 export type { Context } from './workflow/types';
 export type { StepDefinition, StepOptions } from './workflow/types';
 export type { TriggerDefinition } from './workflow/types';
+export type { BenchmarkOptions, BenchmarkResult } from './cronflow';
 
 export { WorkflowDefinitionSchema } from './workflow/validation';
 
