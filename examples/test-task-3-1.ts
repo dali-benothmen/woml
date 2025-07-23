@@ -9,9 +9,10 @@
 
 import { cronflow } from '../sdk/src/index';
 import { Context } from '../sdk/src/workflow/types';
+import * as fs from 'fs';
 
 // Test configuration
-const TEST_DB_PATH = ':memory:';
+const TEST_DB_PATH = './test-task-3-1.db';
 const TEST_WORKFLOW_ID = 'test-state-machine-workflow';
 
 interface StepResult {
@@ -25,9 +26,10 @@ async function testWorkflowStateMachine() {
   console.log('='.repeat(60));
 
   try {
-    // Initialize Cronflow
-    await cronflow.start();
-    console.log('✅ Cronflow initialized');
+    // Clean up any existing test database
+    if (fs.existsSync(TEST_DB_PATH)) {
+      fs.unlinkSync(TEST_DB_PATH);
+    }
 
     // Test 1: Create a workflow with dependencies
     console.log('\n📋 Test 1: Creating workflow with dependencies');
@@ -99,9 +101,13 @@ async function testWorkflowStateMachine() {
     // Add webhook trigger
     workflow.onWebhook('/webhook/state-machine-test');
 
-    // Register the workflow
+    // Register the workflow BEFORE starting the engine
     await workflow.register();
     console.log('✅ Workflow registered successfully');
+
+    // Initialize Cronflow with custom database path
+    await cronflow.start({ dbPath: TEST_DB_PATH });
+    console.log('✅ Cronflow initialized with database:', TEST_DB_PATH);
 
     // Test 2: Create a workflow run
     console.log('\n📋 Test 2: Creating workflow run');
@@ -255,6 +261,11 @@ async function testWorkflowStateMachine() {
   } finally {
     // Clean up
     await cronflow.stop();
+    // Clean up the test database file
+    if (fs.existsSync(TEST_DB_PATH)) {
+      fs.unlinkSync(TEST_DB_PATH);
+      console.log('✅ Test database file deleted:', TEST_DB_PATH);
+    }
   }
 }
 

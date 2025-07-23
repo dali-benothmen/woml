@@ -371,6 +371,11 @@ export function define(
     stop,
     trigger,
     inspect,
+    registerWorkflow: async (workflow: WorkflowDefinition) => {
+      const currentState = getCurrentState();
+      currentState.workflows.set(workflow.id, workflow);
+      console.log(`Workflow '${workflow.id}' registered with SDK state`);
+    },
     registerStepHandler: (
       workflowId: string,
       stepId: string,
@@ -390,6 +395,7 @@ export interface WebhookServerConfig {
 
 export interface StartOptions {
   webhookServer?: WebhookServerConfig;
+  dbPath?: string;
 }
 
 export async function start(options?: StartOptions): Promise<void> {
@@ -407,6 +413,11 @@ export async function start(options?: StartOptions): Promise<void> {
 
   if (core) {
     try {
+      if (options?.dbPath) {
+        setState({ dbPath: options.dbPath });
+        console.log(`🔧 Using custom database path: ${options.dbPath}`);
+      }
+
       if (options?.webhookServer) {
         const webhookConfig = {
           host: options.webhookServer.host || '127.0.0.1',
@@ -860,11 +871,6 @@ async function registerWorkflowWithRust(
   try {
     const rustFormat = convertToRustFormat(workflow);
     const workflowJson = JSON.stringify(rustFormat);
-    console.log(
-      '🔍 Debug: Serialized workflow JSON:',
-      workflowJson.substring(0, 500) + '...'
-    );
-
     const result = core.registerWorkflow(workflowJson, currentState.dbPath);
 
     if (!result.success) {
