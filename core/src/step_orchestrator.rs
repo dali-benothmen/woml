@@ -86,15 +86,15 @@ impl StepOrchestrator {
                 // Get completed steps for context
                 let completed_steps = state_machine.get_completed_steps().to_vec();
                 
-                // Execute the step
-                match self.execute_single_step(&workflow, &run, &step_def, &completed_steps, 0) {
+                // Execute the step using the state machine context
+                match self.execute_step_with_state_machine(&workflow, &run, &step_def, &completed_steps, 0) {
                     Ok(output) => {
-                        // Mark step as completed
+                        // Mark step as completed in state machine
                         state_machine.mark_step_completed(&step_id, output)?;
                         log::info!("Step {} completed successfully", step_id);
                     }
                     Err(error) => {
-                        // Mark step as failed
+                        // Mark step as failed in state machine
                         state_machine.mark_step_failed(&step_id, error.to_string())?;
                         log::error!("Step {} failed: {}", step_id, error);
                         
@@ -111,13 +111,27 @@ impl StepOrchestrator {
             }
         }
         
-        // Check final completion
-        let _is_complete = state_machine.check_workflow_completion()?;
+        // Check final completion and finalize
+        let is_complete = state_machine.check_workflow_completion()?;
+        if is_complete {
+            // Determine error message if any steps failed
+            let error_message = if state_machine.get_stats().failed_steps > 0 {
+                let failed_steps: Vec<_> = state_machine.get_completed_steps()
+                    .iter()
+                    .filter(|step| matches!(step.status, crate::models::StepStatus::Failed))
+                    .map(|step| format!("{}: {}", step.step_id, step.error.as_deref().unwrap_or("Unknown error")))
+                    .collect();
+                Some(format!("Workflow failed: {}", failed_steps.join(", ")))
+            } else {
+                None
+            };
+            
+            // Finalize workflow completion with hooks and cleanup
+            state_machine.finalize_completion(error_message)?;
+        }
+        
         let final_state = state_machine.get_execution_state();
         let stats = state_machine.get_stats();
-        
-        // Save final state to database
-        state_machine.save_state()?;
         
         log::info!("Workflow execution completed with state: {:?}, stats: {:?}", final_state, stats);
         Ok(())
@@ -145,7 +159,7 @@ impl StepOrchestrator {
             };
             
             // Execute the step
-            match self.execute_single_step(&workflow, &run, step_def, &completed_steps, step_index) {
+            match self.execute_step_with_state_machine(&workflow, &run, step_def, &completed_steps, step_index) {
                 Ok(output) => {
                     // Step completed successfully
                     step_result.status = StepStatus::Completed;
@@ -187,8 +201,8 @@ impl StepOrchestrator {
         Ok(())
     }
 
-    /// Execute a single step
-    fn execute_single_step(
+    /// Execute a single step with state machine integration
+    fn execute_step_with_state_machine(
         &self,
         workflow: &WorkflowDefinition,
         run: &WorkflowRun,
@@ -196,7 +210,7 @@ impl StepOrchestrator {
         completed_steps: &[StepResult],
         step_index: usize,
     ) -> CoreResult<serde_json::Value> {
-        log::debug!("Executing step: {} for run: {}", step_def.id, run.id);
+        log::debug!("Executing step with state machine: {} for run: {}", step_def.id, run.id);
         
         // Create context for step execution
         let context = self.create_step_context(workflow, run, step_def, completed_steps, step_index)?;

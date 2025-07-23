@@ -511,6 +511,107 @@ impl WorkflowStateMachine {
         log::debug!("Saved workflow state to database");
         Ok(())
     }
+
+    /// Execute completion hooks (onSuccess or onFailure)
+    pub fn execute_completion_hooks(&self, context: &crate::models::WorkflowCompletionContext) -> CoreResult<()> {
+        log::info!("Executing completion hooks for workflow: {} run: {}", context.workflow_id, context.run_id);
+        
+        // Determine which hook to execute based on final status
+        let hook_type = if context.is_success() {
+            "onSuccess"
+        } else {
+            "onFailure"
+        };
+        
+        log::info!("Executing {} hook for workflow: {}", hook_type, context.workflow_id);
+        
+        // For now, we'll log the hook execution
+        // In the next phase, this will call the N-API function to execute hooks in Bun.js
+        match hook_type {
+            "onSuccess" => {
+                log::info!("✅ Workflow {} completed successfully in {}ms", 
+                    context.workflow_id, 
+                    context.duration_ms.unwrap_or(0)
+                );
+                log::info!("   - Completed steps: {}", context.completed_step_count());
+                log::info!("   - Final output: {:?}", context.final_output);
+            },
+            "onFailure" => {
+                log::error!("❌ Workflow {} failed after {}ms", 
+                    context.workflow_id, 
+                    context.duration_ms.unwrap_or(0)
+                );
+                log::error!("   - Completed steps: {}", context.completed_step_count());
+                log::error!("   - Failed steps: {}", context.failed_step_count());
+                if let Some(error) = &context.error {
+                    log::error!("   - Error: {}", error);
+                }
+            },
+            _ => {
+                log::warn!("Unknown hook type: {}", hook_type);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Create completion context for hook execution
+    pub fn create_completion_context(&self, final_status: RunStatus, error_message: Option<String>) -> CoreResult<crate::models::WorkflowCompletionContext> {
+        let workflow = self.workflow_definition.as_ref()
+            .ok_or_else(|| CoreError::Internal("Workflow definition not found".to_string()))?;
+        
+        let run = self.workflow_run.as_ref()
+            .ok_or_else(|| CoreError::Internal("Workflow run not found".to_string()))?;
+        
+        let completed_at = chrono::Utc::now();
+        
+        let context = crate::models::WorkflowCompletionContext::new(
+            self.run_id.to_string(),
+            self.workflow_id.clone(),
+            final_status,
+            self.completed_steps.clone(),
+            error_message,
+            run.started_at,
+            completed_at,
+            run.payload.clone(),
+        );
+        
+        Ok(context)
+    }
+    
+    /// Finalize workflow completion with hooks and cleanup
+    pub fn finalize_completion(&mut self, error_message: Option<String>) -> CoreResult<()> {
+        log::info!("Finalizing workflow completion for: {} run: {}", self.workflow_id, self.run_id);
+        
+        // Determine final status
+        let final_status = if self.stats.failed_steps > 0 {
+            RunStatus::Failed
+        } else {
+            RunStatus::Completed
+        };
+        
+        // Update execution state
+        self.execution_state = match final_status {
+            RunStatus::Completed => WorkflowExecutionState::Completed,
+            RunStatus::Failed => WorkflowExecutionState::Failed,
+            _ => WorkflowExecutionState::Failed, // Default to failed for unexpected status
+        };
+        
+        // Mark stats as completed
+        self.stats.mark_completed();
+        
+        // Create completion context
+        let completion_context = self.create_completion_context(final_status.clone(), error_message.clone())?;
+        
+        // Execute hooks
+        self.execute_completion_hooks(&completion_context)?;
+        
+        // Save final state to database
+        self.save_state()?;
+        
+        log::info!("Workflow {} finalized with status: {:?}", self.workflow_id, final_status);
+        Ok(())
+    }
 }
 
 impl WorkflowExecutionState {

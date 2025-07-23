@@ -1632,3 +1632,109 @@ export function createValidContext(
 }
 
 initialize();
+
+const hookHandlers = new Map<
+  string,
+  (hookType: string, contextJson: string, workflowId: string) => Promise<any>
+>();
+
+function registerHookHandler(
+  hookType: 'onSuccess' | 'onFailure',
+  handler: (
+    hookType: string,
+    contextJson: string,
+    workflowId: string
+  ) => Promise<any>
+): void {
+  hookHandlers.set(hookType, handler);
+  console.log(`🎣 Registered ${hookType} hook handler`);
+}
+
+registerHookHandler('onSuccess', executeWorkflowHook);
+registerHookHandler('onFailure', executeWorkflowHook);
+
+function getHookHandler(
+  hookType: string
+):
+  | ((
+      hookType: string,
+      contextJson: string,
+      workflowId: string
+    ) => Promise<any>)
+  | undefined {
+  return hookHandlers.get(hookType);
+}
+
+export async function executeWorkflowHook(
+  hookType: string,
+  contextJson: string,
+  workflowId: string
+): Promise<any> {
+  try {
+    console.log(`🎣 Executing ${hookType} hook for workflow: ${workflowId}`);
+
+    if (hookType !== 'onSuccess' && hookType !== 'onFailure') {
+      console.warn(`⚠️  Invalid hook type: ${hookType}`);
+      return { success: false, error: `Invalid hook type: ${hookType}` };
+    }
+
+    const context = JSON.parse(contextJson);
+    console.log(`   - Run ID: ${context.run_id}`);
+    console.log(`   - Status: ${context.status}`);
+    console.log(`   - Duration: ${context.duration_ms}ms`);
+    console.log(
+      `   - Completed steps: ${context.completed_steps?.length || 0}`
+    );
+
+    const workflow = getWorkflow(workflowId);
+    if (!workflow) {
+      console.warn(`⚠️  Workflow ${workflowId} not found for hook execution`);
+      return {
+        success: true,
+        message: `No ${hookType} hook defined (workflow not found)`,
+      };
+    }
+
+    const hook =
+      hookType === 'onSuccess'
+        ? workflow.hooks?.onSuccess
+        : workflow.hooks?.onFailure;
+    if (hook) {
+      try {
+        console.log(`   - Executing ${hookType} hook...`);
+        await hook(context);
+        console.log(`   ✅ ${hookType} hook executed successfully`);
+        return {
+          success: true,
+          message: `${hookType} hook executed successfully`,
+          hookType,
+          workflowId,
+        };
+      } catch (error: any) {
+        console.error(`   ❌ Error executing ${hookType} hook:`, error);
+        return {
+          success: false,
+          error: error.message,
+          hookType,
+          workflowId,
+        };
+      }
+    } else {
+      console.log(`   - No ${hookType} hook defined for workflow`);
+      return {
+        success: true,
+        message: `No ${hookType} hook defined`,
+        hookType,
+        workflowId,
+      };
+    }
+  } catch (error: any) {
+    console.error(`❌ Failed to execute ${hookType} hook:`, error);
+    return {
+      success: false,
+      error: error.message,
+      hookType,
+      workflowId,
+    };
+  }
+}

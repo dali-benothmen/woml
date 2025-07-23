@@ -354,3 +354,80 @@ impl StepStatus {
         }
     }
 } 
+
+/// Workflow completion context for hook execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowCompletionContext {
+    /// Run ID
+    pub run_id: String,
+    /// Workflow ID
+    pub workflow_id: String,
+    /// Final run status
+    pub status: RunStatus,
+    /// All completed step results
+    pub completed_steps: Vec<StepResult>,
+    /// Error message if workflow failed
+    pub error: Option<String>,
+    /// Total execution duration in milliseconds
+    pub duration_ms: Option<u64>,
+    /// Workflow start time
+    pub started_at: chrono::DateTime<Utc>,
+    /// Workflow completion time
+    pub completed_at: chrono::DateTime<Utc>,
+    /// Original payload that triggered the workflow
+    pub payload: serde_json::Value,
+    /// Final workflow output (last step result)
+    pub final_output: Option<serde_json::Value>,
+}
+
+impl WorkflowCompletionContext {
+    /// Create a new completion context
+    pub fn new(
+        run_id: String,
+        workflow_id: String,
+        status: RunStatus,
+        completed_steps: Vec<StepResult>,
+        error: Option<String>,
+        started_at: chrono::DateTime<Utc>,
+        completed_at: chrono::DateTime<Utc>,
+        payload: serde_json::Value,
+    ) -> Self {
+        let duration_ms = Some((completed_at - started_at).num_milliseconds() as u64);
+        let final_output = completed_steps.last().and_then(|step| step.output.clone());
+        
+        Self {
+            run_id,
+            workflow_id,
+            status,
+            completed_steps,
+            error,
+            duration_ms,
+            started_at,
+            completed_at,
+            payload,
+            final_output,
+        }
+    }
+    
+    /// Check if workflow completed successfully
+    pub fn is_success(&self) -> bool {
+        matches!(self.status, RunStatus::Completed)
+    }
+    
+    /// Check if workflow failed
+    pub fn is_failure(&self) -> bool {
+        matches!(self.status, RunStatus::Failed)
+    }
+    
+    /// Get number of completed steps
+    pub fn completed_step_count(&self) -> usize {
+        self.completed_steps.len()
+    }
+    
+    /// Get number of failed steps
+    pub fn failed_step_count(&self) -> usize {
+        self.completed_steps.iter()
+            .filter(|step| matches!(step.status, StepStatus::Failed))
+            .count()
+    }
+} 

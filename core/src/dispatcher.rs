@@ -609,6 +609,27 @@ impl Dispatcher {
                 None
             };
             
+            // Get run information for completion context
+            let run = state_manager.get_run(run_id)?
+                .ok_or_else(|| CoreError::Internal("Run not found".to_string()))?;
+            
+            // Create completion context
+            let completion_context = crate::models::WorkflowCompletionContext::new(
+                run_id.to_string(),
+                workflow_id.to_string(),
+                final_status.clone(),
+                completed_steps.clone(),
+                error_message.clone(),
+                run.started_at,
+                chrono::Utc::now(),
+                run.payload.clone(),
+            );
+            
+            // Execute hooks (for now, just log - will be implemented in Phase 3)
+            log::info!("Workflow {} completed with status: {:?}", workflow_id, final_status);
+            log::info!("Completion context: {:?}", completion_context);
+            
+            // Update final run state
             state_manager.complete_run(run_id, final_status.clone(), error_message)?;
             log::info!("Workflow run {} completed with status: {:?}", run_id, final_status);
         }

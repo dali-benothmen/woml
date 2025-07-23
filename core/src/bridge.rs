@@ -543,6 +543,28 @@ impl Bridge {
             }
         }
     }
+
+    /// Execute workflow hook (onSuccess or onFailure)
+    pub fn execute_workflow_hook(&self, hook_type: &str, context_json: &str, workflow_id: &str) -> CoreResult<String> {
+        log::info!("Executing {} hook for workflow: {}", hook_type, workflow_id);
+        
+        // Validate hook type
+        if hook_type != "onSuccess" && hook_type != "onFailure" {
+            return Err(CoreError::Validation(format!("Invalid hook type: {}", hook_type)));
+        }
+        
+        // For now, we'll return a success response
+        // In the next phase, this will call the Bun.js hook execution
+        let result = serde_json::json!({
+            "success": true,
+            "hook_type": hook_type,
+            "workflow_id": workflow_id,
+            "message": format!("{} hook executed successfully", hook_type),
+            "context": serde_json::from_str::<serde_json::Value>(context_json).unwrap_or(serde_json::Value::Null)
+        });
+        
+        Ok(result.to_string())
+    }
 }
 
 /// Result for job execution
@@ -1849,6 +1871,15 @@ pub struct WebhookServerResult {
     pub message: String,
 } 
 
+#[napi(object)]
+pub struct HookExecutionResult {
+    pub success: bool,
+    pub hook_type: Option<String>,
+    pub workflow_id: Option<String>,
+    pub result: Option<String>,
+    pub message: String,
+}
+
 #[napi]
 pub fn execute_workflow_steps(run_id: String, workflow_id: String, db_path: String) -> StepExecutionResult {
     match Bridge::new(&db_path) {
@@ -1873,6 +1904,43 @@ pub fn execute_workflow_steps(run_id: String, workflow_id: String, db_path: Stri
         Err(error) => {
             StepExecutionResult {
                 success: false,
+                result: None,
+                message: format!("Failed to create bridge: {}", error),
+            }
+        }
+    }
+} 
+
+#[napi]
+pub fn execute_workflow_hook(hook_type: String, context_json: String, workflow_id: String, db_path: String) -> HookExecutionResult {
+    match Bridge::new(&db_path) {
+        Ok(bridge) => {
+            match bridge.execute_workflow_hook(&hook_type, &context_json, &workflow_id) {
+                Ok(result) => {
+                    HookExecutionResult {
+                        success: true,
+                        hook_type: Some(hook_type),
+                        workflow_id: Some(workflow_id),
+                        result: Some(result),
+                        message: "Hook executed successfully".to_string(),
+                    }
+                }
+                Err(error) => {
+                    HookExecutionResult {
+                        success: false,
+                        hook_type: Some(hook_type),
+                        workflow_id: Some(workflow_id),
+                        result: None,
+                        message: format!("Failed to execute hook: {}", error),
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            HookExecutionResult {
+                success: false,
+                hook_type: Some(hook_type),
+                workflow_id: Some(workflow_id),
                 result: None,
                 message: format!("Failed to create bridge: {}", error),
             }
