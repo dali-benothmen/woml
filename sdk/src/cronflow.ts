@@ -738,12 +738,29 @@ export async function executeStep(
       }
     }
 
-    // Fallback to Rust core execution
+    const currentState = getCurrentState();
+    const workflow = currentState.workflows.get(stepId.split(':')[0] || '');
+
+    let servicesJson = '{}';
+    if (workflow && workflow.services) {
+      const servicesObject: Record<string, any> = {};
+      for (const service of workflow.services) {
+        servicesObject[service.id] = {
+          id: service.id,
+          name: service.name,
+          version: service.version,
+          config: service.config,
+          auth: service.auth,
+        };
+      }
+      servicesJson = JSON.stringify(servicesObject);
+    }
+
     const result = core.executeStep(
       runId,
       stepId,
-      getCurrentState().dbPath,
-      contextJson || ''
+      currentState.dbPath,
+      servicesJson
     );
 
     if (result.success && result.result) {
@@ -793,10 +810,34 @@ export async function executeStepFunction(
 
     const contextData = JSON.parse(contextJson);
 
+    const currentState = getCurrentState();
+    const workflow = currentState.workflows.get(workflowId);
+
+    let services: Record<string, any> = contextData.services || {};
+    if (workflow && workflow.services) {
+      for (const service of workflow.services) {
+        if (services[service.id]) {
+          services[service.id] = {
+            ...services[service.id],
+            actions: service.actions,
+          };
+        } else {
+          services[service.id] = {
+            id: service.id,
+            name: service.name,
+            version: service.version,
+            config: service.config,
+            auth: service.auth,
+            actions: service.actions,
+          };
+        }
+      }
+    }
+
     const ctx: Context = {
       payload: contextData.payload || {},
       steps: contextData.steps || {},
-      services: contextData.services || {},
+      services: services,
       run: {
         id: contextData.run_id,
         workflowId: contextData.workflow_id,
