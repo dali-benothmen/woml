@@ -682,6 +682,24 @@ export async function executeStep(
   }
 
   try {
+    if (contextJson && contextJson.trim() !== '') {
+      const contextData = JSON.parse(contextJson);
+      const workflowId = contextData.workflow_id || contextData.workflowId;
+
+      if (workflowId) {
+        console.log(
+          `🔄 Executing step function ${stepId} for workflow ${workflowId}`
+        );
+        return await executeStepFunction(
+          stepId,
+          contextJson,
+          workflowId,
+          runId
+        );
+      }
+    }
+
+    // Fallback to Rust core execution
     const result = core.executeStep(
       runId,
       stepId,
