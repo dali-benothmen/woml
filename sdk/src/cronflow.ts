@@ -647,20 +647,63 @@ async function executeWorkflowSteps(
   }
 
   try {
-    // Use the new step orchestrator function that properly tracks workflow state
-    const result = core.executeWorkflowSteps(
-      runId,
-      workflowId,
-      currentState.dbPath
-    );
-
-    if (result.success && result.result) {
-      console.log(`✅ Workflow steps executed successfully for run ${runId}`);
-    } else {
-      console.error(`❌ Failed to execute workflow steps: ${result.message}`);
+    // Get the workflow definition
+    const workflow = currentState.workflows.get(workflowId);
+    if (!workflow) {
+      throw new Error(`Workflow ${workflowId} not found`);
     }
+
+    console.log(`🔄 Executing workflow steps for ${workflowId} run ${runId}`);
+    console.log(`📋 Workflow has ${workflow.steps.length} steps`);
+
+    // Execute each step in sequence
+    const completedSteps: Record<string, any> = {};
+
+    for (let i = 0; i < workflow.steps.length; i++) {
+      const step = workflow.steps[i];
+      console.log(
+        `\n📝 Executing step ${i + 1}/${workflow.steps.length}: ${step.name}`
+      );
+
+      // Create context for this step
+      const context = {
+        run_id: runId,
+        workflow_id: workflowId,
+        step_name: step.name,
+        payload: payload,
+        steps: completedSteps,
+        services: {},
+        run: {
+          id: runId,
+          workflow_id: workflowId,
+        },
+        last: i > 0 ? completedSteps[workflow.steps[i - 1].name] : undefined,
+      };
+
+      const contextJson = JSON.stringify(context);
+
+      // Execute the step using our Bun.js handler
+      const stepResult = await executeStepFunction(
+        step.name,
+        contextJson,
+        workflowId,
+        runId
+      );
+
+      if (stepResult.success && stepResult.result) {
+        // Store the step result
+        completedSteps[step.name] = stepResult.result.output;
+        console.log(`✅ Step ${step.name} completed successfully`);
+      } else {
+        console.error(`❌ Step ${step.name} failed:`, stepResult.message);
+        throw new Error(`Step ${step.name} failed: ${stepResult.message}`);
+      }
+    }
+
+    console.log(`✅ Workflow steps executed successfully for run ${runId}`);
   } catch (error) {
     console.error(`❌ Error executing workflow steps:`, error);
+    throw error;
   }
 }
 
@@ -876,34 +919,120 @@ export async function executeStepFunction(
     );
 
     console.log(`   - Executing step function ${stepName}...`);
-    const result = await stepHandler.handler(enhancedContext);
-    console.log(`   ✅ Step function ${stepName} executed successfully`);
 
-    const endTime = process.hrtime.bigint();
-    const duration = Number(endTime - startTime) / 1000000; // Convert to milliseconds
+    // Capture console output from step execution
+    const originalConsoleLog = console.log;
+    const originalConsoleError = console.error;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleInfo = console.info;
 
-    console.log(`   📊 Step execution metrics:`);
-    console.log(`      - Duration: ${duration.toFixed(2)}ms`);
-    console.log(`      - Context size: ${contextSize} bytes`);
-    console.log(`      - Services: ${Object.keys(services).length}`);
-    console.log(
-      `      - Steps completed: ${Object.keys(contextData.steps || {}).length}`
-    );
+    const capturedLogs: string[] = [];
 
-    return {
-      success: true,
-      result: {
-        step_name: stepName,
-        workflow_id: workflowId,
-        run_id: runId,
-        output: result,
-        duration_ms: duration,
-        context_size_bytes: contextSize,
-        services_count: Object.keys(services).length,
-        steps_completed: Object.keys(contextData.steps || {}).length,
-      },
-      message: 'Step function executed successfully',
+    // Override console methods to capture output
+    console.log = (...args: any[]) => {
+      const message = args
+        .map(arg =>
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+        )
+        .join(' ');
+      capturedLogs.push(`[LOG] ${message}`);
+      originalConsoleLog(...args);
     };
+
+    console.error = (...args: any[]) => {
+      const message = args
+        .map(arg =>
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+        )
+        .join(' ');
+      capturedLogs.push(`[ERROR] ${message}`);
+      originalConsoleError(...args);
+    };
+
+    console.warn = (...args: any[]) => {
+      const message = args
+        .map(arg =>
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+        )
+        .join(' ');
+      capturedLogs.push(`[WARN] ${message}`);
+      originalConsoleWarn(...args);
+    };
+
+    console.info = (...args: any[]) => {
+      const message = args
+        .map(arg =>
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+        )
+        .join(' ');
+      capturedLogs.push(`[INFO] ${message}`);
+      originalConsoleInfo(...args);
+    };
+
+    try {
+      const result = await stepHandler.handler(enhancedContext);
+
+      // Restore original console methods
+      console.log = originalConsoleLog;
+      console.error = originalConsoleError;
+      console.warn = originalConsoleWarn;
+      console.info = originalConsoleInfo;
+
+      // Display captured logs directly (no extra formatting)
+      if (capturedLogs.length > 0) {
+        capturedLogs.forEach(log => {
+          // Extract just the message part and display it directly
+          const message = log.replace(/^\[LOG\] /, '');
+          console.log(message);
+        });
+      }
+
+      console.log(`   ✅ Step function ${stepName} executed successfully`);
+
+      const endTime = process.hrtime.bigint();
+      const duration = Number(endTime - startTime) / 1000000; // Convert to milliseconds
+
+      console.log(`   📊 Step execution metrics:`);
+      console.log(`      - Duration: ${duration.toFixed(2)}ms`);
+      console.log(`      - Context size: ${contextSize} bytes`);
+      console.log(`      - Services: ${Object.keys(services).length}`);
+      console.log(
+        `      - Steps completed: ${Object.keys(contextData.steps || {}).length}`
+      );
+
+      return {
+        success: true,
+        result: {
+          step_name: stepName,
+          workflow_id: workflowId,
+          run_id: runId,
+          output: result,
+          duration_ms: duration,
+          context_size_bytes: contextSize,
+          services_count: Object.keys(services).length,
+          steps_completed: Object.keys(contextData.steps || {}).length,
+          logs: capturedLogs,
+        },
+        message: 'Step function executed successfully',
+      };
+    } catch (error) {
+      // Restore original console methods
+      console.log = originalConsoleLog;
+      console.error = originalConsoleError;
+      console.warn = originalConsoleWarn;
+      console.info = originalConsoleInfo;
+
+      // Display captured logs even if there was an error (no extra formatting)
+      if (capturedLogs.length > 0) {
+        capturedLogs.forEach(log => {
+          // Extract just the message part and display it directly
+          const message = log.replace(/^\[LOG\] /, '');
+          console.log(message);
+        });
+      }
+
+      throw error;
+    }
   } catch (error: any) {
     const endTime = process.hrtime.bigint();
     const duration = Number(endTime - startTime) / 1000000;
