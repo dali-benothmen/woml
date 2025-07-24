@@ -21,10 +21,11 @@ _Built with Rust + Bun for unparalleled performance_
 ## 📋 Table of Contents
 
 - [🚀 Overview](#-overview)
+- [⚡ Why Cronflow](#-why-cronflow)
 - [📦 Installation](#-installation)
-- [🚀 Quick Start](#-quick-start)
+- [💻 Usage](#-usage)
+- [🎯 Features](#-features)
 - [⚡ Performance Comparison](#-performance-comparison)
-- [🎯 Key Features](#-key-features)
 - [📖 Documentation](#-documentation)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
@@ -35,22 +36,47 @@ _Built with Rust + Bun for unparalleled performance_
 
 **Cronflow** is the world's fastest code-first workflow automation engine, designed for developers who demand performance, type safety, and complete control over their automation workflows.
 
-### Why Cronflow?
+### 🎯 What Makes Cronflow Revolutionary?
 
-- **⚡ World's Fastest**: 98% faster than n8n, zapier, and make.com
-- **💻 Code-First**: Define workflows in TypeScript with full IDE support
-- **🛡️ Type Safe**: Complete TypeScript support with compile-time validation
-- **🔧 Developer Friendly**: Fluent API, comprehensive testing, hot reload
-- **🚀 Production Ready**: Built with Rust for reliability and performance
-- **📦 Zero Dependencies**: Single package, everything included
+- **⚡ Lightning Speed**: 98% faster than n8n, zapier, and make.com with microsecond response times
+- **💚 Featherweight**: 90% less memory usage than competitors - run complex workflows on a Raspberry Pi
+- **🛡️ Bulletproof Type Safety**: Full TypeScript support with compile-time validation that catches errors before they happen
+- **🔧 Developer Nirvana**: Fluent API, hot reload, comprehensive testing - everything developers actually want
+- **🚀 Production Battle-Tested**: Built with Rust for enterprise-grade reliability and performance
+- **📦 Zero Friction**: Single package, zero dependencies, zero complex setups
 
-### What Problems Does It Solve?
+### 🎪 The Performance Revolution
 
-- **Performance**: Traditional workflow engines are slow and resource-heavy
-- **Developer Experience**: Visual editors are limiting for complex logic
-- **Type Safety**: Most automation tools lack proper TypeScript support
-- **Deployment**: Complex setups with multiple services and databases
-- **Testing**: Difficult to test visual workflows programmatically
+While other automation engines struggle with basic webhook processing, Cronflow handles **500+ workflows per second** on a single CPU core. This isn't incremental improvement, it's a complete paradigm shift that redefines what's possible in workflow automation.
+
+**Traditional engines**: "Let's add more servers to handle the load"
+**Cronflow**: "Let's handle 10x more workflows on the same hardware"
+
+---
+
+## ⚡ Why Cronflow?
+
+### 🏆 Performance That Actually Matters
+
+- **⚡ 98% Faster Execution**: From 27ms to <2ms response times
+- **💚 90% Less Memory**: Run complex workflows on 1GB RAM instead of 8GB
+- **🚀 14x Higher Throughput**: 500+ workflows/sec vs 35/sec on n8n
+- **⚡ Microsecond Latency**: Inter-step processing measured in microseconds, not milliseconds
+
+### 🎯 Developer Experience That Doesn't Suck
+
+- **💻 Code-First Philosophy**: Define workflows in TypeScript with full IDE support
+- **🛡️ Type Safety**: Catch errors at compile time, not runtime
+- **🔧 Hot Reload**: See changes instantly without restarts
+- **🧪 Comprehensive Testing**: Test workflows programmatically with ease
+- **📦 Zero Dependencies**: Everything you need in one package
+
+### 🚀 Production Ready from Day One
+
+- **🛡️ Circuit Breakers**: Built-in resilience patterns
+- **🔄 Retry Logic**: Intelligent retry mechanisms with exponential backoff
+- **📊 Built-in Monitoring**: Real-time metrics and health checks
+- **🔒 Enterprise Security**: Production-grade security features
 
 ---
 
@@ -60,13 +86,15 @@ _Built with Rust + Bun for unparalleled performance_
 npm install cronflow
 ```
 
-That's it! No databases, no complex setups, no additional services. Everything you need is included in one package.
+**That's it!** No databases, no complex setups, no additional services. Everything you need is included in one package.
 
 ---
 
-## 🚀 Quick Start
+## 💻 Usage
 
-Create your first workflow in under 60 seconds:
+### 🚀 Basic Workflow
+
+The simplest way to get started with Cronflow:
 
 ```typescript
 import { cronflow } from 'cronflow';
@@ -79,26 +107,331 @@ const simpleWorkflow = cronflow.define({
 
 simpleWorkflow
   .onWebhook('/webhooks/simple')
-  .step('process-webhook', async (ctx: Context) => {
+  .step('process-webhook', async ctx => {
     console.log('📥 Received webhook payload:', ctx.payload);
     return { processed: true, timestamp: new Date().toISOString() };
   })
-  .action('log-success', (ctx: Context) => {
+  .action('log-success', ctx => {
     console.log('✅ Webhook processed successfully');
   });
 
 cronflow.start();
 ```
 
-Your workflow is now live at `http://localhost:3000/webhooks/simple`!
-
-Test it with:
+**Test it:**
 
 ```bash
 curl -X POST http://localhost:3000/webhooks/simple \
   -H "Content-Type: application/json" \
   -d '{"message": "Hello Cronflow!"}'
 ```
+
+### 🔀 Conditional Workflows (If/Else)
+
+Build intelligent workflows with conditional logic:
+
+```typescript
+import { cronflow } from 'cronflow';
+import { z } from 'zod';
+
+const conditionalWorkflow = cronflow.define({
+  id: 'conditional-workflow',
+  name: 'Conditional Processing',
+  description: 'Workflow with if/else logic',
+});
+
+conditionalWorkflow
+  .onWebhook('/webhooks/conditional', {
+    schema: z.object({
+      amount: z.number().positive(),
+      description: z.string().optional(),
+    }),
+  })
+  .step('check-amount', async ctx => {
+    return { amount: ctx.payload.amount, checked: true };
+  })
+  .if('is-high-value', ctx => ctx.last.amount > 120)
+  .step('process-high-value', async ctx => {
+    return { type: 'high-value', processed: true, amount: ctx.last.amount };
+  })
+  .parallel([
+    async ctx => {
+      // Validate data
+      return { validation: 'success', amount: ctx.last.amount };
+    },
+    async ctx => {
+      // Log transaction
+      return { logged: true, transactionId: `txn_${Date.now()}` };
+    },
+  ])
+  .action('background-notification', async ctx => {
+    // Background action that doesn't block workflow
+    await sendNotification(ctx.last);
+  })
+  .endIf()
+  .step('final-step', async ctx => {
+    return { final: true, summary: ctx.last };
+  });
+```
+
+### 🔧 Service Integration
+
+Connect to external services with ease:
+
+```typescript
+import { cronflow, defineService } from 'cronflow';
+import { z } from 'zod';
+
+// 1. Define the service template
+const emailServiceTemplate = defineService({
+  id: 'email-service',
+  name: 'Email Service',
+  description: 'Send emails via external API',
+  version: '1.0.0',
+  schema: {
+    auth: z.object({
+      apiKey: z.string(),
+    }),
+  },
+  setup: ({ auth }) => {
+    const emailClient = new EmailClient(auth.apiKey);
+
+    return {
+      actions: {
+        sendEmail: async (params: {
+          to: string;
+          subject: string;
+          body: string;
+        }) => {
+          return await emailClient.send(params);
+        },
+      },
+    };
+  },
+});
+
+// 2. Create configured service instance
+const emailService = emailServiceTemplate.withConfig({
+  auth: {
+    apiKey: process.env.EMAIL_API_KEY!,
+  },
+});
+
+// 3. Define workflow with services
+const serviceWorkflow = cronflow.define({
+  id: 'service-integration',
+  name: 'Service Integration Example',
+  services: [emailService], // Add service to services array
+});
+
+// 4. Use service in workflow steps
+serviceWorkflow
+  .onWebhook('/webhooks/service')
+  .step('fetch-user-data', async ctx => {
+    const user = await fetchUserFromAPI(ctx.payload.userId);
+    return { user, fetched: true };
+  })
+  .step('process-payment', async ctx => {
+    const payment = await processPayment({
+      amount: ctx.payload.amount,
+      userId: ctx.last.user.id,
+    });
+    return { payment, processed: true };
+  })
+  .step('send-notification', async ctx => {
+    // Use service via ctx.services
+    const result = await ctx.services['email-service'].sendEmail({
+      to: ctx.last.user.email,
+      subject: 'Payment Processed',
+      body: `Payment of $${ctx.last.payment.amount} processed successfully`,
+    });
+    return { notification: 'sent', emailId: result.id };
+  });
+```
+
+### 🎣 Hooks and Lifecycle
+
+Add powerful hooks for workflow lifecycle management:
+
+```typescript
+import { cronflow } from 'cronflow';
+
+const hookedWorkflow = cronflow.define({
+  id: 'hooked-workflow',
+  name: 'Workflow with Hooks',
+  hooks: {
+    onSuccess: (ctx, stepId) => {
+      if (!stepId) {
+        console.log('🎉 Workflow completed successfully!');
+        console.log('Final output:', ctx.last);
+      } else {
+        console.log(`✅ Step ${stepId} completed:`, ctx.step_result);
+      }
+    },
+    onFailure: (ctx, stepId) => {
+      if (!stepId) {
+        console.log('💥 Workflow failed:', ctx.error);
+      } else {
+        console.log(`❌ Step ${stepId} failed:`, ctx.step_error);
+      }
+    },
+  },
+});
+
+hookedWorkflow.onWebhook('/webhooks/hooked').step('process-data', async ctx => {
+  // Your processing logic here
+  return { processed: true };
+});
+```
+
+### 🌐 Framework Integration
+
+Integrate seamlessly with your existing Express.js, Fastify, or any other framework:
+
+```typescript
+import { cronflow } from 'cronflow';
+import express from 'express';
+import { z } from 'zod';
+
+const app = express();
+app.use(express.json());
+
+const frameworkWorkflow = cronflow.define({
+  id: 'framework-integration',
+  name: 'Framework Integration Example',
+});
+
+// Express.js integration
+frameworkWorkflow
+  .onWebhook('/api/webhooks/framework-test', {
+    app: 'express',
+    appInstance: app,
+    method: 'POST',
+    schema: z.object({
+      message: z.string().min(1),
+      userId: z.string().optional(),
+    }),
+  })
+  .step('validate-input', async ctx => {
+    return { validated: true, message: ctx.payload.message };
+  })
+  .step('process-data', async ctx => {
+    return { processed: true, result: ctx.last.message.toUpperCase() };
+  });
+
+// Manual trigger endpoint
+app.post('/api/trigger-workflow', async (req, res) => {
+  try {
+    const runId = await cronflow.trigger('framework-integration', req.body);
+    res.json({ success: true, runId });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Workflow status endpoint
+app.get('/api/workflows/:runId', async (req, res) => {
+  try {
+    const status = await cronflow.inspect(req.params.runId);
+    res.json({ success: true, status });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.listen(3000, async () => {
+  await cronflow.start(); // Register workflows with Rust core
+  console.log('🚀 Server running on port 3000');
+});
+```
+
+### 🔌 Custom Framework Integration
+
+For frameworks not natively supported, use the flexible `registerRoute` approach:
+
+```typescript
+import { cronflow } from 'cronflow';
+
+const customWorkflow = cronflow.define({
+  id: 'custom-framework',
+  name: 'Custom Framework Integration',
+});
+
+// Any framework with custom registration
+customWorkflow
+  .onWebhook('/api/webhooks/custom', {
+    registerRoute: (method, path, handler) => {
+      // Your custom registration logic here
+      myFramework[method.toLowerCase()](path, handler);
+    },
+    method: 'POST',
+  })
+  .step('process-data', async ctx => {
+    return { processed: true };
+  });
+
+// Example with custom middleware
+customWorkflow.onWebhook('/api/webhooks/with-middleware', {
+  registerRoute: (method, path, handler) => {
+    app[method.toLowerCase()](path, (req, res) => {
+      // Custom middleware
+      console.log('Custom middleware executed');
+      req.customData = 'processed by middleware';
+      return handler(req, res);
+    });
+  },
+  method: 'POST',
+});
+```
+
+---
+
+## 🎯 Features
+
+### ⚡ Performance & Speed
+
+- **Lightning-fast execution** with microsecond response times
+- **Rust-powered core engine** for maximum performance
+- **Bun runtime** for 15-29% faster JavaScript execution
+- **Optimized state management** with minimal memory overhead
+- **Smart caching** with 92.5% improvement in database queries
+- **Connection pooling** with 70.1% improvement in database operations
+
+### 💻 Developer Experience
+
+- **Full TypeScript support** with compile-time validation
+- **Fluent API** for intuitive workflow definition
+- **Hot reload** for instant development feedback
+- **Comprehensive testing** with programmatic workflow testing
+- **Zero dependencies** - everything included in one package
+- **IDE support** with IntelliSense and autocomplete
+
+### 🔧 Workflow Capabilities
+
+- **Conditional logic** with if/else statements
+- **Parallel execution** for concurrent step processing
+- **Background actions** that don't block workflow execution
+- **Error handling** with circuit breakers and retry logic
+- **Lifecycle hooks** for workflow and step-level callbacks
+- **Schema validation** with Zod integration
+
+### 🌐 Integration & Deployment
+
+- **Framework agnostic** - works with Express, Fastify, Koa, Hapi, NestJS, Next.js
+- **Custom framework support** with flexible registration
+- **Webhook triggers** with automatic endpoint creation
+- **Manual triggers** for programmatic workflow execution
+- **Status inspection** for real-time workflow monitoring
+- **Production ready** with enterprise-grade reliability
+
+### 🛡️ Reliability & Monitoring
+
+- **Circuit breakers** for fault tolerance
+- **Retry mechanisms** with exponential backoff
+- **Built-in monitoring** with real-time metrics
+- **Health checks** for system status
+- **Error tracking** with detailed error context
+- **Performance metrics** for optimization insights
 
 ---
 
@@ -118,8 +451,6 @@ curl -X POST http://localhost:3000/webhooks/simple \
 | **Error Handling** | ✅ **Circuit Breaker** | ❌ Basic            | ❌ Basic            | ❌ Basic         | ✅ Good    |
 | **Monitoring**     | ✅ **Built-in**        | ❌ External         | ❌ External         | ❌ External      | ✅ Good    |
 
----
-
 ### 🎯 Why Cronflow is Faster
 
 1. **Rust Core Engine**: High-performance state management and database operations
@@ -129,7 +460,7 @@ curl -X POST http://localhost:3000/webhooks/simple \
 5. **Smart Caching**: 92.5% improvement in database queries
 6. **Connection Pooling**: 70.1% improvement in database operations
 
-## 🚀 In a Different League of Performance
+### 🚀 In a Different League of Performance
 
 `cronflow` was not just designed to be a code-first alternative; it was architected from the ground up for a level of performance and efficiency that is simply not possible with traditional Node.js-based automation engines.
 
@@ -160,7 +491,7 @@ To provide a fair comparison, we analyze a simple, webhook-triggered workflow si
 
 This isn't magic; it's a series of deliberate architectural choices:
 
-1.  **A Rust Core Engine:** All the complex orchestration—scheduling, state management, database updates, and queuing—is handled by pre-compiled, highly-optimized Rust code. There is no Garbage Collector to pause execution and no JIT compiler overhead.
+1.  **A Rust Core Engine:** All the complex orchestration, scheduling, state management, database updates, and queuing is handled by pre-compiled, highly-optimized Rust code. There is no Garbage Collector to pause execution and no JIT compiler overhead.
 2.  **A Bun Runtime:** The JavaScript/TypeScript you write runs on Bun, which is designed for fast startup and runtime performance. Its underlying JavaScriptCore engine is often more memory-efficient than V8 for server-side workloads.
 3.  **Ultra-Efficient State Management:** The engine is designed to minimize database chatter. The state of thousands of concurrent workflows is managed efficiently in Rust's memory, which is a fraction of the cost of managing it in a JavaScript heap.
 4.  **Optimized FFI Bridge:** The communication between the Bun runtime and the Rust engine is designed to be as low-overhead as possible, ensuring that inter-step latency is measured in microseconds, not milliseconds.
@@ -178,17 +509,6 @@ By running directly on your own infrastructure, `cronflow` bypasses this overhea
 - ✅ **Lower Costs:** Run complex automation suites on smaller, cheaper VPS instances.
 - ✅ **Real-Time Responsiveness:** Handle webhooks and user-facing automations with near-instantaneous speed.
 - ✅ **Higher Scale:** Confidently handle massive traffic spikes that would overwhelm other systems.
-
----
-
-## 🎯 Key Features
-
-- **⚡ Lightning Fast Performance** - Rust-powered core with microsecond response times
-- **💻 Full TypeScript Support** - Type-safe workflows with IntelliSense
-- **🔧 Advanced Workflow Logic** - Conditionals, parallel execution, human-in-the-loop
-- **🛡️ Enterprise Reliability** - Circuit breakers, retry logic, error handling
-- **📊 Built-in Monitoring** - Real-time metrics, logging, and health checks
-- **🧪 Developer Experience** - Hot reload, comprehensive testing, fluent API
 
 ---
 
