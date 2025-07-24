@@ -488,6 +488,68 @@ export async function start(options?: StartOptions): Promise<void> {
                 return;
               }
 
+              const webhookTrigger = workflow.triggers.find(
+                t => t.type === 'webhook' && t.path === webhookPath
+              ) as { type: 'webhook'; path: string; options?: any } | undefined;
+
+              const headers: Record<string, string> = {};
+              for (const [key, value] of Object.entries(req.headers)) {
+                if (Array.isArray(value)) {
+                  headers[key.toLowerCase()] = value[0];
+                } else if (value) {
+                  headers[key.toLowerCase()] = value;
+                }
+              }
+
+              if (webhookTrigger?.options?.headers) {
+                const headerConfig = webhookTrigger.options.headers;
+
+                if (headerConfig.required) {
+                  for (const [requiredHeader, expectedValue] of Object.entries(
+                    headerConfig.required
+                  )) {
+                    const actualValue = headers[requiredHeader.toLowerCase()];
+                    if (!actualValue) {
+                      res.writeHead(400, {
+                        'Content-Type': 'application/json',
+                      });
+                      res.end(
+                        JSON.stringify({
+                          error: `Missing required header: ${requiredHeader}`,
+                          required_headers: headerConfig.required,
+                        })
+                      );
+                      return;
+                    }
+                    if (expectedValue && actualValue !== expectedValue) {
+                      res.writeHead(400, {
+                        'Content-Type': 'application/json',
+                      });
+                      res.end(
+                        JSON.stringify({
+                          error: `Invalid header value for ${requiredHeader}: expected ${expectedValue}, got ${actualValue}`,
+                          required_headers: headerConfig.required,
+                        })
+                      );
+                      return;
+                    }
+                  }
+                }
+
+                if (headerConfig.validate) {
+                  const validationResult = headerConfig.validate(headers);
+                  if (validationResult !== true) {
+                    const errorMessage =
+                      typeof validationResult === 'string'
+                        ? validationResult
+                        : 'Header validation failed';
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: errorMessage }));
+                    return;
+                  }
+                }
+              }
+
               let body = '';
               req.on('data', chunk => {
                 body += chunk.toString();
@@ -496,6 +558,26 @@ export async function start(options?: StartOptions): Promise<void> {
               req.on('end', async () => {
                 try {
                   const payload = body ? JSON.parse(body) : {};
+
+                  if (webhookTrigger?.options?.schema) {
+                    try {
+                      webhookTrigger.options.schema.parse(payload);
+                    } catch (schemaError: any) {
+                      console.error('Schema validation failed:', schemaError);
+                      res.writeHead(400, {
+                        'Content-Type': 'application/json',
+                      });
+                      res.end(
+                        JSON.stringify({
+                          status: 'error',
+                          message: 'Payload validation failed',
+                          error: schemaError.message,
+                          workflow_triggered: false,
+                        })
+                      );
+                      return;
+                    }
+                  }
 
                   const runId = await trigger(workflow.id, payload);
 

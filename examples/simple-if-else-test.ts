@@ -1,4 +1,5 @@
 import { cronflow } from '../sdk/src/cronflow';
+import { z } from 'zod';
 
 // Simple workflow with if condition only
 const simpleIfWorkflow = cronflow.define({
@@ -6,8 +7,21 @@ const simpleIfWorkflow = cronflow.define({
   name: 'Simple If Test',
   description: 'Test basic if control flow with minimal steps',
 });
+
 simpleIfWorkflow
-  .onWebhook('/simple-if-test')
+  .onWebhook('/simple-if-test', {
+    method: 'POST',
+    schema: z.object({
+      amount: z.number().positive(),
+      description: z.string().optional(),
+    }),
+    parseRawBody: false,
+    headers: {
+      required: {
+        'content-type': 'application/json',
+      },
+    },
+  })
   .step('check-amount', async ctx => {
     console.log('✅ Step 1: check-amount executed');
     console.log('   Payload amount:', ctx.payload.amount);
@@ -51,6 +65,12 @@ simpleIfWorkflow
     console.log(
       '📡 Webhook endpoint: http://127.0.0.1:3000/webhook/simple-if-test'
     );
+    console.log('📋 Webhook configuration:');
+    console.log('   - Method: POST');
+    console.log(
+      '   - Schema validation: amount (positive number), description (optional)'
+    );
+    console.log('   - Parse raw body: false');
   } catch (error) {
     console.error('❌ Test failed:', error);
   }

@@ -66,6 +66,12 @@ export const WorkflowDefinitionSchema = z.object({
             schema: z.any().optional(),
             idempotencyKey: z.function().optional(),
             parseRawBody: z.boolean().optional(),
+            headers: z
+              .object({
+                required: z.record(z.string(), z.string()).optional(),
+                validate: z.function().optional(),
+              })
+              .optional(),
           })
           .optional(),
       }),

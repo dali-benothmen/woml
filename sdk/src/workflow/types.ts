@@ -110,6 +110,10 @@ export interface WebhookOptions {
   schema?: z.ZodObject<any>;
   idempotencyKey?: (ctx: Context) => string;
   parseRawBody?: boolean;
+  headers?: {
+    required?: Record<string, string>; // e.g., { 'content-type': 'application/json' }
+    validate?: (headers: Record<string, string>) => boolean | string;
+  };
 }
 
 // Context object that gets passed to step handlers
