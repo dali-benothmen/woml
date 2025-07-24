@@ -19,6 +19,7 @@ import {
   getFrameworkHandler,
   isFrameworkSupported,
 } from './framework-registry';
+import { registerEventListener } from '../cronflow';
 
 export class WorkflowInstance {
   private _workflow: WorkflowDefinition;
@@ -352,10 +353,23 @@ export class WorkflowInstance {
 
   onEvent(eventName: string): WorkflowInstance {
     const trigger: TriggerDefinition = {
-      type: 'manual', // For now, treat events as manual triggers
+      type: 'event',
+      eventName,
     };
 
     this._workflow.triggers.push(trigger);
+
+    if (this._cronflowInstance && this._cronflowInstance.trigger) {
+      registerEventListener(
+        eventName,
+        this._workflow.id,
+        this._cronflowInstance.trigger
+      );
+      console.log(
+        `✅ Registered workflow ${this._workflow.id} to listen for event: ${eventName}`
+      );
+    }
+
     return this;
   }
 

@@ -112,6 +112,7 @@ export interface CacheConfig {
 export type TriggerDefinition =
   | { type: 'webhook'; path: string; options?: WebhookOptions }
   | { type: 'schedule'; cron_expression: string }
+  | { type: 'event'; eventName: string }
   | { type: 'manual' };
 
 export interface WebhookOptions {

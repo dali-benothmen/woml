@@ -20,6 +20,8 @@ interface CronflowState {
   dbPath: string;
   stateManager?: any;
   webhookServer?: http.Server;
+  eventListeners: Map<string, Array<{ workflowId: string; trigger: any }>>;
+  eventHistory: Array<{ name: string; payload: any; timestamp: number }>;
 }
 
 interface StepHandler {
@@ -35,6 +37,8 @@ let state: CronflowState = {
   workflows: new Map(),
   engineState: 'STOPPED',
   dbPath: './cronflow.db',
+  eventListeners: new Map(),
+  eventHistory: [],
 };
 
 function getCurrentState(): CronflowState {
@@ -74,6 +78,8 @@ function initialize(dbPath?: string): void {
     dbPath: dbPath || './cronflow.db',
     workflows: new Map(),
     engineState: 'STOPPED',
+    eventListeners: new Map(),
+    eventHistory: [],
   });
   console.log(`Node-Cronflow SDK v${VERSION} initialized`);
 }
@@ -1160,8 +1166,83 @@ export async function cancelRun(runId: string): Promise<void> {
 }
 
 export async function publishEvent(name: string, payload: any): Promise<void> {
-  console.log(`Publishing event: ${name}`, payload);
-  // TODO: Implement event publishing
+  console.log(`📡 Publishing event: ${name}`, payload);
+
+  const currentState = getCurrentState();
+
+  currentState.eventHistory.push({
+    name,
+    payload,
+    timestamp: Date.now(),
+  });
+
+  if (currentState.eventHistory.length > 1000) {
+    currentState.eventHistory = currentState.eventHistory.slice(-1000);
+  }
+
+  const listeners = currentState.eventListeners.get(name) || [];
+
+  if (listeners.length === 0) {
+    console.log(`ℹ️  No workflows listening to event: ${name}`);
+    return;
+  }
+
+  console.log(
+    `🚀 Triggering ${listeners.length} workflow(s) for event: ${name}`
+  );
+
+  const triggerPromises = listeners.map(async listener => {
+    try {
+      const { workflowId, trigger } = listener;
+
+      const eventPayload = {
+        event: {
+          name,
+          payload,
+          timestamp: Date.now(),
+        },
+        ...payload,
+      };
+
+      console.log(`   🔄 Triggering workflow: ${workflowId}`);
+      const runId = await trigger(workflowId, eventPayload);
+      console.log(
+        `   ✅ Workflow ${workflowId} triggered successfully with run ID: ${runId}`
+      );
+
+      return { workflowId, runId, success: true };
+    } catch (error) {
+      console.error(
+        `   ❌ Failed to trigger workflow ${listener.workflowId}:`,
+        error
+      );
+      return { workflowId: listener.workflowId, error, success: false };
+    }
+  });
+
+  const results = await Promise.allSettled(triggerPromises);
+
+  const successful = results.filter(
+    r => r.status === 'fulfilled' && r.value.success
+  ).length;
+  const failed = results.length - successful;
+
+  console.log(`📊 Event ${name} processing complete:`);
+  console.log(`   ✅ Successfully triggered: ${successful} workflow(s)`);
+  if (failed > 0) {
+    console.log(`   ❌ Failed to trigger: ${failed} workflow(s)`);
+  }
+
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      console.error(`   ❌ Workflow trigger failed:`, result.reason);
+    } else if (result.status === 'fulfilled' && !result.value.success) {
+      console.error(
+        `   ❌ Workflow ${result.value.workflowId} failed:`,
+        result.value.error
+      );
+    }
+  });
 }
 
 export async function executeStep(
@@ -1648,6 +1729,10 @@ function convertToRustFormat(workflow: WorkflowDefinition): any {
             cron_expression: trigger.cron_expression,
           },
         };
+      } else if (trigger.type === 'event') {
+        // Event triggers are handled in the Node.js layer, not Rust
+        // For now, treat them as manual triggers for Rust compatibility
+        return { Manual: {} };
       } else {
         return { Manual: {} };
       }
@@ -2440,6 +2525,91 @@ export async function executeWorkflowHook(
   }
 }
 
+function registerEventListener(
+  eventName: string,
+  workflowId: string,
+  trigger: any
+): void {
+  const currentState = getCurrentState();
+
+  if (!currentState.eventListeners.has(eventName)) {
+    currentState.eventListeners.set(eventName, []);
+  }
+
+  const listeners = currentState.eventListeners.get(eventName)!;
+
+  const existingIndex = listeners.findIndex(l => l.workflowId === workflowId);
+  if (existingIndex >= 0) {
+    listeners[existingIndex] = { workflowId, trigger };
+    console.log(
+      `🔄 Updated event listener for workflow ${workflowId} on event: ${eventName}`
+    );
+  } else {
+    listeners.push({ workflowId, trigger });
+    console.log(
+      `✅ Registered workflow ${workflowId} to listen for event: ${eventName}`
+    );
+  }
+}
+
+function unregisterEventListener(eventName: string, workflowId: string): void {
+  const currentState = getCurrentState();
+
+  const listeners = currentState.eventListeners.get(eventName);
+  if (!listeners) {
+    return;
+  }
+
+  const index = listeners.findIndex(l => l.workflowId === workflowId);
+  if (index >= 0) {
+    listeners.splice(index, 1);
+    console.log(
+      `🗑️  Unregistered workflow ${workflowId} from event: ${eventName}`
+    );
+
+    if (listeners.length === 0) {
+      currentState.eventListeners.delete(eventName);
+      console.log(`🧹 Cleaned up empty event: ${eventName}`);
+    }
+  }
+}
+
+function getEventHistory(
+  eventName?: string
+): Array<{ name: string; payload: any; timestamp: number }> {
+  const currentState = getCurrentState();
+
+  if (eventName) {
+    return currentState.eventHistory.filter(event => event.name === eventName);
+  }
+
+  return [...currentState.eventHistory];
+}
+
+function getEventListeners(
+  eventName?: string
+): Map<string, Array<{ workflowId: string; trigger: any }>> {
+  const currentState = getCurrentState();
+
+  if (eventName) {
+    const listeners = currentState.eventListeners.get(eventName);
+    const result = new Map();
+    if (listeners) {
+      result.set(eventName, listeners);
+    }
+    return result;
+  }
+
+  return new Map(currentState.eventListeners);
+}
+
+export {
+  registerEventListener,
+  unregisterEventListener,
+  getEventHistory,
+  getEventListeners,
+};
+
 export const cronflow = {
   define,
   start,
@@ -2478,4 +2648,9 @@ export const cronflow = {
   getStateStats,
   cleanupExpiredState,
   VERSION,
+  // Event handling functions
+  registerEventListener,
+  unregisterEventListener,
+  getEventHistory,
+  getEventListeners,
 };
