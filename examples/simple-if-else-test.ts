@@ -72,6 +72,23 @@ simpleIfWorkflow
       };
     },
   ])
+  .action('background-notification', async ctx => {
+    console.log(
+      '🔄 Background Action: Sending notification (this should run in background)'
+    );
+    // Simulate sending a notification that takes time
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    console.log(
+      '✅ Background Action: Notification sent successfully after 2.5 seconds'
+    );
+    return {
+      type: 'notification',
+      message: 'High-value transaction processed',
+      amount: ctx.last.amount,
+      sent: true,
+      timestamp: new Date().toISOString(),
+    };
+  })
   .endIf()
   .step('final-step', async ctx => {
     console.log('✅ Step 3: final-step executed');
@@ -81,6 +98,7 @@ simpleIfWorkflow
       summary: ctx.last,
       parallelResults: ctx.last,
       executionCompleted: new Date().toISOString(),
+      note: 'Background notification action may still be running',
     };
   });
 

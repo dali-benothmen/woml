@@ -88,6 +88,7 @@ export interface StepOptions {
   waitForEvent?: boolean;
   eventName?: string;
   onError?: (ctx: Context) => any;
+  background?: boolean; // Whether this step should run as a background side effect
 }
 
 export interface RetryConfig {

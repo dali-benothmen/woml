@@ -936,6 +936,39 @@ async function executeWorkflowSteps(
 
       const contextJson = JSON.stringify(context);
 
+      if (step.type === 'action' || step.options?.background) {
+        console.log(
+          `🔄 Executing ${step.type === 'action' ? 'action' : 'step'} as background side effect: ${step.name}`
+        );
+
+        executeStepFunction(step.name, contextJson, workflowId, runId)
+          .then(stepResult => {
+            if (stepResult.success && stepResult.result) {
+              console.log(
+                `✅ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} completed successfully in background`
+              );
+            } else {
+              console.error(
+                `❌ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} failed in background:`,
+                stepResult.message
+              );
+            }
+          })
+          .catch(error => {
+            console.error(
+              `❌ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} failed in background:`,
+              error
+            );
+          });
+
+        // For background steps/actions, we don't wait for completion and don't store results
+        // The workflow continues immediately to the next step
+        console.log(
+          `⏭️  Continuing workflow execution while ${step.type === 'action' ? 'action' : 'step'} ${step.name} runs in background`
+        );
+        continue;
+      }
+
       const stepResult = await executeStepFunction(
         step.name,
         contextJson,

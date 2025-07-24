@@ -81,7 +81,10 @@ export class WorkflowInstance {
       name,
       handler: handlerFn,
       type: 'action',
-      options,
+      options: {
+        ...options,
+        background: true,
+      },
     };
 
     this._workflow.steps.push(step);
