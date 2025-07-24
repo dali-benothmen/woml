@@ -202,6 +202,16 @@ pub struct StepDefinition {
     pub control_flow_block: Option<String>,
     /// Whether this step is part of a control flow structure
     pub is_control_flow: bool,
+    /// Whether this step should be executed in parallel
+    pub parallel: Option<bool>,
+    /// Parallel group identifier for grouping parallel steps
+    pub parallel_group_id: Option<String>,
+    /// Number of steps in the parallel group
+    pub parallel_step_count: Option<usize>,
+    /// Whether this is a race condition step
+    pub race: Option<bool>,
+    /// Whether this is a forEach loop step
+    pub for_each: Option<bool>,
 }
 
 impl StepDefinition {
@@ -226,6 +236,9 @@ impl StepDefinition {
         
         // Validate control flow configuration
         self.validate_control_flow()?;
+        
+        // Validate parallel execution configuration
+        self.validate_parallel_execution()?;
         
         Ok(())
     }
@@ -255,6 +268,22 @@ impl StepDefinition {
             }
         }
         
+        Ok(())
+    }
+    
+    /// Validate parallel execution configuration
+    fn validate_parallel_execution(&self) -> Result<(), String> {
+        if self.parallel.is_some() {
+            if self.parallel_group_id.is_none() {
+                return Err("Parallel step must have a parallel group ID".to_string());
+            }
+            if self.parallel_step_count.is_none() {
+                return Err("Parallel step must have a parallel step count".to_string());
+            }
+            if self.parallel_step_count.unwrap() == 0 {
+                return Err("Parallel step count must be greater than 0".to_string());
+            }
+        }
         Ok(())
     }
     
@@ -303,9 +332,39 @@ impl StepDefinition {
         self.control_flow_block.as_ref()
     }
     
-    /// Get the condition expression
+    /// Get the condition expression for evaluation
     pub fn get_condition_expression(&self) -> Option<&String> {
         self.condition_expression.as_ref()
+    }
+    
+    /// Check if this step should be executed in parallel
+    pub fn is_parallel(&self) -> bool {
+        self.parallel.unwrap_or(false)
+    }
+    
+    /// Check if this step is part of a race condition
+    pub fn is_race(&self) -> bool {
+        self.race.unwrap_or(false)
+    }
+    
+    /// Check if this step is a forEach loop
+    pub fn is_for_each(&self) -> bool {
+        self.for_each.unwrap_or(false)
+    }
+    
+    /// Get the parallel group ID if this step is parallel
+    pub fn get_parallel_group_id(&self) -> Option<&String> {
+        self.parallel_group_id.as_ref()
+    }
+    
+    /// Get the number of steps in the parallel group
+    pub fn get_parallel_step_count(&self) -> Option<usize> {
+        self.parallel_step_count
+    }
+    
+    /// Check if this step is a parallel execution step (parallel, race, or forEach)
+    pub fn is_parallel_execution(&self) -> bool {
+        self.is_parallel() || self.is_race() || self.is_for_each()
     }
 }
 
@@ -625,5 +684,156 @@ impl WorkflowCompletionContext {
         self.completed_steps.iter()
             .filter(|step| matches!(step.status, StepStatus::Failed))
             .count()
+    }
+} 
+
+/// Parallel step group for managing concurrent execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelStepGroup {
+    /// Unique identifier for this parallel group
+    pub group_id: String,
+    /// Step IDs that are part of this parallel group
+    pub step_ids: Vec<String>,
+    /// Current status of the parallel group
+    pub status: ParallelGroupStatus,
+    /// Results from individual parallel steps
+    pub results: std::collections::HashMap<String, StepResult>,
+    /// When the parallel group started execution
+    pub started_at: DateTime<Utc>,
+    /// When the parallel group completed execution
+    pub completed_at: Option<DateTime<Utc>>,
+    /// Error message if the parallel group failed
+    pub error: Option<String>,
+    /// Whether to fail fast on first error
+    pub fail_fast: bool,
+    /// Maximum timeout for the entire parallel group
+    pub timeout_ms: Option<u64>,
+}
+
+impl ParallelStepGroup {
+    /// Create a new parallel step group
+    pub fn new(group_id: String, step_ids: Vec<String>) -> Self {
+        Self {
+            group_id,
+            step_ids,
+            status: ParallelGroupStatus::Pending,
+            results: std::collections::HashMap::new(),
+            started_at: Utc::now(),
+            completed_at: None,
+            error: None,
+            fail_fast: true, // Default to fail fast
+            timeout_ms: None,
+        }
+    }
+    
+    /// Mark the group as running
+    pub fn mark_running(&mut self) {
+        self.status = ParallelGroupStatus::Running;
+        self.started_at = Utc::now();
+    }
+    
+    /// Mark the group as completed
+    pub fn mark_completed(&mut self) {
+        self.status = ParallelGroupStatus::Completed;
+        self.completed_at = Some(Utc::now());
+    }
+    
+    /// Mark the group as failed
+    pub fn mark_failed(&mut self, error: String) {
+        self.status = ParallelGroupStatus::Failed;
+        self.completed_at = Some(Utc::now());
+        self.error = Some(error);
+    }
+    
+    /// Mark the group as partially failed
+    pub fn mark_partially_failed(&mut self, error: String) {
+        self.status = ParallelGroupStatus::PartiallyFailed;
+        self.completed_at = Some(Utc::now());
+        self.error = Some(error);
+    }
+    
+    /// Add a step result to the group
+    pub fn add_step_result(&mut self, step_id: String, result: StepResult) {
+        self.results.insert(step_id, result);
+    }
+    
+    /// Check if all steps in the group are completed
+    pub fn is_completed(&self) -> bool {
+        self.step_ids.iter().all(|step_id| {
+            self.results.contains_key(step_id) && 
+            matches!(self.results[step_id].status, StepStatus::Completed)
+        })
+    }
+    
+    /// Check if any step in the group failed
+    pub fn has_failures(&self) -> bool {
+        self.step_ids.iter().any(|step_id| {
+            self.results.contains_key(step_id) && 
+            matches!(self.results[step_id].status, StepStatus::Failed)
+        })
+    }
+    
+    /// Get the number of completed steps
+    pub fn completed_count(&self) -> usize {
+        self.step_ids.iter().filter(|step_id| {
+            self.results.contains_key(step_id) && 
+            matches!(self.results[step_id].status, StepStatus::Completed)
+        }).count()
+    }
+    
+    /// Get the number of failed steps
+    pub fn failed_count(&self) -> usize {
+        self.step_ids.iter().filter(|step_id| {
+            self.results.contains_key(step_id) && 
+            matches!(self.results[step_id].status, StepStatus::Failed)
+        }).count()
+    }
+    
+    /// Get the duration of the parallel group execution
+    pub fn get_duration_ms(&self) -> Option<u64> {
+        self.completed_at.map(|completed| {
+            (completed - self.started_at).num_milliseconds() as u64
+        })
+    }
+}
+
+/// Parallel execution status
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ParallelGroupStatus {
+    /// Group is pending execution
+    Pending,
+    /// Group is currently running
+    Running,
+    /// All steps in the group completed successfully
+    Completed,
+    /// All steps in the group failed
+    Failed,
+    /// Some steps succeeded, some failed
+    PartiallyFailed,
+    /// Group execution timed out
+    TimedOut,
+}
+
+impl ParallelGroupStatus {
+    /// Check if this is a terminal status
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, 
+            ParallelGroupStatus::Completed | 
+            ParallelGroupStatus::Failed | 
+            ParallelGroupStatus::PartiallyFailed |
+            ParallelGroupStatus::TimedOut
+        )
+    }
+    
+    /// Get the status as a string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ParallelGroupStatus::Pending => "pending",
+            ParallelGroupStatus::Running => "running",
+            ParallelGroupStatus::Completed => "completed",
+            ParallelGroupStatus::Failed => "failed",
+            ParallelGroupStatus::PartiallyFailed => "partially_failed",
+            ParallelGroupStatus::TimedOut => "timed_out",
+        }
     }
 } 

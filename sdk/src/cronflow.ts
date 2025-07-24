@@ -848,6 +848,62 @@ async function executeWorkflowSteps(
         continue;
       }
 
+      if (step.options?.parallel || step.parallel) {
+        console.log(`🔄 Executing parallel step: ${step.name}`);
+
+        const context = {
+          run_id: runId,
+          workflow_id: workflowId,
+          step_name: step.name,
+          payload: payload,
+          steps: completedSteps,
+          services: {},
+          run: {
+            id: runId,
+            workflowId: workflowId,
+          },
+          last:
+            lastExecutedStepIndex >= 0
+              ? completedSteps[workflow.steps[lastExecutedStepIndex].name]
+              : undefined,
+          state: {
+            get: () => null,
+            set: async () => {},
+            incr: async () => 0,
+          },
+          trigger: { headers: {} },
+          cancel: (reason?: string) => {
+            throw new Error(
+              `Workflow cancelled: ${reason || 'No reason provided'}`
+            );
+          },
+        };
+
+        const contextJson = JSON.stringify(context);
+
+        const stepResult = await executeStepFunction(
+          step.name,
+          contextJson,
+          workflowId,
+          runId
+        );
+
+        if (stepResult.success && stepResult.result) {
+          completedSteps[step.name] = stepResult.result.output;
+          lastExecutedStepIndex = i;
+          console.log(`✅ Parallel step ${step.name} completed successfully`);
+        } else {
+          console.error(
+            `❌ Parallel step ${step.name} failed:`,
+            stepResult.message
+          );
+          throw new Error(
+            `Parallel step ${step.name} failed: ${stepResult.message}`
+          );
+        }
+        continue;
+      }
+
       console.log(`🔄 Executing regular step: ${step.name}`);
 
       const context = {

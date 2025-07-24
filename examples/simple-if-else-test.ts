@@ -5,7 +5,8 @@ import { z } from 'zod';
 const simpleIfWorkflow = cronflow.define({
   id: 'simple-if-test',
   name: 'Simple If Test',
-  description: 'Test basic if control flow with minimal steps',
+  description:
+    'Test basic if control flow with minimal steps and parallel execution',
 });
 
 simpleIfWorkflow
@@ -40,11 +41,47 @@ simpleIfWorkflow
     console.log('   Processing high value amount:', ctx.last.amount);
     return { type: 'high-value', processed: true, amount: ctx.last.amount };
   })
+  .parallel([
+    async ctx => {
+      console.log('🔄 Parallel step 1: validate-data executing...');
+      await new Promise(resolve => setTimeout(resolve, 200));
+      console.log('✅ Parallel step 1: validate-data completed');
+      return {
+        step: 'validate-data',
+        result: 'success',
+        validation: {
+          amount: ctx.last.amount,
+          isValid: ctx.last.amount > 0,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    },
+    async ctx => {
+      console.log('🔄 Parallel step 2: log-transaction executing...');
+      await new Promise(resolve => setTimeout(resolve, 150));
+      console.log('✅ Parallel step 2: log-transaction completed');
+      return {
+        step: 'log-transaction',
+        result: 'success',
+        log: {
+          transactionId: `txn_${Date.now()}`,
+          amount: ctx.last.amount,
+          type: ctx.last.type,
+          logged: true,
+        },
+      };
+    },
+  ])
   .endIf()
   .step('final-step', async ctx => {
     console.log('✅ Step 3: final-step executed');
     console.log('   Previous step result:', ctx.last);
-    return { final: true, summary: ctx.last };
+    return {
+      final: true,
+      summary: ctx.last,
+      parallelResults: ctx.last,
+      executionCompleted: new Date().toISOString(),
+    };
   });
 
 // Self-executing function to test if condition

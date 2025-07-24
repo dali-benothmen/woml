@@ -10,9 +10,33 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, CoreResult};
 use crate::state::StateManager;
-use crate::models::{WorkflowDefinition, WorkflowRun, StepDefinition, StepResult, StepStatus, RunStatus, ControlFlowBlock, ConditionType, ConditionResult};
+use crate::models::{WorkflowDefinition, WorkflowRun, StepDefinition, StepResult, StepStatus, RunStatus, ControlFlowBlock, ConditionType, ConditionResult, ParallelStepGroup, ParallelGroupStatus};
 use crate::condition_evaluator::ConditionEvaluator;
 use crate::context::Context;
+
+/// Parallel execution configuration
+#[derive(Debug, Clone)]
+pub struct ParallelExecutionConfig {
+    /// Maximum number of parallel steps that can run simultaneously
+    pub max_concurrent_steps: usize,
+    /// Whether to fail fast on first parallel step failure
+    pub fail_fast: bool,
+    /// Default timeout for parallel groups in milliseconds
+    pub default_timeout_ms: Option<u64>,
+    /// Whether to enable parallel execution
+    pub enabled: bool,
+}
+
+impl Default for ParallelExecutionConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_steps: 10,
+            fail_fast: true,
+            default_timeout_ms: Some(30000), // 30 seconds
+            enabled: true,
+        }
+    }
+}
 
 /// Workflow execution state
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -219,6 +243,12 @@ pub struct WorkflowStateMachine {
     skipped_steps: HashSet<String>,
     /// Current condition evaluation context
     condition_context: Option<Context>,
+    /// Parallel step groups for concurrent execution
+    parallel_groups: HashMap<String, ParallelStepGroup>,
+    /// Currently running parallel groups
+    running_parallel_groups: HashSet<String>,
+    /// Parallel execution configuration
+    parallel_config: ParallelExecutionConfig,
 }
 
 impl WorkflowStateMachine {
@@ -244,6 +274,9 @@ impl WorkflowStateMachine {
             control_flow_stack: Vec::new(),
             skipped_steps: HashSet::new(),
             condition_context: None,
+            parallel_groups: HashMap::new(),
+            running_parallel_groups: HashSet::new(),
+            parallel_config: ParallelExecutionConfig::default(),
         }
     }
     
@@ -280,6 +313,9 @@ impl WorkflowStateMachine {
         
         // Validate control flow structure
         self.validate_control_flow_structure(&workflow)?;
+        
+        // Initialize parallel execution groups
+        self.initialize_parallel_groups(&workflow)?;
         
         // Create condition evaluation context
         self.create_condition_context(&run)?;
@@ -458,6 +494,29 @@ impl WorkflowStateMachine {
         Ok(())
     }
     
+    /// Initialize parallel execution groups from workflow definition
+    fn initialize_parallel_groups(&mut self, workflow: &WorkflowDefinition) -> CoreResult<()> {
+        self.parallel_groups.clear();
+        self.running_parallel_groups.clear();
+
+        for step in &workflow.steps {
+            if step.is_parallel() {
+                let group_id = step.get_parallel_group_id().ok_or_else(|| CoreError::Validation(
+                    "Parallel step without a group ID".to_string()
+                ))?;
+
+                let group = self.parallel_groups.entry(group_id.clone()).or_insert_with(|| {
+                    ParallelStepGroup::new(group_id.clone(), Vec::new())
+                });
+
+                group.step_ids.push(step.id.clone());
+            }
+        }
+
+        log::debug!("Initialized {} parallel groups", self.parallel_groups.len());
+        Ok(())
+    }
+
     /// Create condition evaluation context from workflow run
     fn create_condition_context(&mut self, run: &WorkflowRun) -> CoreResult<()> {
         let workflow = self.workflow_definition.as_ref()
@@ -929,6 +988,188 @@ impl WorkflowStateMachine {
         
         log::info!("Workflow {} finalized with status: {:?}", self.workflow_id, final_status);
         Ok(())
+    }
+
+    /// Check if this step is a control flow boundary
+    pub fn is_control_flow_boundary(&self, step_id: &str) -> bool {
+        if let Some(step_state) = self.step_states.get(step_id) {
+            step_state.step.is_control_flow_boundary()
+        } else {
+            false
+        }
+    }
+    
+    /// Detect parallel step groups in the workflow
+    pub fn detect_parallel_groups(&self) -> Vec<ParallelStepGroup> {
+        let mut groups = Vec::new();
+        let mut current_group: Option<ParallelStepGroup> = None;
+        
+        if let Some(workflow) = &self.workflow_definition {
+            for step in &workflow.steps {
+                if step.is_parallel() {
+                    // Start or continue a parallel group
+                    if let Some(ref mut group) = current_group {
+                        group.step_ids.push(step.id.clone());
+                    } else {
+                        // Start a new parallel group
+                        let group_id = format!("parallel_group_{}", step.id);
+                        let mut group = ParallelStepGroup::new(group_id, vec![step.id.clone()]);
+                        group.fail_fast = self.parallel_config.fail_fast;
+                        group.timeout_ms = self.parallel_config.default_timeout_ms;
+                        current_group = Some(group);
+                    }
+                } else {
+                    // End current parallel group if exists
+                    if let Some(group) = current_group.take() {
+                        groups.push(group);
+                    }
+                }
+            }
+            
+            // Don't forget the last group
+            if let Some(group) = current_group {
+                groups.push(group);
+            }
+        }
+        
+        groups
+    }
+    
+    /// Execute a parallel step group
+    pub fn execute_parallel_group(&mut self, group: &ParallelStepGroup) -> CoreResult<Vec<StepResult>> {
+        log::info!("Executing parallel group: {} with {} steps", group.group_id, group.step_ids.len());
+        
+        // Mark group as running
+        let mut group = group.clone();
+        group.mark_running();
+        
+        // Store the group in our tracking
+        self.parallel_groups.insert(group.group_id.clone(), group.clone());
+        self.running_parallel_groups.insert(group.group_id.clone());
+        
+        // For now, we'll simulate parallel execution by executing steps sequentially
+        // In a real implementation, this would use the job dispatcher for concurrent execution
+        let mut results = Vec::new();
+        
+        for step_id in &group.step_ids {
+            if let Some(step_state) = self.step_states.get_mut(step_id) {
+                // Mark step as running
+                step_state.mark_running();
+                
+                // Simulate step execution (this will be replaced with actual execution)
+                let result = self.simulate_parallel_step_execution(step_id)?;
+                results.push(result);
+                
+                // Mark step as completed
+                step_state.mark_completed(result.clone());
+                
+                // Update the parallel group with the result
+                if let Some(group) = self.parallel_groups.get_mut(&group.group_id) {
+                    group.add_step_result(step_id.clone(), result);
+                }
+            }
+        }
+        
+        // Mark group as completed
+        if let Some(group) = self.parallel_groups.get_mut(&group.group_id) {
+            if group.has_failures() {
+                group.mark_partially_failed("Some steps in parallel group failed".to_string());
+            } else {
+                group.mark_completed();
+            }
+        }
+        
+        self.running_parallel_groups.remove(&group.group_id);
+        
+        log::info!("Parallel group {} completed with {} results", group.group_id, results.len());
+        Ok(results)
+    }
+    
+    /// Aggregate results from parallel steps
+    pub fn aggregate_parallel_results(&self, results: Vec<StepResult>) -> CoreResult<serde_json::Value> {
+        let mut aggregated = serde_json::Map::new();
+        let mut success_count = 0;
+        let mut failure_count = 0;
+        
+        for result in results {
+            let step_id = result.step_id.clone();
+            
+            if matches!(result.status, StepStatus::Completed) {
+                success_count += 1;
+                if let Some(output) = result.output {
+                    aggregated.insert(step_id, output);
+                }
+            } else {
+                failure_count += 1;
+                if let Some(error) = result.error {
+                    aggregated.insert(format!("{}_error", step_id), serde_json::Value::String(error));
+                }
+            }
+        }
+        
+        // Add metadata
+        aggregated.insert("success_count".to_string(), serde_json::Value::Number(success_count.into()));
+        aggregated.insert("failure_count".to_string(), serde_json::Value::Number(failure_count.into()));
+        aggregated.insert("total_count".to_string(), serde_json::Value::Number((success_count + failure_count).into()));
+        
+        Ok(serde_json::Value::Object(aggregated))
+    }
+    
+    /// Handle parallel execution failures
+    pub fn handle_parallel_failures(&mut self, group: &ParallelStepGroup, failures: Vec<String>) -> CoreResult<()> {
+        log::warn!("Handling {} failures in parallel group: {}", failures.len(), group.group_id);
+        
+        if self.parallel_config.fail_fast {
+            // Fail fast - mark the entire group as failed
+            if let Some(group) = self.parallel_groups.get_mut(&group.group_id) {
+                group.mark_failed(format!("Parallel group failed: {}", failures.join(", ")));
+            }
+            
+            // Mark all steps in the group as failed
+            for step_id in &group.step_ids {
+                if let Some(step_state) = self.step_states.get_mut(step_id) {
+                    step_state.mark_failed("Parallel group failed".to_string());
+                }
+            }
+        } else {
+            // Continue on error - mark only failed steps as failed
+            if let Some(group) = self.parallel_groups.get_mut(&group.group_id) {
+                group.mark_partially_failed(format!("Some steps failed: {}", failures.join(", ")));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Simulate parallel step execution (placeholder for actual execution)
+    fn simulate_parallel_step_execution(&self, step_id: &str) -> CoreResult<StepResult> {
+        log::debug!("Simulating parallel step execution: {}", step_id);
+        
+        let start_time = Utc::now();
+        
+        // Simulate some processing time
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        
+        let end_time = Utc::now();
+        let duration_ms = (end_time - start_time).num_milliseconds() as u64;
+        
+        let output = serde_json::json!({
+            "step_id": step_id,
+            "status": "completed",
+            "message": "Parallel step executed successfully (simulated)",
+            "timestamp": end_time.to_rfc3339(),
+            "duration_ms": duration_ms,
+        });
+        
+        Ok(StepResult {
+            step_id: step_id.to_string(),
+            status: StepStatus::Completed,
+            output: Some(output),
+            error: None,
+            started_at: start_time,
+            completed_at: Some(end_time),
+            duration_ms: Some(duration_ms),
+        })
     }
 }
 

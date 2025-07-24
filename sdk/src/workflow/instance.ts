@@ -238,6 +238,8 @@ export class WorkflowInstance {
   parallel(
     steps: Array<(ctx: Context) => any | Promise<any>>
   ): WorkflowInstance {
+    const groupId = `parallel_group_${generateId('parallel')}`;
+
     const parallelStep: StepDefinition = {
       id: `parallel_${generateId('parallel')}`,
       name: 'parallel_execution',
@@ -249,16 +251,33 @@ export class WorkflowInstance {
       options: {
         parallel: true,
         stepCount: steps.length,
+        parallelGroupId: groupId,
       },
+      parallel: true,
+      parallel_group_id: groupId,
+      parallel_step_count: steps.length,
+      race: false,
+      for_each: false,
     };
 
     this._workflow.steps.push(parallelStep);
     this._currentStep = parallelStep;
 
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        parallelStep.name,
+        parallelStep.handler,
+        'step'
+      );
+    }
+
     return this;
   }
 
   race(steps: Array<(ctx: Context) => any | Promise<any>>): WorkflowInstance {
+    const groupId = `race_group_${generateId('race')}`;
+
     const raceStep: StepDefinition = {
       id: `race_${generateId('race')}`,
       name: 'race_execution',
@@ -270,11 +289,26 @@ export class WorkflowInstance {
       options: {
         race: true,
         stepCount: steps.length,
+        parallelGroupId: groupId,
       },
+      parallel: false,
+      parallel_group_id: groupId,
+      parallel_step_count: steps.length,
+      race: true,
+      for_each: false,
     };
 
     this._workflow.steps.push(raceStep);
     this._currentStep = raceStep;
+
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        raceStep.name,
+        raceStep.handler,
+        'step'
+      );
+    }
 
     return this;
   }

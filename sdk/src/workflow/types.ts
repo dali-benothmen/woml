@@ -41,6 +41,11 @@ export interface StepDefinition {
   handler: (ctx: Context) => any | Promise<any>;
   type: 'step' | 'action';
   options?: StepOptions;
+  parallel?: boolean;
+  parallel_group_id?: string;
+  parallel_step_count?: number;
+  race?: boolean;
+  for_each?: boolean;
 }
 
 export interface StepOptions {
@@ -63,6 +68,8 @@ export interface StepOptions {
   conditional?: boolean;
   conditionType?: 'if' | 'elseIf' | 'else';
   stepCount?: number;
+  parallelGroupId?: string;
+  parallelStepCount?: number;
   cancel?: boolean;
   reason?: string;
   subflow?: boolean;

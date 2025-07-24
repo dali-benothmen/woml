@@ -71,43 +71,65 @@ impl StepOrchestrator {
                 break;
             }
             
-            // Execute each ready step
-            for step_id in ready_steps {
-                log::info!("Executing ready step: {}", step_id);
-                
-                // Mark step as running
-                state_machine.mark_step_running(&step_id)?;
-                
-                // Get step definition
-                let step_def = workflow.get_step(&step_id)
-                    .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?
-                    .clone();
-                
-                // Get completed steps for context
-                let completed_steps = state_machine.get_completed_steps().to_vec();
-                
-                // Execute the step using the state machine context
-                match self.execute_step_with_state_machine(&workflow, &run, &step_def, &completed_steps, 0) {
-                    Ok(output) => {
-                        // Mark step as completed in state machine
-                        state_machine.mark_step_completed(&step_id, output)?;
-                        log::info!("Step {} completed successfully", step_id);
-                    }
-                    Err(error) => {
-                        // Mark step as failed in state machine
-                        state_machine.mark_step_failed(&step_id, error.to_string())?;
-                        log::error!("Step {} failed: {}", step_id, error);
-                        
-                        // Check if we should continue or stop
-                        if !step_def.can_retry() {
-                            log::error!("Step {} cannot be retried, stopping workflow", step_id);
-                            break;
+            // Check for parallel execution groups
+            let parallel_groups = state_machine.detect_parallel_groups();
+            
+            if !parallel_groups.is_empty() {
+                // Execute parallel groups
+                for group in parallel_groups {
+                    log::info!("Executing parallel group: {} with {} steps", group.group_id, group.step_ids.len());
+                    
+                    // Execute the parallel group
+                    let parallel_results = state_machine.execute_parallel_group(&group)?;
+                    
+                    // Aggregate the results
+                    let aggregated_result = state_machine.aggregate_parallel_results(parallel_results)?;
+                    
+                    // Mark the parallel group as a single completed step
+                    let group_step_id = format!("parallel_group_{}", group.group_id);
+                    state_machine.mark_step_completed(&group_step_id, aggregated_result)?;
+                    
+                    log::info!("Parallel group {} completed successfully", group.group_id);
+                }
+            } else {
+                // Execute each ready step sequentially
+                for step_id in ready_steps {
+                    log::info!("Executing ready step: {}", step_id);
+                    
+                    // Mark step as running
+                    state_machine.mark_step_running(&step_id)?;
+                    
+                    // Get step definition
+                    let step_def = workflow.get_step(&step_id)
+                        .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?
+                        .clone();
+                    
+                    // Get completed steps for context
+                    let completed_steps = state_machine.get_completed_steps().to_vec();
+                    
+                    // Execute the step using the state machine context
+                    match self.execute_step_with_state_machine(&workflow, &run, &step_def, &completed_steps, 0) {
+                        Ok(output) => {
+                            // Mark step as completed in state machine
+                            state_machine.mark_step_completed(&step_id, output)?;
+                            log::info!("Step {} completed successfully", step_id);
+                        }
+                        Err(error) => {
+                            // Mark step as failed in state machine
+                            state_machine.mark_step_failed(&step_id, error.to_string())?;
+                            log::error!("Step {} failed: {}", step_id, error);
+                            
+                            // Check if we should continue or stop
+                            if !step_def.can_retry() {
+                                log::error!("Step {} cannot be retried, stopping workflow", step_id);
+                                break;
+                            }
                         }
                     }
+                    
+                    // Save state to database
+                    state_machine.save_state()?;
                 }
-                
-                // Save state to database
-                state_machine.save_state()?;
             }
         }
         
