@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SupportedFramework } from './framework-registry';
 
 export interface ConfiguredService {
   id: string;
@@ -118,6 +119,9 @@ export interface WebhookOptions {
   schema?: z.ZodObject<any>;
   idempotencyKey?: (ctx: Context) => string;
   parseRawBody?: boolean;
+  app?: SupportedFramework;
+  appInstance?: any;
+  registerRoute?: (method: string, path: string, handler: Function) => void;
   headers?: {
     required?: Record<string, string>; // e.g., { 'content-type': 'application/json' }
     validate?: (headers: Record<string, string>) => boolean | string;

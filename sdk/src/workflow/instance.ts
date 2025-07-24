@@ -6,6 +6,7 @@ import {
   Context,
   RetryConfig,
   CacheConfig,
+  WebhookOptions,
 } from './types';
 import { validateWorkflow } from './validation';
 import { parseDuration, generateId } from '../utils';
@@ -14,6 +15,10 @@ import {
   createAdvancedTestHarness,
   AdvancedTestHarness,
 } from '../testing/advanced';
+import {
+  getFrameworkHandler,
+  isFrameworkSupported,
+} from './framework-registry';
 
 export class WorkflowInstance {
   private _workflow: WorkflowDefinition;
@@ -155,7 +160,7 @@ export class WorkflowInstance {
     return this;
   }
 
-  onWebhook(path: string, options?: any): WorkflowInstance {
+  onWebhook(path: string, options?: WebhookOptions): WorkflowInstance {
     const trigger: TriggerDefinition = {
       type: 'webhook',
       path,
@@ -163,7 +168,171 @@ export class WorkflowInstance {
     };
 
     this._workflow.triggers.push(trigger);
+
+    if (options?.app && options?.appInstance) {
+      this._registerWebhookRouteWithFramework(path, options);
+    } else if (options?.registerRoute) {
+      this._registerWebhookRoute(path, options);
+    }
+
     return this;
+  }
+
+  private _registerWebhookRouteWithFramework(
+    path: string,
+    options: WebhookOptions
+  ): void {
+    const { app: frameworkName, appInstance } = options;
+
+    if (!frameworkName || !appInstance) return;
+
+    // Validate framework is supported
+    if (!isFrameworkSupported(frameworkName)) {
+      throw new Error(
+        `Unsupported framework: ${frameworkName}. Supported frameworks: express, fastify, koa, hapi, nestjs, bun, nextjs`
+      );
+    }
+
+    // Get the framework handler
+    const frameworkHandler = getFrameworkHandler(frameworkName);
+
+    // Create the webhook handler
+    const webhookHandler = async (req: any, res: any) => {
+      try {
+        console.log(`🔗 Webhook triggered: ${path}`);
+        console.log('   Headers:', req.headers);
+        console.log('   Body:', req.body);
+
+        // Validate schema if defined
+        if (options.schema) {
+          try {
+            options.schema.parse(req.body);
+          } catch (schemaError: any) {
+            console.error('❌ Schema validation failed:', schemaError);
+            return res.status(400).json({
+              success: false,
+              error: 'Payload validation failed',
+              details: schemaError.message,
+            });
+          }
+        }
+
+        // Validate headers if required
+        if (options.headers?.required) {
+          const requiredHeaders = options.headers.required;
+          for (const [key, value] of Object.entries(requiredHeaders)) {
+            if (req.headers[key.toLowerCase()] !== value) {
+              return res.status(400).json({
+                success: false,
+                error: `Missing or invalid required header: ${key}`,
+              });
+            }
+          }
+        }
+
+        // Trigger the workflow
+        const runId = await this._cronflowInstance.trigger(
+          this._workflow.id,
+          req.body
+        );
+
+        console.log('✅ Webhook workflow triggered successfully');
+        console.log('   Run ID:', runId);
+
+        res.json({
+          success: true,
+          runId,
+          message: 'Webhook processed successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        console.error('❌ Webhook processing failed:', error);
+        res.status(500).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    };
+
+    // Register the route using the framework handler
+    const method = options.method || 'POST';
+    frameworkHandler(appInstance, method, path, webhookHandler);
+
+    console.log(
+      `✅ Webhook route registered with ${frameworkName}: ${method} ${path}`
+    );
+  }
+
+  private _registerWebhookRoute(path: string, options: WebhookOptions): void {
+    const { registerRoute } = options;
+
+    if (!registerRoute) return;
+
+    // Create the webhook handler
+    const webhookHandler = async (req: any, res: any) => {
+      try {
+        console.log(`🔗 Webhook triggered: ${path}`);
+        console.log('   Headers:', req.headers);
+        console.log('   Body:', req.body);
+
+        // Validate schema if defined
+        if (options.schema) {
+          try {
+            options.schema.parse(req.body);
+          } catch (schemaError: any) {
+            console.error('❌ Schema validation failed:', schemaError);
+            return res.status(400).json({
+              success: false,
+              error: 'Payload validation failed',
+              details: schemaError.message,
+            });
+          }
+        }
+
+        // Validate headers if required
+        if (options.headers?.required) {
+          const requiredHeaders = options.headers.required;
+          for (const [key, value] of Object.entries(requiredHeaders)) {
+            if (req.headers[key.toLowerCase()] !== value) {
+              return res.status(400).json({
+                success: false,
+                error: `Missing or invalid required header: ${key}`,
+              });
+            }
+          }
+        }
+
+        // Trigger the workflow
+        const runId = await this._cronflowInstance.trigger(
+          this._workflow.id,
+          req.body
+        );
+
+        console.log('✅ Webhook workflow triggered successfully');
+        console.log('   Run ID:', runId);
+
+        res.json({
+          success: true,
+          runId,
+          message: 'Webhook processed successfully',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        console.error('❌ Webhook processing failed:', error);
+        res.status(500).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    };
+
+    // Register the route using the universal interface
+    const method = options.method || 'POST';
+    registerRoute(method, path, webhookHandler);
+
+    console.log(`✅ Webhook route registered: ${method} ${path}`);
   }
 
   onSchedule(cronExpression: string): WorkflowInstance {

@@ -66,6 +66,13 @@ export const WorkflowDefinitionSchema = z.object({
             schema: z.any().optional(),
             idempotencyKey: z.function().optional(),
             parseRawBody: z.boolean().optional(),
+            url: z.string().url('Invalid URL format').optional(),
+            timeout: z.number().positive('Timeout must be positive').optional(),
+            retries: z
+              .number()
+              .int()
+              .min(0, 'Retries must be non-negative')
+              .optional(),
             headers: z
               .object({
                 required: z.record(z.string(), z.string()).optional(),
