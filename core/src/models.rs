@@ -4,6 +4,130 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
+/// Control flow condition types
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ConditionType {
+    If,
+    ElseIf,
+    Else,
+    EndIf,
+}
+
+impl ConditionType {
+    /// Check if this is a conditional step that requires evaluation
+    pub fn is_conditional(&self) -> bool {
+        matches!(self, ConditionType::If | ConditionType::ElseIf)
+    }
+    
+    /// Check if this is a control flow boundary step
+    pub fn is_boundary(&self) -> bool {
+        matches!(self, ConditionType::If | ConditionType::EndIf)
+    }
+    
+    /// Get the condition type as a string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConditionType::If => "if",
+            ConditionType::ElseIf => "elseif",
+            ConditionType::Else => "else",
+            ConditionType::EndIf => "endif",
+        }
+    }
+}
+
+/// Control flow block for managing conditional execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlFlowBlock {
+    /// Unique identifier for this control flow block
+    pub block_id: String,
+    /// Type of condition (if/elseif/else/endif)
+    pub condition_type: ConditionType,
+    /// Whether the condition was met (for if/elseif)
+    pub condition_met: bool,
+    /// Whether this block has been executed
+    pub executed: bool,
+    /// Start step ID for this block
+    pub start_step: String,
+    /// End step ID for this block (if known)
+    pub end_step: Option<String>,
+    /// Nested control flow blocks
+    pub nested_blocks: Vec<ControlFlowBlock>,
+    /// Parent block ID (for nested conditions)
+    pub parent_block_id: Option<String>,
+}
+
+impl ControlFlowBlock {
+    /// Create a new control flow block
+    pub fn new(block_id: String, condition_type: ConditionType, start_step: String) -> Self {
+        Self {
+            block_id,
+            condition_type,
+            condition_met: false,
+            executed: false,
+            start_step,
+            end_step: None,
+            nested_blocks: Vec::new(),
+            parent_block_id: None,
+        }
+    }
+    
+    /// Mark the condition as met
+    pub fn mark_condition_met(&mut self) {
+        self.condition_met = true;
+    }
+    
+    /// Mark the block as executed
+    pub fn mark_executed(&mut self) {
+        self.executed = true;
+    }
+    
+    /// Check if this block should be executed
+    pub fn should_execute(&self) -> bool {
+        match self.condition_type {
+            ConditionType::If => self.condition_met,
+            ConditionType::ElseIf => self.condition_met && !self.executed,
+            ConditionType::Else => !self.executed, // Else executes if no previous condition was met
+            ConditionType::EndIf => true, // EndIf always executes
+        }
+    }
+    
+    /// Add a nested block
+    pub fn add_nested_block(&mut self, block: ControlFlowBlock) {
+        self.nested_blocks.push(block);
+    }
+}
+
+/// Condition evaluation result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConditionResult {
+    /// Whether the condition was met
+    pub met: bool,
+    /// Error message if condition evaluation failed
+    pub error: Option<String>,
+    /// Additional metadata about the evaluation
+    pub metadata: serde_json::Value,
+}
+
+impl ConditionResult {
+    /// Create a successful condition result
+    pub fn success(met: bool) -> Self {
+        Self {
+            met,
+            error: None,
+            metadata: serde_json::json!({}),
+        }
+    }
+    
+    /// Create a failed condition result
+    pub fn failure(error: String) -> Self {
+        Self {
+            met: false,
+            error: Some(error),
+            metadata: serde_json::json!({}),
+        }
+    }
+}
+
 /// Workflow definition structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDefinition {
@@ -70,6 +194,14 @@ pub struct StepDefinition {
     pub timeout: Option<u64>,
     pub retry: Option<RetryConfig>,
     pub depends_on: Vec<String>,
+    /// Control flow condition type (if/elseif/else/endif)
+    pub condition_type: Option<ConditionType>,
+    /// Serialized condition expression for evaluation
+    pub condition_expression: Option<String>,
+    /// Control flow block identifier
+    pub control_flow_block: Option<String>,
+    /// Whether this step is part of a control flow structure
+    pub is_control_flow: bool,
 }
 
 impl StepDefinition {
@@ -92,6 +224,37 @@ impl StepDefinition {
             retry.validate()?;
         }
         
+        // Validate control flow configuration
+        self.validate_control_flow()?;
+        
+        Ok(())
+    }
+    
+    /// Validate control flow configuration
+    fn validate_control_flow(&self) -> Result<(), String> {
+        // If this is a control flow step, ensure it has proper configuration
+        if self.is_control_flow {
+            if let Some(condition_type) = &self.condition_type {
+                match condition_type {
+                    ConditionType::If | ConditionType::ElseIf => {
+                        if self.condition_expression.is_none() {
+                            return Err(format!("{} step must have a condition expression", condition_type.as_str()));
+                        }
+                        if self.control_flow_block.is_none() {
+                            return Err(format!("{} step must have a control flow block identifier", condition_type.as_str()));
+                        }
+                    },
+                    ConditionType::Else | ConditionType::EndIf => {
+                        if self.control_flow_block.is_none() {
+                            return Err(format!("{} step must have a control flow block identifier", condition_type.as_str()));
+                        }
+                    }
+                }
+            } else {
+                return Err("Control flow step must have a condition type".to_string());
+            }
+        }
+        
         Ok(())
     }
     
@@ -110,6 +273,39 @@ impl StepDefinition {
         // For now, always return true if retry config exists
         // In the future, this will check against the actual retry count
         self.retry.is_some()
+    }
+    
+    /// Check if this step is a control flow step
+    pub fn is_control_flow_step(&self) -> bool {
+        self.is_control_flow && self.condition_type.is_some()
+    }
+    
+    /// Check if this step requires condition evaluation
+    pub fn requires_condition_evaluation(&self) -> bool {
+        if let Some(condition_type) = &self.condition_type {
+            condition_type.is_conditional()
+        } else {
+            false
+        }
+    }
+    
+    /// Check if this step is a control flow boundary
+    pub fn is_control_flow_boundary(&self) -> bool {
+        if let Some(condition_type) = &self.condition_type {
+            condition_type.is_boundary()
+        } else {
+            false
+        }
+    }
+    
+    /// Get the control flow block ID
+    pub fn get_control_flow_block_id(&self) -> Option<&String> {
+        self.control_flow_block.as_ref()
+    }
+    
+    /// Get the condition expression
+    pub fn get_condition_expression(&self) -> Option<&String> {
+        self.condition_expression.as_ref()
     }
 }
 

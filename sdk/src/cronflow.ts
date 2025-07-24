@@ -656,8 +656,11 @@ async function executeWorkflowSteps(
     console.log(`🔄 Executing workflow steps for ${workflowId} run ${runId}`);
     console.log(`📋 Workflow has ${workflow.steps.length} steps`);
 
-    // Execute each step in sequence
     const completedSteps: Record<string, any> = {};
+    let currentConditionMet = false;
+    let inControlFlowBlock = false;
+    let skipUntilEndIf = false;
+    let lastExecutedStepIndex = -1;
 
     for (let i = 0; i < workflow.steps.length; i++) {
       const step = workflow.steps[i];
@@ -665,7 +668,106 @@ async function executeWorkflowSteps(
         `\n📝 Executing step ${i + 1}/${workflow.steps.length}: ${step.name}`
       );
 
-      // Create context for this step
+      const isControlFlowStep =
+        step.options?.conditionType ||
+        step.name.startsWith('conditional_') ||
+        step.name.startsWith('else_') ||
+        step.name.startsWith('endif_');
+
+      if (isControlFlowStep) {
+        console.log(`🔀 Control flow step detected: ${step.name}`);
+
+        if (
+          step.name.startsWith('conditional_') ||
+          step.options?.conditionType === 'if'
+        ) {
+          console.log(`🔍 Evaluating IF condition: ${step.name}`);
+
+          const context = {
+            run_id: runId,
+            workflow_id: workflowId,
+            step_name: step.name,
+            payload: payload,
+            steps: completedSteps,
+            services: {},
+            run: {
+              id: runId,
+              workflowId: workflowId,
+            },
+            last:
+              lastExecutedStepIndex >= 0
+                ? completedSteps[workflow.steps[lastExecutedStepIndex].name]
+                : undefined,
+            state: {
+              get: () => null,
+              set: async () => {},
+              incr: async () => 0,
+            },
+            trigger: { headers: {} },
+            cancel: (reason?: string) => {
+              throw new Error(
+                `Workflow cancelled: ${reason || 'No reason provided'}`
+              );
+            },
+          };
+
+          const stepHandler = getStepHandler(workflowId, step.name);
+          if (stepHandler) {
+            const conditionResult = await stepHandler.handler(context);
+            currentConditionMet = Boolean(conditionResult);
+            console.log(`✅ IF condition result: ${currentConditionMet}`);
+
+            if (currentConditionMet) {
+              inControlFlowBlock = true;
+              skipUntilEndIf = false;
+            } else {
+              skipUntilEndIf = true;
+            }
+          } else {
+            console.log(
+              `⚠️  No handler found for condition step: ${step.name}`
+            );
+            skipUntilEndIf = true;
+          }
+
+          console.log(`⏭️  Skipping control flow step execution: ${step.name}`);
+          continue;
+        } else if (
+          step.name.startsWith('else_') ||
+          step.options?.conditionType === 'else'
+        ) {
+          console.log(`🔀 Processing ELSE condition: ${step.name}`);
+
+          if (!currentConditionMet && !skipUntilEndIf) {
+            inControlFlowBlock = true;
+            skipUntilEndIf = false;
+            console.log(`✅ ELSE branch will be executed`);
+          } else {
+            skipUntilEndIf = true;
+            console.log(`⏭️  ELSE branch will be skipped`);
+          }
+
+          console.log(`⏭️  Skipping control flow step execution: ${step.name}`);
+          continue;
+        } else if (step.name.startsWith('endif_')) {
+          console.log(`🔚 Processing ENDIF: ${step.name}`);
+
+          inControlFlowBlock = false;
+          skipUntilEndIf = false;
+          currentConditionMet = false;
+
+          console.log(`⏭️  Skipping control flow step execution: ${step.name}`);
+          continue;
+        }
+      }
+
+      if (skipUntilEndIf) {
+        console.log(`⏭️  Skipping step due to control flow: ${step.name}`);
+        continue;
+      }
+
+      console.log(`🔄 Executing regular step: ${step.name}`);
+
       const context = {
         run_id: runId,
         workflow_id: workflowId,
@@ -675,14 +777,27 @@ async function executeWorkflowSteps(
         services: {},
         run: {
           id: runId,
-          workflow_id: workflowId,
+          workflowId: workflowId,
         },
-        last: i > 0 ? completedSteps[workflow.steps[i - 1].name] : undefined,
+        last:
+          lastExecutedStepIndex >= 0
+            ? completedSteps[workflow.steps[lastExecutedStepIndex].name]
+            : undefined,
+        state: {
+          get: () => null,
+          set: async () => {},
+          incr: async () => 0,
+        },
+        trigger: { headers: {} },
+        cancel: (reason?: string) => {
+          throw new Error(
+            `Workflow cancelled: ${reason || 'No reason provided'}`
+          );
+        },
       };
 
       const contextJson = JSON.stringify(context);
 
-      // Execute the step using our Bun.js handler
       const stepResult = await executeStepFunction(
         step.name,
         contextJson,
@@ -691,8 +806,8 @@ async function executeWorkflowSteps(
       );
 
       if (stepResult.success && stepResult.result) {
-        // Store the step result
         completedSteps[step.name] = stepResult.result.output;
+        lastExecutedStepIndex = i; // Update the last executed step index
         console.log(`✅ Step ${step.name} completed successfully`);
       } else {
         console.error(`❌ Step ${step.name} failed:`, stepResult.message);

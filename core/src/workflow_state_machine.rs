@@ -10,7 +10,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, CoreResult};
 use crate::state::StateManager;
-use crate::models::{WorkflowDefinition, WorkflowRun, StepDefinition, StepResult, StepStatus, RunStatus};
+use crate::models::{WorkflowDefinition, WorkflowRun, StepDefinition, StepResult, StepStatus, RunStatus, ControlFlowBlock, ConditionType, ConditionResult};
+use crate::condition_evaluator::ConditionEvaluator;
+use crate::context::Context;
 
 /// Workflow execution state
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -209,6 +211,14 @@ pub struct WorkflowStateMachine {
     workflow_definition: Option<WorkflowDefinition>,
     /// Workflow run
     workflow_run: Option<WorkflowRun>,
+    /// Control flow blocks for conditional execution
+    control_flow_blocks: HashMap<String, ControlFlowBlock>,
+    /// Active control flow block stack (for nested conditions)
+    control_flow_stack: Vec<String>,
+    /// Steps that should be skipped due to control flow
+    skipped_steps: HashSet<String>,
+    /// Current condition evaluation context
+    condition_context: Option<Context>,
 }
 
 impl WorkflowStateMachine {
@@ -230,6 +240,10 @@ impl WorkflowStateMachine {
             stats: WorkflowExecutionStats::new(0),
             workflow_definition: None,
             workflow_run: None,
+            control_flow_blocks: HashMap::new(),
+            control_flow_stack: Vec::new(),
+            skipped_steps: HashSet::new(),
+            condition_context: None,
         }
     }
     
@@ -260,6 +274,15 @@ impl WorkflowStateMachine {
         
         // Initialize step states
         self.initialize_step_states(&workflow)?;
+        
+        // Initialize control flow blocks
+        self.initialize_control_flow_blocks(&workflow)?;
+        
+        // Validate control flow structure
+        self.validate_control_flow_structure(&workflow)?;
+        
+        // Create condition evaluation context
+        self.create_condition_context(&run)?;
         
         // Update statistics
         self.total_steps = workflow.steps.len();
@@ -303,13 +326,305 @@ impl WorkflowStateMachine {
         Ok(())
     }
     
+    /// Initialize control flow blocks from workflow definition
+    fn initialize_control_flow_blocks(&mut self, workflow: &WorkflowDefinition) -> CoreResult<()> {
+        self.control_flow_blocks.clear();
+        self.control_flow_stack.clear();
+        self.skipped_steps.clear();
+        
+        // Build control flow blocks from step definitions
+        let mut current_block_id: Option<String> = None;
+        let mut block_start_step: Option<String> = None;
+        
+        for step in &workflow.steps {
+            if step.is_control_flow_step() {
+                if let Some(condition_type) = &step.condition_type {
+                    match condition_type {
+                        ConditionType::If => {
+                            // Start a new control flow block
+                            if let Some(block_id) = &step.control_flow_block {
+                                current_block_id = Some(block_id.clone());
+                                block_start_step = Some(step.id.clone());
+                                
+                                let block = ControlFlowBlock::new(
+                                    block_id.clone(),
+                                    condition_type.clone(),
+                                    step.id.clone(),
+                                );
+                                self.control_flow_blocks.insert(block_id.clone(), block);
+                                self.control_flow_stack.push(block_id.clone());
+                            }
+                        },
+                        ConditionType::ElseIf => {
+                            // Continue the current block
+                            if let Some(block_id) = &step.control_flow_block {
+                                if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
+                                    // Update the block to handle elseif
+                                    // For now, we'll treat elseif as a separate condition
+                                }
+                            }
+                        },
+                        ConditionType::Else => {
+                            // Continue the current block
+                            if let Some(block_id) = &step.control_flow_block {
+                                if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
+                                    // Update the block to handle else
+                                }
+                            }
+                        },
+                        ConditionType::EndIf => {
+                            // End the current control flow block
+                            if let Some(block_id) = &step.control_flow_block {
+                                if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
+                                    block.end_step = Some(step.id.clone());
+                                }
+                                self.control_flow_stack.pop();
+                                current_block_id = None;
+                                block_start_step = None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        log::debug!("Initialized {} control flow blocks", self.control_flow_blocks.len());
+        Ok(())
+    }
+    
+    /// Validate control flow structure
+    fn validate_control_flow_structure(&self, workflow: &WorkflowDefinition) -> CoreResult<()> {
+        let mut if_count = 0;
+        let mut endif_count = 0;
+        let mut current_block_stack = Vec::new();
+        
+        for step in &workflow.steps {
+            if step.is_control_flow_step() {
+                if let Some(condition_type) = &step.condition_type {
+                    match condition_type {
+                        ConditionType::If => {
+                            if_count += 1;
+                            if let Some(block_id) = &step.control_flow_block {
+                                current_block_stack.push(block_id.clone());
+                            }
+                        },
+                        ConditionType::ElseIf => {
+                            // Validate that we're in an if block
+                            if current_block_stack.is_empty() {
+                                return Err(CoreError::Validation(
+                                    "elseIf found without matching if".to_string()
+                                ));
+                            }
+                        },
+                        ConditionType::Else => {
+                            // Validate that we're in an if block
+                            if current_block_stack.is_empty() {
+                                return Err(CoreError::Validation(
+                                    "else found without matching if".to_string()
+                                ));
+                            }
+                        },
+                        ConditionType::EndIf => {
+                            endif_count += 1;
+                            if let Some(block_id) = &step.control_flow_block {
+                                if let Some(expected_block_id) = current_block_stack.pop() {
+                                    if block_id != &expected_block_id {
+                                        return Err(CoreError::Validation(
+                                            format!("Mismatched endIf for block {}", block_id)
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check for balanced if/endif
+        if if_count != endif_count {
+            return Err(CoreError::Validation(
+                format!("Unbalanced if/endif: {} if, {} endif", if_count, endif_count)
+            ));
+        }
+        
+        // Check for unclosed blocks
+        if !current_block_stack.is_empty() {
+            return Err(CoreError::Validation(
+                format!("Unclosed control flow blocks: {:?}", current_block_stack)
+            ));
+        }
+        
+        Ok(())
+    }
+    
+    /// Create condition evaluation context from workflow run
+    fn create_condition_context(&mut self, run: &WorkflowRun) -> CoreResult<()> {
+        let workflow = self.workflow_definition.as_ref()
+            .ok_or_else(|| CoreError::Internal("Workflow definition not found".to_string()))?;
+        
+        let context = Context::new(
+            self.run_id.to_string(),
+            self.workflow_id.clone(),
+            "condition-eval".to_string(),
+            run.payload.clone(),
+            run.clone(),
+            self.completed_steps.clone(),
+        )?;
+        
+        self.condition_context = Some(context);
+        Ok(())
+    }
+    
     /// Get steps that are ready for execution
     pub fn get_ready_steps(&self) -> Vec<String> {
         self.step_states
             .iter()
             .filter(|(_, state)| state.ready && state.status == StepStatus::Pending)
+            .filter(|(step_id, _)| !self.skipped_steps.contains(*step_id))
             .map(|(step_id, _)| step_id.clone())
             .collect()
+    }
+    
+    /// Evaluate condition for a step
+    pub fn evaluate_step_condition(&mut self, step_id: &str) -> CoreResult<ConditionResult> {
+        let step_state = self.step_states.get(step_id)
+            .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?;
+        
+        if !step_state.step.requires_condition_evaluation() {
+            return Ok(ConditionResult::success(true));
+        }
+        
+        let condition_expr = step_state.step.get_condition_expression()
+            .ok_or_else(|| CoreError::Validation(format!("Step {} requires condition but has no expression", step_id)))?;
+        
+        let context = self.condition_context.as_ref()
+            .ok_or_else(|| CoreError::Internal("Condition context not available".to_string()))?;
+        
+        let evaluator = ConditionEvaluator::new(context.clone(), self.completed_steps.clone());
+        evaluator.evaluate_condition(condition_expr)
+    }
+    
+    /// Handle control flow step execution
+    pub fn handle_control_flow_step(&mut self, step_id: &str) -> CoreResult<bool> {
+        // Get step state and clone necessary data to avoid borrow checker issues
+        let step_state = self.step_states.get(step_id)
+            .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?;
+        
+        if !step_state.step.is_control_flow_step() {
+            return Ok(true); // Not a control flow step, execute normally
+        }
+        
+        // Clone the condition type and block ID to avoid borrow checker issues
+        let condition_type = step_state.step.condition_type.clone();
+        let block_id = step_state.step.get_control_flow_block_id().cloned();
+        
+        if let Some(condition_type) = &condition_type {
+            match condition_type {
+                ConditionType::If => {
+                    let condition_result = self.evaluate_step_condition(step_id)?;
+                    if condition_result.met {
+                        // Condition is true, continue execution
+                        if let Some(block_id) = &block_id {
+                            if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
+                                block.mark_condition_met();
+                            }
+                        }
+                        Ok(true)
+                    } else {
+                        // Condition is false, skip to else/elseif/endif
+                        self.skip_until_control_flow_end(step_id)?;
+                        Ok(false)
+                    }
+                },
+                ConditionType::ElseIf => {
+                    // Check if any previous condition in this block was met
+                    if let Some(block_id) = &block_id {
+                        if let Some(block) = self.control_flow_blocks.get(block_id) {
+                            if block.condition_met {
+                                // Previous condition was met, skip this elseif
+                                self.skip_until_control_flow_end(step_id)?;
+                                return Ok(false);
+                            }
+                        }
+                    }
+                    
+                    // Evaluate this elseif condition
+                    let condition_result = self.evaluate_step_condition(step_id)?;
+                    if condition_result.met {
+                        if let Some(block_id) = &block_id {
+                            if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
+                                block.mark_condition_met();
+                            }
+                        }
+                        Ok(true)
+                    } else {
+                        // Continue to next elseif/else/endif
+                        Ok(true)
+                    }
+                },
+                ConditionType::Else => {
+                    // Check if any previous condition in this block was met
+                    if let Some(block_id) = &block_id {
+                        if let Some(block) = self.control_flow_blocks.get(block_id) {
+                            if block.condition_met {
+                                // Previous condition was met, skip else
+                                self.skip_until_control_flow_end(step_id)?;
+                                return Ok(false);
+                            }
+                        }
+                    }
+                    
+                    // No previous condition was met, execute else
+                    Ok(true)
+                },
+                ConditionType::EndIf => {
+                    // End of control flow block, always execute
+                    Ok(true)
+                }
+            }
+        } else {
+            Ok(true)
+        }
+    }
+    
+    /// Skip steps until the end of the current control flow block
+    fn skip_until_control_flow_end(&mut self, current_step_id: &str) -> CoreResult<()> {
+        let workflow = self.workflow_definition.as_ref()
+            .ok_or_else(|| CoreError::Internal("Workflow definition not found".to_string()))?;
+        
+        let current_step = workflow.get_step(current_step_id)
+            .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", current_step_id)))?;
+        
+        let block_id = current_step.get_control_flow_block_id()
+            .ok_or_else(|| CoreError::Validation("Control flow step without block ID".to_string()))?;
+        
+        // Find all steps in this control flow block and mark them as skipped
+        for step in &workflow.steps {
+            if let Some(step_block_id) = step.get_control_flow_block_id() {
+                if step_block_id == block_id {
+                    self.skipped_steps.insert(step.id.clone());
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Update control flow state after step completion
+    pub fn update_control_flow_state(&mut self, step_id: &str) -> CoreResult<()> {
+        let step_state = self.step_states.get(step_id)
+            .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?;
+        
+        if step_state.step.is_control_flow_step() {
+            if let Some(block_id) = step_state.step.get_control_flow_block_id() {
+                if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
+                    block.mark_executed();
+                }
+            }
+        }
+        
+        Ok(())
     }
     
     /// Mark a step as running
@@ -340,6 +655,9 @@ impl WorkflowStateMachine {
             
             step_state.mark_completed(result.clone());
             self.completed_steps.push(result);
+            
+            // Update control flow state
+            self.update_control_flow_state(step_id)?;
             
             // Update dependencies for other steps
             self.update_dependencies(step_id);
@@ -676,6 +994,20 @@ mod tests {
                 },
             ],
             triggers: vec![],
+            control_flow_blocks: vec![
+                ControlFlowBlock {
+                    id: "block-1".to_string(),
+                    conditions: vec![
+                        ConditionType::If(ConditionResult::True),
+                    ],
+                },
+                ControlFlowBlock {
+                    id: "block-2".to_string(),
+                    conditions: vec![
+                        ConditionType::If(ConditionResult::False),
+                    ],
+                },
+            ],
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

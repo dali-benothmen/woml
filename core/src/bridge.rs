@@ -226,15 +226,16 @@ impl Bridge {
     pub fn execute_step(&self, run_id: &str, step_id: &str, services_json: &str) -> CoreResult<String> {
         log::info!("Executing step {} for run {}", step_id, run_id);
         
-        // Parse run ID and get run from database
         let run_uuid = uuid::Uuid::parse_str(run_id)
             .map_err(|e| CoreError::UuidParse(e))?;
         
         let state_manager = self.state_manager.lock().unwrap();
-        let run = state_manager.get_run(&run_uuid)?;
+        let run = state_manager.get_run(&run_uuid)?
+            .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
         
         // Get workflow definition
-        let workflow = state_manager.get_workflow(&run.workflow_id)?;
+        let workflow = state_manager.get_workflow(&run.workflow_id)?
+            .ok_or_else(|| CoreError::WorkflowNotFound(run.workflow_id.clone()))?;
         
         // Find the step to execute
         let step = workflow.get_step(step_id)

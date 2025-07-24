@@ -216,6 +216,15 @@ export class WorkflowInstance {
     this._workflow.steps.push(conditionalStep);
     this._currentStep = conditionalStep;
 
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        `if_${name}`,
+        condition,
+        'step'
+      );
+    }
+
     this._controlFlowStack.push({
       type: 'if',
       name,
@@ -372,6 +381,15 @@ export class WorkflowInstance {
     this._workflow.steps.push(elseIfStep);
     this._currentStep = elseIfStep;
 
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        `elseif_${name}`,
+        condition,
+        'step'
+      );
+    }
+
     this._controlFlowStack.push({
       type: 'elseIf',
       name,
@@ -408,6 +426,15 @@ export class WorkflowInstance {
 
     this._workflow.steps.push(elseStep);
     this._currentStep = elseStep;
+
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        `else_${lastControlFlow.name}`,
+        (ctx: Context) => true,
+        'step'
+      );
+    }
 
     this._controlFlowStack.push({
       type: 'else',
