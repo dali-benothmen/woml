@@ -17,8 +17,8 @@ export interface WorkflowDefinition {
   tags?: string[];
   services?: ConfiguredService[];
   hooks?: {
-    onSuccess?: (ctx: Context) => void;
-    onFailure?: (ctx: Context) => void;
+    onSuccess?: (ctx: Context, stepId?: string | string[]) => void;
+    onFailure?: (ctx: Context, stepId?: string | string[]) => void;
   };
   timeout?: string | number;
   concurrency?: number;
@@ -145,4 +145,9 @@ export interface Context {
   };
   cancel: (reason?: string) => never;
   error?: Error;
+  step_name?: string;
+  step_result?: any;
+  step_status?: 'completed' | 'failed';
+  step_error?: string;
+  background?: boolean;
 }

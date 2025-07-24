@@ -947,11 +947,69 @@ async function executeWorkflowSteps(
               console.log(
                 `✅ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} completed successfully in background`
               );
+
+              const onSuccessHandler = getHookHandler('onSuccess');
+              if (onSuccessHandler) {
+                try {
+                  const stepContext = {
+                    ...context,
+                    step_name: step.name,
+                    step_result: stepResult.result.output,
+                    step_status: 'completed',
+                    background: true,
+                  };
+                  onSuccessHandler(
+                    'onSuccess',
+                    JSON.stringify(stepContext),
+                    workflowId,
+                    step.name
+                  ).catch(hookError => {
+                    console.warn(
+                      `⚠️  Background step-level onSuccess hook failed for ${step.name}:`,
+                      hookError
+                    );
+                  });
+                } catch (hookError) {
+                  console.warn(
+                    `⚠️  Background step-level onSuccess hook failed for ${step.name}:`,
+                    hookError
+                  );
+                }
+              }
             } else {
               console.error(
                 `❌ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} failed in background:`,
                 stepResult.message
               );
+
+              const onFailureHandler = getHookHandler('onFailure');
+              if (onFailureHandler) {
+                try {
+                  const stepContext = {
+                    ...context,
+                    step_name: step.name,
+                    step_error: stepResult.message,
+                    step_status: 'failed',
+                    background: true,
+                  };
+                  onFailureHandler(
+                    'onFailure',
+                    JSON.stringify(stepContext),
+                    workflowId,
+                    step.name
+                  ).catch(hookError => {
+                    console.warn(
+                      `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
+                      hookError
+                    );
+                  });
+                } catch (hookError) {
+                  console.warn(
+                    `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
+                    hookError
+                  );
+                }
+              }
             }
           })
           .catch(error => {
@@ -959,6 +1017,35 @@ async function executeWorkflowSteps(
               `❌ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} failed in background:`,
               error
             );
+
+            const onFailureHandler = getHookHandler('onFailure');
+            if (onFailureHandler) {
+              try {
+                const stepContext = {
+                  ...context,
+                  step_name: step.name,
+                  step_error: error.message || error.toString(),
+                  step_status: 'failed',
+                  background: true,
+                };
+                onFailureHandler(
+                  'onFailure',
+                  JSON.stringify(stepContext),
+                  workflowId,
+                  step.name
+                ).catch(hookError => {
+                  console.warn(
+                    `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
+                    hookError
+                  );
+                });
+              } catch (hookError) {
+                console.warn(
+                  `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
+                  hookError
+                );
+              }
+            }
           });
 
         // For background steps/actions, we don't wait for completion and don't store results
@@ -980,8 +1067,55 @@ async function executeWorkflowSteps(
         completedSteps[step.name] = stepResult.result.output;
         lastExecutedStepIndex = i; // Update the last executed step index
         console.log(`✅ Step ${step.name} completed successfully`);
+
+        const onSuccessHandler = getHookHandler('onSuccess');
+        if (onSuccessHandler) {
+          try {
+            const stepContext = {
+              ...context,
+              step_name: step.name,
+              step_result: stepResult.result.output,
+              step_status: 'completed',
+            };
+            await onSuccessHandler(
+              'onSuccess',
+              JSON.stringify(stepContext),
+              workflowId,
+              step.name
+            );
+          } catch (hookError) {
+            console.warn(
+              `⚠️  Step-level onSuccess hook failed for step ${step.name}:`,
+              hookError
+            );
+          }
+        }
       } else {
         console.error(`❌ Step ${step.name} failed:`, stepResult.message);
+
+        const onFailureHandler = getHookHandler('onFailure');
+        if (onFailureHandler) {
+          try {
+            const stepContext = {
+              ...context,
+              step_name: step.name,
+              step_error: stepResult.message,
+              step_status: 'failed',
+            };
+            await onFailureHandler(
+              'onFailure',
+              JSON.stringify(stepContext),
+              workflowId,
+              step.name
+            );
+          } catch (hookError) {
+            console.warn(
+              `⚠️  Step-level onFailure hook failed for step ${step.name}:`,
+              hookError
+            );
+          }
+        }
+
         throw new Error(`Step ${step.name} failed: ${stepResult.message}`);
       }
     }
@@ -2172,7 +2306,12 @@ initialize();
 
 const hookHandlers = new Map<
   string,
-  (hookType: string, contextJson: string, workflowId: string) => Promise<any>
+  (
+    hookType: string,
+    contextJson: string,
+    workflowId: string,
+    stepId?: string
+  ) => Promise<any>
 >();
 
 function registerHookHandler(
@@ -2180,7 +2319,8 @@ function registerHookHandler(
   handler: (
     hookType: string,
     contextJson: string,
-    workflowId: string
+    workflowId: string,
+    stepId?: string
   ) => Promise<any>
 ): void {
   hookHandlers.set(hookType, handler);
@@ -2196,7 +2336,8 @@ function getHookHandler(
   | ((
       hookType: string,
       contextJson: string,
-      workflowId: string
+      workflowId: string,
+      stepId?: string
     ) => Promise<any>)
   | undefined {
   return hookHandlers.get(hookType);
@@ -2205,10 +2346,13 @@ function getHookHandler(
 export async function executeWorkflowHook(
   hookType: string,
   contextJson: string,
-  workflowId: string
+  workflowId: string,
+  stepId?: string
 ): Promise<any> {
   try {
-    console.log(`🎣 Executing ${hookType} hook for workflow: ${workflowId}`);
+    console.log(
+      `🎣 Executing ${hookType} hook for workflow: ${workflowId}${stepId ? `, step: ${stepId}` : ''}`
+    );
 
     if (hookType !== 'onSuccess' && hookType !== 'onFailure') {
       console.warn(`⚠️  Invalid hook type: ${hookType}`);
@@ -2236,16 +2380,33 @@ export async function executeWorkflowHook(
       hookType === 'onSuccess'
         ? workflow.hooks?.onSuccess
         : workflow.hooks?.onFailure;
+
     if (hook) {
       try {
+        if (stepId) {
+          // For step-level hooks, we need to check if the hook should run for this specific step
+          // The hook function signature is (ctx: Context, stepId?: string | string[])
+          // We need to determine if the hook should execute for this stepId
+
+          // If stepId is provided, we need to check if the hook should run for this step
+          // The hook might be configured to run for specific steps or all steps
+          console.log(
+            `   - Checking if ${hookType} hook should run for step: ${stepId}`
+          );
+
+          // For now, we'll execute the hook and let it decide internally
+          // The hook function can check the stepId parameter to determine if it should run
+        }
+
         console.log(`   - Executing ${hookType} hook...`);
-        await hook(context);
+        await hook(context, stepId);
         console.log(`   ✅ ${hookType} hook executed successfully`);
         return {
           success: true,
           message: `${hookType} hook executed successfully`,
           hookType,
           workflowId,
+          stepId,
         };
       } catch (error: any) {
         console.error(`   ❌ Error executing ${hookType} hook:`, error);
@@ -2254,6 +2415,7 @@ export async function executeWorkflowHook(
           error: error.message,
           hookType,
           workflowId,
+          stepId,
         };
       }
     } else {
@@ -2263,6 +2425,7 @@ export async function executeWorkflowHook(
         message: `No ${hookType} hook defined`,
         hookType,
         workflowId,
+        stepId,
       };
     }
   } catch (error: any) {
@@ -2272,6 +2435,7 @@ export async function executeWorkflowHook(
       error: error.message,
       hookType,
       workflowId,
+      stepId,
     };
   }
 }

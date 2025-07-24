@@ -7,6 +7,71 @@ const simpleIfWorkflow = cronflow.define({
   name: 'Simple If Test',
   description:
     'Test basic if control flow with minimal steps and parallel execution',
+  hooks: {
+    // Enhanced hooks that support both workflow-level and step-level execution
+    onSuccess: (ctx, stepId) => {
+      if (!stepId) {
+        // Workflow-level success
+        console.log(
+          '🎉 Workflow-level onSuccess: Simple If Test completed successfully!'
+        );
+        console.log('   Final output:', ctx.last);
+        console.log('   Total steps completed:', Object.keys(ctx.steps).length);
+        return;
+      }
+
+      // Step-level success
+      if (Array.isArray(stepId)) {
+        // Multiple steps specified
+        if (stepId.includes(ctx.step_name || '')) {
+          console.log(
+            `✅ Step-level onSuccess for ${ctx.step_name}: Step completed successfully!`
+          );
+          console.log(`   Step result:`, ctx.step_result);
+          console.log(`   Step status:`, ctx.step_status);
+        }
+      } else {
+        // Single step specified
+        if (stepId === ctx.step_name) {
+          console.log(
+            `✅ Step-level onSuccess for ${ctx.step_name}: Step completed successfully!`
+          );
+          console.log(`   Step result:`, ctx.step_result);
+          console.log(`   Step status:`, ctx.step_status);
+        }
+      }
+    },
+    onFailure: (ctx, stepId) => {
+      if (!stepId) {
+        // Workflow-level failure
+        console.log('💥 Workflow-level onFailure: Simple If Test failed!');
+        console.log('   Error:', ctx.error);
+        console.log('   Failed at step:', ctx.step_name);
+        return;
+      }
+
+      // Step-level failure
+      if (Array.isArray(stepId)) {
+        // Multiple steps specified
+        if (stepId.includes(ctx.step_name || '')) {
+          console.log(
+            `❌ Step-level onFailure for ${ctx.step_name}: Step failed!`
+          );
+          console.log(`   Step error:`, ctx.step_error);
+          console.log(`   Step status:`, ctx.step_status);
+        }
+      } else {
+        // Single step specified
+        if (stepId === ctx.step_name) {
+          console.log(
+            `❌ Step-level onFailure for ${ctx.step_name}: Step failed!`
+          );
+          console.log(`   Step error:`, ctx.step_error);
+          console.log(`   Step status:`, ctx.step_status);
+        }
+      }
+    },
+  },
 });
 
 simpleIfWorkflow
