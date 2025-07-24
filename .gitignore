@@ -73,6 +73,7 @@ jspm_packages/
 *.sqlite
 *.sqlite3
 TODO.md
+documentation.md
 
 # Temporary files
 tmp/
