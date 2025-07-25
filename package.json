@@ -3,23 +3,23 @@
   "version": "0.1.0",
   "private": false,
   "description": "The Fastest Code-First Workflow Automation Engine",
-  "main": "dist/dist/src/index.js",
-  "types": "dist/dist/src/index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/dist/src/index.d.ts",
-      "import": "./dist/dist/src/index.js",
-      "require": "./dist/dist/src/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
     },
     "./sdk": {
-      "types": "./dist/dist/sdk/index.d.ts",
-      "import": "./dist/dist/sdk/index.js",
-      "require": "./dist/dist/sdk/index.js"
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js",
+      "require": "./dist/sdk/index.js"
     },
     "./services": {
-      "types": "./dist/dist/services/index.d.ts",
-      "import": "./dist/dist/services/index.js",
-      "require": "./dist/dist/services/index.js"
+      "types": "./dist/services/index.d.ts",
+      "import": "./dist/services/index.js",
+      "require": "./dist/services/index.js"
     }
   },
   "files": [
@@ -46,29 +46,18 @@
     "packageName": "node-cronflow-core"
   },
   "scripts": {
-    "build": "tsc",
-    "build:prod": "tsc --project tsconfig.prod.json",
-    "build:prod:complete": "rm -rf dist dist-optimized package-optimized && npm run build:prod && npm run build:copy-core",
-    "build:clean": "rm -rf dist dist-optimized package-optimized && npm run build",
-    "build:copy-core": "mkdir -p dist/dist/core && cp core/core.node dist/dist/core/",
-    "build:complete": "npm run build:clean && npm run build:copy-core",
-    "compress:dist": "node scripts/compress-dist.js",
-    "optimize:npm": "node scripts/optimize-for-npm.js",
-    "optimize:package": "node scripts/npm-package-optimizer.js",
-    "build:optimized": "npm run build:complete && npm run optimize:npm",
-    "build:ci": "npm run build:complete && npm run optimize:package && rm -rf dist && mv package-optimized dist && npm run check:bundle-size",
-    "build:sdk": "bun build sdk/index.ts --outdir dist/dist/sdk --target node --format cjs",
-    "build:services": "bun build services/index.ts --outdir dist/dist/services --target node --format cjs",
-    "build:main": "bun build src/index.ts --outdir dist/dist --target node --format cjs",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --sourcemap --external \"*.node\" && mkdir -p dist/core && cp core/core.node dist/core/",
+    "build:dev": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --sourcemap --external \"*.node\" && mkdir -p dist/core && cp core/core.node dist/core/",
+    "build:prod": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --external \"*.node\" && mkdir -p dist/core && cp core/core.node dist/core/",
+    "build:analyze": "npm run build && bun run scripts/analyze-bundle.js",
     "build:core": "cd core && napi build --release --package-json-path ../package.json",
     "build:core:debug": "cd core && napi build --package-json-path ../package.json",
-    "build:all": "bun run build:core && bun run build",
     "generate:types": "node scripts/generate-types.js",
-    "prepublishOnly": "npm run build:optimized && npm run test && npm run check:bundle-size",
+    "prepublishOnly": "npm run build && npm run test && npm run check:bundle-size",
     "postpublish": "npm run clean",
     "analyze": "bundle-analyzer dist/**/*.js",
     "analyze:size": "du -sh dist/ && find dist/ -name '*.js' -exec wc -c {} + | tail -1",
-    "size:check": "npm run build:clean && npm run analyze:size",
+    "size:check": "npm run build && npm run analyze:size",
     "check:bundle-size": "node scripts/check-bundle-size.js",
     "test": "bun test",
     "test:run": "bun test --run",
@@ -82,10 +71,10 @@
     "format:check": "prettier --check .",
     "dev": "bun --watch src/index.ts",
     "dev:test": "bun test --watch",
-    "dev:build": "bun run build:all --watch",
+    "dev:build": "bun run build:dev --watch",
     "clean": "rm -rf dist node_modules packages core/core.node",
     "clean:all": "rm -rf dist node_modules packages core/core.node bun.lockb",
-    "install:all": "bun install && bun run build:all",
+    "install:all": "bun install && bun run build:core && bun run build",
     "install:dev": "bun install --dev",
     "add": "bun add",
     "add:dev": "bun add --dev",
