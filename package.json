@@ -3,23 +3,23 @@
   "version": "0.1.0",
   "private": false,
   "description": "The Fastest Code-First Workflow Automation Engine",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/dist/src/index.js",
+  "types": "dist/dist/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "types": "./dist/dist/src/index.d.ts",
+      "import": "./dist/dist/src/index.js",
+      "require": "./dist/dist/src/index.js"
     },
     "./sdk": {
-      "types": "./dist/sdk/index.d.ts",
-      "import": "./dist/sdk/index.js",
-      "require": "./dist/sdk/index.js"
+      "types": "./dist/dist/sdk/index.d.ts",
+      "import": "./dist/dist/sdk/index.js",
+      "require": "./dist/dist/sdk/index.js"
     },
     "./services": {
-      "types": "./dist/services/index.d.ts",
-      "import": "./dist/services/index.js",
-      "require": "./dist/services/index.js"
+      "types": "./dist/dist/services/index.d.ts",
+      "import": "./dist/dist/services/index.js",
+      "require": "./dist/dist/services/index.js"
     }
   },
   "files": [
@@ -56,6 +56,7 @@
     "optimize:npm": "node scripts/optimize-for-npm.js",
     "optimize:package": "node scripts/npm-package-optimizer.js",
     "build:optimized": "npm run build:complete && npm run optimize:npm",
+    "build:ci": "npm run build:complete && npm run optimize:package && rm -rf dist && mv package-optimized dist && npm run check:bundle-size",
     "build:sdk": "bun build sdk/index.ts --outdir dist/sdk --target node --format cjs",
     "build:services": "bun build services/index.ts --outdir dist/services --target node --format cjs",
     "build:main": "bun build src/index.ts --outdir dist --target node --format cjs",

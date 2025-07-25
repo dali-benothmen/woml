@@ -5,10 +5,10 @@ const path = require('path');
 
 // Bundle size limits (in bytes)
 const SIZE_LIMITS = {
-  'dist/index.js': 1024 * 1024, // 1MB
-  'dist/sdk/index.js': 512 * 1024, // 512KB
-  'dist/services/index.js': 256 * 1024, // 256KB
-  'dist/core/core.node': 5 * 1024 * 1024, // 5MB
+  'dist/dist/index.js': 1024 * 1024, // 1MB
+  'dist/dist/sdk/index.js': 512 * 1024, // 512KB
+  'dist/dist/services/index.js': 256 * 1024, // 256KB
+  'dist/dist/core/core.node': 5 * 1024 * 1024, // 5MB
 };
 
 function getFileSize(filePath) {
