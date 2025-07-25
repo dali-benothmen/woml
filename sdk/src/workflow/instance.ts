@@ -1081,10 +1081,60 @@ export class WorkflowInstance {
     message: string | ((ctx: Context) => string),
     level?: 'info' | 'warn' | 'error'
   ): WorkflowInstance {
-    return this.action('log', ctx => {
-      const msg = typeof message === 'function' ? message(ctx) : message;
-      console.log(`[${level || 'info'}] ${msg}`);
-    });
+    const step: StepDefinition = {
+      id: `log_${Date.now()}`,
+      name: 'log',
+      handler: async (ctx: Context) => {
+        const messageStr =
+          typeof message === 'function' ? message(ctx) : message;
+        console.log(`[${level || 'info'}] ${messageStr}`);
+        return { message: messageStr, level: level || 'info' };
+      },
+      type: 'step',
+      options: { background: true },
+    };
+
+    this._workflow.steps.push(step);
+    return this;
+  }
+
+  pause(
+    pauseCallback: (ctx: Context) => void | Promise<void>
+  ): WorkflowInstance {
+    const step: StepDefinition = {
+      id: `pause_${Date.now()}`,
+      name: 'pause',
+      handler: async (ctx: Context) => {
+        await pauseCallback(ctx);
+
+        return {
+          paused: true,
+          timestamp: new Date().toISOString(),
+          stepId: ctx.step_name,
+          message: 'Workflow paused for manual intervention',
+        };
+      },
+      type: 'step',
+      options: {
+        pause: true,
+        background: false,
+      },
+    };
+
+    this._workflow.steps.push(step);
+    this._currentStep = step;
+    this._stepStack.push(step);
+
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        'pause',
+        step.handler,
+        'step'
+      );
+    }
+
+    return this;
   }
 
   validate(): void {

@@ -73,6 +73,22 @@ frameworkWorkflow
 
     return processedData;
   })
+  .pause(async ctx => {
+    // This callback is executed when the pause step is reached
+    console.log('⏸️  PAUSE STEP REACHED!');
+    console.log('   - Current payload:', ctx.payload);
+    console.log('   - Last step output:', ctx.last);
+    console.log('   - Completed steps:', Object.keys(ctx.steps));
+    console.log('   - Workflow ID:', ctx.run.workflowId);
+    console.log('   - Run ID:', ctx.run.id);
+
+    // You can perform any logic here before pausing
+    console.log('   - Performing pre-pause operations...');
+    await new Promise(resolve => setTimeout(resolve, 50)); // Simulate work
+
+    console.log('   - Workflow will now pause for manual intervention');
+    console.log('   - Use the resume functionality to continue execution');
+  })
   .if('needs-approval', ctx => {
     console.log('🔍 Checking if approval is required');
     return ctx.last.requiresApproval;
@@ -462,5 +478,14 @@ app.listen(PORT, async () => {
   console.log('6. Check workflow status:');
   console.log('   curl http://localhost:3000/api/workflows/{runId}');
   console.log('');
-  console.log('✅ Framework integration with human approval test ready!');
+  console.log('7. Test pause functionality:');
+  console.log('   The workflow now includes a .pause() step that will:');
+  console.log('   - Execute a callback function when reached');
+  console.log('   - Log current context information');
+  console.log('   - Pause workflow execution for manual intervention');
+  console.log('   - Allow resuming with the existing resume functionality');
+  console.log('');
+  console.log(
+    '✅ Framework integration with human approval and pause test ready!'
+  );
 });

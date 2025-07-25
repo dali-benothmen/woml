@@ -90,6 +90,7 @@ export interface StepOptions {
   eventName?: string;
   onError?: (ctx: Context) => any;
   background?: boolean; // Whether this step should run as a background side effect
+  pause?: boolean; // Whether this step should pause workflow execution
 }
 
 export interface RetryConfig {

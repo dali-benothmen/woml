@@ -212,6 +212,8 @@ pub struct StepDefinition {
     pub race: Option<bool>,
     /// Whether this is a forEach loop step
     pub for_each: Option<bool>,
+    /// Whether this step should pause workflow execution
+    pub pause: Option<bool>,
 }
 
 impl StepDefinition {
@@ -365,6 +367,11 @@ impl StepDefinition {
     /// Check if this step is a parallel execution step (parallel, race, or forEach)
     pub fn is_parallel_execution(&self) -> bool {
         self.is_parallel() || self.is_race() || self.is_for_each()
+    }
+    
+    /// Check if this step should pause workflow execution
+    pub fn is_pause_step(&self) -> bool {
+        self.pause.unwrap_or(false)
     }
 }
 

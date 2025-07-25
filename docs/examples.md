@@ -244,8 +244,8 @@ serviceWorkflow
       webhookServer: {
         host: '127.0.0.1',
         port: 3000,
-      },
-    });
+  },
+});
 
     console.log('✅ Service workflow started successfully');
     console.log('🌐 Webhook endpoint: http://127.0.0.1:3000/webhooks/service-demo');
@@ -323,7 +323,7 @@ conditionalWorkflow
     async (ctx) => {
       console.log('🔄 Parallel step 2: Log transaction');
       await new Promise(resolve => setTimeout(resolve, 150));
-      return {
+    return {
         logged: true,
         transactionId: `txn_${Date.now()}`,
         amount: ctx.last.amount,
@@ -370,8 +370,8 @@ conditionalWorkflow
       webhookServer: {
         host: '127.0.0.1',
         port: 3000,
-      },
-    });
+  },
+});
 
     console.log('✅ Conditional workflow started successfully');
     console.log('🌐 Webhook endpoint: http://127.0.0.1:3000/webhooks/conditional');
@@ -1093,26 +1093,26 @@ async function runTests() {
   // Test 1: Successful workflow execution
   console.log('\n📋 Test 1: Successful workflow execution');
   const testRun1 = await testableWorkflow
-    .test()
-    .trigger({
+      .test()
+      .trigger({
       userId: 'user123',
       amount: 100,
     })
     .expectStep('validate-input')
-    .toSucceed()
+      .toSucceed()
     .expectStep('fetch-user')
-    .toSucceed()
+      .toSucceed()
     .expectStep('process-payment')
-    .toSucceed()
-    .run();
+      .toSucceed()
+      .run();
 
   console.log('✅ Test 1 passed:', testRun1.status);
 
   // Test 2: Failed validation
   console.log('\n📋 Test 2: Failed validation');
   const testRun2 = await testableWorkflow
-    .test()
-    .trigger({
+      .test()
+      .trigger({
       userId: '', // Invalid userId
       amount: 100,
     })
@@ -1134,10 +1134,10 @@ async function runTests() {
       return { user: { id: 'mocked-user', email: 'mocked@example.com' }, fetched: true };
     })
     .expectStep('validate-input')
-    .toSucceed()
+      .toSucceed()
     .expectStep('fetch-user')
     .toSucceed()
-    .run();
+      .run();
 
   console.log('✅ Test 3 passed:', testRun3.status);
 

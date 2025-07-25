@@ -854,6 +854,84 @@ async function executeWorkflowSteps(
         continue;
       }
 
+      if (step.options?.pause || step.name === 'pause') {
+        console.log(`⏸️  Pause step detected: ${step.name}`);
+
+        const context = {
+          run_id: runId,
+          workflow_id: workflowId,
+          step_name: step.name,
+          payload: payload,
+          steps: completedSteps,
+          services: {},
+          run: {
+            id: runId,
+            workflowId: workflowId,
+          },
+          last:
+            lastExecutedStepIndex >= 0
+              ? completedSteps[workflow.steps[lastExecutedStepIndex].name]
+              : undefined,
+          state: {
+            get: () => null,
+            set: async () => {},
+            incr: async () => 0,
+          },
+          trigger: { headers: {} },
+          cancel: (reason?: string) => {
+            throw new Error(
+              `Workflow cancelled: ${reason || 'No reason provided'}`
+            );
+          },
+        };
+
+        const contextJson = JSON.stringify(context);
+
+        const stepResult = await executeStepFunction(
+          step.name,
+          contextJson,
+          workflowId,
+          runId
+        );
+
+        if (stepResult.success && stepResult.result) {
+          completedSteps[step.name] = stepResult.result.output;
+          lastExecutedStepIndex = i;
+          console.log(`✅ Pause step ${step.name} completed successfully`);
+
+          const pauseInfo = {
+            token: `pause_${runId}_${Date.now()}`,
+            workflowId: workflowId,
+            runId: runId,
+            stepId: step.name,
+            description: 'Workflow paused for manual intervention',
+            metadata: {},
+            createdAt: Date.now(),
+            status: 'waiting' as const,
+            payload: payload,
+            lastStepOutput: stepResult.result.output,
+          };
+
+          storePausedWorkflow(pauseInfo.token, pauseInfo);
+
+          console.log(`⏸️  Workflow paused at step: ${step.name}`);
+          console.log(`🔑 Pause token: ${pauseInfo.token}`);
+          console.log(
+            `🔄 Use cronflow.resume('${pauseInfo.token}', payload) to resume`
+          );
+
+          return;
+        } else {
+          console.error(
+            `❌ Pause step ${step.name} failed:`,
+            stepResult.message
+          );
+          throw new Error(
+            `Pause step ${step.name} failed: ${stepResult.message}`
+          );
+        }
+      }
+
       if (step.options?.parallel || step.parallel) {
         console.log(`🔄 Executing parallel step: ${step.name}`);
 
@@ -1843,6 +1921,21 @@ export async function resume(token: string, payload: any): Promise<void> {
 
   if (pausedWorkflow.resumeCallback) {
     pausedWorkflow.resumeCallback(payload);
+  } else {
+    console.log(`🔄 Continuing workflow execution from pause step`);
+
+    try {
+      await executeWorkflowSteps(
+        pausedWorkflow.workflowId,
+        pausedWorkflow.runId,
+        pausedWorkflow.payload
+      );
+
+      console.log(`✅ Workflow execution completed after resume`);
+    } catch (error) {
+      console.error(`❌ Error continuing workflow execution:`, error);
+      throw error;
+    }
   }
 
   pausedWorkflows.delete(token);

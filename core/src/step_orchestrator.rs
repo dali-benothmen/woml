@@ -104,6 +104,32 @@ impl StepOrchestrator {
                         .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?
                         .clone();
                     
+                    // Check if this is a pause step
+                    if step_def.is_pause_step() {
+                        log::info!("Pause step detected: {}", step_id);
+                        
+                        // Pause the workflow state machine
+                        state_machine.pause()?;
+                        
+                        // Mark the pause step as completed with pause information
+                        let pause_output = serde_json::json!({
+                            "paused": true,
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
+                            "step_id": step_id,
+                            "message": "Workflow paused for manual intervention"
+                        });
+                        
+                        state_machine.mark_step_completed(&step_id, pause_output)?;
+                        
+                        // Save state to database
+                        state_machine.save_state()?;
+                        
+                        log::info!("Workflow paused at step: {}", step_id);
+                        
+                        // Return early - workflow is now paused
+                        return Ok(());
+                    }
+                    
                     // Get completed steps for context
                     let completed_steps = state_machine.get_completed_steps().to_vec();
                     
@@ -168,6 +194,38 @@ impl StepOrchestrator {
         
         for step_def in &workflow.steps {
             log::info!("Executing step: {} ({}/{})", step_def.id, step_index + 1, workflow.steps.len());
+            
+            // Check if this is a pause step
+            if step_def.is_pause_step() {
+                log::info!("Pause step detected: {}", step_def.id);
+                
+                // Create pause step result
+                let pause_result = StepResult {
+                    step_id: step_def.id.clone(),
+                    status: StepStatus::Completed,
+                    output: Some(serde_json::json!({
+                        "paused": true,
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                        "step_id": step_def.id,
+                        "message": "Workflow paused for manual intervention"
+                    })),
+                    error: None,
+                    started_at: Utc::now(),
+                    completed_at: Some(Utc::now()),
+                    duration_ms: Some(0),
+                };
+                
+                // Save pause step result
+                completed_steps.push(pause_result);
+                
+                // Update run status in database
+                self.update_run_status(&run.id, &completed_steps)?;
+                
+                log::info!("Workflow paused at step: {}", step_def.id);
+                
+                // Return early - workflow is now paused
+                return Ok(());
+            }
             
             // Create step result
             let mut step_result = StepResult {
