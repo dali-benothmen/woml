@@ -1,15 +1,32 @@
 {
-  "name": "cronflow",
+  "name": "node-cronflow",
   "version": "0.1.0",
   "private": false,
-  "description": "The fastestworkflow automation engine built on Bun.js + Rust, providing a code-first alternative to tools like n8n",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "description": "The Fastest Code-First Workflow Automation Engine",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js",
+      "require": "./dist/sdk/index.js"
+    },
+    "./services": {
+      "types": "./dist/services/index.d.ts",
+      "import": "./dist/services/index.js",
+      "require": "./dist/services/index.js"
+    }
+  },
   "files": [
     "dist/**/*",
-    "core/core.node",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "napi": {
     "binaryName": "core",
@@ -95,24 +112,26 @@
   "keywords": [
     "workflow",
     "automation",
-    "nodejs",
+    "orchestration",
+    "typescript",
     "rust",
-    "cron",
-    "scheduler",
+    "bun",
     "webhooks",
-    "n8n-alternative",
-    "workflow-engine",
-    "api-automation"
+    "cron"
   ],
   "author": {
     "name": "Node-Cronflow Team",
     "email": "team@node-cronflow.com"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dali-benothmen/cronflow.git"
+  },
   "bugs": {
     "url": "https://github.com/dali-benothmen/cronflow/issues"
   },
-  "homepage": "https://github.com/dali-benothmen/cronflow",
+  "homepage": "https://github.com/dali-benothmen/cronflow#readme",
   "engines": {
     "node": ">=18.0.0",
     "bun": ">=1.0.0"

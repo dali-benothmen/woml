@@ -72,6 +72,14 @@ jspm_packages/
 *.db
 *.sqlite
 *.sqlite3
+.zip
+.tar.gz
+.tar.bz2
+.tar.xz
+.tar.lzma
+.tar.lz
+.tar.zst
+.tar.zstd
 TODO.md
 documentation.md
 core-refactoring.md
