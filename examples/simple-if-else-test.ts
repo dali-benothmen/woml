@@ -1,209 +1,126 @@
 import { cronflow } from '../sdk/src/cronflow';
 import { z } from 'zod';
+import { Context } from '../sdk/src/workflow/types';
 
-// Simple workflow with if condition only
 const simpleIfWorkflow = cronflow.define({
-  id: 'simple-if-test',
-  name: 'Simple If Test',
-  description:
-    'Test basic if control flow with minimal steps and parallel execution',
+  id: 'simple-if-else-test',
+  name: 'Simple If/Else Test',
+  description: 'A simple workflow to test if/else logic with human approval',
+  timeout: '10m',
   hooks: {
-    // Enhanced hooks that support both workflow-level and step-level execution
-    onSuccess: (ctx, stepId) => {
-      if (!stepId) {
-        // Workflow-level success
-        console.log(
-          '🎉 Workflow-level onSuccess: Simple If Test completed successfully!'
-        );
-        console.log('   Final output:', ctx.last);
-        console.log('   Total steps completed:', Object.keys(ctx.steps).length);
-        return;
-      }
-
-      // Step-level success
-      if (Array.isArray(stepId)) {
-        // Multiple steps specified
-        if (stepId.includes(ctx.step_name || '')) {
-          console.log(
-            `✅ Step-level onSuccess for ${ctx.step_name}: Step completed successfully!`
-          );
-          console.log(`   Step result:`, ctx.step_result);
-          console.log(`   Step status:`, ctx.step_status);
-        }
-      } else {
-        // Single step specified
-        if (stepId === ctx.step_name) {
-          console.log(
-            `✅ Step-level onSuccess for ${ctx.step_name}: Step completed successfully!`
-          );
-          console.log(`   Step result:`, ctx.step_result);
-          console.log(`   Step status:`, ctx.step_status);
-        }
-      }
+    onSuccess: (ctx: Context) => {
+      console.log('🎉 Simple if/else workflow completed successfully!');
     },
-    onFailure: (ctx, stepId) => {
-      if (!stepId) {
-        // Workflow-level failure
-        console.log('💥 Workflow-level onFailure: Simple If Test failed!');
-        console.log('   Error:', ctx.error);
-        console.log('   Failed at step:', ctx.step_name);
-        return;
-      }
-
-      // Step-level failure
-      if (Array.isArray(stepId)) {
-        // Multiple steps specified
-        if (stepId.includes(ctx.step_name || '')) {
-          console.log(
-            `❌ Step-level onFailure for ${ctx.step_name}: Step failed!`
-          );
-          console.log(`   Step error:`, ctx.step_error);
-          console.log(`   Step status:`, ctx.step_status);
-        }
-      } else {
-        // Single step specified
-        if (stepId === ctx.step_name) {
-          console.log(
-            `❌ Step-level onFailure for ${ctx.step_name}: Step failed!`
-          );
-          console.log(`   Step error:`, ctx.step_error);
-          console.log(`   Step status:`, ctx.step_status);
-        }
-      }
+    onFailure: (ctx: Context) => {
+      console.error('💥 Simple if/else workflow failed:', ctx.error);
     },
   },
 });
 
 simpleIfWorkflow
   .onWebhook('/simple-if-test', {
-    method: 'POST',
     schema: z.object({
       amount: z.number().positive(),
       description: z.string().optional(),
     }),
-    parseRawBody: false,
-    headers: {
-      required: {
-        'content-type': 'application/json',
-      },
-    },
   })
-  .step('check-amount', async ctx => {
-    console.log('✅ Step 1: check-amount executed');
-    console.log('   Payload amount:', ctx.payload.amount);
+  .step('check-amount', async (ctx: Context) => {
+    console.log('🔍 Checking amount:', ctx.payload.amount);
     return { amount: ctx.payload.amount, checked: true };
   })
-  .if('is-high-value', ctx => {
-    console.log('🔍 Evaluating condition: is-high-value');
-    console.log('   Condition: ctx.last.amount > 120');
-    console.log('   Last step amount:', ctx.last.amount);
-    const result = ctx.last.amount > 120;
-    console.log('   Condition result:', result);
-    return result;
+  .if('is-high-value', (ctx: Context) => {
+    console.log('🔍 Evaluating high-value condition');
+    return ctx.last.amount > 100;
   })
-  .step('process-high-value', async ctx => {
-    console.log('✅ Step 2: process-high-value executed (IF branch)');
-    console.log('   Processing high value amount:', ctx.last.amount);
+  .step('process-high-value', async (ctx: Context) => {
+    console.log('💎 Processing high-value transaction');
     return { type: 'high-value', processed: true, amount: ctx.last.amount };
   })
   .humanInTheLoop({
     timeout: '1h',
     description: 'Approve high-value transaction',
-    onPause: token => {
+    onPause: (token: string) => {
       console.log(`🛑 Human approval required. Token: ${token}`);
+      console.log('📧 Send this token to approver for manual review');
+      console.log(
+        '🔄 Use cronflow.resume(token, {approved: true, reason: "Approved"}) to resume'
+      );
     },
   })
-  .step('after-approval', async ctx => {
+  .step('after-approval', async (ctx: Context) => {
     console.log('✅ Human approval received');
     console.log('   Approval result:', ctx.last);
     return { approved: ctx.last.approved, approvedBy: ctx.last.approvedBy };
   })
   .parallel([
-    async ctx => {
-      console.log('🔄 Parallel step 1: validate-data executing...');
+    async (ctx: Context) => {
+      console.log('🔄 Parallel step 1: Validate data');
       await new Promise(resolve => setTimeout(resolve, 200));
-      console.log('✅ Parallel step 1: validate-data completed');
-      return {
-        step: 'validate-data',
-        result: 'success',
-        validation: {
-          amount: ctx.last.amount,
-          isValid: ctx.last.amount > 0,
-          timestamp: new Date().toISOString(),
-        },
-      };
+      return { validation: 'success', amount: ctx.last.amount };
     },
-    async ctx => {
-      console.log('🔄 Parallel step 2: log-transaction executing...');
+    async (ctx: Context) => {
+      console.log('🔄 Parallel step 2: Log transaction');
       await new Promise(resolve => setTimeout(resolve, 150));
-      console.log('✅ Parallel step 2: log-transaction completed');
-      return {
-        step: 'log-transaction',
-        result: 'success',
-        log: {
-          transactionId: `txn_${Date.now()}`,
-          amount: ctx.last.amount,
-          type: ctx.last.type,
-          logged: true,
-        },
-      };
+      return { logged: true, transactionId: `txn_${Date.now()}` };
     },
   ])
-  .action('background-notification', async ctx => {
-    console.log(
-      '🔄 Background Action: Sending notification (this should run in background)'
-    );
-    // Simulate sending a notification that takes time
-    await new Promise(resolve => setTimeout(resolve, 2500));
-    console.log(
-      '✅ Background Action: Notification sent successfully after 2.5 seconds'
-    );
-    return {
-      type: 'notification',
-      message: 'High-value transaction processed',
-      amount: ctx.last.amount,
-      sent: true,
-      timestamp: new Date().toISOString(),
-    };
+  .action('background-notification', async (ctx: Context) => {
+    console.log('🔄 Background action: Sending notification');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    console.log('✅ Background notification sent');
   })
   .endIf()
-  .step('final-step', async ctx => {
-    console.log('✅ Step 3: final-step executed');
-    console.log('   Previous step result:', ctx.last);
+  .else()
+  .step('process-low-value', async (ctx: Context) => {
+    console.log('📝 Processing low-value transaction');
+    return { type: 'low-value', processed: true, amount: ctx.last.amount };
+  })
+  .endIf()
+  .step('final-summary', async (ctx: Context) => {
+    console.log('📋 Creating final summary');
     return {
       final: true,
       summary: ctx.last,
-      parallelResults: ctx.last,
-      executionCompleted: new Date().toISOString(),
-      note: 'Background notification action may still be running',
+      completedAt: new Date().toISOString(),
     };
   });
 
-// Self-executing function to test if condition
+// Self-executing function to start the workflow
 (async () => {
   try {
-    console.log('🚀 Starting simple workflow test...');
+    console.log('🚀 Starting simple if/else workflow...');
 
     await cronflow.start({
       webhookServer: {
         host: '127.0.0.1',
         port: 3000,
-        maxConnections: 1000,
       },
     });
 
-    console.log('✅ Test completed successfully');
-    console.log('🌐 Webhook server running at: http://127.0.0.1:3000');
+    console.log('✅ Simple if/else workflow started successfully');
+    console.log('🌐 Webhook endpoint: http://127.0.0.1:3000/simple-if-test');
+    console.log('�� Test examples:');
     console.log(
-      '📡 Webhook endpoint: http://127.0.0.1:3000/webhook/simple-if-test'
+      '  High value (requires approval): curl -X POST http://127.0.0.1:3000/simple-if-test \\'
     );
-    console.log('📋 Webhook configuration:');
-    console.log('   - Method: POST');
+    console.log('    -H "Content-Type: application/json" \\');
     console.log(
-      '   - Schema validation: amount (positive number), description (optional)'
+      '    -d \'{"amount": 500, "description": "High value order"}\''
     );
-    console.log('   - Parse raw body: false');
+    console.log(
+      '  Low value (no approval): curl -X POST http://127.0.0.1:3000/simple-if-test \\'
+    );
+    console.log('    -H "Content-Type: application/json" \\');
+    console.log('    -d \'{"amount": 50, "description": "Low value order"}\'');
+    console.log('');
+    console.log('🔄 To resume a paused workflow, use:');
+    console.log(
+      '   cronflow.resume("token_here", {approved: true, reason: "Approved"})'
+    );
+    console.log('');
+    console.log('📊 To list paused workflows, use:');
+    console.log('   cronflow.listPausedWorkflows()');
   } catch (error) {
-    console.error('❌ Test failed:', error);
+    console.error('❌ Failed to start workflow:', error);
   }
 })();

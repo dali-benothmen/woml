@@ -156,6 +156,20 @@ conditionalWorkflow
   .step('process-high-value', async ctx => {
     return { type: 'high-value', processed: true, amount: ctx.last.amount };
   })
+  .humanInTheLoop({
+    timeout: '24h', // Optional: wait up to 24 hours
+    description: 'Approve high-value transaction',
+    onPause: token => {
+      console.log(`🛑 Human approval required. Token: ${token}`);
+      // Send email/Slack notification with the token
+    },
+  })
+  .step('process-approval', async ctx => {
+    if (ctx.last.timedOut) {
+      return { approved: false, reason: 'Timeout' };
+    }
+    return { approved: ctx.last.approved, reason: ctx.last.reason };
+  })
   .parallel([
     async ctx => {
       // Validate data
@@ -174,6 +188,26 @@ conditionalWorkflow
   .step('final-step', async ctx => {
     return { final: true, summary: ctx.last };
   });
+```
+
+**Resume a paused workflow:**
+
+```typescript
+// Resume with approval
+await cronflow.resume('approval_token_123', {
+  approved: true,
+  reason: 'Transaction looks good',
+});
+
+// Resume with rejection
+await cronflow.resume('approval_token_123', {
+  approved: false,
+  reason: 'Amount too high',
+});
+
+// List all paused workflows
+const paused = cronflow.listPausedWorkflows();
+console.log('Paused workflows:', paused);
 ```
 
 ### 🔧 Service Integration

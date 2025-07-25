@@ -1,4 +1,8 @@
-import { cronflow } from '../sdk/src/cronflow';
+import {
+  cronflow,
+  listPausedWorkflows,
+  getPausedWorkflow,
+} from '../sdk/src/cronflow';
 import express from 'express';
 import { z } from 'zod';
 
@@ -16,15 +20,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// Simple workflow for framework testing (no hooks, actions, or conditions)
+// Simple workflow for framework testing with human approval
 const frameworkWorkflow = cronflow.define({
   id: 'framework-test',
   name: 'Framework Integration Test',
   description:
-    'Simple workflow for testing Express.js integration with URL webhooks',
+    'Simple workflow for testing Express.js integration with human approval',
 });
 
-// Define workflow with 3 simple steps
+// Define workflow with human approval step
 frameworkWorkflow
   .onWebhook('/api/webhooks/framework-test', {
     app: 'express', // Simple! Just specify the framework
@@ -34,6 +38,7 @@ frameworkWorkflow
       message: z.string().min(1, 'Message cannot be empty'),
       userId: z.string().optional(),
       timestamp: z.string().optional(),
+      requiresApproval: z.boolean().optional(),
     }),
     headers: {
       required: { 'content-type': 'application/json' },
@@ -50,6 +55,7 @@ frameworkWorkflow
     return {
       validated: true,
       message: ctx.payload.message,
+      requiresApproval: ctx.payload.requiresApproval || false,
       timestamp: new Date().toISOString(),
     };
   })
@@ -60,21 +66,65 @@ frameworkWorkflow
     const processedData = {
       originalMessage: ctx.last.message,
       processedMessage: ctx.last.message.toUpperCase(),
+      requiresApproval: ctx.last.requiresApproval,
       processedAt: new Date().toISOString(),
       stepCount: 2,
     };
 
     return processedData;
   })
+  .if('needs-approval', ctx => {
+    console.log('🔍 Checking if approval is required');
+    return ctx.last.requiresApproval;
+  })
+  .humanInTheLoop({
+    timeout: '5m', // 5 minute timeout for testing
+    description: 'Approve message processing',
+    onPause: token => {
+      console.log(`🛑 Human approval required`);
+      console.log(`🔑 Approval token: ${token}`);
+      console.log('📧 Send this token to approver for manual review');
+      console.log(`🔄 Use POST /api/resume-workflow with token to resume`);
+    },
+  })
+  .step('process-approval', async ctx => {
+    console.log('✅ Processing approval result');
+
+    if (ctx.last.timedOut) {
+      console.log('⏰ Approval timed out');
+      return {
+        approved: false,
+        reason: 'Timeout - no approval received within 5 minutes',
+        status: 'timeout',
+      };
+    }
+
+    console.log('✅ Manual approval received:', ctx.last);
+    return {
+      approved: ctx.last.approved,
+      reason: ctx.last.reason,
+      approvedBy: ctx.last.approvedBy,
+      status: 'approved',
+    };
+  })
+  .endIf()
   .step('finalize', async ctx => {
     console.log('📝 Step 3: Finalizing');
     console.log('   Previous step result:', ctx.last);
 
+    // Get the process-data step output safely
+    const processDataStep = ctx.steps['process-data'];
+    const originalMessage =
+      processDataStep?.output?.originalMessage || 'Unknown';
+    const processedMessage =
+      processDataStep?.output?.processedMessage || 'Unknown';
+
     return {
       final: true,
       summary: {
-        originalMessage: ctx.last.originalMessage,
-        processedMessage: ctx.last.processedMessage,
+        originalMessage,
+        processedMessage,
+        approvalStatus: ctx.last.status || 'no-approval-needed',
         totalSteps: 3,
         completedAt: new Date().toISOString(),
       },
@@ -226,6 +276,122 @@ app.get('/api/workflows/:runId', async (req, res) => {
   }
 });
 
+// Resume workflow endpoint
+app.post('/api/resume-workflow', async (req, res) => {
+  try {
+    const { token, payload } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Token is required',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    if (!payload) {
+      return res.status(400).json({
+        success: false,
+        error: 'Payload is required',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    console.log('🔄 Resuming workflow with token:', token);
+    console.log('📋 Resume payload:', payload);
+
+    await cronflow.resume(token, payload);
+
+    res.json({
+      success: true,
+      message: 'Workflow resumed successfully',
+      token,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('❌ Resume failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// List paused workflows endpoint
+app.get('/api/paused-workflows', async (req, res) => {
+  try {
+    const pausedWorkflows = listPausedWorkflows();
+
+    console.log('📊 Listing paused workflows:', pausedWorkflows.length);
+
+    res.json({
+      success: true,
+      count: pausedWorkflows.length,
+      workflows: pausedWorkflows.map(wf => ({
+        token: wf.token,
+        workflowId: wf.workflowId,
+        runId: wf.runId,
+        description: wf.description,
+        createdAt: new Date(wf.createdAt).toISOString(),
+        expiresAt: wf.expiresAt ? new Date(wf.expiresAt).toISOString() : null,
+        status: wf.status,
+      })),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('❌ Failed to list paused workflows:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// Get specific paused workflow endpoint
+app.get('/api/paused-workflows/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const workflow = getPausedWorkflow(token);
+
+    if (!workflow) {
+      return res.status(404).json({
+        success: false,
+        error: 'Paused workflow not found',
+        token,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    console.log('📊 Getting paused workflow details for token:', token);
+
+    res.json({
+      success: true,
+      workflow: {
+        token: workflow.token,
+        workflowId: workflow.workflowId,
+        runId: workflow.runId,
+        description: workflow.description,
+        createdAt: new Date(workflow.createdAt).toISOString(),
+        expiresAt: workflow.expiresAt
+          ? new Date(workflow.expiresAt).toISOString()
+          : null,
+        status: workflow.status,
+        metadata: workflow.metadata,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('❌ Failed to get paused workflow:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 // Start Express server
 app.listen(PORT, async () => {
   console.log(`\n🚀 Express server started on port ${PORT}`);
@@ -240,6 +406,15 @@ app.listen(PORT, async () => {
   console.log(
     `📊 Status check: GET http://localhost:${PORT}/api/workflows/:runId`
   );
+  console.log(
+    `🔄 Resume workflow: POST http://localhost:${PORT}/api/resume-workflow`
+  );
+  console.log(
+    `📋 List paused workflows: GET http://localhost:${PORT}/api/paused-workflows`
+  );
+  console.log(
+    `📊 Get paused workflow: GET http://localhost:${PORT}/api/paused-workflows/:token`
+  );
 
   // Register workflow with Rust core
   try {
@@ -251,20 +426,41 @@ app.listen(PORT, async () => {
   }
 
   console.log('\n📝 Test Instructions:');
-  console.log('1. Test manual trigger:');
-  console.log('   curl -X POST http://localhost:3000/api/trigger-workflow \\');
-  console.log('     -H "Content-Type: application/json" \\');
-  console.log('     -d \'{"message": "Hello from manual trigger!"}\'');
-  console.log('');
-  console.log('2. Test webhook trigger:');
+  console.log('1. Test workflow without approval:');
   console.log(
     '   curl -X POST http://localhost:3000/api/webhooks/framework-test \\'
   );
   console.log('     -H "Content-Type: application/json" \\');
-  console.log('     -d \'{"message": "Hello from webhook!"}\'');
+  console.log(
+    '     -d \'{"message": "Hello from webhook!", "requiresApproval": false}\''
+  );
   console.log('');
-  console.log('3. Check workflow status:');
+  console.log('2. Test workflow with approval (will pause):');
+  console.log(
+    '   curl -X POST http://localhost:3000/api/webhooks/framework-test \\'
+  );
+  console.log('     -H "Content-Type: application/json" \\');
+  console.log(
+    '     -d \'{"message": "Hello from webhook!", "requiresApproval": true}\''
+  );
+  console.log('');
+  console.log('3. Check paused workflows:');
+  console.log('   curl http://localhost:3000/api/paused-workflows');
+  console.log('');
+  console.log('4. Resume a paused workflow (replace TOKEN with actual token):');
+  console.log('   curl -X POST http://localhost:3000/api/resume-workflow \\');
+  console.log('     -H "Content-Type: application/json" \\');
+  console.log(
+    '     -d \'{"token": "TOKEN", "payload": {"approved": true, "reason": "Looks good!"}}\''
+  );
+  console.log('');
+  console.log('5. Test manual trigger:');
+  console.log('   curl -X POST http://localhost:3000/api/trigger-workflow \\');
+  console.log('     -H "Content-Type: application/json" \\');
+  console.log('     -d \'{"message": "Hello from manual trigger!"}\'');
+  console.log('');
+  console.log('6. Check workflow status:');
   console.log('   curl http://localhost:3000/api/workflows/{runId}');
   console.log('');
-  console.log('✅ Framework integration test ready!');
+  console.log('✅ Framework integration with human approval test ready!');
 });

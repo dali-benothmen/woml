@@ -19,7 +19,7 @@ import {
   getFrameworkHandler,
   isFrameworkSupported,
 } from './framework-registry';
-import { registerEventListener } from '../cronflow';
+import { registerEventListener, storePausedWorkflow } from '../cronflow';
 
 export class WorkflowInstance {
   private _workflow: WorkflowDefinition;
@@ -902,12 +902,13 @@ export class WorkflowInstance {
           metadata: options.metadata || {},
           createdAt,
           expiresAt,
-          status: 'waiting',
+          status: 'waiting' as const,
           payload: ctx.payload,
           lastStepOutput: ctx.last,
         };
 
-        // TODO: Store pause info in persistent storage (database)
+        storePausedWorkflow(token, pauseInfo);
+
         console.log(`🛑 Human approval required: ${options.description}`);
         console.log(`🔑 Approval token: ${token}`);
 
@@ -925,64 +926,81 @@ export class WorkflowInstance {
           console.log(`🌐 Approval URL: ${options.approvalUrl}?token=${token}`);
         }
 
-        // If no timeout is provided, pause indefinitely
         if (!timeoutMs) {
           console.log(
             `🔄 Pausing workflow indefinitely - waiting for manual resume...`
           );
 
-          // TODO: In real implementation, this would:
-          // 1. Store the pause state in persistent storage
-          // 2. Wait for external resume call via cronflow.resume(token, payload)
-          // 3. Return the resume payload when called
-
-          // For now, throw an error to indicate this needs manual resume
-          throw new Error(
-            `Workflow paused for human approval. Use cronflow.resume("${token}", payload) to resume.`
-          );
+          return new Promise(resolve => {
+            storePausedWorkflow(token, {
+              ...pauseInfo,
+              resumeCallback: (resumePayload: any) => {
+                console.log('🔄 Workflow resumed with payload:', resumePayload);
+                resolve({
+                  type: 'human_approval',
+                  token,
+                  description: options.description,
+                  metadata: options.metadata,
+                  approved: resumePayload.approved || false,
+                  reason: resumePayload.reason || 'Manual approval',
+                  approvedBy: resumePayload.approvedBy || 'human',
+                  approvedAt: Date.now(),
+                  status: 'resumed',
+                  resumePayload,
+                });
+              },
+            });
+          });
         }
 
-        // If timeout is provided, wait for the specified duration
         console.log(`⏰ Waiting for ${options.timeout} for human approval...`);
-        await new Promise(resolve => setTimeout(resolve, timeoutMs));
 
-        // Check if we've timed out
-        const now = Date.now();
-        if (expiresAt && now > expiresAt) {
-          console.log(`⏰ Human approval timed out after ${options.timeout}`);
+        return new Promise(resolve => {
+          let resolved = false;
 
-          return {
-            type: 'human_approval',
-            token,
-            description: options.description,
-            metadata: options.metadata,
-            approved: false,
-            reason: 'Timeout - no approval received within specified time',
-            approvedBy: 'system',
-            approvedAt: now,
-            expiresAt,
-            status: 'timeout',
-            timedOut: true,
-          };
-        }
+          const timeoutId = setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              console.log(`⏰ Timeout reached - no human approval received`);
+              resolve({
+                type: 'human_approval',
+                token,
+                description: options.description,
+                metadata: options.metadata,
+                approved: false,
+                reason: 'Timeout - no approval received within specified time',
+                approvedBy: 'system',
+                approvedAt: Date.now(),
+                expiresAt,
+                status: 'timeout',
+                timedOut: true,
+              });
+            }
+          }, timeoutMs);
 
-        // TODO: In real implementation, this would check for actual resume call
-        // For now, simulate a timeout response
-        console.log(`⏰ Timeout reached - no human approval received`);
-
-        return {
-          type: 'human_approval',
-          token,
-          description: options.description,
-          metadata: options.metadata,
-          approved: false,
-          reason: 'Timeout - no approval received within specified time',
-          approvedBy: 'system',
-          approvedAt: now,
-          expiresAt,
-          status: 'timeout',
-          timedOut: true,
-        };
+          storePausedWorkflow(token, {
+            ...pauseInfo,
+            resumeCallback: (resumePayload: any) => {
+              if (!resolved) {
+                resolved = true;
+                clearTimeout(timeoutId);
+                console.log('🔄 Workflow resumed with payload:', resumePayload);
+                resolve({
+                  type: 'human_approval',
+                  token,
+                  description: options.description,
+                  metadata: options.metadata,
+                  approved: resumePayload.approved || false,
+                  reason: resumePayload.reason || 'Manual approval',
+                  approvedBy: resumePayload.approvedBy || 'human',
+                  approvedAt: Date.now(),
+                  status: 'resumed',
+                  resumePayload,
+                });
+              }
+            },
+          });
+        });
       },
       type: 'step',
       options: {
@@ -1000,6 +1018,15 @@ export class WorkflowInstance {
     this._workflow.steps.push(humanStep);
     this._currentStep = humanStep;
 
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        humanStep.name,
+        humanStep.handler,
+        'step'
+      );
+    }
+
     return this;
   }
 
@@ -1015,9 +1042,6 @@ export class WorkflowInstance {
         if (timeout) {
           console.log(`Timeout: ${timeout}`);
         }
-
-        // Simulate event reception
-        await new Promise(resolve => setTimeout(resolve, 500));
 
         return {
           type: 'event_wait',

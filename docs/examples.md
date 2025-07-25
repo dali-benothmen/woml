@@ -9,8 +9,9 @@ Comprehensive examples showcasing the full power of node-cronflow for building r
 3. [Conditional Logic](#conditional-logic)
 4. [Framework Integration](#framework-integration)
 5. [Advanced Control Flow](#advanced-control-flow)
-6. [Testing Workflows](#testing-workflows)
-7. [Complete Real-World Examples](#complete-real-world-examples)
+6. [Human-in-the-Loop Approval](#human-in-the-loop-approval)
+7. [Testing Workflows](#testing-workflows)
+8. [Complete Real-World Examples](#complete-real-world-examples)
 
 ---
 
@@ -706,7 +707,133 @@ advancedWorkflow
 
 ---
 
-## Indefinite Human Approval (No Timeout)
+## Human-in-the-Loop Approval
+
+Demonstrating human approval workflows with timeout and indefinite pause scenarios:
+
+```typescript
+import { cronflow } from 'cronflow';
+import { z } from 'zod';
+
+const humanApprovalWorkflow = cronflow.define({
+  id: 'human-approval-example',
+  name: 'Human-in-the-Loop Approval Example',
+  description: 'Demonstrates human approval workflows with timeout and resume functionality',
+  timeout: '30m',
+  hooks: {
+    onSuccess: (ctx) => {
+      console.log('🎉 Human approval workflow completed successfully!');
+    },
+    onFailure: (ctx) => {
+      console.error('💥 Human approval workflow failed:', ctx.error);
+    },
+  },
+});
+
+humanApprovalWorkflow
+  .onWebhook('/webhooks/human-approval', {
+    schema: z.object({
+      transactionId: z.string(),
+      amount: z.number().positive(),
+      description: z.string().optional(),
+      requiresApproval: z.boolean().optional(),
+    }),
+  })
+  .step('validate-transaction', async (ctx) => {
+    console.log('🔍 Validating transaction:', ctx.payload.transactionId);
+    return {
+      transactionId: ctx.payload.transactionId,
+      amount: ctx.payload.amount,
+      description: ctx.payload.description,
+      requiresApproval: ctx.payload.requiresApproval || ctx.payload.amount > 1000,
+      validated: true,
+    };
+  })
+  .if('needs-approval', (ctx) => {
+    console.log('🔍 Checking if approval is required');
+    return ctx.last.requiresApproval;
+  })
+  .humanInTheLoop({
+    timeout: '24h', // Wait up to 24 hours for approval
+    description: 'Approve high-value transaction',
+    onPause: (token) => {
+      console.log('🛑 Human approval required');
+      console.log('🔑 Approval token:', token);
+      console.log('📧 Send this token to approver for manual review');
+      console.log('🔄 Use cronflow.resume(token, payload) to resume');
+      console.log('📊 Transaction details:');
+      console.log(`   - ID: ${ctx.steps['validate-transaction'].output.transactionId}`);
+      console.log(`   - Amount: $${ctx.steps['validate-transaction'].output.amount}`);
+      console.log(`   - Description: ${ctx.steps['validate-transaction'].output.description}`);
+    },
+  })
+  .step('process-approval', async (ctx) => {
+    console.log('✅ Processing human approval result');
+    
+    if (ctx.last.timedOut) {
+      console.log('⏰ Approval timed out - handling timeout scenario');
+      return {
+        approved: false,
+        reason: 'Timeout - no approval received within 24 hours',
+        handled: 'timeout',
+        timestamp: new Date().toISOString(),
+      };
+    }
+    
+    console.log('✅ Manual approval received:', ctx.last);
+    return {
+      approved: ctx.last.approved,
+      approvedBy: ctx.last.approvedBy,
+      reason: ctx.last.reason,
+      timestamp: new Date().toISOString(),
+    };
+  })
+  .endIf()
+  .step('finalize-transaction', async (ctx) => {
+    console.log('🎯 Finalizing transaction');
+    return {
+      finalized: true,
+      transactionId: ctx.steps['validate-transaction'].output.transactionId,
+      approvalStatus: ctx.last.approved ? 'approved' : 'rejected',
+      completedAt: new Date().toISOString(),
+    };
+  });
+
+// Start the human approval workflow
+(async () => {
+  try {
+    console.log('🚀 Starting human approval workflow...');
+    
+    await cronflow.start({
+      webhookServer: {
+        host: '127.0.0.1',
+        port: 3000,
+      },
+    });
+
+    console.log('✅ Human approval workflow started successfully');
+    console.log('🌐 Webhook endpoint: http://127.0.0.1:3000/webhooks/human-approval');
+    console.log('📋 Test examples:');
+    console.log('  With approval: curl -X POST http://127.0.0.1:3000/webhooks/human-approval \\');
+    console.log('    -H "Content-Type: application/json" \\');
+    console.log('    -d \'{"transactionId": "TXN-123", "amount": 5000, "description": "High-value purchase", "requiresApproval": true}\'');
+    console.log('');
+    console.log('  Without approval: curl -X POST http://127.0.0.1:3000/webhooks/human-approval \\');
+    console.log('    -H "Content-Type: application/json" \\');
+    console.log('    -d \'{"transactionId": "TXN-456", "amount": 500, "description": "Low-value purchase", "requiresApproval": false}\'');
+    console.log('');
+    console.log('🔄 Resume paused workflow:');
+    console.log('   await cronflow.resume("TOKEN", {approved: true, reason: "Approved", approvedBy: "admin"});');
+    console.log('');
+    console.log('📊 List paused workflows:');
+    console.log('   const paused = cronflow.listPausedWorkflows();');
+  } catch (error) {
+    console.error('❌ Failed to start workflow:', error);
+  }
+})();
+```
+
+### Indefinite Human Approval (No Timeout)
 
 Example showing a workflow that pauses indefinitely until manually resumed:
 
@@ -756,6 +883,7 @@ indefiniteApprovalWorkflow
       console.log('🔑 Approval token:', token);
       console.log('📧 Send this token to approver for manual review');
       console.log('🔄 Use cronflow.resume(token, payload) to resume');
+      console.log('⚠️  This workflow will pause indefinitely until manually resumed');
     },
   })
   .step('process-manual-approval', async (ctx) => {
@@ -801,6 +929,99 @@ indefiniteApprovalWorkflow
   } catch (error) {
     console.error('❌ Failed to start workflow:', error);
   }
+})();
+```
+
+### Resume and Management Functions
+
+Examples of how to manage paused workflows:
+
+```typescript
+import { cronflow } from 'cronflow';
+
+// Resume a paused workflow with approval
+async function approveWorkflow(token: string) {
+  try {
+    await cronflow.resume(token, {
+      approved: true,
+      reason: 'Transaction looks good',
+      approvedBy: 'admin@company.com',
+    });
+    console.log('✅ Workflow approved successfully');
+  } catch (error) {
+    console.error('❌ Failed to approve workflow:', error);
+  }
+}
+
+// Resume a paused workflow with rejection
+async function rejectWorkflow(token: string) {
+  try {
+    await cronflow.resume(token, {
+      approved: false,
+      reason: 'Amount too high for approval level',
+      approvedBy: 'manager@company.com',
+    });
+    console.log('❌ Workflow rejected successfully');
+  } catch (error) {
+    console.error('❌ Failed to reject workflow:', error);
+  }
+}
+
+// List all paused workflows
+function listPausedWorkflows() {
+  const paused = cronflow.listPausedWorkflows();
+  console.log('📊 Paused workflows:', paused.length);
+  
+  paused.forEach(workflow => {
+    console.log(`   - Token: ${workflow.token}`);
+    console.log(`   - Description: ${workflow.description}`);
+    console.log(`   - Created: ${new Date(workflow.createdAt).toISOString()}`);
+    console.log(`   - Expires: ${workflow.expiresAt ? new Date(workflow.expiresAt).toISOString() : 'Never'}`);
+    console.log(`   - Status: ${workflow.status}`);
+    console.log('');
+  });
+  
+  return paused;
+}
+
+// Get details of a specific paused workflow
+function getPausedWorkflowDetails(token: string) {
+  const workflow = cronflow.getPausedWorkflow(token);
+  
+  if (!workflow) {
+    console.log('❌ Paused workflow not found');
+    return null;
+  }
+  
+  console.log('📊 Paused workflow details:');
+  console.log(`   - Token: ${workflow.token}`);
+  console.log(`   - Workflow ID: ${workflow.workflowId}`);
+  console.log(`   - Run ID: ${workflow.runId}`);
+  console.log(`   - Description: ${workflow.description}`);
+  console.log(`   - Created: ${new Date(workflow.createdAt).toISOString()}`);
+  console.log(`   - Expires: ${workflow.expiresAt ? new Date(workflow.expiresAt).toISOString() : 'Never'}`);
+  console.log(`   - Status: ${workflow.status}`);
+  console.log(`   - Metadata:`, workflow.metadata);
+  
+  return workflow;
+}
+
+// Example usage
+(async () => {
+  console.log('🔄 Human approval management examples:');
+  
+  // List all paused workflows
+  listPausedWorkflows();
+  
+  // Get details of a specific workflow (replace with actual token)
+  const token = 'human_approval_1234567890_abc123';
+  getPausedWorkflowDetails(token);
+  
+  // Approve a workflow (replace with actual token)
+  // await approveWorkflow(token);
+  
+  // Reject a workflow (replace with actual token)
+  // await rejectWorkflow(token);
 })();
 ```
 

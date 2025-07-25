@@ -915,6 +915,57 @@ await cronflow.resume("approval_token_123", {
 });
 ```
 
+### `cronflow.listPausedWorkflows()`
+
+Returns an array of all currently paused workflows waiting for human approval.
+
+#### Returns
+
+Array of paused workflow objects with the following structure:
+```typescript
+{
+  token: string;
+  workflowId: string;
+  runId: string;
+  stepId: string;
+  description: string;
+  metadata?: Record<string, any>;
+  createdAt: number;
+  expiresAt?: number;
+  status: 'waiting' | 'resumed' | 'timeout';
+  payload: any;
+  lastStepOutput: any;
+}
+```
+
+#### Example
+
+```typescript
+const pausedWorkflows = cronflow.listPausedWorkflows();
+console.log('Paused workflows:', pausedWorkflows);
+```
+
+### `cronflow.getPausedWorkflow(token)`
+
+Retrieves information about a specific paused workflow by its token.
+
+#### Parameters
+
+- `token` (string): The token of the paused workflow
+
+#### Returns
+
+The paused workflow object or `undefined` if not found.
+
+#### Example
+
+```typescript
+const workflow = cronflow.getPausedWorkflow("approval_token_123");
+if (workflow) {
+  console.log('Workflow details:', workflow);
+}
+```
+
 ---
 
 ## Configuration Options

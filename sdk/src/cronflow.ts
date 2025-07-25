@@ -1788,36 +1788,94 @@ export async function replay(
   // TODO: Implement replay functionality
 }
 
+const pausedWorkflows = new Map<
+  string,
+  {
+    token: string;
+    workflowId: string;
+    runId: string;
+    stepId: string;
+    description: string;
+    metadata?: Record<string, any>;
+    createdAt: number;
+    expiresAt?: number;
+    status: 'waiting' | 'resumed' | 'timeout';
+    payload: any;
+    lastStepOutput: any;
+    resumeCallback?: (payload: any) => void;
+    resumedAt?: number;
+  }
+>();
+
 export async function resume(token: string, payload: any): Promise<void> {
   console.log(`🔄 Resuming workflow with token: ${token}`);
   console.log(`📋 Resume payload:`, payload);
 
-  // TODO: Implement actual resume functionality
-  // This would involve:
-  // 1. Looking up the paused workflow by token
-  // 2. Validating the token hasn't expired
-  // 3. Resuming the workflow execution with the provided payload
-  // 4. Updating the pause status in the database
+  const pausedWorkflow = pausedWorkflows.get(token);
 
-  // For now, simulate resume functionality
-  const resumeInfo = {
-    token,
-    payload,
-    resumedAt: Date.now(),
-    status: 'resumed',
-  };
+  if (!pausedWorkflow) {
+    throw new Error(`No paused workflow found with token: ${token}`);
+  }
+
+  if (pausedWorkflow.status !== 'waiting') {
+    throw new Error(
+      `Workflow with token ${token} has already been ${pausedWorkflow.status}`
+    );
+  }
+
+  if (pausedWorkflow.expiresAt && Date.now() > pausedWorkflow.expiresAt) {
+    pausedWorkflow.status = 'timeout';
+    throw new Error(`Workflow with token ${token} has expired`);
+  }
+
+  pausedWorkflow.status = 'resumed';
+  pausedWorkflow.resumedAt = Date.now();
 
   console.log(`✅ Workflow resumed successfully with token: ${token}`);
-  console.log(`📊 Resume info:`, resumeInfo);
+  console.log(`📊 Resume info:`, {
+    token,
+    payload,
+    workflowId: pausedWorkflow.workflowId,
+    runId: pausedWorkflow.runId,
+    resumedAt: pausedWorkflow.resumedAt,
+    status: 'resumed',
+  });
 
-  // In a real implementation, this would:
-  // - Find the paused workflow run
-  // - Validate the token and timeout
-  // - Resume execution from the human-in-the-loop step
-  // - Pass the payload to the next step
-  // - Update the workflow state
+  if (pausedWorkflow.resumeCallback) {
+    pausedWorkflow.resumeCallback(payload);
+  }
+
+  pausedWorkflows.delete(token);
 
   return Promise.resolve();
+}
+
+export function storePausedWorkflow(
+  token: string,
+  pauseInfo: {
+    token: string;
+    workflowId: string;
+    runId: string;
+    stepId: string;
+    description: string;
+    metadata?: Record<string, any>;
+    createdAt: number;
+    expiresAt?: number;
+    status: 'waiting' | 'resumed' | 'timeout';
+    payload: any;
+    lastStepOutput: any;
+    resumeCallback?: (payload: any) => void;
+  }
+): void {
+  pausedWorkflows.set(token, pauseInfo);
+}
+
+export function getPausedWorkflow(token: string) {
+  return pausedWorkflows.get(token);
+}
+
+export function listPausedWorkflows() {
+  return Array.from(pausedWorkflows.values());
 }
 
 export function isRustCoreAvailable(): boolean {
