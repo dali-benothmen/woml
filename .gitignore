@@ -74,6 +74,7 @@ jspm_packages/
 *.sqlite3
 TODO.md
 documentation.md
+core-refactoring.md
 
 # Temporary files
 tmp/

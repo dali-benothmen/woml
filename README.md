@@ -26,7 +26,8 @@ _Built with Rust + Bun for unparalleled performance_
 - [💻 Usage](#-usage)
 - [🎯 Features](#-features)
 - [⚡ Performance Comparison](#-performance-comparison)
-- [📖 Documentation](#-documentation)
+- [📖 API Reference](./docs/api-reference.md)
+- [🎯 Examples](./docs/examples.md)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
 
@@ -548,16 +549,6 @@ By running directly on your own infrastructure, `cronflow` bypasses this overhea
 
 ---
 
-## 📖 Documentation
-
-- **[📖 API Reference](./docs/api-reference.md)** - Complete API documentation
-- **[🎯 Examples](./docs/examples.md)** - Real-world workflow examples
-- **[🚀 Deployment Guide](./docs/deployment.md)** - Production deployment strategies
-- **[🧪 Testing Guide](./docs/testing.md)** - How to test your workflows
-- **[⚙️ Configuration](./docs/configuration.md)** - Advanced configuration options
-
----
-
 ## 🤝 Contributing
 
 We welcome contributions! Check out our [Contributing Guide](./CONTRIBUTING.md) to get started.
@@ -585,6 +576,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ⭐ Star us on GitHub if Cronflow helps you build better automation!
 
-[![GitHub stars](https://img.shields.io/github/stars/your-org/node-cronflow.svg?style=social)]([https://github.com/dali-benothmen/cronflow])
+[![GitHub stars](https://img.shields.io/github/stars/dali-benothmen/cronflow?style=social)](https://github.com/dali-benothmen/cronflow)
 
 </div>
