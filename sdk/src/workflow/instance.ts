@@ -873,16 +873,18 @@ export class WorkflowInstance {
   }
 
   humanInTheLoop(options: {
-    timeout: string;
+    timeout?: string; // Make timeout optional
     onPause: (token: string) => void;
     description: string;
     approvalUrl?: string;
     metadata?: Record<string, any>;
   }): WorkflowInstance {
     const token = generateId('human_approval');
-    const timeoutMs = parseDuration(options.timeout);
+    const timeoutMs = options.timeout
+      ? parseDuration(options.timeout)
+      : undefined;
     const createdAt = Date.now();
-    const expiresAt = createdAt + timeoutMs;
+    const expiresAt = timeoutMs ? createdAt + timeoutMs : undefined;
 
     const humanStep: StepDefinition = {
       id: `human_${token}`,
@@ -908,37 +910,78 @@ export class WorkflowInstance {
         // TODO: Store pause info in persistent storage (database)
         console.log(`🛑 Human approval required: ${options.description}`);
         console.log(`🔑 Approval token: ${token}`);
-        console.log(
-          `⏰ Timeout: ${options.timeout} (expires at ${new Date(expiresAt).toISOString()})`
-        );
+
+        if (timeoutMs) {
+          console.log(
+            `⏰ Timeout: ${options.timeout} (expires at ${new Date(expiresAt!).toISOString()})`
+          );
+        } else {
+          console.log(
+            `⏸️ No timeout set - workflow will pause indefinitely until resumed`
+          );
+        }
 
         if (options.approvalUrl) {
           console.log(`🌐 Approval URL: ${options.approvalUrl}?token=${token}`);
         }
 
-        // Simulate approval after a short delay for demo purposes
-        // In real implementation, this would wait for external resume call
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // If no timeout is provided, pause indefinitely
+        if (!timeoutMs) {
+          console.log(
+            `🔄 Pausing workflow indefinitely - waiting for manual resume...`
+          );
 
-        // Simulate approval response
-        const approvalResponse = {
-          approved: true,
-          reason: 'Demo approval',
-          approvedBy: 'demo-user',
-          approvedAt: Date.now(),
-        };
+          // TODO: In real implementation, this would:
+          // 1. Store the pause state in persistent storage
+          // 2. Wait for external resume call via cronflow.resume(token, payload)
+          // 3. Return the resume payload when called
+
+          // For now, throw an error to indicate this needs manual resume
+          throw new Error(
+            `Workflow paused for human approval. Use cronflow.resume("${token}", payload) to resume.`
+          );
+        }
+
+        // If timeout is provided, wait for the specified duration
+        console.log(`⏰ Waiting for ${options.timeout} for human approval...`);
+        await new Promise(resolve => setTimeout(resolve, timeoutMs));
+
+        // Check if we've timed out
+        const now = Date.now();
+        if (expiresAt && now > expiresAt) {
+          console.log(`⏰ Human approval timed out after ${options.timeout}`);
+
+          return {
+            type: 'human_approval',
+            token,
+            description: options.description,
+            metadata: options.metadata,
+            approved: false,
+            reason: 'Timeout - no approval received within specified time',
+            approvedBy: 'system',
+            approvedAt: now,
+            expiresAt,
+            status: 'timeout',
+            timedOut: true,
+          };
+        }
+
+        // TODO: In real implementation, this would check for actual resume call
+        // For now, simulate a timeout response
+        console.log(`⏰ Timeout reached - no human approval received`);
 
         return {
           type: 'human_approval',
           token,
           description: options.description,
           metadata: options.metadata,
-          approved: approvalResponse.approved,
-          reason: approvalResponse.reason,
-          approvedBy: approvalResponse.approvedBy,
-          approvedAt: approvalResponse.approvedAt,
+          approved: false,
+          reason: 'Timeout - no approval received within specified time',
+          approvedBy: 'system',
+          approvedAt: now,
           expiresAt,
-          status: 'completed',
+          status: 'timeout',
+          timedOut: true,
         };
       },
       type: 'step',

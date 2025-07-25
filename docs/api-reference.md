@@ -633,7 +633,7 @@ Pauses the workflow to wait for external human input via an API call.
 #### Parameters
 
 - `options` (object):
-  - `timeout` (string): Maximum time to wait for human input
+  - `timeout` (string, optional): Maximum time to wait for human input. If not provided, workflow pauses indefinitely until manually resumed.
   - `onPause` ((token) => void): Function called when workflow pauses
   - `description` (string): Description of what human input is needed
 
@@ -641,17 +641,27 @@ Pauses the workflow to wait for external human input via an API call.
 
 ```typescript
 .humanInTheLoop({
-  timeout: '3d',
+  timeout: '3d', // Optional: wait up to 3 days
   description: 'Approve high-value transaction',
   onPause: (token) => {
     sendApprovalEmail(token, ctx.last);
   }
 })
 .step('process-approval', (ctx) => {
-  // This step runs after human approval
+  // This step runs after human approval or timeout
+  if (ctx.last.timedOut) {
+    return handleTimeoutScenario(ctx.last);
+  }
   return processApprovedTransaction(ctx.last);
 })
 ```
+
+#### Behavior
+
+- **With timeout**: Workflow waits for the specified duration, then automatically times out if no human approval is received
+- **Without timeout**: Workflow pauses indefinitely until manually resumed via `cronflow.resume(token, payload)`
+- **Timeout result**: Returns `{ approved: false, status: 'timeout', timedOut: true }`
+- **Manual resume**: Returns the payload provided via `cronflow.resume(token, payload)`
 
 ### `.waitForEvent(eventName, timeout?)`
 

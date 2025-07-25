@@ -630,7 +630,7 @@ advancedWorkflow
     return ctx.steps.initialize.output.requiresApproval;
   })
   .humanInTheLoop({
-    timeout: '24h',
+    timeout: '24h', // Wait up to 24 hours for approval
     description: 'Approve high-value transaction',
     onPause: (token) => {
       console.log('⏸️ Workflow paused for human approval');
@@ -639,11 +639,23 @@ advancedWorkflow
     },
   })
   .step('process-approval', async (ctx) => {
-    console.log('✅ Processing human approval');
+    console.log('✅ Processing human approval result');
+    
+    if (ctx.last.timedOut) {
+      console.log('⏰ Approval timed out - handling timeout scenario');
+      return {
+        approved: false,
+        reason: 'Timeout - no approval received within 24 hours',
+        handled: 'timeout',
+        timestamp: new Date().toISOString(),
+      };
+    }
+    
     return {
-      approved: true,
-      approvedBy: 'human',
-      approvedAt: new Date().toISOString(),
+      approved: ctx.last.approved,
+      approvedBy: ctx.last.approvedBy,
+      reason: ctx.last.reason,
+      timestamp: new Date().toISOString(),
     };
   })
   .endIf()
@@ -686,6 +698,106 @@ advancedWorkflow
     console.log('  Without approval: curl -X POST http://127.0.0.1:3000/webhooks/advanced \\');
     console.log('    -H "Content-Type: application/json" \\');
     console.log('    -d \'{"userId": "user456", "amount": 100, "requiresApproval": false}\'');
+  } catch (error) {
+    console.error('❌ Failed to start workflow:', error);
+  }
+})();
+```
+
+---
+
+## Indefinite Human Approval (No Timeout)
+
+Example showing a workflow that pauses indefinitely until manually resumed:
+
+```typescript
+import { cronflow } from 'cronflow';
+import { z } from 'zod';
+
+const indefiniteApprovalWorkflow = cronflow.define({
+  id: 'indefinite-approval-example',
+  name: 'Indefinite Human Approval Example',
+  description: 'Workflow that pauses indefinitely until manually resumed',
+  timeout: '30m',
+  hooks: {
+    onSuccess: (ctx) => {
+      console.log('🎉 Indefinite approval workflow completed successfully!');
+    },
+    onFailure: (ctx) => {
+      console.error('💥 Indefinite approval workflow failed:', ctx.error);
+    },
+  },
+});
+
+indefiniteApprovalWorkflow
+  .onWebhook('/webhooks/indefinite-approval', {
+    schema: z.object({
+      transactionId: z.string(),
+      amount: z.number().positive(),
+      requiresManualApproval: z.boolean().optional(),
+    }),
+  })
+  .step('validate-transaction', async (ctx) => {
+    console.log('🔍 Validating transaction:', ctx.payload.transactionId);
+    return {
+      transactionId: ctx.payload.transactionId,
+      amount: ctx.payload.amount,
+      validated: true,
+    };
+  })
+  .if('needs-manual-approval', (ctx) => {
+    return ctx.payload.requiresManualApproval || ctx.last.amount > 10000;
+  })
+  .humanInTheLoop({
+    // No timeout - will pause indefinitely until manually resumed
+    description: 'Manual approval required for high-value transaction',
+    onPause: (token) => {
+      console.log('🛑 Manual approval required - no timeout set');
+      console.log('🔑 Approval token:', token);
+      console.log('📧 Send this token to approver for manual review');
+      console.log('🔄 Use cronflow.resume(token, payload) to resume');
+    },
+  })
+  .step('process-manual-approval', async (ctx) => {
+    console.log('✅ Manual approval received');
+    console.log('   Approval details:', ctx.last);
+    return {
+      approved: ctx.last.approved,
+      approvedBy: ctx.last.approvedBy,
+      reason: ctx.last.reason,
+      processed: true,
+    };
+  })
+  .endIf()
+  .step('finalize-transaction', async (ctx) => {
+    console.log('🎯 Finalizing transaction');
+    return {
+      finalized: true,
+      transactionId: ctx.steps['validate-transaction'].output.transactionId,
+      completedAt: new Date().toISOString(),
+    };
+  });
+
+// Start the indefinite approval workflow
+(async () => {
+  try {
+    console.log('🚀 Starting indefinite approval workflow...');
+    
+    await cronflow.start({
+      webhookServer: {
+        host: '127.0.0.1',
+        port: 3000,
+      },
+    });
+
+    console.log('✅ Indefinite approval workflow started successfully');
+    console.log('🌐 Webhook endpoint: http://127.0.0.1:3000/webhooks/indefinite-approval');
+    console.log('📋 Test with: curl -X POST http://127.0.0.1:3000/webhooks/indefinite-approval \\');
+    console.log('  -H "Content-Type: application/json" \\');
+    console.log('  -d \'{"transactionId": "TXN-123", "amount": 15000, "requiresManualApproval": true}\'');
+    console.log('');
+    console.log('⚠️  Note: This workflow will pause indefinitely until manually resumed');
+    console.log('   Use cronflow.resume(token, {approved: true, reason: "Approved"}) to resume');
   } catch (error) {
     console.error('❌ Failed to start workflow:', error);
   }

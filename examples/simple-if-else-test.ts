@@ -106,6 +106,18 @@ simpleIfWorkflow
     console.log('   Processing high value amount:', ctx.last.amount);
     return { type: 'high-value', processed: true, amount: ctx.last.amount };
   })
+  .humanInTheLoop({
+    timeout: '1h',
+    description: 'Approve high-value transaction',
+    onPause: token => {
+      console.log(`🛑 Human approval required. Token: ${token}`);
+    },
+  })
+  .step('after-approval', async ctx => {
+    console.log('✅ Human approval received');
+    console.log('   Approval result:', ctx.last);
+    return { approved: ctx.last.approved, approvedBy: ctx.last.approvedBy };
+  })
   .parallel([
     async ctx => {
       console.log('🔄 Parallel step 1: validate-data executing...');
