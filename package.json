@@ -1,6 +1,7 @@
 {
   "name": "cronflow",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "private": false,
   "description": "The fastestworkflow automation engine built on Bun.js + Rust, providing a code-first alternative to tools like n8n",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -74,7 +75,7 @@
     "audit": "bun audit",
     "outdated": "bun outdated",
     "update": "bun update",
-    "release": "semantic-release",
+    "release": "bunx changeset publish",
     "release:dry-run": "semantic-release --dry-run",
     "benchmark": "bun run benchmarks/bun-vs-node-benchmark.js",
     "benchmark:node": "node benchmarks/node-vs-bun-benchmark.js",
@@ -87,7 +88,9 @@
     "examples:robust": "bun run examples/run-robust-workflow.ts",
     "examples:complex": "bun run examples/run-complex-workflow.ts",
     "examples:control-flow": "bun run examples/run-control-flow-workflow.ts",
-    "examples:external": "bun run examples/external-webhook-access.ts"
+    "examples:external": "bun run examples/external-webhook-access.ts",
+    "changeset": "bunx changeset",
+    "version": "bunx changeset version"
   },
   "keywords": [
     "workflow",
@@ -127,6 +130,7 @@
     "zod": "^3.22.0"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.5",
     "@napi-rs/cli": "^3.0.0",
     "@rollup/rollup-linux-x64-gnu": "^4.40.0",
     "@semantic-release/changelog": "^6.0.3",

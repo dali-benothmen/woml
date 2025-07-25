@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0
+
+### Minor Changes
+
+- Initial release of Node-Cronflow v0.1.0
+  - Complete workflow automation engine with Rust core
+  - TypeScript SDK with comprehensive workflow definitions
+  - Webhook and scheduled trigger support
+  - Advanced control flow (if/else, parallel execution)
+  - Service integration and state management
+  - Optimized build system with bundle size analysis
+  - Ready for npm publishing with proper package structure
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
