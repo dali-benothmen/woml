@@ -128,6 +128,7 @@ export interface WebhookOptions {
     required?: Record<string, string>; // e.g., { 'content-type': 'application/json' }
     validate?: (headers: Record<string, string>) => boolean | string;
   };
+  trigger?: string;
 }
 
 // Context object that gets passed to step handlers

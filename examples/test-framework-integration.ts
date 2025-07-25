@@ -44,6 +44,19 @@ frameworkWorkflow
       required: { 'content-type': 'application/json' },
     },
   })
+  .onWebhook('/api/webhooks/trigger-step', {
+    app: 'express',
+    appInstance: app,
+    method: 'POST',
+    trigger: 'process-data', // Trigger only the 'process-data' step
+    schema: z.object({
+      message: z.string().min(1, 'Message cannot be empty'),
+      userId: z.string().optional(),
+    }),
+    headers: {
+      required: { 'content-type': 'application/json' },
+    },
+  })
   .step('validate-input', async ctx => {
     console.log('📝 Step 1: Validating input');
     console.log('   Payload:', ctx.payload);
@@ -420,6 +433,9 @@ app.listen(PORT, async () => {
     `🔗 Webhook endpoint: POST http://localhost:${PORT}/api/webhooks/framework-test`
   );
   console.log(
+    `🎯 Step-specific webhook: POST http://localhost:${PORT}/api/webhooks/trigger-step`
+  );
+  console.log(
     `📊 Status check: GET http://localhost:${PORT}/api/workflows/:runId`
   );
   console.log(
@@ -475,10 +491,19 @@ app.listen(PORT, async () => {
   console.log('     -H "Content-Type: application/json" \\');
   console.log('     -d \'{"message": "Hello from manual trigger!"}\'');
   console.log('');
-  console.log('6. Check workflow status:');
+  console.log(
+    '6. Test step-specific webhook (triggers only process-data step):'
+  );
+  console.log(
+    '   curl -X POST http://localhost:3000/api/webhooks/trigger-step \\'
+  );
+  console.log('     -H "Content-Type: application/json" \\');
+  console.log('     -d \'{"message": "Hello from step-specific webhook!"}\'');
+  console.log('');
+  console.log('7. Check workflow status:');
   console.log('   curl http://localhost:3000/api/workflows/{runId}');
   console.log('');
-  console.log('7. Test pause functionality:');
+  console.log('8. Test pause functionality:');
   console.log('   The workflow now includes a .pause() step that will:');
   console.log('   - Execute a callback function when reached');
   console.log('   - Log current context information');

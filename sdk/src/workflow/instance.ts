@@ -231,21 +231,101 @@ export class WorkflowInstance {
           }
         }
 
-        // Trigger the workflow
-        const runId = await this._cronflowInstance.trigger(
-          this._workflow.id,
-          req.body
-        );
+        if (options.trigger) {
+          console.log(`🎯 Triggering specific step: ${options.trigger}`);
 
-        console.log('✅ Webhook workflow triggered successfully');
-        console.log('   Run ID:', runId);
+          const stepToTrigger = this._workflow.steps.find(
+            step => step.id === options.trigger || step.name === options.trigger
+          );
 
-        res.json({
-          success: true,
-          runId,
-          message: 'Webhook processed successfully',
-          timestamp: new Date().toISOString(),
-        });
+          if (!stepToTrigger) {
+            console.error(`❌ Step not found: ${options.trigger}`);
+            return res.status(400).json({
+              success: false,
+              error: `Step not found: ${options.trigger}`,
+              availableSteps: this._workflow.steps.map(s => ({
+                id: s.id,
+                name: s.name,
+              })),
+            });
+          }
+
+          const stepContext = {
+            run_id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            workflow_id: this._workflow.id,
+            step_name: stepToTrigger.name,
+            payload: req.body,
+            steps: {},
+            services: {},
+            run: {
+              id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              workflowId: this._workflow.id,
+            },
+            last: undefined,
+            state: {
+              get: () => null,
+              set: async () => {},
+              incr: async () => 0,
+            },
+            trigger: { headers: req.headers },
+            cancel: (reason?: string) => {
+              throw new Error(
+                `Step cancelled: ${reason || 'No reason provided'}`
+              );
+            },
+          };
+
+          const contextJson = JSON.stringify(stepContext);
+
+          const stepResult = await this._cronflowInstance.executeStepFunction(
+            stepToTrigger.name,
+            contextJson,
+            this._workflow.id,
+            stepContext.run_id
+          );
+
+          if (stepResult.success && stepResult.result) {
+            console.log(`✅ Step ${options.trigger} executed successfully`);
+            console.log('   Step output:', stepResult.result.output);
+
+            res.json({
+              success: true,
+              stepId: options.trigger,
+              stepName: stepToTrigger.name,
+              output: stepResult.result.output,
+              message: 'Step executed successfully',
+              timestamp: new Date().toISOString(),
+            });
+          } else {
+            console.error(
+              `❌ Step ${options.trigger} failed:`,
+              stepResult.message
+            );
+            res.status(500).json({
+              success: false,
+              stepId: options.trigger,
+              error: stepResult.message,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } else {
+          console.log(`🔄 Triggering entire workflow: ${this._workflow.id}`);
+
+          const runId = await this._cronflowInstance.trigger(
+            this._workflow.id,
+            req.body
+          );
+
+          console.log('✅ Webhook workflow triggered successfully');
+          console.log('   Run ID:', runId);
+
+          res.json({
+            success: true,
+            runId,
+            message: 'Webhook processed successfully',
+            timestamp: new Date().toISOString(),
+          });
+        }
       } catch (error: any) {
         console.error('❌ Webhook processing failed:', error);
         res.status(500).json({
@@ -256,7 +336,6 @@ export class WorkflowInstance {
       }
     };
 
-    // Register the route using the framework handler
     const method = options.method || 'POST';
     frameworkHandler(appInstance, method, path, webhookHandler);
 
@@ -270,14 +349,12 @@ export class WorkflowInstance {
 
     if (!registerRoute) return;
 
-    // Create the webhook handler
     const webhookHandler = async (req: any, res: any) => {
       try {
         console.log(`🔗 Webhook triggered: ${path}`);
         console.log('   Headers:', req.headers);
         console.log('   Body:', req.body);
 
-        // Validate schema if defined
         if (options.schema) {
           try {
             options.schema.parse(req.body);
@@ -291,7 +368,6 @@ export class WorkflowInstance {
           }
         }
 
-        // Validate headers if required
         if (options.headers?.required) {
           const requiredHeaders = options.headers.required;
           for (const [key, value] of Object.entries(requiredHeaders)) {
@@ -304,21 +380,101 @@ export class WorkflowInstance {
           }
         }
 
-        // Trigger the workflow
-        const runId = await this._cronflowInstance.trigger(
-          this._workflow.id,
-          req.body
-        );
+        if (options.trigger) {
+          console.log(`🎯 Triggering specific step: ${options.trigger}`);
 
-        console.log('✅ Webhook workflow triggered successfully');
-        console.log('   Run ID:', runId);
+          const stepToTrigger = this._workflow.steps.find(
+            step => step.id === options.trigger || step.name === options.trigger
+          );
 
-        res.json({
-          success: true,
-          runId,
-          message: 'Webhook processed successfully',
-          timestamp: new Date().toISOString(),
-        });
+          if (!stepToTrigger) {
+            console.error(`❌ Step not found: ${options.trigger}`);
+            return res.status(400).json({
+              success: false,
+              error: `Step not found: ${options.trigger}`,
+              availableSteps: this._workflow.steps.map(s => ({
+                id: s.id,
+                name: s.name,
+              })),
+            });
+          }
+
+          const stepContext = {
+            run_id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            workflow_id: this._workflow.id,
+            step_name: stepToTrigger.name,
+            payload: req.body,
+            steps: {},
+            services: {},
+            run: {
+              id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              workflowId: this._workflow.id,
+            },
+            last: undefined,
+            state: {
+              get: () => null,
+              set: async () => {},
+              incr: async () => 0,
+            },
+            trigger: { headers: req.headers },
+            cancel: (reason?: string) => {
+              throw new Error(
+                `Step cancelled: ${reason || 'No reason provided'}`
+              );
+            },
+          };
+
+          const contextJson = JSON.stringify(stepContext);
+
+          const stepResult = await this._cronflowInstance.executeStepFunction(
+            stepToTrigger.name,
+            contextJson,
+            this._workflow.id,
+            stepContext.run_id
+          );
+
+          if (stepResult.success && stepResult.result) {
+            console.log(`✅ Step ${options.trigger} executed successfully`);
+            console.log('   Step output:', stepResult.result.output);
+
+            res.json({
+              success: true,
+              stepId: options.trigger,
+              stepName: stepToTrigger.name,
+              output: stepResult.result.output,
+              message: 'Step executed successfully',
+              timestamp: new Date().toISOString(),
+            });
+          } else {
+            console.error(
+              `❌ Step ${options.trigger} failed:`,
+              stepResult.message
+            );
+            res.status(500).json({
+              success: false,
+              stepId: options.trigger,
+              error: stepResult.message,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } else {
+          console.log(`🔄 Triggering entire workflow: ${this._workflow.id}`);
+
+          const runId = await this._cronflowInstance.trigger(
+            this._workflow.id,
+            req.body
+          );
+
+          console.log('✅ Webhook workflow triggered successfully');
+          console.log('   Run ID:', runId);
+
+          res.json({
+            success: true,
+            runId,
+            message: 'Webhook processed successfully',
+            timestamp: new Date().toISOString(),
+          });
+        }
       } catch (error: any) {
         console.error('❌ Webhook processing failed:', error);
         res.status(500).json({
