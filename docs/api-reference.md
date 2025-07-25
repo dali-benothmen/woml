@@ -1,6 +1,6 @@
-# Node-Cronflow API Reference
+# Cronflow API Reference
 
-A comprehensive guide to the node-cronflow API for building reliable, scalable workflow automation.
+A comprehensive guide to the cronflow API for building reliable, scalable workflow automation.
 
 ## Table of Contents
 
@@ -21,10 +21,10 @@ A comprehensive guide to the node-cronflow API for building reliable, scalable w
 
 ## Core Namespace: cronflow
 
-The main entry point for the node-cronflow framework.
+The main entry point for the cronflow framework.
 
 ```typescript
-import { cronflow } from "node-cronflow";
+import { cronflow } from "cronflow";
 ```
 
 ### `cronflow.define(options, setupFn?)`
@@ -704,7 +704,7 @@ The factory function for creating new, reusable integrations.
 
 ```typescript
 // in services/resend.ts
-import { defineService } from "node-cronflow";
+import { defineService } from "cronflow";
 import { z } from "zod";
 
 export const resendServiceTemplate = defineService({
@@ -1018,7 +1018,7 @@ if (workflow) {
 ### Complete Order Processing Workflow
 
 ```typescript
-import { cronflow } from "node-cronflow";
+import { cronflow } from "cronflow";
 import { z } from "zod";
 import { db } from "../../lib/db";
 import {
@@ -1163,4 +1163,4 @@ describe("Order Processing Workflow", () => {
 });
 ```
 
-This comprehensive API reference provides everything you need to build powerful, reliable workflows with node-cronflow. The examples demonstrate real-world usage patterns and best practices for building production-ready automation systems.
+This comprehensive API reference provides everything you need to build powerful, reliable workflows with cronflow. The examples demonstrate real-world usage patterns and best practices for building production-ready automation systems.

@@ -1,10 +1,10 @@
-# Node-Cronflow Framework Integrations
+# Cronflow Framework Integrations
 
-Node-Cronflow is designed to work seamlessly with any Node.js/Bun.js web framework. This document shows how to integrate it with popular frameworks.
+Cronflow is designed to work seamlessly with any Node.js/Bun.js web framework. This document shows how to integrate it with popular frameworks.
 
 ## 🚀 **Framework Compatibility**
 
-Node-Cronflow works with:
+Cronflow works with:
 - ✅ **Express.js** - Most popular Node.js framework
 - ✅ **Fastify** - High-performance framework
 - ✅ **Koa** - Lightweight framework by Express team
@@ -19,7 +19,7 @@ Node-Cronflow works with:
 ### **1. Basic Integration Pattern**
 
 ```typescript
-import { cronflow } from 'node-cronflow';
+import { cronflow } from 'cronflow';
 
 // 1. Define workflows during app initialization
 async function initializeWorkflows() {
@@ -70,7 +70,7 @@ app.get('/api/workflows/:runId', async (req, res) => {
 
 ```typescript
 import express from 'express';
-import { cronflow } from 'node-cronflow';
+import { cronflow } from 'cronflow';
 
 const app = express();
 app.use(express.json());
@@ -126,7 +126,7 @@ initializeWorkflows().then(() => {
 
 ```typescript
 import Fastify from 'fastify';
-import { cronflow } from 'node-cronflow';
+import { cronflow } from 'cronflow';
 
 const fastify = Fastify({ logger: true });
 
@@ -182,7 +182,7 @@ initializeWorkflows().then(async () => {
 import Koa from 'koa';
 import Router from '@koa/router';
 import bodyParser from 'koa-bodyparser';
-import { cronflow } from 'node-cronflow';
+import { cronflow } from 'cronflow';
 
 const app = new Koa();
 const router = new Router();
@@ -241,7 +241,7 @@ initializeWorkflows().then(() => {
 ### **Bun.js HTTP Server Integration**
 
 ```typescript
-import { cronflow } from 'node-cronflow';
+import { cronflow } from 'cronflow';
 
 // Initialize workflows
 async function initializeWorkflows() {
@@ -303,7 +303,7 @@ initializeWorkflows().then(() => {
 ```typescript
 // pages/api/workflows/trigger.ts
 import { NextApiRequest, NextApiResponse } from 'next';
-import { cronflow } from 'node-cronflow';
+import { cronflow } from 'cronflow';
 
 // Initialize workflows (run once)
 let initialized = false;
@@ -344,7 +344,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 ```typescript
 // workflow.service.ts
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { cronflow } from 'node-cronflow';
+import { cronflow } from 'cronflow';
 
 @Injectable()
 export class WorkflowService implements OnModuleInit {

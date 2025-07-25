@@ -1,6 +1,6 @@
-# Node-Cronflow Examples
+# Cronflow Examples
 
-Comprehensive examples showcasing the full power of node-cronflow for building reliable, scalable workflow automation.
+Comprehensive examples showcasing the full power of cronflow for building reliable, scalable workflow automation.
 
 ## Table of Contents
 
@@ -1389,4 +1389,4 @@ orderProcessingWorkflow
 })();
 ```
 
-This comprehensive examples file showcases all the major features of node-cronflow with real, working examples that users can run and modify for their own needs.
+This comprehensive examples file showcases all the major features of cronflow with real, working examples that users can run and modify for their own needs.

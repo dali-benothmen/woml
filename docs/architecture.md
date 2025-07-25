@@ -1,8 +1,8 @@
-# Node-Cronflow Final Architecture Design
+# Cronflow Final Architecture Design
 
 ## Overview
 
-Node-cronflow is a sophisticated workflow automation engine built on a **hybrid architecture** that combines the developer-friendly experience of Node.js with the rock-solid reliability and performance of Rust. This document provides the complete architectural reference for the entire system.
+cronflow is a sophisticated workflow automation engine built on a **hybrid architecture** that combines the developer-friendly experience of Node.js with the rock-solid reliability and performance of Rust. This document provides the complete architectural reference for the entire system.
 
 ## Core Philosophy
 
@@ -22,7 +22,7 @@ direction LR
 A["<b style='font-size:16px'>Your Application Code</b><br>workflows/orders/workflow.ts"]
 end
 
-    subgraph "node-cronflow (The SDK - In Node.js Process)"
+    subgraph "cronflow (The SDK - In Node.js Process)"
         direction TB
         B["<b>Cronflow Singleton</b><br> .define(), .start(), .inspect()"]
         C["<b>Workflow Instance</b><br> .onWebhook(), .step(), .if(), .test()"]
@@ -105,7 +105,7 @@ The public-facing package that provides the developer experience.
 
 #### **Cronflow Singleton**
 
-- **Entry Point**: `import { cronflow } from 'node-cronflow'`
+- **Entry Point**: `import { cronflow } from 'cronflow'`
 - **Responsibilities**:
   - Maintains registry of all defined Workflow instances
   - Provides `.define()`, `.start()`, `.trigger()`, `.inspect()` methods
