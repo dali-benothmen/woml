@@ -62,7 +62,6 @@ function registerStepHandler(
     handler,
     type,
   });
-  console.log(`📝 Registered step handler: ${key} (${type})`);
 }
 
 function getStepHandler(
@@ -81,7 +80,6 @@ function initialize(dbPath?: string): void {
     eventListeners: new Map(),
     eventHistory: [],
   });
-  console.log(`Node-Cronflow SDK v${VERSION} initialized`);
 }
 
 // State management functions
@@ -224,142 +222,6 @@ export function define(
     'steps' | 'triggers' | 'created_at' | 'updated_at'
   >
 ): WorkflowInstance {
-  const currentState = getCurrentState();
-
-  if (!options.id || options.id.trim() === '') {
-    throw new Error('Workflow ID cannot be empty');
-  }
-
-  if (currentState.workflows.has(options.id)) {
-    throw new Error(`Workflow with ID '${options.id}' already exists`);
-  }
-
-  if (options.timeout !== undefined) {
-    if (typeof options.timeout === 'string') {
-      const timeoutRegex = /^(\d+)(s|m|h|d)$/;
-      if (!timeoutRegex.test(options.timeout)) {
-        throw new Error(
-          'Invalid timeout format. Use format like "5m", "1h", "30s"'
-        );
-      }
-    } else if (typeof options.timeout === 'number') {
-      if (options.timeout <= 0) {
-        throw new Error('Timeout must be a positive number');
-      }
-    } else {
-      throw new Error('Timeout must be a string or number');
-    }
-  }
-
-  if (options.concurrency !== undefined) {
-    if (!Number.isInteger(options.concurrency) || options.concurrency <= 0) {
-      throw new Error('Concurrency must be a positive integer');
-    }
-  }
-
-  if (options.rateLimit) {
-    if (
-      !options.rateLimit.count ||
-      !Number.isInteger(options.rateLimit.count) ||
-      options.rateLimit.count <= 0
-    ) {
-      throw new Error('Rate limit count must be a positive integer');
-    }
-
-    if (!options.rateLimit.per || typeof options.rateLimit.per !== 'string') {
-      throw new Error('Rate limit per must be a string (e.g., "1m", "1h")');
-    }
-
-    const rateLimitRegex = /^(\d+)(s|m|h|d)$/;
-    if (!rateLimitRegex.test(options.rateLimit.per)) {
-      throw new Error(
-        'Invalid rate limit time format. Use format like "1m", "1h"'
-      );
-    }
-  }
-
-  if (options.queue !== undefined) {
-    if (typeof options.queue !== 'string' || options.queue.trim() === '') {
-      throw new Error('Queue must be a non-empty string');
-    }
-  }
-
-  if (options.version !== undefined) {
-    if (typeof options.version !== 'string' || options.version.trim() === '') {
-      throw new Error('Version must be a non-empty string');
-    }
-
-    const versionRegex =
-      /^v?\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/;
-    if (!versionRegex.test(options.version)) {
-      console.warn(
-        `Warning: Version '${options.version}' may not follow semantic versioning format`
-      );
-    }
-  }
-
-  if (options.tags) {
-    if (!Array.isArray(options.tags)) {
-      throw new Error('Tags must be an array');
-    }
-    for (const tag of options.tags) {
-      if (typeof tag !== 'string' || tag.trim() === '') {
-        throw new Error('All tags must be non-empty strings');
-      }
-    }
-  }
-
-  if (options.services) {
-    if (!Array.isArray(options.services)) {
-      throw new Error('Services must be an array');
-    }
-    for (const service of options.services) {
-      if (!service || typeof service !== 'object') {
-        throw new Error('Invalid service provided to workflow definition');
-      }
-
-      if (!service.id || typeof service.id !== 'string') {
-        throw new Error('Service must have a valid id property');
-      }
-
-      if (!service.actions || typeof service.actions !== 'object') {
-        throw new Error('Service must have actions property');
-      }
-
-      for (const [actionName, actionFn] of Object.entries(service.actions)) {
-        if (typeof actionFn !== 'function') {
-          throw new Error(`Service action '${actionName}' must be a function`);
-        }
-      }
-    }
-  }
-
-  if (options.hooks) {
-    if (typeof options.hooks !== 'object') {
-      throw new Error('Hooks must be an object');
-    }
-
-    if (
-      options.hooks.onSuccess !== undefined &&
-      typeof options.hooks.onSuccess !== 'function'
-    ) {
-      throw new Error('onSuccess hook must be a function');
-    }
-
-    if (
-      options.hooks.onFailure !== undefined &&
-      typeof options.hooks.onFailure !== 'function'
-    ) {
-      throw new Error('onFailure hook must be a function');
-    }
-  }
-
-  if (options.secrets !== undefined) {
-    if (typeof options.secrets !== 'object' || options.secrets === null) {
-      throw new Error('Secrets must be an object');
-    }
-  }
-
   const workflow: WorkflowDefinition = {
     ...options,
     steps: [],
@@ -368,29 +230,13 @@ export function define(
     updated_at: new Date(),
   };
 
-  currentState.workflows.set(options.id, workflow);
-  console.log(`Workflow '${options.id}' defined successfully`);
+  const instance = new WorkflowInstance(workflow, cronflow);
 
-  return new WorkflowInstance(workflow, {
-    define,
-    start,
-    stop,
-    trigger,
-    inspect,
-    registerWorkflow: async (workflow: WorkflowDefinition) => {
-      const currentState = getCurrentState();
-      currentState.workflows.set(workflow.id, workflow);
-      console.log(`Workflow '${workflow.id}' registered with SDK state`);
-    },
-    registerStepHandler: (
-      workflowId: string,
-      stepId: string,
-      handler: (ctx: Context) => any | Promise<any>,
-      type: 'step' | 'action'
-    ) => {
-      registerStepHandler(workflowId, stepId, handler, type);
-    },
-  });
+  // Register the workflow with the SDK state
+  const currentState = getCurrentState();
+  currentState.workflows.set(workflow.id, workflow);
+
+  return instance;
 }
 
 export interface WebhookServerConfig {
@@ -628,11 +474,7 @@ export async function start(options?: StartOptions): Promise<void> {
         const port = options.webhookServer.port || 3000;
 
         server.listen(port, host, () => {
-          console.log(`🌐 Webhook server running on: http://${host}:${port}`);
-          console.log(
-            `📡 Webhook endpoint: http://${host}:${port}/webhook/webhooks/simple`
-          );
-          console.log(`🏥 Health check: http://${host}:${port}/health`);
+          setState({ webhookServer: server });
         });
 
         setState({ webhookServer: server });
@@ -642,11 +484,10 @@ export async function start(options?: StartOptions): Promise<void> {
       throw error;
     }
   } else {
-    console.log('⚠️  Running in simulation mode (Rust core not available)');
+    // Running in simulation mode
   }
 
   setState({ engineState: 'STARTED' });
-  console.log('Node-Cronflow engine started successfully');
 }
 
 export async function stop(): Promise<void> {
@@ -654,25 +495,24 @@ export async function stop(): Promise<void> {
 
   if (currentState.webhookServer) {
     currentState.webhookServer.close(() => {
-      console.log('✅ Webhook HTTP server closed successfully');
+      // Webhook server closed
     });
+
+    setState({ webhookServer: undefined });
   }
 
   if (core) {
     try {
-      const result = core.stopWebhookServer(currentState.dbPath);
+      const result = core.shutdown();
       if (!result.success) {
-        console.warn(`⚠️  Failed to stop webhook server: ${result.message}`);
-      } else {
-        console.log('✅ Webhook server stopped successfully');
+        console.error('❌ Failed to shutdown Rust engine:', result.message);
       }
     } catch (error) {
-      console.warn('⚠️  Error stopping webhook server:', error);
+      console.error('❌ Error during Rust engine shutdown:', error);
     }
   }
 
-  setState({ engineState: 'STOPPED', webhookServer: undefined });
-  console.log('Node-Cronflow engine stopped');
+  setState({ engineState: 'STOPPED' });
 }
 
 export async function trigger(
@@ -682,10 +522,6 @@ export async function trigger(
   const currentState = getCurrentState();
 
   if (!core) {
-    console.log(
-      `⚠️  Simulation: Triggering workflow: ${workflowId} with payload:`,
-      payload
-    );
     return 'simulation-run-id';
   }
 
@@ -694,17 +530,10 @@ export async function trigger(
     const result = core.createRun(workflowId, payloadJson, currentState.dbPath);
 
     if (result.success && result.runId) {
-      console.log(
-        `✅ Workflow triggered successfully: ${workflowId} -> ${result.runId}`
-      );
-
       await executeWorkflowSteps(workflowId, result.runId, payload);
 
       return result.runId;
     } else if (result.success) {
-      console.log(
-        `⚠️  Workflow triggered but no runId returned: ${workflowId} -> ${result.message}`
-      );
       // Fallback to generating a run ID if none was returned
       const fallbackRunId = `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -728,9 +557,6 @@ async function executeWorkflowSteps(
   const currentState = getCurrentState();
 
   if (!core) {
-    console.log(
-      `⚠️  Simulation: Executing workflow steps for ${workflowId} run ${runId}`
-    );
     return;
   }
 
@@ -741,9 +567,6 @@ async function executeWorkflowSteps(
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
-    console.log(`🔄 Executing workflow steps for ${workflowId} run ${runId}`);
-    console.log(`📋 Workflow has ${workflow.steps.length} steps`);
-
     const completedSteps: Record<string, any> = {};
     let currentConditionMet = false;
     let inControlFlowBlock = false;
@@ -752,9 +575,6 @@ async function executeWorkflowSteps(
 
     for (let i = 0; i < workflow.steps.length; i++) {
       const step = workflow.steps[i];
-      console.log(
-        `\n📝 Executing step ${i + 1}/${workflow.steps.length}: ${step.name}`
-      );
 
       const isControlFlowStep =
         step.options?.conditionType ||
@@ -763,14 +583,10 @@ async function executeWorkflowSteps(
         step.name.startsWith('endif_');
 
       if (isControlFlowStep) {
-        console.log(`🔀 Control flow step detected: ${step.name}`);
-
         if (
           step.name.startsWith('conditional_') ||
           step.options?.conditionType === 'if'
         ) {
-          console.log(`🔍 Evaluating IF condition: ${step.name}`);
-
           const context = {
             run_id: runId,
             workflow_id: workflowId,
@@ -803,7 +619,6 @@ async function executeWorkflowSteps(
           if (stepHandler) {
             const conditionResult = await stepHandler.handler(context);
             currentConditionMet = Boolean(conditionResult);
-            console.log(`✅ IF condition result: ${currentConditionMet}`);
 
             if (currentConditionMet) {
               inControlFlowBlock = true;
@@ -812,45 +627,32 @@ async function executeWorkflowSteps(
               skipUntilEndIf = true;
             }
           } else {
-            console.log(
-              `⚠️  No handler found for condition step: ${step.name}`
-            );
             skipUntilEndIf = true;
           }
 
-          console.log(`⏭️  Skipping control flow step execution: ${step.name}`);
           continue;
         } else if (
           step.name.startsWith('else_') ||
           step.options?.conditionType === 'else'
         ) {
-          console.log(`🔀 Processing ELSE condition: ${step.name}`);
-
           if (!currentConditionMet && !skipUntilEndIf) {
             inControlFlowBlock = true;
             skipUntilEndIf = false;
-            console.log(`✅ ELSE branch will be executed`);
           } else {
             skipUntilEndIf = true;
-            console.log(`⏭️  ELSE branch will be skipped`);
           }
 
-          console.log(`⏭️  Skipping control flow step execution: ${step.name}`);
           continue;
         } else if (step.name.startsWith('endif_')) {
-          console.log(`🔚 Processing ENDIF: ${step.name}`);
-
           inControlFlowBlock = false;
           skipUntilEndIf = false;
           currentConditionMet = false;
 
-          console.log(`⏭️  Skipping control flow step execution: ${step.name}`);
           continue;
         }
       }
 
       if (skipUntilEndIf) {
-        console.log(`⏭️  Skipping step due to control flow: ${step.name}`);
         continue;
       }
 
@@ -897,7 +699,6 @@ async function executeWorkflowSteps(
         if (stepResult.success && stepResult.result) {
           completedSteps[step.name] = stepResult.result.output;
           lastExecutedStepIndex = i;
-          console.log(`✅ Pause step ${step.name} completed successfully`);
 
           const pauseInfo = {
             token: `pause_${runId}_${Date.now()}`,
@@ -914,12 +715,6 @@ async function executeWorkflowSteps(
 
           storePausedWorkflow(pauseInfo.token, pauseInfo);
 
-          console.log(`⏸️  Workflow paused at step: ${step.name}`);
-          console.log(`🔑 Pause token: ${pauseInfo.token}`);
-          console.log(
-            `🔄 Use cronflow.resume('${pauseInfo.token}', payload) to resume`
-          );
-
           return;
         } else {
           console.error(
@@ -933,8 +728,6 @@ async function executeWorkflowSteps(
       }
 
       if (step.options?.parallel || step.parallel) {
-        console.log(`🔄 Executing parallel step: ${step.name}`);
-
         const context = {
           run_id: runId,
           workflow_id: workflowId,
@@ -975,7 +768,6 @@ async function executeWorkflowSteps(
         if (stepResult.success && stepResult.result) {
           completedSteps[step.name] = stepResult.result.output;
           lastExecutedStepIndex = i;
-          console.log(`✅ Parallel step ${step.name} completed successfully`);
         } else {
           console.error(
             `❌ Parallel step ${step.name} failed:`,
@@ -1021,17 +813,9 @@ async function executeWorkflowSteps(
       const contextJson = JSON.stringify(context);
 
       if (step.type === 'action' || step.options?.background) {
-        console.log(
-          `🔄 Executing ${step.type === 'action' ? 'action' : 'step'} as background side effect: ${step.name}`
-        );
-
         executeStepFunction(step.name, contextJson, workflowId, runId)
           .then(stepResult => {
             if (stepResult.success && stepResult.result) {
-              console.log(
-                `✅ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} completed successfully in background`
-              );
-
               const onSuccessHandler = getHookHandler('onSuccess');
               if (onSuccessHandler) {
                 try {
@@ -1407,9 +1191,6 @@ export async function executeStepFunction(
   runId: string
 ): Promise<any> {
   if (!core) {
-    console.log(
-      `⚠️  Simulation: Executing step function ${stepName} for workflow ${workflowId} run ${runId}`
-    );
     return {
       success: true,
       result: {
@@ -1496,8 +1277,6 @@ export async function executeStepFunction(
       workflowId,
       runId
     );
-
-    console.log(`   - Executing step function ${stepName}...`);
 
     const originalConsoleLog = console.log;
     const originalConsoleError = console.error;
@@ -1749,7 +1528,6 @@ async function registerWorkflowWithRust(
   workflow: WorkflowDefinition
 ): Promise<void> {
   if (!core) {
-    console.log(`⚠️  Simulation: Registering workflow: ${workflow.id}`);
     return;
   }
 
@@ -1763,10 +1541,6 @@ async function registerWorkflowWithRust(
     if (!result.success) {
       throw new Error(`Failed to register workflow: ${result.message}`);
     }
-
-    console.log(
-      `✅ Workflow '${workflow.id}' registered successfully with Rust engine`
-    );
   } catch (error) {
     console.error(`❌ Failed to register workflow '${workflow.id}':`, error);
     throw error;
@@ -1922,16 +1696,12 @@ export async function resume(token: string, payload: any): Promise<void> {
   if (pausedWorkflow.resumeCallback) {
     pausedWorkflow.resumeCallback(payload);
   } else {
-    console.log(`🔄 Continuing workflow execution from pause step`);
-
     try {
       await executeWorkflowSteps(
         pausedWorkflow.workflowId,
         pausedWorkflow.runId,
         pausedWorkflow.payload
       );
-
-      console.log(`✅ Workflow execution completed after resume`);
     } catch (error) {
       console.error(`❌ Error continuing workflow execution:`, error);
       throw error;

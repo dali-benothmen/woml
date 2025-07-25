@@ -200,10 +200,6 @@ export class WorkflowInstance {
     // Create the webhook handler
     const webhookHandler = async (req: any, res: any) => {
       try {
-        console.log(`🔗 Webhook triggered: ${path}`);
-        console.log('   Headers:', req.headers);
-        console.log('   Body:', req.body);
-
         // Validate schema if defined
         if (options.schema) {
           try {
@@ -232,8 +228,6 @@ export class WorkflowInstance {
         }
 
         if (options.trigger) {
-          console.log(`🎯 Triggering specific step: ${options.trigger}`);
-
           const stepToTrigger = this._workflow.steps.find(
             step => step.id === options.trigger || step.name === options.trigger
           );
@@ -285,9 +279,6 @@ export class WorkflowInstance {
           );
 
           if (stepResult.success && stepResult.result) {
-            console.log(`✅ Step ${options.trigger} executed successfully`);
-            console.log('   Step output:', stepResult.result.output);
-
             res.json({
               success: true,
               stepId: options.trigger,
@@ -309,15 +300,10 @@ export class WorkflowInstance {
             });
           }
         } else {
-          console.log(`🔄 Triggering entire workflow: ${this._workflow.id}`);
-
           const runId = await this._cronflowInstance.trigger(
             this._workflow.id,
             req.body
           );
-
-          console.log('✅ Webhook workflow triggered successfully');
-          console.log('   Run ID:', runId);
 
           res.json({
             success: true,
@@ -338,10 +324,6 @@ export class WorkflowInstance {
 
     const method = options.method || 'POST';
     frameworkHandler(appInstance, method, path, webhookHandler);
-
-    console.log(
-      `✅ Webhook route registered with ${frameworkName}: ${method} ${path}`
-    );
   }
 
   private _registerWebhookRoute(path: string, options: WebhookOptions): void {
@@ -351,10 +333,6 @@ export class WorkflowInstance {
 
     const webhookHandler = async (req: any, res: any) => {
       try {
-        console.log(`🔗 Webhook triggered: ${path}`);
-        console.log('   Headers:', req.headers);
-        console.log('   Body:', req.body);
-
         if (options.schema) {
           try {
             options.schema.parse(req.body);
@@ -381,8 +359,6 @@ export class WorkflowInstance {
         }
 
         if (options.trigger) {
-          console.log(`🎯 Triggering specific step: ${options.trigger}`);
-
           const stepToTrigger = this._workflow.steps.find(
             step => step.id === options.trigger || step.name === options.trigger
           );
@@ -434,9 +410,6 @@ export class WorkflowInstance {
           );
 
           if (stepResult.success && stepResult.result) {
-            console.log(`✅ Step ${options.trigger} executed successfully`);
-            console.log('   Step output:', stepResult.result.output);
-
             res.json({
               success: true,
               stepId: options.trigger,
@@ -458,15 +431,10 @@ export class WorkflowInstance {
             });
           }
         } else {
-          console.log(`🔄 Triggering entire workflow: ${this._workflow.id}`);
-
           const runId = await this._cronflowInstance.trigger(
             this._workflow.id,
             req.body
           );
-
-          console.log('✅ Webhook workflow triggered successfully');
-          console.log('   Run ID:', runId);
 
           res.json({
             success: true,
@@ -488,8 +456,6 @@ export class WorkflowInstance {
     // Register the route using the universal interface
     const method = options.method || 'POST';
     registerRoute(method, path, webhookHandler);
-
-    console.log(`✅ Webhook route registered: ${method} ${path}`);
   }
 
   onSchedule(cronExpression: string): WorkflowInstance {
@@ -858,7 +824,6 @@ export class WorkflowInstance {
       handler: async (ctx: Context) => {
         // TODO: Implement actual subflow execution
         // For now, simulate subflow execution
-        console.log(`Executing subflow: ${workflowId} with input:`, input);
 
         // Simulate subflow result
         return {
@@ -1065,33 +1030,11 @@ export class WorkflowInstance {
 
         storePausedWorkflow(token, pauseInfo);
 
-        console.log(`🛑 Human approval required: ${options.description}`);
-        console.log(`🔑 Approval token: ${token}`);
-
-        if (timeoutMs) {
-          console.log(
-            `⏰ Timeout: ${options.timeout} (expires at ${new Date(expiresAt!).toISOString()})`
-          );
-        } else {
-          console.log(
-            `⏸️ No timeout set - workflow will pause indefinitely until resumed`
-          );
-        }
-
-        if (options.approvalUrl) {
-          console.log(`🌐 Approval URL: ${options.approvalUrl}?token=${token}`);
-        }
-
         if (!timeoutMs) {
-          console.log(
-            `🔄 Pausing workflow indefinitely - waiting for manual resume...`
-          );
-
           return new Promise(resolve => {
             storePausedWorkflow(token, {
               ...pauseInfo,
               resumeCallback: (resumePayload: any) => {
-                console.log('🔄 Workflow resumed with payload:', resumePayload);
                 resolve({
                   type: 'human_approval',
                   token,
@@ -1109,15 +1052,12 @@ export class WorkflowInstance {
           });
         }
 
-        console.log(`⏰ Waiting for ${options.timeout} for human approval...`);
-
         return new Promise(resolve => {
           let resolved = false;
 
           const timeoutId = setTimeout(() => {
             if (!resolved) {
               resolved = true;
-              console.log(`⏰ Timeout reached - no human approval received`);
               resolve({
                 type: 'human_approval',
                 token,
@@ -1140,7 +1080,6 @@ export class WorkflowInstance {
               if (!resolved) {
                 resolved = true;
                 clearTimeout(timeoutId);
-                console.log('🔄 Workflow resumed with payload:', resumePayload);
                 resolve({
                   type: 'human_approval',
                   token,
@@ -1194,10 +1133,6 @@ export class WorkflowInstance {
       name: `wait_for_event_${eventName}`,
       handler: async (ctx: Context) => {
         // TODO: Implement actual event waiting mechanism
-        console.log(`Waiting for event: ${eventName}`);
-        if (timeout) {
-          console.log(`Timeout: ${timeout}`);
-        }
 
         return {
           type: 'event_wait',
@@ -1243,7 +1178,6 @@ export class WorkflowInstance {
       handler: async (ctx: Context) => {
         const messageStr =
           typeof message === 'function' ? message(ctx) : message;
-        console.log(`[${level || 'info'}] ${messageStr}`);
         return { message: messageStr, level: level || 'info' };
       },
       type: 'step',
@@ -1347,8 +1281,6 @@ export class WorkflowInstance {
       typeof this._cronflowInstance.registerWorkflow === 'function'
     ) {
       await this._cronflowInstance.registerWorkflow(this._workflow);
-    } else {
-      console.log(`Registering workflow: ${this._workflow.id}`);
     }
 
     return Promise.resolve();
