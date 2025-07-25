@@ -633,9 +633,10 @@ advancedWorkflow
   .humanInTheLoop({
     timeout: '24h', // Wait up to 24 hours for approval
     description: 'Approve high-value transaction',
-    onPause: (token) => {
+    onPause: (ctx, token) => {
       console.log('⏸️ Workflow paused for human approval');
       console.log('Approval token:', token);
+      console.log('Transaction amount:', ctx.last.amount);
       // In real implementation, send email/Slack notification
     },
   })
@@ -756,7 +757,7 @@ humanApprovalWorkflow
   .humanInTheLoop({
     timeout: '24h', // Wait up to 24 hours for approval
     description: 'Approve high-value transaction',
-    onPause: (token) => {
+    onPause: (ctx, token) => {
       console.log('🛑 Human approval required');
       console.log('🔑 Approval token:', token);
       console.log('📧 Send this token to approver for manual review');
@@ -878,7 +879,7 @@ indefiniteApprovalWorkflow
   .humanInTheLoop({
     // No timeout - will pause indefinitely until manually resumed
     description: 'Manual approval required for high-value transaction',
-    onPause: (token) => {
+    onPause: (ctx, token) => {
       console.log('🛑 Manual approval required - no timeout set');
       console.log('🔑 Approval token:', token);
       console.log('📧 Send this token to approver for manual review');

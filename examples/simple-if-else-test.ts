@@ -39,8 +39,9 @@ simpleIfWorkflow
   .humanInTheLoop({
     timeout: '1h',
     description: 'Approve high-value transaction',
-    onPause: (token: string) => {
+    onPause: (ctx, token) => {
       console.log(`🛑 Human approval required. Token: ${token}`);
+      console.log(`💰 Transaction amount: $${ctx.last.amount}`);
       console.log('📧 Send this token to approver for manual review');
       console.log(
         '🔄 Use cronflow.resume(token, {approved: true, reason: "Approved"}) to resume'

@@ -229,6 +229,8 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 | `schema`         | `z.ZodObject`            | -        | Zod schema to validate incoming request body                         |
 | `idempotencyKey` | `(ctx) => string`        | -        | Function to extract key from request to prevent duplicate processing |
 | `parseRawBody`   | `boolean`                | `false`  | Whether to parse the raw body for signature validation               |
+| `app`            | `string`                 | -        | Framework name for integration (e.g., 'express', 'fastify')          |
+| `appInstance`    | `any`                    | -        | Framework app instance for integration                               |
 
 #### Example
 
@@ -634,7 +636,7 @@ Pauses the workflow to wait for external human input via an API call.
 
 - `options` (object):
   - `timeout` (string, optional): Maximum time to wait for human input. If not provided, workflow pauses indefinitely until manually resumed.
-  - `onPause` ((token) => void): Function called when workflow pauses
+  - `onPause` ((ctx, token) => void): Function called when workflow pauses, receives context and token
   - `description` (string): Description of what human input is needed
 
 #### Example
@@ -643,8 +645,16 @@ Pauses the workflow to wait for external human input via an API call.
 .humanInTheLoop({
   timeout: '3d', // Optional: wait up to 3 days
   description: 'Approve high-value transaction',
-  onPause: (token) => {
-    sendApprovalEmail(token, ctx.last);
+  onPause: (ctx, token) => {
+    // Access previous step data from context
+    const transactionAmount = ctx.last.amount;
+    const customerId = ctx.steps['validate-transaction'].output.customerId;
+    
+    sendApprovalEmail(token, {
+      amount: transactionAmount,
+      customerId: customerId,
+      approvalUrl: `https://approvals.example.com/approve?token=${token}`
+    });
   }
 })
 .step('process-approval', (ctx) => {

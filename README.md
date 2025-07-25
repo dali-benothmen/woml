@@ -160,9 +160,10 @@ conditionalWorkflow
   .humanInTheLoop({
     timeout: '24h', // Optional: wait up to 24 hours
     description: 'Approve high-value transaction',
-    onPause: token => {
+    onPause: (ctx, token) => {
       console.log(`🛑 Human approval required. Token: ${token}`);
-      // Send email/Slack notification with the token
+      console.log(`💰 Transaction amount: $${ctx.last.amount}`);
+      // Send email/Slack notification with the token and context data
     },
   })
   .step('process-approval', async ctx => {
@@ -354,6 +355,17 @@ frameworkWorkflow
   })
   .step('process-data', async ctx => {
     return { processed: true, result: ctx.last.message.toUpperCase() };
+  })
+  .humanInTheLoop({
+    timeout: '1h',
+    description: 'Approve data processing',
+    onPause: (ctx, token) => {
+      console.log(`🛑 Approval required for: ${ctx.last.result}`);
+      console.log(`🔑 Token: ${token}`);
+    },
+  })
+  .step('finalize', async ctx => {
+    return { finalized: true, approved: ctx.last.approved };
   });
 
 // Manual trigger endpoint
@@ -366,18 +378,8 @@ app.post('/api/trigger-workflow', async (req, res) => {
   }
 });
 
-// Workflow status endpoint
-app.get('/api/workflows/:runId', async (req, res) => {
-  try {
-    const status = await cronflow.inspect(req.params.runId);
-    res.json({ success: true, status });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
 app.listen(3000, async () => {
-  await cronflow.start(); // Register workflows with Rust core
+  await cronflow.start(); // Start cronflow engine
   console.log('🚀 Server running on port 3000');
 });
 ```

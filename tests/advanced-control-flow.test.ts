@@ -168,8 +168,9 @@ try {
     .humanInTheLoop({
       timeout: '1h',
       description: 'Approve high-value transaction',
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(`Human approval required. Token: ${token}`);
+        console.log(`Transaction amount: $${ctx.last.amount}`);
       },
     })
     .step('process-approval', ctx => {

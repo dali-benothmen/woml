@@ -72,6 +72,17 @@ frameworkWorkflow
       timestamp: new Date().toISOString(),
     };
   })
+  .humanInTheLoop({
+    timeout: '5m', // 5 minute timeout for testing
+    description: 'Approve message processing',
+    onPause: (ctx, token) => {
+      console.log(`🛑 Human approval required`);
+      console.log(`🔑 Approval token: ${token}`);
+      console.log(`📧 Context token: ${ctx.token}`);
+      console.log('📧 Send this token to approver for manual review');
+      console.log(`🔄 Use POST /api/resume-workflow with token to resume`);
+    },
+  })
   .step('process-data', async ctx => {
     console.log('📝 Step 2: Processing data');
     console.log('   Previous step result:', ctx.last);
@@ -109,9 +120,10 @@ frameworkWorkflow
   .humanInTheLoop({
     timeout: '5m', // 5 minute timeout for testing
     description: 'Approve message processing',
-    onPause: token => {
+    onPause: (ctx, token) => {
       console.log(`🛑 Human approval required`);
       console.log(`🔑 Approval token: ${token}`);
+      console.log(`📧 Context token: ${ctx.token}`);
       console.log('📧 Send this token to approver for manual review');
       console.log(`🔄 Use POST /api/resume-workflow with token to resume`);
     },
@@ -138,25 +150,11 @@ frameworkWorkflow
   })
   .endIf()
   .step('finalize', async ctx => {
-    console.log('📝 Step 3: Finalizing');
-    console.log('   Previous step result:', ctx.last);
-
-    // Get the process-data step output safely
-    const processDataStep = ctx.steps['process-data'];
-    const originalMessage =
-      processDataStep?.output?.originalMessage || 'Unknown';
-    const processedMessage =
-      processDataStep?.output?.processedMessage || 'Unknown';
-
+    console.log('🎯 Finalizing workflow');
     return {
-      final: true,
-      summary: {
-        originalMessage,
-        processedMessage,
-        approvalStatus: ctx.last.status || 'no-approval-needed',
-        totalSteps: 3,
-        completedAt: new Date().toISOString(),
-      },
+      finalized: true,
+      message: ctx.last.message || 'Workflow completed',
+      timestamp: new Date().toISOString(),
     };
   });
 
@@ -448,13 +446,15 @@ app.listen(PORT, async () => {
     `📊 Get paused workflow: GET http://localhost:${PORT}/api/paused-workflows/:token`
   );
 
-  // Register workflow with Rust core
+  // Register workflow with Rust core BEFORE starting the server
   try {
-    console.log('\n🔧 Registering workflow with Rust core...');
-    await cronflow.start(); // This registers all workflows with the Rust core (no webhook server)
-    console.log('✅ Workflow registered successfully');
+    console.log('\n🔧 Starting cronflow engine...');
+    await cronflow.start(); // This registers all workflows with the Rust core
+    console.log('✅ Cronflow engine started successfully');
+    console.log('✅ All workflows registered and ready to handle requests');
   } catch (error) {
-    console.error('❌ Failed to register workflow:', error);
+    console.error('❌ Failed to start cronflow engine:', error);
+    process.exit(1); // Exit if we can't start the engine
   }
 
   console.log('\n📝 Test Instructions:');

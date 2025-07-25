@@ -39,9 +39,10 @@ resumeTestWorkflow
   .humanInTheLoop({
     timeout: '30s', // Short timeout for testing
     description: 'Approve the message processing',
-    onPause: (token: string) => {
+    onPause: (ctx, token) => {
       console.log(`🛑 Human approval required`);
       console.log(`🔑 Approval token: ${token}`);
+      console.log(`📧 Message: ${ctx.last.message}`);
       console.log(
         '📧 This workflow will wait for manual resume or timeout in 30 seconds'
       );

@@ -2568,6 +2568,7 @@ export const cronflow = {
   deleteWorkflowState,
   getStateStats,
   cleanupExpiredState,
+  registerStepHandler,
   VERSION,
   // Event handling functions
   registerEventListener,

@@ -157,4 +157,5 @@ export interface Context {
   step_status?: 'completed' | 'failed';
   step_error?: string;
   background?: boolean;
+  token?: string | null; // Token for human-in-the-loop scenarios, null by default
 }

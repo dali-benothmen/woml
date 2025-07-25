@@ -18,8 +18,9 @@ try {
     .humanInTheLoop({
       timeout: '1h',
       description: 'Approve high-value transaction',
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(`🛑 Human approval required. Token: ${token}`);
+        console.log(`💰 Transaction amount: $${ctx.last.amount}`);
       },
     })
     .step('process-approval', ctx => {
@@ -52,7 +53,7 @@ try {
       timeout: '24h',
       description: 'Approve high-value order',
       approvalUrl: 'https://approvals.example.com/approve',
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(
           `🛑 Approval URL: https://approvals.example.com/approve?token=${token}`
         );
@@ -96,7 +97,7 @@ try {
         previousApprovals: 3,
         department: 'finance',
       },
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(`🛑 VIP approval required with metadata`);
         console.log(
           `📋 Metadata: VIP customer, medium risk, finance department`
@@ -167,7 +168,7 @@ try {
         riskScore: 'high',
         autoEscalate: true,
       },
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(`🛑 Senior approval required for high-value transaction`);
         console.log(
           `🔗 Approval URL: https://approvals.company.com/senior-approve?token=${token}`
@@ -218,7 +219,7 @@ try {
       timeout: '24h',
       description: 'Manager approval for large deal',
       metadata: { approvalType: 'manager', level: 1 },
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(`🛑 Manager approval required for large deal`);
       },
     })
@@ -233,7 +234,7 @@ try {
       timeout: '48h',
       description: 'Director approval for large deal',
       metadata: { approvalType: 'director', level: 2 },
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(`🛑 Director approval required for large deal`);
       },
     })
@@ -279,7 +280,7 @@ try {
       timeout: '5s', // Short timeout for testing
       description: 'Quick approval test with timeout',
       metadata: { testMode: true, expectedTimeout: true },
-      onPause: token => {
+      onPause: (ctx, token) => {
         console.log(`🛑 Quick approval test - will timeout in 5 seconds`);
         console.log(`⏰ Created at: ${new Date().toISOString()}`);
         console.log(

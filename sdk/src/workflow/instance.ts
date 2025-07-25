@@ -995,7 +995,7 @@ export class WorkflowInstance {
 
   humanInTheLoop(options: {
     timeout?: string; // Make timeout optional
-    onPause: (token: string) => void;
+    onPause: (ctx: Context, token: string) => void;
     description: string;
     approvalUrl?: string;
     metadata?: Record<string, any>;
@@ -1011,8 +1011,14 @@ export class WorkflowInstance {
       id: `human_${token}`,
       name: 'human_in_the_loop',
       handler: async (ctx: Context) => {
-        // Call the onPause function with the token
-        options.onPause(token);
+        // Include the token in the context
+        const enhancedContext = {
+          ...ctx,
+          token,
+        };
+
+        // Call the onPause function with the enhanced context and token
+        options.onPause(enhancedContext, token);
 
         const pauseInfo = {
           token,
