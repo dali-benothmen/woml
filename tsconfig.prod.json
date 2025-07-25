@@ -1,9 +1,10 @@
 {
+  "extends": "./tsconfig.json",
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2020",
     "module": "ES2022",
     "moduleResolution": "node",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": "./",
     "strict": true,
@@ -11,9 +12,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "types": ["node"],
+    "declarationMap": false,
+    "sourceMap": false,
+    "removeComments": true,
     "noEmit": false,
     "baseUrl": ".",
     "paths": {
@@ -21,21 +22,22 @@
       "@node-cronflow/services": ["services"],
       "@node-cronflow/core": ["core"]
     },
-    "downlevelIteration": true
+    "downlevelIteration": true,
+    "importHelpers": true,
+    "importsNotUsedAsValues": "remove",
+    "isolatedModules": true
   },
-  "include": [
-    "src/**/*",
-    "sdk/**/*",
-    "services/**/*",
-    "tests/**/*",
-    "examples/**/*"
-  ],
+  "include": ["src/**/*", "sdk/**/*", "services/**/*"],
   "exclude": [
     "node_modules",
     "dist",
     "packages",
     "core/**/*.rs",
+    "tests/**/*",
     "examples/**/*",
-    "tests/**/*"
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/*.test.js",
+    "**/*.spec.js"
   ]
 }

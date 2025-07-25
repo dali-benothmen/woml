@@ -80,3 +80,5 @@ core-refactoring.md
 tmp/
 temp/ 
 benchmarks/
+package-optimized
+dist-optimized

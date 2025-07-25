@@ -22,11 +22,22 @@
       "aarch64-unknown-linux-gnu",
       "aarch64-unknown-linux-musl",
       "armv7-unknown-linux-gnueabihf",
-      "x86_64-unknown-freebsd"
-    ]
+      "x86_64-unknown-freebsd",
+      "aarch64-pc-windows-msvc"
+    ],
+    "packageName": "node-cronflow-core"
   },
   "scripts": {
-    "build": "bun run build:sdk && bun run build:services && bun run build:main && bun run generate:types",
+    "build": "tsc",
+    "build:prod": "tsc --project tsconfig.prod.json",
+    "build:prod:complete": "rm -rf dist dist-optimized package-optimized && npm run build:prod && npm run build:copy-core",
+    "build:clean": "rm -rf dist dist-optimized package-optimized && npm run build",
+    "build:copy-core": "mkdir -p dist/core && cp core/core.node dist/core/",
+    "build:complete": "npm run build:clean && npm run build:copy-core",
+    "compress:dist": "node scripts/compress-dist.js",
+    "optimize:npm": "node scripts/optimize-for-npm.js",
+    "optimize:package": "node scripts/npm-package-optimizer.js",
+    "build:optimized": "npm run build:complete && npm run optimize:npm",
     "build:sdk": "bun build sdk/index.ts --outdir dist/sdk --target node --format cjs",
     "build:services": "bun build services/index.ts --outdir dist/services --target node --format cjs",
     "build:main": "bun build src/index.ts --outdir dist --target node --format cjs",
@@ -34,7 +45,12 @@
     "build:core:debug": "cd core && napi build --package-json-path ../package.json",
     "build:all": "bun run build:core && bun run build",
     "generate:types": "node scripts/generate-types.js",
-    "prepublishOnly": "bun run build:all && bun run test:package",
+    "prepublishOnly": "npm run build:optimized && npm run test && npm run check:bundle-size",
+    "postpublish": "npm run clean",
+    "analyze": "bundle-analyzer dist/**/*.js",
+    "analyze:size": "du -sh dist/ && find dist/ -name '*.js' -exec wc -c {} + | tail -1",
+    "size:check": "npm run build:clean && npm run analyze:size",
+    "check:bundle-size": "node scripts/check-bundle-size.js",
     "test": "bun test",
     "test:run": "bun test --run",
     "test:ui": "bun test --ui",
@@ -122,12 +138,15 @@
     "@typescript-eslint/parser": "^7.0.0",
     "@vitest/coverage-v8": "^2.0.0",
     "@vitest/ui": "^2.0.0",
+    "bundle-analyzer": "^0.0.6",
     "eslint": "^8.57.0",
     "express": "^5.1.0",
     "prettier": "^3.2.0",
     "semantic-release": "^23.0.0",
+    "tar": "^7.4.3",
     "typescript": "^5.3.0",
-    "vitest": "^2.0.0"
+    "vitest": "^2.0.0",
+    "webpack-bundle-analyzer": "^4.10.2"
   },
   "publishConfig": {
     "access": "public"

@@ -12,7 +12,6 @@ export type {
   StepDefinition,
   RetryConfig,
   TriggerDefinition,
-  Cronflow,
   WorkflowInstance,
 } from '../sdk/index';
 
@@ -22,7 +21,7 @@ export {
   getServiceDefinition,
   listServiceDefinitions,
 } from '../services/index';
-export type { ServiceDefinition, ServiceInstance } from '../services/index';
+export type { ServiceDefinition, ConfiguredService } from '../services/index';
 
 // Default export for backward compatibility
 export { cronflow as default } from '../sdk/index';

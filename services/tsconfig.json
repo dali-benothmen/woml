@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2020",
     "module": "ES2022",
     "moduleResolution": "node",
     "lib": ["ES2022", "DOM"],
@@ -12,7 +12,8 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
+    "sourceMap": false,
+    "removeComments": true,
     "types": ["node"],
     "noEmit": false,
     "downlevelIteration": true
