@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+### Patch Changes
+
+- 47c76ea: Small fix
+
 ## 0.1.1
 
 ### Patch Changes
