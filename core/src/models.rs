@@ -767,32 +767,32 @@ impl ParallelStepGroup {
     /// Check if all steps in the group are completed
     pub fn is_completed(&self) -> bool {
         self.step_ids.iter().all(|step_id| {
-            self.results.contains_key(step_id) && 
-            matches!(self.results[step_id].status, StepStatus::Completed)
+            self.results.contains_key(step_id.as_str()) && 
+            matches!(self.results[step_id.as_str()].status, StepStatus::Completed)
         })
     }
     
     /// Check if any step in the group failed
     pub fn has_failures(&self) -> bool {
         self.step_ids.iter().any(|step_id| {
-            self.results.contains_key(step_id) && 
-            matches!(self.results[step_id].status, StepStatus::Failed)
+            self.results.contains_key(step_id.as_str()) && 
+            matches!(self.results[step_id.as_str()].status, StepStatus::Failed)
         })
     }
     
     /// Get the number of completed steps
     pub fn completed_count(&self) -> usize {
         self.step_ids.iter().filter(|step_id| {
-            self.results.contains_key(step_id) && 
-            matches!(self.results[step_id].status, StepStatus::Completed)
+            self.results.contains_key(step_id.as_str()) && 
+            matches!(self.results[step_id.as_str()].status, StepStatus::Completed)
         }).count()
     }
     
     /// Get the number of failed steps
     pub fn failed_count(&self) -> usize {
         self.step_ids.iter().filter(|step_id| {
-            self.results.contains_key(step_id) && 
-            matches!(self.results[step_id].status, StepStatus::Failed)
+            self.results.contains_key(step_id.as_str()) && 
+            matches!(self.results[step_id.as_str()].status, StepStatus::Failed)
         }).count()
     }
     

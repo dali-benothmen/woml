@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 # Optimize for Bun compatibility
 [profile.release]
-opt-level = 3
+opt-level = "z"  # Optimize for size instead of speed
 lto = true
 codegen-units = 1
 panic = "abort"

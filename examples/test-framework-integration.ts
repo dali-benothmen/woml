@@ -304,7 +304,7 @@ app.get('/api/workflows/:runId', async (req, res) => {
 });
 
 // Resume workflow endpoint
-app.post('/api/resume-workflow', async (req, res) => {
+app.post('/api/resume-workflow', async (req: any, res: any) => {
   try {
     const { token, payload } = req.body;
 
@@ -346,7 +346,7 @@ app.post('/api/resume-workflow', async (req, res) => {
 });
 
 // List paused workflows endpoint
-app.get('/api/paused-workflows', async (req, res) => {
+app.get('/api/paused-workflows', async (req: any, res: any) => {
   try {
     const pausedWorkflows = listPausedWorkflows();
 
@@ -377,7 +377,7 @@ app.get('/api/paused-workflows', async (req, res) => {
 });
 
 // Get specific paused workflow endpoint
-app.get('/api/paused-workflows/:token', async (req, res) => {
+app.get('/api/paused-workflows/:token', async (req: any, res: any) => {
   try {
     const { token } = req.params;
     const workflow = getPausedWorkflow(token);

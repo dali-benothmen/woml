@@ -1566,6 +1566,16 @@ function convertToRustFormat(workflow: WorkflowDefinition): any {
           }
         : { max_attempts: 1, backoff_ms: 1000 },
       depends_on: [],
+      is_control_flow: false,
+      condition_type: null,
+      condition_expression: null,
+      control_flow_block: null,
+      parallel: null,
+      parallel_group_id: null,
+      parallel_step_count: null,
+      race: null,
+      for_each: null,
+      pause: null,
     })),
     triggers: workflow.triggers.map(trigger => {
       if (trigger.type === 'webhook') {

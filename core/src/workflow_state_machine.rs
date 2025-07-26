@@ -1052,21 +1052,22 @@ impl WorkflowStateMachine {
         let mut results = Vec::new();
         
         for step_id in &group.step_ids {
+            // Simulate step execution first (before any mutable borrows)
+            let result = self.simulate_parallel_step_execution(step_id)?;
+            let result_clone = result.clone();
+            results.push(result);
+            
             if let Some(step_state) = self.step_states.get_mut(step_id) {
                 // Mark step as running
                 step_state.mark_running();
                 
-                // Simulate step execution (this will be replaced with actual execution)
-                let result = self.simulate_parallel_step_execution(step_id)?;
-                results.push(result);
-                
                 // Mark step as completed
-                step_state.mark_completed(result.clone());
-                
-                // Update the parallel group with the result
-                if let Some(group) = self.parallel_groups.get_mut(&group.group_id) {
-                    group.add_step_result(step_id.clone(), result);
-                }
+                step_state.mark_completed(result_clone.clone());
+            }
+            
+            // Update the parallel group with the result
+            if let Some(group) = self.parallel_groups.get_mut(&group.group_id) {
+                group.add_step_result(step_id.clone(), result_clone);
             }
         }
         
