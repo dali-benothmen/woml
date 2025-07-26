@@ -80,5 +80,5 @@ jobs:
         with:
           publish: bun run release
         env:
-          GTH_TOKEN: ${{ secrets.GTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GTH_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
