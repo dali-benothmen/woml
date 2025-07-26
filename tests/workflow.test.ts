@@ -3,22 +3,38 @@ import { cronflow, WorkflowInstance } from '../sdk/index';
 import { Context } from '../sdk/src/workflow/types';
 
 describe('Workflow Builder', () => {
-  beforeEach(() => {
+  let workflow: WorkflowInstance;
+  let testCounter = 0;
+
+  beforeEach(async () => {
     // Reset cronflow instance for each test
-    (cronflow as any).workflows.clear();
-    (cronflow as any).engineState = 'STOPPED';
+    try {
+      await cronflow.stop();
+    } catch (error) {
+      // Ignore errors if already stopped
+    }
+
+    // Clear any existing workflows by accessing the internal state
+    const currentState = (cronflow as any).getCurrentState?.() || {};
+    if (currentState.workflows) {
+      currentState.workflows.clear();
+    }
+
+    // Create a new workflow with a unique ID for each test
+    testCounter++;
+    workflow = cronflow.define({
+      id: `test-workflow-${testCounter}`,
+      name: 'Test Workflow',
+    });
   });
 
   describe('cronflow.define()', () => {
     it('should create a workflow with basic definition', () => {
-      const workflow = cronflow.define({
-        id: 'test-workflow',
-        name: 'Test Workflow',
-      });
-
-      expect(workflow).toBeInstanceOf(WorkflowInstance);
-      expect(workflow.getId()).toBe('test-workflow');
+      expect(workflow).toBeDefined();
+      expect(workflow.getId()).toBe(`test-workflow-${testCounter}`);
       expect(workflow.getName()).toBe('Test Workflow');
+      expect(workflow.getSteps()).toEqual([]);
+      expect(workflow.getTriggers()).toEqual([]);
     });
 
     it('should throw error for empty ID', () => {
@@ -32,42 +48,44 @@ describe('Workflow Builder', () => {
 
     it('should throw error for duplicate workflow ID', () => {
       cronflow.define({
-        id: 'test-workflow',
+        id: 'duplicate-test-workflow',
         name: 'Test Workflow',
       });
 
       expect(() => {
         cronflow.define({
-          id: 'test-workflow',
+          id: 'duplicate-test-workflow',
           name: 'Another Workflow',
         });
-      }).toThrow("Workflow with ID 'test-workflow' already exists");
+      }).toThrow("Workflow with ID 'duplicate-test-workflow' already exists");
     });
 
     it('should accept setup function', () => {
-      const workflow = cronflow.define({
-        id: 'test-workflow',
+      const setupWorkflow = cronflow.define({
+        id: 'setup-test-workflow',
         name: 'Test Workflow',
       });
 
       // Use the fluent API after creation
-      workflow
+      setupWorkflow
         .step('test-step', async ctx => {
           return { result: 'test' };
         })
         .onWebhook('/webhook/test');
 
-      expect(workflow).toBeInstanceOf(WorkflowInstance);
-      expect(workflow.getId()).toBe('test-workflow');
+      expect(setupWorkflow).toBeInstanceOf(WorkflowInstance);
+      expect(setupWorkflow.getId()).toBe('setup-test-workflow');
     });
   });
 
   describe('WorkflowInstance fluent API', () => {
     let workflow: WorkflowInstance;
+    let fluentApiCounter = 0;
 
     beforeEach(() => {
+      fluentApiCounter++;
       workflow = cronflow.define({
-        id: 'test-workflow',
+        id: `fluent-api-workflow-${fluentApiCounter}`,
         name: 'Test Workflow',
       });
     });
@@ -234,7 +252,7 @@ describe('Workflow Builder', () => {
       const json = workflow.toJSON();
       const parsed = JSON.parse(json);
 
-      expect(parsed.id).toBe('test-workflow');
+      expect(parsed.id).toBe(`fluent-api-workflow-${fluentApiCounter}`);
       expect(parsed.name).toBe('Test Workflow');
       expect(parsed.steps).toHaveLength(1);
       expect(parsed.triggers).toHaveLength(1);

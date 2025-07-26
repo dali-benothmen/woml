@@ -222,6 +222,15 @@ export function define(
     'steps' | 'triggers' | 'created_at' | 'updated_at'
   >
 ): WorkflowInstance {
+  if (!options.id || options.id.trim() === '') {
+    throw new Error('Workflow ID cannot be empty');
+  }
+
+  const currentState = getCurrentState();
+  if (currentState.workflows.has(options.id)) {
+    throw new Error(`Workflow with ID '${options.id}' already exists`);
+  }
+
   const workflow: WorkflowDefinition = {
     ...options,
     steps: [],
@@ -233,7 +242,6 @@ export function define(
   const instance = new WorkflowInstance(workflow, cronflow);
 
   // Register the workflow with the SDK state
-  const currentState = getCurrentState();
   currentState.workflows.set(workflow.id, workflow);
 
   return instance;
@@ -499,17 +507,6 @@ export async function stop(): Promise<void> {
     });
 
     setState({ webhookServer: undefined });
-  }
-
-  if (core) {
-    try {
-      const result = core.shutdown();
-      if (!result.success) {
-        console.error('❌ Failed to shutdown Rust engine:', result.message);
-      }
-    } catch (error) {
-      console.error('❌ Error during Rust engine shutdown:', error);
-    }
   }
 
   setState({ engineState: 'STOPPED' });

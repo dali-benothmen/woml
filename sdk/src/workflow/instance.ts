@@ -1186,7 +1186,7 @@ export class WorkflowInstance {
           typeof message === 'function' ? message(ctx) : message;
         return { message: messageStr, level: level || 'info' };
       },
-      type: 'step',
+      type: 'action',
       options: { background: true },
     };
 
