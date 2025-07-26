@@ -4,7 +4,7 @@
 
 ![Cronflow Logo](cronflow.jpeg)
 
-**The World's Fastest Code-First Workflow Automation Engine**
+**The Fastest Code-First Workflow Automation Engine**
 
 [![npm version](https://img.shields.io/npm/v/cronflow.svg)](https://www.npmjs.com/package/cronflow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -36,8 +36,6 @@ _Built with Rust + Bun for unparalleled performance_
 ## 🚀 Overview
 
 **Cronflow** is a powerful, lightweight, and extensible library for building, orchestrating, and running complex workflows directly in your Node.js and TypeScript applications. It's designed for developers who want the power of platforms like n8n, Zapier, or Temporal.io, but with the flexibility, version control, and expressiveness of a code-first environment.
-
-Think of it as the operating system for your backend automation—from simple cron jobs to sophisticated, event-driven AI agents.
 
 ### 🎯 What Makes Cronflow Revolutionary?
 

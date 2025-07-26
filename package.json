@@ -23,7 +23,11 @@
     }
   },
   "files": [
-    "dist/**/*",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/sdk/**/*",
+    "dist/services/**/*",
+    "dist/core/**/*",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -46,9 +50,9 @@
     "packageName": "cronflow"
   },
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/",
-    "build:dev": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/",
-    "build:prod": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
+    "build:dev": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
+    "build:prod": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
     "build:analyze": "bun run build:prod && bun run scripts/analyze-bundle.js",
     "build:core": "cd core && napi build --release --package-json-path ../package.json",
     "build:core:debug": "cd core && napi build --package-json-path ../package.json",
