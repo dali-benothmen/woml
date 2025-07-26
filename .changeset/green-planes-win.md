@@ -1,0 +1,5 @@
+---
+'cronflow': patch
+---
+
+Small fix
