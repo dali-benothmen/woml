@@ -26,14 +26,4 @@ export default defineConfig({
       ],
     },
   },
-  resolve: {
-    alias: {
-      '@node-cronflow/core': resolve(__dirname, './packages/core/src/index.ts'),
-      '@node-cronflow/sdk': resolve(__dirname, './packages/sdk/src/index.ts'),
-      '@node-cronflow/services': resolve(
-        __dirname,
-        './packages/services/src/index.ts'
-      ),
-    },
-  },
 });

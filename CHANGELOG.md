@@ -4,7 +4,7 @@
 
 ### Minor Changes
 
-- Initial release of Node-Cronflow v0.1.0
+- Initial release of Cronflow v0.1.0
   - Complete workflow automation engine with Rust core
   - TypeScript SDK with comprehensive workflow definitions
   - Webhook and scheduled trigger support

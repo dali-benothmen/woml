@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { cronflow, VERSION } from '../sdk/index';
 
-describe('Node-Cronflow SDK', () => {
+describe('Cronflow SDK', () => {
   it('should export correct version', () => {
     expect(VERSION).toBe('0.1.0');
   });

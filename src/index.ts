@@ -1,7 +1,7 @@
 /**
- * Node-Cronflow Main Entry Point
+ * Cronflow Main Entry Point
  *
- * This is the main entry point for the node-cronflow package.
+ * This is the main entry point for the cronflow package.
  * It exports the SDK and services for use by consumers.
  */
 

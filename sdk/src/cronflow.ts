@@ -268,7 +268,7 @@ export async function start(options?: StartOptions): Promise<void> {
   }
 
   setState({ engineState: 'STARTING' });
-  console.log('Starting Node-Cronflow engine...');
+  console.log('Starting Cronflow engine...');
 
   if (!currentState.dbPath) {
     const defaultDbPath = './cronflow.db';
@@ -1858,7 +1858,7 @@ export async function benchmark(
   } = options;
 
   if (verbose) {
-    console.log('🚀 Node-Cronflow Performance Benchmark');
+    console.log('🚀 Cronflow Performance Benchmark');
     console.log('='.repeat(60));
     console.log(`📊 Running ${iterations} iterations...`);
     console.log(`⏱️  Start Time: ${new Date().toISOString()}`);

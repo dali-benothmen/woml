@@ -16,11 +16,6 @@
     "types": ["node"],
     "noEmit": false,
     "baseUrl": ".",
-    "paths": {
-      "@node-cronflow/sdk": ["sdk"],
-      "@node-cronflow/services": ["services"],
-      "@node-cronflow/core": ["core"]
-    },
     "downlevelIteration": true
   },
   "include": [

@@ -1,11 +1,11 @@
-# Contributing to Node-Cronflow
+# Contributing to Cronflow
 
-Thank you for your interest in contributing to Node-Cronflow! This document outlines the development workflow, contribution guidelines, and how to work with our versioning system.
+Thank you for your interest in contributing to Cronflow! This document outlines the development workflow, contribution guidelines, and how to work with our versioning system.
 
 ## 🚀 Quick Start
 
 1. **Fork** the repository
-2. **Clone** your fork: `git clone https://github.com/YOUR_USERNAME/node-cronflow.git`
+2. **Clone** your fork: `git clone https://github.com/dali-benothmen/cronflow.git`
 3. **Install dependencies**: `bun install`
 4. **Build the project**: `bun run build:all`
 5. **Run tests**: `bun test`
@@ -24,7 +24,7 @@ Thank you for your interest in contributing to Node-Cronflow! This document outl
 ```bash
 # Clone the repository
 git clone https://github.com/dali-benothmen/cronflow.git
-cd node-cronflow
+cd cronflow
 
 # Install dependencies
 bun install
@@ -121,7 +121,7 @@ After running `bunx changeset`, a file like `.changeset/blue-cats-smile.md` will
 
 ```markdown
 ---
-'node-cronflow': patch
+'cronflow': patch
 ---
 
 fix: resolve webhook parsing issue in high-traffic scenarios
@@ -209,14 +209,14 @@ Closes #123
 ```typescript
 // Good
 const config = {
-  name: 'node-cronflow',
+  name: 'cronflow',
   version: '0.1.0',
   description: 'Workflow automation engine',
 };
 
 // Bad
 const config = {
-  name: 'node-cronflow',
+  name: 'cronflow',
   version: '0.1.0',
   description: 'Workflow automation engine',
 };
@@ -411,8 +411,8 @@ When requesting features, please include:
 
 ## 📄 License
 
-By contributing to Node-Cronflow, you agree that your contributions will be licensed under the MIT License.
+By contributing to Cronflow, you agree that your contributions will be licensed under the MIT License.
 
 ---
 
-Thank you for contributing to Node-Cronflow! 🚀
+Thank you for contributing to Cronflow! 🚀

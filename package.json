@@ -1,5 +1,5 @@
 {
-  "name": "node-cronflow",
+  "name": "cronflow",
   "version": "0.1.0",
   "private": false,
   "description": "The Fastest Code-First Workflow Automation Engine",
@@ -43,7 +43,7 @@
       "x86_64-unknown-freebsd",
       "aarch64-pc-windows-msvc"
     ],
-    "packageName": "node-cronflow-core"
+    "packageName": "cronflow"
   },
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/",
@@ -101,8 +101,7 @@
     "cron"
   ],
   "author": {
-    "name": "Node-Cronflow Team",
-    "email": "team@node-cronflow.com"
+    "name": "Mohamed Ali Ben Othmen"
   },
   "license": "MIT",
   "repository": {
