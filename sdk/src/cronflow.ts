@@ -2,13 +2,41 @@ import { WorkflowInstance, WorkflowDefinition, Context } from './workflow';
 import { createStateManager } from './state';
 import * as http from 'http';
 import * as url from 'url';
+import path from 'path';
 
 // Import the Rust addon
 let core: any;
 try {
-  core = require('../../core/core.node');
+  // Simple and automatic path resolution
+  // Get the current file's directory and find the package root
+  const currentDir = __dirname;
+
+  // Walk up the directory tree to find where dist/core/core.node exists
+  let searchDir = currentDir;
+  let corePath = '';
+
+  while (searchDir !== path.dirname(searchDir)) {
+    const testPath = path.join(searchDir, 'dist/core/core.node');
+    try {
+      require.resolve(testPath);
+      corePath = testPath;
+      break;
+    } catch {
+      searchDir = path.dirname(searchDir);
+    }
+  }
+
+  if (corePath) {
+    core = require(corePath);
+    console.log(`✅ Rust core loaded from: ${corePath}`);
+  } else {
+    throw new Error('Could not find core.node in dist/core/core.node');
+  }
 } catch (error) {
   console.warn('⚠️  Rust core not available, running in simulation mode');
+  console.warn(
+    `   Error: ${error instanceof Error ? error.message : String(error)}`
+  );
   core = null;
 }
 
