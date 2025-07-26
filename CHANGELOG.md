@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+### Patch Changes
+
+- 6d8d1d3: implement dynamic path resolution for Rust core addon
+- 8b3a18b: update reamde
+
 ## 0.1.0
 
 ### Minor Changes
