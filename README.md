@@ -430,45 +430,28 @@ customWorkflow.onWebhook('/api/webhooks/with-middleware', {
 - **Lightning-fast execution** with microsecond response times
 - **Rust-powered core engine** for maximum performance
 - **Bun runtime** for 15-29% faster JavaScript execution
-- **Optimized state management** with minimal memory overhead
 - **Smart caching** with 92.5% improvement in database queries
-- **Connection pooling** with 70.1% improvement in database operations
 
 ### 💻 Developer Experience
 
 - **Full TypeScript support** with compile-time validation
 - **Fluent API** for intuitive workflow definition
 - **Hot reload** for instant development feedback
-- **Comprehensive testing** with programmatic workflow testing
 - **Zero dependencies** - everything included in one package
-- **IDE support** with IntelliSense and autocomplete
 
 ### 🔧 Workflow Capabilities
 
-- **Conditional logic** with if/else statements
-- **Parallel execution** for concurrent step processing
+- **Conditional logic** with if/else statements and parallel execution
 - **Background actions** that don't block workflow execution
 - **Error handling** with circuit breakers and retry logic
-- **Lifecycle hooks** for workflow and step-level callbacks
 - **Schema validation** with Zod integration
 
 ### 🌐 Integration & Deployment
 
-- **Framework agnostic** - works with Express, Fastify, Koa, Hapi, NestJS, Next.js
-- **Custom framework support** with flexible registration
+- **Framework agnostic** - works with Express, Fastify, Koa, NestJS, Next.js
 - **Webhook triggers** with automatic endpoint creation
-- **Manual triggers** for programmatic workflow execution
-- **Status inspection** for real-time workflow monitoring
 - **Production ready** with enterprise-grade reliability
-
-### 🛡️ Reliability & Monitoring
-
-- **Circuit breakers** for fault tolerance
-- **Retry mechanisms** with exponential backoff
 - **Built-in monitoring** with real-time metrics
-- **Health checks** for system status
-- **Error tracking** with detailed error context
-- **Performance metrics** for optimization insights
 
 ---
 
