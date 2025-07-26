@@ -1,5 +1,5 @@
 {
-  "name": "cronflow",
+  "name": "node-cronflow",
   "version": "0.1.0",
   "private": false,
   "description": "The Fastest Code-First Workflow Automation Engine",
