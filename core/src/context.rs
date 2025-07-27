@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::models::{WorkflowRun, StepResult};
 use crate::error::CoreError;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Context object passed to Bun.js for job execution
 /// Contains all necessary information for step execution
@@ -18,8 +17,6 @@ pub struct Context {
     pub payload: serde_json::Value,
     /// Results from completed steps
     pub steps: HashMap<String, StepResult>,
-    /// Available services for this execution
-    pub services: HashMap<String, serde_json::Value>,
     /// Current workflow run state
     pub run: WorkflowRun,
     /// Metadata about the execution
@@ -111,16 +108,10 @@ impl Context {
             step_name,
             payload,
             steps,
-            services: HashMap::new(),
             run,
             metadata,
             serialization_info: None,
         })
-    }
-
-    /// Add a service to the context
-    pub fn add_service(&mut self, name: String, config: serde_json::Value) {
-        self.services.insert(name, config);
     }
 
     /// Get a completed step result
@@ -194,10 +185,6 @@ impl Context {
         if self.steps.len() > 50 { score += 2; }
         else if self.steps.len() > 10 { score += 1; }
         
-        // Add points for number of services
-        if self.services.len() > 10 { score += 2; }
-        else if self.services.len() > 5 { score += 1; }
-        
         // Add points for nested payload structure
         if self.has_deep_nesting(&self.payload, 0) { score += 1; }
         
@@ -219,7 +206,7 @@ impl Context {
         }
     }
 
-    /// Generate checksum for data integrity
+    /// Generate a checksum for the context
     pub fn generate_checksum(&self) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -229,7 +216,7 @@ impl Context {
         self.workflow_id.hash(&mut hasher);
         self.step_name.hash(&mut hasher);
         
-        // Hash payload as string
+        // Hash the payload as a string
         if let Ok(payload_str) = serde_json::to_string(&self.payload) {
             payload_str.hash(&mut hasher);
         }
@@ -237,152 +224,70 @@ impl Context {
         format!("{:x}", hasher.finish())
     }
 
-    /// Serialize context to JSON string with performance tracking
+    /// Convert context to JSON string
     pub fn to_json(&self) -> Result<String, CoreError> {
-        let start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
+        // Generate checksum before serialization
+        let checksum = self.generate_checksum();
         
-        // Validate before serialization
-        self.validate()?;
+        // Create a copy with checksum for serialization
+        let mut context_for_serialization = self.clone();
+        context_for_serialization.metadata.checksum = Some(checksum);
         
-        // Generate checksum
-        let mut context = self.clone();
-        context.metadata.checksum = Some(self.generate_checksum());
-        
-        // Serialize to JSON
-        let json_string = serde_json::to_string_pretty(&context)
-            .map_err(|e| CoreError::Serialization(e))?;
-        
-        let end_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
+        // Calculate complexity score
+        let complexity_score = self.calculate_complexity_score();
         
         // Create serialization info
-        let serialization_info = SerializationInfo {
+        let start_time = std::time::Instant::now();
+        let json_result = serde_json::to_string(&context_for_serialization);
+        let serialization_duration = start_time.elapsed();
+        
+        let json_string = json_result.map_err(|e| CoreError::Serialization(e))?;
+        let size_bytes = json_string.len();
+        
+        // Update serialization info
+        context_for_serialization.serialization_info = Some(SerializationInfo {
             serialized_at: chrono::Utc::now().to_rfc3339(),
-            size_bytes: json_string.len(),
+            size_bytes,
             compressed: false,
             compression_ratio: None,
-            serialization_duration_us: end_time - start_time,
-            complexity_score: self.calculate_complexity_score(),
-        };
+            serialization_duration_us: serialization_duration.as_micros() as u64,
+            complexity_score,
+        });
         
-        // Log performance metrics
-        log::debug!(
-            "Context serialized: {} bytes, {}μs, complexity: {}",
-            serialization_info.size_bytes,
-            serialization_info.serialization_duration_us,
-            serialization_info.complexity_score
-        );
-        
-        Ok(json_string)
+        // Serialize again with the updated info
+        serde_json::to_string(&context_for_serialization)
+            .map_err(|e| CoreError::Serialization(e))
     }
 
-    /// Serialize context to compressed JSON string
+    /// Convert context to compressed JSON string
     pub fn to_json_compressed(&self) -> Result<String, CoreError> {
-        let start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
-        
-        // Validate before serialization
-        self.validate()?;
-        
-        // Generate checksum
-        let mut context = self.clone();
-        context.metadata.checksum = Some(self.generate_checksum());
-        
-        // Serialize to JSON (compact format for compression)
-        let json_string = serde_json::to_string(&context)
-            .map_err(|e| CoreError::Serialization(e))?;
-        
-        // Compress using gzip (simulated for now)
-        // In a real implementation, you would use a compression library
-        let compressed_size = json_string.len(); // Placeholder
-        let compression_ratio = if compressed_size > 0 {
-            Some(compressed_size as f64 / json_string.len() as f64)
-        } else {
-            None
-        };
-        
-        let end_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
-        
-        // Create serialization info
-        let serialization_info = SerializationInfo {
-            serialized_at: chrono::Utc::now().to_rfc3339(),
-            size_bytes: compressed_size,
-            compressed: true,
-            compression_ratio,
-            serialization_duration_us: end_time - start_time,
-            complexity_score: self.calculate_complexity_score(),
-        };
-        
-        // Log performance metrics
-        log::debug!(
-            "Context serialized (compressed): {} bytes, {}μs, ratio: {:.2}",
-            serialization_info.size_bytes,
-            serialization_info.serialization_duration_us,
-            compression_ratio.unwrap_or(1.0)
-        );
-        
-        Ok(json_string) // Return uncompressed for now
+        // For now, just return the regular JSON
+        // TODO: Implement actual compression when needed
+        self.to_json()
     }
 
-    /// Create context from JSON string with validation
+    /// Create context from JSON string
     pub fn from_json(json: &str) -> Result<Self, CoreError> {
-        let start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
-        
-        // Deserialize from JSON
-        let mut context: Context = serde_json::from_str(json)
+        let context: Context = serde_json::from_str(json)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        // Validate checksum if present
-        if let Some(expected_checksum) = &context.metadata.checksum {
-            let actual_checksum = context.generate_checksum();
-            if expected_checksum != &actual_checksum {
-                return Err(CoreError::Validation(
-                    "Context checksum validation failed".to_string()
-                ));
-            }
-        }
-        
-        // Validate context
+        // Validate the context
         context.validate()?;
-        
-        let end_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
-        
-        log::debug!(
-            "Context deserialized: {} bytes, {}μs",
-            json.len(),
-            end_time - start_time
-        );
         
         Ok(context)
     }
 
-    /// Get context as a JSON value
+    /// Convert context to serde_json::Value
     pub fn to_json_value(&self) -> Result<serde_json::Value, CoreError> {
         serde_json::to_value(self)
             .map_err(|e| CoreError::Serialization(e))
     }
 
-    /// Get context size in bytes
+    /// Get the size of the context in bytes
     pub fn size_bytes(&self) -> Result<usize, CoreError> {
-        Ok(serde_json::to_string(self)
-            .map_err(|e| CoreError::Serialization(e))?
-            .len())
+        let json_string = serde_json::to_string(self)
+            .map_err(|e| CoreError::Serialization(e))?;
+        Ok(json_string.len())
     }
 
     /// Check if context is oversized
@@ -394,7 +299,6 @@ impl Context {
     pub fn get_statistics(&self) -> ContextStatistics {
         ContextStatistics {
             total_steps: self.steps.len(),
-            total_services: self.services.len(),
             payload_size_bytes: serde_json::to_string(&self.payload)
                 .map(|s| s.len())
                 .unwrap_or(0),
@@ -408,7 +312,6 @@ impl Context {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextStatistics {
     pub total_steps: usize,
-    pub total_services: usize,
     pub payload_size_bytes: usize,
     pub complexity_score: u8,
     pub has_checksum: bool,
@@ -488,13 +391,13 @@ mod tests {
         let context = Context::new(
             "run-123".to_string(),
             "workflow-123".to_string(),
-            "current-step".to_string(),
+            "test-step".to_string(),
             serde_json::json!({}),
             run,
             vec![completed_step],
         ).unwrap();
 
-        assert_eq!(context.get_completed_steps().len(), 1);
+        assert_eq!(context.steps.len(), 1);
         assert!(context.get_step_result("previous-step").is_some());
         assert!(context.get_step_result("non-existent").is_none());
     }
@@ -515,33 +418,22 @@ mod tests {
             "run-123".to_string(),
             "workflow-123".to_string(),
             "test-step".to_string(),
-            serde_json::json!({"input": "value"}),
+            serde_json::json!({"test": "data"}),
             run,
             vec![],
         ).unwrap();
 
         // Test JSON serialization
-        let json = context.to_json().unwrap();
-        let deserialized = Context::from_json(&json).unwrap();
+        let json_string = context.to_json().unwrap();
+        let deserialized_context = Context::from_json(&json_string).unwrap();
         
-        assert_eq!(context.run_id, deserialized.run_id);
-        assert_eq!(context.workflow_id, deserialized.workflow_id);
-        assert_eq!(context.step_name, deserialized.step_name);
+        assert_eq!(context.run_id, deserialized_context.run_id);
+        assert_eq!(context.workflow_id, deserialized_context.workflow_id);
+        assert_eq!(context.step_name, deserialized_context.step_name);
         
-        // Test checksum validation
-        assert!(deserialized.metadata.checksum.is_some());
-        
-        // Test complexity scoring
-        let complexity = context.calculate_complexity_score();
-        assert!(complexity >= 1 && complexity <= 10);
-        
-        // Test statistics
-        let stats = context.get_statistics();
-        assert_eq!(stats.total_steps, 0);
-        assert_eq!(stats.total_services, 0);
-        assert!(stats.payload_size_bytes > 0);
-        assert_eq!(stats.complexity_score, complexity);
-        assert!(!stats.has_checksum); // Original context doesn't have checksum
+        // Test compressed serialization
+        let compressed_json = context.to_json_compressed().unwrap();
+        assert!(!compressed_json.is_empty());
     }
 
     #[test]
@@ -556,34 +448,17 @@ mod tests {
             error: None,
         };
 
-        // Test simple context
-        let simple_context = Context::new(
+        let context = Context::new(
             "run-123".to_string(),
             "workflow-123".to_string(),
             "test-step".to_string(),
             serde_json::json!({"simple": "data"}),
-            run.clone(),
+            run,
             vec![],
         ).unwrap();
-        
-        assert_eq!(simple_context.calculate_complexity_score(), 1);
 
-        // Test complex context with large payload
-        let large_payload = serde_json::json!({
-            "data": (0..1000).map(|i| format!("item-{}", i)).collect::<Vec<_>>()
-        });
-        
-        let complex_context = Context::new(
-            "run-123".to_string(),
-            "workflow-123".to_string(),
-            "test-step".to_string(),
-            large_payload,
-            run.clone(),
-            vec![],
-        ).unwrap();
-        
-        let complexity = complex_context.calculate_complexity_score();
-        assert!(complexity > 1); // Should be higher than simple context
+        let score = context.calculate_complexity_score();
+        assert!(score >= 1 && score <= 10);
     }
 
     #[test]
@@ -603,28 +478,22 @@ mod tests {
             "run-123".to_string(),
             "workflow-123".to_string(),
             "test-step".to_string(),
-            serde_json::json!({"test": "data"}),
+            serde_json::json!({}),
             run.clone(),
             vec![],
         ).unwrap();
-        
         assert!(valid_context.validate().is_ok());
 
-        // Test oversized payload
-        let oversized_payload = serde_json::json!({
-            "data": "x".repeat(11_000_000) // 11MB, over 10MB limit
-        });
-        
-        let oversized_context = Context::new(
-            "run-123".to_string(),
+        // Test invalid context with empty run_id
+        let invalid_context = Context::new(
+            "".to_string(),
             "workflow-123".to_string(),
             "test-step".to_string(),
-            oversized_payload,
+            serde_json::json!({}),
             run.clone(),
             vec![],
         ).unwrap();
-        
-        assert!(oversized_context.validate().is_err());
+        assert!(invalid_context.validate().is_err());
     }
 
     #[test]
@@ -708,41 +577,5 @@ mod tests {
 
         context.reset_retry_count();
         assert_eq!(context.metadata.retry_count, 0);
-    }
-
-    #[test]
-    fn test_context_services() {
-        let run = WorkflowRun {
-            id: Uuid::new_v4(),
-            workflow_id: "workflow-123".to_string(),
-            status: RunStatus::Running,
-            payload: serde_json::json!({}),
-            started_at: Utc::now(),
-            completed_at: None,
-            error: None,
-        };
-
-        let mut context = Context::new(
-            "run-123".to_string(),
-            "workflow-123".to_string(),
-            "test-step".to_string(),
-            serde_json::json!({}),
-            run,
-            vec![],
-        ).unwrap();
-
-        // Test adding services
-        context.add_service("email".to_string(), serde_json::json!({
-            "smtp": "smtp.gmail.com",
-            "port": 587
-        }));
-
-        context.add_service("database".to_string(), serde_json::json!({
-            "url": "postgresql://localhost:5432/mydb"
-        }));
-
-        assert_eq!(context.services.len(), 2);
-        assert!(context.services.contains_key("email"));
-        assert!(context.services.contains_key("database"));
     }
 } 

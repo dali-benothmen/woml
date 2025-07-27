@@ -162,7 +162,6 @@ export class TestHarness {
     return {
       payload: this.payload,
       steps: {},
-      services: {},
       run: {
         id: 'test-run',
         workflowId: this.workflow.id,

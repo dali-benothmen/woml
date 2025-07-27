@@ -10,12 +10,11 @@ A comprehensive guide to the cronflow API for building reliable, scalable workfl
 4. [Step & Action Methods](#step--action-methods)
 5. [Control Flow Methods](#control-flow-methods)
 6. [Advanced Control Flow](#advanced-control-flow)
-7. [Service & Integration API](#service--integration-api)
-8. [Testing API](#testing-api)
-9. [Context (ctx) Object](#context-ctx-object)
-10. [Engine API](#engine-api)
-11. [Configuration Options](#configuration-options)
-12. [Examples](#examples)
+7. [Testing API](#testing-api)
+8. [Context (ctx) Object](#context-ctx-object)
+9. [Engine API](#engine-api)
+10. [Configuration Options](#configuration-options)
+11. [Examples](#examples)
 
 ---
 
@@ -41,7 +40,6 @@ Defines a new, isolated Workflow instance with its configuration, services, and 
 | `name`        | `string`              | ❌       | A human-readable name (e.g., "Order Processor")                                  |
 | `description` | `string`              | ❌       | A longer description of the workflow's purpose                                   |
 | `tags`        | `string[]`            | ❌       | An array of tags for organization (e.g., ['ecommerce', 'critical'])              |
-| `services`    | `ConfiguredService[]` | ❌       | An array of pre-configured service instances available in `ctx.services`         |
 | `hooks`       | `object`              | ❌       | Global lifecycle hooks for every run of this workflow                            |
 | `timeout`     | `string \| number`    | ❌       | Maximum duration for the entire workflow run (e.g., '10m')                       |
 | `concurrency` | `number`              | ❌       | Maximum number of concurrent runs allowed (1 ensures sequential execution)       |
@@ -89,7 +87,6 @@ const orderWorkflow = cronflow.define({
   name: "Order Processor",
   description: "Processes incoming orders with payment validation",
   tags: ["ecommerce", "finance", "critical"],
-  services: [stripeService, slackService, emailService], // Pre-configured services
   concurrency: 10,
   timeout: "5m",
   rateLimit: {
@@ -104,17 +101,9 @@ const orderWorkflow = cronflow.define({
   hooks: {
     onSuccess: (ctx) => {
       console.log(`✅ Workflow ${ctx.run.id} completed successfully`);
-      ctx.services.slack.sendMessage(
-        "#success",
-        `Order processing completed for run ${ctx.run.id}`
-      );
     },
     onFailure: (ctx) => {
       console.error(`❌ Run ${ctx.run.id} failed!`, ctx.error);
-      ctx.services.slack.sendMessage(
-        "#alerts",
-        `Order processing failed for run ${ctx.run.id}: ${ctx.error?.message}`
-      );
     },
   },
 });
@@ -693,73 +682,6 @@ Pauses the workflow until a specific event is emitted.
 
 ---
 
-## Service & Integration API
-
-### `defineService(options)`
-
-The factory function for creating new, reusable integrations.
-
-#### Parameters
-
-| Property      | Type                                                  | Required | Description                                      |
-| ------------- | ----------------------------------------------------- | -------- | ------------------------------------------------ |
-| `id`          | `string`                                              | ✅       | A unique, kebab-case identifier (e.g., 'resend') |
-| `name`        | `string`                                              | ✅       | The display name (e.g., "Resend")                |
-| `description` | `string`                                              | ✅       | A short description                              |
-| `version`     | `string`                                              | ✅       | The semantic version (e.g., '1.0.0')             |
-| `schema`      | `object`                                              | ❌       | Zod schemas for config and auth                  |
-| `setup`       | `({ config, auth, engine }) => { actions, triggers }` | ✅       | Function that initializes the service            |
-
-#### Example
-
-```typescript
-// in services/resend.ts
-import { defineService } from "cronflow";
-import { z } from "zod";
-
-export const resendServiceTemplate = defineService({
-  id: "resend",
-  name: "Resend",
-  description: "Email delivery service",
-  version: "1.0.0",
-  schema: {
-    auth: z.object({
-      apiKey: z.string(),
-    }),
-  },
-  setup: ({ auth }) => {
-    const resend = new Resend(auth.apiKey);
-
-    return {
-      actions: {
-        send: async (params: { to: string; subject: string; html: string }) => {
-          return await resend.emails.send(params);
-        },
-      },
-    };
-  },
-});
-```
-
-### `.withConfig(config)`
-
-A method on a service template that creates a configured, ready-to-use instance.
-
-#### Example
-
-```typescript
-// in workflows/order-processing/services.ts
-import { resendServiceTemplate } from "../../services/resend";
-
-export const resendService = resendServiceTemplate.withConfig({
-  auth: {
-    apiKey: process.env.RESEND_API_KEY!,
-  },
-});
-```
-
----
-
 ## Testing API
 
 A dedicated API for writing unit and integration tests for your workflows.
@@ -845,7 +767,6 @@ The context object is passed to every step function and contains all the data an
 | -------------- | -------- | ------------------------------------------------------ |
 | `ctx.payload`  | `any`    | Data from the trigger that started the workflow        |
 | `ctx.steps`    | `object` | Outputs from all previously completed steps            |
-| `ctx.services` | `object` | Configured service instances for the workflow          |
 | `ctx.run`      | `object` | Metadata about the current run (`runId`, `workflowId`) |
 | `ctx.state`    | `object` | Persistent state shared across workflow runs           |
 | `ctx.last`     | `any`    | Output from the previous step (convenience property)   |
@@ -1043,15 +964,10 @@ export const orderProcessingWorkflow = cronflow.define({
   id: "v1-order-processing",
   name: "Order Fulfillment Workflow",
   tags: ["ecommerce", "critical"],
-  services: [stripeService, slackService, jiraService, resendService],
   concurrency: 20,
   hooks: {
     onFailure: (ctx) => {
       console.error(`[Workflow Failed] Run ID: ${ctx.run.id}`, ctx.error);
-      ctx.services.slack.sendMessage({
-        channel: "#ops-alerts",
-        text: `🚨 **Order workflow failed!**\nRun ID: \`${ctx.run.id}\`\nError: ${ctx.error?.message}`,
-      });
     },
   },
 });
@@ -1069,67 +985,42 @@ orderProcessingWorkflow
       throw new Error("Missing Stripe signature.");
     }
 
-    const event = ctx.services.stripe.webhooks.constructEvent(
-      ctx.trigger.rawBody,
-      signature
-    );
-
-    if (event.type !== "checkout.session.completed") {
-      return ctx.cancel({ reason: `Ignoring event type: ${event.type}` });
-    }
-
-    return event.data.object;
+    // In a real implementation, you would validate the signature here
+    return { validated: true, eventType: "checkout.session.completed" };
   })
 
   .step("fetch-order-and-user", async (ctx) => {
-    const checkoutSession = ctx.last;
-    const orderId = checkoutSession.metadata?.orderId;
-
-    if (!orderId) throw new Error("Missing orderId in webhook metadata.");
-
-    const order = await db.order.findUnique({
-      where: { id: orderId },
-      include: { user: true },
-    });
-
-    if (!order) throw new Error(`Order ${orderId} not found in database.`);
-    return order;
+    // In a real implementation, you would fetch from database here
+    return {
+      id: "ord_123",
+      totalAmount: 600,
+      user: {
+        email: "customer@example.com",
+        stripeCustomerId: "cus_123",
+      },
+    };
   })
 
   .if("is-high-value-order", (ctx) => ctx.last.totalAmount > 500)
-  .parallel([
-    (ctx) =>
-      ctx.services.stripe.customers.addTag({
-        customerId: ctx.last.user.stripeCustomerId,
-        tag: "vip-customer",
-      }),
-    (ctx) =>
-      ctx.services.slack.sendMessage({
-        channel: "#vip-orders",
-        text: `💎 New VIP Order! Amount: $${ctx.last.totalAmount} from ${ctx.last.user.email}`,
-      }),
-  ])
+  .step("send-vip-notification", async (ctx) => {
+    // In a real implementation, you would send VIP notification here
+    return { notificationSent: true, type: "vip" };
+  })
   .endIf()
 
-  .parallel([
-    (ctx) =>
-      ctx.services.jira.createIssue({
-        project: "FULFILL",
-        title: `Fulfill Order #${ctx.steps["fetch-order-and-user"].output.id}`,
-        description: `Customer: ${ctx.steps["fetch-order-and-user"].output.user.email}`,
-      }),
-    (ctx) =>
-      ctx.services.resend.send({
-        to: ctx.steps["fetch-order-and-user"].output.user.email,
-        subject: "Your order is confirmed!",
-        html: `<h1>Thank you for your order!</h1><p>Order ID: ${ctx.steps["fetch-order-and-user"].output.id}</p>`,
-      }),
-  ])
+  .step("create-fulfillment-task", async (ctx) => {
+    // In a real implementation, you would create JIRA issue here
+    return { taskCreated: true, taskId: "TASK-123" };
+  })
+
+  .step("send-confirmation-email", async (ctx) => {
+    // In a real implementation, you would send email here
+    return { emailSent: true, emailId: "email_123" };
+  })
 
   .action("log-completion", (ctx) => {
-    const [jiraResult, resendResult] = ctx.last;
     console.log(
-      `Workflow completed. JIRA issue ${jiraResult.key} created. Email sent with ID ${resendResult.id}.`
+      `Workflow completed. Task ${ctx.steps["create-fulfillment-task"].output.taskId} created. Email sent with ID ${ctx.steps["send-confirmation-email"].output.emailId}.`
     );
   });
 ```
@@ -1151,14 +1042,6 @@ describe("Order Processing Workflow", () => {
           },
         },
       })
-      .mockStep("fetch-order-and-user", async (ctx) => ({
-        id: "ord_123",
-        totalAmount: 600,
-        user: {
-          email: "vip@example.com",
-          stripeCustomerId: "cus_123",
-        },
-      }))
       .expectStep("validate-stripe-signature")
       .toSucceed()
       .expectStep("fetch-order-and-user")

@@ -54,16 +54,6 @@ CREATE TABLE IF NOT EXISTS triggers (
     FOREIGN KEY (workflow_id) REFERENCES workflows (id)
 );
 
--- Services table
--- Stores service configurations
-CREATE TABLE IF NOT EXISTS services (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    config TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_id ON workflow_runs (workflow_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs (status);
@@ -73,7 +63,6 @@ CREATE INDEX IF NOT EXISTS idx_step_results_step_id ON step_results (step_id);
 CREATE INDEX IF NOT EXISTS idx_step_results_status ON step_results (status);
 CREATE INDEX IF NOT EXISTS idx_triggers_workflow_id ON triggers (workflow_id);
 CREATE INDEX IF NOT EXISTS idx_triggers_type ON triggers (trigger_type);
-CREATE INDEX IF NOT EXISTS idx_services_name ON services (name);
 
 -- Views for common queries
 CREATE VIEW IF NOT EXISTS v_active_runs AS

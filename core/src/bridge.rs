@@ -3,17 +3,20 @@
 //! This module handles the communication between the Rust core engine
 //! and the Node.js SDK via N-API.
 
-use napi_derive::napi;
-use crate::error::{CoreError, CoreResult};
-use crate::state::StateManager;
-use crate::models::WorkflowDefinition;
-use crate::job::Job;
-use crate::triggers::{TriggerManager, WebhookTrigger, ScheduleTrigger};
-use crate::trigger_executor::TriggerExecutor;
-use crate::dispatcher::Dispatcher;
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use napi_derive::napi;
+use crate::{
+    models::WorkflowDefinition,
+    state::StateManager,
+    trigger_executor::TriggerExecutor,
+    dispatcher::Dispatcher,
+    triggers::TriggerManager,
+    error::CoreError,
+    job::Job,
+};
+use crate::error::CoreResult;
 use uuid::Uuid;
+use log;
 use serde::Serialize;
 
 /// N-API bridge for Node.js communication
@@ -85,7 +88,7 @@ impl Bridge {
         log::info!("Registering webhook trigger for workflow: {} with config: {}", workflow_id, trigger_json);
         
         // Parse trigger JSON
-        let trigger: WebhookTrigger = serde_json::from_str(trigger_json)
+        let trigger: crate::triggers::WebhookTrigger = serde_json::from_str(trigger_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
         // Validate the trigger
@@ -119,7 +122,7 @@ impl Bridge {
         log::info!("Registering schedule trigger for workflow: {} with config: {}", workflow_id, trigger_json);
         
         // Parse trigger JSON
-        let trigger: ScheduleTrigger = serde_json::from_str(trigger_json)
+        let trigger: crate::triggers::ScheduleTrigger = serde_json::from_str(trigger_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
         // Validate the trigger
@@ -223,7 +226,7 @@ impl Bridge {
     }
 
     /// Execute a step with context for Bun.js
-    pub fn execute_step(&self, run_id: &str, step_id: &str, services_json: &str) -> CoreResult<String> {
+    pub fn execute_step(&self, run_id: &str, step_id: &str) -> CoreResult<String> {
         log::info!("Executing step {} for run {}", step_id, run_id);
         
         let run_uuid = uuid::Uuid::parse_str(run_id)
@@ -244,14 +247,6 @@ impl Bridge {
         // Get completed steps for context
         let completed_steps = state_manager.get_completed_steps(&run_uuid)?;
         
-        // Parse services from JSON
-        let services: HashMap<String, serde_json::Value> = if services_json.is_empty() {
-            HashMap::new()
-        } else {
-            serde_json::from_str(services_json)
-                .map_err(|e| CoreError::Serialization(e))?
-        };
-        
         // Create context object for Bun.js execution
         let mut context = crate::context::Context::new(
             run_id.to_string(),
@@ -261,11 +256,6 @@ impl Bridge {
             run.clone(),
             completed_steps,
         )?;
-        
-        // Add services to context
-        for (service_name, service_config) in services {
-            context.add_service(service_name, service_config);
-        }
         
         // Set timeout if configured
         if let Some(timeout) = step.timeout {
@@ -293,7 +283,7 @@ impl Bridge {
     }
 
     /// Execute a job with context for Bun.js
-    pub fn execute_job(&self, job: &Job, _services: HashMap<String, serde_json::Value>) -> CoreResult<String> {
+    pub fn execute_job(&self, job: &Job) -> CoreResult<String> {
         log::info!("Executing job: {}", job.id);
         
         // Get state manager
@@ -319,7 +309,6 @@ impl Bridge {
         let result_json = serde_json::to_string(&result)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        log::info!("Job execution result for {}: {}", job.id, result_json);
         Ok(result_json)
     }
 
@@ -966,7 +955,7 @@ pub fn get_run_status(run_id: String, db_path: String) -> RunStatusResult {
 
 /// Execute a step via N-API
 #[napi]
-pub fn execute_step(run_id: String, step_id: String, db_path: String, services_json: String) -> StepExecutionResult {
+pub fn execute_step(run_id: String, step_id: String, db_path: String) -> StepExecutionResult {
     let bridge = match Bridge::new(&db_path) {
         Ok(bridge) => bridge,
         Err(e) => {
@@ -978,7 +967,7 @@ pub fn execute_step(run_id: String, step_id: String, db_path: String, services_j
         }
     };
 
-    match bridge.execute_step(&run_id, &step_id, &services_json) {
+    match bridge.execute_step(&run_id, &step_id) {
         Ok(result) => {
             StepExecutionResult {
                 success: true,
@@ -1151,14 +1140,13 @@ pub fn execute_step_via_bun(
     }
 }
 
-/// Execute a job function via N-API (enhanced for Task 2.4)
+/// Execute a job function via N-API
 #[napi]
 pub fn execute_job_function(
     job_json: String,
-    services_json: String,
     db_path: String
 ) -> JobExecutionResult {
-    log::info!("Executing job function with job: {}", job_json);
+    log::info!("Executing job function: {}", job_json);
     
     let bridge = match Bridge::new(&db_path) {
         Ok(bridge) => bridge,
@@ -1191,24 +1179,8 @@ pub fn execute_job_function(
         }
     };
     
-    // Parse services from JSON
-    let services: HashMap<String, serde_json::Value> = match serde_json::from_str(&services_json) {
-        Ok(services) => services,
-        Err(e) => {
-            return JobExecutionResult {
-                success: false,
-                job_id: None,
-                run_id: None,
-                step_id: None,
-                context: None,
-                result: None,
-                message: format!("Failed to parse services JSON: {}", e),
-            };
-        }
-    };
-    
     // Execute the job using the bridge
-    match bridge.execute_job(&job, services) {
+    match bridge.execute_job(&job) {
         Ok(result_json) => {
             // Parse the result to extract individual fields
             let result: serde_json::Value = match serde_json::from_str(&result_json) {
@@ -1252,7 +1224,7 @@ pub fn execute_job_function(
 
 /// Execute a job with context via N-API (enhanced for Task 2.4)
 #[napi]
-pub fn execute_job(job_json: String, services_json: String, db_path: String) -> JobExecutionResult {
+pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
     log::info!("Executing job with context: {}", job_json);
     
     let bridge = match Bridge::new(&db_path) {
@@ -1286,23 +1258,7 @@ pub fn execute_job(job_json: String, services_json: String, db_path: String) -> 
         }
     };
     
-    // Parse services from JSON
-    let services: HashMap<String, serde_json::Value> = match serde_json::from_str(&services_json) {
-        Ok(services) => services,
-        Err(e) => {
-            return JobExecutionResult {
-                success: false,
-                job_id: None,
-                run_id: None,
-                step_id: None,
-                context: None,
-                result: None,
-                message: format!("Failed to parse services JSON: {}", e),
-            };
-        }
-    };
-    
-    match bridge.execute_job(&job, services) {
+    match bridge.execute_job(&job) {
         Ok(result_json) => {
             // Parse the result to extract individual fields
             let result: serde_json::Value = match serde_json::from_str(&result_json) {

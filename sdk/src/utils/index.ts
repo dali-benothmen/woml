@@ -1,4 +1,4 @@
-import type { Context, ConfiguredService } from '../workflow/types';
+import type { Context } from '../workflow/types';
 import { createStateWrapper } from '../state';
 
 /**
@@ -74,7 +74,6 @@ export function generateId(prefix: string = 'run'): string {
  * @param payload - The workflow payload
  * @param workflowId - The workflow ID
  * @param runId - The run ID
- * @param services - Array of configured services
  * @param steps - Record of step outputs
  * @param lastOutput - Output from the previous step
  * @param trigger - Trigger information
@@ -85,7 +84,6 @@ export function createContext(
   payload: any,
   workflowId: string,
   runId: string,
-  services: ConfiguredService[] = [],
   steps: Record<string, { output: any }> = {},
   lastOutput: any = null,
   trigger: { headers: Record<string, string>; rawBody?: Buffer } = {
@@ -93,19 +91,12 @@ export function createContext(
   },
   dbPath: string = './cronflow.db'
 ): Context {
-  // Convert services array to services object
-  const servicesObject: Record<string, ConfiguredService> = {};
-  for (const service of services) {
-    servicesObject[service.id] = service;
-  }
-
   // Create state wrapper for persistent state management
   const stateWrapper = createStateWrapper(workflowId, runId, dbPath);
 
   return {
     payload,
     steps,
-    services: servicesObject,
     run: {
       id: runId,
       workflowId,

@@ -6,7 +6,6 @@ export const WorkflowDefinitionSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
-  services: z.array(z.any()).optional(),
   hooks: z
     .object({
       onSuccess: z.function().optional(),

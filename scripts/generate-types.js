@@ -17,7 +17,6 @@ const declarations = {
  */
 
 export * from './sdk/index';
-export * from './services/index';
 
 export { cronflow as default } from './sdk/index';
 `,
@@ -59,39 +58,6 @@ export type TriggerDefinition =
 
 export const cronflow: Cronflow;
 export type { Cronflow, WorkflowInstance };
-`,
-
-  'dist/services/index.d.ts': `/**
- * Node-Cronflow Services
- */
-
-export interface ServiceDefinition<TConfig = any, TInstance = any> {
-  name: string;
-  version: string;
-  configSchema: any;
-  createInstance: (config: TConfig) => TInstance;
-}
-
-export interface ServiceInstance {
-  name: string;
-  version: string;
-  config: any;
-}
-
-export function defineService<TConfig = any, TInstance = any>(
-  name: string,
-  definition: Omit<ServiceDefinition<TConfig, TInstance>, 'name'>
-): ServiceDefinition<TConfig, TInstance>;
-
-export function getServiceDefinition(name: string): ServiceDefinition | undefined;
-
-export function listServiceDefinitions(): string[];
-
-export default {
-  defineService,
-  getServiceDefinition,
-  listServiceDefinitions,
-};
 `,
 };
 

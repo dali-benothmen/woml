@@ -1152,46 +1152,11 @@ export async function executeStep(
   }
 
   try {
-    if (contextJson && contextJson.trim() !== '') {
-      const contextData = JSON.parse(contextJson);
-      const workflowId = contextData.workflow_id || contextData.workflowId;
-
-      if (workflowId) {
-        console.log(
-          `🔄 Executing step function ${stepId} for workflow ${workflowId}`
-        );
-        return await executeStepFunction(
-          stepId,
-          contextJson,
-          workflowId,
-          runId
-        );
-      }
-    }
-
-    const currentState = getCurrentState();
-    const workflow = currentState.workflows.get(stepId.split(':')[0] || '');
-
-    let servicesJson = '{}';
-    if (workflow && workflow.services) {
-      const servicesObject: Record<string, any> = {};
-      for (const service of workflow.services) {
-        servicesObject[service.id] = {
-          id: service.id,
-          name: service.name,
-          version: service.version,
-          config: service.config,
-          auth: service.auth,
-        };
-      }
-      servicesJson = JSON.stringify(servicesObject);
-    }
-
     const result = core.executeStep(
       runId,
       stepId,
-      currentState.dbPath,
-      servicesJson
+      getCurrentState().dbPath,
+      '{}' // Empty services JSON
     );
 
     if (result.success && result.result) {
@@ -1275,30 +1240,11 @@ export async function executeStepFunction(
     const currentState = getCurrentState();
     const workflow = currentState.workflows.get(workflowId);
 
-    let services: Record<string, any> = contextData.services || {};
-    if (workflow && workflow.services) {
-      for (const service of workflow.services) {
-        if (services[service.id]) {
-          services[service.id] = {
-            ...services[service.id],
-            actions: service.actions,
-          };
-        } else {
-          services[service.id] = {
-            id: service.id,
-            name: service.name,
-            version: service.version,
-            config: service.config,
-            auth: service.auth,
-            actions: service.actions,
-          };
-        }
-      }
-    }
+    // Create empty services object since services are no longer supported
+    const services: Record<string, any> = {};
 
     const enhancedContext = createEnhancedContext(
       contextData,
-      services,
       workflowId,
       runId
     );
@@ -1434,7 +1380,6 @@ export async function executeStepFunction(
 
 function createEnhancedContext(
   contextData: any,
-  services: Record<string, any>,
   workflowId: string,
   runId: string
 ): Context {
@@ -1442,7 +1387,6 @@ function createEnhancedContext(
 
   const enhancedContext: Context = {
     ...contextData,
-    services,
     _metadata: {
       ...contextData.metadata,
       complexity_score: complexityScore,
@@ -1465,10 +1409,6 @@ function calculateContextComplexity(contextData: any): number {
   const stepsCount = Object.keys(contextData.steps || {}).length;
   if (stepsCount > 50) score += 2;
   else if (stepsCount > 10) score += 1;
-
-  const servicesCount = Object.keys(contextData.services || {}).length;
-  if (servicesCount > 10) score += 2;
-  else if (servicesCount > 5) score += 1;
 
   if (hasDeepNesting(contextData.payload, 0)) score += 1;
 
@@ -2306,7 +2246,6 @@ export function createValidContext(
   stepName: string,
   payload: any = {},
   steps: Record<string, any> = {},
-  services: Record<string, any> = {},
   stepIndex: number = 0,
   totalSteps: number = 1
 ): string {
@@ -2320,7 +2259,6 @@ export function createValidContext(
     step_name: stepName,
     payload: payload,
     steps: {}, // Empty object for now - StepResult requires complex structure
-    services: services,
     run: {
       id: validRunId,
       workflow_id: workflowId,

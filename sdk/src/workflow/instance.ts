@@ -250,7 +250,6 @@ export class WorkflowInstance {
             step_name: stepToTrigger.name,
             payload: req.body,
             steps: {},
-            services: {},
             run: {
               id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               workflowId: this._workflow.id,
@@ -381,7 +380,6 @@ export class WorkflowInstance {
             step_name: stepToTrigger.name,
             payload: req.body,
             steps: {},
-            services: {},
             run: {
               id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               workflowId: this._workflow.id,

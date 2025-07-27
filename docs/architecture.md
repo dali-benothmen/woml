@@ -121,21 +121,12 @@ The public-facing package that provides the developer experience.
   - Provides fluent API: `.onWebhook()`, `.step()`, `.if()`, `.parallel()`
   - Serializable JSON representation of entire workflow
 
-#### **Service Definitions**
-
-- **Purpose**: Factory functions for creating integrations
-- **Responsibilities**:
-  - `defineService()` for creating service templates
-  - `.withConfig()` for configuring service instances
-  - Type-safe service actions and triggers
-  - Integration with external APIs (Stripe, Slack, etc.)
-
 #### **Task Runner**
 
 - **Role**: Internal callback target for Rust engine
 - **Responsibilities**:
   - Receives job requests via N-API bridge
-  - Re-hydrates context object (`ctx.payload`, `ctx.steps`, `ctx.services`)
+  - Re-hydrates context object (`ctx.payload`, `ctx.steps`)
   - Executes user-defined JavaScript functions
   - Returns results or errors to Rust engine
 
@@ -245,9 +236,10 @@ Each step receives a context object with:
 
 - **`ctx.payload`**: Data from the trigger that started the workflow
 - **`ctx.steps`**: Outputs from all previously completed steps
-- **`ctx.services`**: Configured service instances for the workflow
 - **`ctx.run`**: Metadata about the current run (`runId`, `workflowId`)
 - **`ctx.state`**: Persistent state shared across workflow runs
+- **`ctx.last`**: Output from the previous step (convenience property)
+- **`ctx.trigger`**: Information about what triggered this workflow
 
 ## Key Architectural Benefits
 
@@ -266,7 +258,6 @@ Each step receives a context object with:
 ### **Superior Developer Experience**
 
 - Designed from the ground up to support elegant APIs
-- Includes dependency injection for services (`ctx.services`)
 - Fully integrated testing harness
 - Type-safe throughout with TypeScript
 
@@ -290,7 +281,6 @@ Each step receives a context object with:
 
 - State management and persistence
 - Trigger system (webhooks, schedules, events)
-- Service integration framework
 - Error handling and retry logic
 
 ### **Phase 3: Production Features**

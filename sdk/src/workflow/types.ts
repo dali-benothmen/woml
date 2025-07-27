@@ -1,22 +1,11 @@
 import { z } from 'zod';
 import { SupportedFramework } from './framework-registry';
 
-export interface ConfiguredService {
-  id: string;
-  name: string;
-  version: string;
-  config: any;
-  auth: any;
-  actions: Record<string, (...args: any[]) => any>;
-  triggers?: Record<string, (...args: any[]) => any>;
-}
-
 export interface WorkflowDefinition {
   id: string;
   name?: string;
   description?: string;
   tags?: string[];
-  services?: ConfiguredService[];
   hooks?: {
     onSuccess?: (ctx: Context, stepId?: string | string[]) => void;
     onFailure?: (ctx: Context, stepId?: string | string[]) => void;
@@ -135,7 +124,6 @@ export interface WebhookOptions {
 export interface Context {
   payload: any;
   steps: Record<string, { output: any }>;
-  services: Record<string, ConfiguredService>;
   run: {
     id: string;
     workflowId: string;

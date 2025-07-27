@@ -1,13 +1,5 @@
-import { WorkflowDefinition } from '../workflow/types';
 import { TestHarness, TestAssertionBuilder } from './harness';
-import { Context } from '../workflow/types';
-
-export interface ServiceMock {
-  serviceId: string;
-  actions: Record<string, (...args: any[]) => any | Promise<any>>;
-  config?: any;
-  auth?: any;
-}
+import { WorkflowDefinition, Context } from '../workflow';
 
 export interface TriggerMock {
   type: 'webhook' | 'schedule' | 'manual';
@@ -60,27 +52,16 @@ export interface TestCoverage {
       condition: string;
     }
   >;
-  services: Record<
-    string,
-    {
-      called: boolean;
-      callCount: number;
-      actions: Record<string, { called: boolean; callCount: number }>;
-    }
-  >;
   overall: {
     totalSteps: number;
     executedSteps: number;
     totalBranches: number;
     executedBranches: number;
-    totalServices: number;
-    calledServices: number;
     coveragePercentage: number;
   };
 }
 
 export class AdvancedTestHarness extends TestHarness {
-  private serviceMocks: Map<string, ServiceMock> = new Map();
   private triggerMocks: TriggerMock[] = [];
   private dataGenerator: TestDataGenerator;
   private coverage!: TestCoverage;
@@ -108,41 +89,6 @@ export class AdvancedTestHarness extends TestHarness {
     return super.expectStep(stepName);
   }
 
-  mockService(
-    serviceId: string,
-    actions: Record<string, (...args: any[]) => any | Promise<any>>,
-    config?: any,
-    auth?: any
-  ): AdvancedTestHarness {
-    this.serviceMocks.set(serviceId, {
-      serviceId,
-      actions,
-      config,
-      auth,
-    });
-    return this;
-  }
-
-  mockServiceAction(
-    serviceId: string,
-    actionName: string,
-    returnValue: any
-  ): AdvancedTestHarness {
-    const existingMock = this.serviceMocks.get(serviceId);
-    const actions = existingMock?.actions || {};
-
-    actions[actionName] = async () => returnValue;
-
-    this.serviceMocks.set(serviceId, {
-      serviceId,
-      actions,
-      config: existingMock?.config,
-      auth: existingMock?.auth,
-    });
-
-    return this;
-  }
-
   mockTrigger(
     type: 'webhook' | 'schedule' | 'manual',
     options?: {
@@ -152,13 +98,15 @@ export class AdvancedTestHarness extends TestHarness {
       path?: string;
     }
   ): AdvancedTestHarness {
-    this.triggerMocks.push({
+    const mock: TriggerMock = {
       type,
       payload: options?.payload,
       headers: options?.headers,
       query: options?.query,
       path: options?.path,
-    });
+    };
+
+    this.triggerMocks.push(mock);
     return this;
   }
 
@@ -181,15 +129,12 @@ export class AdvancedTestHarness extends TestHarness {
   }
 
   async run(): Promise<any> {
-    const originalRun = super.run.bind(this);
-    const testRun = await originalRun();
-
+    const testRun = await super.run();
     this.updateCoverage(testRun);
 
     return {
       ...testRun,
       coverage: this.coverage,
-      serviceMocks: Array.from(this.serviceMocks.values()),
       triggerMocks: this.triggerMocks,
     };
   }
@@ -198,14 +143,11 @@ export class AdvancedTestHarness extends TestHarness {
     this.coverage = {
       steps: {},
       branches: {},
-      services: {},
       overall: {
         totalSteps: 0,
         executedSteps: 0,
         totalBranches: 0,
         executedBranches: 0,
-        totalServices: 0,
-        calledServices: 0,
         coveragePercentage: 0,
       },
     };
@@ -216,28 +158,6 @@ export class AdvancedTestHarness extends TestHarness {
         executionCount: 0,
       };
     }
-
-    if (this.workflow.services) {
-      for (const service of this.workflow.services) {
-        this.coverage.services[service.id] = {
-          called: false,
-          callCount: 0,
-          actions: {},
-        };
-
-        if (service.actions) {
-          for (const actionName of Object.keys(service.actions)) {
-            this.coverage.services[service.id].actions[actionName] = {
-              called: false,
-              callCount: 0,
-            };
-          }
-        }
-      }
-    }
-
-    this.coverage.overall.totalSteps = this.workflow.steps.length;
-    this.coverage.overall.totalServices = this.workflow.services?.length || 0;
   }
 
   private updateCoverage(testRun: any): void {
@@ -252,18 +172,9 @@ export class AdvancedTestHarness extends TestHarness {
       }
     }
 
-    for (const serviceId of Object.keys(this.coverage.services)) {
-      this.coverage.services[serviceId].called = true;
-      this.coverage.services[serviceId].callCount++;
-    }
-
     this.coverage.overall.executedSteps = Object.values(
       this.coverage.steps
     ).filter(step => step.executed).length;
-
-    this.coverage.overall.calledServices = Object.values(
-      this.coverage.services
-    ).filter(service => service.called).length;
 
     this.coverage.overall.coveragePercentage =
       (this.coverage.overall.executedSteps / this.coverage.overall.totalSteps) *

@@ -15,18 +15,12 @@
       "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js",
       "require": "./dist/sdk/index.js"
-    },
-    "./services": {
-      "types": "./dist/services/index.d.ts",
-      "import": "./dist/services/index.js",
-      "require": "./dist/services/index.js"
     }
   },
   "files": [
     "dist/index.js",
     "dist/index.d.ts",
     "dist/sdk/**/*",
-    "dist/services/**/*",
     "dist/core/**/*",
     "README.md",
     "LICENSE",
@@ -50,9 +44,9 @@
     "packageName": "cronflow"
   },
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
-    "build:dev": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --sourcemap --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
-    "build:prod": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --external \"*.node\" && bun build services/index.ts --outdir dist/services --target node --format cjs --minify --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
+    "build:dev": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
+    "build:prod": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target",
     "build:analyze": "bun run build:prod && bun run scripts/analyze-bundle.js",
     "build:core": "cd core && napi build --release --package-json-path ../package.json",
     "build:core:debug": "cd core && napi build --package-json-path ../package.json",
@@ -70,8 +64,8 @@
     "test:coverage": "bun test --coverage",
     "test:package": "bun run scripts/test-package.js",
     "test:napi": "bun run tests/napi/bridge-test.js",
-    "lint": "eslint src/**/*.ts sdk/**/*.ts services/**/*.ts",
-    "lint:fix": "eslint src/**/*.ts sdk/**/*.ts services/**/*.ts --fix",
+    "lint": "eslint src/**/*.ts sdk/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts sdk/**/*.ts --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "dev": "bun --watch src/index.ts",
