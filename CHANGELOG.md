@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- 7f972c3: remove service integration from codebase
+
 ## 0.1.2
 
 ### Patch Changes
