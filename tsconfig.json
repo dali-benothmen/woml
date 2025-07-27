@@ -23,7 +23,9 @@
     "sdk/**/*",
     "services/**/*",
     "tests/**/*",
-    "examples/**/*"
+    "examples/**/*",
+    "playground/test-framework-integration.ts",
+    "playground/simple-if-else-test.ts"
   ],
   "exclude": [
     "node_modules",
