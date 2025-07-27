@@ -27,7 +27,7 @@ _Built with Rust + Bun for unparalleled performance_
 - [🎯 Features](#-features)
 - [⚡ Performance Comparison](#-performance-comparison)
 - [📖 API Reference](./docs/api-reference.md)
-- [🎯 Examples](./docs/examples.md)
+- [🎯 Examples](./examples/examples.md)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
 
