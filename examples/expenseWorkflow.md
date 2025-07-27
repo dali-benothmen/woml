@@ -3,7 +3,7 @@
 AI-powered expense processing with smart approval routing and fraud detection
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import express from 'express';
 import { z } from 'zod';
 

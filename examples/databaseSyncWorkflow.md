@@ -3,7 +3,7 @@
 Bulletproof database synchronization with smart error handling
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import express from 'express';
 import { z } from 'zod';
 

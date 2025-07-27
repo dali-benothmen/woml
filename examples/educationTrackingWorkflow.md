@@ -3,7 +3,7 @@
 AI-powered learning analytics with predictive intervention and personalized learning paths
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import express from 'express';
 import { z } from 'zod';
 

@@ -3,7 +3,7 @@
 Instant patient triage with automatic care coordination
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import express from 'express';
 import { z } from 'zod';
 

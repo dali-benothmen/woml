@@ -3,7 +3,7 @@
 AI-powered portfolio analysis with tax-efficient rebalancing and risk management
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import express from 'express';
 import { z } from 'zod';
 

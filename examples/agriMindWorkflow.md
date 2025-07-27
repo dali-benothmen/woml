@@ -3,7 +3,7 @@
 Intelligent agricultural monitoring and optimization system
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import { z } from 'zod';
 
 // Types

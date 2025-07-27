@@ -3,7 +3,7 @@
 High-speed AI content moderation with human-in-the-loop fallback
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import { z } from 'zod';
 
 // Types for better type safety

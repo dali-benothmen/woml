@@ -3,7 +3,7 @@
 High-speed domain auction monitoring and automated bidding system
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import { z } from 'zod';
 
 // Types and Interfaces

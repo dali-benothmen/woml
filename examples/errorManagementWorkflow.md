@@ -3,7 +3,7 @@
 Smart error clustering, impact analysis, and automated response
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import { z } from 'zod';
 
 // Types

@@ -3,7 +3,7 @@
 Real-time transaction monitoring with AI-powered fraud detection and instant response
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import { z } from 'zod';
 
 // Types for better type safety

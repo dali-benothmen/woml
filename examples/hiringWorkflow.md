@@ -3,7 +3,7 @@
 Automated recruitment pipeline with AI screening and human oversight
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import { z } from 'zod';
 
 // Types and Interfaces

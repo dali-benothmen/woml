@@ -3,7 +3,7 @@
 Comprehensive digital life management with intelligent automation
 
 ```typescript
-import { cronflow } from '../sdk/src/cronflow';
+import { cronflow } from 'cronflow';
 import { z } from 'zod';
 
 // Types for better type safety
