@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- e672359: scheduler fixes
+
 ## 0.2.0
 
 ### Minor Changes
