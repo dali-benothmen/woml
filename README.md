@@ -91,292 +91,311 @@ npm install cronflow
 
 ---
 
-## 💻 Usage
+# 💻 Usage
 
-### 🚀 Basic Workflow
+## 🚀 AI-Powered Customer Support Bot
 
-The simplest way to get started with Cronflow:
-
-```typescript
-import { cronflow } from 'cronflow';
-
-const simpleWorkflow = cronflow.define({
-  id: 'simple-webhook-workflow',
-  name: 'Simple Webhook Workflow',
-  description: 'A basic workflow triggered by webhook',
-});
-
-simpleWorkflow
-  .onWebhook('/webhooks/simple')
-  .step('process-webhook', async ctx => {
-    console.log('📥 Received webhook payload:', ctx.payload);
-    return { processed: true, timestamp: new Date().toISOString() };
-  })
-  .action('log-success', ctx => {
-    console.log('✅ Webhook processed successfully');
-  });
-
-cronflow.start();
-```
-
-**Test it:**
-
-```bash
-curl -X POST http://localhost:3000/webhooks/simple \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello Cronflow!"}'
-```
-
-### 🔀 Conditional Workflows (If/Else)
-
-Build intelligent workflows with conditional logic:
+Build an intelligent customer support system that routes tickets, analyzes sentiment, and escalates issues:
 
 ```typescript
 import { cronflow } from 'cronflow';
-import { z } from 'zod';
+import { OpenAI } from 'openai';
 
-const conditionalWorkflow = cronflow.define({
-  id: 'conditional-workflow',
-  name: 'Conditional Processing',
-  description: 'Workflow with if/else logic',
+const supportBot = cronflow.define({
+  id: 'ai-support-bot',
+  name: 'AI Customer Support Automation',
 });
 
-conditionalWorkflow
-  .onWebhook('/webhooks/conditional', {
-    schema: z.object({
-      amount: z.number().positive(),
-      description: z.string().optional(),
-    }),
+supportBot
+  .onWebhook('/support/ticket')
+  .step('analyze-sentiment', async ctx => {
+    const { message, customer_email } = ctx.payload;
+    const sentiment = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [{ role: 'user', content: `Analyze sentiment: ${message}` }],
+    });
+
+    return {
+      sentiment: sentiment.choices[0].message.content,
+      priority: sentiment.includes('angry') ? 'high' : 'normal',
+      customer_email,
+    };
   })
-  .step('check-amount', async ctx => {
-    return { amount: ctx.payload.amount, checked: true };
-  })
-  .if('is-high-value', ctx => ctx.last.amount > 120)
-  .step('process-high-value', async ctx => {
-    return { type: 'high-value', processed: true, amount: ctx.last.amount };
-  })
+  .if('high-priority', ctx => ctx.last.priority === 'high')
   .humanInTheLoop({
-    timeout: '24h', // Optional: wait up to 24 hours
-    description: 'Approve high-value transaction',
+    timeout: '15m',
+    description: 'Urgent: Angry customer needs immediate attention',
     onPause: (ctx, token) => {
-      console.log(`🛑 Human approval required. Token: ${token}`);
-      console.log(`💰 Transaction amount: $${ctx.last.amount}`);
-      // Send email/Slack notification with the token and context data
+      // Slack alert to support team
+      slack.send(`🚨 Escalated ticket: ${ctx.last.customer_email}`);
     },
   })
-  .step('process-approval', async ctx => {
-    if (ctx.last.timedOut) {
-      return { approved: false, reason: 'Timeout' };
-    }
-    return { approved: ctx.last.approved, reason: ctx.last.reason };
+  .else()
+  .step('auto-respond', async ctx => {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        {
+          role: 'user',
+          content: `Generate helpful response for: ${ctx.payload.message}`,
+        },
+      ],
+    });
+
+    await sendEmail(
+      ctx.last.customer_email,
+      response.choices[0].message.content
+    );
+    return { auto_resolved: true };
   })
+  .endIf();
+```
+
+## 🛒 E-commerce Order Processing Pipeline
+
+Handle orders with payment processing, inventory checks, and shipping automation:
+
+```typescript
+const orderPipeline = cronflow.define({
+  id: 'ecommerce-orders',
+  name: 'Smart Order Processing',
+});
+
+orderPipeline
+  .onWebhook('/orders/new')
   .parallel([
     async ctx => {
-      // Validate data
-      return { validation: 'success', amount: ctx.last.amount };
+      // Check inventory
+      const available = await checkInventory(ctx.payload.items);
+      return { inventory_status: available ? 'available' : 'low_stock' };
     },
     async ctx => {
-      // Log transaction
-      return { logged: true, transactionId: `txn_${Date.now()}` };
+      // Process payment
+      const payment = await stripe.charges.create({
+        amount: ctx.payload.total * 100,
+        currency: 'usd',
+        source: ctx.payload.payment_token,
+      });
+      return { payment_id: payment.id, charged: true };
     },
   ])
-  .action('background-notification', async ctx => {
-    // Background action that doesn't block workflow
-    await sendNotification(ctx.last);
+  .if('inventory-available', ctx => ctx.last.inventory_status === 'available')
+  .step('fulfill-order', async ctx => {
+    const shipment = await createShipment(
+      ctx.payload.items,
+      ctx.payload.address
+    );
+    await updateInventory(ctx.payload.items);
+
+    return { tracking_number: shipment.tracking, fulfilled: true };
   })
-  .endIf()
-  .step('final-step', async ctx => {
-    return { final: true, summary: ctx.last };
-  });
+  .action('send-confirmation', async ctx => {
+    await sendEmail(ctx.payload.customer_email, {
+      subject: 'Order Confirmed!',
+      tracking: ctx.last.tracking_number,
+    });
+  })
+  .else()
+  .step('backorder-notification', async ctx => {
+    await sendEmail(ctx.payload.customer_email, {
+      subject: 'Item Backordered',
+      estimated_delivery: '2-3 weeks',
+    });
+    return { backordered: true };
+  })
+  .endIf();
 ```
 
-**Resume a paused workflow:**
+## 📊 Real-Time Data Processing & Alerts
+
+Monitor system metrics and trigger intelligent alerts based on patterns:
 
 ```typescript
-// Resume with approval
-await cronflow.resume('approval_token_123', {
-  approved: true,
-  reason: 'Transaction looks good',
+const monitoringSystem = cronflow.define({
+  id: 'system-monitoring',
+  name: 'Intelligent System Monitoring',
 });
 
-// Resume with rejection
-await cronflow.resume('approval_token_123', {
-  approved: false,
-  reason: 'Amount too high',
-});
+monitoringSystem
+  .onWebhook('/metrics/system')
+  .step('analyze-metrics', async ctx => {
+    const { cpu, memory, disk } = ctx.payload;
 
-// List all paused workflows
-const paused = cronflow.listPausedWorkflows();
-console.log('Paused workflows:', paused);
-```
+    const anomaly_score = calculateAnomalyScore({
+      current: { cpu, memory, disk },
+      historical: await getHistoricalMetrics(),
+    });
 
-### 🎣 Hooks and Lifecycle
-
-Add powerful hooks for workflow lifecycle management:
-
-```typescript
-import { cronflow } from 'cronflow';
-
-const hookedWorkflow = cronflow.define({
-  id: 'hooked-workflow',
-  name: 'Workflow with Hooks',
-  hooks: {
-    onSuccess: (ctx, stepId) => {
-      if (!stepId) {
-        console.log('🎉 Workflow completed successfully!');
-        console.log('Final output:', ctx.last);
-      } else {
-        console.log(`✅ Step ${stepId} completed:`, ctx.step_result);
-      }
+    return {
+      metrics: { cpu, memory, disk },
+      anomaly_score,
+      is_critical: anomaly_score > 0.8,
+    };
+  })
+  .if('critical-alert', ctx => ctx.last.is_critical)
+  .parallel([
+    async ctx => {
+      // Immediate Slack alert
+      await slack.send(
+        `🚨 CRITICAL: Anomaly detected (${ctx.last.anomaly_score})`
+      );
+      return { slack_sent: true };
     },
-    onFailure: (ctx, stepId) => {
-      if (!stepId) {
-        console.log('💥 Workflow failed:', ctx.error);
-      } else {
-        console.log(`❌ Step ${stepId} failed:`, ctx.step_error);
-      }
+    async ctx => {
+      // Auto-scale infrastructure
+      await aws.ec2.runInstances({ MinCount: 2, MaxCount: 2 });
+      return { scaled_up: true };
     },
-  },
-});
-
-hookedWorkflow.onWebhook('/webhooks/hooked').step('process-data', async ctx => {
-  // Your processing logic here
-  return { processed: true };
-});
+  ])
+  .humanInTheLoop({
+    timeout: '5m',
+    description: 'Should we trigger emergency protocols?',
+    onPause: (ctx, token) => {
+      console.log(`🔥 System critical - approval needed: ${token}`);
+    },
+  })
+  .else()
+  .action('log-metrics', async ctx => {
+    await database.metrics.insert(ctx.last.metrics);
+  })
+  .endIf();
 ```
 
-### 🌐 Framework Integration
+## 🤖 Multi-Step AI Agent Workflow
 
-Integrate seamlessly with your existing Express.js, Fastify, or any other framework:
+Create an AI agent that researches, analyzes, and takes action based on findings:
 
 ```typescript
-import { cronflow } from 'cronflow';
+const researchAgent = cronflow.define({
+  id: 'ai-research-agent',
+  name: 'Autonomous Research Agent',
+});
+
+researchAgent
+  .onWebhook('/research/topic')
+  .step('gather-information', async ctx => {
+    const { topic, depth } = ctx.payload;
+
+    // Multi-source research
+    const [webResults, newsResults, academicResults] = await Promise.all([
+      searchWeb(topic),
+      getNewsArticles(topic),
+      getAcademicPapers(topic),
+    ]);
+
+    return {
+      sources: {
+        web: webResults,
+        news: newsResults,
+        academic: academicResults,
+      },
+      topic,
+    };
+  })
+  .step('synthesize-findings', async ctx => {
+    const synthesis = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        {
+          role: 'user',
+          content: `Analyze and synthesize these research findings: ${JSON.stringify(ctx.last.sources)}`,
+        },
+      ],
+    });
+
+    return {
+      analysis: synthesis.choices[0].message.content,
+      confidence: calculateConfidenceScore(ctx.last.sources),
+    };
+  })
+  .if('high-confidence', ctx => ctx.last.confidence > 0.85)
+  .step('take-action', async ctx => {
+    // Auto-publish findings
+    const post = await createBlogPost({
+      title: `Research: ${ctx.last.topic}`,
+      content: ctx.last.analysis,
+    });
+
+    return { published: true, post_id: post.id };
+  })
+  .else()
+  .humanInTheLoop({
+    timeout: '2h',
+    description: 'Review research findings before publishing',
+    onPause: (ctx, token) => {
+      // Send to content team for review
+      sendForReview(ctx.last.analysis, token);
+    },
+  })
+  .endIf();
+```
+
+## 🔌 Framework Integration (Express.js)
+
+Seamlessly integrate with your existing Express.js application:
+
+```typescript
 import express from 'express';
-import { z } from 'zod';
+import { cronflow } from 'cronflow';
 
 const app = express();
 app.use(express.json());
 
-const frameworkWorkflow = cronflow.define({
-  id: 'framework-integration',
-  name: 'Framework Integration Example',
+const userOnboarding = cronflow.define({
+  id: 'user-onboarding',
+  name: 'Smart User Onboarding',
 });
 
-// Express.js integration
-frameworkWorkflow
-  .onWebhook('/api/webhooks/framework-test', {
+// Integrate directly with Express routes
+userOnboarding
+  .onWebhook('/api/users/signup', {
     app: 'express',
     appInstance: app,
     method: 'POST',
-    schema: z.object({
-      message: z.string().min(1),
-      userId: z.string().optional(),
-    }),
   })
-  .step('validate-input', async ctx => {
-    return { validated: true, message: ctx.payload.message };
+  .step('create-user', async ctx => {
+    const user = await User.create(ctx.payload);
+    return { user_id: user.id, email: user.email };
   })
-  .step('process-data', async ctx => {
-    return { processed: true, result: ctx.last.message.toUpperCase() };
-  })
-  .humanInTheLoop({
-    timeout: '1h',
-    description: 'Approve data processing',
-    onPause: (ctx, token) => {
-      console.log(`🛑 Approval required for: ${ctx.last.result}`);
-      console.log(`🔑 Token: ${token}`);
+  .parallel([
+    async ctx => {
+      // Send welcome email
+      await sendWelcomeEmail(ctx.last.email);
+      return { welcome_sent: true };
     },
-  })
-  .step('finalize', async ctx => {
-    return { finalized: true, approved: ctx.last.approved };
+    async ctx => {
+      // Setup user workspace
+      await createUserWorkspace(ctx.last.user_id);
+      return { workspace_ready: true };
+    },
+  ])
+  .action('track-onboarding', async ctx => {
+    analytics.track('user_onboarded', { user_id: ctx.last.user_id });
   });
 
-// Manual trigger endpoint
-app.post('/api/trigger-workflow', async (req, res) => {
-  try {
-    const runId = await cronflow.trigger('framework-integration', req.body);
-    res.json({ success: true, runId });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
+// Manual workflow triggers
+app.post('/api/workflows/trigger/:id', async (req, res) => {
+  const runId = await cronflow.trigger(req.params.id, req.body);
+  res.json({ success: true, runId });
 });
 
 app.listen(3000, async () => {
-  await cronflow.start(); // Start cronflow engine
-  console.log('🚀 Server running on port 3000');
+  await cronflow.start();
+  console.log('🚀 Server with CronFlow automation running');
 });
 ```
-
-### 🔌 Custom Framework Integration
-
-For frameworks not natively supported, use the flexible `registerRoute` approach:
-
-```typescript
-import { cronflow } from 'cronflow';
-
-const customWorkflow = cronflow.define({
-  id: 'custom-framework',
-  name: 'Custom Framework Integration',
-});
-
-// Any framework with custom registration
-customWorkflow
-  .onWebhook('/api/webhooks/custom', {
-    registerRoute: (method, path, handler) => {
-      // Your custom registration logic here
-      myFramework[method.toLowerCase()](path, handler);
-    },
-    method: 'POST',
-  })
-  .step('process-data', async ctx => {
-    return { processed: true };
-  });
-
-// Example with custom middleware
-customWorkflow.onWebhook('/api/webhooks/with-middleware', {
-  registerRoute: (method, path, handler) => {
-    app[method.toLowerCase()](path, (req, res) => {
-      // Custom middleware
-      console.log('Custom middleware executed');
-      req.customData = 'processed by middleware';
-      return handler(req, res);
-    });
-  },
-  method: 'POST',
-});
-```
-
----
 
 ## 🎯 Features
 
-### ⚡ Performance & Speed
+- **🤖 AI Integration**: OpenAI, sentiment analysis, autonomous decision making
+- **⚡ Parallel Processing**: Handle multiple operations simultaneously
+- **🔀 Smart Conditionals**: Dynamic routing based on real-time data
+- **👥 Human-in-the-Loop**: Seamless escalation when AI confidence is low
+- **🌐 Framework Agnostic**: Works with Express, Fastify, Next.js, and more
+- **📊 Real-time Processing**: Handle webhooks, metrics, and events instantly
+- **🎣 Lifecycle Hooks**: Monitor, log, and react to workflow events
 
-- **Lightning-fast execution** with microsecond response times
-- **Rust-powered core engine** for maximum performance
-- **Bun runtime** for 15-29% faster JavaScript execution
-- **Smart caching** with 92.5% improvement in database queries
-
-### 💻 Developer Experience
-
-- **Full TypeScript support** with compile-time validation
-- **Fluent API** for intuitive workflow definition
-- **Hot reload** for instant development feedback
-- **Zero dependencies** - everything included in one package
-
-### 🔧 Workflow Capabilities
-
-- **Conditional logic** with if/else statements and parallel execution
-- **Background actions** that don't block workflow execution
-- **Error handling** with circuit breakers and retry logic
-- **Schema validation** with Zod integration
-
-### 🌐 Integration & Deployment
-
-- **Framework agnostic** - works with Express, Fastify, Koa, NestJS, Next.js
-- **Webhook triggers** with automatic endpoint creation
-- **Production ready** with enterprise-grade reliability
-- **Built-in monitoring** with real-time metrics
+_Each workflow runs in under 2ms with minimal memory footprint - perfect for high-traffic production environments._
 
 ---
 
