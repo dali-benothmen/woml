@@ -104,7 +104,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dali-benothmen/cronflow.git"
+    "url": "git+https://github.com/dali-benothmen/cronflow.git"
   },
   "bugs": {
     "url": "https://github.com/dali-benothmen/cronflow/issues"
