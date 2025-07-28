@@ -1,6 +1,6 @@
 {
   "name": "cronflow",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": false,
   "description": "The Fastest Code-First Workflow Automation Engine",
   "main": "dist/index.js",

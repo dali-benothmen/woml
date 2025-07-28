@@ -29,15 +29,10 @@ try {
 
   if (corePath) {
     core = require(corePath);
-    console.log(`✅ Rust core loaded from: ${corePath}`);
   } else {
     throw new Error('Could not find core.node in dist/core/core.node');
   }
 } catch (error) {
-  console.warn('⚠️  Rust core not available, running in simulation mode');
-  console.warn(
-    `   Error: ${error instanceof Error ? error.message : String(error)}`
-  );
   core = null;
 }
 
@@ -297,19 +292,16 @@ export async function start(options?: StartOptions): Promise<void> {
   }
 
   setState({ engineState: 'STARTING' });
-  console.log('Starting Cronflow engine...');
 
   // Start the Node.js scheduler (only if not already running)
   if (!scheduler.getRunningStatus()) {
     scheduler.start();
   } else {
-    console.log('ℹ️  Scheduler is already running, skipping duplicate start');
   }
 
   if (!currentState.dbPath) {
     const defaultDbPath = './cronflow.db';
     setState({ dbPath: defaultDbPath });
-    console.log(`🔧 Using default database path: ${defaultDbPath}`);
   }
 
   if (core) {
@@ -320,10 +312,6 @@ export async function start(options?: StartOptions): Promise<void> {
           port: options.webhookServer.port || 3000,
           max_connections: options.webhookServer.maxConnections || 1000,
         };
-
-        console.log(
-          `🔧 Configuring webhook server: ${webhookConfig.host}:${webhookConfig.port}`
-        );
 
         // TODO: Expose webhook server configuration through N-API
         // For now, we'll use environment variables as a workaround
@@ -342,14 +330,12 @@ export async function start(options?: StartOptions): Promise<void> {
       for (const workflow of currentState.workflows.values()) {
         await registerWorkflowWithRust(workflow);
       }
-      console.log('✅ All workflows registered with Rust engine');
 
       if (options?.webhookServer) {
         const result = core.startWebhookServer(currentState.dbPath);
         if (!result.success) {
           throw new Error(`Failed to start webhook server: ${result.message}`);
         }
-        console.log('✅ Webhook server started successfully');
 
         const server = http.createServer(async (req, res) => {
           try {
@@ -459,7 +445,6 @@ export async function start(options?: StartOptions): Promise<void> {
                     try {
                       webhookTrigger.options.schema.parse(payload);
                     } catch (schemaError: any) {
-                      console.error('Schema validation failed:', schemaError);
                       res.writeHead(400, {
                         'Content-Type': 'application/json',
                       });
@@ -487,7 +472,6 @@ export async function start(options?: StartOptions): Promise<void> {
                     })
                   );
                 } catch (error) {
-                  console.error('Webhook processing error:', error);
                   res.writeHead(500, { 'Content-Type': 'application/json' });
                   res.end(
                     JSON.stringify({
@@ -508,7 +492,6 @@ export async function start(options?: StartOptions): Promise<void> {
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Not found' }));
           } catch (error) {
-            console.error('HTTP server error:', error);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Internal server error' }));
           }
@@ -524,7 +507,6 @@ export async function start(options?: StartOptions): Promise<void> {
         setState({ webhookServer: server });
       }
     } catch (error) {
-      console.error('❌ Failed to register workflows with Rust engine:', error);
       throw error;
     }
   } else {
@@ -580,7 +562,6 @@ export async function trigger(
       throw new Error(`Failed to trigger workflow: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to trigger workflow ${workflowId}:`, error);
     throw error;
   }
 }
@@ -693,8 +674,6 @@ async function executeWorkflowSteps(
       }
 
       if (step.options?.pause || step.name === 'pause') {
-        console.log(`⏸️  Pause step detected: ${step.name}`);
-
         const context = {
           run_id: runId,
           workflow_id: workflowId,
@@ -753,10 +732,6 @@ async function executeWorkflowSteps(
 
           return;
         } else {
-          console.error(
-            `❌ Pause step ${step.name} failed:`,
-            stepResult.message
-          );
           throw new Error(
             `Pause step ${step.name} failed: ${stepResult.message}`
           );
@@ -805,18 +780,12 @@ async function executeWorkflowSteps(
           completedSteps[step.name] = stepResult.result.output;
           lastExecutedStepIndex = i;
         } else {
-          console.error(
-            `❌ Parallel step ${step.name} failed:`,
-            stepResult.message
-          );
           throw new Error(
             `Parallel step ${step.name} failed: ${stepResult.message}`
           );
         }
         continue;
       }
-
-      console.log(`🔄 Executing regular step: ${step.name}`);
 
       const context = {
         run_id: runId,
@@ -867,25 +836,10 @@ async function executeWorkflowSteps(
                     JSON.stringify(stepContext),
                     workflowId,
                     step.name
-                  ).catch(hookError => {
-                    console.warn(
-                      `⚠️  Background step-level onSuccess hook failed for ${step.name}:`,
-                      hookError
-                    );
-                  });
-                } catch (hookError) {
-                  console.warn(
-                    `⚠️  Background step-level onSuccess hook failed for ${step.name}:`,
-                    hookError
-                  );
-                }
+                  ).catch(hookError => {});
+                } catch (hookError) {}
               }
             } else {
-              console.error(
-                `❌ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} failed in background:`,
-                stepResult.message
-              );
-
               const onFailureHandler = getHookHandler('onFailure');
               if (onFailureHandler) {
                 try {
@@ -901,27 +855,12 @@ async function executeWorkflowSteps(
                     JSON.stringify(stepContext),
                     workflowId,
                     step.name
-                  ).catch(hookError => {
-                    console.warn(
-                      `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
-                      hookError
-                    );
-                  });
-                } catch (hookError) {
-                  console.warn(
-                    `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
-                    hookError
-                  );
-                }
+                  ).catch(hookError => {});
+                } catch (hookError) {}
               }
             }
           })
           .catch(error => {
-            console.error(
-              `❌ ${step.type === 'action' ? 'Action' : 'Step'} ${step.name} failed in background:`,
-              error
-            );
-
             const onFailureHandler = getHookHandler('onFailure');
             if (onFailureHandler) {
               try {
@@ -937,26 +876,13 @@ async function executeWorkflowSteps(
                   JSON.stringify(stepContext),
                   workflowId,
                   step.name
-                ).catch(hookError => {
-                  console.warn(
-                    `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
-                    hookError
-                  );
-                });
-              } catch (hookError) {
-                console.warn(
-                  `⚠️  Background step-level onFailure hook failed for ${step.name}:`,
-                  hookError
-                );
-              }
+                ).catch(hookError => {});
+              } catch (hookError) {}
             }
           });
 
         // For background steps/actions, we don't wait for completion and don't store results
         // The workflow continues immediately to the next step
-        console.log(
-          `⏭️  Continuing workflow execution while ${step.type === 'action' ? 'action' : 'step'} ${step.name} runs in background`
-        );
         continue;
       }
 
@@ -970,7 +896,6 @@ async function executeWorkflowSteps(
       if (stepResult.success && stepResult.result) {
         completedSteps[step.name] = stepResult.result.output;
         lastExecutedStepIndex = i; // Update the last executed step index
-        console.log(`✅ Step ${step.name} completed successfully`);
 
         const onSuccessHandler = getHookHandler('onSuccess');
         if (onSuccessHandler) {
@@ -987,16 +912,9 @@ async function executeWorkflowSteps(
               workflowId,
               step.name
             );
-          } catch (hookError) {
-            console.warn(
-              `⚠️  Step-level onSuccess hook failed for step ${step.name}:`,
-              hookError
-            );
-          }
+          } catch (hookError) {}
         }
       } else {
-        console.error(`❌ Step ${step.name} failed:`, stepResult.message);
-
         const onFailureHandler = getHookHandler('onFailure');
         if (onFailureHandler) {
           try {
@@ -1012,21 +930,13 @@ async function executeWorkflowSteps(
               workflowId,
               step.name
             );
-          } catch (hookError) {
-            console.warn(
-              `⚠️  Step-level onFailure hook failed for step ${step.name}:`,
-              hookError
-            );
-          }
+          } catch (hookError) {}
         }
 
         throw new Error(`Step ${step.name} failed: ${stepResult.message}`);
       }
     }
-
-    console.log(`✅ Workflow steps executed successfully for run ${runId}`);
   } catch (error) {
-    console.error(`❌ Error executing workflow steps:`, error);
     throw error;
   }
 }
@@ -1035,7 +945,6 @@ export async function inspect(runId: string): Promise<any> {
   const currentState = getCurrentState();
 
   if (!core) {
-    console.log(`⚠️  Simulation: Inspecting run: ${runId}`);
     return {
       id: runId,
       status: 'simulation',
@@ -1053,19 +962,15 @@ export async function inspect(runId: string): Promise<any> {
       throw new Error(`Failed to inspect run: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to inspect run ${runId}:`, error);
     throw error;
   }
 }
 
 export async function cancelRun(runId: string): Promise<void> {
-  console.log(`Cancelling run: ${runId}`);
   // TODO: Implement run cancellation
 }
 
 export async function publishEvent(name: string, payload: any): Promise<void> {
-  console.log(`📡 Publishing event: ${name}`, payload);
-
   const currentState = getCurrentState();
 
   currentState.eventHistory.push({
@@ -1081,13 +986,8 @@ export async function publishEvent(name: string, payload: any): Promise<void> {
   const listeners = currentState.eventListeners.get(name) || [];
 
   if (listeners.length === 0) {
-    console.log(`ℹ️  No workflows listening to event: ${name}`);
     return;
   }
-
-  console.log(
-    `🚀 Triggering ${listeners.length} workflow(s) for event: ${name}`
-  );
 
   const triggerPromises = listeners.map(async listener => {
     try {
@@ -1102,18 +1002,10 @@ export async function publishEvent(name: string, payload: any): Promise<void> {
         ...payload,
       };
 
-      console.log(`   🔄 Triggering workflow: ${workflowId}`);
       const runId = await trigger(workflowId, eventPayload);
-      console.log(
-        `   ✅ Workflow ${workflowId} triggered successfully with run ID: ${runId}`
-      );
 
       return { workflowId, runId, success: true };
     } catch (error) {
-      console.error(
-        `   ❌ Failed to trigger workflow ${listener.workflowId}:`,
-        error
-      );
       return { workflowId: listener.workflowId, error, success: false };
     }
   });
@@ -1127,12 +1019,7 @@ export async function publishEvent(name: string, payload: any): Promise<void> {
 
   results.forEach((result, index) => {
     if (result.status === 'rejected') {
-      console.error(`   ❌ Workflow trigger failed:`, result.reason);
     } else if (result.status === 'fulfilled' && !result.value.success) {
-      console.error(
-        `   ❌ Workflow ${result.value.workflowId} failed:`,
-        result.value.error
-      );
     }
   });
 }
@@ -1143,7 +1030,6 @@ export async function executeStep(
   contextJson?: string
 ): Promise<any> {
   if (!core) {
-    console.log(`⚠️  Simulation: Executing step ${stepId} for run ${runId}`);
     return {
       success: true,
       result: {
@@ -1165,16 +1051,11 @@ export async function executeStep(
     );
 
     if (result.success && result.result) {
-      console.log(`✅ Step ${stepId} executed successfully for run ${runId}`);
       return JSON.parse(result.result);
     } else {
       throw new Error(`Failed to execute step: ${result.message}`);
     }
   } catch (error) {
-    console.error(
-      `❌ Failed to execute step ${stepId} for run ${runId}:`,
-      error
-    );
     throw error;
   }
 }
@@ -1254,69 +1135,8 @@ export async function executeStepFunction(
       runId
     );
 
-    const originalConsoleLog = console.log;
-    const originalConsoleError = console.error;
-    const originalConsoleWarn = console.warn;
-    const originalConsoleInfo = console.info;
-
-    const capturedLogs: string[] = [];
-
-    console.log = (...args: any[]) => {
-      const message = args
-        .map(arg =>
-          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-        )
-        .join(' ');
-      capturedLogs.push(`[LOG] ${message}`);
-      originalConsoleLog(...args);
-    };
-
-    console.error = (...args: any[]) => {
-      const message = args
-        .map(arg =>
-          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-        )
-        .join(' ');
-      capturedLogs.push(`[ERROR] ${message}`);
-      originalConsoleError(...args);
-    };
-
-    console.warn = (...args: any[]) => {
-      const message = args
-        .map(arg =>
-          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-        )
-        .join(' ');
-      capturedLogs.push(`[WARN] ${message}`);
-      originalConsoleWarn(...args);
-    };
-
-    console.info = (...args: any[]) => {
-      const message = args
-        .map(arg =>
-          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-        )
-        .join(' ');
-      capturedLogs.push(`[INFO] ${message}`);
-      originalConsoleInfo(...args);
-    };
-
     try {
       const result = await stepHandler.handler(enhancedContext);
-
-      console.log = originalConsoleLog;
-      console.error = originalConsoleError;
-      console.warn = originalConsoleWarn;
-      console.info = originalConsoleInfo;
-
-      if (capturedLogs.length > 0) {
-        capturedLogs.forEach(log => {
-          const message = log.replace(/^\[LOG\] /, '');
-          console.log(message);
-        });
-      }
-
-      console.log(`   ✅ Step function ${stepName} executed successfully`);
 
       const endTime = process.hrtime.bigint();
       const duration = Number(endTime - startTime) / 1000000; // Convert to milliseconds
@@ -1332,30 +1152,30 @@ export async function executeStepFunction(
           context_size_bytes: contextSize,
           services_count: Object.keys(services).length,
           steps_completed: Object.keys(contextData.steps || {}).length,
-          logs: capturedLogs,
+          logs: [],
         },
         message: 'Step function executed successfully',
       };
-    } catch (error) {
-      console.log = originalConsoleLog;
-      console.error = originalConsoleError;
-      console.warn = originalConsoleWarn;
-      console.info = originalConsoleInfo;
+    } catch (error: any) {
+      const endTime = process.hrtime.bigint();
+      const duration = Number(endTime - startTime) / 1000000;
 
-      if (capturedLogs.length > 0) {
-        capturedLogs.forEach(log => {
-          const message = log.replace(/^\[LOG\] /, '');
-          console.log(message);
-        });
-      }
-
-      throw error;
+      return {
+        success: false,
+        result: {
+          step_name: stepName,
+          workflow_id: workflowId,
+          run_id: runId,
+          error: error.message,
+          duration_ms: duration,
+          context_size_bytes: contextJson.length,
+        },
+        message: `Step function execution failed: ${error.message}`,
+      };
     }
   } catch (error: any) {
     const endTime = process.hrtime.bigint();
     const duration = Number(endTime - startTime) / 1000000;
-
-    console.error(`   ❌ Error executing step function ${stepName}:`, error);
 
     return {
       success: false,
@@ -1439,7 +1259,6 @@ export async function executeJobFunction(
   servicesJson: string
 ): Promise<any> {
   if (!core) {
-    console.log(`⚠️  Simulation: Executing job function with job: ${jobJson}`);
     return {
       success: true,
       job_id: 'simulation-job-id',
@@ -1462,13 +1281,11 @@ export async function executeJobFunction(
     );
 
     if (result.success && result.result) {
-      console.log(`✅ Job function executed successfully`);
       return JSON.parse(result.result);
     } else {
       throw new Error(`Failed to execute job function: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to execute job function:`, error);
     throw error;
   }
 }
@@ -1502,7 +1319,6 @@ async function registerWorkflowWithRust(
       throw new Error(`Failed to register workflow: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to register workflow '${workflow.id}':`, error);
     throw error;
   }
 }
@@ -1600,7 +1416,6 @@ export async function replay(
     mockStep?: (stepName: string, mockFn: (ctx: Context) => any) => void;
   }
 ): Promise<void> {
-  console.log(`Replaying run: ${runId} with options:`, options);
   // TODO: Implement replay functionality
 }
 
@@ -1624,9 +1439,6 @@ const pausedWorkflows = new Map<
 >();
 
 export async function resume(token: string, payload: any): Promise<void> {
-  console.log(`🔄 Resuming workflow with token: ${token}`);
-  console.log(`📋 Resume payload:`, payload);
-
   const pausedWorkflow = pausedWorkflows.get(token);
 
   if (!pausedWorkflow) {
@@ -1647,8 +1459,6 @@ export async function resume(token: string, payload: any): Promise<void> {
   pausedWorkflow.status = 'resumed';
   pausedWorkflow.resumedAt = Date.now();
 
-  console.log(`✅ Workflow resumed successfully with token: ${token}`);
-
   if (pausedWorkflow.resumeCallback) {
     pausedWorkflow.resumeCallback(payload);
   } else {
@@ -1659,7 +1469,6 @@ export async function resume(token: string, payload: any): Promise<void> {
         pausedWorkflow.payload
       );
     } catch (error) {
-      console.error(`❌ Error continuing workflow execution:`, error);
       throw error;
     }
   }
@@ -1806,27 +1615,12 @@ export async function benchmark(
     verbose = true,
   } = options;
 
-  if (verbose) {
-    console.log('🚀 Cronflow Performance Benchmark');
-    console.log('='.repeat(60));
-    console.log(`📊 Running ${iterations} iterations...`);
-    console.log(`⏱️  Start Time: ${new Date().toISOString()}`);
-    console.log(
-      `🔧 Configuration: ${stepsPerWorkflow} steps/workflow, ${payloadSize} items/payload`
-    );
-    console.log('─'.repeat(60));
-  }
-
   const results: any[] = [];
   const durations: number[] = [];
   const memoryDeltas: number[] = [];
   const benchmarkId = Date.now().toString();
 
   for (let i = 1; i <= iterations; i++) {
-    if (verbose) {
-      console.log(`🔄 Running iteration ${i}/${iterations}...`);
-    }
-
     const startTime = process.hrtime.bigint();
     const startMemory = getMemoryUsage();
 
@@ -1939,56 +1733,6 @@ export async function benchmark(
     throughput = 0;
   }
 
-  if (verbose) {
-    console.log('─'.repeat(60));
-    console.log('📈 PERFORMANCE BENCHMARK RESULTS');
-    console.log('─'.repeat(60));
-
-    if (successfulRuns > 0) {
-      console.log('⏱️  Execution Time Statistics:');
-      console.log(`   - Iterations: ${durationStats.count}`);
-      console.log(`   - Mean: ${formatDuration(durationStats.mean)}`);
-      console.log(`   - Median: ${formatDuration(durationStats.median)}`);
-      console.log(`   - Min: ${formatDuration(durationStats.min)}`);
-      console.log(`   - Max: ${formatDuration(durationStats.max)}`);
-      console.log(`   - Std Dev: ${formatDuration(durationStats.stdDev)}`);
-      console.log(`   - 95th Percentile: ${formatDuration(durationStats.p95)}`);
-      console.log(`   - 99th Percentile: ${formatDuration(durationStats.p99)}`);
-
-      console.log('\n📊 Memory Usage Statistics:');
-      console.log(`   - Mean Heap Delta: ${memoryStats.mean.toFixed(2)} MB`);
-      console.log(
-        `   - Median Heap Delta: ${memoryStats.median.toFixed(2)} MB`
-      );
-      console.log(`   - Min Heap Delta: ${memoryStats.min.toFixed(2)} MB`);
-      console.log(`   - Max Heap Delta: ${memoryStats.max.toFixed(2)} MB`);
-
-      console.log('\n🚀 Performance Metrics:');
-      console.log(`   - Average Steps/Second: ${stepsPerSecond.toFixed(2)}`);
-      console.log(`   - Average Step Time: ${formatDuration(averageStepTime)}`);
-      console.log(`   - Throughput: ${throughput.toFixed(2)} workflows/second`);
-    } else {
-      console.log('❌ No successful runs to analyze');
-    }
-
-    console.log('\n📋 Success Rate:');
-    console.log(
-      `   - Successful: ${successfulRuns}/${iterations} (${successRate.toFixed(1)}%)`
-    );
-
-    if (successfulRuns < iterations) {
-      console.log('\n❌ Failed Runs:');
-      results
-        .filter(r => !r.success)
-        .forEach(r => {
-          console.log(`   - Iteration ${r.iteration}: ${r.error}`);
-        });
-    }
-
-    console.log('─'.repeat(60));
-    console.log('✅ Benchmark completed');
-  }
-
   return {
     success: successfulRuns > 0,
     statistics: {
@@ -2008,9 +1752,6 @@ export async function executeManualTrigger(
   payload: any
 ): Promise<any> {
   if (!core) {
-    console.log(
-      `⚠️  Simulation: Executing manual trigger for workflow: ${workflowId}`
-    );
     return {
       success: true,
       run_id: 'simulation-run-id',
@@ -2028,28 +1769,17 @@ export async function executeManualTrigger(
     );
 
     if (result.success) {
-      console.log(
-        `✅ Manual trigger executed successfully for workflow: ${workflowId}`
-      );
       return result;
     } else {
       throw new Error(`Failed to execute manual trigger: ${result.message}`);
     }
   } catch (error) {
-    console.error(
-      `❌ Failed to execute manual trigger for workflow ${workflowId}:`,
-      error
-    );
     throw error;
   }
 }
 
 export async function executeWebhookTrigger(request: any): Promise<any> {
   if (!core) {
-    console.log(
-      `⚠️  Simulation: Executing webhook trigger for request:`,
-      request
-    );
     return {
       success: true,
       run_id: 'simulation-webhook-run-id',
@@ -2066,20 +1796,17 @@ export async function executeWebhookTrigger(request: any): Promise<any> {
     );
 
     if (result.success) {
-      console.log(`✅ Webhook trigger executed successfully`);
       return result;
     } else {
       throw new Error(`Failed to execute webhook trigger: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to execute webhook trigger:`, error);
     throw error;
   }
 }
 
 export async function executeScheduleTrigger(triggerId: string): Promise<any> {
   if (!core) {
-    console.log(`⚠️  Simulation: Executing schedule trigger: ${triggerId}`);
     return {
       success: true,
       run_id: 'simulation-schedule-run-id',
@@ -2095,20 +1822,17 @@ export async function executeScheduleTrigger(triggerId: string): Promise<any> {
     );
 
     if (result.success) {
-      console.log(`✅ Schedule trigger executed successfully: ${triggerId}`);
       return result;
     } else {
       throw new Error(`Failed to execute schedule trigger: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to execute schedule trigger ${triggerId}:`, error);
     throw error;
   }
 }
 
 export async function getTriggerStats(): Promise<any> {
   if (!core) {
-    console.log(`⚠️  Simulation: Getting trigger statistics`);
     return {
       success: true,
       stats: JSON.stringify({
@@ -2124,20 +1848,17 @@ export async function getTriggerStats(): Promise<any> {
     const result = core.getTriggerStats(getCurrentState().dbPath);
 
     if (result.success) {
-      console.log(`✅ Trigger statistics retrieved successfully`);
       return result;
     } else {
       throw new Error(`Failed to get trigger stats: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to get trigger statistics:`, error);
     throw error;
   }
 }
 
 export async function getWorkflowTriggers(workflowId: string): Promise<any> {
   if (!core) {
-    console.log(`⚠️  Simulation: Getting triggers for workflow: ${workflowId}`);
     return {
       success: true,
       triggers: JSON.stringify(['manual']),
@@ -2152,13 +1873,11 @@ export async function getWorkflowTriggers(workflowId: string): Promise<any> {
     );
 
     if (result.success) {
-      console.log(`✅ Workflow triggers retrieved successfully`);
       return result;
     } else {
       throw new Error(`Failed to get workflow triggers: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to get workflow triggers:`, error);
     throw error;
   }
 }
@@ -2167,9 +1886,6 @@ export async function unregisterWorkflowTriggers(
   workflowId: string
 ): Promise<any> {
   if (!core) {
-    console.log(
-      `⚠️  Simulation: Unregistering triggers for workflow: ${workflowId}`
-    );
     return {
       success: true,
       message: 'Workflow triggers unregistered in simulation mode',
@@ -2183,7 +1899,6 @@ export async function unregisterWorkflowTriggers(
     );
 
     if (result.success) {
-      console.log(`✅ Workflow triggers unregistered successfully`);
       return result;
     } else {
       throw new Error(
@@ -2191,14 +1906,12 @@ export async function unregisterWorkflowTriggers(
       );
     }
   } catch (error) {
-    console.error(`❌ Failed to unregister workflow triggers:`, error);
     throw error;
   }
 }
 
 export async function getScheduleTriggers(): Promise<any> {
   if (!core) {
-    console.log(`⚠️  Simulation: Getting schedule triggers`);
     return {
       success: true,
       triggers: JSON.stringify([]),
@@ -2210,13 +1923,11 @@ export async function getScheduleTriggers(): Promise<any> {
     const result = core.getScheduleTriggers(getCurrentState().dbPath);
 
     if (result.success) {
-      console.log(`✅ Schedule triggers retrieved successfully`);
       return result;
     } else {
       throw new Error(`Failed to get schedule triggers: ${result.message}`);
     }
   } catch (error) {
-    console.error(`❌ Failed to get schedule triggers:`, error);
     throw error;
   }
 }
@@ -2284,7 +1995,6 @@ function registerHookHandler(
   ) => Promise<any>
 ): void {
   hookHandlers.set(hookType, handler);
-  console.log(`🎣 Registered ${hookType} hook handler`);
 }
 
 registerHookHandler('onSuccess', executeWorkflowHook);
@@ -2310,26 +2020,10 @@ export async function executeWorkflowHook(
   stepId?: string
 ): Promise<any> {
   try {
-    console.log(
-      `🎣 Executing ${hookType} hook for workflow: ${workflowId}${stepId ? `, step: ${stepId}` : ''}`
-    );
-
-    if (hookType !== 'onSuccess' && hookType !== 'onFailure') {
-      console.warn(`⚠️  Invalid hook type: ${hookType}`);
-      return { success: false, error: `Invalid hook type: ${hookType}` };
-    }
-
     const context = JSON.parse(contextJson);
-    console.log(`   - Run ID: ${context.run_id}`);
-    console.log(`   - Status: ${context.status}`);
-    console.log(`   - Duration: ${context.duration_ms}ms`);
-    console.log(
-      `   - Completed steps: ${context.completed_steps?.length || 0}`
-    );
 
     const workflow = getWorkflow(workflowId);
     if (!workflow) {
-      console.warn(`⚠️  Workflow ${workflowId} not found for hook execution`);
       return {
         success: true,
         message: `No ${hookType} hook defined (workflow not found)`,
@@ -2343,15 +2037,7 @@ export async function executeWorkflowHook(
 
     if (hook) {
       try {
-        if (stepId) {
-          console.log(
-            `   - Checking if ${hookType} hook should run for step: ${stepId}`
-          );
-        }
-
-        console.log(`   - Executing ${hookType} hook...`);
         await hook(context, stepId);
-        console.log(`   ✅ ${hookType} hook executed successfully`);
         return {
           success: true,
           message: `${hookType} hook executed successfully`,
@@ -2360,7 +2046,6 @@ export async function executeWorkflowHook(
           stepId,
         };
       } catch (error: any) {
-        console.error(`   ❌ Error executing ${hookType} hook:`, error);
         return {
           success: false,
           error: error.message,
@@ -2370,7 +2055,6 @@ export async function executeWorkflowHook(
         };
       }
     } else {
-      console.log(`   - No ${hookType} hook defined for workflow`);
       return {
         success: true,
         message: `No ${hookType} hook defined`,
@@ -2380,7 +2064,6 @@ export async function executeWorkflowHook(
       };
     }
   } catch (error: any) {
-    console.error(`❌ Failed to execute ${hookType} hook:`, error);
     return {
       success: false,
       error: error.message,
@@ -2407,14 +2090,8 @@ function registerEventListener(
   const existingIndex = listeners.findIndex(l => l.workflowId === workflowId);
   if (existingIndex >= 0) {
     listeners[existingIndex] = { workflowId, trigger };
-    console.log(
-      `🔄 Updated event listener for workflow ${workflowId} on event: ${eventName}`
-    );
   } else {
     listeners.push({ workflowId, trigger });
-    console.log(
-      `✅ Registered workflow ${workflowId} to listen for event: ${eventName}`
-    );
   }
 }
 
@@ -2429,13 +2106,9 @@ function unregisterEventListener(eventName: string, workflowId: string): void {
   const index = listeners.findIndex(l => l.workflowId === workflowId);
   if (index >= 0) {
     listeners.splice(index, 1);
-    console.log(
-      `🗑️  Unregistered workflow ${workflowId} from event: ${eventName}`
-    );
 
     if (listeners.length === 0) {
       currentState.eventListeners.delete(eventName);
-      console.log(`🧹 Cleaned up empty event: ${eventName}`);
     }
   }
 }

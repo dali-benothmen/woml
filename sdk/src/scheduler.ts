@@ -18,14 +18,10 @@ class NodeScheduler {
    */
   start(): void {
     if (this.isRunning) {
-      console.log(
-        'ℹ️  Scheduler is already running (ignoring duplicate start call)'
-      );
       return;
     }
 
     this.isRunning = true;
-    console.log('🚀 Starting Node.js scheduler...');
   }
 
   /**
@@ -33,7 +29,6 @@ class NodeScheduler {
    */
   stop(): void {
     if (!this.isRunning) {
-      console.log('⚠️  Scheduler is not running');
       return;
     }
 
@@ -42,11 +37,9 @@ class NodeScheduler {
     // Stop all scheduled tasks
     for (const [workflowId, scheduledWorkflow] of this.scheduledWorkflows) {
       scheduledWorkflow.task.stop();
-      console.log(`⏹️  Stopped scheduled workflow: ${workflowId}`);
     }
 
     this.scheduledWorkflows.clear();
-    console.log('🛑 Node.js scheduler stopped');
   }
 
   /**
@@ -55,7 +48,6 @@ class NodeScheduler {
   scheduleWorkflow(workflowId: string, cronExpression: string): void {
     // Ensure scheduler is running
     if (!this.isRunning) {
-      console.log('🔄 Starting scheduler for workflow scheduling...');
       this.start();
     }
 
@@ -68,7 +60,6 @@ class NodeScheduler {
     const existing = this.scheduledWorkflows.get(workflowId);
     if (existing) {
       existing.task.stop();
-      console.log(`🔄 Updating existing schedule for workflow: ${workflowId}`);
     }
 
     // Create the scheduled task
@@ -76,10 +67,6 @@ class NodeScheduler {
       cronExpression,
       async () => {
         try {
-          console.log(
-            `⏰ Executing scheduled workflow: ${workflowId} (cron: ${cronExpression})`
-          );
-
           const scheduledWorkflow = this.scheduledWorkflows.get(workflowId);
           if (scheduledWorkflow) {
             scheduledWorkflow.lastRun = new Date();
@@ -95,14 +82,8 @@ class NodeScheduler {
           };
 
           const runId = await cronflow.trigger(workflowId, payload);
-          console.log(
-            `✅ Scheduled workflow ${workflowId} executed successfully with run ID: ${runId}`
-          );
         } catch (error) {
-          console.error(
-            `❌ Failed to execute scheduled workflow ${workflowId}:`,
-            error
-          );
+          // Error handling without console output
         }
       },
       {
@@ -118,13 +99,6 @@ class NodeScheduler {
       lastRun: undefined,
       nextRun: this.getNextRunTime(cronExpression),
     });
-
-    console.log(
-      `✅ Scheduled workflow ${workflowId} with cron: ${cronExpression}`
-    );
-    console.log(
-      `   Next run: ${this.getNextRunTime(cronExpression)?.toISOString()}`
-    );
   }
 
   /**
@@ -133,13 +107,11 @@ class NodeScheduler {
   unscheduleWorkflow(workflowId: string): boolean {
     const scheduledWorkflow = this.scheduledWorkflows.get(workflowId);
     if (!scheduledWorkflow) {
-      console.log(`⚠️  No scheduled workflow found with ID: ${workflowId}`);
       return false;
     }
 
     scheduledWorkflow.task.stop();
     this.scheduledWorkflows.delete(workflowId);
-    console.log(`⏹️  Unscheduled workflow: ${workflowId}`);
     return true;
   }
 
@@ -230,9 +202,6 @@ class NodeScheduler {
       const nextRun = new Date(now.getTime() + 60000); // Add 1 minute
       return nextRun;
     } catch (error) {
-      console.warn(
-        `⚠️  Could not calculate next run time for cron: ${cronExpression}`
-      );
       return undefined;
     }
   }
