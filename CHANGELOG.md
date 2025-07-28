@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- enhance step definition with title and description
+
 ## 0.4.0
 
 ### Minor Changes

@@ -7,6 +7,7 @@ import {
   RetryConfig,
   CacheConfig,
   WebhookOptions,
+  StepConfig,
 } from './types';
 import { validateWorkflow } from './validation';
 import { parseDuration, generateId } from '../utils';
@@ -36,7 +37,7 @@ export class WorkflowInstance {
 
   constructor(
     workflow: WorkflowDefinition,
-    private readonly _cronflowInstance: any // Will be typed properly later
+    private readonly _cronflowInstance: any
   ) {
     this._workflow = workflow;
   }
@@ -50,13 +51,27 @@ export class WorkflowInstance {
   }
 
   step(
-    name: string,
+    nameOrConfig: string | StepConfig,
     handlerFn: (ctx: Context) => any | Promise<any>,
     options?: StepOptions
   ): WorkflowInstance {
+    let stepName: string;
+    let stepTitle: string | undefined;
+    let stepDescription: string | undefined;
+
+    if (typeof nameOrConfig === 'string') {
+      stepName = nameOrConfig;
+    } else {
+      stepName = nameOrConfig.id;
+      stepTitle = nameOrConfig.title;
+      stepDescription = nameOrConfig.description;
+    }
+
     const step: StepDefinition = {
-      id: name,
-      name,
+      id: stepName,
+      name: stepName,
+      title: stepTitle,
+      description: stepDescription,
       handler: handlerFn,
       type: 'step',
       options,
@@ -66,10 +81,10 @@ export class WorkflowInstance {
     this._currentStep = step;
     this._stepStack.push(step);
 
-    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+    if (this._cronflowInstance?.registerStepHandler) {
       this._cronflowInstance.registerStepHandler(
         this._workflow.id,
-        name,
+        stepName,
         handlerFn,
         'step'
       );
@@ -79,13 +94,27 @@ export class WorkflowInstance {
   }
 
   action(
-    name: string,
+    nameOrConfig: string | StepConfig,
     handlerFn: (ctx: Context) => any | Promise<any>,
     options?: StepOptions
   ): WorkflowInstance {
+    let stepName: string;
+    let stepTitle: string | undefined;
+    let stepDescription: string | undefined;
+
+    if (typeof nameOrConfig === 'string') {
+      stepName = nameOrConfig;
+    } else {
+      stepName = nameOrConfig.id;
+      stepTitle = nameOrConfig.title;
+      stepDescription = nameOrConfig.description;
+    }
+
     const step: StepDefinition = {
-      id: name,
-      name,
+      id: stepName,
+      name: stepName,
+      title: stepTitle,
+      description: stepDescription,
       handler: handlerFn,
       type: 'action',
       options: {
@@ -98,10 +127,10 @@ export class WorkflowInstance {
     this._currentStep = step;
     this._stepStack.push(step);
 
-    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+    if (this._cronflowInstance?.registerStepHandler) {
       this._cronflowInstance.registerStepHandler(
         this._workflow.id,
-        name,
+        stepName,
         handlerFn,
         'action'
       );
@@ -188,20 +217,16 @@ export class WorkflowInstance {
 
     if (!frameworkName || !appInstance) return;
 
-    // Validate framework is supported
     if (!isFrameworkSupported(frameworkName)) {
       throw new Error(
         `Unsupported framework: ${frameworkName}. Supported frameworks: express, fastify, koa, hapi, nestjs, bun, nextjs`
       );
     }
 
-    // Get the framework handler
     const frameworkHandler = getFrameworkHandler(frameworkName);
 
-    // Create the webhook handler
     const webhookHandler = async (req: any, res: any) => {
       try {
-        // Validate schema if defined
         if (options.schema) {
           try {
             options.schema.parse(req.body);
@@ -215,7 +240,6 @@ export class WorkflowInstance {
           }
         }
 
-        // Validate headers if required
         if (options.headers?.required) {
           const requiredHeaders = options.headers.required;
           for (const [key, value] of Object.entries(requiredHeaders)) {
@@ -452,7 +476,6 @@ export class WorkflowInstance {
       }
     };
 
-    // Register the route using the universal interface
     const method = options.method || 'POST';
     registerRoute(method, path, webhookHandler);
   }
@@ -465,7 +488,6 @@ export class WorkflowInstance {
 
     this._workflow.triggers.push(trigger);
 
-    // Use Node.js scheduler instead of Rust scheduler
     scheduler.scheduleWorkflow(this._workflow.id, cronExpression);
 
     return this;
@@ -634,7 +656,7 @@ export class WorkflowInstance {
       name: `while_${name}`,
       handler: async (ctx: Context) => {
         let iterations = 0;
-        const maxIterations = 1000; // Prevent infinite loops
+        const maxIterations = 1000;
 
         while ((await condition(ctx)) && iterations < maxIterations) {
           iterationFn(ctx);
@@ -997,7 +1019,7 @@ export class WorkflowInstance {
   }
 
   humanInTheLoop(options: {
-    timeout?: string; // Make timeout optional
+    timeout?: string;
     onPause: (ctx: Context, token: string) => void;
     description: string;
     approvalUrl?: string;
@@ -1014,13 +1036,11 @@ export class WorkflowInstance {
       id: `human_${token}`,
       name: 'human_in_the_loop',
       handler: async (ctx: Context) => {
-        // Include the token in the context
         const enhancedContext = {
           ...ctx,
           token,
         };
 
-        // Call the onPause function with the enhanced context and token
         options.onPause(enhancedContext, token);
 
         const pauseInfo = {
@@ -1146,7 +1166,7 @@ export class WorkflowInstance {
         return {
           type: 'event_wait',
           eventName,
-          received: true, // Simulated event
+          received: true,
           data: { event: eventName, timestamp: Date.now() },
         };
       },
@@ -1284,7 +1304,6 @@ export class WorkflowInstance {
   async register(): Promise<void> {
     this.validate();
 
-    // Register with the Cronflow instance (which will handle Rust engine registration)
     if (
       this._cronflowInstance &&
       typeof this._cronflowInstance.registerWorkflow === 'function'
@@ -1307,11 +1326,11 @@ export class WorkflowInstance {
     const num = parseInt(amount);
 
     switch (unit) {
-      case 'm': // minutes
+      case 'm':
         return `*/${num} * * * *`;
-      case 'h': // hours
+      case 'h':
         return `0 */${num} * * *`;
-      case 'd': // days
+      case 'd':
         return `0 0 */${num} * *`;
       default:
         throw new Error(`Unsupported interval unit: ${unit}`);

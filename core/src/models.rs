@@ -189,6 +189,8 @@ impl WorkflowDefinition {
 pub struct StepDefinition {
     pub id: String,
     pub name: String,
+    pub title: Option<String>, // Human-readable title for the step
+    pub description: Option<String>, // Optional description of what the step does
     pub action: String,
     pub timeout: Option<u64>,
     pub retry: Option<RetryConfig>,

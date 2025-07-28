@@ -20,24 +20,45 @@ const simpleIfWorkflow = cronflow.define({
 
 simpleIfWorkflow
   .onSchedule('0 * * * * *') // Run every 1 minute (changed from 30 seconds)
-  .step('check-amount', async (ctx: Context) => {
-    // Generate a random amount for testing
-    const amount = Math.floor(Math.random() * 1000) + 1;
-    console.log('🔍 Checking amount:', amount);
-    return { amount, checked: true };
-  })
-  .step('process-high-value', async (ctx: Context) => {
-    console.log('💎 Processing high-value transaction');
-    return { type: 'high-value', processed: true, amount: ctx.last.amount };
-  })
-  .step('final-summary', async (ctx: Context) => {
-    console.log('📋 Creating final summary');
-    return {
-      final: true,
-      summary: ctx.last,
-      completedAt: new Date().toISOString(),
-    };
-  });
+  .step(
+    {
+      id: 'check-amount',
+      title: 'Check Amount',
+      description: 'Check the amount',
+    },
+    async (ctx: Context) => {
+      // Generate a random amount for testing
+      const amount = Math.floor(Math.random() * 1000) + 1;
+      console.log('🔍 Checking amount:', amount);
+      return { amount, checked: true };
+    }
+  )
+  .step(
+    {
+      id: 'process-high-value',
+      title: 'Process High Value',
+      description: 'Process the high value transaction',
+    },
+    async (ctx: Context) => {
+      console.log('💎 Processing high-value transaction');
+      return { type: 'high-value', processed: true, amount: ctx.last.amount };
+    }
+  )
+  .step(
+    {
+      id: 'final-summary',
+      title: 'Final Summary',
+      description: 'Create the final summary',
+    },
+    async (ctx: Context) => {
+      console.log('📋 Creating final summary');
+      return {
+        final: true,
+        summary: ctx.last,
+        completedAt: new Date().toISOString(),
+      };
+    }
+  );
 
 // Self-executing function to start the workflow
 (async () => {

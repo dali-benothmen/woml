@@ -1125,12 +1125,6 @@ export async function publishEvent(name: string, payload: any): Promise<void> {
   ).length;
   const failed = results.length - successful;
 
-  console.log(`📊 Event ${name} processing complete:`);
-  console.log(`   ✅ Successfully triggered: ${successful} workflow(s)`);
-  if (failed > 0) {
-    console.log(`   ❌ Failed to trigger: ${failed} workflow(s)`);
-  }
-
   results.forEach((result, index) => {
     if (result.status === 'rejected') {
       console.error(`   ❌ Workflow trigger failed:`, result.reason);
@@ -1327,14 +1321,6 @@ export async function executeStepFunction(
       const endTime = process.hrtime.bigint();
       const duration = Number(endTime - startTime) / 1000000; // Convert to milliseconds
 
-      console.log(`   📊 Step execution metrics:`);
-      console.log(`      - Duration: ${duration.toFixed(2)}ms`);
-      console.log(`      - Context size: ${contextSize} bytes`);
-      console.log(`      - Services: ${Object.keys(services).length}`);
-      console.log(
-        `      - Steps completed: ${Object.keys(contextData.steps || {}).length}`
-      );
-
       return {
         success: true,
         result: {
@@ -1370,9 +1356,6 @@ export async function executeStepFunction(
     const duration = Number(endTime - startTime) / 1000000;
 
     console.error(`   ❌ Error executing step function ${stepName}:`, error);
-    console.error(`   📊 Error metrics:`);
-    console.error(`      - Duration: ${duration.toFixed(2)}ms`);
-    console.error(`      - Context size: ${contextJson.length} bytes`);
 
     return {
       success: false,
@@ -1512,6 +1495,7 @@ async function registerWorkflowWithRust(
   try {
     const rustFormat = convertToRustFormat(workflow);
     const workflowJson = JSON.stringify(rustFormat);
+
     const result = core.registerWorkflow(workflowJson, currentState.dbPath);
 
     if (!result.success) {
@@ -1531,7 +1515,9 @@ function convertToRustFormat(workflow: WorkflowDefinition): any {
     steps: workflow.steps.map(step => ({
       id: step.id,
       name: step.name,
-      action: step.handler.toString(), // Always include action field
+      title: step.title,
+      description: step.description,
+      action: step.handler.toString(),
       type: step.type,
       handler: step.handler.toString(),
       timeout: step.options?.timeout || 30000,
@@ -1562,21 +1548,13 @@ function convertToRustFormat(workflow: WorkflowDefinition): any {
           },
         };
       } else if (trigger.type === 'schedule') {
-        return {
-          Schedule: {
-            cron_expression: trigger.cron_expression,
-          },
-        };
+        return 'Manual';
       } else if (trigger.type === 'event') {
-        // Event triggers are handled in the Node.js layer, not Rust
-        // For now, treat them as manual triggers for Rust compatibility
-        return { Manual: {} };
+        return 'Manual';
       } else {
-        return { Manual: {} };
+        return 'Manual';
       }
     }),
-    // Note: Services are not serialized to Rust as they contain functions
-    // Services are handled in the Node.js layer during execution
     created_at: workflow.created_at.toISOString(),
     updated_at: workflow.updated_at.toISOString(),
   };
@@ -1670,14 +1648,6 @@ export async function resume(token: string, payload: any): Promise<void> {
   pausedWorkflow.resumedAt = Date.now();
 
   console.log(`✅ Workflow resumed successfully with token: ${token}`);
-  console.log(`📊 Resume info:`, {
-    token,
-    payload,
-    workflowId: pausedWorkflow.workflowId,
-    runId: pausedWorkflow.runId,
-    resumedAt: pausedWorkflow.resumedAt,
-    status: 'resumed',
-  });
 
   if (pausedWorkflow.resumeCallback) {
     pausedWorkflow.resumeCallback(payload);
@@ -1734,10 +1704,10 @@ export function isRustCoreAvailable(): boolean {
 function getMemoryUsage() {
   const usage = process.memoryUsage();
   return {
-    rss: Math.round(usage.rss / 1024 / 1024), // MB
-    heapTotal: Math.round(usage.heapTotal / 1024 / 1024), // MB
-    heapUsed: Math.round(usage.heapUsed / 1024 / 1024), // MB
-    external: Math.round(usage.external / 1024 / 1024), // MB
+    rss: Math.round(usage.rss / 1024 / 1024),
+    heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
+    heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
+    external: Math.round(usage.external / 1024 / 1024),
   };
 }
 
@@ -1890,7 +1860,7 @@ export async function benchmark(
 
       const endTime = process.hrtime.bigint();
       const endMemory = getMemoryUsage();
-      const duration = Number(endTime - startTime) / 1000000; // Convert to ms
+      const duration = Number(endTime - startTime) / 1000000;
 
       const result = {
         iteration: i,
@@ -2269,7 +2239,7 @@ export function createValidContext(
     workflow_id: workflowId,
     step_name: stepName,
     payload: payload,
-    steps: {}, // Empty object for now - StepResult requires complex structure
+    steps: {},
     run: {
       id: validRunId,
       workflow_id: workflowId,
@@ -2374,18 +2344,9 @@ export async function executeWorkflowHook(
     if (hook) {
       try {
         if (stepId) {
-          // For step-level hooks, we need to check if the hook should run for this specific step
-          // The hook function signature is (ctx: Context, stepId?: string | string[])
-          // We need to determine if the hook should execute for this stepId
-
-          // If stepId is provided, we need to check if the hook should run for this step
-          // The hook might be configured to run for specific steps or all steps
           console.log(
             `   - Checking if ${hookType} hook should run for step: ${stepId}`
           );
-
-          // For now, we'll execute the hook and let it decide internally
-          // The hook function can check the stepId parameter to determine if it should run
         }
 
         console.log(`   - Executing ${hookType} hook...`);
@@ -2554,11 +2515,9 @@ export const cronflow = {
   cleanupExpiredState,
   registerStepHandler,
   VERSION,
-  // Event handling functions
   registerEventListener,
   unregisterEventListener,
   getEventHistory,
   getEventListeners,
-  // Scheduler functions
   scheduler,
 };

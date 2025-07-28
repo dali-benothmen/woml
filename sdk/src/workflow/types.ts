@@ -25,9 +25,17 @@ export interface WorkflowDefinition {
   updated_at: Date;
 }
 
+export interface StepConfig {
+  id: string;
+  title?: string;
+  description?: string;
+}
+
 export interface StepDefinition {
   id: string;
   name: string;
+  title?: string;
+  description?: string;
   handler: (ctx: Context) => any | Promise<any>;
   type: 'step' | 'action';
   options?: StepOptions;
@@ -78,8 +86,8 @@ export interface StepOptions {
   waitForEvent?: boolean;
   eventName?: string;
   onError?: (ctx: Context) => any;
-  background?: boolean; // Whether this step should run as a background side effect
-  pause?: boolean; // Whether this step should pause workflow execution
+  background?: boolean;
+  pause?: boolean;
 }
 
 export interface RetryConfig {
@@ -114,13 +122,12 @@ export interface WebhookOptions {
   appInstance?: any;
   registerRoute?: (method: string, path: string, handler: Function) => void;
   headers?: {
-    required?: Record<string, string>; // e.g., { 'content-type': 'application/json' }
+    required?: Record<string, string>;
     validate?: (headers: Record<string, string>) => boolean | string;
   };
   trigger?: string;
 }
 
-// Context object that gets passed to step handlers
 export interface Context {
   payload: any;
   steps: Record<string, { output: any }>;
@@ -133,7 +140,7 @@ export interface Context {
     set: (key: string, value: any, options?: { ttl?: string }) => Promise<void>;
     incr: (key: string, amount?: number) => Promise<number>;
   };
-  last: any; // Output from the previous step
+  last: any;
   trigger: {
     headers: Record<string, string>;
     rawBody?: Buffer;
@@ -145,5 +152,5 @@ export interface Context {
   step_status?: 'completed' | 'failed';
   step_error?: string;
   background?: boolean;
-  token?: string | null; // Token for human-in-the-loop scenarios, null by default
+  token?: string | null;
 }
