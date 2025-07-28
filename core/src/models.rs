@@ -179,7 +179,6 @@ impl WorkflowDefinition {
     pub fn has_trigger_type(&self, trigger_type: &str) -> bool {
         self.triggers.iter().any(|t| match t {
             TriggerDefinition::Webhook { .. } => trigger_type == "webhook",
-            TriggerDefinition::Schedule { .. } => trigger_type == "schedule",
             TriggerDefinition::Manual => trigger_type == "manual",
         })
     }
@@ -409,9 +408,6 @@ pub enum TriggerDefinition {
         path: String,
         method: String,
     },
-    Schedule {
-        cron_expression: String,
-    },
     Manual,
 }
 
@@ -433,16 +429,6 @@ impl TriggerDefinition {
                 }
                 Ok(())
             }
-            TriggerDefinition::Schedule { cron_expression } => {
-                if cron_expression.is_empty() {
-                    return Err("Cron expression cannot be empty".to_string());
-                }
-                // Basic cron validation (could be enhanced with a cron parser)
-                if cron_expression.split_whitespace().count() != 5 {
-                    return Err("Invalid cron expression format".to_string());
-                }
-                Ok(())
-            }
             TriggerDefinition::Manual => Ok(()),
         }
     }
@@ -451,7 +437,6 @@ impl TriggerDefinition {
     pub fn get_type(&self) -> &'static str {
         match self {
             TriggerDefinition::Webhook { .. } => "webhook",
-            TriggerDefinition::Schedule { .. } => "schedule",
             TriggerDefinition::Manual => "manual",
         }
     }

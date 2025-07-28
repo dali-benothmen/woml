@@ -4,7 +4,7 @@
 
 use crate::error::{CoreError, CoreResult};
 use crate::state::StateManager;
-use crate::triggers::{TriggerManager, WebhookRequest, ScheduleTrigger};
+use crate::triggers::{TriggerManager, WebhookRequest};
 use crate::models::WorkflowDefinition;
 use crate::step_orchestrator::StepOrchestrator;
 use crate::dispatcher::Dispatcher;
@@ -72,46 +72,26 @@ impl TriggerExecutor {
 
     /// Execute a webhook trigger
     pub fn execute_webhook_trigger(&self, request: WebhookRequest) -> CoreResult<TriggerExecutionResult> {
-        log::info!("Executing webhook trigger: {} {}", request.method, request.path);
+        log::info!("Executing webhook trigger for path: {}", request.path);
         
         // Get trigger manager
         let trigger_manager = self.trigger_manager.lock()
             .map_err(|e| CoreError::Internal(format!("Failed to acquire trigger manager lock: {}", e)))?;
         
-        // Handle webhook request
-        let (workflow_id, payload) = trigger_manager.handle_webhook_request(request)?;
+        // Get workflow ID for this webhook path
+        let workflow_id = trigger_manager.get_workflow_id_for_webhook(&request.path)
+            .ok_or_else(|| CoreError::TriggerNotFound(format!("Webhook trigger not found: {}", request.path)))?
+            .clone();
         
         // Execute the workflow
+        let payload = if let Some(body) = &request.body {
+            serde_json::from_str(body).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
         let result = self.execute_workflow(&workflow_id, payload)?;
         
         log::info!("Webhook trigger executed successfully for workflow: {}", workflow_id);
-        Ok(result)
-    }
-
-    /// Execute a schedule trigger
-    pub fn execute_schedule_trigger(&self, trigger_id: &str) -> CoreResult<TriggerExecutionResult> {
-        log::info!("Executing schedule trigger: {}", trigger_id);
-        
-        // Get trigger manager
-        let trigger_manager = self.trigger_manager.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire trigger manager lock: {}", e)))?;
-        
-        // Get workflow ID for this trigger
-        let workflow_id = trigger_manager.get_workflow_id_for_schedule(trigger_id)
-            .ok_or_else(|| CoreError::TriggerNotFound(format!("Schedule trigger not found: {}", trigger_id)))?
-            .clone();
-        
-        // Create payload for scheduled execution
-        let payload = serde_json::json!({
-            "trigger_type": "schedule",
-            "trigger_id": trigger_id,
-            "scheduled_at": Utc::now().to_rfc3339(),
-        });
-        
-        // Execute the workflow
-        let result = self.execute_workflow(&workflow_id, payload)?;
-        
-        log::info!("Schedule trigger executed successfully for workflow: {}", workflow_id);
         Ok(result)
     }
 
@@ -203,18 +183,10 @@ impl TriggerExecutor {
         
         // Get webhook triggers
         for (path, (_, wf_id)) in &trigger_manager.webhook_triggers {
-            if wf_id == workflow_id {
-                triggers.push(format!("webhook:{}", path));
-            }
+            triggers.push(format!("webhook:{}", path));
         }
         
-        // Get schedule triggers
-        for (trigger_id, (_, wf_id)) in &trigger_manager.schedule_triggers {
-            if wf_id == workflow_id {
-                triggers.push(format!("schedule:{}", trigger_id));
-            }
-        }
-        
+        log::info!("Retrieved {} triggers for workflow: {}", triggers.len(), workflow_id);
         Ok(triggers)
     }
 
@@ -237,17 +209,6 @@ impl TriggerExecutor {
                     trigger_ids.push(format!("webhook:{}", path));
                     
                     log::info!("Registered webhook trigger: {} {} for workflow: {}", method, path, workflow_id);
-                }
-                
-                crate::models::TriggerDefinition::Schedule { cron_expression } => {
-                    // Create schedule trigger
-                    let schedule_trigger = ScheduleTrigger::new(cron_expression.clone());
-                    
-                    // Register schedule trigger
-                    let trigger_id = trigger_manager.register_schedule_trigger(workflow_id, schedule_trigger)?;
-                    trigger_ids.push(format!("schedule:{}", trigger_id));
-                    
-                    log::info!("Registered schedule trigger: {} for workflow: {}", cron_expression, workflow_id);
                 }
                 
                 crate::models::TriggerDefinition::Manual => {
@@ -281,18 +242,6 @@ impl TriggerExecutor {
             log::info!("Removed webhook trigger: {} for workflow: {}", path, workflow_id);
         }
         
-        // Remove schedule triggers
-        let schedule_ids: Vec<String> = trigger_manager.schedule_triggers
-            .iter()
-            .filter(|(_, (_, wf_id))| wf_id == workflow_id)
-            .map(|(trigger_id, _)| trigger_id.clone())
-            .collect();
-        
-        for trigger_id in schedule_ids {
-            trigger_manager.remove_schedule_trigger(&trigger_id)?;
-            log::info!("Removed schedule trigger: {} for workflow: {}", trigger_id, workflow_id);
-        }
-        
         log::info!("Successfully unregistered all triggers for workflow: {}", workflow_id);
         Ok(())
     }
@@ -303,13 +252,12 @@ impl TriggerExecutor {
             .map_err(|e| CoreError::Internal(format!("Failed to acquire trigger manager lock: {}", e)))?;
         
         let webhook_count = trigger_manager.webhook_triggers.len();
-        let schedule_count = trigger_manager.schedule_triggers.len();
-        let total_triggers = webhook_count + schedule_count;
+        let total_triggers = webhook_count;
         
         Ok(TriggerStats {
             total_triggers,
             webhook_triggers: webhook_count,
-            schedule_triggers: schedule_count,
+            schedule_triggers: 0, // No longer using Rust scheduler
         })
     }
 }

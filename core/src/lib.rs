@@ -14,7 +14,6 @@ pub mod context;
 pub mod triggers;
 pub mod trigger_executor;
 pub mod webhook_server;
-pub mod scheduler;
 pub mod step_orchestrator;
 pub mod workflow_state_machine;
 pub mod condition_evaluator;

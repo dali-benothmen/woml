@@ -3,6 +3,7 @@ import { createStateManager } from './state';
 import * as http from 'http';
 import * as url from 'url';
 import path from 'path';
+import { scheduler } from './scheduler';
 
 // Import the Rust addon
 let core: any;
@@ -298,6 +299,13 @@ export async function start(options?: StartOptions): Promise<void> {
   setState({ engineState: 'STARTING' });
   console.log('Starting Cronflow engine...');
 
+  // Start the Node.js scheduler (only if not already running)
+  if (!scheduler.getRunningStatus()) {
+    scheduler.start();
+  } else {
+    console.log('ℹ️  Scheduler is already running, skipping duplicate start');
+  }
+
   if (!currentState.dbPath) {
     const defaultDbPath = './cronflow.db';
     setState({ dbPath: defaultDbPath });
@@ -528,6 +536,9 @@ export async function start(options?: StartOptions): Promise<void> {
 
 export async function stop(): Promise<void> {
   const currentState = getCurrentState();
+
+  // Stop the Node.js scheduler
+  scheduler.stop();
 
   if (currentState.webhookServer) {
     currentState.webhookServer.close(() => {
@@ -2548,4 +2559,6 @@ export const cronflow = {
   unregisterEventListener,
   getEventHistory,
   getEventListeners,
+  // Scheduler functions
+  scheduler,
 };

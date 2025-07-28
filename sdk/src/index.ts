@@ -1,4 +1,5 @@
 import * as cronflowFunctions from './cronflow';
+import { scheduler } from './scheduler';
 
 export const cronflow = {
   define: cronflowFunctions.define,
@@ -59,6 +60,9 @@ export const cronflow = {
 
   // Performance benchmarking
   benchmark: cronflowFunctions.benchmark,
+
+  // Scheduler
+  scheduler,
 };
 
 // Export types

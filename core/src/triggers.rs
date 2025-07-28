@@ -1,16 +1,14 @@
 //! Trigger system for the Node-Cronflow Core Engine
-//! 
-//! This module handles different types of triggers that can start workflow execution:
-//! - Webhook triggers (HTTP endpoints)
-//! - Schedule triggers (cron-based)
+//!
+//! This module provides trigger functionality for:
+//! - Webhook triggers (HTTP-based)
 //! - Manual triggers (programmatic)
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
+use chrono::{DateTime, Utc};
 use crate::error::{CoreError, CoreResult};
 use log;
-use chrono::{DateTime, Utc, Datelike, Timelike};
-use cron::Schedule;
 use std::str::FromStr;
 
 /// Webhook trigger configuration
@@ -200,177 +198,10 @@ impl WebhookResponse {
     }
 }
 
-/// Schedule trigger configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScheduleTrigger {
-    pub cron_expression: String,
-    pub timezone: Option<String>,
-    pub enabled: bool,
-    pub last_run: Option<DateTime<Utc>>,
-    pub next_run: Option<DateTime<Utc>>,
-    pub validation: Option<ScheduleValidation>,
-}
-
-impl ScheduleTrigger {
-    /// Create a new schedule trigger
-    pub fn new(cron_expression: String) -> Self {
-        Self {
-            cron_expression,
-            timezone: None,
-            enabled: true,
-            last_run: None,
-            next_run: None,
-            validation: None,
-        }
-    }
-
-    /// Set timezone for the schedule
-    pub fn with_timezone(mut self, timezone: String) -> Self {
-        self.timezone = Some(timezone);
-        self
-    }
-
-    /// Set enabled status
-    pub fn with_enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
-        self
-    }
-
-    /// Add validation to the schedule trigger
-    pub fn with_validation(mut self, validation: ScheduleValidation) -> Self {
-        self.validation = Some(validation);
-        self
-    }
-
-    /// Validate the schedule trigger configuration
-    pub fn validate(&self) -> CoreResult<()> {
-        if self.cron_expression.is_empty() {
-            return Err(CoreError::InvalidTrigger("Cron expression cannot be empty".to_string()));
-        }
-
-        // Validate cron expression
-        Schedule::from_str(&self.cron_expression)
-            .map_err(|e| CoreError::InvalidTrigger(format!("Invalid cron expression: {}", e)))?;
-
-        // Validate timezone if provided
-        if let Some(ref tz) = self.timezone {
-            chrono_tz::Tz::from_str(tz)
-                .map_err(|e| CoreError::InvalidTrigger(format!("Invalid timezone: {}", e)))?;
-        }
-
-        Ok(())
-    }
-
-    /// Get the next run time for this schedule
-    pub fn get_next_run(&self) -> CoreResult<DateTime<Utc>> {
-        let schedule = Schedule::from_str(&self.cron_expression)
-            .map_err(|e| CoreError::InvalidTrigger(format!("Invalid cron expression: {}", e)))?;
-
-        let now = Utc::now();
-        let next = schedule.after(&now).next()
-            .ok_or_else(|| CoreError::InvalidTrigger("Could not calculate next run time".to_string()))?;
-
-        Ok(next)
-    }
-
-    /// Check if the schedule should run now
-    pub fn should_run(&self) -> CoreResult<bool> {
-        if !self.enabled {
-            return Ok(false);
-        }
-
-        let now = Utc::now();
-        let next_run = self.get_next_run()?;
-        
-        // Check if we're within 1 minute of the scheduled time
-        let diff = (now - next_run).num_seconds().abs();
-        Ok(diff <= 60)
-    }
-
-    /// Update the last run time
-    pub fn update_last_run(&mut self) {
-        self.last_run = Some(Utc::now());
-        // Recalculate next run time
-        if let Ok(next) = self.get_next_run() {
-            self.next_run = Some(next);
-        }
-    }
-}
-
-/// Schedule validation configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScheduleValidation {
-    pub max_runs_per_hour: Option<u32>,
-    pub max_runs_per_day: Option<u32>,
-    pub allowed_hours: Option<Vec<u8>>,
-    pub allowed_days: Option<Vec<u8>>,
-}
-
-impl ScheduleValidation {
-    /// Create a new schedule validation configuration
-    pub fn new() -> Self {
-        Self {
-            max_runs_per_hour: None,
-            max_runs_per_day: None,
-            allowed_hours: None,
-            allowed_days: None,
-        }
-    }
-
-    /// Set maximum runs per hour
-    pub fn with_max_runs_per_hour(mut self, max: u32) -> Self {
-        self.max_runs_per_hour = Some(max);
-        self
-    }
-
-    /// Set maximum runs per day
-    pub fn with_max_runs_per_day(mut self, max: u32) -> Self {
-        self.max_runs_per_day = Some(max);
-        self
-    }
-
-    /// Set allowed hours (0-23)
-    pub fn with_allowed_hours(mut self, hours: Vec<u8>) -> Self {
-        self.allowed_hours = Some(hours);
-        self
-    }
-
-    /// Set allowed days (0-6, where 0 is Sunday)
-    pub fn with_allowed_days(mut self, days: Vec<u8>) -> Self {
-        self.allowed_days = Some(days);
-        self
-    }
-
-    /// Validate schedule execution
-    pub fn validate_execution(&self, current_time: DateTime<Utc>) -> CoreResult<()> {
-        // Check allowed hours
-        if let Some(ref allowed_hours) = self.allowed_hours {
-            let current_hour = current_time.hour() as u8;
-            if !allowed_hours.contains(&current_hour) {
-                return Err(CoreError::InvalidTrigger(
-                    format!("Schedule execution not allowed at hour: {}", current_hour)
-                ));
-            }
-        }
-
-        // Check allowed days
-        if let Some(ref allowed_days) = self.allowed_days {
-            let current_day = current_time.weekday().num_days_from_sunday() as u8;
-            if !allowed_days.contains(&current_day) {
-                return Err(CoreError::InvalidTrigger(
-                    format!("Schedule execution not allowed on day: {}", current_day)
-                ));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-/// Trigger manager for handling different trigger types
+/// Trigger manager for handling different types of triggers
+#[derive(Debug)]
 pub struct TriggerManager {
     pub webhook_triggers: HashMap<String, (WebhookTrigger, String)>, // path -> (trigger, workflow_id)
-    pub schedule_triggers: HashMap<String, (ScheduleTrigger, String)>, // trigger_id -> (trigger, workflow_id)
 }
 
 impl TriggerManager {
@@ -378,7 +209,6 @@ impl TriggerManager {
     pub fn new() -> Self {
         Self {
             webhook_triggers: HashMap::new(),
-            schedule_triggers: HashMap::new(),
         }
     }
 
@@ -495,105 +325,6 @@ impl TriggerManager {
     /// Get workflow ID for a webhook path
     pub fn get_workflow_id_for_webhook(&self, path: &str) -> Option<&String> {
         self.webhook_triggers.get(path).map(|(_, workflow_id)| workflow_id)
-    }
-
-    /// Register a schedule trigger for a workflow
-    pub fn register_schedule_trigger(&mut self, workflow_id: &str, trigger: ScheduleTrigger) -> CoreResult<String> {
-        log::info!("Registering schedule trigger for workflow: {} with cron: {}", workflow_id, trigger.cron_expression);
-        
-        // Validate the trigger
-        trigger.validate()?;
-        
-        // Generate unique trigger ID
-        let trigger_id = format!("schedule_{}_{}", workflow_id, uuid::Uuid::new_v4().to_string().replace("-", ""));
-        
-        // Register the trigger
-        self.schedule_triggers.insert(trigger_id.clone(), (trigger, workflow_id.to_string()));
-        
-        log::info!("Successfully registered schedule trigger for workflow: {} with ID: {}", workflow_id, trigger_id);
-        Ok(trigger_id)
-    }
-
-    /// Get all schedule triggers that should run now
-    pub fn get_schedules_to_run(&mut self) -> CoreResult<Vec<(String, String)>> {
-        let mut to_run = Vec::new();
-        let now = Utc::now();
-
-        for (trigger_id, (trigger, workflow_id)) in self.schedule_triggers.iter_mut() {
-            if let Ok(should_run) = trigger.should_run() {
-                if should_run {
-                    // Validate execution if validation is configured
-                    if let Some(ref validation) = trigger.validation {
-                        if let Err(e) = validation.validate_execution(now) {
-                            log::warn!("Schedule validation failed for trigger {}: {}", trigger_id, e);
-                            continue;
-                        }
-                    }
-
-                    // Update last run time
-                    trigger.update_last_run();
-                    to_run.push((trigger_id.clone(), workflow_id.clone()));
-                }
-            }
-        }
-
-        Ok(to_run)
-    }
-
-    /// Get all schedule triggers
-    pub fn get_schedule_triggers(&self) -> Vec<(String, ScheduleTrigger, String)> {
-        self.schedule_triggers
-            .iter()
-            .map(|(trigger_id, (trigger, workflow_id))| {
-                (trigger_id.clone(), trigger.clone(), workflow_id.clone())
-            })
-            .collect()
-    }
-
-    /// Check if a schedule trigger exists
-    pub fn has_schedule_trigger(&self, trigger_id: &str) -> bool {
-        self.schedule_triggers.contains_key(trigger_id)
-    }
-
-    /// Get workflow ID for a schedule trigger
-    pub fn get_workflow_id_for_schedule(&self, trigger_id: &str) -> Option<&String> {
-        self.schedule_triggers.get(trigger_id).map(|(_, workflow_id)| workflow_id)
-    }
-
-    /// Enable or disable a schedule trigger
-    pub fn set_schedule_enabled(&mut self, trigger_id: &str, enabled: bool) -> CoreResult<()> {
-        if let Some((trigger, _)) = self.schedule_triggers.get_mut(trigger_id) {
-            trigger.enabled = enabled;
-            log::info!("Schedule trigger {} {}abled", trigger_id, if enabled { "en" } else { "dis" });
-            Ok(())
-        } else {
-            Err(CoreError::TriggerNotFound(format!("Schedule trigger not found: {}", trigger_id)))
-        }
-    }
-
-    /// Update schedule trigger
-    pub fn update_schedule_trigger(&mut self, trigger_id: &str, new_trigger: ScheduleTrigger) -> CoreResult<()> {
-        if let Some((trigger, _)) = self.schedule_triggers.get_mut(trigger_id) {
-            // Validate the new trigger
-            new_trigger.validate()?;
-            
-            // Update the trigger
-            *trigger = new_trigger;
-            log::info!("Updated schedule trigger: {}", trigger_id);
-            Ok(())
-        } else {
-            Err(CoreError::TriggerNotFound(format!("Schedule trigger not found: {}", trigger_id)))
-        }
-    }
-
-    /// Remove a schedule trigger
-    pub fn remove_schedule_trigger(&mut self, trigger_id: &str) -> CoreResult<()> {
-        if self.schedule_triggers.remove(trigger_id).is_some() {
-            log::info!("Removed schedule trigger: {}", trigger_id);
-            Ok(())
-        } else {
-            Err(CoreError::TriggerNotFound(format!("Schedule trigger not found: {}", trigger_id)))
-        }
     }
 }
 

@@ -1,0 +1,5 @@
+---
+'cronflow': minor
+---
+
+scheduler fixes

@@ -20,6 +20,7 @@ import {
   isFrameworkSupported,
 } from './framework-registry';
 import { registerEventListener, storePausedWorkflow } from '../cronflow';
+import { scheduler } from '../scheduler';
 
 export class WorkflowInstance {
   private _workflow: WorkflowDefinition;
@@ -463,6 +464,10 @@ export class WorkflowInstance {
     };
 
     this._workflow.triggers.push(trigger);
+
+    // Use Node.js scheduler instead of Rust scheduler
+    scheduler.scheduleWorkflow(this._workflow.id, cronExpression);
+
     return this;
   }
 
