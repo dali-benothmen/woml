@@ -90,3 +90,4 @@ temp/
 benchmarks/
 package-optimized
 dist-optimized
+playground/

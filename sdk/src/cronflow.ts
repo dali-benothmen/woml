@@ -8,31 +8,60 @@ import { scheduler } from './scheduler';
 // Import the Rust addon
 let core: any;
 try {
-  // Simple and automatic path resolution
-  // Get the current file's directory and find the package root
-  const currentDir = __dirname;
+  const possiblePaths = [
+    path.join(__dirname, '..', '..', 'dist', 'core', 'core.node'),
+    path.join(__dirname, '..', 'core', 'core.node'),
+    path.join(__dirname, '..', '..', 'core', 'core.node'),
+    path.join(__dirname, 'dist', 'core', 'core.node'),
+    path.join(__dirname, '..', '..', 'core', 'index.node'),
+    path.join(__dirname, '..', 'core', 'index.node'),
+    path.join(__dirname, 'core', 'index.node'),
+    path.join(__dirname, '..', '..', 'core', 'core.node'),
+    path.join(__dirname, '..', 'core', 'core.node'),
+    path.join(__dirname, 'core', 'core.node'),
+    (() => {
+      let searchDir = __dirname;
+      while (searchDir !== path.dirname(searchDir)) {
+        const testPath = path.join(searchDir, 'dist', 'core', 'core.node');
+        try {
+          require.resolve(testPath);
+          return testPath;
+        } catch {
+          searchDir = path.dirname(searchDir);
+        }
+      }
+      return null;
+    })(),
+    (() => {
+      let searchDir = __dirname;
+      while (searchDir !== path.dirname(searchDir)) {
+        const testPath = path.join(searchDir, 'core', 'core.node');
+        try {
+          require.resolve(testPath);
+          return testPath;
+        } catch {
+          searchDir = path.dirname(searchDir);
+        }
+      }
+      return null;
+    })(),
+  ].filter((p): p is string => p !== null);
 
-  // Walk up the directory tree to find where dist/core/core.node exists
-  let searchDir = currentDir;
   let corePath = '';
+  let loaded = false;
 
-  while (searchDir !== path.dirname(searchDir)) {
-    const testPath = path.join(searchDir, 'dist/core/core.node');
+  for (const testPath of possiblePaths) {
     try {
       require.resolve(testPath);
       corePath = testPath;
+      core = require(testPath);
+      loaded = true;
+      console.log('✅ Core loaded from:', corePath);
       break;
-    } catch {
-      searchDir = path.dirname(searchDir);
-    }
-  }
-
-  if (corePath) {
-    core = require(corePath);
-  } else {
-    throw new Error('Could not find core.node in dist/core/core.node');
+    } catch (error) {}
   }
 } catch (error) {
+  console.log('⚠️  Running in simulation mode (no Rust core)');
   core = null;
 }
 
@@ -1506,8 +1535,25 @@ export function listPausedWorkflows() {
   return Array.from(pausedWorkflows.values());
 }
 
+// Function to check if Rust core is available
 export function isRustCoreAvailable(): boolean {
   return core !== null;
+}
+
+// Function to get core loading status
+export function getCoreStatus(): {
+  available: boolean;
+  path?: string;
+  error?: string;
+} {
+  if (core) {
+    return { available: true };
+  } else {
+    return {
+      available: false,
+      error: 'Core not loaded - running in simulation mode',
+    };
+  }
 }
 
 function getMemoryUsage() {

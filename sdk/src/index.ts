@@ -34,6 +34,8 @@ export const cronflow = {
 
   isRustCoreAvailable: cronflowFunctions.isRustCoreAvailable,
 
+  getCoreStatus: cronflowFunctions.getCoreStatus,
+
   replay: cronflowFunctions.replay,
 
   resume: cronflowFunctions.resume,
