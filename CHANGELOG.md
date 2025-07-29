@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5
+
+### Patch Changes
+
+- Remove logs
+
 ## 0.5.4
 
 ### Patch Changes
