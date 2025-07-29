@@ -2,68 +2,11 @@ import { WorkflowInstance, WorkflowDefinition, Context } from './workflow';
 import { createStateManager } from './state';
 import * as http from 'http';
 import * as url from 'url';
-import path from 'path';
 import { scheduler } from './scheduler';
+import { loadCoreModule } from './utils/core-resolver';
 
 // Import the Rust addon
-let core: any;
-try {
-  const possiblePaths = [
-    path.join(__dirname, '..', '..', 'dist', 'core', 'core.node'),
-    path.join(__dirname, '..', 'core', 'core.node'),
-    path.join(__dirname, '..', '..', 'core', 'core.node'),
-    path.join(__dirname, 'dist', 'core', 'core.node'),
-    path.join(__dirname, '..', '..', 'core', 'index.node'),
-    path.join(__dirname, '..', 'core', 'index.node'),
-    path.join(__dirname, 'core', 'index.node'),
-    path.join(__dirname, '..', '..', 'core', 'core.node'),
-    path.join(__dirname, '..', 'core', 'core.node'),
-    path.join(__dirname, 'core', 'core.node'),
-    (() => {
-      let searchDir = __dirname;
-      while (searchDir !== path.dirname(searchDir)) {
-        const testPath = path.join(searchDir, 'dist', 'core', 'core.node');
-        try {
-          require.resolve(testPath);
-          return testPath;
-        } catch {
-          searchDir = path.dirname(searchDir);
-        }
-      }
-      return null;
-    })(),
-    (() => {
-      let searchDir = __dirname;
-      while (searchDir !== path.dirname(searchDir)) {
-        const testPath = path.join(searchDir, 'core', 'core.node');
-        try {
-          require.resolve(testPath);
-          return testPath;
-        } catch {
-          searchDir = path.dirname(searchDir);
-        }
-      }
-      return null;
-    })(),
-  ].filter((p): p is string => p !== null);
-
-  let corePath = '';
-  let loaded = false;
-
-  for (const testPath of possiblePaths) {
-    try {
-      require.resolve(testPath);
-      corePath = testPath;
-      core = require(testPath);
-      loaded = true;
-      console.log('✅ Core loaded from:', corePath);
-      break;
-    } catch (error) {}
-  }
-} catch (error) {
-  console.log('⚠️  Running in simulation mode (no Rust core)');
-  core = null;
-}
+const { core } = loadCoreModule();
 
 export const VERSION = '0.1.0';
 

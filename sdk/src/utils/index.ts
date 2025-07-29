@@ -1,5 +1,6 @@
 import type { Context } from '../workflow/types';
 import { createStateWrapper } from '../state';
+export * from './core-resolver';
 
 /**
  * Convert interval string to cron expression
