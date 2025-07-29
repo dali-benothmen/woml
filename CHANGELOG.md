@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.7
+
+### Patch Changes
+
+- Update License
+
 ## 0.5.6
 
 ### Patch Changes
