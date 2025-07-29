@@ -7,7 +7,7 @@
 **The Fastest Code-First Workflow Automation Engine**
 
 [![npm version](https://img.shields.io/npm/v/cronflow.svg)](https://www.npmjs.com/package/cronflow)
-[![License: Apache 2.0](https://img.shields.io/badge/License-MIT-yellow.svg)](http://www.apache.org/licenses/LICENSE-2.0)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Bun](https://img.shields.io/badge/Bun-000000?logo=bun&logoColor=white)](https://bun.sh/)
