@@ -1,6 +1,6 @@
 {
   "name": "cronflow",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": false,
   "description": "The Fastest Code-First Workflow Automation Engine",
   "main": "dist/index.js",
@@ -103,7 +103,7 @@
   "author": {
     "name": "Mohamed Ali Ben Othmen"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dali-benothmen/cronflow.git"

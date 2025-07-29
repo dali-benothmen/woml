@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8
+
+### Patch Changes
+
+- change license in npm
+
 ## 0.5.7
 
 ### Patch Changes
