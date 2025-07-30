@@ -18,25 +18,6 @@ _Built with Rust + Bun for unparalleled performance_
 
 ---
 
-<div align="center">
-
-## ⭐ Star Cronflow on GitHub
-
-**Love what we're building? Show your support!**
-
-[![GitHub stars](https://img.shields.io/github/stars/dali-benothmen/cronflow?style=social&label=Star)](https://github.com/dali-benothmen/cronflow)
-[![GitHub forks](https://img.shields.io/github/forks/dali-benothmen/cronflow?style=social&label=Fork)](https://github.com/dali-benothmen/cronflow/fork)
-[![GitHub issues](https://img.shields.io/github/issues/dali-benothmen/cronflow)](https://github.com/dali-benothmen/cronflow/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/dali-benothmen/cronflow)](https://github.com/dali-benothmen/cronflow/pulls)
-
-**Your stars fuel our development!** 🌟 Every star helps us continue building the fastest workflow automation engine.
-
-**[⭐ Star Cronflow](https://github.com/dali-benothmen/cronflow)** • **[🐛 Report Issues](https://github.com/dali-benothmen/cronflow/issues)** • **[💡 Request Features](https://github.com/dali-benothmen/cronflow/discussions)**
-
-</div>
-
----
-
 ## 📋 Table of Contents
 
 - [🚀 Overview](#-overview)
