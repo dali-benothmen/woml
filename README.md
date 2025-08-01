@@ -23,7 +23,6 @@ _Built with Rust + Bun for unparalleled performance_
 - [🚀 Overview](#-overview)
 - [📦 Installation](#-installation)
 - [💻 Usage](#-usage)
-- [🎯 Features](#-features)
 - [⚡ Performance Comparison](#-performance-comparison)
 - [📖 API Reference](./docs/api-reference.md)
 - [🎯 Examples](./examples/examples.md)
@@ -40,17 +39,16 @@ _Built with Rust + Bun for unparalleled performance_
 
 ---
 
-_We ran a 12-step computational heavy workflow on a **Life time Free VPS from ORACLE** (1vCPU, 1GB RAM):_
+_We ran a 12-step computational heavy workflow on a **Life time Free VPS from ORACLE** (1vCPU, 1GB RAM). The workflow included Fibonacci calculations, 10,000+ records processed, matrix multiplication, and 3 parallel complex operations:_
 
 <div align="center">
 
-| What We Processed                | Traditional Tools | CronFlow Result      |
+| Performance Metric               | Traditional Tools | CronFlow Result      |
 | -------------------------------- | ----------------- | -------------------- |
-| 🧮 **Fibonacci calculations**    | 500ms+            | **11.5ms**           |
-| 📊 **10,000+ records processed** | 2-5 seconds       | **3.7ms**            |
-| 🔢 **Matrix multiplication**     | 200ms+            | **5.3ms**            |
-| ⚡ **3 parallel operations**     | Sequential only   | **True concurrency** |
-| 💾 **Memory consumption**        | 50MB+             | **0.49MB per step**  |
+| ⚡ **Total Speed**               | 5+ seconds        | **118ms**            |
+| 🚀 **Avg Speed per Step**            | 400ms+            | **9.8ms**            |
+| 💾 **Total Memory Peak**         | 500MB+             | **5.9MB**            |
+| 🧠 **Memory per Step**           | 4MB+              | **0.49MB**           |
 
 ### **🏆 Total: 118ms for entire workflow**
 
@@ -98,322 +96,27 @@ While other automation engines struggle with basic webhook processing, Cronflow 
 ```bash
 npm install cronflow
 ```
-
-**That's it!** No databases, no complex setups, no additional services. Everything you need is included in one package.
-
----
-
-# 💻 Usage
-
-## 🚀 AI-Powered Customer Support Bot
-
-Build an intelligent customer support system that routes tickets, analyzes sentiment, and escalates issues:
-
-```typescript
-import { cronflow } from 'cronflow';
-import { OpenAI } from 'openai';
-
-const supportBot = cronflow.define({
-  id: 'ai-support-bot',
-  name: 'AI Customer Support Automation',
-});
-
-supportBot
-  .onWebhook('/support/ticket')
-  .step('analyze-sentiment', async ctx => {
-    const { message, customer_email } = ctx.payload;
-    const sentiment = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: `Analyze sentiment: ${message}` }],
-    });
-
-    return {
-      sentiment: sentiment.choices[0].message.content,
-      priority: sentiment.includes('angry') ? 'high' : 'normal',
-      customer_email,
-    };
-  })
-  .if('high-priority', ctx => ctx.last.priority === 'high')
-  .humanInTheLoop({
-    timeout: '15m',
-    description: 'Urgent: Angry customer needs immediate attention',
-    onPause: (ctx, token) => {
-      // Slack alert to support team
-      slack.send(`🚨 Escalated ticket: ${ctx.last.customer_email}`);
-    },
-  })
-  .else()
-  .step('auto-respond', async ctx => {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        {
-          role: 'user',
-          content: `Generate helpful response for: ${ctx.payload.message}`,
-        },
-      ],
-    });
-
-    await sendEmail(
-      ctx.last.customer_email,
-      response.choices[0].message.content
-    );
-    return { auto_resolved: true };
-  })
-  .endIf();
-```
-
-## 🛒 E-commerce Order Processing Pipeline
-
-Handle orders with payment processing, inventory checks, and shipping automation:
-
-```typescript
-const orderPipeline = cronflow.define({
-  id: 'ecommerce-orders',
-  name: 'Smart Order Processing',
-});
-
-orderPipeline
-  .onWebhook('/orders/new')
-  .parallel([
-    async ctx => {
-      // Check inventory
-      const available = await checkInventory(ctx.payload.items);
-      return { inventory_status: available ? 'available' : 'low_stock' };
-    },
-    async ctx => {
-      // Process payment
-      const payment = await stripe.charges.create({
-        amount: ctx.payload.total * 100,
-        currency: 'usd',
-        source: ctx.payload.payment_token,
-      });
-      return { payment_id: payment.id, charged: true };
-    },
-  ])
-  .if('inventory-available', ctx => ctx.last.inventory_status === 'available')
-  .step('fulfill-order', async ctx => {
-    const shipment = await createShipment(
-      ctx.payload.items,
-      ctx.payload.address
-    );
-    await updateInventory(ctx.payload.items);
-
-    return { tracking_number: shipment.tracking, fulfilled: true };
-  })
-  .action('send-confirmation', async ctx => {
-    await sendEmail(ctx.payload.customer_email, {
-      subject: 'Order Confirmed!',
-      tracking: ctx.last.tracking_number,
-    });
-  })
-  .else()
-  .step('backorder-notification', async ctx => {
-    await sendEmail(ctx.payload.customer_email, {
-      subject: 'Item Backordered',
-      estimated_delivery: '2-3 weeks',
-    });
-    return { backordered: true };
-  })
-  .endIf();
-```
-
-## 📊 Real-Time Data Processing & Alerts
-
-Monitor system metrics and trigger intelligent alerts based on patterns:
-
-```typescript
-const monitoringSystem = cronflow.define({
-  id: 'system-monitoring',
-  name: 'Intelligent System Monitoring',
-});
-
-monitoringSystem
-  .onWebhook('/metrics/system')
-  .step('analyze-metrics', async ctx => {
-    const { cpu, memory, disk } = ctx.payload;
-
-    const anomaly_score = calculateAnomalyScore({
-      current: { cpu, memory, disk },
-      historical: await getHistoricalMetrics(),
-    });
-
-    return {
-      metrics: { cpu, memory, disk },
-      anomaly_score,
-      is_critical: anomaly_score > 0.8,
-    };
-  })
-  .if('critical-alert', ctx => ctx.last.is_critical)
-  .parallel([
-    async ctx => {
-      // Immediate Slack alert
-      await slack.send(
-        `🚨 CRITICAL: Anomaly detected (${ctx.last.anomaly_score})`
-      );
-      return { slack_sent: true };
-    },
-    async ctx => {
-      // Auto-scale infrastructure
-      await aws.ec2.runInstances({ MinCount: 2, MaxCount: 2 });
-      return { scaled_up: true };
-    },
-  ])
-  .humanInTheLoop({
-    timeout: '5m',
-    description: 'Should we trigger emergency protocols?',
-    onPause: (ctx, token) => {
-      console.log(`🔥 System critical - approval needed: ${token}`);
-    },
-  })
-  .else()
-  .action('log-metrics', async ctx => {
-    await database.metrics.insert(ctx.last.metrics);
-  })
-  .endIf();
-```
-
-## 🤖 Multi-Step AI Agent Workflow
-
-Create an AI agent that researches, analyzes, and takes action based on findings:
-
-```typescript
-const researchAgent = cronflow.define({
-  id: 'ai-research-agent',
-  name: 'Autonomous Research Agent',
-});
-
-researchAgent
-  .onWebhook('/research/topic')
-  .step('gather-information', async ctx => {
-    const { topic, depth } = ctx.payload;
-
-    // Multi-source research
-    const [webResults, newsResults, academicResults] = await Promise.all([
-      searchWeb(topic),
-      getNewsArticles(topic),
-      getAcademicPapers(topic),
-    ]);
-
-    return {
-      sources: {
-        web: webResults,
-        news: newsResults,
-        academic: academicResults,
-      },
-      topic,
-    };
-  })
-  .step('synthesize-findings', async ctx => {
-    const synthesis = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        {
-          role: 'user',
-          content: `Analyze and synthesize these research findings: ${JSON.stringify(ctx.last.sources)}`,
-        },
-      ],
-    });
-
-    return {
-      analysis: synthesis.choices[0].message.content,
-      confidence: calculateConfidenceScore(ctx.last.sources),
-    };
-  })
-  .if('high-confidence', ctx => ctx.last.confidence > 0.85)
-  .step('take-action', async ctx => {
-    // Auto-publish findings
-    const post = await createBlogPost({
-      title: `Research: ${ctx.last.topic}`,
-      content: ctx.last.analysis,
-    });
-
-    return { published: true, post_id: post.id };
-  })
-  .else()
-  .humanInTheLoop({
-    timeout: '2h',
-    description: 'Review research findings before publishing',
-    onPause: (ctx, token) => {
-      // Send to content team for review
-      sendForReview(ctx.last.analysis, token);
-    },
-  })
-  .endIf();
-```
-
-## 🔌 Framework Integration (Express.js)
-
-Seamlessly integrate with your existing Express.js application:
-
-```typescript
-import express from 'express';
+```js
 import { cronflow } from 'cronflow';
 
-const app = express();
-app.use(express.json());
-
-const userOnboarding = cronflow.define({
-  id: 'user-onboarding',
-  name: 'Smart User Onboarding',
+const workflow = cronflow.define({
+  id: 'hello-world',
+  name: 'My First Workflow'
 });
 
-// Integrate directly with Express routes
-userOnboarding
-  .onWebhook('/api/users/signup', {
-    app: 'express',
-    appInstance: app,
-    method: 'POST',
-  })
-  .step('create-user', async ctx => {
-    const user = await User.create(ctx.payload);
-    return { user_id: user.id, email: user.email };
-  })
-  .parallel([
-    async ctx => {
-      // Send welcome email
-      await sendWelcomeEmail(ctx.last.email);
-      return { welcome_sent: true };
-    },
-    async ctx => {
-      // Setup user workspace
-      await createUserWorkspace(ctx.last.user_id);
-      return { workspace_ready: true };
-    },
-  ])
-  .action('track-onboarding', async ctx => {
-    analytics.track('user_onboarded', { user_id: ctx.last.user_id });
-  });
+workflow
+  .onWebhook('/webhooks/hello')
+  .step('greet', async (ctx) => ({ message: `Hello, ${ctx.payload.name}!` }))
+  .action('log', (ctx) => console.log(ctx.last.message));
 
-// Manual workflow triggers
-app.post('/api/workflows/trigger/:id', async (req, res) => {
-  const runId = await cronflow.trigger(req.params.id, req.body);
-  res.json({ success: true, runId });
-});
-
-app.listen(3000, async () => {
-  await cronflow.start();
-  console.log('🚀 Server with CronFlow automation running');
-});
+cronflow.start(); // 🎉 Your workflow is live at http://localhost:3000
+```
+Test it instantly:
+```bash
+curl -X POST http://localhost:3000/webhooks/hello -H "Content-Type: application/json" -d '{"name":"World"}'
 ```
 
-## 🎯 Features
-
-- **🤖 AI Integration**: OpenAI, sentiment analysis, autonomous decision making
-- **⚡ Parallel Processing**: Handle multiple operations simultaneously
-- **🔀 Smart Conditionals**: Dynamic routing based on real-time data
-- **👥 Human-in-the-Loop**: Seamless escalation when AI confidence is low
-- **🌐 Framework Agnostic**: Works with Express, Fastify, Next.js, and more
-- **📊 Real-time Processing**: Handle webhooks, metrics, and events instantly
-- **🎣 Lifecycle Hooks**: Monitor, log, and react to workflow events
-
-_Each workflow runs in under 2ms with minimal memory footprint - perfect for high-traffic production environments._
-
----
-
-## ⚡ Performance Comparison
-
-### 🏆 Cronflow vs Industry Leaders
+### ⚡ Performance Comparison
 
 | Feature            | Cronflow               | n8n                 | Make.com            | Zapier           | Temporal   |
 | ------------------ | ---------------------- | ------------------- | ------------------- | ---------------- | ---------- |
@@ -426,6 +129,265 @@ _Each workflow runs in under 2ms with minimal memory footprint - perfect for hig
 | **Hot Reload**     | ✅ **Instant**         | ❌ Restart required | ❌ Restart required | ❌ Not available | ⚠️ Limited |
 | **Error Handling** | ✅ **Circuit Breaker** | ❌ Basic            | ❌ Basic            | ❌ Basic         | ✅ Good    |
 | **Monitoring**     | ✅ **Built-in**        | ❌ External         | ❌ External         | ❌ External      | ✅ Good    |
+
+## 💻 Usage
+
+### Define Workflows
+
+Create workflow definitions with full TypeScript support:
+
+```typescript
+import { cronflow } from 'cronflow';
+
+const workflow = cronflow.define({
+  id: 'my-workflow',
+  name: 'My Workflow',
+  description: 'Optional workflow description'
+});
+```
+
+### Webhook Triggers
+
+Automatically create HTTP endpoints that trigger your workflows:
+
+```typescript
+import { z } from 'zod';
+
+workflow
+  .onWebhook('/webhooks/order', {
+    method: 'POST', // GET, POST, PUT, DELETE
+    schema: z.object({
+      orderId: z.string(),
+      amount: z.number().positive(),
+      customerEmail: z.string().email()
+    })
+  });
+```
+
+### Processing Steps
+
+Add steps that process data and return results:
+
+```typescript
+workflow
+  .step('validate-order', async (ctx) => {
+    // ctx.payload contains the webhook data
+    const order = await validateOrder(ctx.payload);
+    return { order, isValid: true };
+  })
+  .step('calculate-tax', async (ctx) => {
+    // ctx.last contains the previous step's result
+    const tax = ctx.last.order.amount * 0.08;
+    return { tax, total: ctx.last.order.amount + tax };
+  });
+```
+
+### Background Actions
+
+Execute side effects that don't return data:
+
+```typescript
+workflow
+  .action('send-confirmation', async (ctx) => {
+    // Actions run in the background
+    await sendEmail({
+      to: ctx.payload.customerEmail,
+      subject: 'Order Confirmed',
+      body: `Your order ${ctx.payload.orderId} is confirmed!`
+    });
+  })
+  .action('log-completion', (ctx) => {
+    console.log('Order processed:', ctx.last);
+  });
+```
+
+### Conditional Logic
+
+Add if/else branching to your workflows:
+
+```typescript
+workflow
+  .step('check-amount', async (ctx) => ({ amount: ctx.payload.amount }))
+  .if('high-value', (ctx) => ctx.last.amount > 100)
+    .step('require-approval', async (ctx) => {
+      return { needsApproval: true, amount: ctx.last.amount };
+    })
+    .action('notify-manager', async (ctx) => {
+      await notifyManager(`High value order: ${ctx.last.amount}`);
+    })
+  .else()
+    .step('auto-approve', async (ctx) => {
+      return { approved: true, amount: ctx.last.amount };
+    })
+  .endIf()
+  .step('finalize', async (ctx) => {
+    return { processed: true, approved: ctx.last.approved };
+  });
+```
+
+### Context Object
+
+Every step and action receives a context object with:
+
+```typescript
+workflow.step('example', async (ctx) => {
+  // ctx.payload - Original trigger data (webhook payload, etc.)
+  // ctx.last - Result from the previous step
+  // ctx.meta - Workflow metadata (id, runId, startTime, etc.)
+  // ctx.services - Configured services (covered in advanced features)
+  
+  console.log('Workflow ID:', ctx.meta.workflowId);
+  console.log('Run ID:', ctx.meta.runId);
+  console.log('Original payload:', ctx.payload);
+  console.log('Previous step result:', ctx.last);
+  
+  return { processed: true };
+});
+```
+
+### Start the Engine
+
+Launch Cronflow to handle incoming requests:
+
+```typescript
+// Start on default port 3000
+cronflow.start();
+
+// Or specify custom options
+cronflow.start({
+  port: 8080,
+  host: '0.0.0.0'
+});
+```
+
+📖 [View Complete API Documentation →](./docs/api-reference.md)
+
+## 🚀 Advanced Features
+
+### Parallel Execution
+
+Run multiple steps concurrently for better performance:
+
+```typescript
+workflow
+  .parallel([
+    async (ctx) => ({ email: await sendEmail(ctx.last.user) }),
+    async (ctx) => ({ sms: await sendSMS(ctx.last.user) }),
+    async (ctx) => ({ slack: await notifySlack(ctx.last.user) })
+  ]);
+```
+
+### Human-in-the-Loop Processing
+
+Pause workflows for manual approval with timeout handling:
+
+```typescript
+workflow
+  .humanInTheLoop({
+    timeout: '24h',
+    description: 'Manual review required',
+    onPause: async (ctx, token) => {
+      await sendApprovalRequest(ctx.payload.email, token);
+    },
+    onTimeout: async (ctx) => {
+      await sendTimeoutNotification(ctx.payload.email);
+    }
+  })
+  .step('process-approval', async (ctx) => {
+    if (ctx.last.timedOut) {
+      return { approved: false, reason: 'Timeout' };
+    }
+    return { approved: ctx.last.approved };
+  });
+
+// Resume paused workflows
+await cronflow.resume('approval_token_123', {
+  approved: true,
+  reason: 'Looks good!'
+});
+```
+
+### Event Triggers
+
+Listen to custom events from your application:
+
+```typescript
+workflow
+  .onEvent('user.signup', {
+    schema: z.object({
+      userId: z.string(),
+      email: z.string().email()
+    })
+  })
+  .step('send-welcome', async (ctx) => {
+    await sendWelcomeEmail(ctx.payload.email);
+    return { welcomed: true };
+  });
+
+// Emit events from your app
+cronflow.emit('user.signup', {
+  userId: '123',
+  email: 'user@example.com'
+});
+```
+
+### Manual Triggers
+
+Trigger workflows programmatically from your code:
+
+```typescript
+// Define workflow without automatic trigger
+const manualWorkflow = cronflow.define({
+  id: 'manual-processing'
+});
+
+manualWorkflow
+  .step('process-data', async (ctx) => {
+    return { processed: ctx.payload.data };
+  });
+
+// Trigger manually with custom payload
+const runId = await cronflow.trigger('manual-processing', {
+  data: 'custom payload',
+  source: 'api-call'
+});
+
+console.log('Workflow started with run ID:', runId);
+```
+
+### Framework Integration
+
+Integrate with existing Express, Fastify, or other Node.js frameworks:
+
+```typescript
+import express from 'express';
+
+const app = express();
+
+// Express.js integration
+workflow.onWebhook('/api/webhook', {
+  app: 'express',
+  appInstance: app,
+  method: 'POST'
+});
+
+// Custom framework integration
+workflow.onWebhook('/custom/webhook', {
+  registerRoute: (method, path, handler) => {
+    myFramework[method.toLowerCase()](path, handler);
+  }
+});
+
+app.listen(3000, async () => {
+  await cronflow.start(); // Start Cronflow engine
+  console.log('Server running on port 3000');
+});
+```
+
+
+
+
+---
 
 ### 🎯 Why Cronflow is Faster
 
