@@ -28,6 +28,21 @@ import {
   incrWorkflowState as incrWorkflowStateFromModule,
   deleteWorkflowState as deleteWorkflowStateFromModule,
 } from './state/workflow-state';
+import {
+  resume as resumeFromModule,
+  storePausedWorkflow as storePausedWorkflowFromModule,
+  getPausedWorkflow as getPausedWorkflowFromModule,
+  listPausedWorkflows as listPausedWorkflowsFromModule,
+} from './human-loop';
+import {
+  publishEvent as publishEventFromModule,
+  registerEventListener as registerEventListenerFromModule,
+  unregisterEventListener as unregisterEventListenerFromModule,
+  getEventHistory as getEventHistoryFromModule,
+  getEventListeners as getEventListenersFromModule,
+  setEventSystemState,
+  getEventListenersState,
+} from './events';
 
 // Import the Rust addon
 const { core } = loadCoreModule();
@@ -69,6 +84,8 @@ function setState(newState: Partial<CronflowState>): void {
   state = { ...state, ...newState };
   // Keep workflow engine state in sync
   setWorkflowEngineState(state);
+  // Keep event system state in sync
+  setEventSystemState(state.eventListeners, state.eventHistory);
 }
 
 function registerStepHandler(
@@ -108,6 +125,12 @@ function initialize(dbPath?: string): void {
   // Initialize workflow engine with current state
   setWorkflowEngineState(getCurrentState());
   setStepRegistry(stepRegistry);
+
+  // Initialize event system state
+  setEventSystemState(
+    getCurrentState().eventListeners,
+    getCurrentState().eventHistory
+  );
 }
 
 export async function getGlobalState(
@@ -399,57 +422,7 @@ export async function cancelRun(runId: string): Promise<void> {
 }
 
 export async function publishEvent(name: string, payload: any): Promise<void> {
-  const currentState = getCurrentState();
-
-  currentState.eventHistory.push({
-    name,
-    payload,
-    timestamp: Date.now(),
-  });
-
-  if (currentState.eventHistory.length > 1000) {
-    currentState.eventHistory = currentState.eventHistory.slice(-1000);
-  }
-
-  const listeners = currentState.eventListeners.get(name) || [];
-
-  if (listeners.length === 0) {
-    return;
-  }
-
-  const triggerPromises = listeners.map(async listener => {
-    try {
-      const { workflowId, trigger } = listener;
-
-      const eventPayload = {
-        event: {
-          name,
-          payload,
-          timestamp: Date.now(),
-        },
-        ...payload,
-      };
-
-      const runId = await trigger(workflowId, eventPayload);
-
-      return { workflowId, runId, success: true };
-    } catch (error) {
-      return { workflowId: listener.workflowId, error, success: false };
-    }
-  });
-
-  const results = await Promise.allSettled(triggerPromises);
-
-  const successful = results.filter(
-    r => r.status === 'fulfilled' && r.value.success
-  ).length;
-  const failed = results.length - successful;
-
-  results.forEach((result, index) => {
-    if (result.status === 'rejected') {
-    } else if (result.status === 'fulfilled' && !result.value.success) {
-    }
-  });
+  return await publishEventFromModule(name, payload);
 }
 
 export function getWorkflows(): WorkflowDefinition[] {
@@ -581,63 +554,8 @@ export async function replay(
   // TODO: Implement replay functionality
 }
 
-const pausedWorkflows = new Map<
-  string,
-  {
-    token: string;
-    workflowId: string;
-    runId: string;
-    stepId: string;
-    description: string;
-    metadata?: Record<string, any>;
-    createdAt: number;
-    expiresAt?: number;
-    status: 'waiting' | 'resumed' | 'timeout';
-    payload: any;
-    lastStepOutput: any;
-    resumeCallback?: (payload: any) => void;
-    resumedAt?: number;
-  }
->();
-
 export async function resume(token: string, payload: any): Promise<void> {
-  const pausedWorkflow = pausedWorkflows.get(token);
-
-  if (!pausedWorkflow) {
-    throw new Error(`No paused workflow found with token: ${token}`);
-  }
-
-  if (pausedWorkflow.status !== 'waiting') {
-    throw new Error(
-      `Workflow with token ${token} has already been ${pausedWorkflow.status}`
-    );
-  }
-
-  if (pausedWorkflow.expiresAt && Date.now() > pausedWorkflow.expiresAt) {
-    pausedWorkflow.status = 'timeout';
-    throw new Error(`Workflow with token ${token} has expired`);
-  }
-
-  pausedWorkflow.status = 'resumed';
-  pausedWorkflow.resumedAt = Date.now();
-
-  if (pausedWorkflow.resumeCallback) {
-    pausedWorkflow.resumeCallback(payload);
-  } else {
-    try {
-      await executeWorkflowSteps(
-        pausedWorkflow.workflowId,
-        pausedWorkflow.runId,
-        pausedWorkflow.payload
-      );
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  pausedWorkflows.delete(token);
-
-  return Promise.resolve();
+  return await resumeFromModule(token, payload);
 }
 
 export function storePausedWorkflow(
@@ -657,15 +575,15 @@ export function storePausedWorkflow(
     resumeCallback?: (payload: any) => void;
   }
 ): void {
-  pausedWorkflows.set(token, pauseInfo);
+  return storePausedWorkflowFromModule(token, pauseInfo);
 }
 
 export function getPausedWorkflow(token: string) {
-  return pausedWorkflows.get(token);
+  return getPausedWorkflowFromModule(token);
 }
 
 export function listPausedWorkflows() {
-  return Array.from(pausedWorkflows.values());
+  return listPausedWorkflowsFromModule();
 }
 
 // Function to check if Rust core is available
@@ -1217,67 +1135,35 @@ function registerEventListener(
   workflowId: string,
   trigger: any
 ): void {
-  const currentState = getCurrentState();
-
-  if (!currentState.eventListeners.has(eventName)) {
-    currentState.eventListeners.set(eventName, []);
-  }
-
-  const listeners = currentState.eventListeners.get(eventName)!;
-
-  const existingIndex = listeners.findIndex(l => l.workflowId === workflowId);
-  if (existingIndex >= 0) {
-    listeners[existingIndex] = { workflowId, trigger };
-  } else {
-    listeners.push({ workflowId, trigger });
-  }
+  registerEventListenerFromModule(eventName, workflowId, trigger);
+  // Update the main state to keep it in sync
+  const eventState = getEventListenersState();
+  setState({
+    eventListeners: eventState.listeners,
+    eventHistory: eventState.history,
+  });
 }
 
 function unregisterEventListener(eventName: string, workflowId: string): void {
-  const currentState = getCurrentState();
-
-  const listeners = currentState.eventListeners.get(eventName);
-  if (!listeners) {
-    return;
-  }
-
-  const index = listeners.findIndex(l => l.workflowId === workflowId);
-  if (index >= 0) {
-    listeners.splice(index, 1);
-
-    if (listeners.length === 0) {
-      currentState.eventListeners.delete(eventName);
-    }
-  }
+  unregisterEventListenerFromModule(eventName, workflowId);
+  // Update the main state to keep it in sync
+  const eventState = getEventListenersState();
+  setState({
+    eventListeners: eventState.listeners,
+    eventHistory: eventState.history,
+  });
 }
 
 function getEventHistory(
   eventName?: string
 ): Array<{ name: string; payload: any; timestamp: number }> {
-  const currentState = getCurrentState();
-
-  if (eventName) {
-    return currentState.eventHistory.filter(event => event.name === eventName);
-  }
-
-  return [...currentState.eventHistory];
+  return getEventHistoryFromModule(eventName);
 }
 
 function getEventListeners(
   eventName?: string
 ): Map<string, Array<{ workflowId: string; trigger: any }>> {
-  const currentState = getCurrentState();
-
-  if (eventName) {
-    const listeners = currentState.eventListeners.get(eventName);
-    const result = new Map();
-    if (listeners) {
-      result.set(eventName, listeners);
-    }
-    return result;
-  }
-
-  return new Map(currentState.eventListeners);
+  return getEventListenersFromModule(eventName);
 }
 
 export {

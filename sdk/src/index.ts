@@ -14,4 +14,20 @@ export { RetryExecutor } from './retry';
 export { PerformanceOptimizer, PerformanceMonitor } from './performance';
 export { TestHarness, AdvancedTestHarness } from './testing';
 export { createWebhookServer } from './webhook';
+export {
+  resume,
+  storePausedWorkflow,
+  getPausedWorkflow,
+  listPausedWorkflows,
+  type PausedWorkflow,
+} from './human-loop';
+export {
+  publishEvent,
+  registerEventListener,
+  unregisterEventListener,
+  getEventHistory,
+  getEventListeners,
+  type EventListener,
+  type EventHistoryItem,
+} from './events';
 export { VERSION } from './cronflow';
