@@ -22,6 +22,12 @@ import {
   getStateStats as getStateStatsFromModule,
   cleanupExpiredState as cleanupExpiredStateFromModule,
 } from './state/global-state';
+import {
+  getWorkflowState as getWorkflowStateFromModule,
+  setWorkflowState as setWorkflowStateFromModule,
+  incrWorkflowState as incrWorkflowStateFromModule,
+  deleteWorkflowState as deleteWorkflowStateFromModule,
+} from './state/workflow-state';
 
 // Import the Rust addon
 const { core } = loadCoreModule();
@@ -135,9 +141,12 @@ export async function getWorkflowState(
   key: string,
   defaultValue?: any
 ): Promise<any> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager(workflowId, currentState.dbPath);
-  return await stateManager.get(key, defaultValue);
+  return await getWorkflowStateFromModule(
+    workflowId,
+    key,
+    getCurrentState,
+    defaultValue
+  );
 }
 
 export async function setWorkflowState(
@@ -146,9 +155,13 @@ export async function setWorkflowState(
   value: any,
   options?: { ttl?: string }
 ): Promise<void> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager(workflowId, currentState.dbPath);
-  await stateManager.set(key, value, options);
+  return await setWorkflowStateFromModule(
+    workflowId,
+    key,
+    value,
+    getCurrentState,
+    options
+  );
 }
 
 export async function incrWorkflowState(
@@ -156,18 +169,19 @@ export async function incrWorkflowState(
   key: string,
   amount: number = 1
 ): Promise<number> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager(workflowId, currentState.dbPath);
-  return await stateManager.incr(key, amount);
+  return await incrWorkflowStateFromModule(
+    workflowId,
+    key,
+    getCurrentState,
+    amount
+  );
 }
 
 export async function deleteWorkflowState(
   workflowId: string,
   key: string
 ): Promise<boolean> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager(workflowId, currentState.dbPath);
-  return await stateManager.delete(key);
+  return await deleteWorkflowStateFromModule(workflowId, key, getCurrentState);
 }
 
 export async function getStateStats(): Promise<{

@@ -8,5 +8,11 @@ export {
   getStateStats,
   cleanupExpiredState,
 } from './global-state';
+export {
+  getWorkflowState,
+  setWorkflowState,
+  incrWorkflowState,
+  deleteWorkflowState,
+} from './workflow-state';
 export type { StateValue, StateOptions } from './manager';
 export type { StateWrapper } from './wrapper';
