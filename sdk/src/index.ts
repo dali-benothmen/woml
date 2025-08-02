@@ -36,4 +36,9 @@ export {
   executeWorkflowHook,
   type HookHandler,
 } from './hooks';
+export {
+  benchmark,
+  type BenchmarkOptions,
+  type BenchmarkResult,
+} from './performance/benchmark';
 export { VERSION } from './cronflow';

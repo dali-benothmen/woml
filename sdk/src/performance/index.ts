@@ -10,3 +10,9 @@ export {
   type PerformanceReport,
   type MonitoringConfig,
 } from './monitor';
+export {
+  benchmark,
+  setBenchmarkDependencies,
+  type BenchmarkOptions,
+  type BenchmarkResult,
+} from './benchmark';
