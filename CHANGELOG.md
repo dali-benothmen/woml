@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- Major refactoring
+
 ## 0.5.8
 
 ### Patch Changes
