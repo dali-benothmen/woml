@@ -41,4 +41,13 @@ export {
   type BenchmarkOptions,
   type BenchmarkResult,
 } from './performance/benchmark';
+export {
+  executeManualTrigger,
+  executeWebhookTrigger,
+  executeScheduleTrigger,
+  getTriggerStats,
+  getWorkflowTriggers,
+  unregisterWorkflowTriggers,
+  getScheduleTriggers,
+} from './triggers';
 export { VERSION } from './cronflow';
