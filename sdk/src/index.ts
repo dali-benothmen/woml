@@ -50,4 +50,11 @@ export {
   unregisterWorkflowTriggers,
   getScheduleTriggers,
 } from './triggers';
+export {
+  registerWorkflowWithRust,
+  convertToRustFormat,
+  parseDuration,
+  isRustCoreAvailable,
+  getCoreStatus,
+} from './rust';
 export { VERSION } from './cronflow';
