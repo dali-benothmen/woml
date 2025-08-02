@@ -1,87 +1,16 @@
-import * as cronflowFunctions from './cronflow';
-import { scheduler } from './scheduler';
-
-export const cronflow = {
-  define: cronflowFunctions.define,
-
-  start: cronflowFunctions.start,
-
-  stop: cronflowFunctions.stop,
-
-  trigger: cronflowFunctions.trigger,
-
-  inspect: cronflowFunctions.inspect,
-
-  executeManualTrigger: cronflowFunctions.executeManualTrigger,
-
-  executeWebhookTrigger: cronflowFunctions.executeWebhookTrigger,
-
-  executeScheduleTrigger: cronflowFunctions.executeScheduleTrigger,
-
-  getTriggerStats: cronflowFunctions.getTriggerStats,
-
-  getWorkflowTriggers: cronflowFunctions.getWorkflowTriggers,
-
-  unregisterWorkflowTriggers: cronflowFunctions.unregisterWorkflowTriggers,
-
-  getScheduleTriggers: cronflowFunctions.getScheduleTriggers,
-
-  getWorkflows: cronflowFunctions.getWorkflows,
-
-  getWorkflow: cronflowFunctions.getWorkflow,
-
-  getEngineState: cronflowFunctions.getEngineState,
-
-  isRustCoreAvailable: cronflowFunctions.isRustCoreAvailable,
-
-  getCoreStatus: cronflowFunctions.getCoreStatus,
-
-  replay: cronflowFunctions.replay,
-
-  resume: cronflowFunctions.resume,
-
-  cancelRun: cronflowFunctions.cancelRun,
-
-  publishEvent: cronflowFunctions.publishEvent,
-
-  executeStep: cronflowFunctions.executeStep,
-  executeStepFunction: cronflowFunctions.executeStepFunction,
-  executeJobFunction: cronflowFunctions.executeJobFunction,
-
-  // State management functions
-  getGlobalState: cronflowFunctions.getGlobalState,
-  setGlobalState: cronflowFunctions.setGlobalState,
-  incrGlobalState: cronflowFunctions.incrGlobalState,
-  deleteGlobalState: cronflowFunctions.deleteGlobalState,
-  getWorkflowState: cronflowFunctions.getWorkflowState,
-  setWorkflowState: cronflowFunctions.setWorkflowState,
-  incrWorkflowState: cronflowFunctions.incrWorkflowState,
-  deleteWorkflowState: cronflowFunctions.deleteWorkflowState,
-  getStateStats: cronflowFunctions.getStateStats,
-  cleanupExpiredState: cronflowFunctions.cleanupExpiredState,
-
-  // Performance benchmarking
-  benchmark: cronflowFunctions.benchmark,
-
-  // Scheduler
-  scheduler,
-};
-
-// Export types
-export type { WebhookServerConfig, StartOptions } from './cronflow';
-
-export type { WorkflowDefinition } from './workflow/types';
-export type { Context } from './workflow/types';
-export type { StepDefinition, StepOptions } from './workflow/types';
-export type { TriggerDefinition } from './workflow/types';
-export type { BenchmarkOptions, BenchmarkResult } from './cronflow';
-
-export { WorkflowDefinitionSchema } from './workflow/validation';
-
-export * from './workflow';
-
-export * from './state';
-
-export * from './testing';
-
-export { createValidContext } from './cronflow';
+export { cronflow } from './cronflow';
+export {
+  executeWorkflowSteps,
+  executeStep,
+  executeStepFunction,
+  executeJobFunction,
+  createValidContext,
+} from './execution/workflow-engine';
+export { scheduler } from './scheduler';
+export { createStateManager } from './state';
+export { StepExecutor } from './execution';
+export { CircuitBreakerManager } from './circuit-breaker';
+export { RetryExecutor } from './retry';
+export { PerformanceOptimizer, PerformanceMonitor } from './performance';
+export { TestHarness, AdvancedTestHarness } from './testing';
+export { VERSION } from './cronflow';
