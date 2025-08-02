@@ -30,4 +30,10 @@ export {
   type EventListener,
   type EventHistoryItem,
 } from './events';
+export {
+  registerHookHandler,
+  getHookHandler,
+  executeWorkflowHook,
+  type HookHandler,
+} from './hooks';
 export { VERSION } from './cronflow';

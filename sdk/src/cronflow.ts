@@ -1,7 +1,5 @@
 import { WorkflowInstance, WorkflowDefinition, Context } from './workflow';
-import { createStateManager } from './state';
 import * as http from 'http';
-import * as url from 'url';
 import { scheduler } from './scheduler';
 import { loadCoreModule } from './utils/core-resolver';
 import {
@@ -43,6 +41,12 @@ import {
   setEventSystemState,
   getEventListenersState,
 } from './events';
+import {
+  registerHookHandler as registerHookHandlerFromModule,
+  getHookHandler as getHookHandlerFromModule,
+  executeWorkflowHook as executeWorkflowHookFromModule,
+  setGetWorkflowFunction,
+} from './hooks';
 
 // Import the Rust addon
 const { core } = loadCoreModule();
@@ -131,6 +135,9 @@ function initialize(dbPath?: string): void {
     getCurrentState().eventListeners,
     getCurrentState().eventHistory
   );
+
+  // Initialize hook system state
+  setGetWorkflowFunction(getWorkflow);
 }
 
 export async function getGlobalState(
@@ -1031,15 +1038,8 @@ export async function getScheduleTriggers(): Promise<any> {
 
 initialize();
 
-const hookHandlers = new Map<
-  string,
-  (
-    hookType: string,
-    contextJson: string,
-    workflowId: string,
-    stepId?: string
-  ) => Promise<any>
->();
+registerHookHandler('onSuccess', executeWorkflowHook);
+registerHookHandler('onFailure', executeWorkflowHook);
 
 function registerHookHandler(
   hookType: 'onSuccess' | 'onFailure',
@@ -1050,11 +1050,8 @@ function registerHookHandler(
     stepId?: string
   ) => Promise<any>
 ): void {
-  hookHandlers.set(hookType, handler);
+  registerHookHandlerFromModule(hookType, handler);
 }
-
-registerHookHandler('onSuccess', executeWorkflowHook);
-registerHookHandler('onFailure', executeWorkflowHook);
 
 function getHookHandler(
   hookType: string
@@ -1066,7 +1063,7 @@ function getHookHandler(
       stepId?: string
     ) => Promise<any>)
   | undefined {
-  return hookHandlers.get(hookType);
+  return getHookHandlerFromModule(hookType);
 }
 
 export async function executeWorkflowHook(
@@ -1075,59 +1072,12 @@ export async function executeWorkflowHook(
   workflowId: string,
   stepId?: string
 ): Promise<any> {
-  try {
-    const context = JSON.parse(contextJson);
-
-    const workflow = getWorkflow(workflowId);
-    if (!workflow) {
-      return {
-        success: true,
-        message: `No ${hookType} hook defined (workflow not found)`,
-      };
-    }
-
-    const hook =
-      hookType === 'onSuccess'
-        ? workflow.hooks?.onSuccess
-        : workflow.hooks?.onFailure;
-
-    if (hook) {
-      try {
-        await hook(context, stepId);
-        return {
-          success: true,
-          message: `${hookType} hook executed successfully`,
-          hookType,
-          workflowId,
-          stepId,
-        };
-      } catch (error: any) {
-        return {
-          success: false,
-          error: error.message,
-          hookType,
-          workflowId,
-          stepId,
-        };
-      }
-    } else {
-      return {
-        success: true,
-        message: `No ${hookType} hook defined`,
-        hookType,
-        workflowId,
-        stepId,
-      };
-    }
-  } catch (error: any) {
-    return {
-      success: false,
-      error: error.message,
-      hookType,
-      workflowId,
-      stepId,
-    };
-  }
+  return await executeWorkflowHookFromModule(
+    hookType,
+    contextJson,
+    workflowId,
+    stepId
+  );
 }
 
 function registerEventListener(
