@@ -13,6 +13,7 @@ import {
   setWorkflowEngineState,
   setStepRegistry,
 } from './execution/workflow-engine';
+import { createWebhookServer } from './webhook';
 
 // Import the Rust addon
 const { core } = loadCoreModule();
@@ -260,14 +261,12 @@ export function define(
   return instance;
 }
 
-export interface WebhookServerConfig {
-  host?: string;
-  port?: number;
-  maxConnections?: number;
-}
-
 export interface StartOptions {
-  webhookServer?: WebhookServerConfig;
+  webhookServer?: {
+    host?: string;
+    port?: number;
+    maxConnections?: number;
+  };
 }
 
 export async function start(options?: StartOptions): Promise<void> {
@@ -321,179 +320,13 @@ export async function start(options?: StartOptions): Promise<void> {
       }
 
       if (options?.webhookServer) {
-        const result = core.startWebhookServer(currentState.dbPath);
-        if (!result.success) {
-          throw new Error(`Failed to start webhook server: ${result.message}`);
-        }
-
-        const server = http.createServer(async (req, res) => {
-          try {
-            const parsedUrl = url.parse(req.url || '', true);
-            const path = parsedUrl.pathname || '';
-
-            if (path === '/health') {
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(
-                JSON.stringify({
-                  status: 'healthy',
-                  service: 'node-cronflow-webhook-server',
-                  timestamp: new Date().toISOString(),
-                })
-              );
-              return;
-            }
-
-            if (path.startsWith('/webhook/')) {
-              const webhookPath = path.replace('/webhook', '');
-
-              const workflow = Array.from(currentState.workflows.values()).find(
-                w =>
-                  w.triggers.some(
-                    t => t.type === 'webhook' && t.path === webhookPath
-                  )
-              );
-
-              if (!workflow) {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Webhook not found' }));
-                return;
-              }
-
-              const webhookTrigger = workflow.triggers.find(
-                t => t.type === 'webhook' && t.path === webhookPath
-              ) as { type: 'webhook'; path: string; options?: any } | undefined;
-
-              const headers: Record<string, string> = {};
-              for (const [key, value] of Object.entries(req.headers)) {
-                if (Array.isArray(value)) {
-                  headers[key.toLowerCase()] = value[0];
-                } else if (value) {
-                  headers[key.toLowerCase()] = value;
-                }
-              }
-
-              if (webhookTrigger?.options?.headers) {
-                const headerConfig = webhookTrigger.options.headers;
-
-                if (headerConfig.required) {
-                  for (const [requiredHeader, expectedValue] of Object.entries(
-                    headerConfig.required
-                  )) {
-                    const actualValue = headers[requiredHeader.toLowerCase()];
-                    if (!actualValue) {
-                      res.writeHead(400, {
-                        'Content-Type': 'application/json',
-                      });
-                      res.end(
-                        JSON.stringify({
-                          error: `Missing required header: ${requiredHeader}`,
-                          required_headers: headerConfig.required,
-                        })
-                      );
-                      return;
-                    }
-                    if (expectedValue && actualValue !== expectedValue) {
-                      res.writeHead(400, {
-                        'Content-Type': 'application/json',
-                      });
-                      res.end(
-                        JSON.stringify({
-                          error: `Invalid header value for ${requiredHeader}: expected ${expectedValue}, got ${actualValue}`,
-                          required_headers: headerConfig.required,
-                        })
-                      );
-                      return;
-                    }
-                  }
-                }
-
-                if (headerConfig.validate) {
-                  const validationResult = headerConfig.validate(headers);
-                  if (validationResult !== true) {
-                    const errorMessage =
-                      typeof validationResult === 'string'
-                        ? validationResult
-                        : 'Header validation failed';
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: errorMessage }));
-                    return;
-                  }
-                }
-              }
-
-              let body = '';
-              req.on('data', chunk => {
-                body += chunk.toString();
-              });
-
-              req.on('end', async () => {
-                try {
-                  const payload = body ? JSON.parse(body) : {};
-
-                  if (webhookTrigger?.options?.schema) {
-                    try {
-                      webhookTrigger.options.schema.parse(payload);
-                    } catch (schemaError: any) {
-                      res.writeHead(400, {
-                        'Content-Type': 'application/json',
-                      });
-                      res.end(
-                        JSON.stringify({
-                          status: 'error',
-                          message: 'Payload validation failed',
-                          error: schemaError.message,
-                          workflow_triggered: false,
-                        })
-                      );
-                      return;
-                    }
-                  }
-
-                  const runId = await trigger(workflow.id, payload);
-
-                  res.writeHead(200, { 'Content-Type': 'application/json' });
-                  res.end(
-                    JSON.stringify({
-                      status: 'success',
-                      message: 'Webhook processed successfully',
-                      workflow_triggered: true,
-                      run_id: runId,
-                    })
-                  );
-                } catch (error) {
-                  res.writeHead(500, { 'Content-Type': 'application/json' });
-                  res.end(
-                    JSON.stringify({
-                      status: 'error',
-                      message:
-                        error instanceof Error
-                          ? error.message
-                          : 'Unknown error',
-                      workflow_triggered: false,
-                    })
-                  );
-                }
-              });
-
-              return;
-            }
-
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Not found' }));
-          } catch (error) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Internal server error' }));
-          }
-        });
-
-        const host = options.webhookServer.host || '127.0.0.1';
-        const port = options.webhookServer.port || 3000;
-
-        server.listen(port, host, () => {
-          setState({ webhookServer: server });
-        });
-
-        setState({ webhookServer: server });
+        const webhookServer = createWebhookServer(
+          options.webhookServer,
+          getCurrentState,
+          setState,
+          trigger
+        );
+        setState({ webhookServer: webhookServer.server });
       }
     } catch (error) {
       throw error;

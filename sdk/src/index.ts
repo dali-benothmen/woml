@@ -13,4 +13,5 @@ export { CircuitBreakerManager } from './circuit-breaker';
 export { RetryExecutor } from './retry';
 export { PerformanceOptimizer, PerformanceMonitor } from './performance';
 export { TestHarness, AdvancedTestHarness } from './testing';
+export { createWebhookServer } from './webhook';
 export { VERSION } from './cronflow';
