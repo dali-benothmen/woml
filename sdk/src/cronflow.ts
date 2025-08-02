@@ -14,6 +14,14 @@ import {
   setStepRegistry,
 } from './execution/workflow-engine';
 import { createWebhookServer } from './webhook';
+import {
+  getGlobalState as getGlobalStateFromModule,
+  setGlobalState as setGlobalStateFromModule,
+  incrGlobalState as incrGlobalStateFromModule,
+  deleteGlobalState as deleteGlobalStateFromModule,
+  getStateStats as getStateStatsFromModule,
+  cleanupExpiredState as cleanupExpiredStateFromModule,
+} from './state/global-state';
 
 // Import the Rust addon
 const { core } = loadCoreModule();
@@ -96,14 +104,11 @@ function initialize(dbPath?: string): void {
   setStepRegistry(stepRegistry);
 }
 
-// State management functions
 export async function getGlobalState(
   key: string,
   defaultValue?: any
 ): Promise<any> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager('global', currentState.dbPath);
-  return await stateManager.get(key, defaultValue);
+  return await getGlobalStateFromModule(key, getCurrentState, defaultValue);
 }
 
 export async function setGlobalState(
@@ -111,24 +116,18 @@ export async function setGlobalState(
   value: any,
   options?: { ttl?: string }
 ): Promise<void> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager('global', currentState.dbPath);
-  await stateManager.set(key, value, options);
+  return await setGlobalStateFromModule(key, value, getCurrentState, options);
 }
 
 export async function incrGlobalState(
   key: string,
   amount: number = 1
 ): Promise<number> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager('global', currentState.dbPath);
-  return await stateManager.incr(key, amount);
+  return await incrGlobalStateFromModule(key, getCurrentState, amount);
 }
 
 export async function deleteGlobalState(key: string): Promise<boolean> {
-  const currentState = getCurrentState();
-  const stateManager = createStateManager('global', currentState.dbPath);
-  return await stateManager.delete(key);
+  return await deleteGlobalStateFromModule(key, getCurrentState);
 }
 
 export async function getWorkflowState(
@@ -188,46 +187,14 @@ export async function getStateStats(): Promise<{
     }
   >;
 }> {
-  const currentState = getCurrentState();
-  const globalStateManager = createStateManager('global', currentState.dbPath);
-  const globalStats = await globalStateManager.stats();
-
-  const workflowStats: Record<string, any> = {};
-  for (const workflow of currentState.workflows.values()) {
-    const workflowStateManager = createStateManager(
-      workflow.id,
-      currentState.dbPath
-    );
-    workflowStats[workflow.id] = await workflowStateManager.stats();
-  }
-
-  return {
-    global: globalStats,
-    workflows: workflowStats,
-  };
+  return await getStateStatsFromModule(getCurrentState);
 }
 
 export async function cleanupExpiredState(): Promise<{
   global: number;
   workflows: Record<string, number>;
 }> {
-  const currentState = getCurrentState();
-  const globalStateManager = createStateManager('global', currentState.dbPath);
-  const globalCleaned = await globalStateManager.cleanup();
-
-  const workflowCleaned: Record<string, number> = {};
-  for (const workflow of currentState.workflows.values()) {
-    const workflowStateManager = createStateManager(
-      workflow.id,
-      currentState.dbPath
-    );
-    workflowCleaned[workflow.id] = await workflowStateManager.cleanup();
-  }
-
-  return {
-    global: globalCleaned,
-    workflows: workflowCleaned,
-  };
+  return await cleanupExpiredStateFromModule(getCurrentState);
 }
 
 export function define(
