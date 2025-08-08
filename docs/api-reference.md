@@ -220,6 +220,7 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 | `parseRawBody`   | `boolean`                | `false`  | Whether to parse the raw body for signature validation               |
 | `app`            | `string`                 | -        | Framework name for integration (e.g., 'express', 'fastify')          |
 | `appInstance`    | `any`                    | -        | Framework app instance for integration                               |
+| `trigger`        | `string`                 | -        | ID or name of specific step to trigger instead of full workflow      |
 | `middleware`     | `Array<Function>`        | -        | Array of middleware functions to execute before the webhook handler  |
 | `onSuccess`      | `Function`               | -        | Callback executed when webhook processing succeeds                   |
 | `onError`        | `Function`               | -        | Callback executed when webhook processing fails                      |
