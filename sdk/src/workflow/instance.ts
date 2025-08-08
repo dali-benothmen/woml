@@ -283,6 +283,39 @@ export class WorkflowInstance {
           }
         }
 
+        if (options.validate) {
+          try {
+            const validationResult = options.validate(req.body);
+            const validationPassed =
+              validationResult instanceof Promise
+                ? await validationResult
+                : validationResult;
+
+            if (validationPassed !== true) {
+              const errorMessage =
+                typeof validationPassed === 'string'
+                  ? validationPassed
+                  : 'Custom validation failed';
+
+              console.error('❌ Custom validation failed:', errorMessage);
+              return res.status(400).json({
+                success: false,
+                error: 'Custom validation failed',
+                details: errorMessage,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          } catch (validationError: any) {
+            console.error('❌ Custom validation error:', validationError);
+            return res.status(400).json({
+              success: false,
+              error: 'Custom validation error',
+              details: validationError.message,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+
         if (options.headers?.required) {
           const requiredHeaders = options.headers.required;
           for (const [key, value] of Object.entries(requiredHeaders)) {
@@ -517,6 +550,39 @@ export class WorkflowInstance {
               success: false,
               error: 'Payload validation failed',
               details: schemaError.message,
+            });
+          }
+        }
+
+        if (options.validate) {
+          try {
+            const validationResult = options.validate(req.body);
+            const validationPassed =
+              validationResult instanceof Promise
+                ? await validationResult
+                : validationResult;
+
+            if (validationPassed !== true) {
+              const errorMessage =
+                typeof validationPassed === 'string'
+                  ? validationPassed
+                  : 'Custom validation failed';
+
+              console.error('❌ Custom validation failed:', errorMessage);
+              return res.status(400).json({
+                success: false,
+                error: 'Custom validation failed',
+                details: errorMessage,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          } catch (validationError: any) {
+            console.error('❌ Custom validation error:', validationError);
+            return res.status(400).json({
+              success: false,
+              error: 'Custom validation error',
+              details: validationError.message,
+              timestamp: new Date().toISOString(),
             });
           }
         }

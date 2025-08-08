@@ -216,6 +216,7 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 | ---------------- | ------------------------ | -------- | -------------------------------------------------------------------- |
 | `method`         | `'POST' \| 'GET' \| ...` | `'POST'` | The HTTP method to accept                                            |
 | `schema`         | `z.ZodObject`            | -        | Zod schema to validate incoming request body                         |
+| `validate`       | `Function`               | -        | Custom validation function (payload) => boolean \| string            |
 | `idempotencyKey` | `(ctx) => string`        | -        | Function to extract key from request to prevent duplicate processing |
 | `parseRawBody`   | `boolean`                | `false`  | Whether to parse the raw body for signature validation               |
 | `app`            | `string`                 | -        | Framework name for integration (e.g., 'express', 'fastify')          |
@@ -231,7 +232,7 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 ```typescript
 import { z } from "zod";
 
-// Basic webhook with validation
+// Basic webhook with schema validation
 orderWorkflow.onWebhook("/v1/orders/create", {
   schema: z.object({
     orderId: z.string().uuid(),
@@ -239,6 +240,79 @@ orderWorkflow.onWebhook("/v1/orders/create", {
   }),
   idempotencyKey: (ctx) => ctx.trigger.headers["x-idempotency-key"],
   parseRawBody: true, // For Stripe signature validation
+});
+
+// Webhook with custom validation
+orderWorkflow.onWebhook("/webhooks/orders/validate", {
+  method: "POST",
+  validate: (payload) => {
+    // Custom business rules
+    if (payload.amount > 10000) {
+      return "Orders above $10,000 require manual review";
+    }
+    
+    if (payload.items && payload.items.length > 50) {
+      return "Orders with more than 50 items are not supported";
+    }
+    
+    // Validation passed
+    return true;
+  },
+  schema: z.object({
+    orderId: z.string(),
+    amount: z.number().positive(),
+    items: z.array(z.object({ id: z.string(), quantity: z.number() })).optional(),
+  }),
+});
+
+// Webhook with async custom validation
+orderWorkflow.onWebhook("/webhooks/orders/async-validate", {
+  method: "POST",
+  validate: async (payload) => {
+    // Async validation (e.g., database checks)
+    const customer = await customerService.getCustomer(payload.customerId);
+    
+    if (!customer.isActive) {
+      return "Customer account is inactive";
+    }
+    
+    if (customer.creditLimit < payload.amount) {
+      return `Order amount exceeds credit limit of $${customer.creditLimit}`;
+    }
+    
+    return true;
+  },
+  schema: z.object({
+    customerId: z.string(),
+    amount: z.number().positive(),
+  }),
+});
+
+// Webhook with both schema and custom validation
+orderWorkflow.onWebhook("/webhooks/orders/comprehensive", {
+  method: "POST",
+  // Schema validation runs first
+  schema: z.object({
+    orderId: z.string().min(1),
+    amount: z.number().positive(),
+    customerId: z.string().min(1),
+    priority: z.enum(['low', 'medium', 'high']).optional(),
+  }),
+  // Custom validation runs after schema validation
+  validate: (payload) => {
+    // Business rule: high priority orders must be above $100
+    if (payload.priority === 'high' && payload.amount < 100) {
+      return "High priority orders must be at least $100";
+    }
+    
+    // Business rule: weekend orders have amount limits
+    const isWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
+    if (isWeekend && payload.amount > 5000) {
+      return "Weekend orders are limited to $5,000";
+    }
+    
+    return true;
+  },
 });
 
 // Webhook with middleware for authentication and rate limiting

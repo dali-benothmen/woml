@@ -116,6 +116,7 @@ export type TriggerDefinition =
 export interface WebhookOptions {
   method?: 'POST' | 'GET' | 'PUT' | 'DELETE';
   schema?: z.ZodObject<any>;
+  validate?: (payload: any) => boolean | string | Promise<boolean | string>;
   idempotencyKey?: (ctx: Context) => string;
   parseRawBody?: boolean;
   app?: SupportedFramework;
