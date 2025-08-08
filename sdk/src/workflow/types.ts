@@ -90,18 +90,6 @@ export interface StepOptions {
   pause?: boolean;
 }
 
-export interface RetryConfig {
-  attempts: number;
-  backoff: {
-    strategy: 'exponential' | 'fixed';
-    delay: string | number;
-  };
-  jitter?: boolean;
-  maxBackoff?: string | number;
-  onRetry?: (attempt: number, error: Error, delay: number) => void;
-  shouldRetry?: (error: Error) => boolean;
-}
-
 export interface CacheConfig {
   key: (ctx: Context) => string;
   ttl: string;
@@ -112,6 +100,28 @@ export type TriggerDefinition =
   | { type: 'schedule'; cron_expression: string }
   | { type: 'event'; eventName: string }
   | { type: 'manual' };
+
+export interface RetryBackoffConfig {
+  strategy?: 'fixed' | 'linear' | 'exponential';
+  delay: string | number;
+  maxDelay?: string | number;
+  multiplier?: number;
+}
+
+export interface RetryConfig {
+  attempts: number;
+  backoff?: RetryBackoffConfig;
+  retryOn?: {
+    errors?: string[];
+    statusCodes?: number[];
+    conditions?: (error: Error, attempt: number) => boolean;
+  };
+  onRetry?: (
+    error: Error,
+    attempt: number,
+    nextDelay: number
+  ) => void | Promise<void>;
+}
 
 export interface WebhookOptions {
   method?: 'POST' | 'GET' | 'PUT' | 'DELETE';
@@ -133,6 +143,7 @@ export interface WebhookOptions {
   >;
   onSuccess?: (ctx: Context, result?: any) => void | Promise<void>;
   onError?: (ctx: Context, error: Error) => void | Promise<void>;
+  retry?: RetryConfig;
 }
 
 export interface Context {

@@ -11,11 +11,155 @@ import {
 } from './types';
 import { validateWorkflow } from './validation';
 import { parseDuration, generateId } from '../utils';
+import type { RetryBackoffConfig } from './types';
 import { createTestHarness } from '../testing/harness';
 import {
   createAdvancedTestHarness,
   AdvancedTestHarness,
 } from '../testing/advanced';
+
+function parseDelayToMs(delay: string | number): number {
+  if (typeof delay === 'number') {
+    return delay;
+  }
+
+  const match = delay.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);
+  if (!match) {
+    throw new Error(
+      `Invalid delay format: ${delay}. Use formats like "5s", "1m", "500ms"`
+    );
+  }
+
+  const value = parseFloat(match[1]);
+  const unit = match[2] || 'ms';
+
+  switch (unit) {
+    case 'ms':
+      return value;
+    case 's':
+      return value * 1000;
+    case 'm':
+      return value * 60 * 1000;
+    case 'h':
+      return value * 60 * 60 * 1000;
+    default:
+      throw new Error(`Unsupported time unit: ${unit}`);
+  }
+}
+
+function calculateBackoffDelay(
+  backoff: RetryBackoffConfig,
+  attempt: number
+): number {
+  const baseDelay = parseDelayToMs(backoff.delay);
+  const maxDelay = backoff.maxDelay
+    ? parseDelayToMs(backoff.maxDelay)
+    : Infinity;
+  const multiplier =
+    backoff.multiplier || (backoff.strategy === 'exponential' ? 2 : 1);
+
+  let delay: number;
+
+  switch (backoff.strategy || 'fixed') {
+    case 'fixed':
+      delay = baseDelay;
+      break;
+    case 'linear':
+      delay = baseDelay * (1 + (attempt - 1) * multiplier);
+      break;
+    case 'exponential':
+      delay = baseDelay * Math.pow(multiplier, attempt - 1);
+      break;
+    default:
+      delay = baseDelay;
+  }
+
+  return Math.min(delay, maxDelay);
+}
+
+function shouldRetry(
+  error: Error,
+  attempt: number,
+  retryConfig: RetryConfig
+): boolean {
+  if (attempt >= retryConfig.attempts) {
+    return false;
+  }
+
+  const { retryOn } = retryConfig;
+  if (!retryOn) {
+    return true;
+  }
+
+  if (retryOn.conditions) {
+    return retryOn.conditions(error, attempt);
+  }
+
+  if (retryOn.errors && retryOn.errors.length > 0) {
+    const errorMessage = error.message.toLowerCase();
+    return retryOn.errors.some(pattern =>
+      errorMessage.includes(pattern.toLowerCase())
+    );
+  }
+
+  if (retryOn.statusCodes && retryOn.statusCodes.length > 0) {
+    const statusCode = (error as any).statusCode || (error as any).status;
+    if (statusCode) {
+      return retryOn.statusCodes.includes(statusCode);
+    }
+  }
+
+  return true;
+}
+
+async function executeWithRetry<T>(
+  operation: () => Promise<T>,
+  retryConfig: RetryConfig,
+  operationName: string = 'operation'
+): Promise<T> {
+  let lastError: Error;
+
+  for (let attempt = 1; attempt <= retryConfig.attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      lastError = error;
+
+      if (!shouldRetry(error, attempt, retryConfig)) {
+        console.log(
+          `❌ ${operationName} failed after ${attempt} attempts, not retrying`
+        );
+        throw error;
+      }
+
+      if (attempt < retryConfig.attempts) {
+        const delay = retryConfig.backoff
+          ? calculateBackoffDelay(retryConfig.backoff, attempt)
+          : 1000;
+
+        console.log(
+          `🔄 ${operationName} failed (attempt ${attempt}/${retryConfig.attempts}), retrying in ${delay}ms: ${error.message}`
+        );
+
+        if (retryConfig.onRetry) {
+          try {
+            await retryConfig.onRetry(error, attempt, delay);
+          } catch (callbackError) {
+            console.error('❌ Error in retry callback:', callbackError);
+          }
+        }
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  console.log(
+    `❌ ${operationName} failed after all ${retryConfig.attempts} attempts`
+  );
+  throw lastError!;
+}
+
 import {
   getFrameworkHandler,
   isFrameworkSupported,
@@ -398,12 +542,24 @@ export class WorkflowInstance {
 
           const contextJson = JSON.stringify(stepContext);
 
-          const stepResult = await this._cronflowInstance.executeStepFunction(
-            stepToTrigger.name,
-            contextJson,
-            this._workflow.id,
-            stepContext.run_id
-          );
+          const stepResult = options.retry
+            ? await executeWithRetry(
+                () =>
+                  this._cronflowInstance.executeStepFunction(
+                    stepToTrigger.name,
+                    contextJson,
+                    this._workflow.id,
+                    stepContext.run_id
+                  ),
+                options.retry,
+                `Step execution: ${stepToTrigger.name}`
+              )
+            : await this._cronflowInstance.executeStepFunction(
+                stepToTrigger.name,
+                contextJson,
+                this._workflow.id,
+                stepContext.run_id
+              );
 
           if (stepResult.success && stepResult.result) {
             if (options.onSuccess) {
@@ -478,10 +634,17 @@ export class WorkflowInstance {
           };
 
           try {
-            const runId = await this._cronflowInstance.trigger(
-              this._workflow.id,
-              req.body
-            );
+            const runId = options.retry
+              ? await executeWithRetry(
+                  () =>
+                    this._cronflowInstance.trigger(this._workflow.id, req.body),
+                  options.retry,
+                  `Workflow execution: ${this._workflow.name || this._workflow.id}`
+                )
+              : await this._cronflowInstance.trigger(
+                  this._workflow.id,
+                  req.body
+                );
 
             if (options.onSuccess) {
               try {
@@ -669,12 +832,24 @@ export class WorkflowInstance {
 
           const contextJson = JSON.stringify(stepContext);
 
-          const stepResult = await this._cronflowInstance.executeStepFunction(
-            stepToTrigger.name,
-            contextJson,
-            this._workflow.id,
-            stepContext.run_id
-          );
+          const stepResult = options.retry
+            ? await executeWithRetry(
+                () =>
+                  this._cronflowInstance.executeStepFunction(
+                    stepToTrigger.name,
+                    contextJson,
+                    this._workflow.id,
+                    stepContext.run_id
+                  ),
+                options.retry,
+                `Step execution: ${stepToTrigger.name}`
+              )
+            : await this._cronflowInstance.executeStepFunction(
+                stepToTrigger.name,
+                contextJson,
+                this._workflow.id,
+                stepContext.run_id
+              );
 
           if (stepResult.success && stepResult.result) {
             if (options.onSuccess) {
@@ -749,10 +924,17 @@ export class WorkflowInstance {
           };
 
           try {
-            const runId = await this._cronflowInstance.trigger(
-              this._workflow.id,
-              req.body
-            );
+            const runId = options.retry
+              ? await executeWithRetry(
+                  () =>
+                    this._cronflowInstance.trigger(this._workflow.id, req.body),
+                  options.retry,
+                  `Workflow execution: ${this._workflow.name || this._workflow.id}`
+                )
+              : await this._cronflowInstance.trigger(
+                  this._workflow.id,
+                  req.body
+                );
 
             if (options.onSuccess) {
               try {

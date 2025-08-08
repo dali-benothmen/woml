@@ -226,6 +226,7 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 | `middleware`     | `Array<Function>`        | -        | Array of middleware functions to execute before the webhook handler  |
 | `onSuccess`      | `Function`               | -        | Callback executed when webhook processing succeeds                   |
 | `onError`        | `Function`               | -        | Callback executed when webhook processing fails                      |
+| `retry`          | `RetryConfig`            | -        | Retry configuration for failed webhook executions                    |
 
 #### Example
 
@@ -421,6 +422,108 @@ orderWorkflow.onWebhook("/webhooks/business-hours", {
   onSuccess: (ctx, result) => {
     console.log("✅ Business hours order processed");
   },
+});
+
+// Webhook with retry configuration
+orderWorkflow.onWebhook("/webhooks/orders/retry", {
+  method: "POST",
+  retry: {
+    attempts: 3,
+    backoff: { 
+      strategy: "exponential",
+      delay: "1s",
+      maxDelay: "30s",
+      multiplier: 2
+    },
+    onRetry: (error, attempt, nextDelay) => {
+      console.log(`🔄 Retry attempt ${attempt}, next delay: ${nextDelay}ms`);
+      console.log(`Error: ${error.message}`);
+    }
+  },
+  trigger: "process-order",
+  onSuccess: (ctx, result) => {
+    console.log("✅ Order processed successfully after retries");
+  },
+  onError: (ctx, error) => {
+    console.error("❌ Order processing failed after all retries:", error.message);
+  }
+});
+
+// Webhook with custom retry conditions
+orderWorkflow.onWebhook("/webhooks/orders/selective-retry", {
+  method: "POST",
+  retry: {
+    attempts: 5,
+    backoff: { 
+      strategy: "linear",
+      delay: "2s",
+      multiplier: 1.5
+    },
+    retryOn: {
+      // Only retry on specific errors
+      errors: ["timeout", "network error", "service unavailable"],
+      // Only retry on specific status codes
+      statusCodes: [500, 502, 503, 504],
+      // Custom retry condition
+      conditions: (error, attempt) => {
+        // Don't retry validation errors
+        if (error.message.includes("validation")) {
+          return false;
+        }
+        // Retry network issues up to 3 times
+        if (error.message.includes("network") && attempt < 3) {
+          return true;
+        }
+        return false;
+      }
+    }
+  },
+  validate: (payload) => {
+    if (!payload.orderId) {
+      throw new Error("validation: orderId is required");
+    }
+    return true;
+  }
+});
+
+// Webhook with different backoff strategies
+orderWorkflow.onWebhook("/webhooks/orders/backoff-strategies", {
+  method: "POST",
+  // Fixed delay: 5s between each retry
+  retry: {
+    attempts: 3,
+    backoff: { 
+      strategy: "fixed",
+      delay: "5s"
+    }
+  }
+});
+
+orderWorkflow.onWebhook("/webhooks/orders/linear-backoff", {
+  method: "POST",
+  // Linear backoff: 1s, 2s, 3s, 4s...
+  retry: {
+    attempts: 4,
+    backoff: { 
+      strategy: "linear",
+      delay: "1s",
+      multiplier: 1 // Each retry adds 1 * multiplier * delay
+    }
+  }
+});
+
+orderWorkflow.onWebhook("/webhooks/orders/exponential-backoff", {
+  method: "POST",
+  // Exponential backoff: 1s, 2s, 4s, 8s... (capped at 60s)
+  retry: {
+    attempts: 6,
+    backoff: { 
+      strategy: "exponential",
+      delay: "1s",
+      maxDelay: "60s",
+      multiplier: 2
+    }
+  }
 });
 ```
 
