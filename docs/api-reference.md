@@ -221,6 +221,8 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 | `app`            | `string`                 | -        | Framework name for integration (e.g., 'express', 'fastify')          |
 | `appInstance`    | `any`                    | -        | Framework app instance for integration                               |
 | `middleware`     | `Array<Function>`        | -        | Array of middleware functions to execute before the webhook handler  |
+| `onSuccess`      | `Function`               | -        | Callback executed when webhook processing succeeds                   |
+| `onError`        | `Function`               | -        | Callback executed when webhook processing fails                      |
 
 #### Example
 
@@ -258,6 +260,40 @@ orderWorkflow.onWebhook("/webhooks/orders", {
       next();
     },
   ],
+  schema: z.object({
+    orderId: z.string(),
+    amount: z.number(),
+  }),
+});
+
+// Webhook with success/error callbacks
+orderWorkflow.onWebhook("/webhooks/orders", {
+  method: "POST",
+  trigger: "process-order", // Trigger specific step
+  onSuccess: (ctx, result) => {
+    console.log("✅ Webhook processed successfully", {
+      workflowId: ctx.workflow_id,
+      result: result
+    });
+    
+    // Send notification, log to analytics, etc.
+    analyticsService.track('webhook_success', {
+      workflow: ctx.workflow_id,
+      step: ctx.step_name,
+      timestamp: new Date()
+    });
+  },
+  onError: (ctx, error) => {
+    console.error("❌ Webhook processing failed:", error);
+    
+    // Send alert, log error details, etc.
+    alertService.sendAlert({
+      type: 'webhook_failure',
+      workflow: ctx.workflow_id,
+      error: error.message,
+      context: ctx
+    });
+  },
   schema: z.object({
     orderId: z.string(),
     amount: z.number(),

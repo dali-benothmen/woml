@@ -129,6 +129,8 @@ export interface WebhookOptions {
   middleware?: Array<
     (req: any, res: any, next: () => void) => void | Promise<void>
   >;
+  onSuccess?: (ctx: Context, result?: any) => void | Promise<void>;
+  onError?: (ctx: Context, error: Error) => void | Promise<void>;
 }
 
 export interface Context {

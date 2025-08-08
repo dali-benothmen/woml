@@ -346,6 +346,20 @@ export class WorkflowInstance {
           );
 
           if (stepResult.success && stepResult.result) {
+            if (options.onSuccess) {
+              try {
+                const callbackResult = options.onSuccess(
+                  stepContext,
+                  stepResult.result
+                );
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onSuccess callback error:', callbackError);
+              }
+            }
+
             res.json({
               success: true,
               stepId: options.trigger,
@@ -355,6 +369,21 @@ export class WorkflowInstance {
               timestamp: new Date().toISOString(),
             });
           } else {
+            const stepError = new Error(
+              stepResult.message || 'Step execution failed'
+            );
+
+            if (options.onError) {
+              try {
+                const callbackResult = options.onError(stepContext, stepError);
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onError callback error:', callbackError);
+              }
+            }
+
             console.error(
               `❌ Step ${options.trigger} failed:`,
               stepResult.message
@@ -367,17 +396,69 @@ export class WorkflowInstance {
             });
           }
         } else {
-          const runId = await this._cronflowInstance.trigger(
-            this._workflow.id,
-            req.body
-          );
+          const webhookContext = {
+            payload: req.body,
+            steps: {},
+            run: {
+              id: `webhook_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              workflowId: this._workflow.id,
+            },
+            last: undefined,
+            state: {
+              get: () => null,
+              set: async () => {},
+              incr: async () => 0,
+            },
+            trigger: { headers: req.headers },
+            cancel: (reason?: string) => {
+              throw new Error(
+                `Webhook cancelled: ${reason || 'No reason provided'}`
+              );
+            },
+          };
 
-          res.json({
-            success: true,
-            runId,
-            message: 'Webhook processed successfully',
-            timestamp: new Date().toISOString(),
-          });
+          try {
+            const runId = await this._cronflowInstance.trigger(
+              this._workflow.id,
+              req.body
+            );
+
+            if (options.onSuccess) {
+              try {
+                const callbackResult = options.onSuccess(webhookContext, {
+                  runId,
+                });
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onSuccess callback error:', callbackError);
+              }
+            }
+
+            res.json({
+              success: true,
+              runId,
+              message: 'Webhook processed successfully',
+              timestamp: new Date().toISOString(),
+            });
+          } catch (workflowError: any) {
+            if (options.onError) {
+              try {
+                const callbackResult = options.onError(
+                  webhookContext,
+                  workflowError
+                );
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onError callback error:', callbackError);
+              }
+            }
+
+            throw workflowError;
+          }
         }
       } catch (error: any) {
         console.error('❌ Webhook processing failed:', error);
@@ -476,6 +557,20 @@ export class WorkflowInstance {
           );
 
           if (stepResult.success && stepResult.result) {
+            if (options.onSuccess) {
+              try {
+                const callbackResult = options.onSuccess(
+                  stepContext,
+                  stepResult.result
+                );
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onSuccess callback error:', callbackError);
+              }
+            }
+
             res.json({
               success: true,
               stepId: options.trigger,
@@ -485,6 +580,21 @@ export class WorkflowInstance {
               timestamp: new Date().toISOString(),
             });
           } else {
+            const stepError = new Error(
+              stepResult.message || 'Step execution failed'
+            );
+
+            if (options.onError) {
+              try {
+                const callbackResult = options.onError(stepContext, stepError);
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onError callback error:', callbackError);
+              }
+            }
+
             console.error(
               `❌ Step ${options.trigger} failed:`,
               stepResult.message
@@ -497,17 +607,69 @@ export class WorkflowInstance {
             });
           }
         } else {
-          const runId = await this._cronflowInstance.trigger(
-            this._workflow.id,
-            req.body
-          );
+          const webhookContext = {
+            payload: req.body,
+            steps: {},
+            run: {
+              id: `webhook_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              workflowId: this._workflow.id,
+            },
+            last: undefined,
+            state: {
+              get: () => null,
+              set: async () => {},
+              incr: async () => 0,
+            },
+            trigger: { headers: req.headers },
+            cancel: (reason?: string) => {
+              throw new Error(
+                `Webhook cancelled: ${reason || 'No reason provided'}`
+              );
+            },
+          };
 
-          res.json({
-            success: true,
-            runId,
-            message: 'Webhook processed successfully',
-            timestamp: new Date().toISOString(),
-          });
+          try {
+            const runId = await this._cronflowInstance.trigger(
+              this._workflow.id,
+              req.body
+            );
+
+            if (options.onSuccess) {
+              try {
+                const callbackResult = options.onSuccess(webhookContext, {
+                  runId,
+                });
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onSuccess callback error:', callbackError);
+              }
+            }
+
+            res.json({
+              success: true,
+              runId,
+              message: 'Webhook processed successfully',
+              timestamp: new Date().toISOString(),
+            });
+          } catch (workflowError: any) {
+            if (options.onError) {
+              try {
+                const callbackResult = options.onError(
+                  webhookContext,
+                  workflowError
+                );
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+              } catch (callbackError) {
+                console.error('❌ onError callback error:', callbackError);
+              }
+            }
+
+            throw workflowError;
+          }
         }
       } catch (error: any) {
         console.error('❌ Webhook processing failed:', error);
