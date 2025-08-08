@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Cronflow Logo](cronflow.jpeg)
+![Cronflow Logo](cronflow.jpg)
 
 **The Fastest Code-First Workflow Automation Engine**
 
