@@ -220,12 +220,14 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 | `parseRawBody`   | `boolean`                | `false`  | Whether to parse the raw body for signature validation               |
 | `app`            | `string`                 | -        | Framework name for integration (e.g., 'express', 'fastify')          |
 | `appInstance`    | `any`                    | -        | Framework app instance for integration                               |
+| `middleware`     | `Array<Function>`        | -        | Array of middleware functions to execute before the webhook handler  |
 
 #### Example
 
 ```typescript
 import { z } from "zod";
 
+// Basic webhook with validation
 orderWorkflow.onWebhook("/v1/orders/create", {
   schema: z.object({
     orderId: z.string().uuid(),
@@ -233,6 +235,33 @@ orderWorkflow.onWebhook("/v1/orders/create", {
   }),
   idempotencyKey: (ctx) => ctx.trigger.headers["x-idempotency-key"],
   parseRawBody: true, // For Stripe signature validation
+});
+
+// Webhook with middleware for authentication and rate limiting
+orderWorkflow.onWebhook("/webhooks/orders", {
+  method: "POST",
+  middleware: [
+    async (req, res, next) => {
+      // Rate limiting
+      const clientId = req.headers["x-client-id"];
+      if (!clientId) {
+        return res.status(401).json({ error: "Missing client ID" });
+      }
+      next();
+    },
+    async (req, res, next) => {
+      // Authentication
+      const token = req.headers.authorization;
+      if (!token || !isValidToken(token)) {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+      next();
+    },
+  ],
+  schema: z.object({
+    orderId: z.string(),
+    amount: z.number(),
+  }),
 });
 ```
 

@@ -227,6 +227,49 @@ export class WorkflowInstance {
 
     const webhookHandler = async (req: any, res: any) => {
       try {
+        if (options.middleware && options.middleware.length > 0) {
+          for (const middleware of options.middleware) {
+            let nextCalled = false;
+            let middlewareError: any = null;
+
+            const next = () => {
+              nextCalled = true;
+            };
+
+            try {
+              const result = middleware(req, res, next);
+              if (result instanceof Promise) {
+                await result;
+              }
+            } catch (error) {
+              middlewareError = error;
+            }
+
+            if (middlewareError) {
+              console.error('❌ Middleware error:', middlewareError);
+              return res.status(500).json({
+                success: false,
+                error: 'Middleware error',
+                details: middlewareError.message,
+              });
+            }
+
+            if (!nextCalled && res.headersSent) {
+              return;
+            }
+
+            if (!nextCalled && !res.headersSent) {
+              console.error(
+                '❌ Middleware did not call next() or send a response'
+              );
+              return res.status(500).json({
+                success: false,
+                error: 'Middleware did not call next() or send a response',
+              });
+            }
+          }
+        }
+
         if (options.schema) {
           try {
             options.schema.parse(req.body);
