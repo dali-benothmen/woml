@@ -295,6 +295,33 @@ export class WorkflowInstance {
           }
         }
 
+        if (options.condition) {
+          try {
+            const conditionResult = options.condition(req);
+            const conditionPassed =
+              conditionResult instanceof Promise
+                ? await conditionResult
+                : conditionResult;
+
+            if (!conditionPassed) {
+              return res.status(200).json({
+                success: true,
+                message: 'Webhook received but condition not met',
+                conditionMet: false,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          } catch (conditionError: any) {
+            console.error('❌ Condition evaluation failed:', conditionError);
+            return res.status(400).json({
+              success: false,
+              error: 'Condition evaluation failed',
+              details: conditionError.message,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+
         if (options.trigger) {
           const stepToTrigger = this._workflow.steps.find(
             step => step.id === options.trigger || step.name === options.trigger
@@ -503,6 +530,33 @@ export class WorkflowInstance {
                 error: `Missing or invalid required header: ${key}`,
               });
             }
+          }
+        }
+
+        if (options.condition) {
+          try {
+            const conditionResult = options.condition(req);
+            const conditionPassed =
+              conditionResult instanceof Promise
+                ? await conditionResult
+                : conditionResult;
+
+            if (!conditionPassed) {
+              return res.status(200).json({
+                success: true,
+                message: 'Webhook received but condition not met',
+                conditionMet: false,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          } catch (conditionError: any) {
+            console.error('❌ Condition evaluation failed:', conditionError);
+            return res.status(400).json({
+              success: false,
+              error: 'Condition evaluation failed',
+              details: conditionError.message,
+              timestamp: new Date().toISOString(),
+            });
           }
         }
 

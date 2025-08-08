@@ -221,6 +221,7 @@ Registers a webhook endpoint to trigger the workflow on an HTTP request.
 | `app`            | `string`                 | -        | Framework name for integration (e.g., 'express', 'fastify')          |
 | `appInstance`    | `any`                    | -        | Framework app instance for integration                               |
 | `trigger`        | `string`                 | -        | ID or name of specific step to trigger instead of full workflow      |
+| `condition`      | `Function`               | -        | Function to evaluate whether webhook should execute (req) => boolean  |
 | `middleware`     | `Array<Function>`        | -        | Array of middleware functions to execute before the webhook handler  |
 | `onSuccess`      | `Function`               | -        | Callback executed when webhook processing succeeds                   |
 | `onError`        | `Function`               | -        | Callback executed when webhook processing fails                      |
@@ -299,6 +300,53 @@ orderWorkflow.onWebhook("/webhooks/orders", {
     orderId: z.string(),
     amount: z.number(),
   }),
+});
+
+// Webhook with conditional execution
+orderWorkflow.onWebhook("/webhooks/high-value-orders", {
+  method: "POST",
+  condition: (req) => {
+    // Only trigger for orders above $100
+    return req.body.amount > 100;
+  },
+  onSuccess: (ctx, result) => {
+    console.log("✅ High-value order processed:", ctx.payload.amount);
+  },
+  schema: z.object({
+    orderId: z.string(),
+    amount: z.number().positive(),
+  }),
+});
+
+// Webhook with async condition
+orderWorkflow.onWebhook("/webhooks/premium-customers", {
+  method: "POST",
+  condition: async (req) => {
+    // Async condition check
+    const customer = await customerService.getCustomer(req.body.customerId);
+    return customer.tier === 'premium';
+  },
+  trigger: "premium-processing",
+  schema: z.object({
+    customerId: z.string(),
+    orderId: z.string(),
+  }),
+});
+
+// Webhook with complex conditions
+orderWorkflow.onWebhook("/webhooks/business-hours", {
+  method: "POST",
+  condition: (req) => {
+    const now = new Date();
+    const hour = now.getHours();
+    const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+    
+    // Only process during business hours (9 AM - 5 PM, weekdays)
+    return !isWeekend && hour >= 9 && hour < 17;
+  },
+  onSuccess: (ctx, result) => {
+    console.log("✅ Business hours order processed");
+  },
 });
 ```
 

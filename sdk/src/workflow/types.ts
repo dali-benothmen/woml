@@ -126,6 +126,7 @@ export interface WebhookOptions {
     validate?: (headers: Record<string, string>) => boolean | string;
   };
   trigger?: string;
+  condition?: (req: any) => boolean | Promise<boolean>;
   middleware?: Array<
     (req: any, res: any, next: () => void) => void | Promise<void>
   >;
