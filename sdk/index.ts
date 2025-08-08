@@ -7,6 +7,7 @@ export {
   inspect,
   getWorkflows,
   getWorkflow,
+  getConcurrencyStats,
 } from './src/cronflow';
 
 export type {

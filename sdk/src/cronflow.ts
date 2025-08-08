@@ -11,6 +11,7 @@ import {
   setWorkflowEngineState,
   setStepRegistry,
 } from './execution/workflow-engine';
+import { concurrencyManager } from './execution/concurrency-manager';
 import { createWebhookServer } from './webhook';
 import {
   getGlobalState as getGlobalStateFromModule,
@@ -288,13 +289,20 @@ export async function trigger(
     const payloadJson = JSON.stringify(payload);
     const result = core.createRun(workflowId, payloadJson, currentState.dbPath);
 
-    if (result.success && result.runId) {
-      await executeWorkflowSteps(workflowId, result.runId, payload);
-      return result.runId;
-    } else if (result.success) {
-      const fallbackRunId = `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      await executeWorkflowSteps(workflowId, fallbackRunId, payload);
-      return fallbackRunId;
+    const runId =
+      result.success && result.runId
+        ? result.runId
+        : `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    if (result.success || !result.runId) {
+      // Execute with concurrency control
+      await concurrencyManager.executeWithConcurrency(
+        workflowId,
+        runId,
+        payload,
+        () => executeWorkflowSteps(workflowId, runId, payload)
+      );
+      return runId;
     } else {
       throw new Error(`Failed to trigger workflow: ${result.message}`);
     }
@@ -340,6 +348,14 @@ export function getWorkflows(): WorkflowDefinition[] {
 export function getWorkflow(id: string): WorkflowDefinition | undefined {
   const currentState = getCurrentState();
   return currentState.workflows.get(id);
+}
+
+export function getConcurrencyStats(workflowId?: string): any {
+  if (workflowId) {
+    return concurrencyManager.getStats(workflowId);
+  } else {
+    return concurrencyManager.getAllStats();
+  }
 }
 
 export function getEngineState(): 'STOPPED' | 'STARTING' | 'STARTED' {

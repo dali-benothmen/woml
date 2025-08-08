@@ -165,6 +165,7 @@ import {
   isFrameworkSupported,
 } from './framework-registry';
 import { registerEventListener, storePausedWorkflow } from '../cronflow';
+import { concurrencyManager } from '../execution/concurrency-manager';
 import { scheduler } from '../scheduler';
 
 export class WorkflowInstance {
@@ -1810,6 +1811,14 @@ export class WorkflowInstance {
 
   async register(): Promise<void> {
     this.validate();
+
+    // Register concurrency limits if specified
+    if (this._workflow.concurrency && this._workflow.concurrency > 0) {
+      concurrencyManager.registerWorkflow(
+        this._workflow.id,
+        this._workflow.concurrency
+      );
+    }
 
     if (
       this._cronflowInstance &&

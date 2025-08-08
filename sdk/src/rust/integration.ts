@@ -37,6 +37,7 @@ export function convertToRustFormat(workflow: WorkflowDefinition): any {
     id: workflow.id,
     name: workflow.name || workflow.id,
     description: workflow.description || '',
+    concurrency: workflow.concurrency || null,
     steps: workflow.steps.map(step => ({
       id: step.id,
       name: step.name,
@@ -49,7 +50,9 @@ export function convertToRustFormat(workflow: WorkflowDefinition): any {
       retry: step.options?.retry
         ? {
             max_attempts: step.options.retry.attempts,
-            backoff_ms: parseDuration(step.options.retry.backoff.delay),
+            backoff_ms: step.options.retry.backoff
+              ? parseDuration(step.options.retry.backoff.delay)
+              : 1000,
           }
         : { max_attempts: 1, backoff_ms: 1000 },
       depends_on: [],
