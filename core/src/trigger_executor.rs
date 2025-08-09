@@ -74,11 +74,9 @@ impl TriggerExecutor {
     pub fn execute_webhook_trigger(&self, request: WebhookRequest) -> CoreResult<TriggerExecutionResult> {
         log::info!("Executing webhook trigger for path: {}", request.path);
         
-        // Get trigger manager
         let trigger_manager = self.trigger_manager.lock()
             .map_err(|e| CoreError::Internal(format!("Failed to acquire trigger manager lock: {}", e)))?;
         
-        // Get workflow ID for this webhook path
         let workflow_id = trigger_manager.get_workflow_id_for_webhook(&request.path)
             .ok_or_else(|| CoreError::TriggerNotFound(format!("Webhook trigger not found: {}", request.path)))?
             .clone();
@@ -108,7 +106,6 @@ impl TriggerExecutor {
 
     /// Execute a workflow run
     fn execute_workflow(&self, workflow_id: &str, payload: serde_json::Value) -> CoreResult<TriggerExecutionResult> {
-        // Get state manager
         let mut state_manager = self.state_manager.lock()
             .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
         
@@ -116,23 +113,19 @@ impl TriggerExecutor {
         let workflow = state_manager.get_workflow(workflow_id)?
             .ok_or_else(|| CoreError::WorkflowNotFound(format!("Workflow not found: {}", workflow_id)))?;
         
-        // Validate workflow
         workflow.validate()
             .map_err(|e| CoreError::InvalidWorkflow(e))?;
         
-        // Create workflow run
         let run_id = state_manager.create_run(workflow_id, payload.clone())?;
         
         log::info!("Created workflow run: {} for workflow: {}", run_id, workflow_id);
         
-        // Create and submit jobs for workflow steps
         match self.create_and_submit_jobs(&workflow, &run_id, &payload) {
             Ok(job_count) => {
                 log::info!("Successfully submitted {} jobs for workflow run: {}", job_count, run_id);
             }
             Err(error) => {
                 log::error!("Failed to submit jobs for workflow run {}: {}", run_id, error);
-                // Note: We still return success for the trigger execution
                 // The job submission failure will be handled separately
             }
         }
@@ -144,7 +137,6 @@ impl TriggerExecutor {
     fn create_and_submit_jobs(&self, workflow: &WorkflowDefinition, run_id: &Uuid, payload: &serde_json::Value) -> CoreResult<usize> {
         log::info!("Creating jobs for workflow: {} run: {}", workflow.id, run_id);
         
-        // Create a workflow run object for job creation
         let run = crate::models::WorkflowRun {
             id: *run_id,
             workflow_id: workflow.id.clone(),
@@ -155,7 +147,6 @@ impl TriggerExecutor {
             error: None,
         };
         
-        // Create all jobs for the workflow using the new method
         let jobs = Job::create_workflow_jobs(workflow, &run, payload.clone())?;
         
         // Submit all jobs to the dispatcher
@@ -181,7 +172,6 @@ impl TriggerExecutor {
         
         let mut triggers = Vec::new();
         
-        // Get webhook triggers
         for (path, (_, wf_id)) in &trigger_manager.webhook_triggers {
             triggers.push(format!("webhook:{}", path));
         }
@@ -201,10 +191,8 @@ impl TriggerExecutor {
         for trigger_def in &workflow.triggers {
             match trigger_def {
                 crate::models::TriggerDefinition::Webhook { path, method } => {
-                    // Create webhook trigger
                     let webhook_trigger = crate::triggers::WebhookTrigger::new(path.clone(), method.clone());
                     
-                    // Register webhook trigger
                     trigger_manager.register_webhook_trigger(workflow_id, webhook_trigger)?;
                     trigger_ids.push(format!("webhook:{}", path));
                     

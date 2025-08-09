@@ -35,7 +35,6 @@ impl ConditionEvaluator {
     pub fn evaluate_condition(&self, condition_expr: &str) -> CoreResult<ConditionResult> {
         log::debug!("Evaluating condition: {}", condition_expr);
         
-        // Parse the condition expression
         let parsed_condition = self.parse_condition_expression(condition_expr)?;
         
         // Evaluate the parsed condition
@@ -73,7 +72,6 @@ impl ConditionEvaluator {
             return self.parse_comparison_expression(expr);
         }
         
-        // Default: treat as a boolean field reference
         Ok(ParsedCondition::FieldReference(expr.to_string()))
     }
     
@@ -128,7 +126,6 @@ impl ConditionEvaluator {
     
     /// Parse comparison expressions
     fn parse_comparison_expression(&self, expr: &str) -> CoreResult<ParsedCondition> {
-        // Find comparison operators
         let operators = ["==", "!=", ">=", "<=", ">", "<"];
         
         for op in &operators {
@@ -201,7 +198,6 @@ impl ConditionEvaluator {
     
     /// Get a field from the last step result
     fn get_last_step_field(&self, field_path: &str) -> CoreResult<Value> {
-        // For now, we'll use a simple approach
         // In the future, this should access the actual last step result
         if field_path.is_empty() {
             Ok(Value::Null)
@@ -271,13 +267,11 @@ impl ConditionEvaluator {
             }
         }
         
-        // Default to null
         Ok(Value::Null)
     }
     
     /// Evaluate a comparison expression
     fn evaluate_comparison(&self, left: &str, op: &str, right: &str) -> CoreResult<bool> {
-        // Get left value
         let left_value = if left.starts_with("ctx.") {
             let parsed = self.parse_context_reference(left)?;
             match parsed {
@@ -294,7 +288,6 @@ impl ConditionEvaluator {
             }
         };
         
-        // Get right value
         let right_value = if right.starts_with("ctx.") {
             let parsed = self.parse_context_reference(right)?;
             match parsed {

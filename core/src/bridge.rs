@@ -3,7 +3,7 @@
 //! This module handles the communication between the Rust core engine
 //! and the Node.js SDK via N-API.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use napi_derive::napi;
 use crate::{
     models::WorkflowDefinition,
@@ -27,13 +27,51 @@ pub struct Bridge {
     job_dispatcher: Arc<Mutex<Dispatcher>>,
 }
 
+/// Global shared Bridge instance to eliminate N-API function duplication
+static BRIDGE_CACHE: OnceLock<Mutex<Option<Arc<Bridge>>>> = OnceLock::new();
+
+/// Get or create shared Bridge instance for N-API functions
+fn get_shared_bridge(db_path: &str) -> CoreResult<Arc<Bridge>> {
+    let cache = BRIDGE_CACHE.get_or_init(|| Mutex::new(None));
+    let mut bridge_opt = cache.lock()
+        .map_err(|e| CoreError::Internal(format!("Failed to acquire bridge cache lock: {}", e)))?;
+    
+    if let Some(bridge) = bridge_opt.as_ref() {
+        Ok(bridge.clone())
+    } else {
+        let new_bridge = Arc::new(Bridge::new(db_path)?);
+        *bridge_opt = Some(new_bridge.clone());
+        Ok(new_bridge)
+    }
+}
+
+/// Helper function for consistent N-API error handling
+fn handle_bridge_error<T: Default>(error: CoreError) -> T {
+    log::error!("Bridge operation failed: {}", error);
+    T::default()
+}
+
+/// Macro for standardized N-API function patterns with shared bridge
+macro_rules! with_shared_bridge {
+    ($db_path:expr, $success_result:expr, $failure_result:expr, $operation:expr) => {
+        match get_shared_bridge($db_path) {
+            Ok(bridge) => {
+                match $operation(bridge) {
+                    Ok(result) => $success_result(result),
+                    Err(e) => $failure_result(format!("Operation failed: {}", e)),
+                }
+            }
+            Err(e) => $failure_result(format!("Failed to get bridge: {}", e)),
+        }
+    };
+}
+
 impl Bridge {
     /// Create a new N-API bridge
     pub fn new(db_path: &str) -> CoreResult<Self> {
         let state_manager = Arc::new(Mutex::new(StateManager::new(db_path)?));
         let trigger_manager = Arc::new(Mutex::new(TriggerManager::new()));
         
-        // Create job dispatcher with default configuration and state manager
         let dispatcher_config = crate::dispatcher::WorkerPoolConfig::default();
         let job_dispatcher = Arc::new(Mutex::new(Dispatcher::new(dispatcher_config, state_manager.clone())));
         
@@ -55,21 +93,17 @@ impl Bridge {
     pub fn register_workflow(&self, workflow_json: &str) -> CoreResult<()> {
         log::info!("Registering workflow from JSON: {}", workflow_json);
         
-        // Parse JSON to WorkflowDefinition
         let workflow: WorkflowDefinition = serde_json::from_str(workflow_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        // Validate the workflow
         workflow.validate()
             .map_err(|e| CoreError::InvalidWorkflow(e))?;
         
-        // Register with state manager
         let state_manager = self.state_manager.lock()
             .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
         
         state_manager.register_workflow(workflow.clone())?;
         
-        // Register triggers for the workflow
         let trigger_ids = self.trigger_executor.register_workflow_triggers(&workflow.id, &workflow)?;
         
         log::info!("Successfully registered workflow: {} with {} triggers: {:?}", workflow.id, trigger_ids.len(), trigger_ids);
@@ -80,14 +114,11 @@ impl Bridge {
     pub fn register_webhook_trigger(&self, workflow_id: &str, trigger_json: &str) -> CoreResult<()> {
         log::info!("Registering webhook trigger for workflow: {} with config: {}", workflow_id, trigger_json);
         
-        // Parse trigger JSON
         let trigger: crate::triggers::WebhookTrigger = serde_json::from_str(trigger_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        // Validate the trigger
         trigger.validate()?;
         
-        // Register with trigger manager
         let mut trigger_manager = self.trigger_manager.lock()
             .map_err(|_| CoreError::Internal("Failed to acquire trigger manager lock".to_string()))?;
         
@@ -114,11 +145,9 @@ impl Bridge {
     pub fn create_run(&self, workflow_id: &str, payload_json: &str) -> CoreResult<String> {
         log::info!("Creating run for workflow: {} with payload: {}", workflow_id, payload_json);
         
-        // Parse payload JSON
         let payload: serde_json::Value = serde_json::from_str(payload_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        // Create run with state manager
         let mut state_manager = self.state_manager.lock()
             .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
         
@@ -132,19 +161,15 @@ impl Bridge {
     pub fn get_run_status(&self, run_id: &str) -> CoreResult<String> {
         log::info!("Getting status for run: {}", run_id);
         
-        // Parse run ID
         let run_uuid = uuid::Uuid::parse_str(run_id)
             .map_err(|e| CoreError::UuidParse(e))?;
         
-        // Get run from state manager
         let state_manager = self.state_manager.lock()
             .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
         
         let _run = state_manager.get_run(&run_uuid)?
             .ok_or_else(|| CoreError::WorkflowNotFound(format!("Run not found: {}", run_id)))?;
         
-        // Return basic run status
-        // Enhancement: Could implement full WorkflowRun serialization with steps, timing, etc.
         let status_json = serde_json::json!({
             "run_id": run_id,
             "status": "pending",
@@ -169,18 +194,14 @@ impl Bridge {
         let run = state_manager.get_run(&run_uuid)?
             .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
         
-        // Get workflow definition
         let workflow = state_manager.get_workflow(&run.workflow_id)?
             .ok_or_else(|| CoreError::WorkflowNotFound(run.workflow_id.clone()))?;
         
-        // Find the step to execute
         let step = workflow.get_step(step_id)
             .ok_or_else(|| CoreError::Validation(format!("Step '{}' not found in workflow '{}'", step_id, run.workflow_id)))?;
         
-        // Get completed steps for context
         let completed_steps = state_manager.get_completed_steps(&run_uuid)?;
         
-        // Create context object for Bun.js execution
         let mut context = crate::context::Context::new(
             run_id.to_string(),
             run.workflow_id.clone(),
@@ -190,7 +211,6 @@ impl Bridge {
             completed_steps,
         )?;
         
-        // Set timeout if configured
         if let Some(timeout) = step.timeout {
             context.set_timeout(timeout);
         }
@@ -198,8 +218,6 @@ impl Bridge {
         // Serialize context for Bun.js
         let context_json = context.to_json()?;
         
-        // Return the prepared context for Bun.js execution
-        // Note: Bun.js integration is available via execute_step_function(), execute_step_in_bun(), etc.
         let result = serde_json::json!({
             "run_id": run_id,
             "step_id": step_id,
@@ -219,18 +237,13 @@ impl Bridge {
     pub fn execute_job(&self, job: &Job) -> CoreResult<String> {
         log::info!("Executing job: {}", job.id);
         
-        // Get state manager
         let state_manager = self.state_manager.lock().unwrap();
         
-        // Get workflow definition
         let _workflow = state_manager.get_workflow(&job.workflow_id)?;
         
-        // Get run information
         let _run_uuid = Uuid::parse_str(&job.run_id)
             .map_err(|e| CoreError::UuidParse(e))?;
         
-        // Return job preparation status
-        // Note: Job execution is implemented via dispatcher and execute_job_function() N-API
         let result = serde_json::json!({
             "job_id": job.id,
             "run_id": job.run_id,
@@ -249,7 +262,6 @@ impl Bridge {
     pub fn execute_webhook_trigger(&self, request_json: &str) -> CoreResult<String> {
         log::info!("Executing webhook trigger with request: {}", request_json);
         
-        // Parse request JSON
         let request: crate::triggers::WebhookRequest = serde_json::from_str(request_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
@@ -267,7 +279,6 @@ impl Bridge {
     pub fn execute_manual_trigger(&self, workflow_id: &str, payload_json: &str) -> CoreResult<String> {
         log::info!("Executing manual trigger for workflow: {} with payload: {}", workflow_id, payload_json);
         
-        // Parse payload JSON
         let payload: serde_json::Value = serde_json::from_str(payload_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
@@ -286,7 +297,6 @@ impl Bridge {
     pub fn get_trigger_stats(&self) -> CoreResult<String> {
         log::info!("Getting trigger statistics");
         
-        // Get trigger statistics
         let stats = self.trigger_executor.get_trigger_stats()?;
         
         // Serialize the result
@@ -301,7 +311,6 @@ impl Bridge {
     pub fn get_workflow_triggers(&self, workflow_id: &str) -> CoreResult<String> {
         log::info!("Getting triggers for workflow: {}", workflow_id);
         
-        // Get workflow triggers
         let triggers = self.trigger_executor.get_workflow_triggers(workflow_id)?;
         
         // Serialize the result
@@ -327,7 +336,6 @@ impl Bridge {
     pub fn start_webhook_server(&mut self) -> CoreResult<()> {
         log::info!("Starting webhook server...");
         
-        // For now, we'll just log that the server is configured
         // The actual HTTP server will be started by the Node.js side
         // This is a temporary workaround until we resolve the threading issues
         
@@ -340,7 +348,6 @@ impl Bridge {
     /// Stop the webhook server
     pub fn stop_webhook_server(&mut self) -> CoreResult<()> {
         log::info!("Stopping webhook server");
-        // Enhancement: Implement graceful webhook server shutdown with proper cleanup
         Ok(())
     }
 
@@ -401,11 +408,9 @@ impl Bridge {
     pub fn execute_workflow_steps(&self, run_id: &str, workflow_id: &str) -> CoreResult<String> {
         log::info!("Executing workflow steps for run: {} workflow: {}", run_id, workflow_id);
         
-        // Parse run ID
         let run_uuid = Uuid::parse_str(run_id)
             .map_err(|e| CoreError::Validation(format!("Invalid run ID: {}", e)))?;
         
-        // Create step orchestrator
         let step_orchestrator = crate::step_orchestrator::StepOrchestrator::new(self.state_manager.clone());
         
         // Start step execution using the orchestrator
@@ -430,12 +435,10 @@ impl Bridge {
     pub fn execute_workflow_hook(&self, hook_type: &str, context_json: &str, workflow_id: &str) -> CoreResult<String> {
         log::info!("Executing {} hook for workflow: {}", hook_type, workflow_id);
         
-        // Validate hook type
         if hook_type != "onSuccess" && hook_type != "onFailure" {
             return Err(CoreError::Validation(format!("Invalid hook type: {}", hook_type)));
         }
         
-        // For now, we'll return a success response
         // In the next phase, this will call the Bun.js hook execution
         let result = serde_json::json!({
             "success": true,
@@ -586,30 +589,18 @@ pub struct TriggerUnregistrationResult {
 /// Register a workflow via N-API
 #[napi]
 pub fn register_workflow(workflow_json: String, db_path: String) -> WorkflowRegistrationResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WorkflowRegistrationResult {
-                success: false,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.register_workflow(&workflow_json) {
-        Ok(_) => {
-            WorkflowRegistrationResult {
-                success: true,
-                message: "Workflow registered successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            WorkflowRegistrationResult {
-                success: false,
-                message: format!("Failed to register workflow: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |_| WorkflowRegistrationResult {
+            success: true,
+            message: "Workflow registered successfully".to_string(),
+        },
+        |msg: String| WorkflowRegistrationResult {
+            success: false,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.register_workflow(&workflow_json)
+    )
 }
 
 /// Register a webhook trigger via N-API
@@ -676,97 +667,58 @@ pub fn get_webhook_triggers(db_path: String) -> WebhookTriggersResult {
 /// Create a workflow run via N-API
 #[napi]
 pub fn create_run(workflow_id: String, payload_json: String, db_path: String) -> RunCreationResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return RunCreationResult {
-                success: false,
-                run_id: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.create_run(&workflow_id, &payload_json) {
-        Ok(run_id) => {
-            RunCreationResult {
-                success: true,
-                run_id: Some(run_id),
-                message: "Run created successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            RunCreationResult {
-                success: false,
-                run_id: None,
-                message: format!("Failed to create run: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |run_id: String| RunCreationResult {
+            success: true,
+            run_id: Some(run_id),
+            message: "Run created successfully".to_string(),
+        },
+        |msg: String| RunCreationResult {
+            success: false,
+            run_id: None,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.create_run(&workflow_id, &payload_json)
+    )
 }
 
 /// Get run status via N-API
 #[napi]
 pub fn get_run_status(run_id: String, db_path: String) -> RunStatusResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return RunStatusResult {
-                success: false,
-                status: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_run_status(&run_id) {
-        Ok(status_json) => {
-            RunStatusResult {
-                success: true,
-                status: Some(status_json),
-                message: "Status retrieved successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            RunStatusResult {
-                success: false,
-                status: None,
-                message: format!("Failed to get run status: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |status_json: String| RunStatusResult {
+            success: true,
+            status: Some(status_json),
+            message: "Status retrieved successfully".to_string(),
+        },
+        |msg: String| RunStatusResult {
+            success: false,
+            status: None,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.get_run_status(&run_id)
+    )
 }
 
 /// Execute a step via N-API
 #[napi]
 pub fn execute_step(run_id: String, step_id: String, db_path: String) -> StepExecutionResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return StepExecutionResult {
-                success: false,
-                result: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-
-    match bridge.execute_step(&run_id, &step_id) {
-        Ok(result) => {
-            StepExecutionResult {
-                success: true,
-                result: Some(result),
-                message: "Step executed successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            StepExecutionResult {
-                success: false,
-                result: None,
-                message: format!("Failed to execute step: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |result: String| StepExecutionResult {
+            success: true,
+            result: Some(result),
+            message: "Step executed successfully".to_string(),
+        },
+        |msg: String| StepExecutionResult {
+            success: false,
+            result: None,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.execute_step(&run_id, &step_id)
+    )
 }
 
 /// Execute a step function in Bun.js via N-API
@@ -780,7 +732,6 @@ pub fn execute_step_function(
 ) -> StepExecutionResult {
     log::info!("Executing step function: {} for workflow: {} run: {}", step_name, workflow_id, run_id);
     
-    // Parse context JSON to validate it
     let context: crate::context::Context = match serde_json::from_str(&context_json) {
         Ok(context) => context,
         Err(e) => {
@@ -792,7 +743,6 @@ pub fn execute_step_function(
         }
     };
     
-    // Create bridge to access state manager
     let bridge = match Bridge::new(&db_path) {
         Ok(bridge) => bridge,
         Err(e) => {
@@ -804,7 +754,6 @@ pub fn execute_step_function(
         }
     };
     
-    // Get state manager to save step results
     let state_manager = match bridge.state_manager.lock() {
         Ok(manager) => manager,
         Err(_) => {
@@ -816,7 +765,6 @@ pub fn execute_step_function(
         }
     };
     
-    // Parse run ID
     let run_uuid = match uuid::Uuid::parse_str(&run_id) {
         Ok(uuid) => uuid,
         Err(e) => {
@@ -828,7 +776,6 @@ pub fn execute_step_function(
         }
     };
     
-    // Create step result for tracking
     let step_result = crate::models::StepResult {
         step_id: step_name.clone(),
         status: crate::models::StepStatus::Running,
@@ -844,7 +791,6 @@ pub fn execute_step_function(
         log::warn!("Failed to save step result: {}", e);
     }
     
-    // For now, return success with context for Bun.js execution
     // The actual Bun.js execution will be handled by the SDK when this function is called
     let result = serde_json::json!({
         "step_name": step_name,
@@ -898,7 +844,6 @@ pub fn execute_step_via_bun(
     // This function will be called from the Rust step orchestrator
     // It should trigger the Bun.js step execution handler
     
-    // For now, we'll return a success result indicating the step should be executed
     // In a real implementation, this would trigger the Bun.js step execution
     let result = serde_json::json!({
         "step_name": step_name,
@@ -947,7 +892,6 @@ pub fn execute_job_function(
         }
     };
     
-    // Parse job from JSON
     let job: Job = match serde_json::from_str(&job_json) {
         Ok(job) => job,
         Err(e) => {
@@ -966,7 +910,6 @@ pub fn execute_job_function(
     // Execute the job using the bridge
     match bridge.execute_job(&job) {
         Ok(result_json) => {
-            // Parse the result to extract individual fields
             let result: serde_json::Value = match serde_json::from_str(&result_json) {
                 Ok(result) => result,
                 Err(_) => {
@@ -1026,7 +969,6 @@ pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
         }
     };
     
-    // Parse job from JSON
     let job: Job = match serde_json::from_str(&job_json) {
         Ok(job) => job,
         Err(e) => {
@@ -1044,7 +986,6 @@ pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
     
     match bridge.execute_job(&job) {
         Ok(result_json) => {
-            // Parse the result to extract individual fields
             let result: serde_json::Value = match serde_json::from_str(&result_json) {
                 Ok(result) => result,
                 Err(_) => {
@@ -1303,7 +1244,6 @@ pub fn execute_webhook_trigger(request_json: String, db_path: String) -> Trigger
     
     match bridge.execute_webhook_trigger(&request_json) {
         Ok(result_json) => {
-            // Parse the result to extract individual fields
             let result: serde_json::Value = match serde_json::from_str(&result_json) {
                 Ok(result) => result,
                 Err(_) => {
@@ -1351,7 +1291,6 @@ pub fn execute_manual_trigger(workflow_id: String, payload_json: String, db_path
     
     match bridge.execute_manual_trigger(&workflow_id, &payload_json) {
         Ok(result_json) => {
-            // Parse the result to extract individual fields
             let result: serde_json::Value = match serde_json::from_str(&result_json) {
                 Ok(result) => result,
                 Err(_) => {
@@ -1629,7 +1568,6 @@ pub struct PauseResumeResult {
 pub fn pause_workflow(run_id: String, db_path: String) -> PauseResumeResult {
     match Bridge::new(&db_path) {
         Ok(bridge) => {
-            // For now, we'll return a success response
             // In the future, this will integrate with the workflow state machine
             PauseResumeResult {
                 success: true,
@@ -1655,7 +1593,6 @@ pub fn pause_workflow(run_id: String, db_path: String) -> PauseResumeResult {
 pub fn resume_workflow(run_id: String, db_path: String) -> PauseResumeResult {
     match Bridge::new(&db_path) {
         Ok(bridge) => {
-            // For now, we'll return a success response
             // In the future, this will integrate with the workflow state machine
             PauseResumeResult {
                 success: true,

@@ -75,7 +75,6 @@ impl Context {
         run: WorkflowRun,
         completed_steps: Vec<StepResult>,
     ) -> Result<Self, CoreError> {
-        // Validate required fields
         if run_id.is_empty() {
             return Err(CoreError::Validation("run_id cannot be empty".to_string()));
         }
@@ -158,7 +157,6 @@ impl Context {
             return Err(CoreError::Validation("step_name cannot be empty".to_string()));
         }
         
-        // Validate payload size (prevent oversized contexts)
         let payload_size = serde_json::to_string(&self.payload)
             .map_err(|e| CoreError::Serialization(e))?
             .len();
@@ -177,18 +175,15 @@ impl Context {
     pub fn calculate_complexity_score(&self) -> u8 {
         let mut score = 1u8;
         
-        // Add points for payload complexity
         let config = crate::config::CoreConfig::default();
         if let Some(payload_size) = serde_json::to_string(&self.payload).ok().map(|s| s.len()) {
             if payload_size > config.payload.large_payload_threshold { score += 2; } // Large payload
             else if payload_size > config.payload.medium_payload_threshold { score += 1; } // Medium payload
         }
         
-        // Add points for number of steps
         if self.steps.len() > config.payload.max_step_count_large { score += 2; }
         else if self.steps.len() > config.payload.max_step_count_medium { score += 1; }
         
-        // Add points for nested payload structure
         if self.has_deep_nesting(&self.payload, 0) { score += 1; }
         
         score.min(10)
@@ -232,14 +227,11 @@ impl Context {
         // Generate checksum before serialization
         let checksum = self.generate_checksum();
         
-        // Create a copy with checksum for serialization
         let mut context_for_serialization = self.clone();
         context_for_serialization.metadata.checksum = Some(checksum);
         
-        // Calculate complexity score
         let complexity_score = self.calculate_complexity_score();
         
-        // Create serialization info
         let start_time = std::time::Instant::now();
         let json_result = serde_json::to_string(&context_for_serialization);
         let serialization_duration = start_time.elapsed();
@@ -247,7 +239,6 @@ impl Context {
         let json_string = json_result.map_err(|e| CoreError::Serialization(e))?;
         let size_bytes = json_string.len();
         
-        // Update serialization info
         context_for_serialization.serialization_info = Some(SerializationInfo {
             serialized_at: chrono::Utc::now().to_rfc3339(),
             size_bytes,
@@ -265,7 +256,6 @@ impl Context {
     /// Convert context to compressed JSON string
     pub fn to_json_compressed(&self) -> Result<String, CoreError> {
         // Currently returns uncompressed JSON
-        // Enhancement: Add gzip/zstd compression for large payloads when needed
         self.to_json()
     }
 
@@ -274,7 +264,6 @@ impl Context {
         let context: Context = serde_json::from_str(json)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        // Validate the context
         context.validate()?;
         
         Ok(context)
@@ -434,7 +423,6 @@ mod tests {
         assert_eq!(context.workflow_id, deserialized_context.workflow_id);
         assert_eq!(context.step_name, deserialized_context.step_name);
         
-        // Test compressed serialization
         let compressed_json = context.to_json_compressed().unwrap();
         assert!(!compressed_json.is_empty());
     }
@@ -476,7 +464,6 @@ mod tests {
             error: None,
         };
 
-        // Test valid context
         let valid_context = Context::new(
             "run-123".to_string(),
             "workflow-123".to_string(),
@@ -487,7 +474,6 @@ mod tests {
         ).unwrap();
         assert!(valid_context.validate().is_ok());
 
-        // Test invalid context with empty run_id
         let invalid_context = Context::new(
             "".to_string(),
             "workflow-123".to_string(),
@@ -561,16 +547,13 @@ mod tests {
             vec![],
         ).unwrap();
 
-        // Test metadata updates
         context.update_step_metadata(2, 5);
         assert_eq!(context.metadata.step_index, 2);
         assert_eq!(context.metadata.total_steps, 5);
 
-        // Test timeout
         context.set_timeout(30);
         assert_eq!(context.metadata.timeout, Some(30));
 
-        // Test retry logic
         assert_eq!(context.metadata.retry_count, 0);
         assert!(context.increment_retry());
         assert_eq!(context.metadata.retry_count, 1);

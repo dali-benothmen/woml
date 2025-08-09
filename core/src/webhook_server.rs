@@ -124,7 +124,6 @@ async fn webhook_handler(
         }
     }
     
-    // Create webhook request
     let webhook_request = WebhookRequest::new(method.clone(), path.clone())
         .with_headers(headers)
         .with_body(payload.to_string())
@@ -157,18 +156,15 @@ async fn handle_webhook_request(
     trigger_manager: web::Data<Arc<Mutex<TriggerManager>>>,
     state_manager: web::Data<Arc<Mutex<StateManager>>>,
 ) -> CoreResult<WebhookResponse> {
-    // Get trigger manager lock
     let trigger_manager_guard = trigger_manager.lock()
         .map_err(|e| CoreError::Internal(format!("Failed to acquire trigger manager lock: {}", e)))?;
     
     // Handle the webhook request
     let (workflow_id, payload) = trigger_manager_guard.handle_webhook_request(request)?;
     
-    // Get state manager lock
     let mut state_manager_guard = state_manager.lock()
         .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
     
-    // Create a new workflow run
     let run_id = state_manager_guard.create_run(&workflow_id, payload)?;
     
     log::info!("Created workflow run {} for webhook-triggered workflow {}", run_id, workflow_id);

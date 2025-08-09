@@ -286,7 +286,6 @@ impl WorkflowStateMachine {
     pub fn initialize(&mut self) -> CoreResult<()> {
         log::info!("Initializing workflow state machine for run: {}", self.run_id);
         
-        // Get workflow definition and run
         let workflow = {
             let state_manager = self.state_manager.lock()
                 .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
@@ -307,26 +306,19 @@ impl WorkflowStateMachine {
         self.workflow_definition = Some(workflow.clone());
         self.workflow_run = Some(run.clone());
         
-        // Initialize step states
         self.initialize_step_states(&workflow)?;
         
-        // Initialize control flow blocks
         self.initialize_control_flow_blocks(&workflow)?;
         
-        // Validate control flow structure
         self.validate_control_flow_structure(&workflow)?;
         
-        // Initialize parallel execution groups
         self.initialize_parallel_groups(&workflow)?;
         
-        // Create condition evaluation context
         self.create_condition_context(&run)?;
         
-        // Update statistics
         self.total_steps = workflow.steps.len();
         self.stats = WorkflowExecutionStats::new(self.total_steps);
         
-        // Set initial state
         self.execution_state = WorkflowExecutionState::Running;
         
         log::info!("Workflow state machine initialized with {} steps", self.total_steps);
@@ -337,13 +329,11 @@ impl WorkflowStateMachine {
     fn initialize_step_states(&mut self, workflow: &WorkflowDefinition) -> CoreResult<()> {
         self.step_states.clear();
         
-        // Create step states
         for step in &workflow.steps {
             let step_state = StepExecutionState::new(step.clone());
             self.step_states.insert(step.id.clone(), step_state);
         }
         
-        // Validate dependencies
         self.validate_dependencies()?;
         
         log::debug!("Initialized {} step states", self.step_states.len());
@@ -397,8 +387,6 @@ impl WorkflowStateMachine {
                             // Continue the current block
                             if let Some(block_id) = &step.control_flow_block {
                                 if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
-                                    // Update the block to handle elseif
-                                    // For now, we'll treat elseif as a separate condition
                                 }
                             }
                         },
@@ -406,7 +394,6 @@ impl WorkflowStateMachine {
                             // Continue the current block
                             if let Some(block_id) = &step.control_flow_block {
                                 if let Some(block) = self.control_flow_blocks.get_mut(block_id) {
-                                    // Update the block to handle else
                                 }
                             }
                         },
@@ -447,7 +434,6 @@ impl WorkflowStateMachine {
                             }
                         },
                         ConditionType::ElseIf => {
-                            // Validate that we're in an if block
                             if current_block_stack.is_empty() {
                                 return Err(CoreError::Validation(
                                     "elseIf found without matching if".to_string()
@@ -455,7 +441,6 @@ impl WorkflowStateMachine {
                             }
                         },
                         ConditionType::Else => {
-                            // Validate that we're in an if block
                             if current_block_stack.is_empty() {
                                 return Err(CoreError::Validation(
                                     "else found without matching if".to_string()
@@ -479,14 +464,12 @@ impl WorkflowStateMachine {
             }
         }
         
-        // Check for balanced if/endif
         if if_count != endif_count {
             return Err(CoreError::Validation(
                 format!("Unbalanced if/endif: {} if, {} endif", if_count, endif_count)
             ));
         }
         
-        // Check for unclosed blocks
         if !current_block_stack.is_empty() {
             return Err(CoreError::Validation(
                 format!("Unclosed control flow blocks: {:?}", current_block_stack)
@@ -568,7 +551,6 @@ impl WorkflowStateMachine {
     
     /// Handle control flow step execution
     pub fn handle_control_flow_step(&mut self, step_id: &str) -> CoreResult<bool> {
-        // Get step state and clone necessary data to avoid borrow checker issues
         let step_state = self.step_states.get(step_id)
             .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?;
         
@@ -599,7 +581,6 @@ impl WorkflowStateMachine {
                     }
                 },
                 ConditionType::ElseIf => {
-                    // Check if any previous condition in this block was met
                     if let Some(block_id) = &block_id {
                         if let Some(block) = self.control_flow_blocks.get(block_id) {
                             if block.condition_met {
@@ -625,7 +606,6 @@ impl WorkflowStateMachine {
                     }
                 },
                 ConditionType::Else => {
-                    // Check if any previous condition in this block was met
                     if let Some(block_id) = &block_id {
                         if let Some(block) = self.control_flow_blocks.get(block_id) {
                             if block.condition_met {
@@ -660,7 +640,6 @@ impl WorkflowStateMachine {
         let block_id = current_step.get_control_flow_block_id()
             .ok_or_else(|| CoreError::Validation("Control flow step without block ID".to_string()))?;
         
-        // Find all steps in this control flow block and mark them as skipped
         for step in &workflow.steps {
             if let Some(step_block_id) = step.get_control_flow_block_id() {
                 if step_block_id == block_id {
@@ -703,7 +682,6 @@ impl WorkflowStateMachine {
     /// Mark a step as completed
     pub fn mark_step_completed(&mut self, step_id: &str, output: serde_json::Value) -> CoreResult<()> {
         if let Some(step_state) = self.step_states.get_mut(step_id) {
-            // Create step result
             let result = StepResult {
                 step_id: step_id.to_string(),
                 status: StepStatus::Completed,
@@ -717,13 +695,10 @@ impl WorkflowStateMachine {
             step_state.mark_completed(result.clone());
             self.completed_steps.push(result);
             
-            // Update control flow state
             self.update_control_flow_state(step_id)?;
             
-            // Update dependencies for other steps
             self.update_dependencies(step_id);
             
-            // Update statistics
             self.update_stats();
             
             log::debug!("Marked step {} as completed", step_id);
@@ -738,7 +713,6 @@ impl WorkflowStateMachine {
         if let Some(step_state) = self.step_states.get_mut(step_id) {
             step_state.mark_failed(error.clone());
             
-            // Create step result
             let result = StepResult {
                 step_id: step_id.to_string(),
                 status: StepStatus::Failed,
@@ -751,7 +725,6 @@ impl WorkflowStateMachine {
             
             self.completed_steps.push(result);
             
-            // Update statistics
             self.update_stats();
             
             log::debug!("Marked step {} as failed", step_id);
@@ -871,7 +844,6 @@ impl WorkflowStateMachine {
         let mut state_manager = self.state_manager.lock()
             .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
         
-        // Update run status
         let run_status = match self.execution_state {
             WorkflowExecutionState::Pending | WorkflowExecutionState::Running => RunStatus::Running,
             WorkflowExecutionState::Paused => RunStatus::Running, // Keep as running when paused
@@ -904,7 +876,6 @@ impl WorkflowStateMachine {
         
         log::info!("Executing {} hook for workflow: {}", hook_type, context.workflow_id);
         
-        // For now, we'll log the hook execution
         // In the next phase, this will call the N-API function to execute hooks in Bun.js
         match hook_type {
             "onSuccess" => {
@@ -969,7 +940,6 @@ impl WorkflowStateMachine {
             RunStatus::Completed
         };
         
-        // Update execution state
         self.execution_state = match final_status {
             RunStatus::Completed => WorkflowExecutionState::Completed,
             RunStatus::Failed => WorkflowExecutionState::Failed,
@@ -979,7 +949,6 @@ impl WorkflowStateMachine {
         // Mark stats as completed
         self.stats.mark_completed();
         
-        // Create completion context
         let completion_context = self.create_completion_context(final_status.clone(), error_message.clone())?;
         
         // Execute hooks
@@ -1049,7 +1018,6 @@ impl WorkflowStateMachine {
         self.parallel_groups.insert(group.group_id.clone(), group.clone());
         self.running_parallel_groups.insert(group.group_id.clone());
         
-        // For now, we'll simulate parallel execution by executing steps sequentially
         // In a real implementation, this would use the job dispatcher for concurrent execution
         let mut results = Vec::new();
         
@@ -1067,7 +1035,6 @@ impl WorkflowStateMachine {
                 step_state.mark_completed(result_clone.clone());
             }
             
-            // Update the parallel group with the result
             if let Some(group) = self.parallel_groups.get_mut(&group.group_id) {
                 group.add_step_result(step_id.clone(), result_clone);
             }
@@ -1110,7 +1077,6 @@ impl WorkflowStateMachine {
             }
         }
         
-        // Add metadata
         aggregated.insert("success_count".to_string(), serde_json::Value::Number(success_count.into()));
         aggregated.insert("failure_count".to_string(), serde_json::Value::Number(failure_count.into()));
         aggregated.insert("total_count".to_string(), serde_json::Value::Number((success_count + failure_count).into()));
@@ -1341,7 +1307,6 @@ mod tests {
         assert_eq!(stats.completion_percentage(), 0.0);
         assert!(!stats.is_complete());
         
-        // Update stats
         stats.completed_steps = 3;
         stats.failed_steps = 1;
         stats.pending_steps = 1;

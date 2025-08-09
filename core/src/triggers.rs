@@ -216,15 +216,12 @@ impl TriggerManager {
     pub fn register_webhook_trigger(&mut self, workflow_id: &str, trigger: WebhookTrigger) -> CoreResult<()> {
         log::info!("Registering webhook trigger for workflow: {} at path: {}", workflow_id, trigger.path);
         
-        // Validate the trigger
         trigger.validate()?;
         
-        // Check if path is already registered
         if self.webhook_triggers.contains_key(&trigger.path) {
             return Err(CoreError::InvalidTrigger(format!("Webhook path {} is already registered", trigger.path)));
         }
         
-        // Register the trigger
         let path = trigger.path.clone();
         self.webhook_triggers.insert(path.clone(), (trigger, workflow_id.to_string()));
         
@@ -236,21 +233,17 @@ impl TriggerManager {
     pub fn handle_webhook_request(&self, request: WebhookRequest) -> CoreResult<(String, serde_json::Value)> {
         log::info!("Handling webhook request: {} {}", request.method, request.path);
         
-        // Validate the request
         request.validate()?;
         
-        // Find the trigger for this path
         let (trigger, workflow_id) = self.webhook_triggers.get(&request.path)
             .ok_or_else(|| CoreError::TriggerNotFound(format!("No webhook trigger found for path: {}", request.path)))?;
         
-        // Validate method matches
         if trigger.method != request.method {
             return Err(CoreError::InvalidTrigger(format!(
                 "Method mismatch: expected {}, got {}", trigger.method, request.method
             )));
         }
         
-        // Validate webhook if configured
         if let Some(validation) = &trigger.validation {
             self.validate_webhook(&request, validation)?;
         }
@@ -264,9 +257,7 @@ impl TriggerManager {
 
     /// Validate webhook request based on validation rules
     fn validate_webhook(&self, request: &WebhookRequest, validation: &WebhookValidation) -> CoreResult<()> {
-        // Check required fields if specified
         if let Some(required_fields) = &validation.required_fields {
-            // Parse body as JSON to check for required fields
             if let Some(body) = &request.body {
                 let body_json: serde_json::Value = serde_json::from_str(body)
                     .map_err(|e| CoreError::InvalidTrigger(format!("Invalid JSON body: {}", e)))?;
@@ -281,7 +272,6 @@ impl TriggerManager {
             }
         }
         
-        // Enhancement: Implement cryptographic signature validation for webhook security
         // Current validation covers required fields, headers, and basic request structure
         
         Ok(())
@@ -296,7 +286,6 @@ impl TriggerManager {
             "query_params": request.query_params,
         });
         
-        // Add body if present
         if let Some(body) = &request.body {
             // Try to parse as JSON, fallback to string
             if let Ok(body_json) = serde_json::from_str::<serde_json::Value>(body) {

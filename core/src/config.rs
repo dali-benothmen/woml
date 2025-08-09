@@ -212,7 +212,6 @@ impl CoreConfig {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
-        // Validate worker pool
         if self.worker_pool.min_workers == 0 {
             return Err("Minimum workers must be greater than 0".to_string());
         }
@@ -225,7 +224,6 @@ impl CoreConfig {
             return Err("Queue size must be greater than 0".to_string());
         }
 
-        // Validate execution config
         if self.execution.max_concurrent_steps == 0 {
             return Err("Max concurrent steps must be greater than 0".to_string());
         }
@@ -234,7 +232,6 @@ impl CoreConfig {
             return Err("Retry attempts must be greater than 0".to_string());
         }
 
-        // Validate payload config
         if self.payload.max_size_bytes == 0 {
             return Err("Max payload size must be greater than 0".to_string());
         }
@@ -257,19 +254,16 @@ mod tests {
     fn test_default_values() {
         let config = CoreConfig::default();
         
-        // Test worker pool defaults
         assert_eq!(config.worker_pool.min_workers, 2);
         assert_eq!(config.worker_pool.max_workers, 10);
         assert_eq!(config.worker_pool.worker_timeout_ms, 30000);
         assert_eq!(config.worker_pool.queue_size, 1000);
         
-        // Test execution defaults
         assert_eq!(config.execution.max_concurrent_steps, 10);
         assert_eq!(config.execution.default_timeout_ms, Some(30000));
         assert_eq!(config.execution.fail_fast, true);
         assert_eq!(config.execution.retry_attempts, 3);
         
-        // Test payload defaults
         assert_eq!(config.payload.max_size_bytes, 10_000_000);
         assert_eq!(config.payload.large_payload_threshold, 100_000);
         assert_eq!(config.payload.medium_payload_threshold, 10_000);
@@ -279,16 +273,13 @@ mod tests {
     fn test_config_validation() {
         let mut config = CoreConfig::default();
         
-        // Test invalid min_workers
         config.worker_pool.min_workers = 0;
         assert!(config.validate().is_err());
         
-        // Test invalid max_workers < min_workers
         config.worker_pool.min_workers = 5;
         config.worker_pool.max_workers = 3;
         assert!(config.validate().is_err());
         
-        // Test valid config
         config.worker_pool.min_workers = 2;
         config.worker_pool.max_workers = 10;
         assert!(config.validate().is_ok());

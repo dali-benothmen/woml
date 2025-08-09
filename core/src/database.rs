@@ -115,7 +115,6 @@ impl Database {
             let completed_at_str: Option<String> = row.get(4)?;
             let error: Option<String> = row.get(5)?;
             
-            // Parse status
             let status = match status_str.as_str() {
                 "Pending" => crate::models::RunStatus::Pending,
                 "Running" => crate::models::RunStatus::Running,
@@ -125,14 +124,12 @@ impl Database {
                 _ => crate::models::RunStatus::Failed,
             };
             
-            // Parse dates
             let started_at = chrono::DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&chrono::Utc);
             let completed_at = completed_at_str
                 .map(|s| chrono::DateTime::parse_from_rfc3339(&s))
                 .transpose()?
                 .map(|dt| dt.with_timezone(&chrono::Utc));
             
-            // Parse payload
             let payload = serde_json::from_str(&payload_str)?;
             
             let run = WorkflowRun {
@@ -168,7 +165,6 @@ impl Database {
             let completed_at_str: Option<String> = row.get(4)?;
             let error: Option<String> = row.get(5)?;
             
-            // Parse status
             let status = match status_str.as_str() {
                 "Pending" => crate::models::RunStatus::Pending,
                 "Running" => crate::models::RunStatus::Running,
@@ -178,14 +174,12 @@ impl Database {
                 _ => crate::models::RunStatus::Failed,
             };
             
-            // Parse dates
             let started_at = chrono::DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&chrono::Utc);
             let completed_at = completed_at_str
                 .map(|s| chrono::DateTime::parse_from_rfc3339(&s))
                 .transpose()?
                 .map(|dt| dt.with_timezone(&chrono::Utc));
             
-            // Parse payload
             let payload = serde_json::from_str(&payload_str)?;
             
             let run = WorkflowRun {
@@ -240,7 +234,6 @@ impl Database {
             let completed_at_str: Option<String> = row.get(5)?;
             let duration_ms: Option<u64> = row.get(6)?;
             
-            // Parse status
             let status = match status_str.as_str() {
                 "Pending" => crate::models::StepStatus::Pending,
                 "Running" => crate::models::StepStatus::Running,
@@ -250,14 +243,12 @@ impl Database {
                 _ => crate::models::StepStatus::Failed,
             };
             
-            // Parse dates
             let started_at = chrono::DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&chrono::Utc);
             let completed_at = completed_at_str
                 .map(|s| chrono::DateTime::parse_from_rfc3339(&s))
                 .transpose()?
                 .map(|dt| dt.with_timezone(&chrono::Utc));
             
-            // Parse output
             let output = output_str
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?;

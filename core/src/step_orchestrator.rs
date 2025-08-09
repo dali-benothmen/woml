@@ -31,14 +31,12 @@ impl StepOrchestrator {
     pub fn start_step_execution(&self, run_id: &Uuid, workflow_id: &str) -> CoreResult<()> {
         log::info!("Starting step execution for run: {} workflow: {}", run_id, workflow_id);
         
-        // Create workflow state machine
         let mut state_machine = WorkflowStateMachine::new(
             self.state_manager.clone(),
             workflow_id.to_string(),
             *run_id,
         );
         
-        // Initialize the state machine
         state_machine.initialize()?;
         
         // Execute steps using the state machine
@@ -52,7 +50,6 @@ impl StepOrchestrator {
     fn execute_steps_with_state_machine(&self, mut state_machine: WorkflowStateMachine) -> CoreResult<()> {
         log::info!("Executing steps using state machine for workflow: {}", state_machine.get_workflow_definition().unwrap().id);
         
-        // Get workflow definition and run - clone them to avoid borrow checker issues
         let workflow = state_machine.get_workflow_definition()
             .ok_or_else(|| CoreError::Internal("Workflow definition not found in state machine".to_string()))?
             .clone();
@@ -63,7 +60,6 @@ impl StepOrchestrator {
         
         // Execute steps until completion
         while !state_machine.check_workflow_completion()? {
-            // Get ready steps
             let ready_steps = state_machine.get_ready_steps();
             
             if ready_steps.is_empty() {
@@ -71,7 +67,6 @@ impl StepOrchestrator {
                 break;
             }
             
-            // Check for parallel execution groups
             let parallel_groups = state_machine.detect_parallel_groups();
             
             if !parallel_groups.is_empty() {
@@ -99,12 +94,10 @@ impl StepOrchestrator {
                     // Mark step as running
                     state_machine.mark_step_running(&step_id)?;
                     
-                    // Get step definition
                     let step_def = workflow.get_step(&step_id)
                         .ok_or_else(|| CoreError::StepNotFound(format!("Step not found: {}", step_id)))?
                         .clone();
                     
-                    // Check if this is a pause step
                     if step_def.is_pause_step() {
                         log::info!("Pause step detected: {}", step_id);
                         
@@ -126,11 +119,9 @@ impl StepOrchestrator {
                         
                         log::info!("Workflow paused at step: {}", step_id);
                         
-                        // Return early - workflow is now paused
                         return Ok(());
                     }
                     
-                    // Get completed steps for context
                     let completed_steps = state_machine.get_completed_steps().to_vec();
                     
                     // Execute the step using the state machine context
@@ -145,7 +136,6 @@ impl StepOrchestrator {
                             state_machine.mark_step_failed(&step_id, error.to_string())?;
                             log::error!("Step {} failed: {}", step_id, error);
                             
-                            // Check if we should continue or stop
                             if !step_def.can_retry() {
                                 log::error!("Step {} cannot be retried, stopping workflow", step_id);
                                 break;
@@ -159,7 +149,6 @@ impl StepOrchestrator {
             }
         }
         
-        // Check final completion and finalize
         let is_complete = state_machine.check_workflow_completion()?;
         if is_complete {
             // Determine error message if any steps failed
@@ -196,7 +185,6 @@ impl StepOrchestrator {
     ) -> CoreResult<serde_json::Value> {
         log::debug!("Executing step with state machine: {} for run: {}", step_def.id, run.id);
         
-        // Create context for step execution
         let context = self.create_step_context(workflow, run, step_def, completed_steps, step_index)?;
         
         // Convert context to JSON for Bun.js execution
@@ -228,7 +216,6 @@ impl StepOrchestrator {
         // 2. Wait for the Bun.js step execution to complete
         // 3. Return the actual step result
         
-        // For now, we'll simulate a successful Bun.js execution
         // This simulates what would happen when the Bun.js step handler executes
         let simulated_result = serde_json::json!({
             "step_name": step_name,
@@ -271,7 +258,6 @@ impl StepOrchestrator {
             steps_map.insert(step_result.step_id.clone(), step_result.clone());
         }
         
-        // Create context
         let context = Context::new(
             run.id.to_string(),
             workflow.id.clone(),
@@ -281,7 +267,6 @@ impl StepOrchestrator {
             completed_steps.to_vec(),
         )?;
         
-        // Update metadata
         let mut context = context;
         context.metadata.step_index = step_index;
         context.metadata.total_steps = workflow.steps.len();
@@ -293,7 +278,6 @@ impl StepOrchestrator {
     fn simulate_step_execution(&self, step_id: &str, context: &Context) -> CoreResult<serde_json::Value> {
         log::debug!("Simulating step execution: {}", step_id);
         
-        // For now, return a simple success result
         // In Task 1.5, this will call the Bun.js step execution
         let output = serde_json::json!({
             "step_id": step_id,
@@ -315,7 +299,6 @@ impl StepOrchestrator {
         let mut state_manager = self.state_manager.lock()
             .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
         
-        // Update run with step results
         state_manager.update_run_with_steps(run_id, completed_steps)?;
         
         Ok(())
@@ -326,10 +309,8 @@ impl StepOrchestrator {
         let mut state_manager = self.state_manager.lock()
             .map_err(|e| CoreError::Internal(format!("Failed to acquire state manager lock: {}", e)))?;
         
-        // Check if any steps failed
         let has_failures = completed_steps.iter().any(|step| step.status == StepStatus::Failed);
         
-        // Update run status
         let status = if has_failures {
             crate::models::RunStatus::Failed
         } else {

@@ -125,7 +125,6 @@ impl StateManager {
             self.save_step_result(run_id, step_result.clone())?;
         }
         
-        // Update run status to Running if it's still Pending
         if let Some(run) = self.active_runs.get_mut(run_id) {
             if run.status == crate::models::RunStatus::Pending {
                 run.status = crate::models::RunStatus::Running;

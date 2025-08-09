@@ -155,14 +155,12 @@ impl WorkflowDefinition {
             return Err("Workflow must have at least one step".to_string());
         }
         
-        // Validate step IDs are unique
         let step_ids: Vec<&String> = self.steps.iter().map(|s| &s.id).collect();
         let unique_ids: Vec<&String> = step_ids.iter().map(|&&ref id| id).collect();
         if step_ids.len() != unique_ids.len() {
             return Err("Step IDs must be unique".to_string());
         }
         
-        // Validate each step
         for step in &self.steps {
             step.validate()?;
         }
@@ -232,15 +230,12 @@ impl StepDefinition {
             return Err("Step action cannot be empty".to_string());
         }
         
-        // Validate retry configuration if present
         if let Some(retry) = &self.retry {
             retry.validate()?;
         }
         
-        // Validate control flow configuration
         self.validate_control_flow()?;
         
-        // Validate parallel execution configuration
         self.validate_parallel_execution()?;
         
         Ok(())
@@ -302,7 +297,6 @@ impl StepDefinition {
     
     /// Check if step can be retried (placeholder - will be implemented with retry count tracking)
     pub fn can_retry(&self) -> bool {
-        // For now, always return true if retry config exists
         // In the future, this will check against the actual retry count
         self.retry.is_some()
     }
@@ -424,7 +418,6 @@ impl TriggerDefinition {
                 if method.is_empty() {
                     return Err("Webhook method cannot be empty".to_string());
                 }
-                // Validate HTTP method
                 let valid_methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
                 if !valid_methods.contains(&method.to_uppercase().as_str()) {
                     return Err(format!("Invalid HTTP method: {}", method));
@@ -463,12 +456,10 @@ impl WorkflowRun {
             return Err("Workflow ID cannot be empty".to_string());
         }
         
-        // Check that completed runs have a completed_at timestamp
         if matches!(self.status, RunStatus::Completed | RunStatus::Failed) && self.completed_at.is_none() {
             return Err("Completed runs must have a completed_at timestamp".to_string());
         }
         
-        // Check that failed runs have an error message
         if matches!(self.status, RunStatus::Failed) && self.error.is_none() {
             return Err("Failed runs must have an error message".to_string());
         }
@@ -542,12 +533,10 @@ impl StepResult {
             return Err("Step ID cannot be empty".to_string());
         }
         
-        // Check that completed steps have a completed_at timestamp
         if matches!(self.status, StepStatus::Completed | StepStatus::Failed) && self.completed_at.is_none() {
             return Err("Completed steps must have a completed_at timestamp".to_string());
         }
         
-        // Check that failed steps have an error message
         if matches!(self.status, StepStatus::Failed) && self.error.is_none() {
             return Err("Failed steps must have an error message".to_string());
         }

@@ -125,7 +125,6 @@ impl Job {
         step_name: &str,
         payload: serde_json::Value,
     ) -> Result<Self, CoreError> {
-        // Find the step in the workflow
         let step = workflow
             .steps
             .iter()
@@ -134,11 +133,9 @@ impl Job {
                 CoreError::InvalidWorkflow(format!("Step '{}' not found in workflow", step_name))
             })?;
 
-        // Validate the step
         step.validate()
             .map_err(|e| CoreError::InvalidWorkflow(e))?;
 
-        // Create job with step configuration
         let mut job = Self::new(
             workflow.id.clone(),
             run.id.to_string(),
@@ -150,13 +147,10 @@ impl Job {
         // Apply step-specific configuration
         Self::apply_step_configuration(&mut job, step, workflow)?;
 
-        // Set up dependencies
         Self::setup_dependencies(&mut job, step, workflow)?;
 
-        // Add workflow context
         Self::add_workflow_context(&mut job, workflow, run)?;
 
-        // Validate the created job
         job.validate()?;
 
         Ok(job)
@@ -172,7 +166,6 @@ impl Job {
         
         let mut jobs = Vec::new();
         
-        // Create jobs for each step in the workflow
         for step in &workflow.steps {
             let job = Self::from_workflow_step(workflow, run, &step.id, payload.clone())?;
             jobs.push(job);
@@ -193,7 +186,6 @@ impl Job {
         
         let mut jobs = Vec::new();
         
-        // Validate that all step IDs exist in the workflow
         for step_id in step_ids {
             if !workflow.steps.iter().any(|s| s.id == *step_id) {
                 return Err(CoreError::InvalidWorkflow(format!(
@@ -203,7 +195,6 @@ impl Job {
             }
         }
         
-        // Create jobs for the specified steps
         for step_id in step_ids {
             let job = Self::from_workflow_step(workflow, run, step_id, payload.clone())?;
             jobs.push(job);
@@ -260,7 +251,6 @@ impl Job {
 
     /// Determine job priority based on step and workflow configuration
     fn determine_priority(step: &StepDefinition, workflow: &WorkflowDefinition) -> JobPriority {
-        // For now, use Normal priority
         // In the future, this could be based on:
         // - Step type (critical steps get higher priority)
         // - Workflow configuration
@@ -274,12 +264,10 @@ impl Job {
         step: &StepDefinition,
         _workflow: &WorkflowDefinition,
     ) -> Result<(), CoreError> {
-        // Set timeout
         if let Some(timeout) = step.timeout {
             job.timeout_ms = Some(timeout);
         }
 
-        // Set retry configuration
         if let Some(retry) = &step.retry {
             job.retry_config = RetryConfig {
                 max_attempts: retry.max_attempts,
@@ -289,7 +277,6 @@ impl Job {
             };
         }
 
-        // Add step metadata as tags
         job.add_tag("step_name".to_string(), step.name.clone());
         job.add_tag("step_action".to_string(), step.action.clone());
 
@@ -302,9 +289,7 @@ impl Job {
         step: &StepDefinition,
         workflow: &WorkflowDefinition,
     ) -> Result<(), CoreError> {
-        // Add explicit dependencies from step configuration
         for dependency_step_id in &step.depends_on {
-            // Validate that the dependency step exists
             if !workflow.steps.iter().any(|s| s.id == *dependency_step_id) {
                 return Err(CoreError::InvalidWorkflow(format!(
                     "Step '{}' depends on non-existent step '{}'",
@@ -312,16 +297,13 @@ impl Job {
                 )));
             }
 
-            // Create dependency job ID (format: workflow_id:run_id:step_id)
             let dependency_job_id = format!("{}:{}:{}", workflow.id, job.run_id, dependency_step_id);
             job.dependencies.push(dependency_job_id);
         }
 
-        // Add implicit dependencies based on step order (if no explicit dependencies)
         if job.dependencies.is_empty() {
             if let Some(step_index) = workflow.steps.iter().position(|s| s.id == step.id) {
                 if step_index > 0 {
-                    // Add dependency on the previous step
                     let previous_step = &workflow.steps[step_index - 1];
                     let previous_job_id = format!("{}:{}:{}", workflow.id, job.run_id, previous_step.id);
                     job.dependencies.push(previous_job_id);
@@ -338,7 +320,6 @@ impl Job {
         workflow: &WorkflowDefinition,
         run: &WorkflowRun,
     ) -> Result<(), CoreError> {
-        // Add workflow metadata
         job.add_context("workflow_name".to_string(), serde_json::Value::String(workflow.name.clone()));
         if let Some(description) = &workflow.description {
             job.add_context("workflow_description".to_string(), serde_json::Value::String(description.clone()));
@@ -346,11 +327,9 @@ impl Job {
         job.add_context("workflow_created_at".to_string(), serde_json::Value::String(workflow.created_at.to_rfc3339()));
         job.add_context("workflow_updated_at".to_string(), serde_json::Value::String(workflow.updated_at.to_rfc3339()));
 
-        // Add run metadata
         job.add_context("run_started_at".to_string(), serde_json::Value::String(run.started_at.to_rfc3339()));
         job.add_context("run_status".to_string(), serde_json::Value::String(run.status.as_str().to_string()));
 
-        // Add step position information
         if let Some(step_index) = workflow.steps.iter().position(|s| s.id == job.step_name) {
             job.add_context("step_index".to_string(), serde_json::Value::Number(step_index.into()));
             job.add_context("total_steps".to_string(), serde_json::Value::Number(workflow.steps.len().into()));
@@ -448,7 +427,6 @@ impl Job {
             return false;
         }
 
-        // Check if all dependencies are completed
         self.dependencies.iter().all(|dep_id| completed_jobs.contains(dep_id))
     }
 
@@ -550,7 +528,6 @@ impl JobQueue {
 
     /// Get the next job to execute (highest priority, oldest first)
     pub fn dequeue(&mut self, completed_jobs: &[String]) -> Option<Job> {
-        // Find jobs that are ready to execute
         let ready_jobs: Vec<_> = self.jobs
             .iter()
             .enumerate()
@@ -816,7 +793,6 @@ mod tests {
         job.start().unwrap();
         assert_eq!(job.state, JobState::Running);
 
-        // Check retry limits - only retry twice more (total 3 attempts)
         job.fail("Test error".to_string()).unwrap();
         assert!(job.retry().is_ok()); // Second retry
         job.start().unwrap();
@@ -872,7 +848,6 @@ mod tests {
         assert_eq!(jobs[1].step_name, "step-2");
         assert_eq!(jobs[2].step_name, "step-3");
 
-        // Check dependencies
         assert_eq!(jobs[0].dependencies.len(), 0); // First step has no dependencies
         assert_eq!(jobs[1].dependencies.len(), 1); // Depends on step-1
         assert_eq!(jobs[2].dependencies.len(), 2); // Depends on step-1 and step-2
@@ -902,7 +877,6 @@ mod tests {
         assert_eq!(run_id, "run-1");
         assert_eq!(step_id, "step-1");
 
-        // Test invalid job ID
         assert!(Job::parse_job_id("invalid").is_err());
     }
 
@@ -924,7 +898,6 @@ mod tests {
             JobPriority::Normal,
         );
 
-        // Add dependency
         job2.add_dependency(job1.id.clone());
         assert!(job2.depends_on_job(&job1.id));
         assert!(job1.is_dependency_for(&job2));
@@ -943,12 +916,10 @@ mod tests {
 
         let job = Job::from_workflow_step(&workflow, &run, "step-1", payload).unwrap();
 
-        // Check workflow context
         assert_eq!(job.get_context("workflow_name").unwrap(), &serde_json::Value::String(workflow.name));
         assert_eq!(job.get_context("step_index").unwrap(), &serde_json::Value::Number(0.into()));
         assert_eq!(job.get_context("total_steps").unwrap(), &serde_json::Value::Number(3.into()));
 
-        // Check step tags
         assert_eq!(job.get_tag("step_name").unwrap(), "Step 1");
         assert_eq!(job.get_tag("step_action").unwrap(), "test_action_1");
     }
