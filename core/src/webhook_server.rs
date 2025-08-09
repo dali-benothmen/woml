@@ -23,17 +23,12 @@ pub struct WebhookServerConfig {
 
 impl Default for WebhookServerConfig {
     fn default() -> Self {
+        // Use centralized configuration
+        let core_config = crate::config::CoreConfig::default();
         Self {
-            host: std::env::var("CRONFLOW_WEBHOOK_HOST")
-                .unwrap_or_else(|_| "127.0.0.1".to_string()),
-            port: std::env::var("CRONFLOW_WEBHOOK_PORT")
-                .unwrap_or_else(|_| "3000".to_string())
-                .parse()
-                .unwrap_or(3000),
-            max_connections: std::env::var("CRONFLOW_WEBHOOK_MAX_CONNECTIONS")
-                .unwrap_or_else(|_| "1000".to_string())
-                .parse()
-                .unwrap_or(1000),
+            host: core_config.webhook.host,
+            port: core_config.webhook.port,
+            max_connections: core_config.webhook.max_connections,
         }
     }
 }

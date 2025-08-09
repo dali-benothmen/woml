@@ -29,11 +29,13 @@ pub struct ParallelExecutionConfig {
 
 impl Default for ParallelExecutionConfig {
     fn default() -> Self {
+        // Use centralized configuration
+        let core_config = crate::config::CoreConfig::default();
         Self {
-            max_concurrent_steps: 10,
-            fail_fast: true,
-            default_timeout_ms: Some(30000), // 30 seconds
-            enabled: true,
+            max_concurrent_steps: core_config.execution.max_concurrent_steps,
+            fail_fast: core_config.execution.fail_fast,
+            default_timeout_ms: core_config.execution.default_timeout_ms,
+            enabled: true, // Always enabled by default
         }
     }
 }

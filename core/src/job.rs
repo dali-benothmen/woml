@@ -37,11 +37,13 @@ pub struct RetryConfig {
 
 impl Default for RetryConfig {
     fn default() -> Self {
+        // Use centralized configuration
+        let core_config = crate::config::CoreConfig::default();
         Self {
-            max_attempts: 3,
-            backoff_ms: 1000,
-            max_backoff_ms: 30000,
-            jitter: true,
+            max_attempts: core_config.execution.retry_attempts,
+            backoff_ms: core_config.execution.retry_backoff_ms,
+            max_backoff_ms: core_config.execution.max_backoff_ms,
+            jitter: core_config.execution.retry_jitter,
         }
     }
 }

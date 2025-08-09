@@ -97,7 +97,7 @@ impl Context {
             total_steps: 0, // Will be updated by caller
             timeout: None,
             retry_count: 0,
-            max_retries: 3,
+            max_retries: crate::config::CoreConfig::default().execution.max_retries,
             version: "1.0.0".to_string(),
             checksum: None,
         };
@@ -162,9 +162,11 @@ impl Context {
         let payload_size = serde_json::to_string(&self.payload)
             .map_err(|e| CoreError::Serialization(e))?
             .len();
-        if payload_size > 10_000_000 { // 10MB limit
+        let config = crate::config::CoreConfig::default();
+        if payload_size > config.payload.max_size_bytes {
             return Err(CoreError::Validation(format!(
-                "Payload too large: {} bytes (max: 10MB)", payload_size
+                "Payload too large: {} bytes (max: {})", 
+                payload_size, config.payload.max_size_bytes
             )));
         }
 
@@ -176,14 +178,15 @@ impl Context {
         let mut score = 1u8;
         
         // Add points for payload complexity
+        let config = crate::config::CoreConfig::default();
         if let Some(payload_size) = serde_json::to_string(&self.payload).ok().map(|s| s.len()) {
-            if payload_size > 100_000 { score += 2; } // Large payload
-            else if payload_size > 10_000 { score += 1; } // Medium payload
+            if payload_size > config.payload.large_payload_threshold { score += 2; } // Large payload
+            else if payload_size > config.payload.medium_payload_threshold { score += 1; } // Medium payload
         }
         
         // Add points for number of steps
-        if self.steps.len() > 50 { score += 2; }
-        else if self.steps.len() > 10 { score += 1; }
+        if self.steps.len() > config.payload.max_step_count_large { score += 2; }
+        else if self.steps.len() > config.payload.max_step_count_medium { score += 1; }
         
         // Add points for nested payload structure
         if self.has_deep_nesting(&self.payload, 0) { score += 1; }
@@ -261,8 +264,8 @@ impl Context {
 
     /// Convert context to compressed JSON string
     pub fn to_json_compressed(&self) -> Result<String, CoreError> {
-        // For now, just return the regular JSON
-        // TODO: Implement actual compression when needed
+        // Currently returns uncompressed JSON
+        // Enhancement: Add gzip/zstd compression for large payloads when needed
         self.to_json()
     }
 
@@ -325,7 +328,7 @@ impl Default for ContextMetadata {
             total_steps: 0,
             timeout: None,
             retry_count: 0,
-            max_retries: 3,
+            max_retries: crate::config::CoreConfig::default().execution.max_retries,
             version: "1.0.0".to_string(),
             checksum: None,
         }

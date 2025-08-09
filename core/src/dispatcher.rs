@@ -23,11 +23,13 @@ pub struct WorkerPoolConfig {
 
 impl Default for WorkerPoolConfig {
     fn default() -> Self {
+        // Use centralized configuration
+        let core_config = crate::config::CoreConfig::default();
         Self {
-            min_workers: 2,
-            max_workers: 10,
-            worker_timeout_ms: 30000, // 30 seconds
-            queue_size: 1000,
+            min_workers: core_config.worker_pool.min_workers,
+            max_workers: core_config.worker_pool.max_workers,
+            worker_timeout_ms: core_config.worker_pool.worker_timeout_ms,
+            queue_size: core_config.worker_pool.queue_size,
         }
     }
 }
@@ -517,13 +519,13 @@ impl Dispatcher {
         // Scale up if queue is deep and we have capacity
         if queue_depth > active_workers * 2 && total_workers < self.config.max_workers {
             log::info!("Scaling up workers: queue_depth={}, active_workers={}", queue_depth, active_workers);
-            // TODO: Implement worker scaling
+            // TODO: Implement dynamic worker scaling (add new workers)
         }
         
         // Scale down if queue is empty and we have excess workers
         if queue_depth == 0 && total_workers > self.config.min_workers {
             log::info!("Scaling down workers: queue_depth={}, total_workers={}", queue_depth, total_workers);
-            // TODO: Implement worker scaling
+            // TODO: Implement dynamic worker scaling (remove idle workers)
         }
         
         Ok(())
