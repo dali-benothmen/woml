@@ -5,7 +5,6 @@
 
 use std::env;
 
-/// Main configuration structure for the core engine
 #[derive(Debug, Clone)]
 pub struct CoreConfig {
     pub worker_pool: WorkerPoolConfig,
@@ -15,7 +14,6 @@ pub struct CoreConfig {
     pub payload: PayloadConfig,
 }
 
-/// Worker pool configuration
 #[derive(Debug, Clone)]
 pub struct WorkerPoolConfig {
     pub min_workers: usize,
@@ -24,7 +22,6 @@ pub struct WorkerPoolConfig {
     pub queue_size: usize,
 }
 
-/// Execution engine configuration
 #[derive(Debug, Clone)]
 pub struct ExecutionConfig {
     pub max_concurrent_steps: usize,
@@ -45,7 +42,6 @@ pub struct WebhookConfig {
     pub max_connections: usize,
 }
 
-/// Database configuration
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
     pub default_path: String,
@@ -53,7 +49,6 @@ pub struct DatabaseConfig {
     pub max_connections: usize,
 }
 
-/// Payload and context configuration
 #[derive(Debug, Clone)]
 pub struct PayloadConfig {
     pub max_size_bytes: usize,
@@ -200,17 +195,14 @@ impl Default for PayloadConfig {
 }
 
 impl CoreConfig {
-    /// Create a new configuration with default values
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create a configuration from environment variables only
     pub fn from_env() -> Self {
         Self::default() // Already loads from env in Default impl
     }
 
-    /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         if self.worker_pool.min_workers == 0 {
             return Err("Minimum workers must be greater than 0".to_string());

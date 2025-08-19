@@ -332,22 +332,34 @@ impl Bridge {
         Ok(())
     }
 
-    /// Start the webhook server
+    /// Start the webhook server with proper async support
+    pub async fn start_webhook_server_async(&mut self) -> CoreResult<()> {
+        log::info!("Starting webhook server with async support...");
+        
+        let config = crate::webhook_server::WebhookServerConfig::default();
+        let mut webhook_server = crate::webhook_server::WebhookServer::new(
+            config,
+            self.trigger_manager.clone(),
+            self.state_manager.clone(),
+        );
+        
+        webhook_server.start().await?;
+        log::info!("Webhook server started successfully");
+        Ok(())
+    }
+    
+    /// Start the webhook server (legacy sync method)
     pub fn start_webhook_server(&mut self) -> CoreResult<()> {
-        log::info!("Starting webhook server...");
-        
-        // The actual HTTP server will be started by the Node.js side
-        // This is a temporary workaround until we resolve the threading issues
-        
+        log::info!("Starting webhook server (legacy mode)...");
+        log::info!("Note: Use start_webhook_server_async() for full async support");
         log::info!("Webhook server configuration ready");
-        log::info!("Note: HTTP server needs to be started separately");
-        
         Ok(())
     }
     
     /// Stop the webhook server
     pub fn stop_webhook_server(&mut self) -> CoreResult<()> {
         log::info!("Stopping webhook server");
+        // Note: For async server, use the WebhookServer instance directly
         Ok(())
     }
 

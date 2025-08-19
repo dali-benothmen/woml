@@ -315,6 +315,11 @@ impl TriggerManager {
     pub fn get_workflow_id_for_webhook(&self, path: &str) -> Option<&String> {
         self.webhook_triggers.get(path).map(|(_, workflow_id)| workflow_id)
     }
+    
+    /// Get webhook trigger details for a path
+    pub fn get_webhook_trigger(&self, path: &str) -> Option<(&WebhookTrigger, &String)> {
+        self.webhook_triggers.get(path).map(|(trigger, workflow_id)| (trigger, workflow_id))
+    }
 }
 
 impl Default for TriggerManager {

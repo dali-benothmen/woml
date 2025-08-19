@@ -20,6 +20,9 @@ pub mod condition_evaluator;
 pub mod config;
 pub mod execution;
 
+#[cfg(test)]
+mod webhook_test;
+
 /// Core engine version
 pub const VERSION: &str = "0.1.0";
 
