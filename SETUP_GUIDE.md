@@ -6,7 +6,7 @@ This guide will help you set up Cronflow locally for testing and development.
 
 If you just want to try Cronflow in your own project:
 
-### Option 1: Install from npm (Recommended)
+Install from npm
 
 ```bash
 # Create a new project
@@ -60,37 +60,6 @@ node workflow.js
 3. The database is initialized with the schema automatically
 4. Your workflow is registered and ready to receive webhooks
 
-### Option 2: Use the Playground
-
-The repository includes a ready-to-use playground:
-
-```bash
-# Clone the repository
-git clone https://github.com/dali-benothmen/cronflow.git
-cd cronflow
-
-# Install dependencies
-npm install  # or: bun install
-
-# Build the project
-npm run build  # or: bun run build
-
-# Go to playground
-cd playground
-
-# Install playground dependencies
-npm install
-
-# Run the example workflow
-node workflow.js
-```
-
-The playground workflow demonstrates:
-
-- Complex multi-step workflows
-- Parallel execution
-- Performance monitoring
-- Webhook integration with Express
 
 ## 🛠️ Development Setup (Contributing to Cronflow)
 
@@ -375,7 +344,6 @@ cronflow.start({
 
 - **Use TypeScript** for better type safety and autocomplete
 - **Enable hot reload** with `nodemon` or `bun --watch` during development
-- **Check the playground** examples for advanced patterns
 - **Monitor performance** using the built-in monitoring features
 - **Test workflows** using the testing utilities provided
 
