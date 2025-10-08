@@ -1,6 +1,8 @@
 //! Database operations for the Node-Cronflow Core Engine
 
 use rusqlite::Connection;
+use std::path::Path;
+use std::fs;
 use crate::error::CoreResult;
 use crate::models::{WorkflowDefinition, WorkflowRun, StepResult};
 
@@ -12,6 +14,13 @@ pub struct Database {
 impl Database {
     /// Create a new database connection
     pub fn new(path: &str) -> CoreResult<Self> {
+        // Ensure parent directory exists
+        if let Some(parent) = Path::new(path).parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        
         let conn = Connection::open(path)?;
         let db = Database { conn };
         db.init_schema()?;

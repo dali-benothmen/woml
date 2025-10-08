@@ -154,7 +154,7 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             default_path: env::var("CRONFLOW_DB_PATH")
-                .unwrap_or_else(|_| "cronflow.db".to_string()),
+                .unwrap_or_else(|_| ".cronflow/data.db".to_string()),
             connection_timeout_ms: env::var("CRONFLOW_DB_TIMEOUT_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())

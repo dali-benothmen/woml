@@ -140,7 +140,7 @@ function getStepHandler(
 
 function initialize(dbPath?: string): void {
   setState({
-    dbPath: dbPath || './cronflow.db',
+    dbPath: dbPath || './.cronflow/data.db',
     workflows: new Map(),
     engineState: 'STOPPED',
     eventListeners: new Map(),
@@ -213,7 +213,7 @@ export async function start(options?: StartOptions): Promise<void> {
   }
 
   if (!currentState.dbPath) {
-    const defaultDbPath = './cronflow.db';
+    const defaultDbPath = './.cronflow/data.db';
     setState({ dbPath: defaultDbPath });
   }
 

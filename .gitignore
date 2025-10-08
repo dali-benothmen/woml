@@ -68,7 +68,10 @@ jspm_packages/
 # Nx
 .nx/cache/
 
-# Database
+# Cronflow data directory (contains workflow state and execution history)
+.cronflow/
+
+# Database files
 *.db
 *.sqlite
 *.sqlite3

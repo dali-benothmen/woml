@@ -53,6 +53,9 @@ pub enum CoreError {
     #[error("UUID parsing error: {0}")]
     UuidParse(#[from] uuid::Error),
 
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

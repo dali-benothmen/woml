@@ -63,24 +63,15 @@ export function createWebhookServer(
         return;
       }
 
-      if (path.startsWith('/webhook/')) {
-        const webhookPath = path.replace('/webhook', '');
+      // Match webhook path directly (no /webhook/ prefix required)
+      const workflow = Array.from(currentState.workflows.values()).find(
+        (w: any) =>
+          w.triggers.some((t: any) => t.type === 'webhook' && t.path === path)
+      ) as WorkflowDefinition | undefined;
 
-        const workflow = Array.from(currentState.workflows.values()).find(
-          (w: any) =>
-            w.triggers.some(
-              (t: any) => t.type === 'webhook' && t.path === webhookPath
-            )
-        ) as WorkflowDefinition | undefined;
-
-        if (!workflow) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Webhook not found' }));
-          return;
-        }
-
+      if (workflow) {
         const webhookTrigger = workflow.triggers.find(
-          (t: any) => t.type === 'webhook' && t.path === webhookPath
+          (t: any) => t.type === 'webhook' && t.path === path
         ) as { type: 'webhook'; path: string; options?: any } | undefined;
 
         const headers: Record<string, string> = {};
@@ -196,6 +187,7 @@ export function createWebhookServer(
         return;
       }
 
+      // No matching webhook found
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
     } catch (error) {

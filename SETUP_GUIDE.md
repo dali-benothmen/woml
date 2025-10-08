@@ -38,11 +38,11 @@ workflow
   });
 
 // Start the engine
-cronflow.start({ 
-  webhookServer: { 
-    host: '0.0.0.0', 
-    port: 3000 
-  } 
+cronflow.start({
+  webhookServer: {
+    host: '0.0.0.0',
+    port: 3000
+  }
 }).then(() => {
   console.log('✅ Cronflow is running on http://localhost:3000');
   console.log('🧪 Test it: curl -X POST http://localhost:3000/webhooks/hello -H "Content-Type: application/json" -d \'{"name":"Developer"}\'');
@@ -54,9 +54,11 @@ node workflow.js
 ```
 
 **What happens**:
-1. When you run `node workflow.js`, Cronflow automatically creates `cronflow.db` in your current directory
-2. The database is initialized with the schema automatically
-3. Your workflow is registered and ready to receive webhooks
+
+1. When you run `node workflow.js`, Cronflow automatically creates `.cronflow/data.db` in your current directory
+2. The `.cronflow/` directory is hidden (starts with a dot) to keep your project clean
+3. The database is initialized with the schema automatically
+4. Your workflow is registered and ready to receive webhooks
 
 ### Option 2: Use the Playground
 
@@ -84,6 +86,7 @@ node workflow.js
 ```
 
 The playground workflow demonstrates:
+
 - Complex multi-step workflows
 - Parallel execution
 - Performance monitoring
@@ -171,25 +174,40 @@ npm install ../cronflow/cronflow-X.X.X.tgz
 
 ## 🔍 Understanding the Database
 
-**Important**: You don't need to manually create `cronflow.db` - it's automatic!
+**Important**: You don't need to manually create the database - it's automatic!
 
 ### How it works:
 
 1. When you call `cronflow.start()`, the Rust core initializes
-2. The core automatically creates `cronflow.db` in your working directory
-3. The database schema is applied automatically from `core/src/schema.sql`
-4. Workflows are registered and stored in the database
+2. The core automatically creates `.cronflow/data.db` in a hidden directory
+3. The `.cronflow/` directory keeps your project root clean
+4. The database schema is applied automatically from `core/src/schema.sql`
+5. Workflows are registered and stored in the database
 
 ### Database Location
 
-By default, the database is created as `./cronflow.db` in your current working directory.
+By default, the database is created as `./.cronflow/data.db` in your current working directory.
+
+```
+my-project/
+  ├── .cronflow/           ✅ Hidden directory
+  │   └── data.db         Database file
+  ├── .gitignore
+  ├── node_modules/
+  ├── package.json
+  └── workflow.js
+```
 
 You can specify a custom location:
 
 ```javascript
-// This is handled internally, but the database will be created
-// in the current directory when cronflow.start() is called
+// Default: uses ./.cronflow/data.db
 cronflow.start();
+
+// Custom location
+cronflow.start({
+  // dbPath is handled internally by the core
+});
 
 // The database includes:
 // - workflows: Your workflow definitions
@@ -200,14 +218,16 @@ cronflow.start();
 
 ### Troubleshooting Database Issues
 
-If you don't see `cronflow.db` being created:
+If you don't see `.cronflow/` directory being created:
 
 1. **Check if cronflow.start() is called**:
+
    ```javascript
    await cronflow.start(); // Make sure this is executed
    ```
 
 2. **Check for errors**:
+
    ```javascript
    cronflow.start().catch(err => {
      console.error('Failed to start Cronflow:', err);
@@ -215,12 +235,18 @@ If you don't see `cronflow.db` being created:
    ```
 
 3. **Verify Rust core is built**:
+
    ```bash
    ls core/core.node  # Should exist after building
    ```
 
 4. **Check write permissions**:
    - Ensure your process has write permissions in the current directory
+
+5. **View hidden files**:
+   ```bash
+   ls -la  # Shows hidden directories starting with .
+   ```
 
 ## 🧪 Example Workflows
 
@@ -231,12 +257,12 @@ const { cronflow } = require('cronflow');
 
 const workflow = cronflow.define({
   id: 'user-registration',
-  name: 'User Registration Workflow'
+  name: 'User Registration Workflow',
 });
 
 workflow
   .onWebhook('/api/register', { method: 'POST' })
-  .step('validate', async (ctx) => {
+  .step('validate', async ctx => {
     // Validate user data
     const { email, name } = ctx.payload;
     if (!email || !name) {
@@ -244,17 +270,17 @@ workflow
     }
     return { email, name, valid: true };
   })
-  .step('save-user', async (ctx) => {
+  .step('save-user', async ctx => {
     // Save to database (pseudo-code)
     const userId = await db.users.create(ctx.last);
     return { userId, ...ctx.last };
   })
-  .action('send-welcome-email', async (ctx) => {
+  .action('send-welcome-email', async ctx => {
     // Send welcome email (runs in background)
     await emailService.send({
       to: ctx.last.email,
       subject: 'Welcome!',
-      body: `Hello ${ctx.last.name}!`
+      body: `Hello ${ctx.last.name}!`,
     });
   });
 
@@ -266,26 +292,25 @@ cronflow.start({ webhookServer: { port: 3000 } });
 ```javascript
 const workflow = cronflow.define({
   id: 'data-processor',
-  name: 'Data Processing Workflow'
+  name: 'Data Processing Workflow',
 });
 
-workflow
-  .step('process', async (ctx) => {
-    const { data } = ctx.payload;
-    const processed = data.map(item => ({
-      ...item,
-      processed: true,
-      timestamp: new Date()
-    }));
-    return { processed };
-  });
+workflow.step('process', async ctx => {
+  const { data } = ctx.payload;
+  const processed = data.map(item => ({
+    ...item,
+    processed: true,
+    timestamp: new Date(),
+  }));
+  return { processed };
+});
 
 // Start the engine
 await cronflow.start();
 
 // Trigger manually
 const runId = await cronflow.trigger('data-processor', {
-  data: [{ id: 1 }, { id: 2 }]
+  data: [{ id: 1 }, { id: 2 }],
 });
 
 console.log('Workflow started:', runId);
@@ -296,34 +321,40 @@ console.log('Workflow started:', runId);
 ### Issue: "Cannot find module 'cronflow'"
 
 **Solution**: Make sure Cronflow is installed:
+
 ```bash
 npm install cronflow
 # or for local development:
 npm install ../path/to/cronflow-X.X.X.tgz
 ```
 
-### Issue: "cronflow.db is not created"
+### Issue: ".cronflow directory is not created"
 
 **Solution**: Ensure you're calling `cronflow.start()`:
+
 ```javascript
-await cronflow.start(); // Database is created here
+await cronflow.start(); // Database directory is created here
 ```
+
+**Note**: The directory is hidden (starts with `.`). Use `ls -la` to see it.
 
 ### Issue: "No response from webhook"
 
 **Solution**: Make sure the webhook server is started:
+
 ```javascript
-cronflow.start({ 
-  webhookServer: { 
+cronflow.start({
+  webhookServer: {
     port: 3000,
-    host: '0.0.0.0'  // Important for Docker/remote access
-  } 
+    host: '0.0.0.0', // Important for Docker/remote access
+  },
 });
 ```
 
 ### Issue: "Build fails with Rust errors"
 
-**Solution**: 
+**Solution**:
+
 1. Ensure Rust is installed: `rustc --version`
 2. Update Rust: `rustup update`
 3. Clean and rebuild:
@@ -351,4 +382,3 @@ cronflow.start({
 ---
 
 **Still having issues?** Open a [GitHub Discussion](https://github.com/dali-benothmen/cronflow/discussions) and we'll help you out! 🚀
-
