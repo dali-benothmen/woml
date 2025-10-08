@@ -100,6 +100,8 @@ npm install cronflow
 
 > 💡 **New to Cronflow?** Check out our [Complete Setup Guide](./SETUP_GUIDE.md) for step-by-step instructions, including local testing, troubleshooting, and examples!
 
+> 🆕 **v0.9.0 Update**: Cronflow now stores data in a hidden `.cronflow/` directory (instead of `cronflow.db` in your project root) for a cleaner project structure. Everything is automatic - no action needed for new users! Existing users: see [Migration Guide](./MIGRATION_V0.9.md).
+
 ```js
 import { cronflow } from 'cronflow';
 

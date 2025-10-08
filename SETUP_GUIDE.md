@@ -2,6 +2,36 @@
 
 This guide will help you set up Cronflow locally for testing and development.
 
+## 🆕 New in v0.9.0: Hidden Data Directory
+
+**Important Update**: Starting with v0.9.0, Cronflow stores its database in a hidden `.cronflow/` directory instead of the project root. This keeps your project cleaner and follows standard conventions (like `.git/`, `.next/`, etc.).
+
+**Before (< v0.9.0):**
+```
+my-project/
+  ├── cronflow.db          ❌ Visible in root
+  ├── package.json
+  └── workflow.js
+```
+
+**After (>= v0.9.0):**
+```
+my-project/
+  ├── .cronflow/           ✅ Hidden directory
+  │   └── data.db
+  ├── package.json
+  └── workflow.js
+```
+
+**For new users**: Everything works automatically - the `.cronflow/` directory is created when you first run `cronflow.start()`.
+
+**For existing users**: If you have an old `cronflow.db` file, see our [Migration Guide](./MIGRATION_V0.9.md) for options to:
+- Start fresh (delete old database)
+- Migrate existing data (move the file)
+- Use a custom path (environment variable)
+
+---
+
 ## 🎯 Quick Start (Testing Cronflow)
 
 If you just want to try Cronflow in your own project:
