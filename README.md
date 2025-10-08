@@ -97,6 +97,9 @@ While other automation engines struggle with basic webhook processing, Cronflow 
 ```bash
 npm install cronflow
 ```
+
+> 💡 **New to Cronflow?** Check out our [Complete Setup Guide](./SETUP_GUIDE.md) for step-by-step instructions, including local testing, troubleshooting, and examples!
+
 ```js
 import { cronflow } from 'cronflow';
 
@@ -450,11 +453,21 @@ We welcome contributions! Check out our [Contributing Guide](./CONTRIBUTING.md) 
 ### Quick Development Setup
 
 ```bash
-git clone https://github.com/your-org/node-cronflow.git
+# Clone the repository
+git clone https://github.com/dali-benothmen/cronflow.git
 cd cronflow
+
+# Install dependencies
 npm install
-npm run dev
+
+# Build the project (TypeScript + Rust core)
+npm run build
+
+# Run tests
+npm test
 ```
+
+📖 **For detailed setup instructions**, see the [Setup Guide](./SETUP_GUIDE.md)
 
 ---
 

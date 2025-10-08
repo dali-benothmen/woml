@@ -27,46 +27,54 @@ git clone https://github.com/dali-benothmen/cronflow.git
 cd cronflow
 
 # Install dependencies
-bun install
+npm install  # or: bun install
 
-# Build everything (TypeScript + Rust core)
-bun run build:all
+# Build the Rust core
+cd core
+cargo build --release
+cd ..
+
+# Build TypeScript
+npm run build  # or: bun run build
 
 # Run tests
-bun test
+npm test  # or: bun test
 ```
+
+> 💡 **Tip**: For a comprehensive setup guide including troubleshooting, see [SETUP_GUIDE.md](./SETUP_GUIDE.md)
 
 ### Available Scripts
 
 ```bash
 # Development
-bun run dev              # Start development server with watch mode
-bun run dev:test         # Run tests in watch mode
-bun run dev:build        # Build in watch mode
+npm run dev              # Start development server with watch mode
+npm run dev:test         # Run tests in watch mode
 
 # Building
-bun run build            # Build TypeScript only
-bun run build:all        # Build TypeScript + Rust core
-bun run build:complete   # Clean build with core binary copy
-bun run build:prod       # Production build
+npm run build            # Build TypeScript + Rust core
+npm run build:core       # Build only Rust core
+npm run build:prod       # Production build with optimizations
 
 # Testing
-bun test                 # Run all tests
-bun run test:run         # Run tests once
-bun run test:coverage    # Run tests with coverage
-bun run test:ui          # Run tests with UI
+npm test                 # Run all tests
+npm run test:run         # Run tests once
+npm run test:coverage    # Run tests with coverage
+npm run test:ui          # Run tests with UI
 
 # Code Quality
-bun run lint             # Run ESLint
-bun run lint:fix         # Fix ESLint issues
-bun run format           # Format code with Prettier
-bun run format:check     # Check code formatting
+npm run lint             # Run ESLint
+npm run lint:fix         # Fix ESLint issues
+npm run format           # Format code with Prettier
+npm run format:check     # Check code formatting
 
 # Package Management
-bun run analyze          # Analyze bundle size
-bun run check:bundle-size # Check bundle size limits
-bun run clean            # Clean build artifacts
+npm run pack             # Create a local .tgz package
+npm run analyze          # Analyze bundle size
+npm run check:bundle-size # Check bundle size limits
+npm run clean            # Clean build artifacts
 ```
+
+> **Note**: You can replace `npm` with `bun` if you prefer Bun as your runtime
 
 ## 📝 Changesets Workflow
 
