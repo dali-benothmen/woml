@@ -98,6 +98,18 @@ While other automation engines struggle with basic webhook processing, Cronflow 
 npm install cronflow
 ```
 
+### 🌍 Platform Support
+
+Cronflow supports multiple platforms with native binaries:
+
+- **Windows**: x64, ARM64
+- **macOS**: Intel (x64), Apple Silicon (ARM64)  
+- **Linux**: x64 (GNU/musl), ARM64 (GNU/musl)
+
+The correct binary for your platform is automatically installed via optional dependencies. No compilation required!
+
+**Troubleshooting**: If you encounter issues loading the native module, ensure your platform and architecture are supported. The installation will automatically download the appropriate `@cronflow/[platform]` package for your system.
+
 > 💡 **New to Cronflow?** Check out our [Complete Setup Guide](./SETUP_GUIDE.md) for step-by-step instructions, including local testing, troubleshooting, and examples!
 
 > 🆕 **v0.9.0 Update**: Cronflow now stores data in a hidden `.cronflow/` directory (instead of `cronflow.db` in your project root) for a cleaner project structure. Everything is automatic - no action needed for new users! Existing users: see [Migration Guide](./MIGRATION_V0.9.md).

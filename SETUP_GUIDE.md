@@ -7,6 +7,7 @@ This guide will help you set up Cronflow locally for testing and development.
 **Important Update**: Starting with v0.9.0, Cronflow stores its database in a hidden `.cronflow/` directory instead of the project root. This keeps your project cleaner and follows standard conventions (like `.git/`, `.next/`, etc.).
 
 **Before (< v0.9.0):**
+
 ```
 my-project/
   ├── cronflow.db          ❌ Visible in root
@@ -15,6 +16,7 @@ my-project/
 ```
 
 **After (>= v0.9.0):**
+
 ```
 my-project/
   ├── .cronflow/           ✅ Hidden directory
@@ -26,6 +28,7 @@ my-project/
 **For new users**: Everything works automatically - the `.cronflow/` directory is created when you first run `cronflow.start()`.
 
 **For existing users**: If you have an old `cronflow.db` file, see our [Migration Guide](./MIGRATION_V0.9.md) for options to:
+
 - Start fresh (delete old database)
 - Migrate existing data (move the file)
 - Use a custom path (environment variable)
@@ -90,6 +93,80 @@ node workflow.js
 3. The database is initialized with the schema automatically
 4. Your workflow is registered and ready to receive webhooks
 
+---
+
+## 🌍 Platform Support & Cross-Platform Installation
+
+Cronflow uses native Rust binaries for maximum performance. We provide pre-built binaries for all major platforms.
+
+### Supported Platforms
+
+| Platform | Architecture          | Package Name                 |
+| -------- | --------------------- | ---------------------------- |
+| Windows  | x64                   | `@cronflow/win32-x64-msvc`   |
+| Windows  | ARM64                 | `@cronflow/win32-arm64-msvc` |
+| macOS    | Intel (x64)           | `@cronflow/darwin-x64`       |
+| macOS    | Apple Silicon (ARM64) | `@cronflow/darwin-arm64`     |
+| Linux    | x64 (GNU)             | `@cronflow/linux-x64-gnu`    |
+| Linux    | x64 (musl)            | `@cronflow/linux-x64-musl`   |
+| Linux    | ARM64 (GNU)           | `@cronflow/linux-arm64-gnu`  |
+| Linux    | ARM64 (musl)          | `@cronflow/linux-arm64-musl` |
+
+### How It Works
+
+When you install `cronflow`, npm/bun automatically installs the correct platform-specific package as an optional dependency. For example:
+
+- On **Windows x64**: `@cronflow/win32-x64-msvc` is installed
+- On **macOS Apple Silicon**: `@cronflow/darwin-arm64` is installed
+- On **Linux x64**: `@cronflow/linux-x64-gnu` is installed
+
+**No compilation required!** The native binary is pre-built and ready to use.
+
+### Troubleshooting Platform Issues
+
+If Cronflow fails to load the native module:
+
+1. **Check your platform and architecture:**
+
+   ```bash
+   node -e "console.log(process.platform, process.arch)"
+   ```
+
+2. **Verify the platform package is installed:**
+
+   ```bash
+   # On Windows x64
+   npm list @cronflow/win32-x64-msvc
+
+   # On macOS ARM64
+   npm list @cronflow/darwin-arm64
+
+   # On Linux x64
+   npm list @cronflow/linux-x64-gnu
+   ```
+
+3. **Reinstall if the platform package is missing:**
+
+   ```bash
+   npm install --force cronflow
+   ```
+
+4. **Check for installation errors:**
+   - Look for errors during `npm install` related to optional dependencies
+   - Ensure you have a stable internet connection
+   - Try clearing npm cache: `npm cache clean --force`
+
+5. **Manual installation (last resort):**
+   ```bash
+   # Example for Windows x64
+   npm install @cronflow/win32-x64-msvc
+   ```
+
+### Development Note
+
+If you're developing Cronflow itself or need to build from source, see the [Development Setup](#-development-setup-contributing-to-cronflow) section below.
+
+---
 
 ## 🛠️ Development Setup (Contributing to Cronflow)
 

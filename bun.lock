@@ -31,6 +31,16 @@
         "vue": "^3.5.18",
         "webpack-bundle-analyzer": "^4.10.2",
       },
+      "optionalDependencies": {
+        "@cronflow/darwin-arm64": "0.9.0",
+        "@cronflow/darwin-x64": "0.9.0",
+        "@cronflow/linux-arm64-gnu": "0.9.0",
+        "@cronflow/linux-arm64-musl": "0.9.0",
+        "@cronflow/linux-x64-gnu": "0.9.0",
+        "@cronflow/linux-x64-musl": "0.9.0",
+        "@cronflow/win32-arm64-msvc": "0.9.0",
+        "@cronflow/win32-x64-msvc": "0.9.0",
+      },
     },
   },
   "packages": {

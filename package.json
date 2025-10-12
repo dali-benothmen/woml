@@ -27,30 +27,39 @@
     "CHANGELOG.md"
   ],
   "napi": {
-    "binaryName": "core",
-    "targets": [
-      "x86_64-pc-windows-msvc",
-      "i686-pc-windows-msvc",
-      "aarch64-apple-darwin",
-      "x86_64-apple-darwin",
-      "x86_64-unknown-linux-gnu",
-      "x86_64-unknown-linux-musl",
-      "aarch64-unknown-linux-gnu",
-      "aarch64-unknown-linux-musl",
-      "armv7-unknown-linux-gnueabihf",
-      "x86_64-unknown-freebsd",
-      "aarch64-pc-windows-msvc"
-    ],
-    "packageName": "cronflow"
+    "name": "core",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "aarch64-apple-darwin",
+        "aarch64-pc-windows-msvc"
+      ]
+    }
+  },
+  "optionalDependencies": {
+    "@cronflow/darwin-x64": "0.9.0",
+    "@cronflow/darwin-arm64": "0.9.0",
+    "@cronflow/linux-x64-gnu": "0.9.0",
+    "@cronflow/linux-x64-musl": "0.9.0",
+    "@cronflow/linux-arm64-gnu": "0.9.0",
+    "@cronflow/linux-arm64-musl": "0.9.0",
+    "@cronflow/win32-x64-msvc": "0.9.0",
+    "@cronflow/win32-arm64-msvc": "0.9.0"
   },
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target && bun run generate:types",
     "build:dev": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --sourcemap --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target && bun run generate:types",
     "build:prod": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --external \"*.node\" && bun run build:core:optimized && mkdir -p dist/core && cp core/core.node dist/core/ && rm -rf dist/target && bun run generate:types",
     "build:analyze": "bun run build:prod && bun run scripts/analyze-bundle.js",
-    "build:core": "cd core && napi build --release --package-json-path ../package.json",
-    "build:core:debug": "cd core && napi build --package-json-path ../package.json",
-    "build:core:optimized": "cd core && napi build --release --package-json-path ../package.json && strip core.node && echo '✅ Core binary optimized and stripped'",
+    "build:core": "cd core && napi build --release",
+    "build:core:debug": "cd core && napi build",
+    "build:core:optimized": "cd core && napi build --release && strip core.node && echo '✅ Core binary optimized and stripped'",
+    "build:core:all": "cd core && napi build --platform --release",
+    "artifacts": "cd core && napi artifacts",
+    "prepublish:artifacts": "cd core && napi prepublish -t npm",
     "generate:types": "node scripts/generate-types.js",
     "prepublishOnly": "bun run build:prod && bun test && bun run check:bundle-size",
     "postpublish": "bun run clean",
