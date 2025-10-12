@@ -187,11 +187,9 @@ jobs:
       - name: Create platform packages
         run: |
           cd core
-          npx napi artifacts --skip-gh-release
+          npx napi prepublish -t npm --no-gh-release
           ls -R ./npm
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish platform packages
         run: |
