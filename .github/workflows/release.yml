@@ -187,7 +187,7 @@ jobs:
       - name: Create platform packages
         run: |
           cd core
-          npx napi artifacts -t npm
+          npx napi artifacts
           ls -R ./npm
         shell: bash
 
