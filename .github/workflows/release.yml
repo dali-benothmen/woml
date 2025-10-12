@@ -235,6 +235,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Setup Bun for main package build
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
       - name: Install main package dependencies
         run: npm install --omit=optional
 
