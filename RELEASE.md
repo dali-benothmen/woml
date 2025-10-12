@@ -19,7 +19,6 @@ When you install `cronflow`, npm automatically installs the correct platform-spe
 - **Linux x64 (GNU)**: `@cronflow/linux-x64-gnu`
 - **Linux x64 (musl)**: `@cronflow/linux-x64-musl`
 - **Linux ARM64 (GNU)**: `@cronflow/linux-arm64-gnu`
-- **Linux ARM64 (musl)**: `@cronflow/linux-arm64-musl`
 
 ### 2. Automated Release Workflow
 
@@ -40,21 +39,23 @@ The release process is fully automated via GitHub Actions (`.github/workflows/re
 ### Step-by-Step Release
 
 1. **Update version in package.json files:**
+
    ```bash
    # Update main package.json
    npm version patch  # or minor, major
-   
+
    # Update core/package.json to match
    cd core
    npm version patch
    cd ..
-   
+
    # Commit the version changes
    git add package.json core/package.json
    git commit -m "chore: bump version to 0.9.1"
    ```
 
 2. **Create and push a git tag:**
+
    ```bash
    git tag v0.9.1
    git push origin master
@@ -67,10 +68,11 @@ The release process is fully automated via GitHub Actions (`.github/workflows/re
    - Builds typically take 20-30 minutes (parallel builds across platforms)
 
 4. **Verify the release:**
+
    ```bash
    # Check main package
    npm view cronflow version
-   
+
    # Check platform packages
    npm view @cronflow/win32-x64-msvc version
    npm view @cronflow/darwin-arm64 version
@@ -82,6 +84,7 @@ The release process is fully automated via GitHub Actions (`.github/workflows/re
 The GitHub Actions workflow (`.github/workflows/release.yml`) performs these steps:
 
 #### Build Job (runs in parallel for each platform)
+
 1. Checkout code
 2. Set up Node.js and Rust toolchain
 3. Install dependencies
@@ -89,6 +92,7 @@ The GitHub Actions workflow (`.github/workflows/release.yml`) performs these ste
 5. Upload artifact
 
 #### Publish Job (runs after all builds complete)
+
 1. Download all platform artifacts
 2. Generate platform-specific packages using NAPI-RS
 3. Publish each platform package to npm
@@ -166,6 +170,7 @@ All package versions (main + platform packages) should match.
 Before making an official release, test the workflow:
 
 1. **Create a test tag:**
+
    ```bash
    git tag v0.9.1-test
    git push origin v0.9.1-test
@@ -208,4 +213,3 @@ The complete CI/CD pipeline includes:
 - [NAPI-RS Documentation](https://napi.rs/)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 - [npm Publishing Documentation](https://docs.npmjs.com/cli/v8/commands/npm-publish)
-

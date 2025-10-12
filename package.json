@@ -35,8 +35,7 @@
       "aarch64-pc-windows-msvc",
       "x86_64-unknown-linux-gnu",
       "x86_64-unknown-linux-musl",
-      "aarch64-unknown-linux-gnu",
-      "aarch64-unknown-linux-musl"
+      "aarch64-unknown-linux-gnu"
     ]
   },
   "optionalDependencies": {
@@ -45,7 +44,6 @@
     "@cronflow/linux-x64-gnu": "0.10.0",
     "@cronflow/linux-x64-musl": "0.10.0",
     "@cronflow/linux-arm64-gnu": "0.10.0",
-    "@cronflow/linux-arm64-musl": "0.10.0",
     "@cronflow/win32-x64-msvc": "0.10.0",
     "@cronflow/win32-arm64-msvc": "0.10.0"
   },

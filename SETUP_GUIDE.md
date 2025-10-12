@@ -110,7 +110,6 @@ Cronflow uses native Rust binaries for maximum performance. We provide pre-built
 | Linux    | x64 (GNU)             | `@cronflow/linux-x64-gnu`    |
 | Linux    | x64 (musl)            | `@cronflow/linux-x64-musl`   |
 | Linux    | ARM64 (GNU)           | `@cronflow/linux-arm64-gnu`  |
-| Linux    | ARM64 (musl)          | `@cronflow/linux-arm64-musl` |
 
 ### How It Works
 
