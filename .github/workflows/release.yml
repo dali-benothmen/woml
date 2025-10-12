@@ -19,45 +19,65 @@ jobs:
           - host: macos-latest
             target: x86_64-apple-darwin
             build: |
-              cd core && napi build --platform --release --target x86_64-apple-darwin --package-json-path ../package.json
+              cd core
+              npm install
+              npx napi build --platform --release --target x86_64-apple-darwin
               strip -x *.node
           - host: macos-latest
             target: aarch64-apple-darwin
             build: |
-              cd core && napi build --platform --release --target aarch64-apple-darwin --package-json-path ../package.json
+              cd core
+              npm install
+              npx napi build --platform --release --target aarch64-apple-darwin
               strip -x *.node
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
             build: |
-              cd core && napi build --platform --release --target x86_64-unknown-linux-gnu --package-json-path ../package.json
+              set -e
+              cd core
+              npm install
+              npx napi build --platform --release --target x86_64-unknown-linux-gnu
               strip *.node
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
             build: |
-              cd core && napi build --platform --release --target x86_64-unknown-linux-musl --package-json-path ../package.json
+              set -e
+              cd core
+              npm install
+              npx napi build --platform --release --target x86_64-unknown-linux-musl
               strip *.node
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
             build: |
-              cd core && napi build --platform --release --target aarch64-unknown-linux-gnu --package-json-path ../package.json
+              set -e
+              cd core
+              npm install
+              npx napi build --platform --release --target aarch64-unknown-linux-gnu
               aarch64-unknown-linux-gnu-strip *.node
           - host: ubuntu-latest
             target: aarch64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine-aarch64
             build: |
-              cd core && napi build --platform --release --target aarch64-unknown-linux-musl --package-json-path ../package.json
+              set -e
+              cd core
+              npm install
+              npx napi build --platform --release --target aarch64-unknown-linux-musl
               aarch64-linux-musl-strip *.node
           - host: windows-latest
             target: x86_64-pc-windows-msvc
             build: |
-              cd core && napi build --platform --release --target x86_64-pc-windows-msvc --package-json-path ../package.json
+              cd core
+              npm install
+              npx napi build --platform --release --target x86_64-pc-windows-msvc
           - host: windows-latest
             target: aarch64-pc-windows-msvc
             build: |
-              cd core && napi build --platform --release --target aarch64-pc-windows-msvc --package-json-path ../package.json
+              cd core
+              npm install
+              npx napi build --platform --release --target aarch64-pc-windows-msvc
 
     name: Build ${{ matrix.settings.target }}
     runs-on: ${{ matrix.settings.host }}
@@ -67,7 +87,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install Rust toolchain
@@ -92,9 +112,6 @@ jobs:
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
         shell: bash
-
-      - name: Install dependencies
-        run: npm install
 
       - name: Build in docker
         uses: addnab/docker-run-action@v3
@@ -126,11 +143,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Install dependencies
-        run: npm install
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -146,10 +160,15 @@ jobs:
           done
           ls -la core/
 
+      - name: Install dependencies for publishing
+        run: |
+          cd core
+          npm install
+
       - name: List packages
         run: |
           cd core
-          npm run prepublish:artifacts
+          npx napi prepublish -t npm
           ls -R ./npm
         shell: bash
 
@@ -157,25 +176,28 @@ jobs:
         run: |
           cd core
           echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" >> ~/.npmrc
-          npm run artifacts
+          npx napi artifacts
           for pkg in npm/@cronflow/*; do
             if [ -d "$pkg" ]; then
+              echo "Publishing $pkg..."
               cd "$pkg"
-              npm publish --access public
-              cd -
+              npm publish --access public || echo "Failed to publish $pkg"
+              cd /home/runner/work/cronflow/cronflow/core
             fi
           done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Install main package dependencies
+        run: npm install --omit=optional
+
       - name: Build main package
-        run: |
-          npm run build:prod
+        run: npm run build:prod
 
       - name: Publish main package
         run: |
+          echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" >> ~/.npmrc
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-

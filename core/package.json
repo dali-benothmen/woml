@@ -19,14 +19,15 @@
   },
   "license": "Apache-2.0",
   "engines": {
-    "node": ">= 18"
+    "node": ">= 20"
   },
   "scripts": {
     "artifacts": "napi artifacts",
     "build": "napi build --platform --release",
-    "build:debug": "napi build --platform"
+    "build:debug": "napi build --platform",
+    "prepublish:artifacts": "napi prepublish -t npm"
   },
-  "devDependencies": {
+  "dependencies": {
     "@napi-rs/cli": "^3.0.0"
   },
   "repository": {
@@ -34,4 +35,3 @@
     "url": "https://github.com/dali-benothmen/cronflow.git"
   }
 }
-
