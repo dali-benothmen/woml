@@ -142,42 +142,71 @@ jobs:
         with:
           path: artifacts
 
-      - name: Move artifacts
-        run: |
-          for dir in artifacts/bindings-*; do
-            if [ -d "$dir" ]; then
-              cp "$dir"/*.node core/ || true
-            fi
-          done
-          ls -la core/
-
       - name: Install dependencies for publishing
         run: |
           cd core
           npm install
 
-      - name: List packages
+      - name: Move and rename artifacts
+        run: |
+          # Create npm directory
+          mkdir -p core/npm
+
+          # Map artifact names to NAPI platform names
+          declare -A platform_map=(
+            ["bindings-x86_64-apple-darwin"]="darwin-x64"
+            ["bindings-aarch64-apple-darwin"]="darwin-arm64"
+            ["bindings-x86_64-pc-windows-msvc"]="win32-x64-msvc"
+            ["bindings-aarch64-pc-windows-msvc"]="win32-arm64-msvc"
+            ["bindings-x86_64-unknown-linux-gnu"]="linux-x64-gnu"
+            ["bindings-x86_64-unknown-linux-musl"]="linux-x64-musl"
+            ["bindings-aarch64-unknown-linux-gnu"]="linux-arm64-gnu"
+          )
+
+          # Copy and rename binaries
+          for artifact_dir in artifacts/bindings-*; do
+            if [ -d "$artifact_dir" ]; then
+              artifact_name=$(basename "$artifact_dir")
+              platform_name="${platform_map[$artifact_name]}"
+              
+              if [ -n "$platform_name" ]; then
+                echo "Processing $artifact_name -> $platform_name"
+                mkdir -p "core/npm/$platform_name"
+                
+                # Find .node file and copy with platform-specific name
+                if ls "$artifact_dir"/*.node 1> /dev/null 2>&1; then
+                  cp "$artifact_dir"/*.node "core/npm/$platform_name/core.$platform_name.node"
+                  echo "✅ Copied to core/npm/$platform_name/core.$platform_name.node"
+                fi
+              fi
+            fi
+          done
+
+          ls -la core/npm/
+
+      - name: Create platform packages
         run: |
           cd core
-          npx napi prepublish -t npm
+          npx napi artifacts --skip-gh-release
           ls -R ./npm
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish platform packages
         run: |
           cd core
           echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" >> ~/.npmrc
-          npx napi artifacts
+
           for pkg in npm/@cronflow/*; do
             if [ -d "$pkg" ]; then
               echo "Publishing $pkg..."
               cd "$pkg"
-              npm publish --access public || echo "Failed to publish $pkg"
+              npm publish --access public || echo "⚠️ Failed to publish $pkg"
               cd /home/runner/work/cronflow/cronflow/core
             fi
           done
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install main package dependencies
