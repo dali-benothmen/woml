@@ -147,11 +147,8 @@ jobs:
           cd core
           npm install
 
-      - name: Move and rename artifacts
+      - name: Create platform packages
         run: |
-          # Create npm directory
-          mkdir -p core/npm
-
           # Map artifact names to NAPI platform names
           declare -A platform_map=(
             ["bindings-x86_64-apple-darwin"]="darwin-x64"
@@ -163,32 +160,63 @@ jobs:
             ["bindings-aarch64-unknown-linux-gnu"]="linux-arm64-gnu"
           )
 
-          # Copy and rename binaries
+          # Process each artifact
           for artifact_dir in artifacts/bindings-*; do
             if [ -d "$artifact_dir" ]; then
               artifact_name=$(basename "$artifact_dir")
               platform_name="${platform_map[$artifact_name]}"
               
               if [ -n "$platform_name" ]; then
-                echo "Processing $artifact_name -> $platform_name"
-                mkdir -p "core/npm/$platform_name"
+                echo "Creating package for $platform_name..."
                 
-                # Find .node file and copy with platform-specific name
+                # Create package directory
+                pkg_dir="core/npm/@cronflow/$platform_name"
+                mkdir -p "$pkg_dir"
+                
+                # Copy binary
                 if ls "$artifact_dir"/*.node 1> /dev/null 2>&1; then
-                  cp "$artifact_dir"/*.node "core/npm/$platform_name/core.$platform_name.node"
-                  echo "✅ Copied to core/npm/$platform_name/core.$platform_name.node"
+                  cp "$artifact_dir"/*.node "$pkg_dir/core.$platform_name.node"
+                  echo "✅ Binary copied"
                 fi
+                
+                # Create package.json
+                cat > "$pkg_dir/package.json" << EOF
+          {
+            "name": "@cronflow/$platform_name",
+            "version": "0.10.0",
+            "description": "Cronflow native bindings for $platform_name",
+            "main": "core.$platform_name.node",
+            "license": "Apache-2.0",
+            "os": ["$(echo $platform_name | cut -d- -f1)"],
+            "cpu": ["$(echo $platform_name | cut -d- -f2)"],
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/dali-benothmen/cronflow.git"
+            },
+            "engines": {
+              "node": ">= 20"
+            }
+          }
+          EOF
+                
+                # Create README.md
+                cat > "$pkg_dir/README.md" << EOF
+          # @cronflow/$platform_name
+
+          Native bindings for Cronflow on $platform_name.
+
+          This package is automatically installed as an optional dependency when you install \`cronflow\`.
+          You typically don't need to install this package directly.
+          EOF
+                
+                echo "✅ Package created at $pkg_dir"
               fi
             fi
           done
 
-          ls -la core/npm/
-
-      - name: Create platform packages
-        run: |
-          cd core
-          npx napi artifacts
-          ls -R ./npm
+          echo ""
+          echo "Platform packages created:"
+          ls -la core/npm/@cronflow/
         shell: bash
 
       - name: Publish platform packages
