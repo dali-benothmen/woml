@@ -187,7 +187,7 @@ jobs:
       - name: Create platform packages
         run: |
           cd core
-          npx napi prepublish -t npm --no-gh-release
+          npx napi artifacts -t npm
           ls -R ./npm
         shell: bash
 
