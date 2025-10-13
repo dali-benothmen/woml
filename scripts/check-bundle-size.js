@@ -8,7 +8,7 @@ const SIZE_LIMITS = {
   'dist/dist/index.js': 1024 * 1024, // 1MB
   'dist/dist/sdk/index.js': 512 * 1024, // 512KB
   'dist/dist/services/index.js': 256 * 1024, // 256KB
-  'dist/dist/core/core.node': 5 * 1024 * 1024, // 5MB
+  // Note: core.node is no longer bundled - it's in platform-specific packages (@cronflow/*)
 };
 
 function getFileSize(filePath) {
