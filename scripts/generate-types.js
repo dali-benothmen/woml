@@ -221,36 +221,74 @@ export interface WorkflowDefinition {
 // Classes
 // ============================================================================
 
+export interface StepConfig {
+  id: string;
+  title?: string;
+  description?: string;
+}
+
 export declare class WorkflowInstance {
-  constructor(definition: WorkflowDefinition);
-  execute(payload?: any): Promise<any>;
-  step(config: { id: string; title?: string; description?: string }): any;
-  action(config: { id: string; title?: string; description?: string }): any;
-  if(condition: (ctx: Context) => boolean | Promise<boolean>): any;
-  elseIf(condition: (ctx: Context) => boolean | Promise<boolean>): any;
-  else(): any;
-  endIf(): any;
-  wait(duration: string | number): any;
-  sleep(duration: string | number): any;
-  delay(duration: string | number): any;
-  parallel(): any;
-  race(): any;
-  forEach(items: any[] | ((ctx: Context) => any[] | Promise<any[]>)): any;
-  loop(options?: { maxIterations?: number }): any;
-  retry(options: RetryConfig): any;
-  timeout(duration: string | number): any;
-  cache(config: CacheConfig): any;
-  pause(options?: { token?: string; description?: string; approvalUrl?: string; metadata?: Record<string, any>; expiresAt?: number }): any;
-  waitForEvent(eventName: string): any;
-  background(): any;
-  cancel(reason?: string): any;
-  subflow(workflowId: string, input?: any): any;
-  circuitBreaker(options?: { name?: string; failureThreshold?: number; recoveryTimeout?: string | number; expectedErrors?: string[] }): any;
-  batch(batchSize: number): any;
-  humanInTheLoop(options?: { token?: string; description?: string; approvalUrl?: string; metadata?: Record<string, any>; expiresAt?: number }): any;
-  addStep(step: StepDefinition): this;
-  addTrigger(trigger: TriggerDefinition): this;
+  constructor(workflow: WorkflowDefinition, cronflowInstance: any);
+  
+  // Core step methods
+  step(nameOrConfig: string | StepConfig, handlerFn: (ctx: Context) => any | Promise<any>, options?: StepOptions): WorkflowInstance;
+  action(nameOrConfig: string | StepConfig, handlerFn: (ctx: Context) => any | Promise<any>, options?: StepOptions): WorkflowInstance;
+  
+  // Step modifiers (chainable after step/action)
+  retry(options: RetryConfig): WorkflowInstance;
+  timeout(duration: string | number): WorkflowInstance;
+  cache(config: CacheConfig): WorkflowInstance;
+  delay(duration: string | number): WorkflowInstance;
+  onError(handlerFn: (ctx: Context) => any): WorkflowInstance;
+  
+  // Triggers
+  onWebhook(path: string, options?: WebhookOptions): WorkflowInstance;
+  onSchedule(cronExpression: string): WorkflowInstance;
+  onInterval(interval: string): WorkflowInstance;
+  onEvent(eventName: string): WorkflowInstance;
+  manual(): WorkflowInstance;
+  
+  // Control flow
+  if(name: string, condition: (ctx: Context) => boolean | Promise<boolean>, options?: any): WorkflowInstance;
+  elseIf(name: string, condition: (ctx: Context) => boolean | Promise<boolean>): WorkflowInstance;
+  else(): WorkflowInstance;
+  endIf(): WorkflowInstance;
+  
+  // Parallel execution
+  parallel(steps: Array<(ctx: Context) => any | Promise<any>>): WorkflowInstance;
+  race(steps: Array<(ctx: Context) => any | Promise<any>>): WorkflowInstance;
+  
+  // Loops and iteration
+  forEach(name: string, items: (ctx: Context) => any[] | Promise<any[]>, iterationFn: (item: any, flow: WorkflowInstance) => void): WorkflowInstance;
+  while(name: string, condition: (ctx: Context) => boolean | Promise<boolean>, iterationFn: (ctx: Context) => void): WorkflowInstance;
+  batch(name: string, options: { items: (ctx: Context) => any[] | Promise<any[]>; size: number }, batchFn: (batch: any[], flow: WorkflowInstance) => void): WorkflowInstance;
+  
+  // Advanced features
+  sleep(duration: string | number): WorkflowInstance;
+  subflow(name: string, workflowId: string, input?: any): WorkflowInstance;
+  cancel(reason?: string): WorkflowInstance;
+  humanInTheLoop(options: { timeout?: string; onPause: (ctx: Context, token: string) => void; description: string; approvalUrl?: string; metadata?: Record<string, any> }): WorkflowInstance;
+  waitForEvent(eventName: string, timeout?: string): WorkflowInstance;
+  pause(pauseCallback: (ctx: Context) => void | Promise<void>): WorkflowInstance;
+  log(message: string | ((ctx: Context) => string), level?: 'info' | 'warn' | 'error'): WorkflowInstance;
+  
+  // Testing
+  test(): TestHarness;
+  advancedTest(): AdvancedTestHarness;
+  
+  // Workflow info
   validate(): void;
+  toJSON(): string;
+  getDefinition(): WorkflowDefinition;
+  getId(): string;
+  getName(): string;
+  getSteps(): StepDefinition[];
+  getTriggers(): TriggerDefinition[];
+  hasWebhookTriggers(): boolean;
+  hasScheduleTriggers(): boolean;
+  hasManualTriggers(): boolean;
+  getStep(id: string): StepDefinition | undefined;
+  register(): Promise<void>;
 }
 
 export declare class TestHarness {
@@ -372,56 +410,91 @@ export interface BenchmarkResult {
 // Core Functions
 // ============================================================================
 
-export declare function define(id: string): WorkflowInstance;
-export declare function start(options?: { port?: number; dbPath?: string }): Promise<void>;
+export interface StartOptions {
+  webhookServer?: {
+    host?: string;
+    port?: number;
+    maxConnections?: number;
+  };
+}
+
+export declare function define(options: Omit<WorkflowDefinition, 'steps' | 'triggers' | 'created_at' | 'updated_at'>): WorkflowInstance;
+export declare function start(options?: StartOptions): Promise<void>;
 export declare function stop(): Promise<void>;
-export declare function trigger(workflowId: string, payload?: any): Promise<any>;
-export declare function inspect(workflowId: string): WorkflowDefinition | null;
+export declare function trigger(workflowId: string, payload?: any): Promise<string>;
+export declare function inspect(runId: string): Promise<any>;
 export declare function getWorkflows(): WorkflowDefinition[];
-export declare function getWorkflow(workflowId: string): WorkflowDefinition | null;
-export declare function getConcurrencyStats(): any;
+export declare function getWorkflow(workflowId: string): WorkflowDefinition | undefined;
+export declare function getConcurrencyStats(workflowId?: string): any;
 
 // State Management
-export declare function getGlobalState(key: string, defaultValue?: any): any;
+export declare function getGlobalState(key: string, defaultValue?: any): Promise<any>;
 export declare function setGlobalState(key: string, value: any, options?: { ttl?: string }): Promise<void>;
 export declare function incrGlobalState(key: string, amount?: number): Promise<number>;
-export declare function deleteGlobalState(key: string): Promise<void>;
-export declare function getWorkflowState(workflowId: string, key: string, defaultValue?: any): any;
+export declare function deleteGlobalState(key: string): Promise<boolean>;
+export declare function getWorkflowState(workflowId: string, key: string, defaultValue?: any): Promise<any>;
 export declare function setWorkflowState(workflowId: string, key: string, value: any, options?: { ttl?: string }): Promise<void>;
 export declare function incrWorkflowState(workflowId: string, key: string, amount?: number): Promise<number>;
-export declare function deleteWorkflowState(workflowId: string, key: string): Promise<void>;
-export declare function getStateStats(): any;
-export declare function cleanupExpiredState(): Promise<void>;
+export declare function deleteWorkflowState(workflowId: string, key: string): Promise<boolean>;
+export declare function getStateStats(): Promise<{
+  global: {
+    totalKeys: number;
+    expiredKeys: number;
+    namespace: string;
+    dbPath: string;
+  };
+  workflows: Record<string, {
+    totalKeys: number;
+    expiredKeys: number;
+    namespace: string;
+    dbPath: string;
+  }>;
+}>;
+export declare function cleanupExpiredState(): Promise<{
+  global: number;
+  workflows: Record<string, number>;
+}>;
 
 // Human Loop
-export declare function resume(token: string, approval?: any): Promise<any>;
-export declare function storePausedWorkflow(workflow: PausedWorkflow): Promise<void>;
-export declare function getPausedWorkflow(token: string): Promise<PausedWorkflow | null>;
-export declare function listPausedWorkflows(): Promise<PausedWorkflow[]>;
+export declare function resume(token: string, payload: any): Promise<void>;
+export declare function storePausedWorkflow(token: string, pauseInfo: {
+  token: string;
+  workflowId: string;
+  runId: string;
+  stepId: string;
+  description: string;
+  metadata?: Record<string, any>;
+  createdAt: number;
+  expiresAt?: number;
+  status: 'waiting' | 'resumed' | 'timeout';
+  payload: any;
+  lastStepOutput: any;
+  resumeCallback?: (payload: any) => void;
+}): void;
+export declare function getPausedWorkflow(token: string): any;
+export declare function listPausedWorkflows(): any[];
 
 // Events
 export declare function publishEvent(eventName: string, payload: any): Promise<void>;
-export declare function registerEventListener(eventName: string, workflowId: string, handler: (payload: any) => void | Promise<void>): void;
+export declare function registerEventListener(eventName: string, workflowId: string, trigger: any): void;
 export declare function unregisterEventListener(eventName: string, workflowId: string): void;
-export declare function getEventHistory(): EventHistoryItem[];
-export declare function getEventListeners(): EventListener[];
+export declare function getEventHistory(eventName?: string): Array<{ name: string; payload: any; timestamp: number }>;
+export declare function getEventListeners(eventName?: string): Map<string, Array<{ workflowId: string; trigger: any }>>;
 
 // Hooks
-export declare function registerHookHandler(hookName: string, handler: HookHandler): void;
-export declare function getHookHandler(hookName: string): HookHandler | null;
-export declare function executeWorkflowHook(hookName: string, ctx: Context, stepId?: string | string[]): Promise<void>;
+export declare function executeWorkflowHook(hookType: string, contextJson: string, workflowId: string, stepId?: string): Promise<any>;
 
 // Performance
-export declare function benchmark(name: string, workflow: WorkflowDefinition, options?: BenchmarkOptions): Promise<BenchmarkResult>;
+export declare function benchmark(options?: BenchmarkOptions): Promise<BenchmarkResult>;
 
 // Triggers
-export declare function executeManualTrigger(workflowId: string, payload?: any): Promise<any>;
-export declare function executeWebhookTrigger(workflowId: string, req: any, res?: any): Promise<any>;
-export declare function executeScheduleTrigger(workflowId: string): Promise<any>;
-export declare function getTriggerStats(): any;
-export declare function getWorkflowTriggers(workflowId: string): TriggerDefinition[];
-export declare function unregisterWorkflowTriggers(workflowId: string): void;
-export declare function getScheduleTriggers(): any[];
+export declare function executeManualTrigger(workflowId: string, payload: any): Promise<any>;
+export declare function executeWebhookTrigger(request: any): Promise<any>;
+export declare function executeScheduleTrigger(triggerId: string): Promise<any>;
+export declare function getTriggerStats(): Promise<any>;
+export declare function getWorkflowTriggers(workflowId: string): Promise<any>;
+export declare function unregisterWorkflowTriggers(workflowId: string): Promise<any>;
+export declare function getScheduleTriggers(): Promise<any>;
 
 // Testing
 export declare function createTestHarness(): TestHarness;
@@ -449,6 +522,12 @@ export declare const scheduler: {
   stop(): void;
 };
 
+// Additional exported functions
+export declare function cancelRun(runId: string): Promise<void>;
+export declare function getEngineState(): 'STOPPED' | 'STARTING' | 'STARTED';
+export declare function replay(runId: string, options?: { overridePayload?: any; mockStep?: (stepName: string, mockFn: (ctx: Context) => any) => void }): Promise<void>;
+export declare function registerStepHandler(workflowId: string, stepId: string, handler: (ctx: Context) => any | Promise<any>, type: 'step' | 'action'): void;
+
 // ============================================================================
 // Main Cronflow Object
 // ============================================================================
@@ -459,15 +538,15 @@ export declare const cronflow: {
   stop: typeof stop;
   trigger: typeof trigger;
   inspect: typeof inspect;
-  cancelRun: (runId: string) => Promise<void>;
+  cancelRun: typeof cancelRun;
   publishEvent: typeof publishEvent;
   executeStep: typeof executeStep;
   executeStepFunction: typeof executeStepFunction;
   executeJobFunction: typeof executeJobFunction;
   getWorkflows: typeof getWorkflows;
   getWorkflow: typeof getWorkflow;
-  getEngineState: () => 'STOPPED' | 'STARTING' | 'STARTED';
-  replay: (runId: string) => Promise<any>;
+  getEngineState: typeof getEngineState;
+  replay: typeof replay;
   resume: typeof resume;
   isRustCoreAvailable: typeof isRustCoreAvailable;
   benchmark: typeof benchmark;
@@ -490,7 +569,7 @@ export declare const cronflow: {
   deleteWorkflowState: typeof deleteWorkflowState;
   getStateStats: typeof getStateStats;
   cleanupExpiredState: typeof cleanupExpiredState;
-  registerStepHandler: (stepId: string, handler: (ctx: Context) => any) => void;
+  registerStepHandler: typeof registerStepHandler;
   VERSION: string;
   registerEventListener: typeof registerEventListener;
   unregisterEventListener: typeof unregisterEventListener;
