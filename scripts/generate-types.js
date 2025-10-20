@@ -18,6 +18,25 @@ const declarations = {
 
 export * from './sdk/index';
 
+// Explicitly export key types for better IDE support
+export type {
+  Context,
+  WorkflowDefinition,
+  StepDefinition,
+  TriggerDefinition,
+  RetryConfig,
+  RetryBackoffConfig,
+  StepOptions,
+  WebhookOptions,
+  CacheConfig,
+  WorkflowInstance,
+  PausedWorkflow,
+  EventListener,
+  EventHistoryItem,
+  BenchmarkOptions,
+  BenchmarkResult,
+} from './sdk/index';
+
 export { cronflow as default } from './sdk/index';
 `,
 
