@@ -349,7 +349,7 @@ impl Bridge {
     }
     
     /// Start the webhook server (legacy sync method)
-    pub fn start_webhook_server(&mut self) -> CoreResult<()> {
+    pub fn start_webhook_server(&self) -> CoreResult<()> {
         log::info!("Starting webhook server (legacy mode)...");
         log::info!("Note: Use start_webhook_server_async() for full async support");
         log::info!("Webhook server configuration ready");
@@ -357,7 +357,7 @@ impl Bridge {
     }
     
     /// Stop the webhook server
-    pub fn stop_webhook_server(&mut self) -> CoreResult<()> {
+    pub fn stop_webhook_server(&self) -> CoreResult<()> {
         log::info!("Stopping webhook server");
         // Note: For async server, use the WebhookServer instance directly
         Ok(())
@@ -618,62 +618,37 @@ pub fn register_workflow(workflow_json: String, db_path: String) -> WorkflowRegi
 /// Register a webhook trigger via N-API
 #[napi]
 pub fn register_webhook_trigger(workflow_id: String, trigger_json: String, db_path: String) -> WebhookTriggerRegistrationResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WebhookTriggerRegistrationResult {
-                success: false,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.register_webhook_trigger(&workflow_id, &trigger_json) {
-        Ok(_) => {
-            WebhookTriggerRegistrationResult {
-                success: true,
-                message: "Webhook trigger registered successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            WebhookTriggerRegistrationResult {
-                success: false,
-                message: format!("Failed to register webhook trigger: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |_| WebhookTriggerRegistrationResult {
+            success: true,
+            message: "Webhook trigger registered successfully".to_string(),
+        },
+        |msg: String| WebhookTriggerRegistrationResult {
+            success: false,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.register_webhook_trigger(&workflow_id, &trigger_json)
+    )
 }
 
 /// Get all webhook triggers via N-API
 #[napi]
 pub fn get_webhook_triggers(db_path: String) -> WebhookTriggersResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WebhookTriggersResult {
-                success: false,
-                triggers: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_webhook_triggers() {
-        Ok(triggers_json) => {
-            WebhookTriggersResult {
-                success: true,
-                triggers: Some(triggers_json),
-                message: "Webhook triggers retrieved successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            WebhookTriggersResult {
-                success: false,
-                triggers: None,
-                message: format!("Failed to get webhook triggers: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |triggers_json: String| WebhookTriggersResult {
+            success: true,
+            triggers: Some(triggers_json),
+            message: "Webhook triggers retrieved successfully".to_string(),
+        },
+        |msg: String| WebhookTriggersResult {
+            success: false,
+            triggers: None,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.get_webhook_triggers()
+    )
 }
 
 /// Create a workflow run via N-API
@@ -816,30 +791,30 @@ pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
 pub fn get_job_status(job_id: String, db_path: String) -> JobStatusResult {
     log::info!("Getting job status for: {}", job_id);
     
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return JobStatusResult {
-                success: false,
-                job_id: None,
-                status: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_job_status(&job_id) {
-        Ok(status) => {
-            let status_str = match status {
-                Some(s) => format!("{:?}", s),
-                None => "not_found".to_string(),
-            };
-            
-            JobStatusResult {
-                success: true,
-                job_id: Some(job_id),
-                status: Some(status_str),
-                message: "Job status retrieved successfully".to_string(),
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.get_job_status(&job_id) {
+                Ok(status) => {
+                    let status_str = match status {
+                        Some(s) => format!("{:?}", s),
+                        None => "not_found".to_string(),
+                    };
+                    
+                    JobStatusResult {
+                        success: true,
+                        job_id: Some(job_id),
+                        status: Some(status_str),
+                        message: "Job status retrieved successfully".to_string(),
+                    }
+                }
+                Err(e) => {
+                    JobStatusResult {
+                        success: false,
+                        job_id: None,
+                        status: None,
+                        message: format!("Failed to get job status: {}", e),
+                    }
+                }
             }
         }
         Err(e) => {
@@ -847,7 +822,7 @@ pub fn get_job_status(job_id: String, db_path: String) -> JobStatusResult {
                 success: false,
                 job_id: None,
                 status: None,
-                message: format!("Failed to get job status: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -858,29 +833,29 @@ pub fn get_job_status(job_id: String, db_path: String) -> JobStatusResult {
 pub fn cancel_job(job_id: String, db_path: String) -> JobCancellationResult {
     log::info!("Cancelling job: {}", job_id);
     
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return JobCancellationResult {
-                success: false,
-                job_id: None,
-                cancelled: false,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.cancel_job(&job_id) {
-        Ok(cancelled) => {
-            JobCancellationResult {
-                success: true,
-                job_id: Some(job_id),
-                cancelled,
-                message: if cancelled {
-                    "Job cancelled successfully".to_string()
-                } else {
-                    "Job not found or already completed".to_string()
-                },
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.cancel_job(&job_id) {
+                Ok(cancelled) => {
+                    JobCancellationResult {
+                        success: true,
+                        job_id: Some(job_id),
+                        cancelled,
+                        message: if cancelled {
+                            "Job cancelled successfully".to_string()
+                        } else {
+                            "Job not found or already completed".to_string()
+                        },
+                    }
+                }
+                Err(e) => {
+                    JobCancellationResult {
+                        success: false,
+                        job_id: None,
+                        cancelled: false,
+                        message: format!("Failed to cancel job: {}", e),
+                    }
+                }
             }
         }
         Err(e) => {
@@ -888,7 +863,7 @@ pub fn cancel_job(job_id: String, db_path: String) -> JobCancellationResult {
                 success: false,
                 job_id: None,
                 cancelled: false,
-                message: format!("Failed to cancel job: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -899,33 +874,33 @@ pub fn cancel_job(job_id: String, db_path: String) -> JobCancellationResult {
 pub fn get_dispatcher_stats(db_path: String) -> DispatcherStatsResult {
     log::info!("Getting dispatcher statistics");
     
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return DispatcherStatsResult {
-                success: false,
-                stats: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_dispatcher_stats() {
-        Ok(stats) => {
-            let stats_json = serde_json::to_string(&stats)
-                .unwrap_or_else(|_| "{}".to_string());
-            
-            DispatcherStatsResult {
-                success: true,
-                stats: Some(stats_json),
-                message: "Dispatcher statistics retrieved successfully".to_string(),
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.get_dispatcher_stats() {
+                Ok(stats) => {
+                    let stats_json = serde_json::to_string(&stats)
+                        .unwrap_or_else(|_| "{}".to_string());
+                    
+                    DispatcherStatsResult {
+                        success: true,
+                        stats: Some(stats_json),
+                        message: "Dispatcher statistics retrieved successfully".to_string(),
+                    }
+                }
+                Err(e) => {
+                    DispatcherStatsResult {
+                        success: false,
+                        stats: None,
+                        message: format!("Failed to get dispatcher stats: {}", e),
+                    }
+                }
             }
         }
         Err(e) => {
             DispatcherStatsResult {
                 success: false,
                 stats: None,
-                message: format!("Failed to get dispatcher stats: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -936,30 +911,30 @@ pub fn get_dispatcher_stats(db_path: String) -> DispatcherStatsResult {
 pub fn get_workflow_run_status(run_id: String, db_path: String) -> WorkflowRunStatusResult {
     log::info!("Getting workflow run status for: {}", run_id);
     
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WorkflowRunStatusResult {
-                success: false,
-                run_id: None,
-                status: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_workflow_run_status(&run_id) {
-        Ok(status) => {
-            let status_str = match status {
-                Some(s) => format!("{:?}", s),
-                None => "not_found".to_string(),
-            };
-            
-            WorkflowRunStatusResult {
-                success: true,
-                run_id: Some(run_id),
-                status: Some(status_str),
-                message: "Workflow run status retrieved successfully".to_string(),
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.get_workflow_run_status(&run_id) {
+                Ok(status) => {
+                    let status_str = match status {
+                        Some(s) => format!("{:?}", s),
+                        None => "not_found".to_string(),
+                    };
+                    
+                    WorkflowRunStatusResult {
+                        success: true,
+                        run_id: Some(run_id),
+                        status: Some(status_str),
+                        message: "Workflow run status retrieved successfully".to_string(),
+                    }
+                }
+                Err(e) => {
+                    WorkflowRunStatusResult {
+                        success: false,
+                        run_id: None,
+                        status: None,
+                        message: format!("Failed to get workflow run status: {}", e),
+                    }
+                }
             }
         }
         Err(e) => {
@@ -967,7 +942,7 @@ pub fn get_workflow_run_status(run_id: String, db_path: String) -> WorkflowRunSt
                 success: false,
                 run_id: None,
                 status: None,
-                message: format!("Failed to get workflow run status: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -978,28 +953,28 @@ pub fn get_workflow_run_status(run_id: String, db_path: String) -> WorkflowRunSt
 pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> WorkflowStepsResult {
     log::info!("Getting completed steps for workflow run: {}", run_id);
     
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WorkflowStepsResult {
-                success: false,
-                run_id: None,
-                steps: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_workflow_completed_steps(&run_id) {
-        Ok(steps) => {
-            let steps_json = serde_json::to_string(&steps)
-                .unwrap_or_else(|_| "[]".to_string());
-            
-            WorkflowStepsResult {
-                success: true,
-                run_id: Some(run_id),
-                steps: Some(steps_json),
-                message: "Workflow completed steps retrieved successfully".to_string(),
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.get_workflow_completed_steps(&run_id) {
+                Ok(steps) => {
+                    let steps_json = serde_json::to_string(&steps)
+                        .unwrap_or_else(|_| "[]".to_string());
+                    
+                    WorkflowStepsResult {
+                        success: true,
+                        run_id: Some(run_id),
+                        steps: Some(steps_json),
+                        message: "Workflow completed steps retrieved successfully".to_string(),
+                    }
+                }
+                Err(e) => {
+                    WorkflowStepsResult {
+                        success: false,
+                        run_id: None,
+                        steps: None,
+                        message: format!("Failed to get workflow completed steps: {}", e),
+                    }
+                }
             }
         }
         Err(e) => {
@@ -1007,7 +982,7 @@ pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> Workflow
                 success: false,
                 run_id: None,
                 steps: None,
-                message: format!("Failed to get workflow completed steps: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -1016,37 +991,37 @@ pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> Workflow
 /// Execute a webhook trigger via N-API
 #[napi]
 pub fn execute_webhook_trigger(request_json: String, db_path: String) -> TriggerExecutionResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return TriggerExecutionResult {
-                success: false,
-                run_id: None,
-                workflow_id: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.execute_webhook_trigger(&request_json) {
-        Ok(result_json) => {
-            let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                Ok(result) => result,
-                Err(_) => {
-                    return TriggerExecutionResult {
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.execute_webhook_trigger(&request_json) {
+                Ok(result_json) => {
+                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return TriggerExecutionResult {
+                                success: false,
+                                run_id: None,
+                                workflow_id: None,
+                                message: "Failed to parse execution result".to_string(),
+                            };
+                        }
+                    };
+                    
+                    TriggerExecutionResult {
+                        success: true,
+                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                        workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
+                        message: result["message"].as_str().unwrap_or("Webhook trigger executed successfully").to_string(),
+                    }
+                }
+                Err(e) => {
+                    TriggerExecutionResult {
                         success: false,
                         run_id: None,
                         workflow_id: None,
-                        message: "Failed to parse execution result".to_string(),
-                    };
+                        message: format!("Failed to execute webhook trigger: {}", e),
+                    }
                 }
-            };
-            
-            TriggerExecutionResult {
-                success: true,
-                run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
-                message: result["message"].as_str().unwrap_or("Webhook trigger executed successfully").to_string(),
             }
         }
         Err(e) => {
@@ -1054,7 +1029,7 @@ pub fn execute_webhook_trigger(request_json: String, db_path: String) -> Trigger
                 success: false,
                 run_id: None,
                 workflow_id: None,
-                message: format!("Failed to execute webhook trigger: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -1063,37 +1038,37 @@ pub fn execute_webhook_trigger(request_json: String, db_path: String) -> Trigger
 /// Execute a manual trigger via N-API
 #[napi]
 pub fn execute_manual_trigger(workflow_id: String, payload_json: String, db_path: String) -> TriggerExecutionResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return TriggerExecutionResult {
-                success: false,
-                run_id: None,
-                workflow_id: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.execute_manual_trigger(&workflow_id, &payload_json) {
-        Ok(result_json) => {
-            let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                Ok(result) => result,
-                Err(_) => {
-                    return TriggerExecutionResult {
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.execute_manual_trigger(&workflow_id, &payload_json) {
+                Ok(result_json) => {
+                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return TriggerExecutionResult {
+                                success: false,
+                                run_id: None,
+                                workflow_id: None,
+                                message: "Failed to parse execution result".to_string(),
+                            };
+                        }
+                    };
+                    
+                    TriggerExecutionResult {
+                        success: true,
+                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                        workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
+                        message: result["message"].as_str().unwrap_or("Manual trigger executed successfully").to_string(),
+                    }
+                }
+                Err(e) => {
+                    TriggerExecutionResult {
                         success: false,
                         run_id: None,
                         workflow_id: None,
-                        message: "Failed to parse execution result".to_string(),
-                    };
+                        message: format!("Failed to execute manual trigger: {}", e),
+                    }
                 }
-            };
-            
-            TriggerExecutionResult {
-                success: true,
-                run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
-                message: result["message"].as_str().unwrap_or("Manual trigger executed successfully").to_string(),
             }
         }
         Err(e) => {
@@ -1101,7 +1076,7 @@ pub fn execute_manual_trigger(workflow_id: String, payload_json: String, db_path
                 success: false,
                 run_id: None,
                 workflow_id: None,
-                message: format!("Failed to execute manual trigger: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -1110,120 +1085,84 @@ pub fn execute_manual_trigger(workflow_id: String, payload_json: String, db_path
 /// Get trigger statistics via N-API
 #[napi]
 pub fn get_trigger_stats(db_path: String) -> TriggerStatsResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return TriggerStatsResult {
-                success: false,
-                stats: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_trigger_stats() {
-        Ok(stats_json) => {
-            TriggerStatsResult {
-                success: true,
-                stats: Some(stats_json),
-                message: "Trigger statistics retrieved successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            TriggerStatsResult {
-                success: false,
-                stats: None,
-                message: format!("Failed to get trigger statistics: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |stats_json: String| TriggerStatsResult {
+            success: true,
+            stats: Some(stats_json),
+            message: "Trigger statistics retrieved successfully".to_string(),
+        },
+        |msg: String| TriggerStatsResult {
+            success: false,
+            stats: None,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.get_trigger_stats()
+    )
 }
 
 /// Get triggers for a workflow via N-API
 #[napi]
 pub fn get_workflow_triggers(workflow_id: String, db_path: String) -> WorkflowTriggersResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WorkflowTriggersResult {
-                success: false,
-                triggers: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.get_workflow_triggers(&workflow_id) {
-        Ok(triggers_json) => {
-            WorkflowTriggersResult {
-                success: true,
-                triggers: Some(triggers_json),
-                message: "Workflow triggers retrieved successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            WorkflowTriggersResult {
-                success: false,
-                triggers: None,
-                message: format!("Failed to get workflow triggers: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |triggers_json: String| WorkflowTriggersResult {
+            success: true,
+            triggers: Some(triggers_json),
+            message: "Workflow triggers retrieved successfully".to_string(),
+        },
+        |msg: String| WorkflowTriggersResult {
+            success: false,
+            triggers: None,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.get_workflow_triggers(&workflow_id)
+    )
 }
 
 /// Unregister triggers for a workflow via N-API
 #[napi]
 pub fn unregister_workflow_triggers(workflow_id: String, db_path: String) -> TriggerUnregistrationResult {
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return TriggerUnregistrationResult {
-                success: false,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.unregister_workflow_triggers(&workflow_id) {
-        Ok(_) => {
-            TriggerUnregistrationResult {
-                success: true,
-                message: format!("Successfully unregistered triggers for workflow: {}", workflow_id),
-            }
-        }
-        Err(e) => {
-            TriggerUnregistrationResult {
-                success: false,
-                message: format!("Failed to unregister workflow triggers: {}", e),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |_| TriggerUnregistrationResult {
+            success: true,
+            message: format!("Successfully unregistered triggers for workflow: {}", workflow_id),
+        },
+        |msg: String| TriggerUnregistrationResult {
+            success: false,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.unregister_workflow_triggers(&workflow_id)
+    )
 } 
 
 /// Start the webhook server via N-API
 #[napi]
 pub fn start_webhook_server(db_path: String) -> WebhookServerResult {
-    let mut bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WebhookServerResult {
-                success: false,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.start_webhook_server() {
-        Ok(_) => {
-            WebhookServerResult {
-                success: true,
-                message: "Webhook server started successfully".to_string(),
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            // Note: start_webhook_server doesn't actually mutate the bridge
+            // The Arc allows interior mutability where needed
+            match bridge.start_webhook_server() {
+                Ok(_) => {
+                    WebhookServerResult {
+                        success: true,
+                        message: "Webhook server started successfully".to_string(),
+                    }
+                }
+                Err(e) => {
+                    WebhookServerResult {
+                        success: false,
+                        message: format!("Failed to start webhook server: {}", e),
+                    }
+                }
             }
         }
         Err(e) => {
             WebhookServerResult {
                 success: false,
-                message: format!("Failed to start webhook server: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -1232,27 +1171,29 @@ pub fn start_webhook_server(db_path: String) -> WebhookServerResult {
 /// Stop the webhook server via N-API
 #[napi]
 pub fn stop_webhook_server(db_path: String) -> WebhookServerResult {
-    let mut bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return WebhookServerResult {
-                success: false,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    match bridge.stop_webhook_server() {
-        Ok(_) => {
-            WebhookServerResult {
-                success: true,
-                message: "Webhook server stopped successfully".to_string(),
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            // Note: stop_webhook_server doesn't actually mutate the bridge
+            // The Arc allows interior mutability where needed
+            match bridge.stop_webhook_server() {
+                Ok(_) => {
+                    WebhookServerResult {
+                        success: true,
+                        message: "Webhook server stopped successfully".to_string(),
+                    }
+                }
+                Err(e) => {
+                    WebhookServerResult {
+                        success: false,
+                        message: format!("Failed to stop webhook server: {}", e),
+                    }
+                }
             }
         }
         Err(e) => {
             WebhookServerResult {
                 success: false,
-                message: format!("Failed to stop webhook server: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
@@ -1275,38 +1216,25 @@ pub struct HookExecutionResult {
 
 #[napi]
 pub fn execute_workflow_steps(run_id: String, workflow_id: String, db_path: String) -> StepExecutionResult {
-    match Bridge::new(&db_path) {
-        Ok(bridge) => {
-            match bridge.execute_workflow_steps(&run_id, &workflow_id) {
-                Ok(result) => {
-                    StepExecutionResult {
-                        success: true,
-                        result: Some(result),
-                        message: "Workflow steps executed successfully".to_string(),
-                    }
-                }
-                Err(error) => {
-                    StepExecutionResult {
-                        success: false,
-                        result: None,
-                        message: format!("Failed to execute workflow steps: {}", error),
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            StepExecutionResult {
-                success: false,
-                result: None,
-                message: format!("Failed to create bridge: {}", error),
-            }
-        }
-    }
+    with_shared_bridge!(
+        &db_path,
+        |result: String| StepExecutionResult {
+            success: true,
+            result: Some(result),
+            message: "Workflow steps executed successfully".to_string(),
+        },
+        |msg: String| StepExecutionResult {
+            success: false,
+            result: None,
+            message: msg,
+        },
+        |bridge: Arc<Bridge>| bridge.execute_workflow_steps(&run_id, &workflow_id)
+    )
 } 
 
 #[napi]
 pub fn execute_workflow_hook(hook_type: String, context_json: String, workflow_id: String, db_path: String) -> HookExecutionResult {
-    match Bridge::new(&db_path) {
+    match get_shared_bridge(&db_path) {
         Ok(bridge) => {
             match bridge.execute_workflow_hook(&hook_type, &context_json, &workflow_id) {
                 Ok(result) => {
@@ -1335,7 +1263,7 @@ pub fn execute_workflow_hook(hook_type: String, context_json: String, workflow_i
                 hook_type: Some(hook_type),
                 workflow_id: Some(workflow_id),
                 result: None,
-                message: format!("Failed to create bridge: {}", error),
+                message: format!("Failed to get bridge: {}", error),
             }
         }
     }
@@ -1352,8 +1280,8 @@ pub struct PauseResumeResult {
 
 #[napi]
 pub fn pause_workflow(run_id: String, db_path: String) -> PauseResumeResult {
-    match Bridge::new(&db_path) {
-        Ok(bridge) => {
+    match get_shared_bridge(&db_path) {
+        Ok(_bridge) => {
             // In the future, this will integrate with the workflow state machine
             PauseResumeResult {
                 success: true,
@@ -1369,7 +1297,7 @@ pub fn pause_workflow(run_id: String, db_path: String) -> PauseResumeResult {
                 run_id: Some(run_id),
                 workflow_id: None,
                 status: None,
-                message: format!("Failed to create bridge: {}", error),
+                message: format!("Failed to get bridge: {}", error),
             }
         }
     }
@@ -1377,8 +1305,8 @@ pub fn pause_workflow(run_id: String, db_path: String) -> PauseResumeResult {
 
 #[napi]
 pub fn resume_workflow(run_id: String, db_path: String) -> PauseResumeResult {
-    match Bridge::new(&db_path) {
-        Ok(bridge) => {
+    match get_shared_bridge(&db_path) {
+        Ok(_bridge) => {
             // In the future, this will integrate with the workflow state machine
             PauseResumeResult {
                 success: true,
@@ -1394,7 +1322,7 @@ pub fn resume_workflow(run_id: String, db_path: String) -> PauseResumeResult {
                 run_id: Some(run_id),
                 workflow_id: None,
                 status: None,
-                message: format!("Failed to create bridge: {}", error),
+                message: format!("Failed to get bridge: {}", error),
             }
         }
     }
