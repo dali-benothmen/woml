@@ -733,254 +733,12 @@ pub fn execute_step(run_id: String, step_id: String, db_path: String) -> StepExe
     )
 }
 
-/// Execute a step function in Bun.js via N-API
-#[napi]
-pub fn execute_step_function(
-    step_name: String,
-    context_json: String,
-    workflow_id: String,
-    run_id: String,
-    db_path: String
-) -> StepExecutionResult {
-    log::info!("Executing step function: {} for workflow: {} run: {}", step_name, workflow_id, run_id);
-    
-    let context: crate::context::Context = match serde_json::from_str(&context_json) {
-        Ok(context) => context,
-        Err(e) => {
-            return StepExecutionResult {
-                success: false,
-                result: None,
-                message: format!("Failed to parse context JSON: {}", e),
-            };
-        }
-    };
-    
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return StepExecutionResult {
-                success: false,
-                result: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    let state_manager = match bridge.state_manager.lock() {
-        Ok(manager) => manager,
-        Err(_) => {
-            return StepExecutionResult {
-                success: false,
-                result: None,
-                message: "Failed to acquire state manager lock".to_string(),
-            };
-        }
-    };
-    
-    let run_uuid = match uuid::Uuid::parse_str(&run_id) {
-        Ok(uuid) => uuid,
-        Err(e) => {
-            return StepExecutionResult {
-                success: false,
-                result: None,
-                message: format!("Failed to parse run ID: {}", e),
-            };
-        }
-    };
-    
-    let step_result = crate::models::StepResult {
-        step_id: step_name.clone(),
-        status: crate::models::StepStatus::Running,
-        started_at: chrono::Utc::now(),
-        completed_at: None,
-        output: None,
-        error: None,
-        duration_ms: None,
-    };
-    
-    // Save step result to database
-    if let Err(e) = state_manager.save_step_result(&run_uuid, step_result) {
-        log::warn!("Failed to save step result: {}", e);
-    }
-    
-    // The actual Bun.js execution will be handled by the SDK when this function is called
-    let result = serde_json::json!({
-        "step_name": step_name,
-        "workflow_id": workflow_id,
-        "run_id": run_id,
-        "context": context_json,
-        "status": "ready_for_bun_execution",
-        "message": "Step function ready for Bun.js execution via SDK"
-    });
-    
-    let result_json = serde_json::to_string(&result)
-        .map_err(|e| CoreError::Serialization(e))
-        .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
-    
-    StepExecutionResult {
-        success: true,
-        result: Some(result_json),
-        message: "Step function prepared for Bun.js execution".to_string(),
-    }
-}
-
-/// Execute step in Bun.js (called from Rust step orchestrator)
-#[napi]
-pub fn execute_step_in_bun(
-    step_name: String, context_json: String, workflow_id: String, run_id: String, db_path: String
-) -> StepExecutionResult {
-    let result = serde_json::json!({
-        "step_name": step_name, "workflow_id": workflow_id, "run_id": run_id,
-        "context": context_json, "status": "executing_in_bun",
-        "message": "Step execution delegated to Bun.js"
-    });
-    match serde_json::to_string(&result) {
-        Ok(result_json) => StepExecutionResult {
-            success: true,
-            result: Some(result_json),
-            message: "Step execution delegated to Bun.js".to_string(),
-        },
-        Err(e) => StepExecutionResult {
-            success: false,
-            result: None,
-            message: format!("Failed to serialize result: {}", e),
-        },
-    }
-}
-
-/// Execute step via Bun.js step execution handler (for Rust orchestrator)
-#[napi]
-pub fn execute_step_via_bun(
-    step_name: String, context_json: String, workflow_id: String, run_id: String, db_path: String
-) -> StepExecutionResult {
-    // This function will be called from the Rust step orchestrator
-    // It should trigger the Bun.js step execution handler
-    
-    // In a real implementation, this would trigger the Bun.js step execution
-    let result = serde_json::json!({
-        "step_name": step_name,
-        "workflow_id": workflow_id,
-        "run_id": run_id,
-        "context": context_json,
-        "status": "ready_for_bun_execution",
-        "message": "Step ready for Bun.js execution",
-        "execution_type": "bun_step_handler"
-    });
-    
-    match serde_json::to_string(&result) {
-        Ok(result_json) => StepExecutionResult {
-            success: true,
-            result: Some(result_json),
-            message: "Step ready for Bun.js execution".to_string(),
-        },
-        Err(e) => StepExecutionResult {
-            success: false,
-            result: None,
-            message: format!("Failed to serialize result: {}", e),
-        },
-    }
-}
-
-/// Execute a job function via N-API
-#[napi]
-pub fn execute_job_function(
-    job_json: String,
-    db_path: String
-) -> JobExecutionResult {
-    log::info!("Executing job function: {}", job_json);
-    
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return JobExecutionResult {
-                success: false,
-                job_id: None,
-                run_id: None,
-                step_id: None,
-                context: None,
-                result: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
-    let job: Job = match serde_json::from_str(&job_json) {
-        Ok(job) => job,
-        Err(e) => {
-            return JobExecutionResult {
-                success: false,
-                job_id: None,
-                run_id: None,
-                step_id: None,
-                context: None,
-                result: None,
-                message: format!("Failed to parse job JSON: {}", e),
-            };
-        }
-    };
-    
-    // Execute the job using the bridge
-    match bridge.execute_job(&job) {
-        Ok(result_json) => {
-            let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                Ok(result) => result,
-                Err(_) => {
-                    return JobExecutionResult {
-                        success: false,
-                        job_id: None,
-                        run_id: None,
-                        step_id: None,
-                        context: None,
-                        result: None,
-                        message: "Failed to parse execution result".to_string(),
-                    };
-                }
-            };
-            
-            JobExecutionResult {
-                success: true,
-                job_id: result["job_id"].as_str().map(|s| s.to_string()),
-                run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                step_id: result["step_id"].as_str().map(|s| s.to_string()),
-                context: result["context"].as_str().map(|s| s.to_string()),
-                result: Some(result_json),
-                message: "Job function executed successfully".to_string(),
-            }
-        }
-        Err(e) => {
-            JobExecutionResult {
-                success: false,
-                job_id: None,
-                run_id: None,
-                step_id: None,
-                context: None,
-                result: None,
-                message: format!("Failed to execute job: {}", e),
-            }
-        }
-    }
-}
-
-/// Execute a job with context via N-API (enhanced for Task 2.4)
+/// Execute a job with context via N-API
 #[napi]
 pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
     log::info!("Executing job with context: {}", job_json);
     
-    let bridge = match Bridge::new(&db_path) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return JobExecutionResult {
-                success: false,
-                job_id: None,
-                run_id: None,
-                step_id: None,
-                context: None,
-                result: None,
-                message: format!("Failed to create bridge: {}", e),
-            };
-        }
-    };
-    
+    // Parse job JSON first
     let job: Job = match serde_json::from_str(&job_json) {
         Ok(job) => job,
         Err(e) => {
@@ -996,31 +754,47 @@ pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
         }
     };
     
-    match bridge.execute_job(&job) {
-        Ok(result_json) => {
-            let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                Ok(result) => result,
-                Err(_) => {
-                    return JobExecutionResult {
+    // Use shared bridge instance
+    match get_shared_bridge(&db_path) {
+        Ok(bridge) => {
+            match bridge.execute_job(&job) {
+                Ok(result_json) => {
+                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return JobExecutionResult {
+                                success: false,
+                                job_id: None,
+                                run_id: None,
+                                step_id: None,
+                                context: None,
+                                result: None,
+                                message: "Failed to parse execution result".to_string(),
+                            };
+                        }
+                    };
+                    
+                    JobExecutionResult {
+                        success: true,
+                        job_id: result["job_id"].as_str().map(|s| s.to_string()),
+                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                        step_id: result["step_id"].as_str().map(|s| s.to_string()),
+                        context: result["context"].as_str().map(|s| s.to_string()),
+                        result: Some(result_json),
+                        message: "Job executed successfully".to_string(),
+                    }
+                }
+                Err(e) => {
+                    JobExecutionResult {
                         success: false,
                         job_id: None,
                         run_id: None,
                         step_id: None,
                         context: None,
                         result: None,
-                        message: "Failed to parse execution result".to_string(),
-                    };
+                        message: format!("Failed to execute job: {}", e),
+                    }
                 }
-            };
-            
-            JobExecutionResult {
-                success: true,
-                job_id: result["job_id"].as_str().map(|s| s.to_string()),
-                run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                step_id: result["step_id"].as_str().map(|s| s.to_string()),
-                context: result["context"].as_str().map(|s| s.to_string()),
-                result: Some(result_json),
-                message: "Job executed successfully".to_string(),
             }
         }
         Err(e) => {
@@ -1031,7 +805,7 @@ pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
                 step_id: None,
                 context: None,
                 result: None,
-                message: format!("Failed to execute job: {}", e),
+                message: format!("Failed to get bridge: {}", e),
             }
         }
     }
