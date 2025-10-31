@@ -464,7 +464,42 @@ impl Bridge {
     }
 }
 
-/// Result for job execution
+// ============================================================================
+// CONSOLIDATED N-API RESULT TYPES (Task 1.5)
+// ============================================================================
+
+/// Simple result with just success + message
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct SimpleResult {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Result with optional data payload (JSON string)
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct DataResult {
+    pub success: bool,
+    pub data: Option<String>,
+    pub message: String,
+}
+
+/// Result with optional ID and data
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct IdDataResult {
+    pub success: bool,
+    pub id: Option<String>,
+    pub data: Option<String>,
+    pub message: String,
+}
+
+// ============================================================================
+// SPECIALIZED RESULT TYPES (kept for complex structures)
+// ============================================================================
+
+/// Result for job execution (complex, multiple fields)
 #[derive(Debug, Clone, Serialize)]
 #[napi(object)]
 pub struct JobExecutionResult {
@@ -477,17 +512,7 @@ pub struct JobExecutionResult {
     pub message: String,
 }
 
-/// Result for job status retrieval
-#[derive(Debug, Clone, Serialize)]
-#[napi(object)]
-pub struct JobStatusResult {
-    pub success: bool,
-    pub job_id: Option<String>,
-    pub status: Option<String>,
-    pub message: String,
-}
-
-/// Result for job cancellation
+/// Result for job cancellation (has boolean flag)
 #[derive(Debug, Clone, Serialize)]
 #[napi(object)]
 pub struct JobCancellationResult {
@@ -497,76 +522,8 @@ pub struct JobCancellationResult {
     pub message: String,
 }
 
-/// Result for dispatcher statistics
+/// Result for trigger execution (two IDs)
 #[derive(Debug, Clone, Serialize)]
-#[napi(object)]
-pub struct DispatcherStatsResult {
-    pub success: bool,
-    pub stats: Option<String>,
-    pub message: String,
-}
-
-/// Result for workflow run status
-#[derive(Debug, Clone, Serialize)]
-#[napi(object)]
-pub struct WorkflowRunStatusResult {
-    pub success: bool,
-    pub run_id: Option<String>,
-    pub status: Option<String>,
-    pub message: String,
-}
-
-/// Result for workflow completed steps
-#[derive(Debug, Clone, Serialize)]
-#[napi(object)]
-pub struct WorkflowStepsResult {
-    pub success: bool,
-    pub run_id: Option<String>,
-    pub steps: Option<String>,
-    pub message: String,
-}
-
-// N-API module setup
-#[napi(object)]
-pub struct WorkflowRegistrationResult {
-    pub success: bool,
-    pub message: String,
-}
-
-#[napi(object)]
-pub struct RunCreationResult {
-    pub success: bool,
-    pub run_id: Option<String>,
-    pub message: String,
-}
-
-#[napi(object)]
-pub struct RunStatusResult {
-    pub success: bool,
-    pub status: Option<String>,
-    pub message: String,
-}
-
-#[napi(object)]
-pub struct StepExecutionResult {
-    pub success: bool,
-    pub result: Option<String>,
-    pub message: String,
-}
-
-#[napi(object)]
-pub struct WebhookTriggerRegistrationResult {
-    pub success: bool,
-    pub message: String,
-}
-
-#[napi(object)]
-pub struct WebhookTriggersResult {
-    pub success: bool,
-    pub triggers: Option<String>,
-    pub message: String,
-}
-
 #[napi(object)]
 pub struct TriggerExecutionResult {
     pub success: bool,
@@ -575,28 +532,34 @@ pub struct TriggerExecutionResult {
     pub message: String,
 }
 
-/// Trigger statistics result
-#[napi_derive::napi]
-pub struct TriggerStatsResult {
+/// Result for hook execution
+#[derive(Debug, Clone, Serialize)]
+#[napi(object)]
+pub struct HookExecutionResult {
     pub success: bool,
-    pub stats: Option<String>,
+    pub hook_type: Option<String>,
+    pub workflow_id: Option<String>,
+    pub result: Option<String>,
     pub message: String,
 }
 
-/// Workflow triggers result
-#[napi_derive::napi]
-pub struct WorkflowTriggersResult {
-    pub success: bool,
-    pub triggers: Option<String>,
-    pub message: String,
-}
+// Type aliases for backward compatibility and clarity
+pub type WorkflowRegistrationResult = SimpleResult;
+pub type WebhookTriggerRegistrationResult = SimpleResult;
+pub type TriggerUnregistrationResult = SimpleResult;
+pub type WebhookServerResult = SimpleResult;
 
-/// Trigger unregistration result
-#[napi_derive::napi]
-pub struct TriggerUnregistrationResult {
-    pub success: bool,
-    pub message: String,
-}
+pub type RunCreationResult = IdDataResult;
+pub type RunStatusResult = DataResult;
+pub type StepExecutionResult = DataResult;
+pub type WebhookTriggersResult = DataResult;
+pub type DispatcherStatsResult = DataResult;
+pub type TriggerStatsResult = DataResult;
+pub type WorkflowTriggersResult = DataResult;
+
+pub type JobStatusResult = IdDataResult;
+pub type WorkflowRunStatusResult = IdDataResult;
+pub type WorkflowStepsResult = IdDataResult;
 
 /// Register a workflow via N-API
 #[napi]
@@ -639,12 +602,12 @@ pub fn get_webhook_triggers(db_path: String) -> WebhookTriggersResult {
         &db_path,
         |triggers_json: String| WebhookTriggersResult {
             success: true,
-            triggers: Some(triggers_json),
+            data: Some(triggers_json),
             message: "Webhook triggers retrieved successfully".to_string(),
         },
         |msg: String| WebhookTriggersResult {
             success: false,
-            triggers: None,
+            data: None,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.get_webhook_triggers()
@@ -658,12 +621,14 @@ pub fn create_run(workflow_id: String, payload_json: String, db_path: String) ->
         &db_path,
         |run_id: String| RunCreationResult {
             success: true,
-            run_id: Some(run_id),
+            id: Some(run_id),
+            data: None,
             message: "Run created successfully".to_string(),
         },
         |msg: String| RunCreationResult {
             success: false,
-            run_id: None,
+            id: None,
+            data: None,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.create_run(&workflow_id, &payload_json)
@@ -677,12 +642,12 @@ pub fn get_run_status(run_id: String, db_path: String) -> RunStatusResult {
         &db_path,
         |status_json: String| RunStatusResult {
             success: true,
-            status: Some(status_json),
+            data: Some(status_json),
             message: "Status retrieved successfully".to_string(),
         },
         |msg: String| RunStatusResult {
             success: false,
-            status: None,
+            data: None,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.get_run_status(&run_id)
@@ -696,12 +661,12 @@ pub fn execute_step(run_id: String, step_id: String, db_path: String) -> StepExe
         &db_path,
         |result: String| StepExecutionResult {
             success: true,
-            result: Some(result),
+            data: Some(result),
             message: "Step executed successfully".to_string(),
         },
         |msg: String| StepExecutionResult {
             success: false,
-            result: None,
+            data: None,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.execute_step(&run_id, &step_id)
@@ -802,16 +767,16 @@ pub fn get_job_status(job_id: String, db_path: String) -> JobStatusResult {
                     
                     JobStatusResult {
                         success: true,
-                        job_id: Some(job_id),
-                        status: Some(status_str),
+                        id: Some(job_id),
+                        data: Some(status_str),
                         message: "Job status retrieved successfully".to_string(),
                     }
                 }
                 Err(e) => {
                     JobStatusResult {
                         success: false,
-                        job_id: None,
-                        status: None,
+                        id: None,
+                        data: None,
                         message: format!("Failed to get job status: {}", e),
                     }
                 }
@@ -820,8 +785,8 @@ pub fn get_job_status(job_id: String, db_path: String) -> JobStatusResult {
         Err(e) => {
             JobStatusResult {
                 success: false,
-                job_id: None,
-                status: None,
+                id: None,
+                data: None,
                 message: format!("Failed to get bridge: {}", e),
             }
         }
@@ -883,14 +848,14 @@ pub fn get_dispatcher_stats(db_path: String) -> DispatcherStatsResult {
                     
                     DispatcherStatsResult {
                         success: true,
-                        stats: Some(stats_json),
+                        data: Some(stats_json),
                         message: "Dispatcher statistics retrieved successfully".to_string(),
                     }
                 }
                 Err(e) => {
                     DispatcherStatsResult {
                         success: false,
-                        stats: None,
+                        data: None,
                         message: format!("Failed to get dispatcher stats: {}", e),
                     }
                 }
@@ -899,7 +864,7 @@ pub fn get_dispatcher_stats(db_path: String) -> DispatcherStatsResult {
         Err(e) => {
             DispatcherStatsResult {
                 success: false,
-                stats: None,
+                data: None,
                 message: format!("Failed to get bridge: {}", e),
             }
         }
@@ -922,16 +887,16 @@ pub fn get_workflow_run_status(run_id: String, db_path: String) -> WorkflowRunSt
                     
                     WorkflowRunStatusResult {
                         success: true,
-                        run_id: Some(run_id),
-                        status: Some(status_str),
+                        id: Some(run_id),
+                        data: Some(status_str),
                         message: "Workflow run status retrieved successfully".to_string(),
                     }
                 }
                 Err(e) => {
                     WorkflowRunStatusResult {
                         success: false,
-                        run_id: None,
-                        status: None,
+                        id: None,
+                        data: None,
                         message: format!("Failed to get workflow run status: {}", e),
                     }
                 }
@@ -940,8 +905,8 @@ pub fn get_workflow_run_status(run_id: String, db_path: String) -> WorkflowRunSt
         Err(e) => {
             WorkflowRunStatusResult {
                 success: false,
-                run_id: None,
-                status: None,
+                id: None,
+                data: None,
                 message: format!("Failed to get bridge: {}", e),
             }
         }
@@ -962,16 +927,16 @@ pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> Workflow
                     
                     WorkflowStepsResult {
                         success: true,
-                        run_id: Some(run_id),
-                        steps: Some(steps_json),
+                        id: Some(run_id),
+                        data: Some(steps_json),
                         message: "Workflow completed steps retrieved successfully".to_string(),
                     }
                 }
                 Err(e) => {
                     WorkflowStepsResult {
                         success: false,
-                        run_id: None,
-                        steps: None,
+                        id: None,
+                        data: None,
                         message: format!("Failed to get workflow completed steps: {}", e),
                     }
                 }
@@ -980,8 +945,8 @@ pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> Workflow
         Err(e) => {
             WorkflowStepsResult {
                 success: false,
-                run_id: None,
-                steps: None,
+                id: None,
+                data: None,
                 message: format!("Failed to get bridge: {}", e),
             }
         }
@@ -1089,12 +1054,12 @@ pub fn get_trigger_stats(db_path: String) -> TriggerStatsResult {
         &db_path,
         |stats_json: String| TriggerStatsResult {
             success: true,
-            stats: Some(stats_json),
+            data: Some(stats_json),
             message: "Trigger statistics retrieved successfully".to_string(),
         },
         |msg: String| TriggerStatsResult {
             success: false,
-            stats: None,
+            data: None,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.get_trigger_stats()
@@ -1108,12 +1073,12 @@ pub fn get_workflow_triggers(workflow_id: String, db_path: String) -> WorkflowTr
         &db_path,
         |triggers_json: String| WorkflowTriggersResult {
             success: true,
-            triggers: Some(triggers_json),
+            data: Some(triggers_json),
             message: "Workflow triggers retrieved successfully".to_string(),
         },
         |msg: String| WorkflowTriggersResult {
             success: false,
-            triggers: None,
+            data: None,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.get_workflow_triggers(&workflow_id)
@@ -1199,33 +1164,18 @@ pub fn stop_webhook_server(db_path: String) -> WebhookServerResult {
     }
 }
 
-#[napi(object)]
-pub struct WebhookServerResult {
-    pub success: bool,
-    pub message: String,
-} 
-
-#[napi(object)]
-pub struct HookExecutionResult {
-    pub success: bool,
-    pub hook_type: Option<String>,
-    pub workflow_id: Option<String>,
-    pub result: Option<String>,
-    pub message: String,
-}
-
 #[napi]
 pub fn execute_workflow_steps(run_id: String, workflow_id: String, db_path: String) -> StepExecutionResult {
     with_shared_bridge!(
         &db_path,
         |result: String| StepExecutionResult {
             success: true,
-            result: Some(result),
+            data: Some(result),
             message: "Workflow steps executed successfully".to_string(),
         },
         |msg: String| StepExecutionResult {
             success: false,
-            result: None,
+            data: None,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.execute_workflow_steps(&run_id, &workflow_id)
@@ -1269,61 +1219,7 @@ pub fn execute_workflow_hook(hook_type: String, context_json: String, workflow_i
     }
 } 
 
-#[napi(object)]
-pub struct PauseResumeResult {
-    pub success: bool,
-    pub run_id: Option<String>,
-    pub workflow_id: Option<String>,
-    pub status: Option<String>,
-    pub message: String,
-}
-
-#[napi]
-pub fn pause_workflow(run_id: String, db_path: String) -> PauseResumeResult {
-    match get_shared_bridge(&db_path) {
-        Ok(_bridge) => {
-            // In the future, this will integrate with the workflow state machine
-            PauseResumeResult {
-                success: true,
-                run_id: Some(run_id.clone()),
-                workflow_id: None,
-                status: Some("paused".to_string()),
-                message: "Workflow paused successfully".to_string(),
-            }
-        }
-        Err(error) => {
-            PauseResumeResult {
-                success: false,
-                run_id: Some(run_id),
-                workflow_id: None,
-                status: None,
-                message: format!("Failed to get bridge: {}", error),
-            }
-        }
-    }
-}
-
-#[napi]
-pub fn resume_workflow(run_id: String, db_path: String) -> PauseResumeResult {
-    match get_shared_bridge(&db_path) {
-        Ok(_bridge) => {
-            // In the future, this will integrate with the workflow state machine
-            PauseResumeResult {
-                success: true,
-                run_id: Some(run_id.clone()),
-                workflow_id: None,
-                status: Some("resumed".to_string()),
-                message: "Workflow resumed successfully".to_string(),
-            }
-        }
-        Err(error) => {
-            PauseResumeResult {
-                success: false,
-                run_id: Some(run_id),
-                workflow_id: None,
-                status: None,
-                message: format!("Failed to get bridge: {}", error),
-            }
-        }
-    }
-} 
+// Note: pause_workflow and resume_workflow removed (Task 1.4)
+// These were placeholder functions that didn't actually pause/resume workflows.
+// When workflow state machine is integrated (Phase 2, Task 2.2), 
+// these functions can be re-implemented with actual functionality. 
