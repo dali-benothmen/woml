@@ -38,13 +38,13 @@
     ]
   },
   "optionalDependencies": {
-    "@cronflow/darwin-x64": "0.10.0",
-    "@cronflow/darwin-arm64": "0.10.0",
-    "@cronflow/linux-x64-gnu": "0.10.0",
-    "@cronflow/linux-x64-musl": "0.10.0",
-    "@cronflow/linux-arm64-gnu": "0.10.0",
-    "@cronflow/win32-x64-msvc": "0.10.0",
-    "@cronflow/win32-arm64-msvc": "0.10.0"
+    "@cronflow/darwin-x64": "0.10.1",
+    "@cronflow/darwin-arm64": "0.10.1",
+    "@cronflow/linux-x64-gnu": "0.10.1",
+    "@cronflow/linux-x64-musl": "0.10.1",
+    "@cronflow/linux-arm64-gnu": "0.10.1",
+    "@cronflow/win32-x64-msvc": "0.10.1",
+    "@cronflow/win32-arm64-msvc": "0.10.1"
   },
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts --outdir dist --target node --format cjs --minify --sourcemap --external \"*.node\" && bun build sdk/index.ts --outdir dist/sdk --target node --format cjs --minify --sourcemap --external \"*.node\" && bun run generate:types",
