@@ -35,6 +35,8 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
             build: |
               set -e
+              rustup update stable
+              rustup default stable
               cd core
               npm install
               npx napi build --platform --release --target x86_64-unknown-linux-gnu
@@ -53,6 +55,8 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
             build: |
               set -e
+              rustup update stable
+              rustup default stable
               cd core
               npm install
               npx napi build --platform --release --target aarch64-unknown-linux-gnu
