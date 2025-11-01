@@ -55,6 +55,8 @@
     "build:core:debug": "cd core && napi build",
     "build:core:optimized": "cd core && napi build --release && strip core.node && echo '✅ Core binary optimized and stripped'",
     "build:core:all": "cd core && napi build --platform --release",
+    "install:core": "node scripts/install-core-local.js",
+    "install:core:debug": "node scripts/install-core-local.js --debug",
     "artifacts": "cd core && napi artifacts",
     "prepublish:artifacts": "cd core && napi prepublish -t npm",
     "generate:types": "node scripts/generate-types.js",
