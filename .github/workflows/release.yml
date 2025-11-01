@@ -230,12 +230,31 @@ jobs:
 
           for pkg in npm/@cronflow/*; do
             if [ -d "$pkg" ]; then
-              echo "Publishing $pkg..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "Processing $pkg..."
               cd "$pkg"
-              npm publish --access public || echo "⚠️ Failed to publish $pkg"
+              
+              # Check if version already exists
+              PACKAGE_NAME=$(node -p "require('./package.json').name")
+              PACKAGE_VERSION=$(node -p "require('./package.json').version")
+              
+              if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version 2>/dev/null; then
+                echo "⏭️  Skipping $PACKAGE_NAME@$PACKAGE_VERSION (already published)"
+              else
+                echo "📦 Publishing $PACKAGE_NAME@$PACKAGE_VERSION..."
+                if npm publish --access public; then
+                  echo "✅ Successfully published $PACKAGE_NAME@$PACKAGE_VERSION"
+                else
+                  echo "❌ Failed to publish $PACKAGE_NAME@$PACKAGE_VERSION"
+                fi
+              fi
+              
               cd /home/runner/work/cronflow/cronflow/core
             fi
           done
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✨ Platform packages publish completed"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -250,9 +269,36 @@ jobs:
       - name: Build main package
         run: npm run build:prod
 
+      - name: Check if version already published
+        id: version_check
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          echo "Checking if $PACKAGE_NAME@$PACKAGE_VERSION is already published..."
+
+          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version 2>/dev/null; then
+            echo "⚠️ Version $PACKAGE_VERSION is already published"
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Version $PACKAGE_VERSION is not published yet"
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "package_version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+
       - name: Publish main package
+        if: steps.version_check.outputs.should_publish == 'true'
         run: |
           echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" >> ~/.npmrc
           npm publish --access public
+          echo "🎉 Successfully published ${{ steps.version_check.outputs.package_name }}@${{ steps.version_check.outputs.package_version }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Skip publish (version already exists)
+        if: steps.version_check.outputs.should_publish == 'false'
+        run: |
+          echo "⏭️ Skipping publish - ${{ steps.version_check.outputs.package_name }}@${{ steps.version_check.outputs.package_version }} already exists on npm"
+          echo "💡 To publish a new version, bump the version in package.json first"
