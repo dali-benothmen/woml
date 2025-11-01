@@ -187,7 +187,7 @@ jobs:
                 cat > "$pkg_dir/package.json" << EOF
           {
             "name": "@cronflow/$platform_name",
-            "version": "0.10.1",
+            "version": "0.10.2",
             "description": "Cronflow native bindings for $platform_name",
             "main": "core.$platform_name.node",
             "license": "Apache-2.0",
