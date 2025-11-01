@@ -4,12 +4,13 @@ Thank you for your interest in contributing to Cronflow! This document outlines 
 
 ## 🚀 Quick Start
 
-1. **Fork** the repository
-2. **Clone** your fork: `git clone https://github.com/dali-benothmen/cronflow.git`
-3. **Install dependencies**: `bun install`
-4. **Build the project**: `bun run build:all`
-5. **Run tests**: `bun test`
-6. **Create a feature branch**: `git checkout -b feature/your-feature-name`
+1. **Create an issue**
+2. **Fork** the repository
+3. **Clone** your fork: `git clone https://github.com/dali-benothmen/cronflow.git`
+4. **Install dependencies**: `bun install`
+5. **Build the project**: `bun run build:all`
+6. **Run tests**: `bun test`
+7. **Create a feature branch**: `git checkout -b feature/your-feature-name`
 
 ## 🛠️ Development Setup
 
@@ -153,10 +154,11 @@ bunx changeset publish
 
 ### Before Submitting a PR
 
-1. **Ensure tests pass**: `bun test`
-2. **Check code quality**: `bun run lint && bun run format:check`
-3. **Build successfully**: `bun run build:all`
-4. **Create changeset** (if needed): `bunx changeset`
+1. **Create an issue (even if it is a new feature) to notify the community about it**
+2. **Ensure tests pass**: `bun test`
+3. **Check code quality**: `bun run lint && bun run format:check`
+4. **Build successfully**: `bun run build:all`
+5. **Create changeset** (if needed): `bunx changeset`
 
 ### PR Title Format
 
