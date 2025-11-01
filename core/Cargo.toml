@@ -27,7 +27,7 @@ napi-build = "2.0"
 
 [dependencies]
 # N-API for Node.js communication
-napi = { version = "2.15", default-features = false, features = ["napi4"] }
+napi = { version = "2.15", default-features = false, features = ["napi4", "tokio_rt"] }
 napi-derive = "2.15"
 
 # JSON serialization

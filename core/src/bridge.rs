@@ -4,10 +4,11 @@
 //! and the Node.js SDK via N-API.
 
 use std::sync::{Arc, Mutex, OnceLock};
+use tokio::sync::Mutex as TokioMutex;
 use napi_derive::napi;
 use crate::{
     models::WorkflowDefinition,
-    state::StateManager,
+    state::{StateManager, AsyncStateManager},
     trigger_executor::TriggerExecutor,
     dispatcher::Dispatcher,
     triggers::TriggerManager,
@@ -19,7 +20,7 @@ use uuid::Uuid;
 use log;
 use serde::Serialize;
 
-/// N-API bridge for Node.js communication
+/// N-API bridge for Node.js communication (synchronous version - kept for backward compatibility)
 pub struct Bridge {
     state_manager: Arc<Mutex<StateManager>>,
     trigger_manager: Arc<Mutex<TriggerManager>>,
@@ -27,8 +28,20 @@ pub struct Bridge {
     job_dispatcher: Arc<Mutex<Dispatcher>>,
 }
 
+/// Async N-API bridge for Node.js communication
+/// Uses async components for non-blocking operations
+pub struct AsyncBridge {
+    state_manager: Arc<AsyncStateManager>,
+    trigger_manager: Arc<TokioMutex<TriggerManager>>,
+    trigger_executor: Arc<TriggerExecutor>,
+    job_dispatcher: Arc<TokioMutex<Dispatcher>>,
+}
+
 /// Global shared Bridge instance to eliminate N-API function duplication
 static BRIDGE_CACHE: OnceLock<Mutex<Option<Arc<Bridge>>>> = OnceLock::new();
+
+/// Global shared AsyncBridge instance for async N-API functions
+static ASYNC_BRIDGE_CACHE: OnceLock<TokioMutex<Option<Arc<AsyncBridge>>>> = OnceLock::new();
 
 /// Get or create shared Bridge instance for N-API functions
 fn get_shared_bridge(db_path: &str) -> CoreResult<Arc<Bridge>> {
@@ -40,6 +53,20 @@ fn get_shared_bridge(db_path: &str) -> CoreResult<Arc<Bridge>> {
         Ok(bridge.clone())
     } else {
         let new_bridge = Arc::new(Bridge::new(db_path)?);
+        *bridge_opt = Some(new_bridge.clone());
+        Ok(new_bridge)
+    }
+}
+
+/// Get or create shared AsyncBridge instance for async N-API functions
+async fn get_shared_async_bridge(db_path: &str) -> CoreResult<Arc<AsyncBridge>> {
+    let cache = ASYNC_BRIDGE_CACHE.get_or_init(|| TokioMutex::new(None));
+    let mut bridge_opt = cache.lock().await;
+    
+    if let Some(bridge) = bridge_opt.as_ref() {
+        Ok(bridge.clone())
+    } else {
+        let new_bridge = Arc::new(AsyncBridge::new(db_path)?);
         *bridge_opt = Some(new_bridge.clone());
         Ok(new_bridge)
     }
@@ -465,6 +492,208 @@ impl Bridge {
 }
 
 // ============================================================================
+// ASYNC BRIDGE IMPLEMENTATION (Task 2.1.3)
+// ============================================================================
+
+impl AsyncBridge {
+    /// Create a new async N-API bridge
+    pub fn new(db_path: &str) -> CoreResult<Self> {
+        let state_manager = Arc::new(AsyncStateManager::new(db_path)?);
+        let trigger_manager = Arc::new(TokioMutex::new(TriggerManager::new()));
+        
+        // Note: For now, we keep Dispatcher synchronous as it uses thread pools
+        // In Phase 3, we'll convert it to use Tokio tasks
+        let dispatcher_config = crate::dispatcher::WorkerPoolConfig::default();
+        let sync_state_manager = Arc::new(Mutex::new(StateManager::new(db_path)?));
+        let job_dispatcher = Arc::new(TokioMutex::new(Dispatcher::new(dispatcher_config, sync_state_manager)));
+        
+        // TODO: Update TriggerExecutor to use AsyncStateManager in Phase 2.2
+        // For now, we need to create a separate sync trigger_manager for TriggerExecutor
+        let sync_trigger_manager = Arc::new(Mutex::new(TriggerManager::new()));
+        let sync_state_manager_for_trigger = Arc::new(Mutex::new(StateManager::new(db_path)?));
+        let sync_dispatcher_for_trigger = Arc::new(Mutex::new(Dispatcher::new(
+            crate::dispatcher::WorkerPoolConfig::default(),
+            sync_state_manager_for_trigger.clone()
+        )));
+        
+        let trigger_executor = Arc::new(TriggerExecutor::new(
+            sync_state_manager_for_trigger,
+            sync_trigger_manager,
+            sync_dispatcher_for_trigger,
+        ));
+        
+        Ok(AsyncBridge {
+            state_manager,
+            trigger_manager,
+            trigger_executor,
+            job_dispatcher,
+        })
+    }
+
+    /// Register a workflow from Node.js (async)
+    pub async fn register_workflow(&self, workflow_json: &str) -> CoreResult<()> {
+        log::info!("Registering workflow from JSON (async): {}", workflow_json);
+        
+        let workflow: WorkflowDefinition = serde_json::from_str(workflow_json)
+            .map_err(|e| CoreError::Serialization(e))?;
+        
+        workflow.validate()
+            .map_err(|e| CoreError::InvalidWorkflow(e))?;
+        
+        self.state_manager.register_workflow(workflow.clone()).await?;
+        
+        let trigger_ids = self.trigger_executor.register_workflow_triggers(&workflow.id, &workflow)?;
+        
+        log::info!("Successfully registered workflow: {} with {} triggers: {:?}", workflow.id, trigger_ids.len(), trigger_ids);
+        Ok(())
+    }
+
+    /// Create a workflow run from Node.js (async)
+    pub async fn create_run(&self, workflow_id: &str, payload_json: &str) -> CoreResult<String> {
+        log::info!("Creating run for workflow: {} with payload: {}", workflow_id, payload_json);
+        
+        let payload: serde_json::Value = serde_json::from_str(payload_json)
+            .map_err(|e| CoreError::Serialization(e))?;
+        
+        let run_id = self.state_manager.create_run(workflow_id, payload).await?;
+        
+        log::info!("Successfully created run: {} for workflow: {}", run_id, workflow_id);
+        Ok(run_id.to_string())
+    }
+
+    /// Get workflow run status (async)
+    pub async fn get_run_status(&self, run_id: &str) -> CoreResult<String> {
+        log::info!("Getting status for run: {}", run_id);
+        
+        let run_uuid = uuid::Uuid::parse_str(run_id)
+            .map_err(|e| CoreError::UuidParse(e))?;
+        
+        let _run = self.state_manager.get_run(&run_uuid).await?
+            .ok_or_else(|| CoreError::WorkflowNotFound(format!("Run not found: {}", run_id)))?;
+        
+        let status_json = serde_json::json!({
+            "run_id": run_id,
+            "status": "pending",
+            "message": "Run status retrieved successfully"
+        });
+        
+        let result = serde_json::to_string(&status_json)
+            .map_err(|e| CoreError::Serialization(e))?;
+        
+        log::info!("Retrieved status for run: {}", run_id);
+        Ok(result)
+    }
+
+    /// Execute a step with context (async)
+    pub async fn execute_step(&self, run_id: &str, step_id: &str) -> CoreResult<String> {
+        log::info!("Executing step {} for run {} (async)", step_id, run_id);
+        
+        let run_uuid = uuid::Uuid::parse_str(run_id)
+            .map_err(|e| CoreError::UuidParse(e))?;
+        
+        let run = self.state_manager.get_run(&run_uuid).await?
+            .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
+        
+        let workflow = self.state_manager.get_workflow(&run.workflow_id).await?
+            .ok_or_else(|| CoreError::WorkflowNotFound(run.workflow_id.clone()))?;
+        
+        let step = workflow.get_step(step_id)
+            .ok_or_else(|| CoreError::Validation(format!("Step '{}' not found in workflow '{}'", step_id, run.workflow_id)))?;
+        
+        let completed_steps = self.state_manager.get_completed_steps(&run_uuid).await?;
+        
+        let mut context = crate::context::Context::new(
+            run_id.to_string(),
+            run.workflow_id.clone(),
+            step_id.to_string(),
+            run.payload.clone(),
+            run.clone(),
+            completed_steps,
+        )?;
+        
+        if let Some(timeout) = step.timeout {
+            context.set_timeout(timeout);
+        }
+        
+        // Serialize context for Bun.js
+        let context_json = context.to_json()?;
+        
+        log::info!("Step execution context created for step {}", step_id);
+        Ok(context_json)
+    }
+
+    /// Execute a job (async)
+    pub async fn execute_job(&self, job_json: &str) -> CoreResult<String> {
+        log::info!("Executing job with context (async): {}", job_json);
+        
+        let job: Job = serde_json::from_str(job_json)
+            .map_err(|e| CoreError::Serialization(e))?;
+        
+        let job_id = job.id.clone();
+        
+        let mut dispatcher = self.job_dispatcher.lock().await;
+        dispatcher.submit_job(job)?;
+        
+        log::info!("Job {} submitted successfully", job_id);
+        
+        Ok(serde_json::json!({
+            "success": true,
+            "job_id": job_id,
+            "message": "Job submitted successfully"
+        }).to_string())
+    }
+
+    /// Get job status (async)
+    pub async fn get_job_status(&self, job_id: &str) -> CoreResult<Option<String>> {
+        log::info!("Getting status for job: {}", job_id);
+        
+        let dispatcher = self.job_dispatcher.lock().await;
+        
+        match dispatcher.get_job_status(job_id)? {
+            Some(state) => Ok(Some(format!("{:?}", state))),
+            None => Ok(None),
+        }
+    }
+
+    /// Register a webhook trigger (async)
+    pub async fn register_webhook_trigger(&self, workflow_id: &str, trigger_json: &str) -> CoreResult<()> {
+        log::info!("Registering webhook trigger for workflow: {} with config: {}", workflow_id, trigger_json);
+        
+        let trigger: crate::triggers::WebhookTrigger = serde_json::from_str(trigger_json)
+            .map_err(|e| CoreError::Serialization(e))?;
+        
+        trigger.validate()?;
+        
+        let mut trigger_manager = self.trigger_manager.lock().await;
+        trigger_manager.register_webhook_trigger(workflow_id, trigger)?;
+        
+        log::info!("Successfully registered webhook trigger for workflow: {}", workflow_id);
+        Ok(())
+    }
+
+    /// Get all webhook triggers (async)
+    pub async fn get_webhook_triggers(&self) -> CoreResult<String> {
+        let trigger_manager = self.trigger_manager.lock().await;
+        
+        let triggers = trigger_manager.get_webhook_triggers();
+        
+        let triggers_json = serde_json::to_string(&triggers)
+            .map_err(|e| CoreError::Serialization(e))?;
+        
+        Ok(triggers_json)
+    }
+
+    /// Get dispatcher statistics (async)
+    pub async fn get_dispatcher_stats(&self) -> CoreResult<crate::dispatcher::DispatcherStats> {
+        log::info!("Getting dispatcher statistics (async)");
+        
+        let dispatcher = self.job_dispatcher.lock().await;
+        
+        dispatcher.get_stats()
+    }
+}
+
+// ============================================================================
 // CONSOLIDATED N-API RESULT TYPES (Task 1.5)
 // ============================================================================
 
@@ -561,7 +790,7 @@ pub type JobStatusResult = IdDataResult;
 pub type WorkflowRunStatusResult = IdDataResult;
 pub type WorkflowStepsResult = IdDataResult;
 
-/// Register a workflow via N-API
+/// Register a workflow via N-API (synchronous version)
 #[napi]
 pub fn register_workflow(workflow_json: String, db_path: String) -> WorkflowRegistrationResult {
     with_shared_bridge!(
@@ -576,6 +805,29 @@ pub fn register_workflow(workflow_json: String, db_path: String) -> WorkflowRegi
         },
         |bridge: Arc<Bridge>| bridge.register_workflow(&workflow_json)
     )
+}
+
+/// Register a workflow via N-API (async version) - Task 2.1.4
+#[napi(ts_return_type = "Promise<WorkflowRegistrationResult>")]
+pub async fn register_workflow_async(workflow_json: String, db_path: String) -> napi::Result<WorkflowRegistrationResult> {
+    match get_shared_async_bridge(&db_path).await {
+        Ok(bridge) => {
+            match bridge.register_workflow(&workflow_json).await {
+                Ok(_) => Ok(WorkflowRegistrationResult {
+                    success: true,
+                    message: "Workflow registered successfully".to_string(),
+                }),
+                Err(e) => Ok(WorkflowRegistrationResult {
+                    success: false,
+                    message: format!("Failed to register workflow: {}", e),
+                }),
+            }
+        }
+        Err(e) => Ok(WorkflowRegistrationResult {
+            success: false,
+            message: format!("Failed to get bridge: {}", e),
+        }),
+    }
 }
 
 /// Register a webhook trigger via N-API
@@ -614,7 +866,7 @@ pub fn get_webhook_triggers(db_path: String) -> WebhookTriggersResult {
     )
 }
 
-/// Create a workflow run via N-API
+/// Create a workflow run via N-API (synchronous version)
 #[napi]
 pub fn create_run(workflow_id: String, payload_json: String, db_path: String) -> RunCreationResult {
     with_shared_bridge!(
@@ -633,6 +885,35 @@ pub fn create_run(workflow_id: String, payload_json: String, db_path: String) ->
         },
         |bridge: Arc<Bridge>| bridge.create_run(&workflow_id, &payload_json)
     )
+}
+
+/// Create a workflow run via N-API (async version) - Task 2.1.4
+#[napi(ts_return_type = "Promise<RunCreationResult>")]
+pub async fn create_run_async(workflow_id: String, payload_json: String, db_path: String) -> napi::Result<RunCreationResult> {
+    match get_shared_async_bridge(&db_path).await {
+        Ok(bridge) => {
+            match bridge.create_run(&workflow_id, &payload_json).await {
+                Ok(run_id) => Ok(RunCreationResult {
+                    success: true,
+                    id: Some(run_id),
+                    data: None,
+                    message: "Run created successfully".to_string(),
+                }),
+                Err(e) => Ok(RunCreationResult {
+                    success: false,
+                    id: None,
+                    data: None,
+                    message: format!("Failed to create run: {}", e),
+                }),
+            }
+        }
+        Err(e) => Ok(RunCreationResult {
+            success: false,
+            id: None,
+            data: None,
+            message: format!("Failed to get bridge: {}", e),
+        }),
+    }
 }
 
 /// Get run status via N-API
@@ -654,7 +935,7 @@ pub fn get_run_status(run_id: String, db_path: String) -> RunStatusResult {
     )
 }
 
-/// Execute a step via N-API
+/// Execute a step via N-API (synchronous version)
 #[napi]
 pub fn execute_step(run_id: String, step_id: String, db_path: String) -> StepExecutionResult {
     with_shared_bridge!(
@@ -673,7 +954,33 @@ pub fn execute_step(run_id: String, step_id: String, db_path: String) -> StepExe
     )
 }
 
-/// Execute a job with context via N-API
+/// Execute a step via N-API (async version) - Task 2.1.4
+#[napi(ts_return_type = "Promise<StepExecutionResult>")]
+pub async fn execute_step_async(run_id: String, step_id: String, db_path: String) -> napi::Result<StepExecutionResult> {
+    match get_shared_async_bridge(&db_path).await {
+        Ok(bridge) => {
+            match bridge.execute_step(&run_id, &step_id).await {
+                Ok(result) => Ok(StepExecutionResult {
+                    success: true,
+                    data: Some(result),
+                    message: "Step executed successfully".to_string(),
+                }),
+                Err(e) => Ok(StepExecutionResult {
+                    success: false,
+                    data: None,
+                    message: format!("Failed to execute step: {}", e),
+                }),
+            }
+        }
+        Err(e) => Ok(StepExecutionResult {
+            success: false,
+            data: None,
+            message: format!("Failed to get bridge: {}", e),
+        }),
+    }
+}
+
+/// Execute a job with context via N-API (synchronous version)
 #[napi]
 pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
     log::info!("Executing job with context: {}", job_json);
@@ -748,6 +1055,63 @@ pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
                 message: format!("Failed to get bridge: {}", e),
             }
         }
+    }
+}
+
+/// Execute a job with context via N-API (async version) - Task 2.1.4
+#[napi(ts_return_type = "Promise<JobExecutionResult>")]
+pub async fn execute_job_async(job_json: String, db_path: String) -> napi::Result<JobExecutionResult> {
+    log::info!("Executing job with context (async): {}", job_json);
+    
+    match get_shared_async_bridge(&db_path).await {
+        Ok(bridge) => {
+            match bridge.execute_job(&job_json).await {
+                Ok(result_json) => {
+                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return Ok(JobExecutionResult {
+                                success: false,
+                                job_id: None,
+                                run_id: None,
+                                step_id: None,
+                                context: None,
+                                result: None,
+                                message: "Failed to parse execution result".to_string(),
+                            });
+                        }
+                    };
+                    
+                    Ok(JobExecutionResult {
+                        success: true,
+                        job_id: result["job_id"].as_str().map(|s| s.to_string()),
+                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                        step_id: result["step_id"].as_str().map(|s| s.to_string()),
+                        context: result["context"].as_str().map(|s| s.to_string()),
+                        result: Some(result_json),
+                        message: "Job executed successfully".to_string(),
+                    })
+                }
+                Err(e) => Ok(JobExecutionResult {
+                    success: false,
+                    job_id: None,
+                    run_id: None,
+                    step_id: None,
+                    context: None,
+                    result: None,
+                    message: format!("Failed to execute job: {}", e),
+                }),
+            }
+        }
+        Err(e) => Ok(JobExecutionResult {
+            success: false,
+            job_id: None,
+            run_id: None,
+            step_id: None,
+            context: None,
+            result: None,
+            message: format!("Failed to get bridge: {}", e),
+        }),
     }
 }
 
