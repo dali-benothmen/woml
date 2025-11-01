@@ -35,6 +35,9 @@ pub enum CoreError {
     #[error("Invalid state transition: {0}")]
     InvalidState(String),
 
+    #[error("Invalid workflow state transition: {0}")]
+    InvalidStateTransition(String),
+
     #[error("Configuration error: {0}")]
     Configuration(String),
 

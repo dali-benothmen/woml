@@ -57,6 +57,81 @@ pub enum WorkflowExecutionState {
     Cancelled,
 }
 
+impl WorkflowExecutionState {
+    /// Check if a state transition is valid
+    /// 
+    /// Valid transitions:
+    /// - Pending -> Running | Cancelled
+    /// - Running -> Paused | Completed | Failed | Cancelled
+    /// - Paused -> Running | Cancelled
+    /// - Completed -> (terminal state, no transitions)
+    /// - Failed -> (terminal state, no transitions)
+    /// - Cancelled -> (terminal state, no transitions)
+    pub fn can_transition_to(&self, target: &WorkflowExecutionState) -> bool {
+        use WorkflowExecutionState::*;
+        
+        match (self, target) {
+            // From Pending
+            (Pending, Running) => true,
+            (Pending, Cancelled) => true,
+            
+            // From Running
+            (Running, Paused) => true,
+            (Running, Completed) => true,
+            (Running, Failed) => true,
+            (Running, Cancelled) => true,
+            
+            // From Paused
+            (Paused, Running) => true,
+            (Paused, Cancelled) => true,
+            
+            // Terminal states (Completed, Failed, Cancelled) cannot transition
+            (Completed, _) => false,
+            (Failed, _) => false,
+            (Cancelled, _) => false,
+            
+            // Same state (no-op)
+            (a, b) if a == b => true,
+            
+            // All other transitions are invalid
+            _ => false,
+        }
+    }
+    
+    /// Validate and perform a state transition
+    pub fn transition_to(&self, target: WorkflowExecutionState) -> CoreResult<WorkflowExecutionState> {
+        if !self.can_transition_to(&target) {
+            return Err(CoreError::InvalidStateTransition(format!(
+                "Invalid transition from {:?} to {:?}",
+                self, target
+            )));
+        }
+        Ok(target)
+    }
+    
+    /// Check if this is a terminal state
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            WorkflowExecutionState::Completed
+                | WorkflowExecutionState::Failed
+                | WorkflowExecutionState::Cancelled
+        )
+    }
+    
+    /// Convert to string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorkflowExecutionState::Pending => "Pending",
+            WorkflowExecutionState::Running => "Running",
+            WorkflowExecutionState::Paused => "Paused",
+            WorkflowExecutionState::Completed => "Completed",
+            WorkflowExecutionState::Failed => "Failed",
+            WorkflowExecutionState::Cancelled => "Cancelled",
+        }
+    }
+}
+
 /// Step execution state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepExecutionState {
@@ -319,7 +394,9 @@ impl WorkflowStateMachine {
         self.total_steps = workflow.steps.len();
         self.stats = WorkflowExecutionStats::new(self.total_steps);
         
-        self.execution_state = WorkflowExecutionState::Running;
+        // Transition from Pending to Running with validation
+        let new_state = self.execution_state.transition_to(WorkflowExecutionState::Running)?;
+        self.execution_state = new_state;
         
         log::info!("Workflow state machine initialized with {} steps", self.total_steps);
         Ok(())
@@ -792,41 +869,26 @@ impl WorkflowStateMachine {
     
     /// Pause workflow execution
     pub fn pause(&mut self) -> CoreResult<()> {
-        if self.execution_state == WorkflowExecutionState::Running {
-            self.execution_state = WorkflowExecutionState::Paused;
-            log::info!("Workflow execution paused");
-            Ok(())
-        } else {
-            Err(CoreError::InvalidState(format!(
-                "Cannot pause workflow in state: {:?}", self.execution_state
-            )))
-        }
+        let new_state = self.execution_state.transition_to(WorkflowExecutionState::Paused)?;
+        self.execution_state = new_state;
+        log::info!("Workflow execution paused");
+        Ok(())
     }
     
     /// Resume workflow execution
     pub fn resume(&mut self) -> CoreResult<()> {
-        if self.execution_state == WorkflowExecutionState::Paused {
-            self.execution_state = WorkflowExecutionState::Running;
-            log::info!("Workflow execution resumed");
-            Ok(())
-        } else {
-            Err(CoreError::InvalidState(format!(
-                "Cannot resume workflow in state: {:?}", self.execution_state
-            )))
-        }
+        let new_state = self.execution_state.transition_to(WorkflowExecutionState::Running)?;
+        self.execution_state = new_state;
+        log::info!("Workflow execution resumed");
+        Ok(())
     }
     
     /// Cancel workflow execution
     pub fn cancel(&mut self, reason: Option<String>) -> CoreResult<()> {
-        if !self.execution_state.is_terminal() {
-            self.execution_state = WorkflowExecutionState::Cancelled;
-            log::info!("Workflow execution cancelled: {}", reason.unwrap_or_else(|| "No reason provided".to_string()));
-            Ok(())
-        } else {
-            Err(CoreError::InvalidState(format!(
-                "Cannot cancel workflow in state: {:?}", self.execution_state
-            )))
-        }
+        let new_state = self.execution_state.transition_to(WorkflowExecutionState::Cancelled)?;
+        self.execution_state = new_state;
+        log::info!("Workflow execution cancelled: {}", reason.unwrap_or_else(|| "No reason provided".to_string()));
+        Ok(())
     }
     
     /// Get workflow definition
@@ -940,11 +1002,14 @@ impl WorkflowStateMachine {
             RunStatus::Completed
         };
         
-        self.execution_state = match final_status {
+        // Transition to final state with validation
+        let target_state = match final_status {
             RunStatus::Completed => WorkflowExecutionState::Completed,
             RunStatus::Failed => WorkflowExecutionState::Failed,
             _ => WorkflowExecutionState::Failed, // Default to failed for unexpected status
         };
+        let new_state = self.execution_state.transition_to(target_state)?;
+        self.execution_state = new_state;
         
         // Mark stats as completed
         self.stats.mark_completed();
@@ -1142,28 +1207,6 @@ impl WorkflowStateMachine {
     }
 }
 
-impl WorkflowExecutionState {
-    /// Check if state is terminal (no further transitions possible)
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, 
-            WorkflowExecutionState::Completed | 
-            WorkflowExecutionState::Failed | 
-            WorkflowExecutionState::Cancelled
-        )
-    }
-    
-    /// Get state as string
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            WorkflowExecutionState::Pending => "pending",
-            WorkflowExecutionState::Running => "running",
-            WorkflowExecutionState::Paused => "paused",
-            WorkflowExecutionState::Completed => "completed",
-            WorkflowExecutionState::Failed => "failed",
-            WorkflowExecutionState::Cancelled => "cancelled",
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
