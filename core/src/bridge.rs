@@ -25,7 +25,7 @@ pub struct Bridge {
     state_manager: Arc<Mutex<StateManager>>,
     trigger_manager: Arc<Mutex<TriggerManager>>,
     trigger_executor: TriggerExecutor,
-    job_dispatcher: Arc<Mutex<Dispatcher>>,
+    job_dispatcher: Arc<Mutex<Arc<tokio::sync::Mutex<Dispatcher>>>>, // Wrapper for async dispatcher
 }
 
 /// Async N-API bridge for Node.js communication
@@ -99,13 +99,22 @@ impl Bridge {
         let state_manager = Arc::new(Mutex::new(StateManager::new(db_path)?));
         let trigger_manager = Arc::new(Mutex::new(TriggerManager::new()));
         
+        // Create a tokio Mutex wrapper for the dispatcher
+        // The dispatcher needs async state manager access
+        let state_manager_for_dispatcher = {
+            // Create new state manager for dispatcher (will be shared later)
+            Arc::new(tokio::sync::Mutex::new(StateManager::new(db_path)?))
+        };
+        
         let dispatcher_config = crate::dispatcher::WorkerPoolConfig::default();
-        let job_dispatcher = Arc::new(Mutex::new(Dispatcher::new(dispatcher_config, state_manager.clone())));
+        let async_dispatcher = Dispatcher::new(dispatcher_config, state_manager_for_dispatcher);
+        let async_dispatcher_arc = Arc::new(tokio::sync::Mutex::new(async_dispatcher));
+        let job_dispatcher = Arc::new(Mutex::new(Arc::clone(&async_dispatcher_arc))); // Sync wrapper for Bridge
         
         let trigger_executor = TriggerExecutor::new(
             state_manager.clone(), 
             trigger_manager.clone(),
-            job_dispatcher.clone()
+            Arc::clone(&job_dispatcher)  // Share the same Arc<Mutex<Arc<TokioMutex<Dispatcher>>>>
         );
         
         Ok(Bridge { 
@@ -128,9 +137,9 @@ impl Bridge {
         
         // Acquire lock, register workflow, then immediately release
         {
-            let state_manager = self.state_manager.lock()
-                .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
-            state_manager.register_workflow(workflow.clone())?;
+        let state_manager = self.state_manager.lock()
+            .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+        state_manager.register_workflow(workflow.clone())?;
         } // Lock released here
         
         // Register triggers without holding the state manager lock
@@ -180,8 +189,8 @@ impl Bridge {
         
         // Acquire lock, create run, then immediately release
         let run_id = {
-            let mut state_manager = self.state_manager.lock()
-                .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+        let mut state_manager = self.state_manager.lock()
+            .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
             state_manager.create_run(workflow_id, payload)?
         }; // Lock released here
         
@@ -198,8 +207,8 @@ impl Bridge {
         
         // Acquire lock, get run, then immediately release
         let _run = {
-            let state_manager = self.state_manager.lock()
-                .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+        let state_manager = self.state_manager.lock()
+            .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
             state_manager.get_run(&run_uuid)?
                 .ok_or_else(|| CoreError::WorkflowNotFound(format!("Run not found: {}", run_id)))?
         }; // Lock released here
@@ -227,14 +236,14 @@ impl Bridge {
         
         // Acquire lock, get all needed data, then immediately release
         let (run, workflow, completed_steps) = {
-            let state_manager = self.state_manager.lock().unwrap();
+        let state_manager = self.state_manager.lock().unwrap();
             
-            let run = state_manager.get_run(&run_uuid)?
-                .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
-            
-            let workflow = state_manager.get_workflow(&run.workflow_id)?
-                .ok_or_else(|| CoreError::WorkflowNotFound(run.workflow_id.clone()))?;
-            
+        let run = state_manager.get_run(&run_uuid)?
+            .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
+        
+        let workflow = state_manager.get_workflow(&run.workflow_id)?
+            .ok_or_else(|| CoreError::WorkflowNotFound(run.workflow_id.clone()))?;
+        
             let completed_steps = state_manager.get_completed_steps(&run_uuid)?;
             
             (run, workflow, completed_steps)
@@ -281,7 +290,7 @@ impl Bridge {
         
         // Acquire lock, get workflow, then immediately release
         let _workflow = {
-            let state_manager = self.state_manager.lock().unwrap();
+        let state_manager = self.state_manager.lock().unwrap();
             state_manager.get_workflow(&job.workflow_id)?
         }; // Lock released here
         
@@ -408,57 +417,90 @@ impl Bridge {
         Ok(())
     }
 
-    /// Get job status
+    /// Get job status (sync wrapper around async method)
     pub fn get_job_status(&self, job_id: &str) -> CoreResult<Option<String>> {
         log::info!("Getting job status for: {}", job_id);
         
-        let dispatcher = self.job_dispatcher.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        // Use tokio runtime to block on async call
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| CoreError::Internal("No tokio runtime available".to_string()))?;
         
-        match dispatcher.get_job_status(job_id)? {
+        rt.block_on(async {
+            let dispatcher_arc = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+            let dispatcher = dispatcher_arc.lock().await;
+        
+            match dispatcher.get_job_status(job_id).await? {
             Some(state) => Ok(Some(format!("{:?}", state))),
             None => Ok(None),
         }
+        })
     }
 
-    /// Cancel a job
+    /// Cancel a job (sync wrapper around async method)
     pub fn cancel_job(&self, job_id: &str) -> CoreResult<bool> {
         log::info!("Cancelling job: {}", job_id);
         
-        let dispatcher = self.job_dispatcher.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        // Use tokio runtime to block on async call
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| CoreError::Internal("No tokio runtime available".to_string()))?;
         
-        dispatcher.cancel_job(job_id)
+        rt.block_on(async {
+            let dispatcher_arc = self.job_dispatcher.lock()
+            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+            let dispatcher = dispatcher_arc.lock().await;
+        
+            dispatcher.cancel_job(job_id).await
+        })
     }
 
-    /// Get dispatcher statistics
+    /// Get dispatcher statistics (sync wrapper around async method)
     pub fn get_dispatcher_stats(&self) -> CoreResult<crate::dispatcher::DispatcherStats> {
         log::info!("Getting dispatcher statistics");
         
-        let dispatcher = self.job_dispatcher.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        // Use tokio runtime to block on async call
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| CoreError::Internal("No tokio runtime available".to_string()))?;
         
-        dispatcher.get_stats()
+        rt.block_on(async {
+            let dispatcher_arc = self.job_dispatcher.lock()
+                .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+            let dispatcher = dispatcher_arc.lock().await;
+            
+            dispatcher.get_stats().await
+        })
     }
 
-    /// Get workflow run status
+    /// Get workflow run status (sync wrapper around async method)
     pub fn get_workflow_run_status(&self, run_id: &str) -> CoreResult<Option<crate::models::RunStatus>> {
         log::info!("Getting workflow run status for: {}", run_id);
         
-        let dispatcher = self.job_dispatcher.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| CoreError::Internal("No tokio runtime available".to_string()))?;
         
-        dispatcher.get_workflow_run_status(run_id)
+        rt.block_on(async {
+            let dispatcher_arc = self.job_dispatcher.lock()
+                .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+            let dispatcher = dispatcher_arc.lock().await;
+            
+            dispatcher.get_workflow_run_status(run_id).await
+        })
     }
 
-    /// Get completed steps for a workflow run
+    /// Get completed steps for a workflow run (sync wrapper around async method)
     pub fn get_workflow_completed_steps(&self, run_id: &str) -> CoreResult<Vec<crate::models::StepResult>> {
         log::info!("Getting completed steps for workflow run: {}", run_id);
         
-        let dispatcher = self.job_dispatcher.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| CoreError::Internal("No tokio runtime available".to_string()))?;
         
-        dispatcher.get_workflow_completed_steps(run_id)
+        rt.block_on(async {
+            let dispatcher_arc = self.job_dispatcher.lock()
+                .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+            let dispatcher = dispatcher_arc.lock().await;
+            
+            dispatcher.get_workflow_completed_steps(run_id).await
+        })
     }
 
     /// Execute workflow steps using step orchestrator and state machine
@@ -519,20 +561,17 @@ impl AsyncBridge {
         let state_manager = Arc::new(AsyncStateManager::new(db_path)?);
         let trigger_manager = Arc::new(TokioMutex::new(TriggerManager::new()));
         
-        // Note: For now, we keep Dispatcher synchronous as it uses thread pools
-        // In Phase 3, we'll convert it to use Tokio tasks
+        // Dispatcher now uses Tokio async tasks
         let dispatcher_config = crate::dispatcher::WorkerPoolConfig::default();
-        let sync_state_manager = Arc::new(Mutex::new(StateManager::new(db_path)?));
-        let job_dispatcher = Arc::new(TokioMutex::new(Dispatcher::new(dispatcher_config, sync_state_manager)));
+        let async_state_manager = Arc::new(TokioMutex::new(StateManager::new(db_path)?));
+        let job_dispatcher = Arc::new(TokioMutex::new(Dispatcher::new(dispatcher_config, async_state_manager.clone())));
         
-        // TODO: Update TriggerExecutor to use AsyncStateManager in Phase 2.2
-        // For now, we need to create a separate sync trigger_manager for TriggerExecutor
+        // TriggerExecutor still needs sync components for now
+        // TODO: Update TriggerExecutor to use async in Phase 3.2
         let sync_trigger_manager = Arc::new(Mutex::new(TriggerManager::new()));
         let sync_state_manager_for_trigger = Arc::new(Mutex::new(StateManager::new(db_path)?));
-        let sync_dispatcher_for_trigger = Arc::new(Mutex::new(Dispatcher::new(
-            crate::dispatcher::WorkerPoolConfig::default(),
-            sync_state_manager_for_trigger.clone()
-        )));
+        // Share the same dispatcher Arc with trigger executor (it will use block_on to call async methods)
+        let sync_dispatcher_for_trigger = Arc::new(Mutex::new(Arc::clone(&job_dispatcher)));
         
         let trigger_executor = Arc::new(TriggerExecutor::new(
             sync_state_manager_for_trigger,
@@ -649,8 +688,8 @@ impl AsyncBridge {
         
         let job_id = job.id.clone();
         
-        let mut dispatcher = self.job_dispatcher.lock().await;
-        dispatcher.submit_job(job)?;
+        let dispatcher = self.job_dispatcher.lock().await;
+        dispatcher.submit_job(job).await?;
         
         log::info!("Job {} submitted successfully", job_id);
         
@@ -667,7 +706,7 @@ impl AsyncBridge {
         
         let dispatcher = self.job_dispatcher.lock().await;
         
-        match dispatcher.get_job_status(job_id)? {
+        match dispatcher.get_job_status(job_id).await? {
             Some(state) => Ok(Some(format!("{:?}", state))),
             None => Ok(None),
         }
@@ -707,7 +746,7 @@ impl AsyncBridge {
         
         let dispatcher = self.job_dispatcher.lock().await;
         
-        dispatcher.get_stats()
+        dispatcher.get_stats().await
     }
 }
 
@@ -836,13 +875,13 @@ pub async fn register_workflow_async(workflow_json: String, db_path: String) -> 
                     message: "Workflow registered successfully".to_string(),
                 }),
                 Err(e) => Ok(WorkflowRegistrationResult {
-                    success: false,
+                success: false,
                     message: format!("Failed to register workflow: {}", e),
                 }),
             }
         }
         Err(e) => Ok(WorkflowRegistrationResult {
-            success: false,
+                success: false,
             message: format!("Failed to get bridge: {}", e),
         }),
     }
@@ -858,7 +897,7 @@ pub fn register_webhook_trigger(workflow_id: String, trigger_json: String, db_pa
             message: "Webhook trigger registered successfully".to_string(),
         },
         |msg: String| WebhookTriggerRegistrationResult {
-            success: false,
+                success: false,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.register_webhook_trigger(&workflow_id, &trigger_json)
@@ -871,12 +910,12 @@ pub fn get_webhook_triggers(db_path: String) -> WebhookTriggersResult {
     with_shared_bridge!(
         &db_path,
         |triggers_json: String| WebhookTriggersResult {
-            success: true,
+                success: true,
             data: Some(triggers_json),
-            message: "Webhook triggers retrieved successfully".to_string(),
+                message: "Webhook triggers retrieved successfully".to_string(),
         },
         |msg: String| WebhookTriggersResult {
-            success: false,
+                success: false,
             data: None,
             message: msg,
         },
@@ -979,12 +1018,12 @@ pub async fn execute_step_async(run_id: String, step_id: String, db_path: String
         Ok(bridge) => {
             match bridge.execute_step(&run_id, &step_id).await {
                 Ok(result) => Ok(StepExecutionResult {
-                    success: true,
+        success: true,
                     data: Some(result),
                     message: "Step executed successfully".to_string(),
                 }),
                 Err(e) => Ok(StepExecutionResult {
-                    success: false,
+            success: false,
                     data: None,
                     message: format!("Failed to execute step: {}", e),
                 }),
@@ -1022,46 +1061,46 @@ pub fn execute_job(job_json: String, db_path: String) -> JobExecutionResult {
     // Use shared bridge instance
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.execute_job(&job) {
-                Ok(result_json) => {
-                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return JobExecutionResult {
-                                success: false,
-                                job_id: None,
-                                run_id: None,
-                                step_id: None,
-                                context: None,
-                                result: None,
-                                message: "Failed to parse execution result".to_string(),
-                            };
-                        }
-                    };
-                    
-                    JobExecutionResult {
-                        success: true,
-                        job_id: result["job_id"].as_str().map(|s| s.to_string()),
-                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                        step_id: result["step_id"].as_str().map(|s| s.to_string()),
-                        context: result["context"].as_str().map(|s| s.to_string()),
-                        result: Some(result_json),
-                        message: "Job executed successfully".to_string(),
-                    }
-                }
-                Err(e) => {
-                    JobExecutionResult {
+    match bridge.execute_job(&job) {
+        Ok(result_json) => {
+            let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                Ok(result) => result,
+                Err(_) => {
+                    return JobExecutionResult {
                         success: false,
                         job_id: None,
                         run_id: None,
                         step_id: None,
                         context: None,
                         result: None,
-                        message: format!("Failed to execute job: {}", e),
-                    }
+                        message: "Failed to parse execution result".to_string(),
+                    };
                 }
+            };
+            
+            JobExecutionResult {
+                success: true,
+                job_id: result["job_id"].as_str().map(|s| s.to_string()),
+                run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                step_id: result["step_id"].as_str().map(|s| s.to_string()),
+                context: result["context"].as_str().map(|s| s.to_string()),
+                result: Some(result_json),
+                        message: "Job executed successfully".to_string(),
             }
         }
+        Err(e) => {
+            JobExecutionResult {
+                success: false,
+                job_id: None,
+                run_id: None,
+                step_id: None,
+                context: None,
+                result: None,
+                message: format!("Failed to execute job: {}", e),
+            }
+        }
+    }
+}
         Err(e) => {
             JobExecutionResult {
                 success: false,
@@ -1084,40 +1123,40 @@ pub async fn execute_job_async(job_json: String, db_path: String) -> napi::Resul
     match get_shared_async_bridge(&db_path).await {
         Ok(bridge) => {
             match bridge.execute_job(&job_json).await {
-                Ok(result_json) => {
-                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                        Ok(result) => result,
-                        Err(_) => {
+        Ok(result_json) => {
+            let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                Ok(result) => result,
+                Err(_) => {
                             return Ok(JobExecutionResult {
-                                success: false,
-                                job_id: None,
-                                run_id: None,
-                                step_id: None,
-                                context: None,
-                                result: None,
-                                message: "Failed to parse execution result".to_string(),
+                        success: false,
+                        job_id: None,
+                        run_id: None,
+                        step_id: None,
+                        context: None,
+                        result: None,
+                        message: "Failed to parse execution result".to_string(),
                             });
-                        }
-                    };
-                    
-                    Ok(JobExecutionResult {
-                        success: true,
-                        job_id: result["job_id"].as_str().map(|s| s.to_string()),
-                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                        step_id: result["step_id"].as_str().map(|s| s.to_string()),
-                        context: result["context"].as_str().map(|s| s.to_string()),
-                        result: Some(result_json),
-                        message: "Job executed successfully".to_string(),
-                    })
                 }
+            };
+            
+                    Ok(JobExecutionResult {
+                success: true,
+                job_id: result["job_id"].as_str().map(|s| s.to_string()),
+                run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                step_id: result["step_id"].as_str().map(|s| s.to_string()),
+                context: result["context"].as_str().map(|s| s.to_string()),
+                result: Some(result_json),
+                message: "Job executed successfully".to_string(),
+                    })
+            }
                 Err(e) => Ok(JobExecutionResult {
-                    success: false,
-                    job_id: None,
-                    run_id: None,
-                    step_id: None,
-                    context: None,
-                    result: None,
-                    message: format!("Failed to execute job: {}", e),
+                success: false,
+                job_id: None,
+                run_id: None,
+                step_id: None,
+                context: None,
+                result: None,
+                message: format!("Failed to execute job: {}", e),
                 }),
             }
         }
@@ -1140,26 +1179,26 @@ pub fn get_job_status(job_id: String, db_path: String) -> JobStatusResult {
     
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.get_job_status(&job_id) {
-                Ok(status) => {
-                    let status_str = match status {
-                        Some(s) => format!("{:?}", s),
-                        None => "not_found".to_string(),
-                    };
-                    
-                    JobStatusResult {
-                        success: true,
+    match bridge.get_job_status(&job_id) {
+        Ok(status) => {
+            let status_str = match status {
+                Some(s) => format!("{:?}", s),
+                None => "not_found".to_string(),
+            };
+            
+            JobStatusResult {
+                success: true,
                         id: Some(job_id),
                         data: Some(status_str),
-                        message: "Job status retrieved successfully".to_string(),
-                    }
-                }
-                Err(e) => {
-                    JobStatusResult {
-                        success: false,
+                message: "Job status retrieved successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            JobStatusResult {
+                success: false,
                         id: None,
                         data: None,
-                        message: format!("Failed to get job status: {}", e),
+                message: format!("Failed to get job status: {}", e),
                     }
                 }
             }
@@ -1182,25 +1221,25 @@ pub fn cancel_job(job_id: String, db_path: String) -> JobCancellationResult {
     
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.cancel_job(&job_id) {
-                Ok(cancelled) => {
-                    JobCancellationResult {
-                        success: true,
-                        job_id: Some(job_id),
-                        cancelled,
-                        message: if cancelled {
-                            "Job cancelled successfully".to_string()
-                        } else {
-                            "Job not found or already completed".to_string()
-                        },
-                    }
-                }
-                Err(e) => {
-                    JobCancellationResult {
-                        success: false,
-                        job_id: None,
-                        cancelled: false,
-                        message: format!("Failed to cancel job: {}", e),
+    match bridge.cancel_job(&job_id) {
+        Ok(cancelled) => {
+            JobCancellationResult {
+                success: true,
+                job_id: Some(job_id),
+                cancelled,
+                message: if cancelled {
+                    "Job cancelled successfully".to_string()
+                } else {
+                    "Job not found or already completed".to_string()
+                },
+            }
+        }
+        Err(e) => {
+            JobCancellationResult {
+                success: false,
+                job_id: None,
+                cancelled: false,
+                message: format!("Failed to cancel job: {}", e),
                     }
                 }
             }
@@ -1223,22 +1262,22 @@ pub fn get_dispatcher_stats(db_path: String) -> DispatcherStatsResult {
     
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.get_dispatcher_stats() {
-                Ok(stats) => {
-                    let stats_json = serde_json::to_string(&stats)
-                        .unwrap_or_else(|_| "{}".to_string());
-                    
-                    DispatcherStatsResult {
-                        success: true,
+    match bridge.get_dispatcher_stats() {
+        Ok(stats) => {
+            let stats_json = serde_json::to_string(&stats)
+                .unwrap_or_else(|_| "{}".to_string());
+            
+            DispatcherStatsResult {
+                success: true,
                         data: Some(stats_json),
-                        message: "Dispatcher statistics retrieved successfully".to_string(),
-                    }
-                }
-                Err(e) => {
-                    DispatcherStatsResult {
-                        success: false,
+                message: "Dispatcher statistics retrieved successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            DispatcherStatsResult {
+                success: false,
                         data: None,
-                        message: format!("Failed to get dispatcher stats: {}", e),
+                message: format!("Failed to get dispatcher stats: {}", e),
                     }
                 }
             }
@@ -1260,26 +1299,26 @@ pub fn get_workflow_run_status(run_id: String, db_path: String) -> WorkflowRunSt
     
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.get_workflow_run_status(&run_id) {
-                Ok(status) => {
-                    let status_str = match status {
-                        Some(s) => format!("{:?}", s),
-                        None => "not_found".to_string(),
-                    };
-                    
-                    WorkflowRunStatusResult {
-                        success: true,
+    match bridge.get_workflow_run_status(&run_id) {
+        Ok(status) => {
+            let status_str = match status {
+                Some(s) => format!("{:?}", s),
+                None => "not_found".to_string(),
+            };
+            
+            WorkflowRunStatusResult {
+                success: true,
                         id: Some(run_id),
                         data: Some(status_str),
-                        message: "Workflow run status retrieved successfully".to_string(),
-                    }
-                }
-                Err(e) => {
-                    WorkflowRunStatusResult {
-                        success: false,
+                message: "Workflow run status retrieved successfully".to_string(),
+            }
+        }
+        Err(e) => {
+            WorkflowRunStatusResult {
+                success: false,
                         id: None,
                         data: None,
-                        message: format!("Failed to get workflow run status: {}", e),
+                message: format!("Failed to get workflow run status: {}", e),
                     }
                 }
             }
@@ -1302,28 +1341,28 @@ pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> Workflow
     
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.get_workflow_completed_steps(&run_id) {
-                Ok(steps) => {
-                    let steps_json = serde_json::to_string(&steps)
-                        .unwrap_or_else(|_| "[]".to_string());
-                    
-                    WorkflowStepsResult {
-                        success: true,
+    match bridge.get_workflow_completed_steps(&run_id) {
+        Ok(steps) => {
+            let steps_json = serde_json::to_string(&steps)
+                .unwrap_or_else(|_| "[]".to_string());
+            
+            WorkflowStepsResult {
+                success: true,
                         id: Some(run_id),
                         data: Some(steps_json),
-                        message: "Workflow completed steps retrieved successfully".to_string(),
-                    }
-                }
-                Err(e) => {
-                    WorkflowStepsResult {
-                        success: false,
-                        id: None,
-                        data: None,
-                        message: format!("Failed to get workflow completed steps: {}", e),
-                    }
-                }
+                message: "Workflow completed steps retrieved successfully".to_string(),
             }
         }
+        Err(e) => {
+            WorkflowStepsResult {
+                success: false,
+                        id: None,
+                        data: None,
+                message: format!("Failed to get workflow completed steps: {}", e),
+            }
+        }
+    }
+}
         Err(e) => {
             WorkflowStepsResult {
                 success: false,
@@ -1340,35 +1379,25 @@ pub fn get_workflow_completed_steps(run_id: String, db_path: String) -> Workflow
 pub fn execute_webhook_trigger(request_json: String, db_path: String) -> TriggerExecutionResult {
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.execute_webhook_trigger(&request_json) {
-                Ok(result_json) => {
-                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return TriggerExecutionResult {
-                                success: false,
-                                run_id: None,
-                                workflow_id: None,
-                                message: "Failed to parse execution result".to_string(),
-                            };
-                        }
-                    };
-                    
-                    TriggerExecutionResult {
-                        success: true,
-                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                        workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
-                        message: result["message"].as_str().unwrap_or("Webhook trigger executed successfully").to_string(),
-                    }
-                }
-                Err(e) => {
-                    TriggerExecutionResult {
+    match bridge.execute_webhook_trigger(&request_json) {
+        Ok(result_json) => {
+            let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                Ok(result) => result,
+                Err(_) => {
+                    return TriggerExecutionResult {
                         success: false,
                         run_id: None,
                         workflow_id: None,
-                        message: format!("Failed to execute webhook trigger: {}", e),
-                    }
+                        message: "Failed to parse execution result".to_string(),
+                    };
                 }
+            };
+            
+            TriggerExecutionResult {
+                success: true,
+                run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
+                message: result["message"].as_str().unwrap_or("Webhook trigger executed successfully").to_string(),
             }
         }
         Err(e) => {
@@ -1376,48 +1405,58 @@ pub fn execute_webhook_trigger(request_json: String, db_path: String) -> Trigger
                 success: false,
                 run_id: None,
                 workflow_id: None,
-                message: format!("Failed to get bridge: {}", e),
+                message: format!("Failed to execute webhook trigger: {}", e),
             }
         }
     }
 }
-
+        Err(e) => {
+            TriggerExecutionResult {
+                success: false,
+                run_id: None,
+                workflow_id: None,
+                message: format!("Failed to get bridge: {}", e),
+        }
+        }
+    }
+}
+    
 /// Execute a manual trigger via N-API
 #[napi]
 pub fn execute_manual_trigger(workflow_id: String, payload_json: String, db_path: String) -> TriggerExecutionResult {
     match get_shared_bridge(&db_path) {
         Ok(bridge) => {
-            match bridge.execute_manual_trigger(&workflow_id, &payload_json) {
-                Ok(result_json) => {
-                    let result: serde_json::Value = match serde_json::from_str(&result_json) {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return TriggerExecutionResult {
-                                success: false,
-                                run_id: None,
-                                workflow_id: None,
-                                message: "Failed to parse execution result".to_string(),
-                            };
-                        }
-                    };
-                    
-                    TriggerExecutionResult {
-                        success: true,
-                        run_id: result["run_id"].as_str().map(|s| s.to_string()),
-                        workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
-                        message: result["message"].as_str().unwrap_or("Manual trigger executed successfully").to_string(),
-                    }
-                }
-                Err(e) => {
-                    TriggerExecutionResult {
+    match bridge.execute_manual_trigger(&workflow_id, &payload_json) {
+        Ok(result_json) => {
+            let result: serde_json::Value = match serde_json::from_str(&result_json) {
+                Ok(result) => result,
+                Err(_) => {
+                    return TriggerExecutionResult {
                         success: false,
                         run_id: None,
                         workflow_id: None,
-                        message: format!("Failed to execute manual trigger: {}", e),
-                    }
+                        message: "Failed to parse execution result".to_string(),
+                    };
                 }
+            };
+            
+            TriggerExecutionResult {
+                success: true,
+                run_id: result["run_id"].as_str().map(|s| s.to_string()),
+                workflow_id: result["workflow_id"].as_str().map(|s| s.to_string()),
+                message: result["message"].as_str().unwrap_or("Manual trigger executed successfully").to_string(),
             }
         }
+        Err(e) => {
+            TriggerExecutionResult {
+                success: false,
+                run_id: None,
+                workflow_id: None,
+                message: format!("Failed to execute manual trigger: {}", e),
+            }
+        }
+    }
+}
         Err(e) => {
             TriggerExecutionResult {
                 success: false,
@@ -1435,12 +1474,12 @@ pub fn get_trigger_stats(db_path: String) -> TriggerStatsResult {
     with_shared_bridge!(
         &db_path,
         |stats_json: String| TriggerStatsResult {
-            success: true,
+                success: true,
             data: Some(stats_json),
-            message: "Trigger statistics retrieved successfully".to_string(),
+                message: "Trigger statistics retrieved successfully".to_string(),
         },
         |msg: String| TriggerStatsResult {
-            success: false,
+                success: false,
             data: None,
             message: msg,
         },
@@ -1454,12 +1493,12 @@ pub fn get_workflow_triggers(workflow_id: String, db_path: String) -> WorkflowTr
     with_shared_bridge!(
         &db_path,
         |triggers_json: String| WorkflowTriggersResult {
-            success: true,
+                success: true,
             data: Some(triggers_json),
-            message: "Workflow triggers retrieved successfully".to_string(),
+                message: "Workflow triggers retrieved successfully".to_string(),
         },
         |msg: String| WorkflowTriggersResult {
-            success: false,
+                success: false,
             data: None,
             message: msg,
         },
@@ -1473,11 +1512,11 @@ pub fn unregister_workflow_triggers(workflow_id: String, db_path: String) -> Tri
     with_shared_bridge!(
         &db_path,
         |_| TriggerUnregistrationResult {
-            success: true,
-            message: format!("Successfully unregistered triggers for workflow: {}", workflow_id),
+                success: true,
+                message: format!("Successfully unregistered triggers for workflow: {}", workflow_id),
         },
         |msg: String| TriggerUnregistrationResult {
-            success: false,
+                success: false,
             message: msg,
         },
         |bridge: Arc<Bridge>| bridge.unregister_workflow_triggers(&workflow_id)
@@ -1491,21 +1530,21 @@ pub fn start_webhook_server(db_path: String) -> WebhookServerResult {
         Ok(bridge) => {
             // Note: start_webhook_server doesn't actually mutate the bridge
             // The Arc allows interior mutability where needed
-            match bridge.start_webhook_server() {
-                Ok(_) => {
-                    WebhookServerResult {
-                        success: true,
-                        message: "Webhook server started successfully".to_string(),
-                    }
-                }
-                Err(e) => {
-                    WebhookServerResult {
-                        success: false,
-                        message: format!("Failed to start webhook server: {}", e),
-                    }
-                }
+    match bridge.start_webhook_server() {
+        Ok(_) => {
+            WebhookServerResult {
+                success: true,
+                message: "Webhook server started successfully".to_string(),
             }
         }
+        Err(e) => {
+            WebhookServerResult {
+                success: false,
+                message: format!("Failed to start webhook server: {}", e),
+            }
+        }
+    }
+}
         Err(e) => {
             WebhookServerResult {
                 success: false,
@@ -1522,21 +1561,21 @@ pub fn stop_webhook_server(db_path: String) -> WebhookServerResult {
         Ok(bridge) => {
             // Note: stop_webhook_server doesn't actually mutate the bridge
             // The Arc allows interior mutability where needed
-            match bridge.stop_webhook_server() {
-                Ok(_) => {
-                    WebhookServerResult {
-                        success: true,
-                        message: "Webhook server stopped successfully".to_string(),
-                    }
-                }
-                Err(e) => {
-                    WebhookServerResult {
-                        success: false,
-                        message: format!("Failed to stop webhook server: {}", e),
-                    }
-                }
+    match bridge.stop_webhook_server() {
+        Ok(_) => {
+            WebhookServerResult {
+                success: true,
+                message: "Webhook server stopped successfully".to_string(),
             }
         }
+        Err(e) => {
+            WebhookServerResult {
+                success: false,
+                message: format!("Failed to stop webhook server: {}", e),
+            }
+        }
+    }
+}
         Err(e) => {
             WebhookServerResult {
                 success: false,
@@ -1551,12 +1590,12 @@ pub fn execute_workflow_steps(run_id: String, workflow_id: String, db_path: Stri
     with_shared_bridge!(
         &db_path,
         |result: String| StepExecutionResult {
-            success: true,
+                        success: true,
             data: Some(result),
-            message: "Workflow steps executed successfully".to_string(),
+                        message: "Workflow steps executed successfully".to_string(),
         },
         |msg: String| StepExecutionResult {
-            success: false,
+                        success: false,
             data: None,
             message: msg,
         },

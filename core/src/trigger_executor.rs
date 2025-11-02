@@ -51,7 +51,7 @@ pub struct TriggerExecutor {
     state_manager: Arc<Mutex<StateManager>>,
     trigger_manager: Arc<Mutex<TriggerManager>>,
     step_orchestrator: StepOrchestrator,
-    job_dispatcher: Arc<Mutex<Dispatcher>>,
+    job_dispatcher: Arc<Mutex<Arc<tokio::sync::Mutex<Dispatcher>>>>, // Wrapper Arc for async dispatcher
 }
 
 impl TriggerExecutor {
@@ -59,7 +59,7 @@ impl TriggerExecutor {
     pub fn new(
         state_manager: Arc<Mutex<StateManager>>, 
         trigger_manager: Arc<Mutex<TriggerManager>>,
-        job_dispatcher: Arc<Mutex<Dispatcher>>
+        job_dispatcher: Arc<Mutex<Arc<tokio::sync::Mutex<Dispatcher>>>>
     ) -> Self {
         let step_orchestrator = StepOrchestrator::new(state_manager.clone());
         Self {
@@ -149,15 +149,29 @@ impl TriggerExecutor {
         
         let jobs = Job::create_workflow_jobs(workflow, &run, payload.clone())?;
         
-        // Submit all jobs to the dispatcher
-        let dispatcher = self.job_dispatcher.lock()
-            .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+        // Submit all jobs to the dispatcher (async call from sync context)
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|_| CoreError::Internal("No tokio runtime available".to_string()))?;
         
         let job_count = jobs.len();
         for job in jobs {
             let job_id = job.id.clone();
             let step_name = job.step_name.clone();
-            dispatcher.submit_job(job)?;
+            
+            // Get dispatcher Arc from sync mutex, then call async submit_job
+            let dispatcher_arc = {
+                let guard = self.job_dispatcher.lock()
+                    .map_err(|e| CoreError::Internal(format!("Failed to acquire dispatcher lock: {}", e)))?;
+                // dispatcher inside is Arc<TokioMutex<Dispatcher>>, so we can clone the Arc
+                guard.clone()
+            }; // Sync mutex guard dropped here
+            
+            // Now call async submit_job (it uses tokio mutex internally)
+            rt.block_on(async {
+                let dispatcher_guard = dispatcher_arc.lock().await;
+                dispatcher_guard.submit_job(job).await
+            })?;
+            
             log::debug!("Submitted job: {} for step: {}", job_id, step_name);
         }
         
