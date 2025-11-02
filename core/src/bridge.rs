@@ -126,11 +126,14 @@ impl Bridge {
         workflow.validate()
             .map_err(|e| CoreError::InvalidWorkflow(e))?;
         
-        let state_manager = self.state_manager.lock()
-            .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+        // Acquire lock, register workflow, then immediately release
+        {
+            let state_manager = self.state_manager.lock()
+                .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+            state_manager.register_workflow(workflow.clone())?;
+        } // Lock released here
         
-        state_manager.register_workflow(workflow.clone())?;
-        
+        // Register triggers without holding the state manager lock
         let trigger_ids = self.trigger_executor.register_workflow_triggers(&workflow.id, &workflow)?;
         
         log::info!("Successfully registered workflow: {} with {} triggers: {:?}", workflow.id, trigger_ids.len(), trigger_ids);
@@ -175,10 +178,12 @@ impl Bridge {
         let payload: serde_json::Value = serde_json::from_str(payload_json)
             .map_err(|e| CoreError::Serialization(e))?;
         
-        let mut state_manager = self.state_manager.lock()
-            .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
-        
-        let run_id = state_manager.create_run(workflow_id, payload)?;
+        // Acquire lock, create run, then immediately release
+        let run_id = {
+            let mut state_manager = self.state_manager.lock()
+                .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+            state_manager.create_run(workflow_id, payload)?
+        }; // Lock released here
         
         log::info!("Successfully created run: {} for workflow: {}", run_id, workflow_id);
         Ok(run_id.to_string())
@@ -191,12 +196,15 @@ impl Bridge {
         let run_uuid = uuid::Uuid::parse_str(run_id)
             .map_err(|e| CoreError::UuidParse(e))?;
         
-        let state_manager = self.state_manager.lock()
-            .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+        // Acquire lock, get run, then immediately release
+        let _run = {
+            let state_manager = self.state_manager.lock()
+                .map_err(|_| CoreError::Internal("Failed to acquire state manager lock".to_string()))?;
+            state_manager.get_run(&run_uuid)?
+                .ok_or_else(|| CoreError::WorkflowNotFound(format!("Run not found: {}", run_id)))?
+        }; // Lock released here
         
-        let _run = state_manager.get_run(&run_uuid)?
-            .ok_or_else(|| CoreError::WorkflowNotFound(format!("Run not found: {}", run_id)))?;
-        
+        // Build response without holding the lock
         let status_json = serde_json::json!({
             "run_id": run_id,
             "status": "pending",
@@ -217,17 +225,24 @@ impl Bridge {
         let run_uuid = uuid::Uuid::parse_str(run_id)
             .map_err(|e| CoreError::UuidParse(e))?;
         
-        let state_manager = self.state_manager.lock().unwrap();
-        let run = state_manager.get_run(&run_uuid)?
-            .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
+        // Acquire lock, get all needed data, then immediately release
+        let (run, workflow, completed_steps) = {
+            let state_manager = self.state_manager.lock().unwrap();
+            
+            let run = state_manager.get_run(&run_uuid)?
+                .ok_or_else(|| CoreError::RunNotFound(format!("Run not found: {}", run_id)))?;
+            
+            let workflow = state_manager.get_workflow(&run.workflow_id)?
+                .ok_or_else(|| CoreError::WorkflowNotFound(run.workflow_id.clone()))?;
+            
+            let completed_steps = state_manager.get_completed_steps(&run_uuid)?;
+            
+            (run, workflow, completed_steps)
+        }; // Lock released here
         
-        let workflow = state_manager.get_workflow(&run.workflow_id)?
-            .ok_or_else(|| CoreError::WorkflowNotFound(run.workflow_id.clone()))?;
-        
+        // Process step data without holding the lock
         let step = workflow.get_step(step_id)
             .ok_or_else(|| CoreError::Validation(format!("Step '{}' not found in workflow '{}'", step_id, run.workflow_id)))?;
-        
-        let completed_steps = state_manager.get_completed_steps(&run_uuid)?;
         
         let mut context = crate::context::Context::new(
             run_id.to_string(),
@@ -264,13 +279,16 @@ impl Bridge {
     pub fn execute_job(&self, job: &Job) -> CoreResult<String> {
         log::info!("Executing job: {}", job.id);
         
-        let state_manager = self.state_manager.lock().unwrap();
-        
-        let _workflow = state_manager.get_workflow(&job.workflow_id)?;
+        // Acquire lock, get workflow, then immediately release
+        let _workflow = {
+            let state_manager = self.state_manager.lock().unwrap();
+            state_manager.get_workflow(&job.workflow_id)?
+        }; // Lock released here
         
         let _run_uuid = Uuid::parse_str(&job.run_id)
             .map_err(|e| CoreError::UuidParse(e))?;
         
+        // Build response without holding the lock
         let result = serde_json::json!({
             "job_id": job.id,
             "run_id": job.run_id,
