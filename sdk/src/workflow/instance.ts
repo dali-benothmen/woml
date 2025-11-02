@@ -1444,6 +1444,15 @@ export class WorkflowInstance {
     this._workflow.steps.push(forEachStep);
     this._currentStep = forEachStep;
 
+    if (this._cronflowInstance && this._cronflowInstance.registerStepHandler) {
+      this._cronflowInstance.registerStepHandler(
+        this._workflow.id,
+        forEachStep.name,
+        forEachStep.handler,
+        'step'
+      );
+    }
+
     return this;
   }
 

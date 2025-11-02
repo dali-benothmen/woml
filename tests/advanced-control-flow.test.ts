@@ -86,7 +86,7 @@ try {
     })
     .forEach(
       'process-users',
-      ctx => ctx.steps['get-users'].output,
+      ctx => ctx.steps['get-users'],
       (user, flow) => {
         flow
           .step('send-welcome', ctx => {
@@ -96,6 +96,20 @@ try {
           .step('update-status', ctx => {
             console.log(`Updating status for ${user.name}`);
             return { updated: true, user: user.name };
+          })
+          .step('verify-registration', () => {
+            const workflow = cronflow.getWorkflow('foreach-test');
+            const hasForEachStep = workflow?.steps.some(
+              step => step.name === 'forEach_process-users'
+            );
+
+            if (!hasForEachStep) {
+              throw new Error(
+                "forEach step handler wasn't registered on workflow definition"
+              );
+            }
+
+            return { verified: true, user: user.name };
           });
       }
     )
@@ -126,7 +140,7 @@ try {
     .batch(
       'process-batches',
       {
-        items: ctx => ctx.steps['get-all-items'].output,
+        items: ctx => ctx.steps['get-all-items'],
         size: 3,
       },
       (batch, flow) => {
@@ -245,7 +259,7 @@ try {
     .forEach(
       'process-users',
       ctx =>
-        Array.from({ length: ctx.steps['get-data'].output.users }, (_, i) => ({
+        Array.from({ length: ctx.steps['get-data'].users }, (_, i) => ({
           id: i + 1,
         })),
       (user, flow) => {
@@ -263,10 +277,9 @@ try {
       'process-items',
       {
         items: ctx =>
-          Array.from(
-            { length: ctx.steps['get-data'].output.items },
-            (_, i) => ({ id: i + 1 })
-          ),
+          Array.from({ length: ctx.steps['get-data'].items }, (_, i) => ({
+            id: i + 1,
+          })),
         size: 5,
       },
       (batch, flow) => {
@@ -280,6 +293,21 @@ try {
   console.log('✅ Complex workflow defined successfully');
 } catch (error) {
   console.log('❌ Complex workflow test failed:', error);
+}
+
+console.log(
+  '\n🚀 Executing foreach-test workflow to validate handler registration...'
+);
+await cronflow.start();
+try {
+  const runId = await cronflow.trigger('foreach-test', {});
+  console.log(`   ↳ Triggered run ${runId}, waiting for completion...`);
+  await new Promise(resolve => setTimeout(resolve, 500));
+  console.log('   ✔ foreach-test workflow run completed.');
+} catch (error) {
+  console.log('❌ Failed to execute foreach-test workflow:', error);
+} finally {
+  await cronflow.stop();
 }
 
 console.log('\n🎉 All advanced control flow tests completed!');
