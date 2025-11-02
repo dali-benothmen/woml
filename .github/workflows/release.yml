@@ -151,8 +151,20 @@ jobs:
           cd core
           npm install
 
+      - name: Extract version from git tag
+        id: extract_version
+        run: |
+          # Extract version from GITHUB_REF (e.g., refs/tags/v0.10.4 -> 0.10.4)
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Extracted version: $VERSION from tag $GITHUB_REF"
+
       - name: Create platform packages
         run: |
+          # Extract version from git tag
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "📦 Using version: $VERSION from tag $GITHUB_REF"
+
           # Map artifact names to NAPI platform names
           declare -A platform_map=(
             ["bindings-x86_64-apple-darwin"]="darwin-x64"
@@ -183,11 +195,11 @@ jobs:
                   echo "✅ Binary copied"
                 fi
                 
-                # Create package.json
+                # Create package.json with dynamic version
                 cat > "$pkg_dir/package.json" << EOF
           {
             "name": "@cronflow/$platform_name",
-            "version": "0.10.3",
+            "version": "$VERSION",
             "description": "Cronflow native bindings for $platform_name",
             "main": "core.$platform_name.node",
             "license": "Apache-2.0",
