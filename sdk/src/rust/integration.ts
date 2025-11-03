@@ -46,7 +46,11 @@ export function convertToRustFormat(workflow: WorkflowDefinition): any {
       action: step.handler.toString(),
       type: step.type,
       handler: step.handler.toString(),
-      timeout: step.options?.timeout || 30000,
+      timeout: step.options?.timeout
+        ? typeof step.options.timeout === 'string'
+          ? parseDuration(step.options.timeout)
+          : step.options.timeout
+        : 30000,
       retry: step.options?.retry
         ? {
             max_attempts: step.options.retry.attempts,

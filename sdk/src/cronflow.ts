@@ -239,7 +239,23 @@ export async function start(options?: StartOptions): Promise<void> {
       }
 
       for (const workflow of currentState.workflows.values()) {
-        await registerWorkflowWithRustFromModule(workflow);
+        // Skip workflows with no steps - Rust requires at least one step
+        if (workflow.steps.length === 0) {
+          continue;
+        }
+        try {
+          await registerWorkflowWithRustFromModule(workflow);
+        } catch (error: any) {
+          // Ignore errors about already registered workflows/triggers
+          // This can happen when start() is called multiple times or in tests
+          if (
+            error?.message?.includes('already registered') ||
+            error?.message?.includes('already exists')
+          ) {
+            continue;
+          }
+          throw error;
+        }
       }
 
       if (options?.webhookServer) {
