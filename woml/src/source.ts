@@ -62,13 +62,34 @@ export interface WomlSourceDocument {
   readonly span: SourceSpan;
 }
 
-export class WomlParseError extends Error {
+export class WomlDiagnosticError extends Error {
   readonly diagnostic: WomlDiagnostic;
 
   constructor(diagnostic: WomlDiagnostic) {
     super(diagnostic.message);
-    this.name = 'WomlParseError';
+    this.name = 'WomlDiagnosticError';
     this.diagnostic = diagnostic;
+  }
+}
+
+export class WomlParseError extends WomlDiagnosticError {
+  constructor(diagnostic: WomlDiagnostic) {
+    super(diagnostic);
+    this.name = 'WomlParseError';
+  }
+}
+
+export class WomlValidationError extends WomlDiagnosticError {
+  constructor(diagnostic: WomlDiagnostic) {
+    super(diagnostic);
+    this.name = 'WomlValidationError';
+  }
+}
+
+export class WomlCompileError extends WomlDiagnosticError {
+  constructor(diagnostic: WomlDiagnostic) {
+    super(diagnostic);
+    this.name = 'WomlCompileError';
   }
 }
 

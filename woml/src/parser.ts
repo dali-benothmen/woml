@@ -157,7 +157,7 @@ function scanElementLocations(
     if (closing) nameStart += 1;
     while (/\s/.test(maskedSource[nameStart] ?? '')) nameStart += 1;
     let nameEnd = nameStart;
-    while (/[A-Za-z0-9:_-]/.test(maskedSource[nameEnd] ?? '')) nameEnd += 1;
+    while (/[A-Za-z0-9:_.-]/.test(maskedSource[nameEnd] ?? '')) nameEnd += 1;
     const name = maskedSource.slice(nameStart, nameEnd);
 
     if (closing) {

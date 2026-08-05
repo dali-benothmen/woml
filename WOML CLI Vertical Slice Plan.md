@@ -1,6 +1,6 @@
 # WOML CLI Vertical Slice Implementation Plan
 
-Status: Phase 1 complete; Phase 2 not started
+Status: Phase 3 complete; Phase 4 not started
 Target: `woml run hello.woml` parses, compiles, and executes a real WOML
 workflow through Bun
 Scope: the smallest end-to-end implementation that proves the WOML syntax and
@@ -409,6 +409,8 @@ woml/                                            # WOML library: source to compi
   src/handlers.ts                                # registry containing runtime.script only
   src/script-runner.ts                           # host-side Bun worker adapter
   src/script-worker.ts                           # isolated async script invocation
+  src/json.ts                                    # strict JSON boundary validation, cloning, and freezing
+  src/runtime-error.ts                           # execution error codes and failing-node identity
   tests/parser.test.ts                           # raw body and structural parsing tests
   tests/compiler.test.ts                         # validation and exact lowering tests
   tests/executor.test.ts                         # context threading and handler behavior
@@ -508,7 +510,7 @@ Gate:
 - `hello.woml` produces the expected ordered source tree.
 - No compiler or executor is required to pass this gate.
 
-### Phase 2 — Validate and lower to the DAG
+### Phase 2 — Validate and lower to the DAG — complete
 
 Work:
 
@@ -538,7 +540,7 @@ Gate:
   multiple operations report stable diagnostic codes and source locations.
 - No Bun worker or handler has been required to prove the compiler gate.
 
-### Phase 3 — Resolve script inputs and execute the DAG
+### Phase 3 — Resolve script inputs and execute the DAG — complete
 
 Work:
 

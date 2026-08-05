@@ -61,7 +61,7 @@ function readMarkupToken(source: string, start: number): MarkupToken {
   while (/\s/.test(source[cursor] ?? '')) cursor += 1;
 
   const nameStart = cursor;
-  while (/[A-Za-z0-9:_-]/.test(source[cursor] ?? '')) cursor += 1;
+  while (/[A-Za-z0-9:_.-]/.test(source[cursor] ?? '')) cursor += 1;
   const name = cursor === nameStart ? undefined : source.slice(nameStart, cursor);
   const tokenText = source.slice(start, end);
 
