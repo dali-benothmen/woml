@@ -1,0 +1,1565 @@
+# WOML v0.1 Fundamental Syntax
+
+Status: draft for review
+Scope: fundamental workflow structure, triggers, script, log, and approval steps,
+parallel flow, conditional flow, configuration, and lifecycle hooks
+
+This document defines the proposed fundamental authoring syntax for WOML v0.1.
+It contains both a language-design catalog and an executable-profile contract.
+A construct appearing in the design catalog is not automatically implemented,
+publishable, or accepted by a runtime. Elements whose lowering or runtime
+semantics remain open must not be silently implemented with guessed behavior.
+
+WOML is a frontend for WOML's language-neutral compiled workflow model. The
+WOML compiler validates this source and lowers it to that model; the execution
+core never parses or interprets WOML.
+
+## 1. Design Principles
+
+The fundamental syntax follows these rules:
+
+1. Structure expresses control flow.
+2. Stable step and approval IDs express output identity.
+3. Document order expresses sequential dependency within a steps container.
+4. Context references express data access, not hidden dependency edges.
+5. JavaScript appears only inside `<script>` bodies, never in attributes.
+6. A successful step return or resolved approval becomes a named
+   `context.steps` value.
+7. There is no implicit `last` step or positional parallel-result array.
+8. Unknown elements and attributes are compile errors.
+9. The syntax remains independent of database, HTTP-client, Slack, and other
+   capability vocabularies.
+
+The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** describe normative
+requirements within this draft.
+
+### 1.1 Feature maturity and publication
+
+WOML separates syntax design from executable availability:
+
+- **Designed** means the proposed source shape and author-facing intent are
+  documented for review.
+- **Executable** means the construct has an approved lowering, runtime
+  semantics, diagnostics, and end-to-end tests.
+- **Publishable** means an executable construct is included in an advertised
+  runtime profile. A runtime MUST reject every designed-only construct with an
+  unsupported-feature diagnostic.
+
+The first CLI vertical-slice profile is deliberately small:
+
+| Feature | Design status | First CLI profile |
+|---|---|---|
+| Workflow metadata, manual trigger, sequential steps | Designed | Executable target |
+| `<script>` with `context.trigger` and `context.steps` | Designed | Executable target |
+| `<log>` with one exact `{{context...}}` reference | Designed | Executable target |
+| `retry` | Reserved as an attribute | Only omission or `retry="1"`; no retry occurs |
+| Webhook and inline payload schema | Designed | Unavailable |
+| Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
+| Parallel, branch, and approval | Designed | Unavailable |
+| Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
+
+The complete example in Section 3 demonstrates the design catalog; it is not a
+claim that the first CLI profile can execute every element shown. The minimum
+publishable example is in Section 20.
+
+## 2. WOML Is XML-Like, Not XML
+
+WOML uses familiar markup structure, but an ordinary `<script>` body may contain
+raw JavaScript operators such as `<`, `>`, and `&&`. A WOML document therefore
+is not required to be well-formed XML and MUST NOT include an XML declaration.
+
+Authors write:
+
+```xml
+<script>
+  if (score < 0.8 && enabled) {
+    return { accepted: true };
+  }
+
+  return { accepted: false };
+</script>
+```
+
+Authors do not write CDATA wrappers and do not entity-escape ordinary
+JavaScript.
+
+The frontend lexer has at least two modes:
+
+- **Markup mode** parses WOML elements and attributes.
+- **Raw-content mode** preserves `<script>` JavaScript and inline `<schema>`
+  JSON without source rewriting.
+
+Raw-content termination is deterministic in v0.1:
+
+- The first literal, case-sensitive `</script>` terminates a `<script>` body.
+- The first literal, case-sensitive `</schema>` terminates a `<schema>` body.
+- The terminator is recognized without interpreting JavaScript or JSON strings,
+  comments, escapes, regular expressions, or template literals.
+- The exact terminator text therefore MUST NOT occur inside the raw content.
+  JavaScript that needs to construct the text can split it, for example
+  `"</scr" + "ipt>"`.
+- The frontend MUST preserve the raw body exactly and MUST retain an offset map
+  to the original source for diagnostics.
+
+This simple raw-text rule is part of the v0.1 grammar. A future WOML version may
+introduce a JavaScript-aware terminator without changing v0.1 parsing.
+
+Outside raw-content elements:
+
+- Element and attribute names are lowercase and case-sensitive.
+- Multiword element and attribute names use kebab-case.
+- Attribute values MUST be quoted.
+- Duplicate attributes are invalid.
+- Comments use `<!-- comment -->`.
+- Attribute text uses the normal markup entities `&amp;`, `&quot;`, `&apos;`,
+  `&lt;`, and `&gt;` when needed.
+
+## 3. Complete Example
+
+```xml
+<workflow
+  woml-version="0.1"
+  id="content-moderator"
+  name="AI Content Moderator"
+  description="Analyze submitted content and select a review path"
+  tags="ai,moderation,safety"
+  version="1.0.0">
+
+  <config
+    concurrency="4"
+    timeout="10m"
+    rate-limit="100/1m"
+    queue="moderation"
+  />
+
+  <lifecycle>
+    <on-success>
+      <script>
+        console.log("Content moderation completed");
+      </script>
+    </on-success>
+
+    <on-failure>
+      <script>
+        console.error("Content moderation failed");
+      </script>
+    </on-failure>
+  </lifecycle>
+
+  <triggers>
+    <webhook
+      id="moderateContent"
+      path="/webhooks/moderate-content"
+      method="POST">
+
+      <schema>
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "required": ["contentId", "content", "userId"],
+          "properties": {
+            "contentId": { "type": "string" },
+            "content": { "type": "string" },
+            "imageUrl": { "type": "string" },
+            "userId": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      </schema>
+    </webhook>
+  </triggers>
+
+  <steps>
+    <step id="preprocessContent" timeout="30s">
+      <name>Preprocess content</name>
+      <description>Normalize the submitted content before analysis</description>
+
+      <script>
+        const { content } = context.trigger;
+
+        return {
+          originalContent: content,
+          normalizedContent: content.trim().toLowerCase()
+        };
+      </script>
+    </step>
+
+    <parallel id="contentAnalysis" concurrency="3" on-error="fail-fast">
+      <name>Analyze content</name>
+      <description>Run the independent analysis steps concurrently</description>
+
+      <step id="analyzeText">
+        <script>
+          return analyzeText(
+            context.steps.preprocessContent.originalContent
+          );
+        </script>
+      </step>
+
+      <step id="analyzeImage">
+        <script>
+          return analyzeImage(context.trigger.imageUrl);
+        </script>
+      </step>
+
+      <step id="analyzeContext">
+        <script>
+          return analyzeContext(
+            context.steps.preprocessContent.originalContent
+          );
+        </script>
+      </step>
+    </parallel>
+
+    <step id="combineAnalysis">
+      <script>
+        return {
+          text: context.steps.analyzeText,
+          image: context.steps.analyzeImage,
+          contextual: context.steps.analyzeContext
+        };
+      </script>
+    </step>
+
+    <step id="needsHumanReview">
+      <script>
+        const { risk, confidence } = context.steps.combineAnalysis;
+
+        return (
+          (risk > 0.3 && confidence < 0.8) ||
+          (risk > 0.7 && confidence < 0.9)
+        );
+      </script>
+    </step>
+
+    <branch id="reviewPath">
+      <name>Select review path</name>
+      <description>Choose human or automatic review</description>
+
+      <when test="{{context.steps.needsHumanReview}}">
+        <step id="prepareHumanReview">
+          <script>
+            return {
+              analysis: context.steps.combineAnalysis,
+              requestedAt: new Date().toISOString()
+            };
+          </script>
+        </step>
+
+        <approval
+          id="humanApproval"
+          name="Human content approval"
+          description="Ask a moderator to approve or reject the content"
+          timeout="24h"
+          on-timeout="reject">
+
+          <notify>
+            <script>
+              await services.slack.send(
+                "#approvals",
+                `Approve ${context.trigger.contentId}?`
+              );
+            </script>
+          </notify>
+
+          <when-approved>
+            <step id="recordHumanApproval">
+              <script>
+                return {
+                  contentId: context.trigger.contentId,
+                  approved: true
+                };
+              </script>
+            </step>
+          </when-approved>
+
+          <when-rejected>
+            <step id="recordHumanRejection">
+              <script>
+                return {
+                  contentId: context.trigger.contentId,
+                  approved: false
+                };
+              </script>
+            </step>
+          </when-rejected>
+        </approval>
+      </when>
+
+      <otherwise>
+        <step id="makeAutomaticDecision">
+          <script>
+            return makeDecision(context.steps.combineAnalysis);
+          </script>
+        </step>
+      </otherwise>
+    </branch>
+  </steps>
+</workflow>
+```
+
+## 4. Document Structure
+
+A WOML file contains exactly one `<workflow>` root.
+
+The root children appear in this order:
+
+1. Optional `<config>`.
+2. Optional `<lifecycle>`.
+3. Required `<triggers>`.
+4. Required `<steps>`.
+
+The order is deliberate. Metadata and runtime policy are declared before entry
+points, and entry points are declared before executable steps.
+
+The structural grammar is:
+
+```text
+document       := workflow
+
+workflow       := <workflow workflow-attributes>
+                    config?
+                    lifecycle?
+                    triggers
+                    steps
+                  </workflow>
+
+config         := <config config-attributes />
+
+lifecycle      := <lifecycle>
+                    on-success?
+                    on-failure?
+                  </lifecycle>
+
+on-success     := <on-success> script </on-success>
+on-failure     := <on-failure> script </on-failure>
+
+triggers       := <triggers> trigger+ </triggers>
+
+trigger        := manual
+                | webhook
+                | schedule
+                | interval
+                | event
+
+steps          := <steps> steps-item+ </steps>
+
+steps-item     := step
+                | parallel
+                | branch
+                | approval
+
+metadata       := name? description?
+name           := <name> text </name>
+description    := <description> text </description>
+
+step           := <step step-attributes>
+                    metadata
+                    operation
+                  </step>
+
+operation      := script
+                | log
+
+log            := <log message="attribute-value" />
+
+parallel       := <parallel parallel-attributes>
+                    metadata
+                    step+
+                  </parallel>
+
+branch         := <branch branch-attributes>
+                    metadata
+                    when+
+                    otherwise?
+                  </branch>
+
+when           := <when test="context-reference">
+                    steps-item+
+                  </when>
+
+otherwise      := <otherwise>
+                    steps-item+
+                  </otherwise>
+
+approval       := <approval approval-attributes>
+                    notify?
+                    when-approved
+                    when-rejected
+                  </approval>
+
+notify         := <notify> script </notify>
+
+when-approved  := <when-approved>
+                    steps-item*
+                  </when-approved>
+
+when-rejected  := <when-rejected>
+                    steps-item*
+                  </when-rejected>
+```
+
+This is a structural grammar. Identifier and raw-content tokenization are fixed
+by Sections 2 and 5. Attribute-reference tokenization is defined in Section 15.
+
+## 5. Identifiers
+
+Six identifier roles exist:
+
+- A workflow ID identifies the workflow definition.
+- A trigger ID identifies a trigger within that definition.
+- A step ID identifies an executable DAG node and its output in context.
+- A parallel ID identifies a fork/join structure for diagnostics and events.
+- A branch ID identifies a conditional structure for diagnostics and events.
+- An approval ID identifies a durable waiting node, its decision, and its output
+  in context.
+
+All IDs MUST be non-empty. Workflow IDs and trigger IDs MUST be unique within
+their respective namespaces. Step, parallel, branch, and approval IDs share one
+structural namespace and MUST be unique across the whole workflow.
+
+Step IDs are part of the JavaScript-facing API:
+
+```js
+context.steps.preprocessContent
+```
+
+Approval IDs use the same JavaScript-facing output namespace:
+
+```js
+context.steps.humanApproval
+```
+
+Trigger, step, parallel, branch, and approval IDs MUST be JavaScript-safe
+lower-camel identifiers matching:
+
+```text
+[a-z][A-Za-z0-9]*
+```
+
+Quoted or bracket context paths are not part of WOML v0.1. This keeps JavaScript
+access and `{{context...}}` access identical.
+
+Workflow IDs MUST use lowercase kebab-case matching:
+
+```text
+[a-z][a-z0-9]*(?:-[a-z0-9]+)*
+```
+
+For example, `content-moderator` is a workflow ID and `preprocessContent` is a
+step ID.
+
+Generated timestamps, array positions, display names, and source line numbers
+MUST NOT be used as durable step identities.
+
+### 5.1 Structural name and description
+
+`<step>`, `<parallel>`, and `<branch>` may contain optional `<name>` and
+`<description>` child elements:
+
+```xml
+<step id="generateReport">
+  <name>Generate report</name>
+  <description>Build the report returned to the publishing step</description>
+
+  <script>
+    return generateReport(context.trigger);
+  </script>
+</step>
+```
+
+Rules:
+
+- `<name>` and `<description>` are optional and may each occur at most once.
+- When present, `<name>` appears before `<description>`.
+- Both appear before executable or control-flow children.
+- Both contain plain text only.
+- They are descriptive metadata and never become `context.steps` values.
+- An `id` remains required even when a name is present; display names are not
+  execution identities.
+
+`<approval>` is the deliberate exception: its `name` and `description` are
+attributes because approval metadata is commonly displayed together with its
+timeout policy. It does not accept `<name>` or `<description>` children.
+
+## 6. `<workflow>`
+
+`<workflow>` defines one workflow.
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `woml-version` | Yes | Version string | Selects the WOML grammar. This draft accepts `0.1`. |
+| `id` | Yes | Workflow ID | Stable workflow identity. |
+| `name` | No | String | Human-readable display name. |
+| `description` | No | String | Short human-readable description. |
+| `tags` | No | Tag list | Comma-separated classification tags. |
+| `version` | No | Version string | User-defined workflow version, distinct from `woml-version`. |
+
+`tags` is a comma-separated list. Whitespace surrounding each item is removed.
+Empty items and duplicate items are invalid.
+
+```xml
+<workflow
+  woml-version="0.1"
+  id="daily-report"
+  name="Daily Report"
+  description="Generate and publish the daily report"
+  tags="reporting,daily"
+  version="1.2.0">
+  ...
+</workflow>
+```
+
+Runtime settings such as concurrency and timeout MUST NOT also appear on
+`<workflow>`. They have one canonical location: `<config>`.
+
+## 7. `<config>`
+
+`<config>` contains workflow-level runtime policy. It is optional and may occur
+at most once.
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `concurrency` | No | Positive integer | Maximum concurrently active runs of this workflow. |
+| `timeout` | No | Duration | Maximum duration of one complete run. |
+| `rate-limit` | No | Rate | Maximum run starts per duration window. |
+| `queue` | No | Non-empty string | Logical execution queue. |
+
+```xml
+<config
+  concurrency="4"
+  timeout="10m"
+  rate-limit="100/1m"
+  queue="moderation"
+/>
+```
+
+The rate syntax is:
+
+```text
+rate := positive-integer "/" duration
+```
+
+For example, `100/1m` means at most 100 run starts in one minute.
+The rate-limiting algorithm and distributed coordination behavior are runtime
+contracts; the source syntax only declares the count and window.
+
+The initial duration syntax is:
+
+```text
+duration := positive-number ("ms" | "s" | "m" | "h" | "d")
+```
+
+Bare numeric durations are invalid because their unit would be ambiguous.
+
+`<config>` contains data only. Lifecycle scripts MUST NOT be nested inside it.
+
+The current compiled-workflow schema does not yet represent workflow-level
+concurrency, timeout, rate limiting, or queue selection. Before the compiler may
+accept `<config>`, these values need an approved language-neutral home—either in
+the compiled definition or in a separately versioned registration policy. The
+WOML frontend must not pass them to the core through WOML-specific fields.
+
+## 8. `<lifecycle>`
+
+`<lifecycle>` declares workflow-level lifecycle behavior. It is separate from
+`<config>` because its children execute code rather than describe runtime data.
+
+```xml
+<lifecycle>
+  <on-success>
+    <script>
+      console.log("Workflow completed");
+    </script>
+  </on-success>
+
+  <on-failure>
+    <script>
+      console.error("Workflow failed");
+    </script>
+  </on-failure>
+</lifecycle>
+```
+
+Structural rules:
+
+- `<lifecycle>` is optional and may occur at most once.
+- `<on-success>` is optional and may occur at most once.
+- `<on-failure>` is optional and may occur at most once.
+- Each lifecycle hook contains exactly one `<script>`.
+- Lifecycle scripts do not create `context.steps` outputs.
+
+This draft fixes the lifecycle syntax but does not yet approve the durable event
+boundaries, retry behavior, or failure semantics of lifecycle execution. A
+runtime MUST reject unsupported lifecycle hooks rather than silently ignore
+them.
+
+The current compiled-workflow schema also has no lifecycle representation. That
+contract must be extended deliberately before lifecycle syntax can lower into an
+executable model.
+
+## 9. `<triggers>`
+
+`<triggers>` contains one or more workflow entry points.
+
+All triggers in one workflow start the same `<steps>`. WOML v0.1 does not expose
+an attribute that routes different triggers to different entry nodes. Workflows
+with different graphs MUST be separate workflow definitions.
+
+This corrects an ambiguity in the TypeScript SDK where triggers and steps are
+stored in unrelated flat arrays.
+
+### 9.1 `<manual>`
+
+```xml
+<manual id="manualRun" />
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Trigger ID | Stable trigger identity. |
+
+Manual CLI input becomes `context.trigger`.
+
+### 9.2 `<webhook>`
+
+```xml
+<webhook id="newOrder" path="/webhooks/orders" method="POST">
+  <schema>
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": ["orderId"],
+      "properties": {
+        "orderId": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  </schema>
+</webhook>
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Trigger ID | Stable trigger identity. |
+| `path` | Yes | Absolute route path | Route registered by the runtime. |
+| `method` | No | HTTP method | `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`; defaults to `POST`. |
+
+`<webhook>` may contain at most one `<schema>`. An inline schema is standard JSON
+Schema Draft 2020-12. The compiler MUST parse and validate the schema before the
+workflow can be registered.
+
+When a schema exists, the webhook payload MUST validate before a run is created.
+The normalized successful payload becomes `context.trigger`.
+
+When payload validation fails:
+
+- The HTTP runtime returns status `400 Bad Request`.
+- No workflow run is created and no run event is appended.
+- The response body is JSON with the stable code
+  `WOML_TRIGGER_SCHEMA_INVALID`, a human-readable message, and validation issues
+  addressed by JSON Pointer when available.
+- Transport access logs or security audit logs MAY record the rejected request,
+  but they are not workflow-run events.
+
+The minimum response shape is:
+
+```json
+{
+  "error": {
+    "code": "WOML_TRIGGER_SCHEMA_INVALID",
+    "message": "Webhook payload does not match the declared schema",
+    "issues": [
+      {
+        "path": "/orderId",
+        "message": "Required property is missing"
+      }
+    ]
+  }
+}
+```
+
+Framework instances, middleware callbacks, Zod values, and arbitrary validation
+callbacks from the TypeScript SDK are not part of the fundamental WOML grammar.
+
+External schema files, such as `<schema src="..." />`, are deferred until file
+resolution and portability rules are designed.
+
+### 9.3 `<schedule>`
+
+```xml
+<schedule
+  id="everySixHours"
+  cron="0 */6 * * *"
+  timezone="UTC"
+/>
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Trigger ID | Stable trigger identity. |
+| `cron` | Yes | Cron expression | Schedule expression. |
+| `timezone` | No | IANA timezone | Evaluation timezone; defaults to `UTC`. |
+
+The supported cron dialect must be named by the runtime specification before
+`<schedule>` is considered executable.
+
+### 9.4 `<interval>`
+
+```xml
+<interval id="everyFiveMinutes" every="5m" />
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Trigger ID | Stable trigger identity. |
+| `every` | Yes | Duration | Interval between run starts. |
+
+An interval is a first-class trigger. The compiler MUST NOT translate it into a
+cron expression if doing so would change its semantics.
+
+### 9.5 `<event>`
+
+```xml
+<event id="orderCreated" name="order.created" />
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Trigger ID | Stable trigger identity. |
+| `name` | Yes | Non-empty string | Event name consumed by the workflow. |
+
+Transport, subscription, acknowledgement, and event-delivery guarantees are
+outside the fundamental syntax and require a runtime contract.
+
+## 10. `<steps>` and Sequential Execution
+
+`<steps>` is the root executable container and contains one or more step items.
+The name describes the workflow's executable body; structural `<parallel>` and
+`<branch>` elements are valid step items even though they are not executable
+operations themselves.
+
+```xml
+<steps>
+  <step id="first">...</step>
+  <step id="second">...</step>
+</steps>
+```
+
+Within any sequential steps container, document order creates dependency edges:
+
+```text
+first -> second
+```
+
+`<steps>` has no attributes. It may contain `<step>`, `<parallel>`, `<branch>`,
+and `<approval>` elements.
+
+Empty and control-only behavior is explicit:
+
+- `<steps></steps>` and a self-closing `<steps />` are invalid because the root
+  container requires at least one step item.
+- Every `<when>` and `<otherwise>` arm requires at least one step item. A branch
+  whose cases are all structurally empty is invalid.
+- Approval decision arms may be empty. After a decision, an empty selected arm
+  is a successful no-op and execution continues after the approval.
+- A workflow whose only item is an approval is valid: it waits durably, records
+  the decision output at `context.steps.<approvalId>`, runs the selected arm if
+  non-empty, and then completes.
+- A branch with no matching `<when>` and no `<otherwise>` performs no child work
+  and completes successfully. If it is the final item, the workflow completes
+  with the context produced before that branch.
+- Structural containers do not need to contain a `<script>` specifically, but
+  the lowered graph must contain at least one reachable executable or durable
+  control node. A graph made only of grouping metadata is invalid.
+
+WOML v0.1 does not expose arbitrary `after`, `depends-on`, `from`, or `to`
+attributes. The frontend still produces a DAG, but the source language describes
+that DAG through structured sequencing, parallelism, and conditional flow.
+
+## 11. `<step>` Operations
+
+A `<step>` is one identifiable executable node. It contains exactly one
+operation. The fundamental step operations in this document are `<script>` and
+`<log>`. An `<approval>` is a first-class control-flow item rather than an
+operation wrapped in `<step>`.
+
+```xml
+<step
+  id="greetUser"
+  retry="1"
+  timeout="5s">
+
+  <name>Greet user</name>
+  <description>Build the greeting returned to downstream steps</description>
+
+  <script>
+    return {
+      message: `Hello ${context.trigger.name}`
+    };
+  </script>
+</step>
+```
+
+### 11.1 Step attributes
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Step ID | Stable DAG-node and output identity. |
+| `retry` | No | Integer `1` | Reserved retry policy; omission and `1` both mean one attempt in v0.1. |
+| `timeout` | No | Duration | Maximum duration of each attempt. |
+
+Human-readable name and description are child elements, as defined in Section
+5.1. They are not step attributes.
+
+WOML v0.1 does not execute retries. Omitting `retry` and writing `retry="1"`
+both lower to `maxAttempts: 1`. Any value greater than one is a compile error,
+not valid syntax that a runtime may choose to ignore. Multi-attempt retry cannot
+become executable until retryable-error, backoff, interruption, and idempotency
+contracts are approved together.
+
+The fundamental syntax intentionally keeps retry as an attribute. When backoff
+is added, it should remain attribute-based rather than introducing a second
+retry representation. Candidate future attributes are:
+
+```xml
+<step
+  id="callModel"
+  retry="3"
+  retry-backoff="exponential"
+  retry-delay="1s"
+  retry-max-delay="30s">
+  ...
+</step>
+```
+
+These backoff attributes and `retry` values greater than one are reserved, not
+part of the executable v0.1 grammar.
+
+### 11.2 Script semantics
+
+`<script>` contains the body of an asynchronous JavaScript function. Authors
+write ordinary statements and may use `await`, loops, conditions, exceptions,
+and returned objects without adding a function wrapper.
+
+The runtime injects two distinct bindings:
+
+- `context` is the fixed read-only, JSON-compatible data view derived from
+  persisted run events.
+- `services` exposes runtime-only capabilities made available to the workflow;
+  service clients and secrets never become context or persisted step output.
+
+The complete v0.1 context paths are:
+
+```text
+context.trigger
+context.steps.<stepId>
+```
+
+`context.run` is not present in WOML v0.1. A runtime MUST NOT expose internal run
+fields through that name. A future WOML version may add `context.run` only after
+its minimal public schema and versioning policy are approved.
+
+The current SDK mapping is:
+
+```text
+ctx.payload -> context.trigger
+ctx.last    -> explicit context.steps.<stepId>
+```
+
+A script contributes downstream data only by returning a JSON value. That value
+enters context only after the successful attempt event has been persisted and
+folded:
+
+```text
+return value -> success event -> fold -> context.steps.<stepId>
+```
+
+The following do not persist:
+
+- Mutations to the supplied `context` object.
+- Local variables.
+- Script globals.
+- Functions or clients.
+- `undefined`, functions, symbols, `BigInt`, circular data, or other non-JSON
+  values.
+
+`<script>` has no attributes in the fundamental grammar. Timeout and retry are
+step policies and belong on `<step>`.
+
+### 11.3 `<log>`
+
+`<log>` is the first fundamental declarative operation and contains no child
+elements:
+
+```xml
+<step id="showGreeting">
+  <log message="{{context.steps.greetUser.message}}" />
+</step>
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `message` | Yes | WOML attribute value | Value emitted through the runtime log sink. |
+
+An exact reference preserves its JSON type. A mixed template produces a string
+as defined in Section 15. The CLI vertical-slice profile initially accepts only
+an exact reference. Its `core.log` handler writes the value to stderr and
+returns `{ "message": <resolved-value> }` as the step output.
+
+## 12. `<approval>`, `<notify>`, and Decision Arms
+
+`<approval>` is a first-class durable control-flow item. It records that a run
+is waiting for a decision, optionally executes notification code, suspends the
+run, and selects exactly one continuation after the decision arrives. It is not
+an attribute on `<step>` and is not wrapped by `<step>`.
+
+```xml
+<approval
+  id="contentApproval"
+  name="Content approval"
+  description="Ask a moderator to approve or reject the calculated amount"
+  timeout="24h"
+  on-timeout="reject">
+
+  <notify>
+    <script>
+      await services.slack.send(
+        "#approvals",
+        `Approve ${context.steps.calc.amount}?`
+      );
+    </script>
+  </notify>
+
+  <when-approved>
+    <step id="publishApprovedContent">
+      <script>
+        return publish(context.steps.calc);
+      </script>
+    </step>
+  </when-approved>
+
+  <when-rejected>
+    <step id="recordRejection">
+      <script>
+        return { rejected: true };
+      </script>
+    </step>
+  </when-rejected>
+</approval>
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Structural ID | Stable waiting-node identity and `context.steps` output key. |
+| `name` | No | String | Human-readable approval name. |
+| `description` | No | String | Human-readable explanation of the requested decision. |
+| `timeout` | No | Duration | Maximum durable waiting period; omission means no WOML-level deadline. |
+| `on-timeout` | No | Enum | `reject` or `fail`; defaults to `fail`. |
+
+`name` and `description` are attributes on `<approval>`. Unlike `<step>`,
+`<parallel>`, and `<branch>`, an approval does not accept child metadata tags.
+
+The child order is fixed:
+
+1. Optional `<notify>` containing exactly one `<script>`.
+2. Required `<when-approved>`.
+3. Required `<when-rejected>`.
+
+Each decision arm is a sequential steps container and may contain zero or more
+`<step>`, `<parallel>`, `<branch>`, or nested `<approval>` items. Exactly one arm
+runs. After the selected arm completes, execution continues after the approval.
+An empty arm is a valid no-op continuation.
+
+### 12.1 Durable waiting and notification
+
+When execution reaches an approval, the runtime:
+
+1. Generates a cryptographically opaque token scoped to this run and approval.
+2. Persists the waiting state and token identity before any notification side
+   effect occurs.
+3. Executes `<notify>`, when present.
+4. Suspends further scheduling along this path until a decision or timeout is
+   durably recorded.
+
+A process restart leaves the approval waiting. An in-memory Promise, callback,
+or timer is never the authoritative state. The token is runtime identity; it is
+not WOML source text and is not a compiled constant.
+
+`<notify>` is ordinary script execution and receives the same `context` and
+`services` bindings as a step script. The Slack call above illustrates a service
+provided by a future capability package; Slack is not a fundamental WOML tag.
+How the opaque token is delivered to the reviewer or approval UI remains an open
+integration contract in Section 18.
+
+### 12.2 Resuming an approval
+
+The host application resumes a waiting approval through the WOML runtime API:
+
+```js
+await woml.resume(token, "approved");
+await woml.resume(token, "rejected");
+```
+
+Only the exact decisions `"approved"` and `"rejected"` are accepted in v0.1.
+`woml.resume` is an external runtime API; it is not a WOML element and is not an
+in-script control-flow function.
+
+The runtime validates the token, atomically records the decision, and makes the
+approval output available as `context.steps.<approvalId>`. The initial output
+shape is:
+
+```json
+{
+  "decision": "approved",
+  "source": "human",
+  "decidedAt": "2026-08-04T12:00:00.000Z"
+}
+```
+
+`decision` is `approved` or `rejected`; `source` is `human` or `timeout`.
+`decidedAt` is the timestamp recorded by the runtime. A successful human resume
+selects the matching arm. An unknown, expired, or conflicting token is rejected.
+Repeating the same already-recorded decision is idempotent; attempting a
+different decision for the same approval is a conflict.
+
+### 12.3 Timeout behavior
+
+With `on-timeout="reject"`, expiry durably records a rejected decision with
+`source: "timeout"`, publishes the approval output, and runs
+`<when-rejected>`. With `on-timeout="fail"`, expiry fails the run and neither
+decision arm executes. Omitting `on-timeout` uses `fail`.
+
+Timeout processing and `woml.resume` must compete through one atomic persistence
+decision so only one terminal outcome wins.
+
+## 13. `<parallel>`
+
+`<parallel>` runs its direct child steps concurrently and joins after they
+finish.
+
+```xml
+<parallel id="fieldData" concurrency="2" on-error="wait-all">
+  <name>Load field data</name>
+  <description>Fetch independent weather and soil readings</description>
+
+  <step id="loadWeather">
+    <script>
+      return loadWeather(context.trigger.fieldId);
+    </script>
+  </step>
+
+  <step id="loadSoil">
+    <script>
+      return loadSoil(context.trigger.fieldId);
+    </script>
+  </step>
+</parallel>
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Structural ID | Stable identity for the parallel fork/join. |
+| `concurrency` | No | Positive integer | Maximum simultaneously running child steps; defaults to the number of children. |
+| `on-error` | No | Enum | `fail-fast` or `wait-all`; defaults to `fail-fast`. |
+
+Structural and data rules:
+
+- `<parallel>` contains one or more direct `<step>` children. A one-step
+  parallel is a valid degenerate fork/join, which keeps generated WOML stable
+  when a computed branch list happens to contain one item.
+- Optional `<name>` and `<description>` metadata precedes those steps.
+- When present, `concurrency` MUST NOT exceed the number of child steps.
+- All children receive the same context view from immediately before the fork.
+- A child MUST NOT reference a sibling's output.
+- Each successful child writes its own `context.steps.<stepId>` output.
+- `<parallel>` does not create an implicit aggregate output.
+- The parallel ID is not a `context.steps` key; only its child steps produce
+  context outputs.
+- The next flow item becomes ready only after the group reaches its terminal
+  outcome.
+- After a successful join, every child output is available downstream.
+
+Error policies:
+
+- `fail-fast` stops scheduling unstarted children, requests cancellation of
+  active children, and fails the group after their terminal outcomes are known.
+- `wait-all` allows every child to reach a terminal outcome, then fails the
+  group if any child failed.
+
+Both designed policies fail the group when a child fails. The previously
+considered value `continue` is reserved because continuing downstream would
+require defined semantics for missing failed-step outputs.
+
+The compiled model represents the children as independent DAG nodes. A runtime
+that does not support concurrent scheduling MUST reject `<parallel>` as an
+unsupported feature; it MUST NOT silently present sequential execution as
+parallel execution.
+
+Multi-step concurrent lanes are deferred. A future design may add an explicit
+`<sequence>` child, but `<branch>` is not used for that purpose.
+
+## 14. `<branch>`, `<when>`, and `<otherwise>`
+
+`<branch>` represents mutually exclusive conditional flow and replaces the
+TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
+
+```xml
+<branch id="alertRoute">
+  <name>Select alert handling</name>
+  <description>Route the analysis by alert severity</description>
+
+  <when test="{{context.steps.isCritical}}">
+    <step id="handleCritical">
+      <script>
+        return handleCritical(context.steps.analysis);
+      </script>
+    </step>
+  </when>
+
+  <when test="{{context.steps.needsReview}}">
+    <step id="requestReview">
+      <script>
+        return requestReview(context.steps.analysis);
+      </script>
+    </step>
+  </when>
+
+  <otherwise>
+    <step id="acceptAutomatically">
+      <script>
+        return { accepted: true };
+      </script>
+    </step>
+  </otherwise>
+</branch>
+```
+
+### 14.1 Branch structure
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Structural ID | Stable identity for the conditional structure. |
+
+- `<branch>` requires an `id` attribute.
+- The ID is a stable structural identity but is not a `context.steps` key.
+- Optional `<name>` and `<description>` metadata appears before the first
+  `<when>`.
+- It contains one or more `<when>` elements.
+- It contains at most one `<otherwise>`.
+- `<otherwise>`, when present, MUST be last.
+- Each `<when>` and `<otherwise>` contains one or more step items.
+- `<when>` elements are evaluated in document order.
+- The first test that resolves to `true` is selected.
+- At most one case executes.
+- `<otherwise>` is selected only when every `<when>` is false.
+- When no test matches and no `<otherwise>` exists, the branch performs no child
+  work and the following step item becomes eligible.
+- The compiler derives deterministic internal identities for individual
+  `<when>` and `<otherwise>` arms from the stable branch ID and case ordinal in
+  the immutable compiled definition. Source line/column values are diagnostic
+  metadata only and never durable identities. Arm identities are not
+  user-facing context keys.
+
+### 14.2 The `test` attribute
+
+`test` is required on `<when>` and contains exactly one context reference:
+
+```xml
+<when test="{{context.steps.needsReview}}">
+```
+
+At runtime, the referenced value MUST be the JSON boolean `true` or `false`.
+WOML does not coerce strings, numbers, arrays, objects, or null to booleans. The
+frontend can validate the reference and its graph position, but it cannot prove
+the return type of arbitrary JavaScript.
+
+These forms are invalid:
+
+```xml
+<!-- Arbitrary JavaScript is not allowed in attributes. -->
+<when test="context.steps.analysis.risk > 0.3">
+
+<!-- A mixed template is a string, not a boolean reference. -->
+<when test="Result: {{context.steps.needsReview}}">
+```
+
+Complex conditions belong in named script steps:
+
+```xml
+<step id="needsReview">
+  <script>
+    const { risk, confidence } = context.steps.analysis;
+    return risk > 0.3 && confidence < 0.8;
+  </script>
+</step>
+
+<branch id="reviewRoute">
+  <when test="{{context.steps.needsReview}}">
+    ...
+  </when>
+</branch>
+```
+
+### 14.3 Conditional outputs
+
+Steps in unselected cases do not produce successful outputs in
+`context.steps`. Until a branch-result or optional-reference mechanism is
+approved, an unconditional downstream reference to a conditionally executed
+step is a compile error.
+
+For example, this is not currently valid:
+
+```xml
+<branch id="decisionRoute">
+  <when test="{{context.steps.needsReview}}">
+    <step id="humanDecision">...</step>
+  </when>
+  <otherwise>
+    <step id="automaticDecision">...</step>
+  </otherwise>
+</branch>
+
+<step id="publishDecision">
+  <script>
+    // Neither output is guaranteed to exist on every path.
+    return publish(context.steps.humanDecision);
+  </script>
+</step>
+```
+
+A stable merged branch result is a release-blocking design item in Section 18.1.
+
+## 15. Attribute Values and Context References
+
+Every attribute has a declared type. WOML does not treat every resolved value as
+a string.
+
+### 15.1 Literal attributes
+
+Literal text is parsed according to the attribute declaration:
+
+```xml
+<config concurrency="4" timeout="10m" />
+```
+
+Here, `concurrency` becomes an integer and `timeout` becomes a duration. Invalid
+values are compile errors.
+
+### 15.2 Exact references preserve type
+
+An attribute value containing exactly one reference preserves the referenced
+JSON type:
+
+```xml
+<when test="{{context.steps.isEligible}}">
+```
+
+If `isEligible` is a boolean, `test` receives a boolean rather than the string
+`"true"`.
+
+Future declarative capability attributes use the same rule:
+
+```xml
+<operation count="{{context.steps.calculate.total}}" />
+```
+
+If `total` is a number and `count` accepts numbers, it remains a number.
+
+### 15.3 Mixed templates are strings
+
+An attribute containing literal text plus one or more references always produces
+a string:
+
+```xml
+<log message="Processed {{context.steps.calculate.total}} items" />
+```
+
+### 15.4 Executable v0.1 reference grammar
+
+The first executable profile accepts exact references with no internal
+whitespace:
+
+```text
+reference       := "{{" context-path "}}"
+context-path    := trigger-path | step-path
+trigger-path    := "context.trigger" ("." property-id)*
+step-path       := "context.steps." structural-id ("." property-id)*
+structural-id   := [a-z][A-Za-z0-9]*
+property-id     := [A-Za-z_$][A-Za-z0-9_$]*
+```
+
+Bracket access, optional chaining, operators, function calls, and fallbacks are
+not WOML references. A referenced step must exist and dominate the consumer in
+the lowered DAG. A missing nested property at runtime produces
+`WOML_REFERENCE_NOT_AVAILABLE`; it never becomes `undefined` or an empty string.
+
+Mixed templates are part of the design catalog but are unavailable in the first
+CLI profile. Their escaping rules must be approved before a publishable profile
+accepts them.
+
+## 16. Static Validation
+
+The WOML frontend MUST reject a document before run creation when any of these
+conditions hold.
+
+### 16.1 Structural errors
+
+- The document has no `<workflow>` root or has more than one root.
+- Required root children are missing or out of order.
+- An element appears under an invalid parent.
+- A required attribute is missing.
+- An attribute is duplicated.
+- An element or attribute is unknown.
+- A singleton child occurs more than once.
+- `<steps>` contains no step items.
+- `<parallel>` contains no steps.
+- `<branch>` has no `<when>`.
+- A `<when>` or `<otherwise>` arm contains no step items.
+- `<otherwise>` is duplicated or is not last.
+- A step contains zero or multiple operations.
+- `<approval>` is missing `<when-approved>` or `<when-rejected>`, duplicates
+  either arm, or declares them out of order.
+- `<approval>` contains more than one `<notify>`, or `<notify>` does not contain
+  exactly one `<script>`.
+- `<approval>` contains `<name>` or `<description>` child elements instead of
+  the corresponding attributes.
+
+### 16.2 Identity errors
+
+- A workflow, trigger, step, parallel, branch, or approval ID is empty or
+  malformed.
+- Trigger IDs are duplicated.
+- A step, parallel, branch, or approval ID is duplicated anywhere in the
+  structural namespace, including across conditional cases, approval arms, and
+  parallel groups.
+
+### 16.3 Value errors
+
+- A duration has no unit or uses an unsupported unit.
+- `concurrency` or a rate count is not a positive integer.
+- `retry` is present with any value other than the integer `1`.
+- An enum attribute contains an unsupported value.
+- Inline webhook JSON Schema is malformed or invalid.
+- Approval `timeout` is invalid or `on-timeout` is not `reject` or `fail`.
+- A `<when>` test is not exactly one context reference.
+
+### 16.4 Reference and dependency errors
+
+- A WOML attribute reference targets a nonexistent step.
+- A WOML attribute reference targets a later sequential step.
+- A WOML attribute in one parallel child references a sibling.
+- A branch test references a value not guaranteed before the branch.
+- A WOML attribute in one selected case references a node from another case.
+- A downstream WOML attribute unconditionally references an output that only
+  exists on some conditional paths.
+
+Context references do not automatically create graph dependencies. Structural
+order and nesting create the DAG; references are validated against it.
+
+The compiler SHOULD diagnose statically recognizable direct JavaScript accesses
+such as `context.steps.missingStep`, but arbitrary JavaScript is not the WOML
+reference grammar. Dynamic property access remains a runtime concern and cannot
+be the only signal used to create a dependency edge.
+
+### 16.5 Lowered graph well-formedness
+
+After lowering and before registration or execution, the frontend MUST verify:
+
+- The graph is directed and acyclic.
+- Node IDs and edge IDs are unique.
+- Every edge endpoint names a node in the same graph.
+- Every entry node exists and has no incoming edge.
+- Every node is reachable from an entry node.
+- Every source step or durable control item lowers exactly once; no source item
+  is reachable through two duplicate structural paths.
+- Global structural IDs remain unique across every nested branch case,
+  parallel group, and approval arm.
+- Joining nested containers does not create an unreachable node or a cycle.
+
+Structured sequencing makes cycles impossible for a correct compiler, but the
+compiler still checks the emitted artifact. This protects the model boundary
+from compiler bugs and from compiled models produced by future non-WOML
+frontends.
+
+## 17. Diagnostic Contract
+
+Parse, validation, and compile failures are part of the WOML public interface.
+Every frontend diagnostic MUST contain:
+
+```ts
+type WomlDiagnostic = {
+  code: string;
+  phase: "parse" | "validation" | "compile" | "runtime";
+  message: string;
+  file: string;
+  location: {
+    start: { line: number; column: number; offset: number };
+    end?: { line: number; column: number; offset: number };
+  };
+  hint?: string;
+};
+```
+
+Rules:
+
+- `code` is a stable machine-readable identifier such as
+  `WOML_UNKNOWN_ELEMENT`, `WOML_DUPLICATE_ID`, or
+  `WOML_REFERENCE_NOT_AVAILABLE`.
+- `line` and `column` are one-based; `offset` is a zero-based UTF-8 source byte
+  offset.
+- `message` explains what is wrong in author language and names the relevant
+  element, attribute, or ID.
+- `hint`, when present, gives one concrete correction and is not a second error.
+- A frontend MAY return multiple diagnostics. The first diagnostic is primary;
+  all remaining diagnostics are sorted by source position.
+- Locations always refer to the original `.woml` file. Raw-body extraction or
+  XML-safe placeholders MUST retain an offset map; diagnostics must never point
+  into a rewritten temporary document.
+- A JavaScript parse or runtime error points to the `<script>` body when an exact
+  inner location is unavailable. When Bun provides a reliable inner line and
+  column, the runtime translates it back to the original WOML coordinates.
+
+The CLI renders the primary diagnostic in this stable form:
+
+```text
+hello.woml:14:18 [WOML_REFERENCE_NOT_AVAILABLE] Step "missing" is not available here
+```
+
+Human formatting may improve without changing the diagnostic object or code.
+Webhook input-schema failures use the transport response contract in Section
+9.2 because their location is the request payload, not WOML source.
+
+## 18. Open Design Decisions
+
+Identifier grammar and raw-content termination are closed by Sections 5 and 2
+because they gate the first parser and reference compiler. The following items
+remain open and block only the executable profiles that depend on them.
+
+### 18.1 Conditional merge results
+
+Define how mutually exclusive cases expose one stable downstream result. A
+candidate syntax is:
+
+```xml
+<branch id="decision">
+  <when test="{{context.steps.needsReview}}">
+    ...
+    <result value="{{context.steps.humanDecision}}" />
+  </when>
+
+  <otherwise>
+    ...
+    <result value="{{context.steps.automaticDecision}}" />
+  </otherwise>
+</branch>
+```
+
+The branch `id` shown here is designed, but `<result>` is not. Branch MUST NOT be
+included in a publishable executable profile until a merged-output syntax,
+compiled lowering target, and context semantics are approved. A development
+runtime may implement control-only branch behind an explicitly experimental
+profile, but must surface the missing merged output as a prominent limitation.
+
+### 18.2 Lifecycle execution
+
+Approve the event boundaries, ordering, retry behavior, timeout behavior, and
+error recording for lifecycle scripts. In particular, decide whether hook
+failure can change an already determined workflow outcome.
+
+### 18.3 Continuing after parallel failure
+
+Define an explicit failed-output or outcome model before adding
+`on-error="continue"`. The current grammar accepts only `fail-fast` and
+`wait-all`, both of which fail the parallel group when any child fails.
+
+### 18.4 Approval notification and token delivery
+
+The durable state transition and public call shape
+`woml.resume(token, decision)` are designed. Approval remains unavailable in a
+publishable profile until the integration surrounding that call has a security
+and delivery contract:
+
+- How `<notify>` or an approval UI receives a reviewer-safe form of the opaque
+  token.
+- How a reviewer is authenticated and authorized for an approval.
+- Whether notification delivery has an idempotency key and what happens when
+  the notification script fails after the waiting state has been persisted.
+- How long resolved token records remain available so identical duplicate
+  resume calls can remain idempotent.
+- Whether a later WOML version extends the decision call with structured
+  reviewer metadata or a validated payload.
+
+These are explicitly open. They do not change the designed two-decision control
+flow, timeout behavior, or `woml.resume` name.
+
+## 19. Explicitly Deferred Syntax
+
+The following concepts are not part of the fundamental grammar in this draft:
+
+- Background `<action>` execution.
+- Race/first-success concurrency.
+- `while`, `for-each`, and batching.
+- Subflows.
+- Cache and circuit-breaker policies.
+- Durable event waiting.
+- Pause and cancellation syntax.
+- Explicit arbitrary DAG edges.
+- External schema files.
+- Resolved secrets or `context.env`.
+- RAK, packages, `<requires>`, and dynamic capability vocabularies.
+- Database, HTTP-client, Slack, email, and other integration operations.
+
+These features require their own durable execution and context semantics. Their
+absence from this grammar does not prevent the compiled workflow model from
+supporting future DAG execution features.
+
+## 20. Minimum Executable-Profile Example
+
+The smallest workflow that exercises both script context access and WOML
+attribute-reference resolution is:
+
+```xml
+<workflow woml-version="0.1" id="hello" name="Hello">
+  <triggers>
+    <manual id="manualRun" />
+  </triggers>
+
+  <steps>
+    <step id="a">
+      <script>
+        const name = context.trigger.name ?? "World";
+
+        return {
+          message: `Hello ${name}`
+        };
+      </script>
+    </step>
+
+    <step id="b">
+      <log message="{{context.steps.a.message}}" />
+    </step>
+  </steps>
+</workflow>
+```
+
+For `woml run hello.woml`, the manual trigger payload is `{}`. The successful
+context is:
+
+```json
+{
+  "trigger": {},
+  "steps": {
+    "a": {
+      "message": "Hello World"
+    },
+    "b": {
+      "message": "Hello World"
+    }
+  }
+}
+```
+
+The CLI vertical slice builds this projection in memory. A durable runtime
+reconstructs the same public shape by folding persisted events; the context is
+never an authoritative mutable object exposed to scripts.
