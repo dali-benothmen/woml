@@ -2,8 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v1",
   "title": "Cronflow Compiled Workflow Model v1",
-  "description": "Draft review contract between workflow frontends and the language-neutral Rust execution core. The model is a DAG from version 1; an executor may initially choose to execute ready nodes sequentially.",
-  "x-status": "draft-for-review",
+  "description": "Versioned contract between workflow frontends and the language-neutral Rust execution core. The WOML CLI vertical-slice subset is frozen; fields used only by staged features remain provisional until their listed open questions are closed. The model is a DAG from version 1; an executor may initially choose to execute ready nodes sequentially.",
+  "x-status": "vertical-slice-subset-frozen",
+  "x-frozenProfile": {
+    "name": "woml-cli-vertical-slice",
+    "fixture": "woml/tests/fixtures/hello.compiled.v1.json",
+    "constraint": "The exact model shapes exercised by the fixture are frozen for implementation. Staged branching, retry, capability, and durable-control shapes are not approved by this status."
+  },
   "x-invariants": [
     "The graph must be directed and acyclic.",
     "Node IDs and edge IDs must each be unique within the workflow.",
@@ -17,11 +22,6 @@
     "A definition hash is computed over a canonical serialization of this semantic model and is stored outside the bytes being hashed. Compiler provenance is not part of the semantic hash."
   ],
   "x-openQuestions": [
-    {
-      "id": "reference-value-typing",
-      "question": "When a source-language tag input compiles from a context reference, which values preserve their JSON type and which values are coerced to strings?",
-      "constraint": "The compiled model can represent literals, references, arrays, objects, and templates, but the frontend conversion rules are not yet approved."
-    },
     {
       "id": "context-run-schema",
       "question": "What is the stable public schema of context.run?",
@@ -219,7 +219,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 512,
-      "description": "Stable registry key such as core.log, runtime.script, or a future namespaced capability operation."
+      "description": "Stable registry or descriptor key such as trigger.manual, runtime.script, or a future namespaced capability operation."
     },
     "retryPolicy": {
       "type": "object",

@@ -40,7 +40,7 @@ scope here.
 |-------|------|----------------|
 | 1 | Rust core | Execution, state, concurrency, scheduling, persistence |
 | 2 | WOML frontend | Read → parse → resolve → validate → lower into a workflow model |
-| 3 | JS bridge (Bun) | Execute `<script>` bodies and adapter code; inject `context` and `services` |
+| 3 | JS bridge (Bun) | Execute `<script>` bodies and adapter code; inject `context`, plus `services` only in capability-enabled profiles |
 | 4 | RAK | Resolve dependencies and configure services before execution |
 | 5 | Surfaces | CLI, ClickWork (out of scope for this document) |
 
@@ -188,8 +188,10 @@ into scope:
   language-version decision. The *only* way a step contributes data downstream
   is its `return` value. This rule keeps the graph and logs honest — there are no
   invisible side channels.
-- **`services`** — the configured integrations: `services.slack.send(...)`,
-  `services.db.query(...)`. Populated by RAK-installed adapters (§6).
+- **`services`** — available only in capability-enabled profiles, containing
+  configured integrations such as `services.slack.send(...)` and
+  `services.db.query(...)`. It is absent from the first CLI vertical slice and
+  is populated later by RAK-installed adapters (§6).
 
 The script's `return` value becomes `context.steps.<thisStep>`, which the next
 step can read. Then execution advances.

@@ -1,6 +1,6 @@
 # WOML CLI Vertical Slice Implementation Plan
 
-Status: proposed for review
+Status: Phase 1 complete; Phase 2 not started
 Target: `woml run hello.woml` parses, compiles, and executes a real WOML
 workflow through Bun
 Scope: the smallest end-to-end implementation that proves the WOML syntax and
@@ -24,9 +24,9 @@ That command will:
 5. Execute the DAG sequentially in memory.
 6. Run script nodes in isolated Bun workers with an injected read-only
    `context` binding.
-7. Resolve one `{{context.steps...}}` attribute reference for a declarative
-   handler.
-8. Print the last step's JSON result and exit successfully.
+7. Make the second script read the first script's output through
+   `context.steps.a.x`.
+8. Print the only terminal step's JSON return and exit successfully.
 
 The slice is complete only when the installed package exposes the `woml`
 executable and the exact command above works. A parser demo, compiler-only test,
@@ -47,18 +47,25 @@ The checked-in example will be:
   </triggers>
 
   <steps>
-    <step id="a">
+    <step
+      id="a"
+      name="Choose greeting name"
+      description="Use the trigger name or default to World">
       <script>
         const name = context.trigger.name ?? "World";
 
         return {
-          message: `Hello ${name}`
+          x: name
         };
       </script>
     </step>
 
     <step id="b">
-      <log message="{{context.steps.a.message}}" />
+      <script>
+        return {
+          message: `Hello ${context.steps.a.x}`
+        };
+      </script>
     </step>
   </steps>
 </workflow>
@@ -69,12 +76,12 @@ object. Step `a` therefore returns:
 
 ```json
 {
-  "message": "Hello World"
+  "x": "World"
 }
 ```
 
-Step `b` receives the exact referenced value, writes `Hello World` as a log
-line, and returns:
+Step `b` reads `context.steps.a.x` through the injected JavaScript `context`
+binding and returns:
 
 ```json
 {
@@ -82,19 +89,14 @@ line, and returns:
 }
 ```
 
-The CLI writes workflow logs to stderr and writes only the last step result as
-JSON to stdout. This keeps stdout deterministic and usable by another command:
+The CLI writes the only terminal step's result as compact JSON followed by one
+line feed to stdout. A successful run writes nothing to stderr:
 
 ```text
-stderr: Hello World
+stderr: <empty>
 stdout: {"message":"Hello World"}
 exit:   0
 ```
-
-`<log>` is the one small declarative operation included in the slice. It is not
-an integration package: it is a built-in handler used to prove that a WOML
-attribute reference can lower to a typed value expression and be resolved at
-runtime. It maps to the existing compiled-model handler example `core.log`.
 
 ## 3. Architectural Shape
 
@@ -109,7 +111,6 @@ flowchart TD
     Executor[In-memory sequential DAG executor]
     Registry[Handler registry]
     Script[runtime.script adapter]
-    Log[core.log adapter]
     Worker[Isolated Bun worker]
     Context[Derived in-memory context]
 
@@ -121,10 +122,8 @@ flowchart TD
     Model --> Executor
     Executor --> Registry
     Registry --> Script
-    Registry --> Log
     Script --> Worker
     Worker --> Context
-    Log --> Context
     Context --> Executor
 ```
 
@@ -135,6 +134,7 @@ The important boundaries are:
 - The executor receives only the compiled model; it never receives or walks the
   WOML tree.
 - The registry maps opaque handler IDs to runtime adapters.
+- The milestone registers exactly one executable handler: `runtime.script`.
 - The script adapter owns JavaScript execution and the Bun worker boundary.
 - `context` is workflow data. It does not contain services, clients, secrets,
   executor controls, or mutable engine state.
@@ -149,6 +149,9 @@ not require changing the compiler-to-core interface.
 
 - The executable is named `woml`.
 - Its first command is `woml run <file.woml>`.
+- The WOML library will live in the new top-level `woml/` folder.
+- The public CLI will live in the new top-level `woml-cli/` folder and consume
+  the WOML library rather than duplicating parsing, compilation, or execution.
 - No public `cronflow` object or command is introduced.
 - Renaming the existing npm package, SDK exports, repository metadata, and old
   examples is outside this slice.
@@ -192,16 +195,17 @@ points into generated parser input.
 The compiler accepts only:
 
 - One `<workflow>` root with `woml-version="0.1"`, required `id`, and optional
-  workflow metadata attributes.
+  non-empty `name` and `description` attributes. Other workflow attributes are
+  staged.
 - One `<triggers>` container with exactly one `<manual id="..." />` trigger.
 - One `<steps>` container with one or more sequential `<step>` elements.
-- A required unique `id` on every step.
-- Exactly one operation per step: `<script>` or `<log>`.
-- A required `message` attribute on `<log>`.
-- An exact `{{context...}}` reference in `<log message>`.
+- A required unique `id` and optional non-empty `name` and `description`
+  attributes on every step.
+- Exactly one `<script>` operation per step.
 - Lowercase kebab-case workflow IDs and JavaScript-safe lower-camel trigger and
   step IDs, as frozen in `docs/woml-v0.1.md`.
-- No `context.run`, retry greater than one, timeout, or designed-only feature.
+- No `context.run`, retry, timeout, declarative capability operation, or other
+  frozen-but-staged feature.
 
 Every recognized but unsupported v0.1 feature produces a clear
 "unsupported in the vertical slice" validation error. It is never ignored.
@@ -213,14 +217,17 @@ The compiler targets
 `docs/schemas/compiled-workflow-model.v1.schema.json`. For the acceptance file,
 the semantic result is:
 
-- Manual trigger handler: `core.manual`.
+- One compiled manual-trigger descriptor. `woml run` activates it directly; it
+  uses descriptor handler ID `trigger.manual` with an empty object config. It is
+  not registered or executed as a workflow-node handler.
 - Node `a` handler: `runtime.script`.
-- Node `b` handler: `core.log`.
+- Node `a` metadata: `name` is `Choose greeting name` and `description` is
+  `Use the trigger name or default to World`.
+- Node `b` handler: `runtime.script`.
 - Entry node: `a`.
-- One unconditional edge: `a -> b`.
-- Script source stored as an opaque literal handler input.
-- Log message stored as a `contextReference` value expression with path
-  `['steps', 'a', 'message']`.
+- One unconditional edge named `a-to-b`: `a -> b`.
+- Each `runtime.script` node receives an object input with one `source` field;
+  that field is an opaque literal containing the exact raw script body.
 
 The model contains no XML nodes, moustache strings, WOML tag names, callbacks,
 or parsed JavaScript AST. The core-facing handler and value-expression shapes
@@ -238,6 +245,8 @@ type WorkflowContext = Readonly<{
 ```
 
 `context.run` is deliberately absent until its public schema is approved.
+`services` is also absent from the first executable profile. Capability-backed
+script bindings are introduced only with the later capability/RAK milestone.
 
 Execution rules:
 
@@ -256,9 +265,10 @@ The in-memory context is a disposable projection. Later event persistence will
 replace direct output publication with `event -> fold -> context` without
 changing the script-facing shape.
 
-### 4.6 Reference contract
+### 4.6 Frozen reference grammar versus script context access
 
-The slice accepts exact references with no internal whitespace:
+Phase 0 freezes the future WOML attribute-reference grammar with no internal
+whitespace:
 
 ```text
 reference     := "{{" path "}}"
@@ -268,26 +278,34 @@ step-id       := [a-z][A-Za-z0-9]*
 property-id   := [A-Za-z_$][A-Za-z0-9_$]*
 ```
 
-For `{{context.steps.a.message}}`, compilation produces:
+For example, a later reference-bearing tag may compile
+`{{context.steps.a.x}}` into:
 
 ```json
 {
   "kind": "contextReference",
-  "path": ["steps", "a", "message"]
+  "path": ["steps", "a", "x"]
 }
 ```
 
-Rules:
+That grammar is frozen but not executable in this walking skeleton because the
+executable tag set contains no reference-bearing attributes. The milestone does
+not add a declarative operation merely to consume it and does not implement the
+runtime `contextReference` resolver yet.
 
-- The compiler verifies that a referenced step ID exists and is an earlier
-  dependency of the consuming node.
-- The compiler cannot verify `message` without an output schema; the resolver
-  checks that property at runtime.
-- A missing runtime property is an error, not `undefined` and not an empty
-  string.
+The data dependency exercised now is ordinary JavaScript:
+
+```js
+context.steps.a.x
+```
+
+Rules that are pinned now for later staged features:
+
+- A future compiler verifies that a referenced step ID exists and dominates the
+  consuming node.
+- A missing nested property is a runtime reference error, not an empty string.
 - Exact references preserve their JSON type.
-- Mixed templates such as `Hello {{context.steps.a.message}}` are deferred from
-  the slice, even though the compiled schema can represent them.
+- Mixed templates are staged even though model v1 can represent them.
 - Bracket notation, escaping, optional references, and fallback expressions are
   deferred.
 
@@ -308,8 +326,9 @@ No script scope is reused between nodes. This preserves the chosen architecture
 of a reusable Bun host with isolated invocation contexts, while keeping the
 first executor simple.
 
-This worker is process isolation for state and cancellation boundaries, not a
-security sandbox. The vertical slice executes trusted local WOML only. Resource
+This worker provides per-invocation state and cancellation boundaries, not a
+security sandbox or a separate operating-system process. The vertical slice
+executes trusted local WOML only. Resource
 limits, permissions, untrusted-code hardening, and production timeout control
 are later work.
 
@@ -327,7 +346,8 @@ The executor will:
 6. Invoke the registered handler.
 7. Validate and publish the JSON result under the node ID.
 8. Continue until all reachable nodes finish or one fails.
-9. Return the final context and the last executed node's result.
+9. Require exactly one terminal node for this CLI profile and return the final
+   context plus that terminal node's result.
 
 The executor must not special-case WOML tags. Its only script-specific knowledge
 is the registered `runtime.script` adapter.
@@ -342,9 +362,9 @@ Included:
 - Lowering to the versioned DAG model.
 - Manual trigger with an empty payload.
 - Sequential scheduling of compiled nodes.
-- `runtime.script` and `core.log` handler adapters.
-- Exact typed context references.
+- A handler registry containing only `runtime.script`.
 - Read-only `context` injection into JavaScript.
+- Direct data access from the second script through `context.steps.a.x`.
 - JSON output validation.
 - A package-installed `woml` executable.
 - Unit, compiler-contract, and end-to-end CLI tests.
@@ -358,7 +378,8 @@ Explicitly deferred:
 - Schedule, interval, webhook, and event trigger activation.
 - Parallel, branch, approval, lifecycle, configuration, and queues.
 - Services, secrets, RAK, database, HTTP, Slack, and capability packages.
-- Mixed templates and the complete reference grammar.
+- Executing `{{context...}}` references, mixed templates, and declarative
+  attribute inputs.
 - External trigger input flags, interactive prompts, and environment loading.
 - Production sandboxing, resource accounting, and daemonized Bun hosts.
 - Publishing or renaming the existing npm package.
@@ -371,27 +392,38 @@ and publishes only the executable profile listed here.
 ## 6. Planned Repository Changes
 
 ```text
-package.json                                  # add parser dependency, CLI build, and woml bin
-src/cli.ts                                   # argument parsing and run command
-src/woml/source.ts                           # source-tree types, spans, and diagnostics
-src/woml/raw-content.ts                      # exact script extraction/restoration
-src/woml/parser.ts                           # XML library configuration and tree normalization
-src/woml/references.ts                       # reference parse, compile, and runtime resolution
-src/woml/compiler.ts                         # subset validation and DAG lowering
-src/woml/model.ts                            # TypeScript view of compiled-model v1
-src/woml/executor.ts                         # in-memory ready-node loop and context projection
-src/woml/handlers.ts                         # registry plus core.manual/core.log adapters
-src/woml/script-runner.ts                    # host-side Bun worker adapter
-src/woml/script-worker.ts                    # isolated async script invocation
-hello.woml                                  # acceptance workflow
-tests/woml/parser.test.ts                    # raw body and structural parsing tests
-tests/woml/compiler.test.ts                  # validation and exact lowering tests
-tests/woml/references.test.ts                # typed and invalid reference tests
-tests/woml/executor.test.ts                  # context threading and handler behavior
-tests/woml/cli.test.ts                       # spawned command end-to-end test
-docs/woml-v0.1.md                            # accept core.log and raw terminator rule
+package.json                                      # declare the two packages/workspaces when implementation starts
+hello.woml                                       # Phase 0 acceptance workflow
+
+woml/                                            # WOML library: source to compiled DAG, plus slice runtime
+  package.json                                   # library package and fast-xml-parser dependency
+  bun.lock                                       # exact Phase 1 dependency resolution
+  tsconfig.json                                  # isolated strict type-check configuration
+  src/index.ts                                   # public WOML library exports
+  src/source.ts                                  # source-tree types, spans, and diagnostics
+  src/raw-content.ts                             # exact script extraction/restoration
+  src/parser.ts                                  # XML parser configuration and normalization
+  src/compiler.ts                                # tag validation and DAG lowering
+  src/model.ts                                   # TypeScript view of compiled-model v1
+  src/executor.ts                                # in-memory ready-node loop and context projection
+  src/handlers.ts                                # registry containing runtime.script only
+  src/script-runner.ts                           # host-side Bun worker adapter
+  src/script-worker.ts                           # isolated async script invocation
+  tests/parser.test.ts                           # raw body and structural parsing tests
+  tests/compiler.test.ts                         # validation and exact lowering tests
+  tests/executor.test.ts                         # context threading and handler behavior
+  tests/fixtures/hello.compiled.v1.json          # Phase 0 compiled target
+  tests/fixtures/hello.context.v0.1.json         # Phase 0 context snapshots
+
+woml-cli/                                        # public command package; depends on woml/
+  package.json                                   # woml binary and CLI build
+  src/cli.ts                                     # argument parsing and run command
+  tests/cli.test.ts                              # spawned command end-to-end test
+  tests/fixtures/hello.cli.v0.1.json             # Phase 0 process contract
+
+docs/woml-v0.1.md                                # language and executable-profile contract
 docs/schemas/compiled-workflow-model.v1.schema.json
-                                              # only if the slice exposes a real schema gap
+                                                   # reviewed frontend-to-core model
 ```
 
 `core/` and `sdk/` are intentionally untouched in this milestone. The frontend
@@ -401,38 +433,71 @@ production executor is converged in Rust.
 
 ## 7. Implementation Phases and Gates
 
-### Phase 0 — Freeze the executable subset
+### Phase 0 — Close blocking decisions and pin the target fixture
 
-Work:
+Phase 0 produces decisions and fixtures only. It adds no dependency, parser,
+compiler, executor, worker, CLI, or other executable code. Executable
+implementation begins in Phase 1.
 
-- Add `<log message="..." />` to the fundamental syntax as the first built-in
-  declarative operation.
-- Record exact-reference-only behavior for this slice.
-- Record the literal `</script>` raw-body terminator restriction.
-- Freeze workflow and structural identifier grammars.
-- Make `context.run` explicitly unavailable in v0.1.
-- Separate designed syntax from the first executable/publishable CLI profile.
-- Freeze the diagnostic object and CLI rendering contract.
-- Write the expected compiled model fixture for `hello.woml` before building the
-  executor.
+Decisions to close:
+
+- Freeze raw-content termination: the first literal `</script>` closes a raw
+  script body, and that exact sequence is forbidden inside the body in v0.1.
+- Freeze the JavaScript-safe identifier grammar and the staged
+  `{{context...}}` reference grammar. The reference grammar is not executed by
+  this milestone because the executable set contains no reference-bearing tag.
+- Freeze the executable set as exactly `<workflow>`, `<triggers>`, `<manual>`,
+  `<steps>`, `<step>`, and `<script>`, plus static validation for those elements.
+- Freeze `name` and `description` as optional attributes—not child tags—on
+  workflow and step elements in this executable profile.
+- Classify every other frozen syntax construct as runtime-staged. It must fail
+  with `WOML_FEATURE_NOT_EXECUTABLE` in this profile; it is never ignored or
+  assigned weaker semantics.
+- Make `context.run` unavailable in v0.1. The injected context contains only
+  `context.trigger` and `context.steps`.
+- Freeze package ownership: `woml/` owns the reusable WOML library and the
+  vertical-slice runtime; `woml-cli/` owns only the public command and depends
+  on `woml/`. Neither package makes `core/` understand WOML tags or XML.
+- Freeze the first CLI result rule: its compiled DAG must have exactly one
+  terminal node, and that node's JSON result is written to stdout.
+
+Fixtures and contracts to pin:
+
+- Check in the exact `hello.woml` shown in Section 2.
+- Write `woml/tests/fixtures/hello.compiled.v1.json` by hand as the reviewed
+  semantic target before implementing the compiler.
+- Pin the compiled trigger, two `runtime.script` nodes, entry node, and
+  `a-to-b` unconditional edge; node `b` is the only terminal node.
+- Pin the optional step metadata lowering as `node.metadata.name` and
+  `node.metadata.description` through node `a` in the compiled fixture.
+- Pin the in-memory context shape before `a`, after `a`, and after `b` in
+  `woml/tests/fixtures/hello.context.v0.1.json`.
+- Pin the command, empty trigger payload, exact stdout including its trailing
+  line feed, empty stderr, and exit status `0` in
+  `woml-cli/tests/fixtures/hello.cli.v0.1.json`.
 
 Gate:
 
-- The source example, compiled fixture, context shape, handler IDs, stdout,
-  stderr, and exit code are reviewable and unambiguous.
+- The language decisions, WOML fixture, compiled-model fixture, context
+  snapshots, stdout, stderr, and exit code have been reviewed together.
+- There are no unresolved parser or identifier decisions.
+- No executable implementation file has been added or changed in this phase.
 
-### Phase 1 — Parse WOML into a source tree
+### Phase 1 — Parse WOML into a source tree — complete
 
 Work:
 
 - Add `fast-xml-parser`.
-- Build raw script extraction/restoration.
+- Build raw `<script>` extraction/restoration using the Phase 0 terminator rule.
 - Normalize the ordered XML result into small typed source nodes.
 - Reject malformed markup, duplicate attributes, declarations, multiple roots,
   and unclosed raw scripts.
 - Preserve script text exactly.
 - Attach original source spans to every normalized node and retain offset maps
   across raw-body masking.
+- Implement raw-content behavior only for `<script>`; staged raw elements such
+  as webhook `<schema>` receive no runtime/parser feature implementation in this
+  milestone.
 
 Gate:
 
@@ -441,45 +506,60 @@ Gate:
 - A malformed element before, inside, and after a raw script reports the correct
   original file, line, and column.
 - `hello.woml` produces the expected ordered source tree.
+- No compiler or executor is required to pass this gate.
 
 ### Phase 2 — Validate and lower to the DAG
 
 Work:
 
-- Validate only the accepted workflow, manual trigger, steps, script, and log
-  structures.
+- Validate exactly the executable profile: `<workflow>`, `<triggers>`, one
+  `<manual>`, `<steps>`, sequential `<step>` elements, and one `<script>` per
+  step.
+- Accept and lower optional workflow and step `name`/`description` attributes as
+  descriptive compiled metadata.
 - Enforce required and unique IDs and one operation per step.
+- Reject every frozen-but-staged construct with
+  `WOML_FEATURE_NOT_EXECUTABLE` and its source location.
 - Compile sequential document order into explicit unconditional edges.
-- Compile scripts to opaque `runtime.script` inputs.
-- Compile the log reference to a `contextReference` value expression.
+- Compile every step to the single handler ID `runtime.script`, with its script
+  source carried as an opaque literal input.
+- Lower optional step `name` and `description` to the same keys in node
+  `metadata`.
 - Run graph semantic checks after lowering: acyclicity, unique node/edge IDs,
-  valid endpoints and entries, and full reachability.
+  valid endpoints and entries, full reachability, and exactly one terminal node
+  for the first CLI profile.
 
 Gate:
 
 - The compiled output for `hello.woml` deep-equals the reviewed JSON fixture.
 - The fixture satisfies every compiled-model invariant used by the slice.
-- Unknown and deferred constructs fail before execution.
-- Empty `<steps>`, invalid IDs, missing references, and duplicate nested IDs
-  report stable diagnostic codes and source locations.
+- Unknown and staged constructs fail before execution.
+- Empty `<steps>`, invalid IDs, duplicate IDs, missing required children, and
+  multiple operations report stable diagnostic codes and source locations.
+- No Bun worker or handler has been required to prove the compiler gate.
 
-### Phase 3 — Resolve inputs and execute handlers
+### Phase 3 — Resolve script inputs and execute the DAG
 
 Work:
 
-- Implement recursive value-expression resolution for literals, objects, arrays,
-  and exact context references already represented by model v1.
-- Add the handler registry.
-- Add `core.log` with deterministic stderr logging and JSON output.
+- Resolve only the literal/object compiled inputs needed by `runtime.script`.
+  Do not implement `contextReference` or mixed-template evaluation yet.
+- Add the handler registry with exactly one registered executable handler:
+  `runtime.script`.
 - Add the Bun worker script runner and JSON-result validation.
 - Add the sequential ready-node executor and in-memory context projection.
+- Inject a read-only context snapshot containing `trigger` and prior `steps`
+  outputs into each script invocation.
 
 Gate:
 
-- Step `a` can read `context.trigger` and return JSON.
-- Step `b` resolves `context.steps.a.message` from its compiled input.
-- A missing property, script exception, unknown handler, or non-JSON result fails
+- Step `a` reads `context.trigger` and returns `{ "x": "World" }`.
+- The successful result becomes `context.steps.a` before `b` starts.
+- Step `b` reads `context.steps.a.x` directly in JavaScript and returns
+  `{ "message": "Hello World" }`.
+- A script exception, unknown handler, invalid graph, or non-JSON result fails
   deterministically without publishing a partial step output.
+- The executor consumes only the compiled model and never the WOML source tree.
 
 ### Phase 4 — Expose `woml run`
 
@@ -496,12 +576,13 @@ Gate:
 - After building and linking/installing the package, the shell resolves `woml`.
 - `woml run hello.woml` prints the agreed output and exits `0`.
 - Invalid WOML and script failure exit nonzero without a success JSON result.
+- A successful run writes nothing to stderr.
 
 ### Phase 5 — Verify the real package journey
 
 Work:
 
-- Add the checked-in root `hello.woml` fixture.
+- Use the reviewed root `hello.woml` fixture pinned in Phase 0.
 - Add focused unit tests and one spawned CLI test.
 - Build the package exactly as a user would receive it.
 - Link or install that build into an isolated temporary directory.
@@ -518,7 +599,7 @@ woml run hello.woml
 
 The final gate checks:
 
-- stderr contains `Hello World` once.
+- stderr is empty.
 - stdout parses as JSON and equals `{"message":"Hello World"}`.
 - exit status is `0`.
 - no SQLite database, run-state file, cache file, or generated workflow artifact
@@ -530,9 +611,9 @@ The final gate checks:
 |---|---|
 | Raw content | JavaScript with XML-significant characters survives byte-for-byte. |
 | Markup parser | Child order, repeated steps, attributes, self-closing tags, and original source spans are retained. |
-| Validation | Unknown tags, duplicate IDs, multiple operations, bad references, and deferred features fail early with stable locations. |
+| Validation | Unknown tags, duplicate IDs, multiple operations, and staged features fail early with stable locations. |
 | Compiler | `hello.woml` lowers to two DAG nodes and one unconditional edge; the result is acyclic and fully reachable. |
-| Reference resolver | Exact reference preserves the original JSON type and missing paths fail. |
+| Context threading | The second script reads the first script's successful output through `context.steps.a.x`. |
 | Script runner | `context` is available, `await` works, state is not shared, and only JSON returns cross the worker boundary. |
 | Executor | Outputs appear only after success and the next node sees prior outputs. |
 | CLI | Public binary, file errors, parse errors, runtime errors, stdout, stderr, and exit codes behave as specified. |
@@ -559,14 +640,14 @@ type WomlDiagnostic = {
 
 The first implementation includes specific codes for malformed markup, an
 unclosed raw body, unknown or unsupported elements, missing attributes,
-duplicate IDs, invalid IDs, unavailable references, invalid DAGs, unknown
-handlers, script failures, and non-JSON results. It does not collapse every
-failure into one generic parse or runtime code.
+duplicate IDs, invalid IDs, invalid DAGs, unknown handlers, script failures, and
+non-JSON results. It does not collapse every failure into one generic parse or
+runtime code.
 
 The normal CLI rendering is:
 
 ```text
-hello.woml:14:18 [WOML_REFERENCE_NOT_AVAILABLE] Step "missing" is not available here
+hello.woml:14:5 [WOML_FEATURE_NOT_EXECUTABLE] <parallel> is frozen but not executable in this runtime profile
 ```
 
 Every message includes the original `.woml` location. Stack traces and internal
@@ -596,8 +677,8 @@ test harness for replacing scheduling with the converged core later.
 
 ### Source syntax leaking into the compiled model
 
-Risk: raw moustache strings, tag names, or XML nodes could be passed to the
-executor for convenience.
+Risk: WOML tag names or XML/source-tree nodes could be passed to the executor
+for convenience.
 
 Containment: compiler fixture tests require typed value expressions and opaque
 handler IDs. The executor package has no dependency on parser/source-tree types.
@@ -626,13 +707,13 @@ The vertical slice is done when all of the following are true:
 - One step executes raw JavaScript through Bun.
 - That JavaScript reads the injected `context` keyword.
 - The successful return is available at `context.steps.a`.
-- The next step consumes `{{context.steps.a.message}}` through the runtime
-  reference resolver.
+- The next script reads `context.steps.a.x` directly through the injected
+  JavaScript context.
 - The compiler emits a version-1 DAG, not a linear source-only structure.
 - The executor consumes only the compiled model.
 - The package exposes the `woml` executable.
 - `woml run hello.woml` produces the exact reviewed output.
-- Parser, compiler, resolver, worker, executor, and CLI tests pass.
+- Parser, compiler, worker, executor, and CLI tests pass.
 - Parse, validation, compile, and runtime failures carry a stable code, original
   line/column, and useful message.
 - Unsupported features fail explicitly.

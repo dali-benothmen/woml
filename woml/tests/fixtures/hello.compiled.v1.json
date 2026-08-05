@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "workflowId": "hello",
+  "metadata": {
+    "name": "Hello WOML"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": {
+        "kind": "object",
+        "fields": {}
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": [
+      "a"
+    ],
+    "nodes": [
+      {
+        "id": "a",
+        "handler": "runtime.script",
+        "metadata": {
+          "name": "Choose greeting name",
+          "description": "Use the trigger name or default to World"
+        },
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        const name = context.trigger.name ?? \"World\";\n\n        return {\n          x: name\n        };\n      "
+            }
+          }
+        }
+      },
+      {
+        "id": "b",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          message: `Hello ${context.steps.a.x}`\n        };\n      "
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "a-to-b",
+        "from": "a",
+        "to": "b",
+        "condition": {
+          "kind": "always"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+<workflow
+  woml-version="0.1"
+  id="hello"
+  name="Hello WOML">
+
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step
+      id="a"
+      name="Choose greeting name"
+      description="Use the trigger name or default to World">
+      <script>
+        const name = context.trigger.name ?? "World";
+
+        return {
+          x: name
+        };
+      </script>
+    </step>
+
+    <step id="b">
+      <script>
+        return {
+          message: `Hello ${context.steps.a.x}`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>

@@ -1,7 +1,7 @@
 # WOML v0.1 Fundamental Syntax
 
-Status: draft for review
-Scope: fundamental workflow structure, triggers, script, log, and approval steps,
+Status: design catalog draft; first CLI executable subset frozen for implementation
+Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
 This document defines the proposed fundamental authoring syntax for WOML v0.1.
@@ -49,10 +49,10 @@ The first CLI vertical-slice profile is deliberately small:
 
 | Feature | Design status | First CLI profile |
 |---|---|---|
-| Workflow metadata, manual trigger, sequential steps | Designed | Executable target |
+| Workflow `id`/`name`/`description`, manual trigger, sequential steps | Designed | Executable target |
 | `<script>` with `context.trigger` and `context.steps` | Designed | Executable target |
-| `<log>` with one exact `{{context...}}` reference | Designed | Executable target |
-| `retry` | Reserved as an attribute | Only omission or `retry="1"`; no retry occurs |
+| `{{context...}}` attribute-reference grammar | Frozen | Staged; no executable consumer in the walking skeleton |
+| Workflow `tags`/`version` and step `retry`/`timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Parallel, branch, and approval | Designed | Unavailable |
@@ -170,10 +170,11 @@ Outside raw-content elements:
   </triggers>
 
   <steps>
-    <step id="preprocessContent" timeout="30s">
-      <name>Preprocess content</name>
-      <description>Normalize the submitted content before analysis</description>
-
+    <step
+      id="preprocessContent"
+      name="Preprocess content"
+      description="Normalize the submitted content before analysis"
+      timeout="30s">
       <script>
         const { content } = context.trigger;
 
@@ -184,10 +185,12 @@ Outside raw-content elements:
       </script>
     </step>
 
-    <parallel id="contentAnalysis" concurrency="3" on-error="fail-fast">
-      <name>Analyze content</name>
-      <description>Run the independent analysis steps concurrently</description>
-
+    <parallel
+      id="contentAnalysis"
+      name="Analyze content"
+      description="Run the independent analysis steps concurrently"
+      concurrency="3"
+      on-error="fail-fast">
       <step id="analyzeText">
         <script>
           return analyzeText(
@@ -232,10 +235,10 @@ Outside raw-content elements:
       </script>
     </step>
 
-    <branch id="reviewPath">
-      <name>Select review path</name>
-      <description>Choose human or automatic review</description>
-
+    <branch
+      id="reviewPath"
+      name="Select review path"
+      description="Choose human or automatic review">
       <when test="{{context.steps.needsHumanReview}}">
         <step id="prepareHumanReview">
           <script>
@@ -349,27 +352,17 @@ steps-item     := step
                 | branch
                 | approval
 
-metadata       := name? description?
-name           := <name> text </name>
-description    := <description> text </description>
-
 step           := <step step-attributes>
-                    metadata
                     operation
                   </step>
 
 operation      := script
-                | log
-
-log            := <log message="attribute-value" />
 
 parallel       := <parallel parallel-attributes>
-                    metadata
                     step+
                   </parallel>
 
 branch         := <branch branch-attributes>
-                    metadata
                     when+
                     otherwise?
                   </branch>
@@ -454,14 +447,14 @@ MUST NOT be used as durable step identities.
 
 ### 5.1 Structural name and description
 
-`<step>`, `<parallel>`, and `<branch>` may contain optional `<name>` and
-`<description>` child elements:
+`<step>`, `<parallel>`, `<branch>`, and `<approval>` use optional `name` and
+`description` attributes:
 
 ```xml
-<step id="generateReport">
-  <name>Generate report</name>
-  <description>Build the report returned to the publishing step</description>
-
+<step
+  id="generateReport"
+  name="Generate report"
+  description="Build the report returned to the publishing step">
   <script>
     return generateReport(context.trigger);
   </script>
@@ -470,17 +463,12 @@ MUST NOT be used as durable step identities.
 
 Rules:
 
-- `<name>` and `<description>` are optional and may each occur at most once.
-- When present, `<name>` appears before `<description>`.
-- Both appear before executable or control-flow children.
-- Both contain plain text only.
+- `name` and `description` are optional string attributes. When present, each
+  must contain at least one non-whitespace character.
+- `<name>` and `<description>` child elements are invalid.
 - They are descriptive metadata and never become `context.steps` values.
 - An `id` remains required even when a name is present; display names are not
   execution identities.
-
-`<approval>` is the deliberate exception: its `name` and `description` are
-attributes because approval metadata is commonly displayed together with its
-timeout policy. It does not accept `<name>` or `<description>` children.
 
 ## 6. `<workflow>`
 
@@ -494,6 +482,9 @@ timeout policy. It does not accept `<name>` or `<description>` children.
 | `description` | No | String | Short human-readable description. |
 | `tags` | No | Tag list | Comma-separated classification tags. |
 | `version` | No | Version string | User-defined workflow version, distinct from `woml-version`. |
+
+When present, workflow `name` and `description` must each contain at least one
+non-whitespace character.
 
 `tags` is a comma-separated list. Whitespace surrounding each item is removed.
 Empty items and duplicate items are invalid.
@@ -512,6 +503,11 @@ Empty items and duplicate items are invalid.
 
 Runtime settings such as concurrency and timeout MUST NOT also appear on
 `<workflow>`. They have one canonical location: `<config>`.
+
+In the first CLI profile, `name` and `description` lower to
+`metadata.name` and `metadata.description` on the compiled workflow. The
+`tags` and user-defined `version` attributes remain staged because their
+compiled representation is not yet frozen.
 
 ## 7. `<config>`
 
@@ -780,19 +776,17 @@ that DAG through structured sequencing, parallelism, and conditional flow.
 ## 11. `<step>` Operations
 
 A `<step>` is one identifiable executable node. It contains exactly one
-operation. The fundamental step operations in this document are `<script>` and
-`<log>`. An `<approval>` is a first-class control-flow item rather than an
-operation wrapped in `<step>`.
+operation. The only fundamental step operation in this document is `<script>`.
+An `<approval>` is a first-class control-flow item rather than an operation
+wrapped in `<step>`.
 
 ```xml
 <step
   id="greetUser"
+  name="Greet user"
+  description="Build the greeting returned to downstream steps"
   retry="1"
   timeout="5s">
-
-  <name>Greet user</name>
-  <description>Build the greeting returned to downstream steps</description>
-
   <script>
     return {
       message: `Hello ${context.trigger.name}`
@@ -806,17 +800,20 @@ operation wrapped in `<step>`.
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
 | `id` | Yes | Step ID | Stable DAG-node and output identity. |
+| `name` | No | String | Human-readable display name. |
+| `description` | No | String | Human-readable description. |
 | `retry` | No | Integer `1` | Reserved retry policy; omission and `1` both mean one attempt in v0.1. |
 | `timeout` | No | Duration | Maximum duration of each attempt. |
 
-Human-readable name and description are child elements, as defined in Section
-5.1. They are not step attributes.
+Human-readable name and description are attributes, as defined in Section 5.1.
+They lower to `metadata.name` and `metadata.description` on the compiled node.
 
-WOML v0.1 does not execute retries. Omitting `retry` and writing `retry="1"`
-both lower to `maxAttempts: 1`. Any value greater than one is a compile error,
-not valid syntax that a runtime may choose to ignore. Multi-attempt retry cannot
-become executable until retryable-error, backoff, interruption, and idempotency
-contracts are approved together.
+The frozen design grammar reserves `retry="1"` as the only v0.1 value, but the
+first CLI executable profile rejects the `retry` attribute entirely with
+`WOML_FEATURE_NOT_EXECUTABLE`. It never silently ignores the attribute. Any
+value greater than one is also outside the v0.1 grammar. Multi-attempt retry
+cannot become executable until retryable-error, backoff, interruption, and
+idempotency contracts are approved together.
 
 The fundamental syntax intentionally keeps retry as an attribute. When backoff
 is added, it should remain attribute-based rather than introducing a second
@@ -842,12 +839,15 @@ part of the executable v0.1 grammar.
 write ordinary statements and may use `await`, loops, conditions, exceptions,
 and returned objects without adding a function wrapper.
 
-The runtime injects two distinct bindings:
+The first CLI executable profile injects exactly one binding:
 
-- `context` is the fixed read-only, JSON-compatible data view derived from
-  persisted run events.
-- `services` exposes runtime-only capabilities made available to the workflow;
-  service clients and secrets never become context or persisted step output.
+- `context` is the fixed read-only, JSON-compatible data projection for the
+  current workflow run.
+
+`services` is unavailable in this profile. A script that references it receives
+the normal JavaScript missing-binding failure. A later capability profile may
+add a `services` binding; service clients and secrets must never become context
+or persisted step output.
 
 The complete v0.1 context paths are:
 
@@ -868,12 +868,16 @@ ctx.last    -> explicit context.steps.<stepId>
 ```
 
 A script contributes downstream data only by returning a JSON value. That value
-enters context only after the successful attempt event has been persisted and
-folded:
+enters the context projection only after the handler succeeds:
 
 ```text
-return value -> success event -> fold -> context.steps.<stepId>
+return value -> successful handler outcome -> context.steps.<stepId>
 ```
+
+The first CLI profile publishes that outcome to its in-memory projection. A
+durable runtime first appends the versioned success event and then folds the
+event history into the same projection. Storage changes how the projection is
+reconstructed, not the script-facing context contract.
 
 The following do not persist:
 
@@ -886,26 +890,6 @@ The following do not persist:
 
 `<script>` has no attributes in the fundamental grammar. Timeout and retry are
 step policies and belong on `<step>`.
-
-### 11.3 `<log>`
-
-`<log>` is the first fundamental declarative operation and contains no child
-elements:
-
-```xml
-<step id="showGreeting">
-  <log message="{{context.steps.greetUser.message}}" />
-</step>
-```
-
-| Attribute | Required | Type | Meaning |
-|---|---:|---|---|
-| `message` | Yes | WOML attribute value | Value emitted through the runtime log sink. |
-
-An exact reference preserves its JSON type. A mixed template produces a string
-as defined in Section 15. The CLI vertical-slice profile initially accepts only
-an exact reference. Its `core.log` handler writes the value to stderr and
-returns `{ "message": <resolved-value> }` as the step output.
 
 ## 12. `<approval>`, `<notify>`, and Decision Arms
 
@@ -957,8 +941,8 @@ an attribute on `<step>` and is not wrapped by `<step>`.
 | `timeout` | No | Duration | Maximum durable waiting period; omission means no WOML-level deadline. |
 | `on-timeout` | No | Enum | `reject` or `fail`; defaults to `fail`. |
 
-`name` and `description` are attributes on `<approval>`. Unlike `<step>`,
-`<parallel>`, and `<branch>`, an approval does not accept child metadata tags.
+Like the other structural elements, `<approval>` does not accept child metadata
+tags.
 
 The child order is fixed:
 
@@ -1039,10 +1023,12 @@ decision so only one terminal outcome wins.
 finish.
 
 ```xml
-<parallel id="fieldData" concurrency="2" on-error="wait-all">
-  <name>Load field data</name>
-  <description>Fetch independent weather and soil readings</description>
-
+<parallel
+  id="fieldData"
+  name="Load field data"
+  description="Fetch independent weather and soil readings"
+  concurrency="2"
+  on-error="wait-all">
   <step id="loadWeather">
     <script>
       return loadWeather(context.trigger.fieldId);
@@ -1060,6 +1046,8 @@ finish.
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
 | `id` | Yes | Structural ID | Stable identity for the parallel fork/join. |
+| `name` | No | String | Human-readable display name. |
+| `description` | No | String | Human-readable description. |
 | `concurrency` | No | Positive integer | Maximum simultaneously running child steps; defaults to the number of children. |
 | `on-error` | No | Enum | `fail-fast` or `wait-all`; defaults to `fail-fast`. |
 
@@ -1068,7 +1056,7 @@ Structural and data rules:
 - `<parallel>` contains one or more direct `<step>` children. A one-step
   parallel is a valid degenerate fork/join, which keeps generated WOML stable
   when a computed branch list happens to contain one item.
-- Optional `<name>` and `<description>` metadata precedes those steps.
+- Optional `name` and `description` attributes describe the group.
 - When present, `concurrency` MUST NOT exceed the number of child steps.
 - All children receive the same context view from immediately before the fork.
 - A child MUST NOT reference a sibling's output.
@@ -1105,10 +1093,10 @@ Multi-step concurrent lanes are deferred. A future design may add an explicit
 TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
 
 ```xml
-<branch id="alertRoute">
-  <name>Select alert handling</name>
-  <description>Route the analysis by alert severity</description>
-
+<branch
+  id="alertRoute"
+  name="Select alert handling"
+  description="Route the analysis by alert severity">
   <when test="{{context.steps.isCritical}}">
     <step id="handleCritical">
       <script>
@@ -1140,11 +1128,12 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
 | `id` | Yes | Structural ID | Stable identity for the conditional structure. |
+| `name` | No | String | Human-readable display name. |
+| `description` | No | String | Human-readable description. |
 
 - `<branch>` requires an `id` attribute.
 - The ID is a stable structural identity but is not a `context.steps` key.
-- Optional `<name>` and `<description>` metadata appears before the first
-  `<when>`.
+- Optional `name` and `description` attributes describe the branch.
 - It contains one or more `<when>` elements.
 - It contains at most one `<otherwise>`.
 - `<otherwise>`, when present, MUST be last.
@@ -1272,12 +1261,14 @@ An attribute containing literal text plus one or more references always produces
 a string:
 
 ```xml
-<log message="Processed {{context.steps.calculate.total}} items" />
+<operation message="Processed {{context.steps.calculate.total}} items" />
 ```
 
-### 15.4 Executable v0.1 reference grammar
+`<operation>` is illustrative, not accepted syntax.
 
-The first executable profile accepts exact references with no internal
+### 15.4 Frozen v0.1 reference grammar
+
+The frozen language grammar defines exact references with no internal
 whitespace:
 
 ```text
@@ -1294,9 +1285,12 @@ not WOML references. A referenced step must exist and dominate the consumer in
 the lowered DAG. A missing nested property at runtime produces
 `WOML_REFERENCE_NOT_AVAILABLE`; it never becomes `undefined` or an empty string.
 
-Mixed templates are part of the design catalog but are unavailable in the first
-CLI profile. Their escaping rules must be approved before a publishable profile
-accepts them.
+The first CLI walking skeleton has no reference-bearing declarative or
+control-flow tag, so it does not execute this attribute-reference grammar. Its
+second script reads `context.steps.<id>` directly in JavaScript. Reference
+resolution becomes executable only when the first staged reference-bearing tag
+is deliberately added. Mixed templates remain in the design catalog; their
+escaping rules must be approved before a publishable profile accepts them.
 
 ## 16. Static Validation
 
@@ -1322,8 +1316,8 @@ conditions hold.
   either arm, or declares them out of order.
 - `<approval>` contains more than one `<notify>`, or `<notify>` does not contain
   exactly one `<script>`.
-- `<approval>` contains `<name>` or `<description>` child elements instead of
-  the corresponding attributes.
+- A structural element contains `<name>` or `<description>` child elements
+  instead of the corresponding attributes.
 
 ### 16.2 Identity errors
 
@@ -1376,6 +1370,12 @@ After lowering and before registration or execution, the frontend MUST verify:
 - Global structural IDs remain unique across every nested branch case,
   parallel group, and approval arm.
 - Joining nested containers does not create an unreachable node or a cycle.
+
+The first CLI executable profile additionally requires exactly one terminal
+node: one node with no outgoing edge. Its result is the command's workflow
+result. DAGs with multiple terminal nodes remain valid in the general compiled
+model but are unavailable to this CLI profile until workflow-output semantics
+are explicitly designed.
 
 Structured sequencing makes cycles impossible for a correct compiler, but the
 compiler still checks the emitted artifact. This protects the model boundary
@@ -1508,6 +1508,7 @@ The following concepts are not part of the fundamental grammar in this draft:
 - External schema files.
 - Resolved secrets or `context.env`.
 - RAK, packages, `<requires>`, and dynamic capability vocabularies.
+- Declarative capability operations.
 - Database, HTTP-client, Slack, email, and other integration operations.
 
 These features require their own durable execution and context semantics. Their
@@ -1516,28 +1517,35 @@ supporting future DAG execution features.
 
 ## 20. Minimum Executable-Profile Example
 
-The smallest workflow that exercises both script context access and WOML
-attribute-reference resolution is:
+The walking-skeleton workflow exercises raw script execution and direct context
+threading between two sequential script steps:
 
 ```xml
-<workflow woml-version="0.1" id="hello" name="Hello">
+<workflow woml-version="0.1" id="hello" name="Hello WOML">
   <triggers>
-    <manual id="manualRun" />
+    <manual id="start" />
   </triggers>
 
   <steps>
-    <step id="a">
+    <step
+      id="a"
+      name="Choose greeting name"
+      description="Use the trigger name or default to World">
       <script>
         const name = context.trigger.name ?? "World";
 
         return {
-          message: `Hello ${name}`
+          x: name
         };
       </script>
     </step>
 
     <step id="b">
-      <log message="{{context.steps.a.message}}" />
+      <script>
+        return {
+          message: `Hello ${context.steps.a.x}`
+        };
+      </script>
     </step>
   </steps>
 </workflow>
@@ -1551,7 +1559,7 @@ context is:
   "trigger": {},
   "steps": {
     "a": {
-      "message": "Hello World"
+      "x": "World"
     },
     "b": {
       "message": "Hello World"
@@ -1563,3 +1571,14 @@ context is:
 The CLI vertical slice builds this projection in memory. A durable runtime
 reconstructs the same public shape by folding persisted events; the context is
 never an authoritative mutable object exposed to scripts.
+
+The Phase 0 acceptance contracts are checked in at:
+
+- `hello.woml` — canonical source workflow.
+- `woml/tests/fixtures/hello.compiled.v1.json` — exact compiled DAG.
+- `woml/tests/fixtures/hello.context.v0.1.json` — context before and after each
+  node.
+- `woml-cli/tests/fixtures/hello.cli.v0.1.json` — exact public process contract.
+
+The successful CLI result is compact JSON followed by one line feed on stdout,
+empty stderr, and exit status `0`.
