@@ -1,0 +1,22 @@
+{
+  "name": "woml-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "woml": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/cli.ts --outfile dist/cli.js --target bun && bun build ../woml/src/script-worker.ts --outfile dist/script-worker.ts --target bun",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "7.0.2",
+    "woml": "file:../woml"
+  }
+}

@@ -1,6 +1,6 @@
 # WOML CLI Vertical Slice Implementation Plan
 
-Status: Phase 3 complete; Phase 4 not started
+Status: Phase 4 complete; Phase 5 not started
 Target: `woml run hello.woml` parses, compiles, and executes a real WOML
 workflow through Bun
 Scope: the smallest end-to-end implementation that proves the WOML syntax and
@@ -419,6 +419,8 @@ woml/                                            # WOML library: source to compi
 
 woml-cli/                                        # public command package; depends on woml/
   package.json                                   # woml binary and CLI build
+  bun.lock                                       # exact CLI development dependency resolution
+  tsconfig.json                                  # isolated strict type-check configuration
   src/cli.ts                                     # argument parsing and run command
   tests/cli.test.ts                              # spawned command end-to-end test
   tests/fixtures/hello.cli.v0.1.json             # Phase 0 process contract
@@ -563,7 +565,7 @@ Gate:
   deterministically without publishing a partial step output.
 - The executor consumes only the compiled model and never the WOML source tree.
 
-### Phase 4 — Expose `woml run`
+### Phase 4 — Expose `woml run` — complete
 
 Work:
 
