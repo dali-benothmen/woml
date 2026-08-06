@@ -637,3 +637,15 @@ impl CompiledWorkflowDefinition {
     }
   }
 }
+
+impl CompiledWorkflowNode {
+  pub fn script_source(&self) -> Option<&str> {
+    let ValueExpression::Object { fields } = &self.inputs else {
+      return None;
+    };
+    let ValueExpression::Literal { value } = fields.get("source")? else {
+      return None;
+    };
+    value.as_str()
+  }
+}

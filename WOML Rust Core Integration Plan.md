@@ -568,7 +568,7 @@ Implementation note: R2 lives in the isolated `core/woml-engine` Rust crate so
 the new event-driven engine does not inherit the legacy SDK execution paths.
 R3 will connect this crate to the existing native core boundary.
 
-### R3 — Connect Rust, the Bun host, and `hello.woml`
+### R3 — Connect Rust, the Bun host, and `hello.woml` — complete
 
 One phrase: run the proven two-step workflow through the real Rust-to-Bun path.
 
@@ -596,7 +596,12 @@ Gate:
 - Script throw, timeout, invalid result, and host crash reach Rust as distinct
   failures.
 
-### R4 — Add durable events and fail-closed recovery
+Implementation note: the asynchronous native entry point and TypeScript adapter
+are now available for conformance testing. The public `woml run` command remains
+on the TypeScript reference executor until the deliberate production cutover in
+R5.
+
+### R4 — Add durable events and fail-closed recovery — complete
 
 One phrase: make Rust runs reconstructable after the process stops.
 
@@ -621,6 +626,14 @@ Gate:
 - Restarting after `step_attempt_started` fails the attempt as `interrupted`.
 - No interrupted attempt is replayed automatically.
 - Stored event payloads validate against the versioned schema.
+
+Implementation note: durability is exposed through an explicit SQLite file
+path; R4 does not silently choose a database for users. SQLite itself enforces
+immutable definitions, immutable run bindings, and append-only run events. On
+restart, Rust derives state exclusively by folding those events. It safely adds
+a missing final run event when the terminal step outcome is already known, but
+an attempt left in progress is recorded as `interrupted` and is never replayed.
+The public `woml run` command remains unchanged until the R5 cutover.
 
 ### R5 — Move the public CLI to Rust execution
 

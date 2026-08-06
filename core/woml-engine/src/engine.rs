@@ -75,7 +75,8 @@ impl InMemoryDagEngine {
   }
 
   pub fn append_event(&mut self, event: RunEvent) -> Result<RunProjection, EngineError> {
-    self.validate_event_against_definition(&event)?;
+    validate_payload_against_definition(&self.workflow, &self.definition_hash, &event.payload)
+      .map_err(EngineError::Contract)?;
     if let RunEventPayload::StepAttemptStarted(data) = &event.payload {
       let ready = self.ready_node_ids(&event.run_id)?;
       if !ready.iter().any(|node_id| node_id == &data.node_id) {
@@ -109,107 +110,118 @@ impl InMemoryDagEngine {
       ));
     }
 
-    let completed = projection.completed_node_ids();
-    let attempted = projection.attempted_node_ids();
-    let mut incoming: HashMap<&str, Vec<&str>> = self
-      .workflow
+    ready_node_ids_for_projection(&self.workflow, &self.definition_hash, &projection)
+      .map_err(EngineError::Contract)
+  }
+}
+
+pub(crate) fn ready_node_ids_for_projection(
+  workflow: &CompiledWorkflowDefinition,
+  definition_hash: &str,
+  projection: &RunProjection,
+) -> Result<Vec<String>, String> {
+  if projection.status != RunStatus::Running {
+    return Ok(Vec::new());
+  }
+  if projection.workflow_id.as_deref() != Some(workflow.workflow_id.as_str())
+    || projection.definition_hash.as_deref() != Some(definition_hash)
+  {
+    return Err("The run is not bound to this compiled workflow definition.".to_string());
+  }
+
+  let completed = projection.completed_node_ids();
+  let attempted = projection.attempted_node_ids();
+  let mut incoming: HashMap<&str, Vec<&str>> = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| (node.id.as_str(), Vec::new()))
+    .collect();
+  for edge in &workflow.graph.edges {
+    incoming
+      .entry(edge.to.as_str())
+      .or_default()
+      .push(edge.from.as_str());
+  }
+
+  Ok(
+    workflow
       .graph
       .nodes
       .iter()
-      .map(|node| (node.id.as_str(), Vec::new()))
-      .collect();
-    for edge in &self.workflow.graph.edges {
-      incoming
-        .entry(edge.to.as_str())
-        .or_default()
-        .push(edge.from.as_str());
+      .filter(|node| {
+        !completed.contains(node.id.as_str())
+          && !attempted.contains(node.id.as_str())
+          && incoming
+            .get(node.id.as_str())
+            .into_iter()
+            .flatten()
+            .all(|predecessor| completed.contains(predecessor))
+      })
+      .map(|node| node.id.clone())
+      .collect(),
+  )
+}
+
+pub(crate) fn validate_payload_against_definition(
+  workflow: &CompiledWorkflowDefinition,
+  definition_hash: &str,
+  payload: &RunEventPayload,
+) -> Result<(), String> {
+  match payload {
+    RunEventPayload::RunStarted(data) => {
+      if data.workflow_id != workflow.workflow_id || data.definition_hash != definition_hash {
+        return Err(
+          "run_started does not match the engine's workflow ID and definition hash.".to_string(),
+        );
+      }
     }
-
-    Ok(
-      self
-        .workflow
-        .graph
-        .nodes
-        .iter()
-        .filter(|node| {
-          !completed.contains(node.id.as_str())
-            && !attempted.contains(node.id.as_str())
-            && incoming
-              .get(node.id.as_str())
-              .into_iter()
-              .flatten()
-              .all(|predecessor| completed.contains(predecessor))
-        })
-        .map(|node| node.id.clone())
-        .collect(),
-    )
-  }
-
-  fn validate_event_against_definition(&self, event: &RunEvent) -> Result<(), EngineError> {
-    match &event.payload {
-      RunEventPayload::RunStarted(data) => {
-        if data.workflow_id != self.workflow.workflow_id
-          || data.definition_hash != self.definition_hash
-        {
-          return Err(EngineError::Contract(
-            "run_started does not match the engine's workflow ID and definition hash.".to_string(),
-          ));
-        }
+    RunEventPayload::StepAttemptStarted(data) => {
+      if data.attempt != 1 {
+        return Err("R2 does not execute retries; attempt must be 1.".to_string());
       }
-      RunEventPayload::StepAttemptStarted(data) => {
-        if data.attempt != 1 {
-          return Err(EngineError::Contract(
-            "R2 does not execute retries; attempt must be 1.".to_string(),
-          ));
-        }
-        let node = self.workflow.node(&data.node_id).ok_or_else(|| {
-          EngineError::Contract(format!(
-            "Attempt references unknown node {:?}.",
-            data.node_id
-          ))
-        })?;
-        if data.handler != node.handler {
-          return Err(EngineError::Contract(format!(
-            "Attempt handler {:?} does not match node {:?} handler {:?}.",
-            data.handler, data.node_id, node.handler
-          )));
-        }
+      let node = workflow
+        .node(&data.node_id)
+        .ok_or_else(|| format!("Attempt references unknown node {:?}.", data.node_id))?;
+      if data.handler != node.handler {
+        return Err(format!(
+          "Attempt handler {:?} does not match node {:?} handler {:?}.",
+          data.handler, data.node_id, node.handler
+        ));
       }
-      RunEventPayload::StepAttemptSucceeded(data) => {
-        if self.workflow.node(&data.node_id).is_none() {
-          return Err(EngineError::Contract(format!(
-            "Attempt references unknown node {:?}.",
-            data.node_id
-          )));
-        }
+    }
+    RunEventPayload::StepAttemptSucceeded(data) => {
+      if workflow.node(&data.node_id).is_none() {
+        return Err(format!(
+          "Attempt references unknown node {:?}.",
+          data.node_id
+        ));
       }
-      RunEventPayload::StepAttemptFailed(data) => {
-        if self.workflow.node(&data.node_id).is_none() {
-          return Err(EngineError::Contract(format!(
-            "Attempt references unknown node {:?}.",
-            data.node_id
-          )));
-        }
+    }
+    RunEventPayload::StepAttemptFailed(data) => {
+      if workflow.node(&data.node_id).is_none() {
+        return Err(format!(
+          "Attempt references unknown node {:?}.",
+          data.node_id
+        ));
       }
-      RunEventPayload::RunSucceeded(data) => {
-        if self.workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
-          return Err(EngineError::Contract(format!(
-            "run_succeeded names {:?}, which is not the workflow terminal node.",
-            data.terminal_node_id
-          )));
-        }
+    }
+    RunEventPayload::RunSucceeded(data) => {
+      if workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
+        return Err(format!(
+          "run_succeeded names {:?}, which is not the workflow terminal node.",
+          data.terminal_node_id
+        ));
       }
-      RunEventPayload::RunFailed(data) => {
-        if let Some(node_id) = &data.node_id {
-          if self.workflow.node(node_id).is_none() {
-            return Err(EngineError::Contract(format!(
-              "run_failed references unknown node {node_id:?}."
-            )));
-          }
+    }
+    RunEventPayload::RunFailed(data) => {
+      if let Some(node_id) = &data.node_id {
+        if workflow.node(node_id).is_none() {
+          return Err(format!("run_failed references unknown node {node_id:?}."));
         }
       }
     }
-
-    Ok(())
   }
+
+  Ok(())
 }

@@ -18,6 +18,7 @@ pub mod step_orchestrator;
 pub mod workflow_state_machine;
 pub mod condition_evaluator;
 pub mod config;
+pub mod woml_bridge;
 
 /// Core engine version
 pub const VERSION: &str = "0.1.0";
