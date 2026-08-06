@@ -8,7 +8,7 @@ use woml_engine::{
 };
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
-const HELLO_HASH: &str = "sha256:74d4a6799119042d1cdcf2ed3e1e8e30228b3fbb80ad6750c1256ebd335b03ae";
+const HELLO_HASH: &str = "sha256:97788d011d2306b254e9ab36ec9262887517a682357a955d770242774317939a";
 
 fn host_options() -> Option<ScriptHostProcessOptions> {
   let bun = std::process::Command::new("bun")

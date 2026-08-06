@@ -71,7 +71,7 @@ describe('parseWoml', () => {
         }
         return { markup, accepted: false };
       `;
-    const source = `<workflow woml-version="0.1" id="raw-script">
+    const source = `<workflow version="1.0.0" id="raw-script">
   <triggers><manual id="start" /></triggers>
   <steps><step id="a"><script>${rawScript}</script></step></steps>
 </workflow>`;

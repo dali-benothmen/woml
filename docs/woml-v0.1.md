@@ -118,7 +118,6 @@ Outside raw-content elements:
 
 ```xml
 <workflow
-  woml-version="0.1"
   id="content-moderator"
   name="AI Content Moderator"
   description="Analyze submitted content and select a review path"
@@ -476,22 +475,20 @@ Rules:
 
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
-| `woml-version` | Yes | Version string | Selects the WOML grammar. This draft accepts `0.1`. |
 | `id` | Yes | Workflow ID | Stable workflow identity. |
 | `name` | No | String | Human-readable display name. |
 | `description` | No | String | Short human-readable description. |
 | `tags` | No | Tag list | Comma-separated classification tags. |
-| `version` | No | Version string | User-defined workflow version, distinct from `woml-version`. |
+| `version` | No | Version string | User-defined workflow version. It does not select the WOML grammar. |
 
-When present, workflow `name` and `description` must each contain at least one
-non-whitespace character.
+When present, workflow `name`, `description`, and `version` must each contain
+at least one non-whitespace character.
 
 `tags` is a comma-separated list. Whitespace surrounding each item is removed.
 Empty items and duplicate items are invalid.
 
 ```xml
 <workflow
-  woml-version="0.1"
   id="daily-report"
   name="Daily Report"
   description="Generate and publish the daily report"
@@ -504,10 +501,10 @@ Empty items and duplicate items are invalid.
 Runtime settings such as concurrency and timeout MUST NOT also appear on
 `<workflow>`. They have one canonical location: `<config>`.
 
-In the first CLI profile, `name` and `description` lower to
-`metadata.name` and `metadata.description` on the compiled workflow. The
-`tags` and user-defined `version` attributes remain staged because their
-compiled representation is not yet frozen.
+In the first CLI profile, `name`, `description`, and `version` lower to
+`metadata.name`, `metadata.description`, and `metadata.version` on the
+compiled workflow. The `tags` attribute remains staged because its compiled
+representation is not yet frozen.
 
 ## 7. `<config>`
 
@@ -1521,7 +1518,7 @@ The walking-skeleton workflow exercises raw script execution and direct context
 threading between two sequential script steps:
 
 ```xml
-<workflow woml-version="0.1" id="hello" name="Hello WOML">
+<workflow version="0.1" id="hello" name="Hello WOML">
   <triggers>
     <manual id="start" />
   </triggers>

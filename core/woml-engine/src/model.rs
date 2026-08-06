@@ -25,6 +25,8 @@ pub struct CompiledWorkflowMetadata {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub description: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub version: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub labels: Option<BTreeMap<String, String>>,
 }
 
@@ -305,6 +307,12 @@ impl CompiledWorkflowDefinition {
         issues.push(issue(
           ModelIssueCode::InvalidMetadata,
           "metadata.name must not be empty when present.",
+        ));
+      }
+      if metadata.version.as_deref() == Some("") {
+        issues.push(issue(
+          ModelIssueCode::InvalidMetadata,
+          "metadata.version must not be empty when present.",
         ));
       }
     }

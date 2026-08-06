@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "workflowId": "hello",
   "metadata": {
-    "name": "Hello WOML"
+    "name": "Hello WOML",
+    "version": "0.1"
   },
   "triggers": [
     {

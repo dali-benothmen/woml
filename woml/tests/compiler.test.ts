@@ -24,7 +24,7 @@ function validationError(source: string): WomlValidationError {
 }
 
 function validWorkflow(stepMarkup = '<step id="a"><script>return { ok: true };</script></step>') {
-  return `<workflow woml-version="0.1" id="test-workflow">
+  return `<workflow version="1.0.0" id="test-workflow">
   <triggers><manual id="start" /></triggers>
   <steps>${stepMarkup}</steps>
 </workflow>`;
@@ -200,7 +200,7 @@ describe('compileWoml', () => {
   });
 
   test('rejects missing required children and attributes', () => {
-    const missingTriggers = `<workflow woml-version="0.1" id="test-workflow">
+    const missingTriggers = `<workflow version="1.0.0" id="test-workflow">
   <steps><step id="a"><script>return 1;</script></step></steps>
 </workflow>`;
     expect(validationError(missingTriggers).diagnostic.code).toBe(
@@ -216,7 +216,7 @@ describe('compileWoml', () => {
   });
 
   test('requires one manual trigger and the canonical container order', () => {
-    const multipleManual = `<workflow woml-version="0.1" id="test-workflow">
+    const multipleManual = `<workflow version="1.0.0" id="test-workflow">
   <triggers><manual id="first" /><manual id="second" /></triggers>
   <steps><step id="a"><script>return 1;</script></step></steps>
 </workflow>`;
@@ -224,7 +224,7 @@ describe('compileWoml', () => {
       'WOML_MANUAL_TRIGGER_COUNT',
     );
 
-    const wrongOrder = `<workflow woml-version="0.1" id="test-workflow">
+    const wrongOrder = `<workflow version="1.0.0" id="test-workflow">
   <steps><step id="a"><script>return 1;</script></step></steps>
   <triggers><manual id="start" /></triggers>
 </workflow>`;
@@ -255,7 +255,9 @@ describe('compileWoml', () => {
     );
   });
 
-  test('rejects empty metadata and unsupported WOML versions', () => {
+  test('lowers the workflow version as metadata and rejects empty metadata', () => {
+    expect(compile(validWorkflow()).metadata?.version).toBe('1.0.0');
+
     const emptyName = validWorkflow(
       '<step id="a" name="   "><script>return 1;</script></step>',
     );
@@ -263,12 +265,29 @@ describe('compileWoml', () => {
       'WOML_EMPTY_METADATA',
     );
 
-    const futureVersion = validWorkflow().replace(
-      'woml-version="0.1"',
-      'woml-version="0.2"',
+    const emptyVersion = validWorkflow().replace(
+      'version="1.0.0"',
+      'version="   "',
     );
-    expect(validationError(futureVersion).diagnostic.code).toBe(
-      'WOML_UNSUPPORTED_VERSION',
+    expect(validationError(emptyVersion).diagnostic.code).toBe(
+      'WOML_EMPTY_METADATA',
+    );
+  });
+
+  test('does not require a workflow version', () => {
+    const source = validWorkflow().replace(' version="1.0.0"', '');
+
+    expect(compile(source).metadata).toBeUndefined();
+  });
+
+  test('rejects woml-version because version belongs to the workflow', () => {
+    const source = validWorkflow().replace(
+      'version="1.0.0"',
+      'woml-version="0.1"',
+    );
+
+    expect(validationError(source).diagnostic.code).toBe(
+      'WOML_UNKNOWN_ATTRIBUTE',
     );
   });
 });

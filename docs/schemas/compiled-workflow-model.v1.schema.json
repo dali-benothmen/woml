@@ -95,6 +95,11 @@
         "description": {
           "type": "string"
         },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "User-defined workflow version. This is not the WOML language or compiled-model schema version."
+        },
         "labels": {
           "type": "object",
           "additionalProperties": {

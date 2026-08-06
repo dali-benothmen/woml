@@ -313,7 +313,7 @@ describe('run-event v1 contract', () => {
 
     expect(started?.data.definitionHash).toBe(definitionHash(compiled));
     expect(started?.data.definitionHash).toBe(
-      'sha256:74d4a6799119042d1cdcf2ed3e1e8e30228b3fbb80ad6750c1256ebd335b03ae',
+      'sha256:97788d011d2306b254e9ab36ec9262887517a682357a955d770242774317939a',
     );
   });
 

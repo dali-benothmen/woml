@@ -91,6 +91,7 @@ export type EdgeCondition =
 export interface CompiledWorkflowMetadata {
   readonly name?: string;
   readonly description?: string;
+  readonly version?: string;
   readonly labels?: Readonly<Record<string, string>>;
 }
 

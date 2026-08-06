@@ -58,8 +58,8 @@ const stagedElements = new Set([
 
 const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   workflow: {
-    attributes: new Set(['woml-version', 'id', 'name', 'description']),
-    stagedAttributes: new Set(['tags', 'version']),
+    attributes: new Set(['id', 'name', 'description', 'version']),
+    stagedAttributes: new Set(['tags']),
   },
   triggers: { attributes: new Set() },
   manual: { attributes: new Set(['id']) },
@@ -253,7 +253,7 @@ function validateJavaScriptSafeId(
 function optionalMetadataValue(
   document: WomlSourceDocument,
   element: WomlSourceElement,
-  name: 'name' | 'description',
+  name: 'name' | 'description' | 'version',
 ): string | undefined {
   const attribute = element.attributes[name];
   if (attribute === undefined) return undefined;
@@ -274,10 +274,18 @@ function workflowMetadata(
 ): CompiledWorkflowMetadata | undefined {
   const name = optionalMetadataValue(document, workflow, 'name');
   const description = optionalMetadataValue(document, workflow, 'description');
-  if (name === undefined && description === undefined) return undefined;
+  const version = optionalMetadataValue(document, workflow, 'version');
+  if (
+    name === undefined &&
+    description === undefined &&
+    version === undefined
+  ) {
+    return undefined;
+  }
   return {
     ...(name === undefined ? {} : { name }),
     ...(description === undefined ? {} : { description }),
+    ...(version === undefined ? {} : { version }),
   };
 }
 
@@ -472,16 +480,6 @@ export function compileWoml(
 
   visitProfile(document, workflow);
 
-  const version = requiredAttribute(document, workflow, 'woml-version');
-  if (version.value !== '0.1') {
-    failValidation(
-      document,
-      'WOML_UNSUPPORTED_VERSION',
-      `Unsupported WOML version "${version.value}".`,
-      version.valueSpan,
-      'The first WOML CLI profile accepts woml-version="0.1".',
-    );
-  }
   const workflowId = validateWorkflowId(
     document,
     requiredAttribute(document, workflow, 'id'),

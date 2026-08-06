@@ -1,5 +1,5 @@
 <workflow
-  woml-version="0.1"
+  version="0.1"
   id="hello"
   name="Hello WOML">
 
@@ -13,7 +13,7 @@
       name="Choose greeting name"
       description="Use the trigger name or default to World">
       <script>
-        const name = context.trigger.name ?? "DALI";
+        const name = context.trigger.name ?? "Mohamed Ali";
         const age = 10 + 20
 
         return {

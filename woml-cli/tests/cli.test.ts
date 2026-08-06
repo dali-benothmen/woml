@@ -119,7 +119,7 @@ describe('woml run', () => {
     const workflowPath = join(temporaryDirectory, 'failure.woml');
     await writeFile(
       workflowPath,
-      `<workflow woml-version="0.1" id="failure">
+      `<workflow version="1.0.0" id="failure">
   <triggers><manual id="start" /></triggers>
   <steps><step id="broken"><script>throw new Error("boom");</script></step></steps>
 </workflow>`,

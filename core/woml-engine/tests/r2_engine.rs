@@ -14,7 +14,7 @@ const HOST_CRASHED_EVENT: &str =
   include_str!("../../../woml/tests/fixtures/run-events/host-crashed.event.v1.json");
 const INTERRUPTED_EVENT: &str =
   include_str!("../../../woml/tests/fixtures/run-events/interrupted.event.v1.json");
-const HELLO_HASH: &str = "sha256:74d4a6799119042d1cdcf2ed3e1e8e30228b3fbb80ad6750c1256ebd335b03ae";
+const HELLO_HASH: &str = "sha256:97788d011d2306b254e9ab36ec9262887517a682357a955d770242774317939a";
 
 fn hello_model() -> CompiledWorkflowDefinition {
   CompiledWorkflowDefinition::from_json(HELLO_MODEL).expect("hello model must deserialize")
@@ -32,6 +32,13 @@ fn accepts_the_existing_compiled_model_fixture_unchanged() {
   model.validate_for_execution().unwrap();
   assert_eq!(model.schema_version, 1);
   assert_eq!(model.workflow_id, "hello");
+  assert_eq!(
+    model
+      .metadata
+      .as_ref()
+      .and_then(|metadata| metadata.version.as_deref()),
+    Some("0.1")
+  );
   assert_eq!(model.graph.entry_node_ids, ["a"]);
   assert_eq!(model.terminal_node_id(), Some("b"));
   assert_eq!(serde_json::to_value(model).unwrap(), original);

@@ -39,7 +39,7 @@ The checked-in example will be:
 
 ```xml
 <workflow
-  woml-version="0.1"
+  version="0.1"
   id="hello"
   name="Hello WOML">
 
@@ -195,9 +195,10 @@ points into generated parser input.
 
 The compiler accepts only:
 
-- One `<workflow>` root with `woml-version="0.1"`, required `id`, and optional
-  non-empty `name` and `description` attributes. Other workflow attributes are
-  staged.
+- One `<workflow>` root with required `id`, plus optional non-empty `version`,
+  `name`, and `description` attributes. `version` identifies the workflow
+  itself; it does not select a WOML language version. Other workflow attributes
+  are staged.
 - One `<triggers>` container with exactly one `<manual id="..." />` trigger.
 - One `<steps>` container with one or more sequential `<step>` elements.
 - A required unique `id` and optional non-empty `name` and `description`
