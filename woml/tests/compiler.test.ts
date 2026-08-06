@@ -131,37 +131,48 @@ describe('compileWoml', () => {
     ]);
   });
 
-  test('accepts valid parallel syntax but stops at the explicit P2 lowering gate', () => {
-    const source = validWorkflow(`
-    <parallel id="work">
-      <step id="a"><script>return 1;</script></step>
-    </parallel>
-    <step id="result"><script>return context.steps.a;</script></step>`);
-    const error = compileError(source);
+  test('lowers the reviewed parallel fixture exactly to compiled model v3', () => {
+    const source = readFileSync(
+      new URL('./fixtures/parallel.woml', import.meta.url),
+      'utf8'
+    );
+    const expected = JSON.parse(
+      readFileSync(
+        new URL('./fixtures/parallel.compiled.v3.json', import.meta.url),
+        'utf8'
+      )
+    );
+    const compiled = compileWoml(parseWoml(source, { file: 'parallel.woml' }));
 
-    expect(error.diagnostic.code).toBe(
-      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
-    );
-    expect(error.diagnostic.phase).toBe('compile');
-    expect(error.diagnostic.location.start.offset).toBe(
-      source.indexOf('<parallel')
-    );
-    expect(error.diagnostic.message).toContain('phase P2');
+    expect(compiled).toEqual(expected);
+    expect(compiled.schemaVersion).toBe(3);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
   });
 
-  test('validates one-child groups and default policy/cap before the P2 gate', () => {
+  test('lowers one-child groups with the frozen default policy and cap', () => {
     const source = validWorkflow(`
     <parallel id="one" name="One child" description="Degenerate group">
       <step id="child"><script>return 1;</script></step>
     </parallel>
     <step id="result"><script>return context.steps.child;</script></step>`);
 
-    expect(compileError(source).diagnostic.code).toBe(
-      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
-    );
+    const compiled = compile(source);
+    expect(compiled.schemaVersion).toBe(3);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+    expect(
+      compiled.graph.nodes.find(
+        node => node.handler === 'engine.parallel-start'
+      )?.inputs
+    ).toEqual({
+      kind: 'object',
+      fields: {
+        concurrency: { kind: 'literal', value: 1 },
+        onError: { kind: 'literal', value: 'fail-fast' },
+      },
+    });
   });
 
-  test('validates parallel inside a branch arm before the P2 gate', () => {
+  test('lowers parallel inside a branch arm into one valid model-v3 DAG', () => {
     const source = validWorkflow(`
     <step id="ready"><script>return true;</script></step>
     <branch id="route">
@@ -178,9 +189,15 @@ describe('compileWoml', () => {
       </otherwise>
     </branch>`);
 
-    expect(compileError(source).diagnostic.code).toBe(
-      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
+    const compiled = compile(source);
+    expect(compiled.schemaVersion).toBe(3);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+    expect(compiled.graph.nodes.map(node => node.id)).toContain(
+      '__woml_parallel__checks__start'
     );
+    expect(
+      compiled.graph.edges.filter(edge => edge.parallelId === 'checks')
+    ).toHaveLength(4);
   });
 
   test('rejects empty and unsupported parallel children at their source', () => {
@@ -331,9 +348,9 @@ describe('compileWoml', () => {
       '{{context.steps.group}}',
       '{{context.steps.child}}'
     );
-    expect(compileError(validSource).diagnostic.code).toBe(
-      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
-    );
+    const compiled = compile(validSource);
+    expect(compiled.schemaVersion).toBe(3);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
   });
 
   test('rejects staged attributes instead of silently ignoring them', () => {
@@ -911,5 +928,72 @@ describe('inspectCompiledWorkflowGraph', () => {
     expect(
       inspectCompiledWorkflowGraph(badJoin).map(issue => issue.code)
     ).toContain('INVALID_BRANCH_GROUP');
+  });
+
+  test('rejects malformed parallel start, ownership, route, and join contracts', () => {
+    const source = readFileSync(
+      new URL('./fixtures/parallel.woml', import.meta.url),
+      'utf8'
+    );
+    const compiled = compile(source);
+
+    const badStart = {
+      ...compiled.graph,
+      nodes: compiled.graph.nodes.map(node =>
+        node.handler === 'engine.parallel-start'
+          ? {
+              ...node,
+              inputs: {
+                kind: 'object' as const,
+                fields: {
+                  concurrency: { kind: 'literal' as const, value: 3 },
+                  onError: { kind: 'literal' as const, value: 'continue' },
+                },
+              },
+            }
+          : node
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(badStart).map(issue => issue.code)
+    ).toContain('INVALID_PARALLEL_GROUP');
+
+    const missingOwner = {
+      ...compiled.graph,
+      edges: compiled.graph.edges.map(edge =>
+        edge.id === 'fieldData:child:0'
+          ? { ...edge, parallelId: undefined }
+          : edge
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(missingOwner).map(issue => issue.code)
+    ).toContain('INVALID_PARALLEL_GROUP');
+
+    const bypassedJoin = {
+      ...compiled.graph,
+      edges: [
+        ...compiled.graph.edges,
+        {
+          id: 'loadWeather-to-buildReport',
+          from: 'loadWeather',
+          to: 'buildReport',
+          condition: { kind: 'always' as const },
+        },
+      ],
+    };
+    expect(
+      inspectCompiledWorkflowGraph(bypassedJoin).map(issue => issue.code)
+    ).toContain('INVALID_PARALLEL_GROUP');
+
+    const terminalJoin = {
+      ...compiled.graph,
+      edges: compiled.graph.edges.filter(
+        edge => edge.id !== 'fieldData-to-buildReport'
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(terminalJoin).map(issue => issue.code)
+    ).toContain('INVALID_PARALLEL_GROUP');
   });
 });

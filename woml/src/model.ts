@@ -122,6 +122,7 @@ export interface CompiledWorkflowEdge {
   readonly to: string;
   readonly condition: EdgeCondition;
   readonly branchId?: string;
+  readonly parallelId?: string;
 }
 
 export interface CompiledWorkflowGraph {
@@ -147,9 +148,15 @@ export interface CompiledWorkflowDefinitionV2
   readonly schemaVersion: 2;
 }
 
+export interface CompiledWorkflowDefinitionV3
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 3;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
-  | CompiledWorkflowDefinitionV2;
+  | CompiledWorkflowDefinitionV2
+  | CompiledWorkflowDefinitionV3;
 
 export interface CompiledGraphIssue {
   readonly code:
@@ -163,7 +170,8 @@ export interface CompiledGraphIssue {
     | 'TERMINAL_NODE_COUNT'
     | 'INVALID_BRANCH_SELECTOR'
     | 'INVALID_BRANCH_GROUP'
-    | 'INVALID_BRANCH_RESULT';
+    | 'INVALID_BRANCH_RESULT'
+    | 'INVALID_PARALLEL_GROUP';
   readonly message: string;
 }
 
@@ -173,7 +181,7 @@ export interface InspectCompiledGraphOptions {
 
 export function inspectCompiledWorkflowGraph(
   graph: CompiledWorkflowGraph,
-  options: InspectCompiledGraphOptions = {},
+  options: InspectCompiledGraphOptions = {}
 ): readonly CompiledGraphIssue[] {
   const issues: CompiledGraphIssue[] = [];
   const nodeIds = new Set<string>();
@@ -243,7 +251,7 @@ export function inspectCompiledWorkflowGraph(
   }
 
   const reachable = new Set<string>();
-  const queue = [...entryIds].filter((id) => nodeIds.has(id));
+  const queue = [...entryIds].filter(id => nodeIds.has(id));
   while (queue.length > 0) {
     const id = queue.shift();
     if (id === undefined || reachable.has(id)) continue;
@@ -260,7 +268,9 @@ export function inspectCompiledWorkflowGraph(
   }
 
   const remainingIncoming = new Map(incoming);
-  const ready = [...nodeIds].filter((id) => (remainingIncoming.get(id) ?? 0) === 0);
+  const ready = [...nodeIds].filter(
+    id => (remainingIncoming.get(id) ?? 0) === 0
+  );
   let visitedCount = 0;
   while (ready.length > 0) {
     const id = ready.shift();
@@ -281,7 +291,7 @@ export function inspectCompiledWorkflowGraph(
 
   if (options.requireSingleTerminal === true) {
     const terminalIds = [...nodeIds].filter(
-      (id) => (adjacency.get(id)?.length ?? 0) === 0,
+      id => (adjacency.get(id)?.length ?? 0) === 0
     );
     if (terminalIds.length !== 1) {
       issues.push({
@@ -292,14 +302,141 @@ export function inspectCompiledWorkflowGraph(
   }
 
   inspectBranchGroups(graph, issues);
+  inspectParallelGroups(graph, issues);
 
   return issues;
+}
+
+function parallelStartId(parallelId: string): string {
+  return `__woml_parallel__${parallelId}__start`;
+}
+
+function inspectParallelGroups(
+  graph: CompiledWorkflowGraph,
+  issues: CompiledGraphIssue[]
+): void {
+  const nodes = new Map(graph.nodes.map(node => [node.id, node]));
+  const groups = new Map<string, CompiledWorkflowEdge[]>();
+  for (const edge of graph.edges) {
+    if (edge.parallelId === undefined) continue;
+    const group = groups.get(edge.parallelId) ?? [];
+    group.push(edge);
+    groups.set(edge.parallelId, group);
+    if (edge.branchId !== undefined || edge.condition.kind !== 'always') {
+      issues.push({
+        code: 'INVALID_PARALLEL_GROUP',
+        message: `Parallel edge "${edge.id}" must be unconditional and cannot also belong to a branch.`,
+      });
+    }
+  }
+
+  for (const [parallelId, edges] of groups) {
+    const startId = parallelStartId(parallelId);
+    const start = nodes.get(startId);
+    const join = nodes.get(parallelId);
+    const fields = start?.inputs.kind === 'object' ? start.inputs.fields : {};
+    const concurrency = fields.concurrency;
+    const onError = fields.onError;
+    const childEdges = edges.filter(edge => edge.from === startId);
+    const joinEdges = edges.filter(edge => edge.to === parallelId);
+    const childIds = childEdges.map(edge => edge.to);
+    const inputsAreValid =
+      start?.handler === 'engine.parallel-start' &&
+      Object.keys(fields).length === 2 &&
+      concurrency?.kind === 'literal' &&
+      typeof concurrency.value === 'number' &&
+      Number.isSafeInteger(concurrency.value) &&
+      concurrency.value >= 1 &&
+      concurrency.value <= childEdges.length &&
+      onError?.kind === 'literal' &&
+      (onError.value === 'fail-fast' || onError.value === 'wait-all');
+    const joinIsValid =
+      join?.handler === 'engine.parallel-join' &&
+      join.inputs.kind === 'object' &&
+      Object.keys(join.inputs.fields).length === 0;
+    const edgesAreValid =
+      childEdges.length >= 1 &&
+      joinEdges.length === childEdges.length &&
+      edges.length === childEdges.length * 2 &&
+      childEdges.every(
+        (edge, index) =>
+          edge.id === `${parallelId}:child:${index}` &&
+          edge.parallelId === parallelId &&
+          edge.branchId === undefined &&
+          edge.condition.kind === 'always' &&
+          nodes.get(edge.to)?.handler === 'runtime.script'
+      ) &&
+      joinEdges.every(
+        (edge, index) =>
+          edge.id === `${parallelId}:join:${index}` &&
+          edge.from === childIds[index] &&
+          edge.parallelId === parallelId &&
+          edge.branchId === undefined &&
+          edge.condition.kind === 'always'
+      );
+    const startOutgoing = graph.edges.filter(edge => edge.from === startId);
+    const joinIncoming = graph.edges.filter(edge => edge.to === parallelId);
+    const boundariesAreClosed =
+      startOutgoing.length === childEdges.length &&
+      startOutgoing.every(edge => edge.parallelId === parallelId) &&
+      joinIncoming.length === joinEdges.length &&
+      joinIncoming.every(edge => edge.parallelId === parallelId) &&
+      childIds.every(childId => {
+        const incoming = graph.edges.filter(edge => edge.to === childId);
+        const outgoing = graph.edges.filter(edge => edge.from === childId);
+        return (
+          incoming.length === 1 &&
+          incoming[0].from === startId &&
+          incoming[0].parallelId === parallelId &&
+          outgoing.length === 1 &&
+          outgoing[0].to === parallelId &&
+          outgoing[0].parallelId === parallelId
+        );
+      });
+    const joinHasDownstream = graph.edges.some(
+      edge => edge.from === parallelId
+    );
+
+    if (
+      !publicStructuralIdPattern.test(parallelId) ||
+      !inputsAreValid ||
+      !joinIsValid ||
+      !edgesAreValid ||
+      !boundariesAreClosed ||
+      !joinHasDownstream
+    ) {
+      issues.push({
+        code: 'INVALID_PARALLEL_GROUP',
+        message: `Parallel group "${parallelId}" does not match the frozen start, ordered child, join, policy, and concurrency contract.`,
+      });
+    }
+  }
+
+  for (const node of graph.nodes) {
+    if (node.handler === 'engine.parallel-start') {
+      const match = /^__woml_parallel__([a-z][A-Za-z0-9]*)__start$/.exec(
+        node.id
+      );
+      if (match === null || !groups.has(match[1])) {
+        issues.push({
+          code: 'INVALID_PARALLEL_GROUP',
+          message: `Parallel start "${node.id}" has no matching edge group.`,
+        });
+      }
+    }
+    if (node.handler === 'engine.parallel-join' && !groups.has(node.id)) {
+      issues.push({
+        code: 'INVALID_PARALLEL_GROUP',
+        message: `Parallel join "${node.id}" has no matching edge group.`,
+      });
+    }
+  }
 }
 
 const publicStructuralIdPattern = /^[a-z][A-Za-z0-9]*$/;
 
 function isBranchContextReference(
-  expression: ValueExpression | undefined,
+  expression: ValueExpression | undefined
 ): expression is ContextReferenceExpression {
   if (expression?.kind !== 'contextReference') return false;
   const [root, structuralId] = expression.path;
@@ -313,9 +450,9 @@ function isBranchContextReference(
 
 function inspectBranchGroups(
   graph: CompiledWorkflowGraph,
-  issues: CompiledGraphIssue[],
+  issues: CompiledGraphIssue[]
 ): void {
-  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const groups = new Map<string, CompiledWorkflowEdge[]>();
 
   for (const edge of graph.edges) {
@@ -336,7 +473,7 @@ function inspectBranchGroups(
   for (const node of graph.nodes) {
     if (node.handler === 'engine.branch-select') {
       const match = /^__woml_branch__([a-z][A-Za-z0-9]*)__select$/.exec(
-        node.id,
+        node.id
       );
       const branchId = match?.[1];
       const inputsAreEmpty =
@@ -355,14 +492,14 @@ function inspectBranchGroups(
     const selectorId = `__woml_branch__${branchId}__select`;
     const selector = nodes.get(selectorId);
     const selectorOutgoing = graph.edges.filter(
-      (edge) => edge.from === selectorId,
+      edge => edge.from === selectorId
     );
     if (
       !publicStructuralIdPattern.test(branchId) ||
       selector?.handler !== 'engine.branch-select' ||
-      edges.some((edge) => edge.from !== selectorId) ||
+      edges.some(edge => edge.from !== selectorId) ||
       selectorOutgoing.length !== edges.length ||
-      selectorOutgoing.some((edge) => edge.branchId !== branchId)
+      selectorOutgoing.some(edge => edge.branchId !== branchId)
     ) {
       issues.push({
         code: 'INVALID_BRANCH_GROUP',
@@ -378,7 +515,7 @@ function inspectBranchGroups(
         (edge, index) =>
           edge.id === `${branchId}:when:${index}` &&
           edge.condition.kind === 'boolean' &&
-          isBranchContextReference(edge.condition.value),
+          isBranchContextReference(edge.condition.value)
       );
     const validOtherwise =
       otherwiseEdge?.id === `${branchId}:otherwise` &&
@@ -392,12 +529,12 @@ function inspectBranchGroups(
 
     const result = nodes.get(branchId);
     const fields = result?.inputs.kind === 'object' ? result.inputs.fields : {};
-    const expectedKeys = edges.map((edge) => edge.id);
+    const expectedKeys = edges.map(edge => edge.id);
     const actualKeys = Object.keys(fields);
     if (
       result?.handler !== 'engine.branch-result' ||
       actualKeys.length !== expectedKeys.length ||
-      expectedKeys.some((key) => !isBranchContextReference(fields[key]))
+      expectedKeys.some(key => !isBranchContextReference(fields[key]))
     ) {
       issues.push({
         code: 'INVALID_BRANCH_RESULT',
@@ -406,13 +543,12 @@ function inspectBranchGroups(
     }
 
     const incomingResultEdges = graph.edges.filter(
-      (edge) => edge.to === branchId,
+      edge => edge.to === branchId
     );
     const validJoins =
       incomingResultEdges.length === edges.length &&
       incomingResultEdges.every(
-        (edge) =>
-          edge.branchId === undefined && edge.condition.kind === 'always',
+        edge => edge.branchId === undefined && edge.condition.kind === 'always'
       );
     const adjacency = new Map<string, string[]>();
     for (const edge of graph.edges) {
@@ -420,7 +556,7 @@ function inspectBranchGroups(
       outgoing.push(edge.to);
       adjacency.set(edge.from, outgoing);
     }
-    const routeNodeSets = edges.map((edge) => {
+    const routeNodeSets = edges.map(edge => {
       const visited = new Set<string>();
       const queue = [edge.to];
       let reachesResult = false;
@@ -440,18 +576,16 @@ function inspectBranchGroups(
       routeNodeSets
         .slice(index + 1)
         .every(
-          (other) =>
-            ![...route.visited].some((nodeId) => other.visited.has(nodeId)),
-        ),
+          other => ![...route.visited].some(nodeId => other.visited.has(nodeId))
+        )
     );
     const joinsBelongToDistinctRoutes = incomingResultEdges.every(
-      (join) =>
-        routeNodeSets.filter((route) => route.visited.has(join.from)).length ===
-        1,
+      join =>
+        routeNodeSets.filter(route => route.visited.has(join.from)).length === 1
     );
     if (
       !validJoins ||
-      routeNodeSets.some((route) => !route.reachesResult) ||
+      routeNodeSets.some(route => !route.reachesResult) ||
       !routesAreDisjoint ||
       !joinsBelongToDistinctRoutes
     ) {

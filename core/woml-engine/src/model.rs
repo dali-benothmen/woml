@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::{COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2};
+use crate::{
+  COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2,
+  COMPILED_MODEL_SCHEMA_VERSION_V3,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -69,6 +72,8 @@ pub struct CompiledWorkflowEdge {
   pub condition: EdgeCondition,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub branch_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub parallel_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -168,6 +173,8 @@ pub enum ModelIssueCode {
   InvalidBranchSelector,
   InvalidBranchGroup,
   InvalidBranchResult,
+  InvalidParallelGroup,
+  UnsupportedParallelExecution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -220,6 +227,50 @@ fn selector_branch_id(value: &str) -> Option<&str> {
     .strip_prefix("__woml_branch__")?
     .strip_suffix("__select")
     .filter(|branch_id| valid_public_structural_id(branch_id))
+}
+
+fn parallel_start_id(value: &str) -> Option<&str> {
+  value
+    .strip_prefix("__woml_parallel__")?
+    .strip_suffix("__start")
+    .filter(|parallel_id| valid_public_structural_id(parallel_id))
+}
+
+fn parallel_start_inputs(node: Option<&CompiledWorkflowNode>, child_count: usize) -> bool {
+  let Some(node) = node else {
+    return false;
+  };
+  if node.handler != "engine.parallel-start" {
+    return false;
+  }
+  let ValueExpression::Object { fields } = &node.inputs else {
+    return false;
+  };
+  if fields.len() != 2 {
+    return false;
+  }
+  let valid_concurrency = matches!(
+    fields.get("concurrency"),
+    Some(ValueExpression::Literal { value })
+      if value.as_u64().is_some_and(|value| value >= 1 && value <= child_count as u64)
+  );
+  let valid_policy = matches!(
+    fields.get("onError"),
+    Some(ValueExpression::Literal { value })
+      if matches!(value.as_str(), Some("fail-fast" | "wait-all"))
+  );
+  valid_concurrency && valid_policy
+}
+
+fn parallel_join_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
+  matches!(
+    node,
+    Some(CompiledWorkflowNode {
+      handler,
+      inputs: ValueExpression::Object { fields },
+      ..
+    }) if handler == "engine.parallel-join" && fields.is_empty()
+  )
 }
 
 fn is_branch_context_reference(expression: &ValueExpression) -> bool {
@@ -301,7 +352,7 @@ fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut V
   }
 
   for edge in &workflow.graph.edges {
-    if workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V2
+    if workflow.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V2
       && matches!(
         edge.condition,
         EdgeCondition::Truthy { .. } | EdgeCondition::Equals { .. }
@@ -498,6 +549,159 @@ fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut V
   }
 }
 
+fn inspect_parallel_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec<ModelIssue>) {
+  let nodes: HashMap<&str, &CompiledWorkflowNode> = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| (node.id.as_str(), node))
+    .collect();
+  let mut groups: BTreeMap<&str, Vec<&CompiledWorkflowEdge>> = BTreeMap::new();
+  for edge in &workflow.graph.edges {
+    if let Some(parallel_id) = edge.parallel_id.as_deref() {
+      groups.entry(parallel_id).or_default().push(edge);
+      if edge.branch_id.is_some() || !matches!(edge.condition, EdgeCondition::Always) {
+        issues.push(issue(
+          ModelIssueCode::InvalidParallelGroup,
+          format!(
+            "Parallel edge {:?} must be unconditional and cannot also belong to a branch.",
+            edge.id
+          ),
+        ));
+      }
+    }
+  }
+
+  if workflow.schema_version < COMPILED_MODEL_SCHEMA_VERSION_V3 && !groups.is_empty() {
+    issues.push(issue(
+      ModelIssueCode::InvalidParallelGroup,
+      "Compiled model v1/v2 cannot contain model-v3 parallel groups.",
+    ));
+  }
+
+  let mut child_owners: HashMap<&str, &str> = HashMap::new();
+  for (parallel_id, edges) in &groups {
+    let start_id = format!("__woml_parallel__{parallel_id}__start");
+    let start = nodes.get(start_id.as_str()).copied();
+    let join = nodes.get(*parallel_id).copied();
+    let child_edges: Vec<_> = edges
+      .iter()
+      .copied()
+      .filter(|edge| edge.from == start_id)
+      .collect();
+    let join_edges: Vec<_> = edges
+      .iter()
+      .copied()
+      .filter(|edge| edge.to.as_str() == *parallel_id)
+      .collect();
+    let children: Vec<_> = child_edges.iter().map(|edge| edge.to.as_str()).collect();
+
+    let ordered_edges_are_valid = !child_edges.is_empty()
+      && join_edges.len() == child_edges.len()
+      && edges.len() == child_edges.len() * 2
+      && child_edges.iter().enumerate().all(|(index, edge)| {
+        edge.id == format!("{parallel_id}:child:{index}")
+          && edge.parallel_id.as_deref() == Some(*parallel_id)
+          && edge.branch_id.is_none()
+          && matches!(edge.condition, EdgeCondition::Always)
+          && nodes
+            .get(edge.to.as_str())
+            .is_some_and(|node| node.handler == "runtime.script")
+      })
+      && join_edges.iter().enumerate().all(|(index, edge)| {
+        edge.id == format!("{parallel_id}:join:{index}")
+          && edge.from == children[index]
+          && edge.parallel_id.as_deref() == Some(*parallel_id)
+          && edge.branch_id.is_none()
+          && matches!(edge.condition, EdgeCondition::Always)
+      });
+    let start_outgoing: Vec<_> = workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.from == start_id)
+      .collect();
+    let join_incoming: Vec<_> = workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.to.as_str() == *parallel_id)
+      .collect();
+    let child_boundaries_are_closed = children.iter().all(|child_id| {
+      let incoming: Vec<_> = workflow
+        .graph
+        .edges
+        .iter()
+        .filter(|edge| edge.to == *child_id)
+        .collect();
+      let outgoing: Vec<_> = workflow
+        .graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from == *child_id)
+        .collect();
+      incoming.len() == 1
+        && incoming[0].from == start_id
+        && incoming[0].parallel_id.as_deref() == Some(*parallel_id)
+        && outgoing.len() == 1
+        && outgoing[0].to.as_str() == *parallel_id
+        && outgoing[0].parallel_id.as_deref() == Some(*parallel_id)
+    });
+    let boundaries_are_valid = start_outgoing.len() == child_edges.len()
+      && start_outgoing
+        .iter()
+        .all(|edge| edge.parallel_id.as_deref() == Some(*parallel_id))
+      && join_incoming.len() == join_edges.len()
+      && join_incoming
+        .iter()
+        .all(|edge| edge.parallel_id.as_deref() == Some(*parallel_id))
+      && child_boundaries_are_closed
+      && workflow
+        .graph
+        .edges
+        .iter()
+        .any(|edge| edge.from.as_str() == *parallel_id);
+
+    let mut duplicate_child = false;
+    for child_id in &children {
+      if child_owners.insert(child_id, parallel_id).is_some() {
+        duplicate_child = true;
+      }
+    }
+
+    if !valid_public_structural_id(parallel_id)
+      || !parallel_start_inputs(start, child_edges.len())
+      || !parallel_join_inputs(join)
+      || !ordered_edges_are_valid
+      || !boundaries_are_valid
+      || duplicate_child
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidParallelGroup,
+        format!(
+          "Parallel group {parallel_id:?} does not match the frozen start, ordered child, join, policy, and concurrency contract."
+        ),
+      ));
+    }
+  }
+
+  for node in &workflow.graph.nodes {
+    if node.handler == "engine.parallel-start" {
+      if parallel_start_id(&node.id).is_none_or(|parallel_id| !groups.contains_key(parallel_id)) {
+        issues.push(issue(
+          ModelIssueCode::InvalidParallelGroup,
+          format!("Parallel start {:?} has no matching edge group.", node.id),
+        ));
+      }
+    } else if node.handler == "engine.parallel-join" && !groups.contains_key(node.id.as_str()) {
+      issues.push(issue(
+        ModelIssueCode::InvalidParallelGroup,
+        format!("Parallel join {:?} has no matching edge group.", node.id),
+      ));
+    }
+  }
+}
+
 impl CompiledWorkflowDefinition {
   pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
     serde_json::from_str(json)
@@ -549,7 +753,9 @@ impl CompiledWorkflowDefinition {
     let mut issues = Vec::new();
     if !matches!(
       self.schema_version,
-      COMPILED_MODEL_SCHEMA_VERSION_V1 | COMPILED_MODEL_SCHEMA_VERSION_V2
+      COMPILED_MODEL_SCHEMA_VERSION_V1
+        | COMPILED_MODEL_SCHEMA_VERSION_V2
+        | COMPILED_MODEL_SCHEMA_VERSION_V3
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -797,10 +1003,17 @@ impl CompiledWorkflowDefinition {
             ));
     }
     inspect_branch_contract(self, &mut issues);
+    inspect_parallel_contract(self, &mut issues);
     issues
   }
 
   fn inspect_executable_profile(&self, issues: &mut Vec<ModelIssue>) {
+    if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V3 {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedParallelExecution,
+        "Compiled model v3 is structurally valid, but parallel execution is enabled in phase P4.",
+      ));
+    }
     for trigger in &self.triggers {
       let is_empty_object = matches!(
           &trigger.config,
@@ -829,7 +1042,18 @@ impl CompiledWorkflowDefinition {
               .values()
               .all(|value| matches!(value, ValueExpression::ContextReference { .. }))
         }
-        ("runtime.script" | "engine.branch-select" | "engine.branch-result", _) => false,
+        ("engine.parallel-start", ValueExpression::Object { .. }) => {
+          parallel_start_inputs(Some(node), usize::MAX)
+        }
+        ("engine.parallel-join", ValueExpression::Object { fields }) => fields.is_empty(),
+        (
+          "runtime.script"
+          | "engine.branch-select"
+          | "engine.branch-result"
+          | "engine.parallel-start"
+          | "engine.parallel-join",
+          _,
+        ) => false,
         _ => {
           issues.push(issue(
             ModelIssueCode::UnknownHandler,
@@ -903,13 +1127,17 @@ impl CompiledWorkflowDefinition {
       && self.graph.nodes.iter().all(|node| {
         let incoming_count = incoming.get(node.id.as_str()).copied().unwrap_or(0);
         let outgoing_count = outgoing.get(node.id.as_str()).copied().unwrap_or(0);
-        (incoming_count <= 1 || node.handler == "engine.branch-result")
-          && (outgoing_count <= 1 || node.handler == "engine.branch-select")
+        (incoming_count <= 1
+          || node.handler == "engine.branch-result"
+          || node.handler == "engine.parallel-join")
+          && (outgoing_count <= 1
+            || node.handler == "engine.branch-select"
+            || node.handler == "engine.parallel-start")
       });
     if !topology_is_sequential_or_branching {
       issues.push(issue(
         ModelIssueCode::UnsupportedNonSequentialDag,
-        "The executable profile supports sequential and branch DAGs; unrelated fan-out remains staged.",
+        "The executable profile supports only frozen sequential, branch, and parallel DAG shapes; unrelated fan-out remains staged.",
       ));
     }
   }

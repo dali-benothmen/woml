@@ -1,14 +1,10 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
-import type {
-  CompiledWorkflowDefinition,
-  JsonObject,
-  JsonValue,
-} from 'woml';
+import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
 
 export interface RustRunEvent {
-  readonly eventSchemaVersion: 1 | 2;
+  readonly eventSchemaVersion: 1 | 2 | 3;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
@@ -73,7 +69,7 @@ export class RustWorkflowExecutionError extends Error {
       readonly armId?: string;
       readonly referencePath?: readonly string[];
       readonly branchSite?: 'test' | 'result' | 'selection';
-    } = {},
+    } = {}
   ) {
     super(message);
     this.name = 'RustWorkflowExecutionError';
@@ -95,7 +91,7 @@ interface NativeCore {
     triggerJson: string,
     bunExecutable: string,
     scriptHostPath: string,
-    scriptTimeoutMs: number,
+    scriptTimeoutMs: number
   ) => Promise<string>;
   readonly executeWomlWorkflowDurable: (
     compiledModelJson: string,
@@ -104,18 +100,24 @@ interface NativeCore {
     bunExecutable: string,
     scriptHostPath: string,
     scriptTimeoutMs: number,
-    eventStorePath: string,
+    eventStorePath: string
   ) => Promise<string>;
   readonly recoverWomlRuns: (eventStorePath: string) => string;
 }
 
 function canonicalizeJson(value: unknown): string {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'string'
+  ) {
     return JSON.stringify(value);
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new Error('A compiled workflow definition must contain only finite JSON numbers.');
+      throw new Error(
+        'A compiled workflow definition must contain only finite JSON numbers.'
+      );
     }
     return JSON.stringify(value);
   }
@@ -126,16 +128,14 @@ function canonicalizeJson(value: unknown): string {
     const object = value as Readonly<Record<string, unknown>>;
     return `{${Object.keys(object)
       .sort()
-      .map(
-        (key) => `${JSON.stringify(key)}:${canonicalizeJson(object[key])}`,
-      )
+      .map(key => `${JSON.stringify(key)}:${canonicalizeJson(object[key])}`)
       .join(',')}}`;
   }
   throw new Error('A compiled workflow definition must be strict JSON.');
 }
 
 export function compiledDefinitionHash(
-  workflow: CompiledWorkflowDefinition,
+  workflow: CompiledWorkflowDefinition
 ): string {
   const hexadecimal = new Bun.CryptoHasher('sha256')
     .update(canonicalizeJson(workflow))
@@ -146,14 +146,17 @@ export function compiledDefinitionHash(
 function defaultNativeCorePath(): string {
   const override = process.env.WOML_RUST_CORE_PATH;
   return override === undefined
-    ? resolve(import.meta.dir, `woml-core.${process.platform}-${process.arch}.node`)
+    ? resolve(
+        import.meta.dir,
+        `woml-core.${process.platform}-${process.arch}.node`
+      )
     : resolve(override);
 }
 
 function defaultScriptHostPath(): string {
   return resolve(
     import.meta.dir,
-    import.meta.url.endsWith('.ts') ? 'script-host.ts' : 'script-host.js',
+    import.meta.url.endsWith('.ts') ? 'script-host.ts' : 'script-host.js'
   );
 }
 
@@ -162,7 +165,7 @@ function loadNativeCore(path: string): NativeCore {
   const loaded = require(path) as Partial<NativeCore>;
   if (typeof loaded.executeWomlWorkflow !== 'function') {
     throw new Error(
-      `Native core at "${path}" does not expose executeWomlWorkflow; rebuild the Rust addon.`,
+      `Native core at "${path}" does not expose executeWomlWorkflow; rebuild the Rust addon.`
     );
   }
   return loaded as NativeCore;
@@ -174,37 +177,35 @@ function decodeNativeExecutionError(error: unknown): never {
   if (jsonStart !== -1) {
     try {
       const decoded = JSON.parse(
-        message.slice(jsonStart),
+        message.slice(jsonStart)
       ) as Partial<NativeExecutionErrorEnvelope>;
       if (
         decoded.kind === 'woml_execution_error' &&
         typeof decoded.code === 'string' &&
         typeof decoded.message === 'string' &&
         (decoded.nodeId === undefined || typeof decoded.nodeId === 'string') &&
-        (decoded.branchId === undefined || typeof decoded.branchId === 'string') &&
+        (decoded.branchId === undefined ||
+          typeof decoded.branchId === 'string') &&
         (decoded.armId === undefined || typeof decoded.armId === 'string') &&
         (decoded.referencePath === undefined ||
           (Array.isArray(decoded.referencePath) &&
-            decoded.referencePath.every((part) => typeof part === 'string'))) &&
+            decoded.referencePath.every(part => typeof part === 'string'))) &&
         (decoded.branchSite === undefined ||
           decoded.branchSite === 'test' ||
           decoded.branchSite === 'result' ||
           decoded.branchSite === 'selection')
       ) {
-        throw new RustWorkflowExecutionError(
-          decoded.code,
-          decoded.message,
-          {
-            nodeId: decoded.nodeId,
-            branchId: decoded.branchId,
-            armId: decoded.armId,
-            referencePath: decoded.referencePath,
-            branchSite: decoded.branchSite,
-          },
-        );
+        throw new RustWorkflowExecutionError(decoded.code, decoded.message, {
+          nodeId: decoded.nodeId,
+          branchId: decoded.branchId,
+          armId: decoded.armId,
+          referencePath: decoded.referencePath,
+          branchSite: decoded.branchSite,
+        });
       }
     } catch (decodedError) {
-      if (decodedError instanceof RustWorkflowExecutionError) throw decodedError;
+      if (decodedError instanceof RustWorkflowExecutionError)
+        throw decodedError;
     }
   }
   throw error;
@@ -212,16 +213,19 @@ function decodeNativeExecutionError(error: unknown): never {
 
 export async function executeWorkflowWithRust(
   workflow: CompiledWorkflowDefinition,
-  options: RustExecutorOptions = {},
+  options: RustExecutorOptions = {}
 ): Promise<RustWorkflowExecutionResult> {
   const timeoutMs = options.scriptTimeoutMs ?? 5_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 0xffff_ffff) {
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 0xffff_ffff
+  ) {
     throw new Error('scriptTimeoutMs must be a positive 32-bit integer.');
   }
 
   const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
-  const scriptHostPath =
-    options.scriptHostPath ?? defaultScriptHostPath();
+  const scriptHostPath = options.scriptHostPath ?? defaultScriptHostPath();
   const bunExecutable = options.bunExecutable ?? process.execPath;
   const native = loadNativeCore(nativePath);
   let resultJson: string;
@@ -232,7 +236,7 @@ export async function executeWorkflowWithRust(
       JSON.stringify(options.trigger ?? {}),
       bunExecutable,
       scriptHostPath,
-      timeoutMs,
+      timeoutMs
     );
   } catch (error) {
     decodeNativeExecutionError(error);
@@ -243,10 +247,14 @@ export async function executeWorkflowWithRust(
 export async function executeWorkflowWithRustDurable(
   workflow: CompiledWorkflowDefinition,
   eventStorePath: string,
-  options: RustExecutorOptions = {},
+  options: RustExecutorOptions = {}
 ): Promise<RustWorkflowExecutionResult> {
   const timeoutMs = options.scriptTimeoutMs ?? 5_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 0xffff_ffff) {
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 0xffff_ffff
+  ) {
     throw new Error('scriptTimeoutMs must be a positive 32-bit integer.');
   }
   if (eventStorePath.length === 0) {
@@ -257,31 +265,35 @@ export async function executeWorkflowWithRustDurable(
   const native = loadNativeCore(nativePath);
   if (typeof native.executeWomlWorkflowDurable !== 'function') {
     throw new Error(
-      `Native core at "${nativePath}" does not expose executeWomlWorkflowDurable; rebuild the Rust addon.`,
+      `Native core at "${nativePath}" does not expose executeWomlWorkflowDurable; rebuild the Rust addon.`
     );
   }
-  const resultJson = await native.executeWomlWorkflowDurable(
-    JSON.stringify(workflow),
-    compiledDefinitionHash(workflow),
-    JSON.stringify(options.trigger ?? {}),
-    options.bunExecutable ?? process.execPath,
-    options.scriptHostPath ?? defaultScriptHostPath(),
-    timeoutMs,
-    eventStorePath,
-  ).catch(decodeNativeExecutionError);
+  const resultJson = await native
+    .executeWomlWorkflowDurable(
+      JSON.stringify(workflow),
+      compiledDefinitionHash(workflow),
+      JSON.stringify(options.trigger ?? {}),
+      options.bunExecutable ?? process.execPath,
+      options.scriptHostPath ?? defaultScriptHostPath(),
+      timeoutMs,
+      eventStorePath
+    )
+    .catch(decodeNativeExecutionError);
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
 }
 
 export function recoverDurableRuns(
   eventStorePath: string,
-  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {},
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
 ): RustRecoveryReport {
   const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
   const native = loadNativeCore(nativePath);
   if (typeof native.recoverWomlRuns !== 'function') {
     throw new Error(
-      `Native core at "${nativePath}" does not expose recoverWomlRuns; rebuild the Rust addon.`,
+      `Native core at "${nativePath}" does not expose recoverWomlRuns; rebuild the Rust addon.`
     );
   }
-  return JSON.parse(native.recoverWomlRuns(eventStorePath)) as RustRecoveryReport;
+  return JSON.parse(
+    native.recoverWomlRuns(eventStorePath)
+  ) as RustRecoveryReport;
 }

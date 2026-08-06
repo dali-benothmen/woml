@@ -9,6 +9,7 @@ export {
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV1,
   type CompiledWorkflowDefinitionV2,
+  type CompiledWorkflowDefinitionV3,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,

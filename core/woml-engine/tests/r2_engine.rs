@@ -9,6 +9,7 @@ use woml_engine::{
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
 const BRANCH_MODEL: &str = include_str!("../../../woml/tests/fixtures/branch.compiled.v2.json");
+const PARALLEL_MODEL: &str = include_str!("../../../woml/tests/fixtures/parallel.compiled.v3.json");
 const HELLO_EVENTS: &str =
   include_str!("../../../woml/tests/fixtures/run-events/hello.events.v1.json");
 const HOST_CRASHED_EVENT: &str =
@@ -27,6 +28,10 @@ fn hello_events() -> Vec<RunEvent> {
 
 fn branch_model() -> CompiledWorkflowDefinition {
   CompiledWorkflowDefinition::from_json(BRANCH_MODEL).expect("branch model must deserialize")
+}
+
+fn parallel_model() -> CompiledWorkflowDefinition {
+  CompiledWorkflowDefinition::from_json(PARALLEL_MODEL).expect("parallel model must deserialize")
 }
 
 #[test]
@@ -103,9 +108,223 @@ fn accepts_the_frozen_model_v2_branch_shape_as_structural_and_executable() {
 }
 
 #[test]
+fn accepts_model_v3_structurally_but_keeps_parallel_execution_gated() {
+  let original: Value = serde_json::from_str(PARALLEL_MODEL).unwrap();
+  let model = parallel_model();
+
+  model.validate_structure().unwrap();
+  assert_eq!(model.schema_version, 3);
+  assert_eq!(model.workflow_id, "field-report");
+  assert_eq!(model.graph.entry_node_ids, ["loadField"]);
+  assert_eq!(model.terminal_node_id(), Some("buildReport"));
+  assert_eq!(serde_json::to_value(&model).unwrap(), original);
+  assert_eq!(
+    model
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.parallel_id.as_deref() == Some("fieldData"))
+      .count(),
+    4
+  );
+
+  let execution_issues = model.validate_for_execution().unwrap_err().issues;
+  assert!(execution_issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::UnsupportedParallelExecution));
+
+  let mut malformed_ordinal = parallel_model();
+  malformed_ordinal.graph.edges[1].id = "fieldData:child:01".to_string();
+  assert!(malformed_ordinal
+    .validate_structure()
+    .unwrap_err()
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::InvalidParallelGroup));
+
+  let mut excessive_concurrency = parallel_model();
+  let start = excessive_concurrency
+    .graph
+    .nodes
+    .iter_mut()
+    .find(|node| node.handler == "engine.parallel-start")
+    .unwrap();
+  let woml_engine::model::ValueExpression::Object { fields } = &mut start.inputs else {
+    panic!("parallel start must contain object inputs");
+  };
+  fields.insert(
+    "concurrency".to_string(),
+    woml_engine::model::ValueExpression::Literal { value: json!(3) },
+  );
+  assert!(excessive_concurrency
+    .validate_structure()
+    .unwrap_err()
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::InvalidParallelGroup));
+
+  let mut bypassed_join = parallel_model();
+  bypassed_join
+    .graph
+    .edges
+    .push(woml_engine::model::CompiledWorkflowEdge {
+      id: "loadWeather-to-buildReport".to_string(),
+      from: "loadWeather".to_string(),
+      to: "buildReport".to_string(),
+      condition: EdgeCondition::Always,
+      branch_id: None,
+      parallel_id: None,
+    });
+  assert!(bypassed_join
+    .validate_structure()
+    .unwrap_err()
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::InvalidParallelGroup));
+}
+
+#[test]
+fn model_v3_parallel_group_composes_inside_one_branch_route() {
+  let mut model = parallel_model();
+  model.workflow_id = "parallel-branch".to_string();
+  model.graph.edges.retain(|edge| {
+    edge.id != "loadField-to-__woml_parallel__fieldData__start"
+      && edge.id != "fieldData-to-buildReport"
+  });
+
+  let mut selector_fields = std::collections::BTreeMap::new();
+  let mut result_fields = std::collections::BTreeMap::new();
+  result_fields.insert(
+    "route:when:0".to_string(),
+    woml_engine::model::ValueExpression::ContextReference {
+      path: vec!["steps".to_string(), "loadWeather".to_string()],
+    },
+  );
+  result_fields.insert(
+    "route:otherwise".to_string(),
+    woml_engine::model::ValueExpression::ContextReference {
+      path: vec!["steps".to_string(), "fallback".to_string()],
+    },
+  );
+  let mut fallback = model.node("loadWeather").unwrap().clone();
+  fallback.id = "fallback".to_string();
+  let insertion = model
+    .graph
+    .nodes
+    .iter()
+    .position(|node| node.id == "__woml_parallel__fieldData__start")
+    .unwrap();
+  model.graph.nodes.insert(
+    insertion,
+    woml_engine::model::CompiledWorkflowNode {
+      id: "__woml_branch__route__select".to_string(),
+      handler: "engine.branch-select".to_string(),
+      inputs: woml_engine::model::ValueExpression::Object {
+        fields: std::mem::take(&mut selector_fields),
+      },
+      timeout_ms: None,
+      retry_policy: None,
+      metadata: None,
+    },
+  );
+  let build_report = model
+    .graph
+    .nodes
+    .iter()
+    .position(|node| node.id == "buildReport")
+    .unwrap();
+  model.graph.nodes.insert(build_report, fallback);
+  let build_report = model
+    .graph
+    .nodes
+    .iter()
+    .position(|node| node.id == "buildReport")
+    .unwrap();
+  model.graph.nodes.insert(
+    build_report,
+    woml_engine::model::CompiledWorkflowNode {
+      id: "route".to_string(),
+      handler: "engine.branch-result".to_string(),
+      inputs: woml_engine::model::ValueExpression::Object {
+        fields: result_fields,
+      },
+      timeout_ms: None,
+      retry_policy: None,
+      metadata: None,
+    },
+  );
+
+  let edge = |id: &str, from: &str, to: &str, condition: EdgeCondition, branch_id: Option<&str>| {
+    woml_engine::model::CompiledWorkflowEdge {
+      id: id.to_string(),
+      from: from.to_string(),
+      to: to.to_string(),
+      condition,
+      branch_id: branch_id.map(str::to_string),
+      parallel_id: None,
+    }
+  };
+  model.graph.edges.splice(
+    0..0,
+    [
+      edge(
+        "loadField-to-__woml_branch__route__select",
+        "loadField",
+        "__woml_branch__route__select",
+        EdgeCondition::Always,
+        None,
+      ),
+      edge(
+        "route:when:0",
+        "__woml_branch__route__select",
+        "__woml_parallel__fieldData__start",
+        EdgeCondition::Boolean {
+          value: woml_engine::model::ValueExpression::ContextReference {
+            path: vec!["trigger".to_string(), "useParallel".to_string()],
+          },
+        },
+        Some("route"),
+      ),
+      edge(
+        "route:otherwise",
+        "__woml_branch__route__select",
+        "fallback",
+        EdgeCondition::Always,
+        Some("route"),
+      ),
+    ],
+  );
+  model.graph.edges.extend([
+    edge(
+      "fieldData-to-route",
+      "fieldData",
+      "route",
+      EdgeCondition::Always,
+      None,
+    ),
+    edge(
+      "fallback-to-route",
+      "fallback",
+      "route",
+      EdgeCondition::Always,
+      None,
+    ),
+    edge(
+      "route-to-buildReport",
+      "route",
+      "buildReport",
+      EdgeCondition::Always,
+      None,
+    ),
+  ]);
+
+  model.validate_structure().unwrap();
+}
+
+#[test]
 fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
   let mut bad_version = hello_model();
-  bad_version.schema_version = 3;
+  bad_version.schema_version = 4;
   let codes: Vec<_> = bad_version
     .validate_for_execution()
     .unwrap_err()
@@ -136,6 +355,7 @@ fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
       to: "a".to_string(),
       condition: EdgeCondition::Always,
       branch_id: None,
+      parallel_id: None,
     });
   let codes: Vec<_> = cyclic
     .validate_for_execution()
@@ -205,6 +425,7 @@ fn rejects_constructs_outside_the_current_executable_profile() {
       to: "c".to_string(),
       condition: EdgeCondition::Always,
       branch_id: None,
+      parallel_id: None,
     });
   assert!(parallel
     .validate_for_execution()

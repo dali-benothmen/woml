@@ -1,7 +1,8 @@
 # WOML v0.1 Fundamental Syntax
 
 Status: design catalog draft; sequential scripts and conditional branches are
-implemented; parallel syntax is frozen and validated but not yet executable
+implemented; parallel syntax and model-v3 lowering are implemented but runtime
+execution is not yet enabled
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -59,7 +60,7 @@ includes conditional branches:
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
-| Parallel | Frozen | Frontend validation implemented; lowering and execution unavailable until P2–P6 |
+| Parallel | Frozen | Frontend validation and model-v3 lowering implemented; execution unavailable until P3–P6 |
 | Approval | Designed | Unavailable |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 
@@ -1096,12 +1097,12 @@ Both designed policies fail the group when a child fails. The previously
 considered value `continue` is reserved because continuing downstream would
 require defined semantics for missing failed-step outputs.
 
-The compiled model represents the children as independent DAG nodes. Until
-model-v3 lowering is implemented, the frontend accepts and validates the
-frozen syntax, then fails at the explicit compile gate
-`WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED`. A runtime that does not support
-concurrent scheduling MUST reject `<parallel>`; it MUST NOT silently present
-sequential execution as parallel execution.
+The compiler represents the children as independent model-v3 DAG nodes using
+the frozen `engine.parallel-start`, ordered child edges, ordered join edges,
+and `engine.parallel-join` identities. Rust validates this structure at its
+model boundary. Until concurrent scheduling is enabled, execution remains
+explicitly gated; a runtime MUST NOT silently present sequential execution as
+parallel execution.
 
 Multi-step concurrent lanes are deferred. A future design may add an explicit
 `<sequence>` child, but `<branch>` is not used for that purpose.

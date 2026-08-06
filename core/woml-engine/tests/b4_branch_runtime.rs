@@ -218,6 +218,7 @@ async fn first_true_when_wins_even_when_a_later_condition_is_also_true() {
         },
       },
       branch_id: Some("decision".to_string()),
+      parallel_id: None,
     },
   );
   workflow.graph.edges.insert(
@@ -228,6 +229,7 @@ async fn first_true_when_wins_even_when_a_later_condition_is_also_true() {
       to: "decision".to_string(),
       condition: EdgeCondition::Always,
       branch_id: None,
+      parallel_id: None,
     },
   );
   let decision = workflow
@@ -323,6 +325,7 @@ fn edge(id: &str, from: &str, to: &str) -> CompiledWorkflowEdge {
     to: to.to_string(),
     condition: EdgeCondition::Always,
     branch_id: None,
+    parallel_id: None,
   }
 }
 
@@ -375,6 +378,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
           value: reference(&["steps", "ready"]),
         },
         branch_id: Some("outer".to_string()),
+        parallel_id: None,
       },
       CompiledWorkflowEdge {
         id: "outer:otherwise".to_string(),
@@ -382,6 +386,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
         to: "outerFallback".to_string(),
         condition: EdgeCondition::Always,
         branch_id: Some("outer".to_string()),
+        parallel_id: None,
       },
       CompiledWorkflowEdge {
         id: "inner:when:0".to_string(),
@@ -391,6 +396,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
           value: reference(&["steps", "ready"]),
         },
         branch_id: Some("inner".to_string()),
+        parallel_id: None,
       },
       CompiledWorkflowEdge {
         id: "inner:otherwise".to_string(),
@@ -398,6 +404,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
         to: "innerFallback".to_string(),
         condition: EdgeCondition::Always,
         branch_id: Some("inner".to_string()),
+        parallel_id: None,
       },
       edge("inside-to-inner", "inside", "inner"),
       edge("innerFallback-to-inner", "innerFallback", "inner"),

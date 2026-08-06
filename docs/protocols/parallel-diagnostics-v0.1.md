@@ -16,7 +16,7 @@ details rather than only in prose.
 | Unsupported direct child | `WOML_PARALLEL_CHILD_UNSUPPORTED` | validation |
 | Static sibling reference | `WOML_PARALLEL_SIBLING_REFERENCE` | compile |
 | Root terminal parallel group | `WOML_PARALLEL_TERMINAL_UNSUPPORTED` | validation |
-| Valid syntax before P2 lowering | `WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED` | compile |
+| Valid syntax before P2 lowering (retired compatibility code) | `WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED` | compile |
 | Malformed compiled group | `WOML_PARALLEL_GROUP_INVALID` | runtime boundary |
 | One or more children failed | `WOML_PARALLEL_CHILD_FAILED` | runtime |
 | Engine-requested Worker cancellation | `WOML_SCRIPT_CANCELLED` | runtime |

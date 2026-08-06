@@ -1,6 +1,6 @@
 # WOML Parallel Implementation Plan
 
-Status: P0 and P1 complete — P2 deterministic model-v3 lowering is next
+Status: P0–P2 complete — P3 durable parallel events and folding is next
 
 ## 1. Product Outcome
 
@@ -553,7 +553,7 @@ Gate:
 Sequential and branch fixtures remain byte-for-structure compatible and all
 existing frontend tests pass.
 
-### P2 — Lower parallel groups into Compiled Workflow Model v3
+### P2 — Lower parallel groups into Compiled Workflow Model v3 — complete
 
 Changes:
 

@@ -1024,10 +1024,61 @@ function lowerBranch(branch: ValidatedBranch): LoweredFlowFragment {
   };
 }
 
+function lowerParallel(parallel: ValidatedParallel): LoweredFlowFragment {
+  const startId = `__woml_parallel__${parallel.id}__start`;
+  const start: CompiledWorkflowNode = {
+    id: startId,
+    handler: 'engine.parallel-start',
+    inputs: {
+      kind: 'object',
+      fields: {
+        concurrency: { kind: 'literal', value: parallel.concurrency },
+        onError: { kind: 'literal', value: parallel.onError },
+      },
+    },
+    ...(parallel.metadata === undefined ? {} : { metadata: parallel.metadata }),
+  };
+  const childFragments = parallel.children.map(lowerStep);
+  const join: CompiledWorkflowNode = {
+    id: parallel.id,
+    handler: 'engine.parallel-join',
+    inputs: { kind: 'object', fields: {} },
+  };
+  const fanOutEdges: CompiledWorkflowEdge[] = childFragments.map(
+    (fragment, index) => ({
+      id: `${parallel.id}:child:${index}`,
+      from: startId,
+      to: fragment.entryId,
+      condition: { kind: 'always' },
+      parallelId: parallel.id,
+    })
+  );
+  const joinEdges: CompiledWorkflowEdge[] = childFragments.map(
+    (fragment, index) => ({
+      id: `${parallel.id}:join:${index}`,
+      from: fragment.exitId,
+      to: parallel.id,
+      condition: { kind: 'always' },
+      parallelId: parallel.id,
+    })
+  );
+
+  return {
+    entryId: startId,
+    exitId: parallel.id,
+    nodes: [start, ...childFragments.flatMap(fragment => fragment.nodes), join],
+    edges: [
+      ...fanOutEdges,
+      ...childFragments.flatMap(fragment => fragment.edges),
+      ...joinEdges,
+    ],
+  };
+}
+
 function lowerFlowItem(item: ValidatedFlowItem): LoweredFlowFragment {
   if (item.kind === 'step') return lowerStep(item);
   if (item.kind === 'branch') return lowerBranch(item);
-  throw new Error('Validated parallel lowering is gated until phase P2.');
+  return lowerParallel(item);
 }
 
 function lowerFlowItems(
@@ -1080,14 +1131,6 @@ export function compileWoml(
   );
   const triggerId = validateManualTrigger(document, triggersElement);
   const flow = validateSteps(document, stepsElement);
-  if (flow.firstParallel !== undefined) {
-    failCompile(
-      document,
-      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED',
-      'This parallel group is valid, but parallel DAG lowering is introduced in phase P2.',
-      flow.firstParallel.openTagSpan
-    );
-  }
   const lowered = lowerFlowItems(flow.items);
   const definition = {
     workflowId,
@@ -1106,9 +1149,11 @@ export function compileWoml(
     } satisfies CompiledWorkflowGraph,
   };
   const compiled: CompiledWorkflowDefinition =
-    flow.firstBranch === undefined
-      ? { schemaVersion: 1, ...definition }
-      : { schemaVersion: 2, ...definition };
+    flow.firstParallel !== undefined
+      ? { schemaVersion: 3, ...definition }
+      : flow.firstBranch === undefined
+        ? { schemaVersion: 1, ...definition }
+        : { schemaVersion: 2, ...definition };
 
   const graphIssues = inspectCompiledWorkflowGraph(compiled.graph, {
     requireSingleTerminal: true,
