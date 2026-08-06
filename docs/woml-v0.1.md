@@ -1568,13 +1568,13 @@ context is:
 }
 ```
 
-The CLI vertical slice builds this projection in memory. A durable runtime
-reconstructs the same public shape by folding persisted events; the context is
-never an authoritative mutable object exposed to scripts.
+The Rust engine builds this projection by folding run events. Its durable mode
+reconstructs the same public shape from persisted events; the context is never
+an authoritative mutable object exposed to scripts.
 
 The Phase 0 acceptance contracts are checked in at:
 
-- `hello.woml` — canonical source workflow.
+- `woml/tests/fixtures/hello.woml` — canonical source workflow.
 - `woml/tests/fixtures/hello.compiled.v1.json` — exact compiled DAG.
 - `woml/tests/fixtures/hello.context.v0.1.json` — context before and after each
   node.

@@ -1,6 +1,6 @@
 # WOML Rust Core Integration Plan
 
-Status: R0–R5 complete; the public CLI now executes workflows through Rust
+Status: R0–R6 complete; Rust is the only WOML workflow executor
 
 This document defines how WOML moves from the validated TypeScript execution
 slice to the intended production architecture: Bun and TypeScript own the WOML
@@ -669,10 +669,9 @@ Release builds package the platform-specific native addon, long-lived Bun host,
 and isolated Worker entry point. The ordinary `woml run` command uses Rust's
 in-memory event engine and does not create a database implicitly; the explicit
 durable API from R4 remains available for a later product surface. The
-TypeScript executor is no longer reachable from the production CLI and remains
-only as the equivalence oracle to be removed in R6.
+temporary TypeScript executor is removed in R6.
 
-### R6 — Retire the TypeScript execution implementation
+### R6 — Retire the TypeScript execution implementation — complete
 
 One phrase: remove the temporary engine after Rust has replaced every behavior
 it proved.
@@ -695,6 +694,15 @@ Gate:
 - Removing the TypeScript executor does not reduce behavioral coverage.
 - Every existing executable WOML fixture passes through Rust.
 - No package exports the temporary execution API.
+
+Implementation note: the TypeScript DAG loop, handler registry, direct Worker
+runner, mutable context projection, and execution-error API were deleted from
+the `woml` package. Its public surface now contains only the parser, validator,
+compiler, compiled-model types, and source diagnostics. The isolated JavaScript
+Worker and strict JSON boundary remain under `woml-cli/src/script-host/` because
+they are execution components supervised by Rust, not a second workflow
+engine. Former executor behavior is covered by Rust engine tests, script-host
+tests, reviewed result/context fixtures, and black-box CLI tests.
 
 ## 11. Feature Expansion After the Rust Cutover
 

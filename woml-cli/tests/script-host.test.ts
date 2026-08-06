@@ -151,6 +151,40 @@ describe('production Content-Length framing', () => {
 });
 
 describe('long-lived Bun script host', () => {
+  test('provides the frozen context contract with top-level await', async () => {
+    const result = await runHost([
+      execute(
+        'inv_context_contract',
+        `await Promise.resolve();
+return {
+  greeting: \`Hello \${context.trigger.name}\`,
+  hasRun: "run" in context,
+  hasServices: typeof services !== "undefined"
+};`,
+        { context: { trigger: { name: 'Ada' }, steps: {} } },
+      ),
+      execute(
+        'inv_frozen_context',
+        'context.trigger.name = "Changed"; return { unreachable: true };',
+        { context: { trigger: { name: 'Original' }, steps: {} } },
+      ),
+    ]);
+    const indexed = byInvocation(result.messages);
+
+    expect(indexed.get('inv_context_contract')?.outcome).toEqual({
+      kind: 'success',
+      value: {
+        greeting: 'Hello Ada',
+        hasRun: false,
+        hasServices: false,
+      },
+    });
+    expect(indexed.get('inv_frozen_context')?.outcome).toMatchObject({
+      kind: 'failure',
+      error: { kind: 'script_threw', code: 'WOML_SCRIPT_THROWN' },
+    });
+  });
+
   test('multiplexes invocations and correlates out-of-order responses', async () => {
     const result = await runHost([
       execute(
@@ -237,6 +271,34 @@ describe('long-lived Bun script host', () => {
       kind: 'success',
       value: { hostAlive: true },
     });
+  });
+
+  test('rejects every non-JSON result shape covered by the retired executor', async () => {
+    const result = await runHost([
+      execute('inv_undefined', 'return undefined;'),
+      execute('inv_bigint', 'return 1n;'),
+      execute('inv_function', 'return { callback() {} };'),
+      execute(
+        'inv_circular',
+        'const value = {}; value.self = value; return value;',
+      ),
+    ]);
+    const indexed = byInvocation(result.messages);
+
+    for (const invocationId of [
+      'inv_undefined',
+      'inv_bigint',
+      'inv_function',
+      'inv_circular',
+    ]) {
+      expect(indexed.get(invocationId)?.outcome).toMatchObject({
+        kind: 'failure',
+        error: {
+          kind: 'invalid_script_result',
+          code: 'WOML_SCRIPT_NON_JSON_RESULT',
+        },
+      });
+    }
   });
 
   test('reports a Worker startup crash separately', async () => {

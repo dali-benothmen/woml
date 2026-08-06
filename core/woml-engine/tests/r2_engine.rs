@@ -93,6 +93,18 @@ fn rejects_every_staged_execution_construct_in_r2() {
     .iter()
     .any(|issue| issue.code == ModelIssueCode::UnknownHandler));
 
+  let mut unsupported_inputs = hello_model();
+  unsupported_inputs.graph.nodes[0].inputs =
+    woml_engine::model::ValueExpression::ContextReference {
+      path: vec!["trigger".to_string()],
+    };
+  assert!(unsupported_inputs
+    .validate_for_execution()
+    .unwrap_err()
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::UnsupportedNodeInputs));
+
   let mut retry = hello_model();
   retry.graph.nodes[0].retry_policy = Some(RetryPolicy {
     max_attempts: 2,

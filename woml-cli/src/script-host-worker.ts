@@ -1,1 +1,1 @@
-import '../../woml/src/script-worker';
+import './script-host/worker';

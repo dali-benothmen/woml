@@ -1,15 +1,10 @@
 import { deepFreezeJson, findJsonViolation } from './json';
-import type { JsonObject, JsonValue } from './model';
-
-interface ScriptWorkerContext extends JsonObject {
-  readonly trigger: JsonObject;
-  readonly steps: Readonly<Record<string, JsonValue>>;
-}
+import type { JsonValue, ScriptContext } from './types';
 
 export interface ScriptWorkerRequest {
   readonly nodeId: string;
   readonly source: string;
-  readonly context: ScriptWorkerContext;
+  readonly context: ScriptContext;
 }
 
 export type ScriptWorkerResponse =
@@ -24,9 +19,7 @@ export type ScriptWorkerResponse =
       };
     };
 
-type AsyncFunction = (
-  context: ScriptWorkerContext,
-) => Promise<unknown>;
+type AsyncFunction = (context: ScriptContext) => Promise<unknown>;
 type AsyncFunctionConstructor = new (
   ...parametersAndBody: string[]
 ) => AsyncFunction;
@@ -79,7 +72,10 @@ self.onmessage = async (event: MessageEvent<ScriptWorkerRequest>) => {
       } satisfies ScriptWorkerResponse);
       return;
     }
-    self.postMessage({ ok: true, result: result as JsonValue } satisfies ScriptWorkerResponse);
+    self.postMessage({
+      ok: true,
+      result: result as JsonValue,
+    } satisfies ScriptWorkerResponse);
   } catch (error) {
     self.postMessage(serializeError(error));
   }

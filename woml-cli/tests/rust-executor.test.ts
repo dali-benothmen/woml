@@ -5,7 +5,6 @@ import { join, resolve } from 'node:path';
 
 import {
   compileWoml,
-  executeWorkflow,
   parseWoml,
   type CompiledWorkflowDefinition,
 } from 'woml';
@@ -74,17 +73,18 @@ describe('Rust to Bun workflow execution', () => {
     );
   });
 
-  nativeTest('matches the TypeScript reference result, context, and order', async () => {
+  nativeTest('matches the reviewed result, context, and order fixtures', async () => {
     const workflow = await helloWorkflow();
-    const reference = await executeWorkflow(workflow);
+    const expectedContexts = await Bun.file(
+      resolve(packageRoot, '../woml/tests/fixtures/hello.context.v0.1.json'),
+    ).json();
     const rust = await executeWorkflowWithRust(workflow, {
       nativeCorePath,
       scriptHostPath,
     });
 
-    expect(rust.result).toEqual(reference.result);
-    expect(rust.context).toEqual(reference.context);
-    expect(rust.executionOrder).toEqual(reference.executionOrder);
+    expect(rust.result).toEqual({ message: 'Hello World' });
+    expect(rust.context).toEqual(expectedContexts.afterB);
     expect(rust.executionOrder).toEqual(['a', 'b']);
     expect(rust.events.map((event) => event.type)).toEqual([
       'run_started',

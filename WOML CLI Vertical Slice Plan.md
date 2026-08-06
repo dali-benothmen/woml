@@ -1,8 +1,9 @@
 # WOML CLI Vertical Slice Implementation Plan
 
-Status: Phases 0–5 complete; the packaged CLI journey is verified
+Status: Phases 0–5 complete; the packaged CLI journey is verified; the
+temporary TypeScript executor was retired in Rust integration R6
 Target: `woml run hello.woml` parses, compiles, and executes a real WOML
-workflow through Bun
+workflow through the TypeScript frontend, Rust engine, and Bun workers
 Scope: the smallest end-to-end implementation that proves the WOML syntax and
 the language-neutral compiled workflow model are compatible
 
@@ -389,7 +390,12 @@ construct must fail validation with a specific unsupported-feature message.
 The language document may describe designed constructs, but the CLI advertises
 and publishes only the executable profile listed here.
 
-## 6. Planned Repository Changes
+## 6. Historical Vertical-Slice Repository Changes
+
+This layout records the temporary Phase 0–5 implementation. Rust integration
+R6 later deleted the `woml` execution modules and moved the JSON/Worker
+primitives still required by Rust into `woml-cli/src/script-host/`. The current
+source tree, rather than this historical layout, is authoritative.
 
 ```text
 package.json                                      # declare the two packages/workspaces when implementation starts

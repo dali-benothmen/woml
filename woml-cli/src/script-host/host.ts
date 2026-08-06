@@ -1,8 +1,4 @@
-import { findJsonViolation } from '../../../woml/src/json';
-import type {
-  ScriptWorkerRequest,
-  ScriptWorkerResponse,
-} from '../../../woml/src/script-worker';
+import { findJsonViolation } from './json';
 import { assertExecuteMessage, MessageProtocolError } from './protocol';
 import type {
   CompletedMessage,
@@ -13,6 +9,7 @@ import type {
   ScriptHostLimits,
   SuccessMessage,
 } from './types';
+import type { ScriptWorkerRequest, ScriptWorkerResponse } from './worker';
 
 export interface ScriptHostOptions {
   readonly workerUrl: URL;

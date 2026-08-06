@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from './model';
+import type { JsonValue } from './types';
 
 export interface JsonViolation {
   readonly path: string;
@@ -30,10 +30,12 @@ function inspectJsonValue(
     if (Array.isArray(value)) {
       const allowedKeys = new Set(['length']);
       for (let index = 0; index < value.length; index += 1) {
-        const key = String(index);
-        allowedKeys.add(key);
+        allowedKeys.add(String(index));
         if (!Object.prototype.hasOwnProperty.call(value, index)) {
-          return { path: `${path}[${index}]`, reason: 'array holes are not JSON values' };
+          return {
+            path: `${path}[${index}]`,
+            reason: 'array holes are not JSON values',
+          };
         }
         const issue = inspectJsonValue(value[index], `${path}[${index}]`, ancestors);
         if (issue !== undefined) return issue;
@@ -62,7 +64,10 @@ function inspectJsonValue(
         'get' in descriptor ||
         'set' in descriptor
       ) {
-        return { path: `${path}.${key}`, reason: 'JSON fields must be enumerable data properties' };
+        return {
+          path: `${path}.${key}`,
+          reason: 'JSON fields must be enumerable data properties',
+        };
       }
       const issue = inspectJsonValue(descriptor.value, `${path}.${key}`, ancestors);
       if (issue !== undefined) return issue;
@@ -77,23 +82,8 @@ export function findJsonViolation(value: unknown): JsonViolation | undefined {
   return inspectJsonValue(value, '$', new Set());
 }
 
-export function isJsonObject(value: unknown): value is JsonObject {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value) &&
-    findJsonViolation(value) === undefined
-  );
-}
-
-export function cloneJson<T extends JsonValue>(value: T): T {
-  return structuredClone(value) as T;
-}
-
 export function deepFreezeJson<T extends JsonValue>(value: T): T {
-  if (typeof value !== 'object' || value === null) {
-    return value;
-  }
+  if (typeof value !== 'object' || value === null) return value;
   if (Array.isArray(value)) {
     for (const item of value) deepFreezeJson(item);
   } else {
