@@ -536,7 +536,7 @@ Gate:
 - A new invocation cannot observe a prior Worker's global state.
 - Throw, timeout, bad result, Worker crash, and size failures remain distinct.
 
-### R2 — Build the minimal Rust event-driven DAG engine
+### R2 — Build the minimal Rust event-driven DAG engine — complete
 
 One phrase: make Rust understand the compiled model and derive run state from an
 in-memory event log.
@@ -563,6 +563,10 @@ Gate:
 - Folding the same events always produces the same projection.
 - Only successful attempt events publish step outputs.
 - The engine cannot execute retry, branch, parallel, approval, or services.
+
+Implementation note: R2 lives in the isolated `core/woml-engine` Rust crate so
+the new event-driven engine does not inherit the legacy SDK execution paths.
+R3 will connect this crate to the existing native core boundary.
 
 ### R3 — Connect Rust, the Bun host, and `hello.woml`
 
