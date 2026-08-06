@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v2",
+  "title": "WOML Run Event v2",
+  "description": "Append-only workflow run events for sequential and branch execution. Version 2 adds durable branch selection and separates workflow-level branch evaluation failures from attempt failures.",
+  "x-status": "branch-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v1",
+  "x-currentEventTypes": [
+    "run_started",
+    "step_attempt_started",
+    "step_attempt_succeeded",
+    "step_attempt_failed",
+    "branch_selected",
+    "run_succeeded",
+    "run_failed"
+  ],
+  "x-reservedEventTypes": [
+    "step_retry_scheduled",
+    "run_paused",
+    "run_resumed",
+    "parallel_group_started",
+    "parallel_group_completed"
+  ],
+  "x-invariants": [
+    "Events are immutable and append-only.",
+    "Every event in one run uses the same eventSchemaVersion; v1 and v2 events never mix in one history.",
+    "The pair (runId, sequence) is unique and sequence increases contiguously within a run.",
+    "run_started is first and binds the run to workflowId and the RFC 8785 JCS SHA-256 definitionHash.",
+    "Context, branch selections, and run status are projections derived by folding events.",
+    "A branch may publish exactly one branch_selected event, and its armId must identify one selector edge in the bound compiled definition.",
+    "A recorded branch selection is never re-evaluated into another arm during recovery.",
+    "branch_selected publishes no user context output; it records durable control state.",
+    "Only step_attempt_succeeded publishes an output into context.steps, including the atomic engine.branch-result success.",
+    "A terminal attempt event corresponds to one earlier step_attempt_started with the same nodeId, attempt, and invocationId.",
+    "step_attempt_failed contains only the frozen attempt-failure taxonomy.",
+    "run_failed with failureScope branch contains a branch-evaluation failure, never a fabricated script attempt failure.",
+    "A recovered external-effect attempt without a terminal event fails as interrupted and is not automatically replayed.",
+    "Resolved secret values never appear in event data or failure messages.",
+    "Readers reject unsupported eventSchemaVersion values while continuing to support immutable v1 histories."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventSchemaVersion",
+    "eventId",
+    "runId",
+    "sequence",
+    "occurredAt",
+    "type",
+    "data"
+  ],
+  "properties": {
+    "eventSchemaVersion": {
+      "const": 2
+    },
+    "eventId": {
+      "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId"
+    },
+    "runId": {
+      "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "type": {
+      "enum": [
+        "run_started",
+        "step_attempt_started",
+        "step_attempt_succeeded",
+        "step_attempt_failed",
+        "branch_selected",
+        "run_succeeded",
+        "run_failed"
+      ]
+    },
+    "data": {}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "type": { "const": "run_started" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runStartedData"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "step_attempt_started" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptStartedData"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "step_attempt_succeeded" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptSucceededData"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "step_attempt_failed" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptFailedData"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "branch_selected" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/branchSelectedData"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "run_succeeded" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runSucceededData"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "run_failed" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/runFailedData"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "branchSelectedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branchId", "armId"],
+      "properties": {
+        "branchId": {
+          "$ref": "#/$defs/publicStructuralId"
+        },
+        "armId": {
+          "$ref": "#/$defs/branchArmId"
+        }
+      }
+    },
+    "runFailedData": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/attemptRunFailedData"
+        },
+        {
+          "$ref": "#/$defs/branchRunFailedData"
+        }
+      ]
+    },
+    "attemptRunFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "failureScope",
+        "nodeId",
+        "attempt",
+        "invocationId",
+        "failure"
+      ],
+      "properties": {
+        "failureScope": {
+          "const": "attempt"
+        },
+        "nodeId": {
+          "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "invocationId": {
+          "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId"
+        },
+        "failure": {
+          "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/attemptFailure"
+        }
+      }
+    },
+    "branchRunFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failureScope", "branchId", "failure"],
+      "properties": {
+        "failureScope": {
+          "const": "branch"
+        },
+        "branchId": {
+          "$ref": "#/$defs/publicStructuralId"
+        },
+        "armId": {
+          "$ref": "#/$defs/branchArmId"
+        },
+        "path": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "failure": {
+          "$ref": "#/$defs/branchFailure"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "failure": {
+                "properties": {
+                  "kind": { "const": "branch_test_not_boolean" }
+                },
+                "required": ["kind"]
+              }
+            }
+          },
+          "then": {
+            "required": ["armId", "path"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "failure": {
+                "properties": {
+                  "kind": { "const": "reference_not_available" }
+                },
+                "required": ["kind"]
+              }
+            }
+          },
+          "then": {
+            "required": ["path"]
+          }
+        }
+      ]
+    },
+    "branchFailure": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/branchTestNotBoolean"
+        },
+        {
+          "$ref": "#/$defs/referenceNotAvailable"
+        },
+        {
+          "$ref": "#/$defs/branchSelectionInvalid"
+        }
+      ]
+    },
+    "branchTestNotBoolean": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message", "actualType"],
+      "properties": {
+        "kind": {
+          "const": "branch_test_not_boolean"
+        },
+        "code": {
+          "const": "WOML_BRANCH_TEST_NOT_BOOLEAN"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actualType": {
+          "enum": ["null", "number", "string", "array", "object"]
+        }
+      }
+    },
+    "referenceNotAvailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": {
+          "const": "reference_not_available"
+        },
+        "code": {
+          "const": "WOML_REFERENCE_NOT_AVAILABLE"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "branchSelectionInvalid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": {
+          "const": "branch_selection_invalid"
+        },
+        "code": {
+          "const": "WOML_BRANCH_SELECTION_INVALID"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "publicStructuralId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "branchArmId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*:(?:when:(0|[1-9][0-9]*)|otherwise)$",
+      "maxLength": 256
+    }
+  }
+}

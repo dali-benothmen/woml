@@ -286,6 +286,8 @@ Outside raw-content elements:
             </step>
           </when-rejected>
         </approval>
+
+        <result value="{{context.steps.humanApproval}}" />
       </when>
 
       <otherwise>
@@ -294,6 +296,8 @@ Outside raw-content elements:
             return makeDecision(context.steps.combineAnalysis);
           </script>
         </step>
+
+        <result value="{{context.steps.makeAutomaticDecision}}" />
       </otherwise>
     </branch>
   </steps>
@@ -363,16 +367,20 @@ parallel       := <parallel parallel-attributes>
 
 branch         := <branch branch-attributes>
                     when+
-                    otherwise?
+                    otherwise
                   </branch>
 
 when           := <when test="context-reference">
                     steps-item+
+                    result
                   </when>
 
 otherwise      := <otherwise>
                     steps-item+
+                    result
                   </otherwise>
+
+result         := <result value="context-reference" />
 
 approval       := <approval approval-attributes>
                     notify?
@@ -752,16 +760,16 @@ Empty and control-only behavior is explicit:
 
 - `<steps></steps>` and a self-closing `<steps />` are invalid because the root
   container requires at least one step item.
-- Every `<when>` and `<otherwise>` arm requires at least one step item. A branch
-  whose cases are all structurally empty is invalid.
+- Every `<when>` and `<otherwise>` arm requires at least one step item followed
+  by exactly one `<result>`. A branch whose cases are structurally empty is
+  invalid.
 - Approval decision arms may be empty. After a decision, an empty selected arm
   is a successful no-op and execution continues after the approval.
 - A workflow whose only item is an approval is valid: it waits durably, records
   the decision output at `context.steps.<approvalId>`, runs the selected arm if
   non-empty, and then completes.
-- A branch with no matching `<when>` and no `<otherwise>` performs no child work
-  and completes successfully. If it is the final item, the workflow completes
-  with the context produced before that branch.
+- The first executable branch profile requires `<otherwise>`, so a successful
+  branch always selects one route and publishes one stable merged result.
 - Structural containers do not need to contain a `<script>` specifically, but
   the lowered graph must contain at least one reachable executable or durable
   control node. A graph made only of grouping metadata is invalid.
@@ -1100,6 +1108,8 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
         return handleCritical(context.steps.analysis);
       </script>
     </step>
+
+    <result value="{{context.steps.handleCritical}}" />
   </when>
 
   <when test="{{context.steps.needsReview}}">
@@ -1108,6 +1118,8 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
         return requestReview(context.steps.analysis);
       </script>
     </step>
+
+    <result value="{{context.steps.requestReview}}" />
   </when>
 
   <otherwise>
@@ -1116,6 +1128,8 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
         return { accepted: true };
       </script>
     </step>
+
+    <result value="{{context.steps.acceptAutomatically}}" />
   </otherwise>
 </branch>
 ```
@@ -1129,18 +1143,19 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
 | `description` | No | String | Human-readable description. |
 
 - `<branch>` requires an `id` attribute.
-- The ID is a stable structural identity but is not a `context.steps` key.
+- The ID is both the stable structural identity and the key of the merged
+  successful result at `context.steps.<branchId>`.
 - Optional `name` and `description` attributes describe the branch.
 - It contains one or more `<when>` elements.
-- It contains at most one `<otherwise>`.
-- `<otherwise>`, when present, MUST be last.
-- Each `<when>` and `<otherwise>` contains one or more step items.
+- It contains exactly one `<otherwise>` in the first executable branch profile.
+- `<otherwise>` MUST be last.
+- Each `<when>` and `<otherwise>` contains one or more step items followed by
+  exactly one `<result>`.
 - `<when>` elements are evaluated in document order.
 - The first test that resolves to `true` is selected.
 - At most one case executes.
 - `<otherwise>` is selected only when every `<when>` is false.
-- When no test matches and no `<otherwise>` exists, the branch performs no child
-  work and the following step item becomes eligible.
+- When no `<when>` matches, `<otherwise>` is selected.
 - The compiler derives deterministic internal identities for individual
   `<when>` and `<otherwise>` arms from the stable branch ID and case ordinal in
   the immutable compiled definition. Source line/column values are diagnostic
@@ -1189,32 +1204,77 @@ Complex conditions belong in named script steps:
 
 ### 14.3 Conditional outputs
 
-Steps in unselected cases do not produce successful outputs in
-`context.steps`. Until a branch-result or optional-reference mechanism is
-approved, an unconditional downstream reference to a conditionally executed
-step is a compile error.
-
-For example, this is not currently valid:
+Steps in unselected cases do not produce successful outputs in `context.steps`.
+Every arm therefore ends with a typed `<result>` reference:
 
 ```xml
 <branch id="decisionRoute">
   <when test="{{context.steps.needsReview}}">
     <step id="humanDecision">...</step>
+    <result value="{{context.steps.humanDecision}}" />
   </when>
+
   <otherwise>
     <step id="automaticDecision">...</step>
+    <result value="{{context.steps.automaticDecision}}" />
   </otherwise>
 </branch>
 
 <step id="publishDecision">
   <script>
-    // Neither output is guaranteed to exist on every path.
-    return publish(context.steps.humanDecision);
+    return publish(context.steps.decisionRoute);
   </script>
 </step>
 ```
 
-A stable merged branch result is a release-blocking design item in Section 18.1.
+`<result>` has one required `value` attribute and no children. In the first
+executable branch profile, `value` contains exactly one context reference and
+therefore preserves the referenced JSON type. Literal values, mixed templates,
+fallbacks, and arbitrary JavaScript are not accepted in `<result>`.
+
+The reference must be guaranteed to exist on the selected arm before the
+result. It may target a step or completed nested branch earlier in the same arm,
+or a value that dominates the outer branch. It may not target another arm.
+
+After the selected arm completes, the engine resolves the selected `<result>`
+and publishes that JSON value at `context.steps.<branchId>`. The branch ID is
+therefore the only output key that downstream declarative references can use
+unconditionally. Route-specific step outputs remain available to JavaScript but
+are not guaranteed across every route.
+
+The branch result is pure engine-owned derivation. It does not execute through
+Bun and cannot perform an external side effect.
+
+### 14.4 Frozen lowering identities
+
+The WOML frontend lowers a branch into the language-neutral Compiled Workflow
+Model v2 using these identities:
+
+| Item | Frozen compiled identity |
+|---|---|
+| Selector node | `__woml_branch__<branchId>__select` |
+| Selector handler | `engine.branch-select` |
+| `<when>` arm and selector-edge ID | `<branchId>:when:<zeroBasedIndex>` |
+| `<otherwise>` arm and selector-edge ID | `<branchId>:otherwise` |
+| Result/join node ID | `<branchId>` |
+| Result/join handler | `engine.branch-result` |
+
+The selector's outgoing edges are ordered exactly like the source cases. Each
+`<when>` edge carries a strict `boolean` condition and the public `branchId`.
+The final `<otherwise>` edge carries `condition.kind = "always"` and the same
+`branchId`. Ordinary sequencing and join edges do not carry a branch ID.
+
+The result node inputs are an object keyed by durable arm ID. Each value is the
+compiled context-reference expression from that arm's `<result>`. Generated
+selector and arm IDs occupy a namespace that user-authored JavaScript-safe IDs
+cannot enter.
+
+Optional branch `name` and `description` lower to descriptive metadata on the
+selector node. They never affect selection, identity, result publication, or
+the definition's event vocabulary.
+
+Source positions, display names, timestamps, and random values never become
+compiled or durable branch identities.
 
 ## 15. Attribute Values and Context References
 
@@ -1306,8 +1366,11 @@ conditions hold.
 - `<steps>` contains no step items.
 - `<parallel>` contains no steps.
 - `<branch>` has no `<when>`.
+- `<branch>` has no `<otherwise>` in the executable branch profile.
 - A `<when>` or `<otherwise>` arm contains no step items.
 - `<otherwise>` is duplicated or is not last.
+- A branch arm has no `<result>`, has more than one `<result>`, or places
+  `<result>` anywhere except last.
 - A step contains zero or multiple operations.
 - `<approval>` is missing `<when-approved>` or `<when-rejected>`, duplicates
   either arm, or declares them out of order.
@@ -1334,6 +1397,7 @@ conditions hold.
 - Inline webhook JSON Schema is malformed or invalid.
 - Approval `timeout` is invalid or `on-timeout` is not `reject` or `fail`.
 - A `<when>` test is not exactly one context reference.
+- A `<result>` value is not exactly one context reference.
 
 ### 16.4 Reference and dependency errors
 
@@ -1342,8 +1406,10 @@ conditions hold.
 - A WOML attribute in one parallel child references a sibling.
 - A branch test references a value not guaranteed before the branch.
 - A WOML attribute in one selected case references a node from another case.
+- A branch result references a value that is not guaranteed earlier in its own
+  selected arm or before the branch.
 - A downstream WOML attribute unconditionally references an output that only
-  exists on some conditional paths.
+  exists on some conditional paths instead of the stable branch result.
 
 Context references do not automatically create graph dependencies. Structural
 order and nesting create the DAG; references are validated against it.
@@ -1417,6 +1483,25 @@ Rules:
   inner location is unavailable. When Bun provides a reliable inner line and
   column, the runtime translates it back to the original WOML coordinates.
 
+The executable branch profile freezes these branch-specific diagnostic codes:
+
+| Code | Phase | Meaning and primary location |
+|---|---|---|
+| `WOML_BRANCH_WHEN_REQUIRED` | validation | `<branch>` contains no `<when>`; points to the branch opening tag. |
+| `WOML_BRANCH_OTHERWISE_REQUIRED` | validation | `<branch>` has no fallback; points to the branch opening tag. |
+| `WOML_BRANCH_OTHERWISE_ORDER` | validation | `<otherwise>` is duplicated or not last; points to the offending tag. |
+| `WOML_BRANCH_RESULT_REQUIRED` | validation | An arm has zero or multiple `<result>` children; points to the arm or duplicate result. |
+| `WOML_BRANCH_RESULT_ORDER` | validation | `<result>` is not the final arm child; points to the misplaced result. |
+| `WOML_INVALID_REFERENCE` | validation | `test` or `value` is not exactly one frozen WOML context reference; points to the attribute value. |
+| `WOML_UNKNOWN_REFERENCE` | compile | A reference names an unknown structural ID; points to that ID inside the attribute. |
+| `WOML_REFERENCE_NOT_DOMINATING` | compile | The referenced output is later, in another arm, or otherwise not guaranteed; points to that reference. |
+| `WOML_BRANCH_TEST_NOT_BOOLEAN` | runtime | A selected test reference resolved to a non-boolean JSON value; points to the `test` value. |
+| `WOML_REFERENCE_NOT_AVAILABLE` | runtime | A compiled reference path has a missing property; points to the consuming `test` or `value`. |
+| `WOML_BRANCH_SELECTION_INVALID` | runtime | The compiled/event branch identity is inconsistent; reported at the branch opening tag. |
+
+General diagnostics such as `WOML_DUPLICATE_ID`, `WOML_UNKNOWN_ATTRIBUTE`, and
+`WOML_INVALID_DAG` continue to apply and are not renamed for branches.
+
 The CLI renders the primary diagnostic in this stable form:
 
 ```text
@@ -1427,50 +1512,25 @@ Human formatting may improve without changing the diagnostic object or code.
 Webhook input-schema failures use the transport response contract in Section
 9.2 because their location is the request payload, not WOML source.
 
-## 18. Open Design Decisions
+## 18. Remaining Open Design Decisions
 
-Identifier grammar and raw-content termination are closed by Sections 5 and 2
-because they gate the first parser and reference compiler. The following items
-remain open and block only the executable profiles that depend on them.
+Identifier grammar, raw-content termination, and conditional merge results are
+closed by Sections 5, 2, and 14. The following items remain open and block only
+the executable profiles that depend on them.
 
-### 18.1 Conditional merge results
-
-Define how mutually exclusive cases expose one stable downstream result. A
-candidate syntax is:
-
-```xml
-<branch id="decision">
-  <when test="{{context.steps.needsReview}}">
-    ...
-    <result value="{{context.steps.humanDecision}}" />
-  </when>
-
-  <otherwise>
-    ...
-    <result value="{{context.steps.automaticDecision}}" />
-  </otherwise>
-</branch>
-```
-
-The branch `id` shown here is designed, but `<result>` is not. Branch MUST NOT be
-included in a publishable executable profile until a merged-output syntax,
-compiled lowering target, and context semantics are approved. A development
-runtime may implement control-only branch behind an explicitly experimental
-profile, but must surface the missing merged output as a prominent limitation.
-
-### 18.2 Lifecycle execution
+### 18.1 Lifecycle execution
 
 Approve the event boundaries, ordering, retry behavior, timeout behavior, and
 error recording for lifecycle scripts. In particular, decide whether hook
 failure can change an already determined workflow outcome.
 
-### 18.3 Continuing after parallel failure
+### 18.2 Continuing after parallel failure
 
 Define an explicit failed-output or outcome model before adding
 `on-error="continue"`. The current grammar accepts only `fail-fast` and
 `wait-all`, both of which fail the parallel group when any child fails.
 
-### 18.4 Approval notification and token delivery
+### 18.3 Approval notification and token delivery
 
 The durable state transition and public call shape
 `woml.resume(token, decision)` are designed. Approval remains unavailable in a

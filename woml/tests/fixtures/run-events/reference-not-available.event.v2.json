@@ -1,0 +1,19 @@
+{
+  "eventSchemaVersion": 2,
+  "eventId": "evt_branch_reference_failure_004",
+  "runId": "run_branch_reference_failure_01",
+  "sequence": 4,
+  "occurredAt": "2026-08-06T13:20:00.003Z",
+  "type": "run_failed",
+  "data": {
+    "failureScope": "branch",
+    "branchId": "decision",
+    "armId": "decision:when:0",
+    "path": ["steps", "checkContent", "needsReview"],
+    "failure": {
+      "kind": "reference_not_available",
+      "code": "WOML_REFERENCE_NOT_AVAILABLE",
+      "message": "Reference context.steps.checkContent.needsReview is not available."
+    }
+  }
+}

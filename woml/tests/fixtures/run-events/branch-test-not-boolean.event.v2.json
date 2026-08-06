@@ -1,0 +1,20 @@
+{
+  "eventSchemaVersion": 2,
+  "eventId": "evt_branch_failure_004",
+  "runId": "run_branch_failure_01",
+  "sequence": 4,
+  "occurredAt": "2026-08-06T13:10:00.003Z",
+  "type": "run_failed",
+  "data": {
+    "failureScope": "branch",
+    "branchId": "decision",
+    "armId": "decision:when:0",
+    "path": ["steps", "checkContent", "needsReview"],
+    "failure": {
+      "kind": "branch_test_not_boolean",
+      "code": "WOML_BRANCH_TEST_NOT_BOOLEAN",
+      "message": "Branch test for decision:when:0 must resolve to a JSON boolean.",
+      "actualType": "string"
+    }
+  }
+}

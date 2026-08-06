@@ -1,6 +1,7 @@
 # WOML Branch Implementation Plan
 
-Status: Proposed — ready for review before implementation
+Status: B0 complete — branch contracts and reviewed fixtures are frozen; B1 is
+next
 
 ## 1. Product Outcome
 
@@ -393,7 +394,7 @@ implementation code uses them.
 
 ## 7. Implementation Phases
 
-### B0 — Freeze branch contracts and reviewed fixtures
+### B0 — Freeze branch contracts and reviewed fixtures — complete
 
 Changes:
 
@@ -422,6 +423,24 @@ Gate:
 
 No compiler or runtime implementation begins until the B0 fixtures and schemas
 are approved together.
+
+Completed artifacts:
+
+- `docs/schemas/compiled-workflow-model.v2.schema.json`
+- `docs/schemas/run-event.v2.schema.json`
+- `docs/protocols/run-events-v2.md`
+- `woml/tests/fixtures/branch.woml`
+- `woml/tests/fixtures/branch.compiled.v2.json`
+- `woml/tests/fixtures/branch.context.v0.1.json`
+- `woml/tests/fixtures/branch.result.v0.1.json`
+- `woml/tests/fixtures/run-events/branch-selected.events.v2.json`
+- reviewed branch-failure event fixtures and schema conformance tests
+
+The compiled fixture is bound to:
+
+```text
+sha256:6a9b3aa53e81ae0e95414f80df0192de5ff11489e9b65b1254b69b71a496155a
+```
 
 ### B1 — Teach the WOML frontend the branch syntax
 

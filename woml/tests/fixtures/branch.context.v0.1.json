@@ -1,0 +1,69 @@
+{
+  "beforeCheckContent": {
+    "trigger": {},
+    "steps": {}
+  },
+  "afterCheckContent": {
+    "trigger": {},
+    "steps": {
+      "checkContent": {
+        "needsReview": true
+      }
+    }
+  },
+  "afterBranchSelection": {
+    "trigger": {},
+    "steps": {
+      "checkContent": {
+        "needsReview": true
+      }
+    }
+  },
+  "afterReviewContent": {
+    "trigger": {},
+    "steps": {
+      "checkContent": {
+        "needsReview": true
+      },
+      "reviewContent": {
+        "status": "reviewed",
+        "accepted": true
+      }
+    }
+  },
+  "afterDecision": {
+    "trigger": {},
+    "steps": {
+      "checkContent": {
+        "needsReview": true
+      },
+      "reviewContent": {
+        "status": "reviewed",
+        "accepted": true
+      },
+      "decision": {
+        "status": "reviewed",
+        "accepted": true
+      }
+    }
+  },
+  "afterPublishDecision": {
+    "trigger": {},
+    "steps": {
+      "checkContent": {
+        "needsReview": true
+      },
+      "reviewContent": {
+        "status": "reviewed",
+        "accepted": true
+      },
+      "decision": {
+        "status": "reviewed",
+        "accepted": true
+      },
+      "publishDecision": {
+        "message": "Final status: reviewed"
+      }
+    }
+  }
+}
