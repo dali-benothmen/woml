@@ -1,6 +1,6 @@
 # WOML Rust Core Integration Plan
 
-Status: R0 complete; protocol and event contracts frozen; R1 not started
+Status: R1 complete; multiplexed Bun script host implemented; R2 not started
 
 This document defines how WOML moves from the validated TypeScript execution
 slice to the intended production architecture: Bun and TypeScript own the WOML
@@ -509,7 +509,7 @@ Gate:
 - No Rust execution or host behavior relies on an undocumented field.
 - The blocking protocol decisions receive review before implementation starts.
 
-### R1 — Build the long-lived Bun script host
+### R1 — Build the long-lived Bun script host — complete
 
 One phrase: turn the existing Worker runner into a multiplexed protocol service.
 

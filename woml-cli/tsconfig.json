@@ -3,12 +3,12 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
     "lib": ["ES2022", "WebWorker"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "rootDir": ".",
     "types": ["bun"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]
