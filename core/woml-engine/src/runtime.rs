@@ -5,16 +5,21 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::event::{
-  RunFailedData, RunFailedDataV1, RunSucceededData, StepAttemptFailedData, StepAttemptStartedData,
-  StepAttemptSucceededData,
+use crate::engine::{
+  resolve_context_reference, selected_branch_arm, BranchEvaluationError, BranchEvaluationErrorKind,
 };
+use crate::event::{
+  BranchSelectedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunSucceededData,
+  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
+};
+use crate::model::ValueExpression;
 use crate::protocol::{ExecuteMessage, HostOutcome};
 use crate::{
-  AttemptFailure, AttemptFailureKind, CompiledWorkflowDefinition, DurableDagEngine,
-  DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
-  RecoveryReport, RunEvent, RunEventPayload, RunProjection, RunStatus, ScriptHostClient,
-  ScriptHostClientError, ScriptHostProcessOptions, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
+  run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind, BranchFailure,
+  CompiledWorkflowDefinition, DurableDagEngine, DurableEngineError, DurableEventStore,
+  DurableStoreError, EngineError, InMemoryDagEngine, RecoveryReport, RunEvent, RunEventPayload,
+  RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions,
+  WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
 #[derive(Debug, Clone)]
@@ -58,6 +63,8 @@ pub enum RuntimeExecutionError {
   Host(#[from] ScriptHostClientError),
   #[error(transparent)]
   RunFailed(Box<FailedRunDetails>),
+  #[error(transparent)]
+  BranchFailed(Box<FailedBranchDetails>),
   #[error("workflow execution stalled: {0}")]
   Stalled(String),
   #[error("runtime configuration is invalid: {0}")]
@@ -70,6 +77,15 @@ pub struct FailedRunDetails {
   pub code: String,
   pub message: String,
   pub failure: AttemptFailure,
+  pub events: Vec<RunEvent>,
+}
+
+#[derive(Debug, Error)]
+#[error("workflow branch failed [{code}]: {message}")]
+pub struct FailedBranchDetails {
+  pub code: String,
+  pub message: String,
+  pub failure: BranchFailure,
   pub events: Vec<RunEvent>,
 }
 
@@ -148,104 +164,196 @@ async fn execute_with_host<E: RuntimeDagEngine>(
     };
     if ready.len() != 1 {
       return Err(RuntimeExecutionError::Stalled(
-        "the R3 runtime received more than one ready node".to_string(),
+        "the current runtime received more than one ready node".to_string(),
       ));
     }
 
-    let node = engine
-      .workflow()
-      .node(node_id)
-      .ok_or_else(|| RuntimeExecutionError::Stalled("ready node disappeared".to_string()))?;
-    let source = node
-      .script_source()
-      .ok_or_else(|| {
-        RuntimeExecutionError::Stalled(format!("node {node_id:?} has no script source"))
-      })?
-      .to_string();
-    let invocation_id = generated_id("inv");
-    engine.append_payload(
-      &run_id,
-      RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
-        node_id: node_id.clone(),
-        attempt: 1,
-        invocation_id: invocation_id.clone(),
-        handler: "runtime.script".to_string(),
-      }),
-    )?;
-
-    let context = engine.projection(&run_id)?.context;
-    if let Some(limit) = options.max_context_bytes {
-      let actual = serde_json::to_vec(&context)
-        .map_err(|error| RuntimeExecutionError::Stalled(error.to_string()))?
-        .len();
-      if actual > limit {
-        let failure = AttemptFailure {
-          kind: AttemptFailureKind::ContextTooLarge,
-          code: AttemptFailureKind::ContextTooLarge.code().to_string(),
-          message: "Invocation context exceeds the configured byte limit.".to_string(),
-          details: Some(crate::FailureSizeDetails {
-            actual_bytes: Some(actual as u64),
-            limit_bytes: Some(limit as u64),
-          }),
-        };
-        return fail_attempt(engine, &run_id, node_id, &invocation_id, failure);
-      }
-    }
-
-    let request = ExecuteMessage::runtime_script(
-      &invocation_id,
-      &run_id,
-      node_id,
-      options.script_timeout_ms,
-      &source,
-      &context,
-    );
-    let outcome = match host.execute(&request).await {
-      Ok(completed) => completed.outcome,
-      Err(error) => {
-        let failure = AttemptFailure {
-          kind: AttemptFailureKind::HostCrashed,
-          code: AttemptFailureKind::HostCrashed.code().to_string(),
-          message: error.to_string(),
-          details: None,
-        };
-        return fail_attempt(engine, &run_id, node_id, &invocation_id, failure);
-      }
+    let (handler, inputs, source) = {
+      let node = engine
+        .workflow()
+        .node(node_id)
+        .ok_or_else(|| RuntimeExecutionError::Stalled("ready node disappeared".to_string()))?;
+      (
+        node.handler.clone(),
+        node.inputs.clone(),
+        node.script_source().map(str::to_string),
+      )
     };
 
-    match outcome {
-      HostOutcome::Success { value } => {
-        engine.append_payload(
-          &run_id,
-          RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
-            node_id: node_id.clone(),
-            attempt: 1,
-            invocation_id,
-            output: value.clone(),
-          }),
-        )?;
+    match handler.as_str() {
+      "engine.branch-select" => {
+        let context = engine.projection(&run_id)?.context;
+        match selected_branch_arm(engine.workflow(), node_id, &context) {
+          Ok(arm_id) => {
+            let branch_id = crate::engine::selector_branch_id(node_id)
+              .ok_or_else(|| {
+                RuntimeExecutionError::Stalled(format!(
+                  "selector node {node_id:?} has no canonical branch identity"
+                ))
+              })?
+              .to_string();
+            engine.append_payload(
+              &run_id,
+              RunEventPayload::BranchSelected(BranchSelectedData { branch_id, arm_id }),
+            )?;
+          }
+          Err(error) => return fail_branch(engine, &run_id, error),
+        }
+      }
+      "engine.branch-result" => {
+        let projection = engine.projection(&run_id)?;
+        let arm_id = projection
+          .branch_selections
+          .get(node_id)
+          .cloned()
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "branch result {node_id:?} became ready without a recorded selection"
+            ))
+          })?;
+        let ValueExpression::Object { fields } = &inputs else {
+          return Err(RuntimeExecutionError::Stalled(format!(
+            "branch result {node_id:?} has invalid compiled inputs"
+          )));
+        };
+        let expression = fields.get(&arm_id).ok_or_else(|| {
+          RuntimeExecutionError::Stalled(format!(
+            "branch result {node_id:?} has no value for selected arm {arm_id:?}"
+          ))
+        })?;
+        let output = match resolve_context_reference(expression, &projection.context) {
+          Ok(output) => output,
+          Err(error) => {
+            return fail_branch(
+              engine,
+              &run_id,
+              BranchEvaluationError {
+                branch_id: node_id.clone(),
+                arm_id: Some(arm_id),
+                path: Some(error.path),
+                kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
+              },
+            );
+          }
+        };
+        engine.publish_pure_result(&run_id, node_id, output.clone())?;
         execution_order.push(node_id.clone());
         if node_id == &terminal_node_id {
           engine.append_payload(
             &run_id,
             RunEventPayload::RunSucceeded(RunSucceededData {
               terminal_node_id: terminal_node_id.clone(),
-              result: value,
+              result: output,
             }),
           )?;
           return final_result(engine, &run_id, execution_order);
         }
       }
-      HostOutcome::Failure { error } => {
-        return fail_attempt(
-          engine,
-          &run_id,
-          node_id,
-          &invocation_id,
-          error.into_attempt_failure(),
-        );
+      "runtime.script" => {
+        let source = source.ok_or_else(|| {
+          RuntimeExecutionError::Stalled(format!("node {node_id:?} has no script source"))
+        })?;
+        let output = execute_script_node(engine, &run_id, node_id, &source, options, host).await?;
+        execution_order.push(node_id.clone());
+        if node_id == &terminal_node_id {
+          engine.append_payload(
+            &run_id,
+            RunEventPayload::RunSucceeded(RunSucceededData {
+              terminal_node_id: terminal_node_id.clone(),
+              result: output,
+            }),
+          )?;
+          return final_result(engine, &run_id, execution_order);
+        }
+      }
+      _ => {
+        return Err(RuntimeExecutionError::Stalled(format!(
+          "ready node {node_id:?} uses unknown handler {handler:?}"
+        )));
       }
     }
+  }
+}
+
+async fn execute_script_node<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  node_id: &str,
+  source: &str,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<Value, RuntimeExecutionError> {
+  let invocation_id = generated_id("inv");
+  engine.append_payload(
+    run_id,
+    RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+      node_id: node_id.to_string(),
+      attempt: 1,
+      invocation_id: invocation_id.clone(),
+      handler: "runtime.script".to_string(),
+    }),
+  )?;
+
+  let context = engine.projection(run_id)?.context;
+  if let Some(limit) = options.max_context_bytes {
+    let actual = serde_json::to_vec(&context)
+      .map_err(|error| RuntimeExecutionError::Stalled(error.to_string()))?
+      .len();
+    if actual > limit {
+      let failure = AttemptFailure {
+        kind: AttemptFailureKind::ContextTooLarge,
+        code: AttemptFailureKind::ContextTooLarge.code().to_string(),
+        message: "Invocation context exceeds the configured byte limit.".to_string(),
+        details: Some(crate::FailureSizeDetails {
+          actual_bytes: Some(actual as u64),
+          limit_bytes: Some(limit as u64),
+        }),
+      };
+      return fail_attempt(engine, run_id, node_id, &invocation_id, failure);
+    }
+  }
+
+  let request = ExecuteMessage::runtime_script(
+    &invocation_id,
+    run_id,
+    node_id,
+    options.script_timeout_ms,
+    source,
+    &context,
+  );
+  let outcome = match host.execute(&request).await {
+    Ok(completed) => completed.outcome,
+    Err(error) => {
+      let failure = AttemptFailure {
+        kind: AttemptFailureKind::HostCrashed,
+        code: AttemptFailureKind::HostCrashed.code().to_string(),
+        message: error.to_string(),
+        details: None,
+      };
+      return fail_attempt(engine, run_id, node_id, &invocation_id, failure);
+    }
+  };
+
+  match outcome {
+    HostOutcome::Success { value } => {
+      engine.append_payload(
+        run_id,
+        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+          node_id: node_id.to_string(),
+          attempt: 1,
+          invocation_id,
+          output: value.clone(),
+        }),
+      )?;
+      Ok(value)
+    }
+    HostOutcome::Failure { error } => fail_attempt(
+      engine,
+      run_id,
+      node_id,
+      &invocation_id,
+      error.into_attempt_failure(),
+    ),
   }
 }
 
@@ -290,17 +398,86 @@ fn fail_attempt<T, E: RuntimeDagEngine>(
   )?;
   engine.append_payload(
     run_id,
-    RunEventPayload::RunFailed(RunFailedData::V1(RunFailedDataV1 {
-      node_id: Some(node_id.to_string()),
-      attempt: Some(1),
-      invocation_id: Some(invocation_id.to_string()),
-      failure: failure.clone(),
-    })),
+    RunEventPayload::RunFailed(match engine.event_schema_version() {
+      RUN_EVENT_SCHEMA_VERSION_V1 => RunFailedData::V1(RunFailedDataV1 {
+        node_id: Some(node_id.to_string()),
+        attempt: Some(1),
+        invocation_id: Some(invocation_id.to_string()),
+        failure: failure.clone(),
+      }),
+      RUN_EVENT_SCHEMA_VERSION_V2 => RunFailedData::V2(RunFailedDataV2::Attempt {
+        node_id: node_id.to_string(),
+        attempt: 1,
+        invocation_id: invocation_id.to_string(),
+        failure: failure.clone(),
+      }),
+      _ => unreachable!("compiled models select a supported run-event version"),
+    }),
   )?;
   Err(RuntimeExecutionError::RunFailed(Box::new(
     FailedRunDetails {
       code: failure.code.clone(),
       message: failure.message.clone(),
+      failure,
+      events: engine.events(run_id)?,
+    },
+  )))
+}
+
+fn fail_branch<T, E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  error: BranchEvaluationError,
+) -> Result<T, RuntimeExecutionError> {
+  let BranchEvaluationError {
+    branch_id,
+    arm_id,
+    path,
+    kind,
+  } = error;
+  let reference = path
+    .as_ref()
+    .map(|path| format!("context.{}", path.join(".")));
+  let failure = match kind {
+    BranchEvaluationErrorKind::NotBoolean(actual_type) => BranchFailure::BranchTestNotBoolean {
+      code: "WOML_BRANCH_TEST_NOT_BOOLEAN".to_string(),
+      message: format!(
+        "Branch test for {} must resolve to a JSON boolean.",
+        arm_id.as_deref().unwrap_or(&branch_id)
+      ),
+      actual_type,
+    },
+    BranchEvaluationErrorKind::ReferenceNotAvailable => BranchFailure::ReferenceNotAvailable {
+      code: "WOML_REFERENCE_NOT_AVAILABLE".to_string(),
+      message: format!(
+        "Reference {} is not available.",
+        reference.as_deref().unwrap_or("<unknown>")
+      ),
+    },
+    BranchEvaluationErrorKind::SelectionInvalid => BranchFailure::BranchSelectionInvalid {
+      code: "WOML_BRANCH_SELECTION_INVALID".to_string(),
+      message: format!("Branch {branch_id:?} has no valid selectable arm."),
+    },
+  };
+  let code = failure.code().to_string();
+  let message = match &failure {
+    BranchFailure::BranchTestNotBoolean { message, .. }
+    | BranchFailure::ReferenceNotAvailable { message, .. }
+    | BranchFailure::BranchSelectionInvalid { message, .. } => message.clone(),
+  };
+  engine.append_payload(
+    run_id,
+    RunEventPayload::RunFailed(RunFailedData::V2(RunFailedDataV2::Branch {
+      branch_id,
+      arm_id,
+      path,
+      failure: failure.clone(),
+    })),
+  )?;
+  Err(RuntimeExecutionError::BranchFailed(Box::new(
+    FailedBranchDetails {
+      code,
+      message,
       failure,
       events: engine.events(run_id)?,
     },
@@ -322,6 +499,36 @@ trait RuntimeDagEngine {
   fn projection(&self, run_id: &str) -> Result<RunProjection, RuntimeExecutionError>;
   fn events(&self, run_id: &str) -> Result<Vec<RunEvent>, RuntimeExecutionError>;
   fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, RuntimeExecutionError>;
+  fn event_schema_version(&self) -> u32 {
+    run_event_schema_version_for_model(self.workflow().schema_version)
+  }
+  fn publish_pure_result(
+    &mut self,
+    run_id: &str,
+    node_id: &str,
+    output: Value,
+  ) -> Result<(), RuntimeExecutionError> {
+    let invocation_id = generated_id("inv");
+    self.append_payload(
+      run_id,
+      RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+        node_id: node_id.to_string(),
+        attempt: 1,
+        invocation_id: invocation_id.clone(),
+        handler: "engine.branch-result".to_string(),
+      }),
+    )?;
+    self.append_payload(
+      run_id,
+      RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+        node_id: node_id.to_string(),
+        attempt: 1,
+        invocation_id,
+        output,
+      }),
+    )?;
+    Ok(())
+  }
 }
 
 impl RuntimeDagEngine for InMemoryDagEngine {
@@ -345,7 +552,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
   ) -> Result<(), RuntimeExecutionError> {
     let sequence = self.events(run_id).len() as u64 + 1;
     self.append_event(RunEvent {
-      event_schema_version: RUN_EVENT_SCHEMA_VERSION_V1,
+      event_schema_version: self.event_schema_version(),
       event_id: generated_id("evt"),
       run_id: run_id.to_string(),
       sequence,
@@ -401,6 +608,17 @@ impl RuntimeDagEngine for DurableDagEngine {
 
   fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, RuntimeExecutionError> {
     Ok(self.ready_node_ids(run_id)?)
+  }
+
+  fn publish_pure_result(
+    &mut self,
+    run_id: &str,
+    node_id: &str,
+    output: Value,
+  ) -> Result<(), RuntimeExecutionError> {
+    let invocation_id = generated_id("inv");
+    self.publish_pure_result(run_id, node_id, &invocation_id, output)?;
+    Ok(())
   }
 }
 

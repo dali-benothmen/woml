@@ -110,6 +110,37 @@ describe('Rust to Bun workflow execution', () => {
     ]);
   });
 
+  nativeTest('executes only the selected branch route and publishes its merged result', async () => {
+    const workflow = await branchWorkflow();
+    const rust = await executeWorkflowWithRust(workflow, {
+      nativeCorePath,
+      scriptHostPath,
+    });
+
+    expect(rust.result).toEqual({ message: 'Final status: reviewed' });
+    expect(rust.executionOrder).toEqual([
+      'checkContent',
+      'reviewContent',
+      'decision',
+      'publishDecision',
+    ]);
+    expect(rust.context.steps.reviewContent).toEqual({
+      status: 'reviewed',
+      accepted: true,
+    });
+    expect(rust.context.steps.acceptContent).toBeUndefined();
+    expect(rust.context.steps.decision).toEqual({
+      status: 'reviewed',
+      accepted: true,
+    });
+    expect(
+      rust.events.find((event) => event.type === 'branch_selected')?.data,
+    ).toEqual({ branchId: 'decision', armId: 'decision:when:0' });
+    expect(rust.events.every((event) => event.eventSchemaVersion === 2)).toBe(
+      true,
+    );
+  });
+
   nativeTest('preserves script throw, timeout, invalid result, and host crash', async () => {
     const workflow = await helloWorkflow();
 

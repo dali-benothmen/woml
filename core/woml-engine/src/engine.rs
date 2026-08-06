@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
@@ -8,8 +8,9 @@ use crate::event::{
   is_definition_hash, RunEventPayload, RunFailedData, RunFailedDataV2, RunStartedData,
 };
 use crate::{
+  model::{EdgeCondition, ValueExpression},
   run_event_schema_version_for_model, CompiledWorkflowDefinition, EventStoreError, FoldError,
-  InMemoryEventStore, ModelValidationError, RunEvent, RunProjection, RunStatus,
+  InMemoryEventStore, ModelValidationError, RunEvent, RunProjection, RunStatus, WorkflowContext,
 };
 
 #[derive(Debug, Error)]
@@ -172,19 +173,18 @@ pub(crate) fn ready_node_ids_for_projection(
     return Err("The run is not bound to this compiled workflow definition.".to_string());
   }
 
-  let completed = projection.completed_node_ids();
+  let active = active_node_ids(workflow, projection);
   let attempted = projection.attempted_node_ids();
-  let mut incoming: HashMap<&str, Vec<&str>> = workflow
+  let mut incoming: HashMap<&str, Vec<&crate::model::CompiledWorkflowEdge>> = workflow
     .graph
     .nodes
     .iter()
     .map(|node| (node.id.as_str(), Vec::new()))
     .collect();
   for edge in &workflow.graph.edges {
-    incoming
-      .entry(edge.to.as_str())
-      .or_default()
-      .push(edge.from.as_str());
+    if active.contains(edge.from.as_str()) && edge_is_active(edge, projection) {
+      incoming.entry(edge.to.as_str()).or_default().push(edge);
+    }
   }
 
   Ok(
@@ -193,17 +193,192 @@ pub(crate) fn ready_node_ids_for_projection(
       .nodes
       .iter()
       .filter(|node| {
-        !completed.contains(node.id.as_str())
+        active.contains(node.id.as_str())
+          && !node_is_complete(node, projection)
           && !attempted.contains(node.id.as_str())
           && incoming
             .get(node.id.as_str())
             .into_iter()
             .flatten()
-            .all(|predecessor| completed.contains(predecessor))
+            .all(|edge| {
+              workflow
+                .node(&edge.from)
+                .is_some_and(|predecessor| node_is_complete(predecessor, projection))
+            })
       })
       .map(|node| node.id.clone())
       .collect(),
   )
+}
+
+fn active_node_ids<'a>(
+  workflow: &'a CompiledWorkflowDefinition,
+  projection: &RunProjection,
+) -> HashSet<&'a str> {
+  let mut active = HashSet::new();
+  let mut queue: VecDeque<&str> = workflow
+    .graph
+    .entry_node_ids
+    .iter()
+    .map(String::as_str)
+    .collect();
+  while let Some(node_id) = queue.pop_front() {
+    if !active.insert(node_id) {
+      continue;
+    }
+    for edge in workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.from == node_id && edge_is_active(edge, projection))
+    {
+      queue.push_back(edge.to.as_str());
+    }
+  }
+  active
+}
+
+fn edge_is_active(edge: &crate::model::CompiledWorkflowEdge, projection: &RunProjection) -> bool {
+  match edge.branch_id.as_deref() {
+    Some(branch_id) => projection
+      .branch_selections
+      .get(branch_id)
+      .is_some_and(|arm_id| arm_id == &edge.id),
+    None => true,
+  }
+}
+
+fn node_is_complete(node: &crate::model::CompiledWorkflowNode, projection: &RunProjection) -> bool {
+  if node.handler == "engine.branch-select" {
+    return selector_branch_id(&node.id)
+      .is_some_and(|branch_id| projection.branch_selections.contains_key(branch_id));
+  }
+  projection.context.steps.contains_key(&node.id)
+}
+
+pub(crate) fn selector_branch_id(selector_id: &str) -> Option<&str> {
+  selector_id
+    .strip_prefix("__woml_branch__")?
+    .strip_suffix("__select")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContextReferenceError {
+  pub path: Vec<String>,
+}
+
+pub(crate) fn resolve_context_reference(
+  expression: &ValueExpression,
+  context: &WorkflowContext,
+) -> Result<Value, ContextReferenceError> {
+  let ValueExpression::ContextReference { path } = expression else {
+    return Err(ContextReferenceError { path: Vec::new() });
+  };
+  let missing = || ContextReferenceError { path: path.clone() };
+  let Some(root) = path.first().map(String::as_str) else {
+    return Err(missing());
+  };
+  let (mut value, remaining): (Value, &[String]) = match root {
+    "trigger" => (Value::Object(context.trigger.clone()), &path[1..]),
+    "steps" => (Value::Object(context.steps.clone()), &path[1..]),
+    _ => return Err(missing()),
+  };
+  for segment in remaining {
+    value = match value {
+      Value::Object(object) => object.get(segment).cloned().ok_or_else(missing)?,
+      _ => return Err(missing()),
+    };
+  }
+  Ok(value)
+}
+
+pub(crate) fn selected_branch_arm(
+  workflow: &CompiledWorkflowDefinition,
+  selector_id: &str,
+  context: &WorkflowContext,
+) -> Result<String, BranchEvaluationError> {
+  let branch_id = selector_branch_id(selector_id).ok_or_else(|| BranchEvaluationError {
+    branch_id: selector_id.to_string(),
+    arm_id: None,
+    path: None,
+    kind: BranchEvaluationErrorKind::SelectionInvalid,
+  })?;
+  for edge in workflow
+    .graph
+    .edges
+    .iter()
+    .filter(|edge| edge.from == selector_id && edge.branch_id.as_deref() == Some(branch_id))
+  {
+    match &edge.condition {
+      EdgeCondition::Boolean { value: expression } => {
+        let condition_path = match expression {
+          ValueExpression::ContextReference { path } => Some(path.clone()),
+          _ => None,
+        };
+        let resolved = resolve_context_reference(expression, context).map_err(|error| {
+          BranchEvaluationError {
+            branch_id: branch_id.to_string(),
+            arm_id: Some(edge.id.clone()),
+            path: Some(error.path),
+            kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
+          }
+        })?;
+        match resolved {
+          Value::Bool(true) => return Ok(edge.id.clone()),
+          Value::Bool(false) => {}
+          value => {
+            return Err(BranchEvaluationError {
+              branch_id: branch_id.to_string(),
+              arm_id: Some(edge.id.clone()),
+              path: condition_path,
+              kind: BranchEvaluationErrorKind::NotBoolean(json_value_type(&value)),
+            });
+          }
+        }
+      }
+      EdgeCondition::Always => return Ok(edge.id.clone()),
+      _ => {
+        return Err(BranchEvaluationError {
+          branch_id: branch_id.to_string(),
+          arm_id: Some(edge.id.clone()),
+          path: None,
+          kind: BranchEvaluationErrorKind::SelectionInvalid,
+        });
+      }
+    }
+  }
+  Err(BranchEvaluationError {
+    branch_id: branch_id.to_string(),
+    arm_id: None,
+    path: None,
+    kind: BranchEvaluationErrorKind::SelectionInvalid,
+  })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BranchEvaluationError {
+  pub branch_id: String,
+  pub arm_id: Option<String>,
+  pub path: Option<Vec<String>>,
+  pub kind: BranchEvaluationErrorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BranchEvaluationErrorKind {
+  NotBoolean(crate::JsonValueType),
+  ReferenceNotAvailable,
+  SelectionInvalid,
+}
+
+fn json_value_type(value: &Value) -> crate::JsonValueType {
+  match value {
+    Value::Null => crate::JsonValueType::Null,
+    Value::Number(_) => crate::JsonValueType::Number,
+    Value::String(_) => crate::JsonValueType::String,
+    Value::Array(_) => crate::JsonValueType::Array,
+    Value::Object(_) => crate::JsonValueType::Object,
+    Value::Bool(_) => unreachable!("boolean values are handled before type classification"),
+  }
 }
 
 pub(crate) fn validate_payload_against_definition(
@@ -221,7 +396,7 @@ pub(crate) fn validate_payload_against_definition(
     }
     RunEventPayload::StepAttemptStarted(data) => {
       if data.attempt != 1 {
-        return Err("R2 does not execute retries; attempt must be 1.".to_string());
+        return Err("The current executable profile requires attempt 1.".to_string());
       }
       let node = workflow
         .node(&data.node_id)

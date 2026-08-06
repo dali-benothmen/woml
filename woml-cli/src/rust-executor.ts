@@ -8,7 +8,7 @@ import type {
 } from 'woml';
 
 export interface RustRunEvent {
-  readonly eventSchemaVersion: 1;
+  readonly eventSchemaVersion: 1 | 2;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;

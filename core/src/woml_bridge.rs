@@ -42,6 +42,12 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
         node_id,
       }
     }
+    RuntimeExecutionError::BranchFailed(details) => NativeExecutionError {
+      kind: "woml_execution_error",
+      code: details.code.clone(),
+      message: details.message.clone(),
+      node_id: None,
+    },
     error => NativeExecutionError {
       kind: "woml_execution_error",
       code: "WOML_RUST_EXECUTION_FAILED".to_string(),

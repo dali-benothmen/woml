@@ -1,7 +1,7 @@
 # WOML Branch Implementation Plan
 
-Status: B0–B3 complete — branch syntax compiles into the frozen model-v2 DAG,
-and Rust now persists and recovers an immutable selected arm; B4 is next
+Status: B0–B4 complete — Rust now evaluates branches, executes only the
+selected route, and publishes its stable merged result; B5 is next
 
 ## 1. Product Outcome
 
@@ -607,6 +607,31 @@ Result:
 
 The Rust engine executes exactly one branch route, publishes one predictable
 branch result, and continues into downstream steps.
+
+Completed proof:
+
+- Rust resolves frozen context-reference expressions directly against folded
+  event state and requires an actual JSON boolean for every `<when>`.
+- Conditions are evaluated in document order; the first true `<when>` wins and
+  `<otherwise>` is selected only when all earlier tests are false.
+- Scheduler reachability follows only the recorded selector edge, so inactive
+  siblings produce no attempts, outputs, or Bun side effects and do not block
+  the branch join.
+- `engine.branch-select` runs entirely in Rust and publishes only the durable
+  `branch_selected` control event.
+- `engine.branch-result` resolves the selected arm's result entirely in Rust
+  and publishes it through ordinary attempt-success events at
+  `context.steps.<branchId>`.
+- Durable branch-result start and success events are committed in one SQLite
+  transaction, removing an ambiguous recovery window for this pure operation.
+- Runtime failures distinguish non-boolean tests, unavailable references, and
+  selected-script attempt failures using the frozen event-v2 failure scopes.
+- True, fallback, multiple-true, nested, selected-script-failure, in-memory,
+  durable, native-addon, and sequential-regression tests pass.
+- The reviewed workflow already returns
+  `{"message":"Final status: reviewed"}` through the development CLI path;
+  B5 remains responsible for the complete public CLI error and packaging
+  surface.
 
 ### B5 — Expose branch behavior through `woml run`
 

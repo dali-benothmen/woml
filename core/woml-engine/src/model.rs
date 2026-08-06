@@ -810,7 +810,7 @@ impl CompiledWorkflowDefinition {
         issues.push(issue(
                     ModelIssueCode::UnsupportedTrigger,
                     format!(
-                        "Trigger {:?} is not executable in R2; only trigger.manual with empty config is supported.",
+                        "Trigger {:?} is not executable in the current profile; only trigger.manual with empty config is supported.",
                         trigger.id
                     ),
                 ));
@@ -818,41 +818,52 @@ impl CompiledWorkflowDefinition {
     }
 
     for node in &self.graph.nodes {
-      if node.handler != "runtime.script" {
-        issues.push(issue(
-          ModelIssueCode::UnknownHandler,
-          format!(
-            "No R2 handler is registered for {:?} on node {:?}.",
-            node.handler, node.id
-          ),
-        ));
-      }
-      let valid_script_input = match &node.inputs {
-        ValueExpression::Object { fields } if fields.len() == 1 => {
+      let valid_inputs = match (node.handler.as_str(), &node.inputs) {
+        ("runtime.script", ValueExpression::Object { fields }) if fields.len() == 1 => {
           matches!(fields.get("source"), Some(ValueExpression::Literal { value }) if value.is_string())
         }
-        _ => false,
+        ("engine.branch-select", ValueExpression::Object { fields }) => fields.is_empty(),
+        ("engine.branch-result", ValueExpression::Object { fields }) => {
+          !fields.is_empty()
+            && fields
+              .values()
+              .all(|value| matches!(value, ValueExpression::ContextReference { .. }))
+        }
+        ("runtime.script" | "engine.branch-select" | "engine.branch-result", _) => false,
+        _ => {
+          issues.push(issue(
+            ModelIssueCode::UnknownHandler,
+            format!(
+              "No executable WOML handler is registered for {:?} on node {:?}.",
+              node.handler, node.id
+            ),
+          ));
+          true
+        }
       };
-      if !valid_script_input {
+      if !valid_inputs {
         issues.push(issue(
           ModelIssueCode::UnsupportedNodeInputs,
           format!(
-            "Node {:?} must have exactly one literal string input named source in R2.",
-            node.id
+            "Node {:?} does not match the input contract for handler {:?}.",
+            node.id, node.handler
           ),
         ));
       }
       if node.retry_policy.is_some() {
         issues.push(issue(
           ModelIssueCode::UnsupportedRetry,
-          format!("Retry is not executable in R2 (node {:?}).", node.id),
+          format!(
+            "Retry is not executable in the current profile (node {:?}).",
+            node.id
+          ),
         ));
       }
       if node.timeout_ms.is_some() {
         issues.push(issue(
           ModelIssueCode::UnsupportedTimeout,
           format!(
-            "Per-node timeout is not executable in R2 (node {:?}).",
+            "Per-node timeout is not executable in the current profile (node {:?}).",
             node.id
           ),
         ));
@@ -860,20 +871,13 @@ impl CompiledWorkflowDefinition {
     }
 
     for edge in &self.graph.edges {
-      if !matches!(edge.condition, EdgeCondition::Always) {
+      let executable_condition = matches!(edge.condition, EdgeCondition::Always)
+        || matches!(edge.condition, EdgeCondition::Boolean { .. }) && edge.branch_id.is_some();
+      if !executable_condition {
         issues.push(issue(
           ModelIssueCode::UnsupportedEdgeCondition,
           format!(
-            "Edge {:?} uses a condition that is not executable in R2.",
-            edge.id
-          ),
-        ));
-      }
-      if edge.branch_id.is_some() {
-        issues.push(issue(
-          ModelIssueCode::UnsupportedBranch,
-          format!(
-            "Edge {:?} carries a branch identity, which is staged.",
+            "Edge {:?} uses a condition outside the executable WOML profile.",
             edge.id
           ),
         ));
@@ -895,17 +899,18 @@ impl CompiledWorkflowDefinition {
         *count += 1;
       }
     }
-    let is_linear = self.graph.entry_node_ids.len() == 1
+    let topology_is_sequential_or_branching = self.graph.entry_node_ids.len() == 1
       && self.graph.nodes.iter().all(|node| {
-        incoming.get(node.id.as_str()).copied().unwrap_or(0) <= 1
-          && outgoing.get(node.id.as_str()).copied().unwrap_or(0) <= 1
-      })
-      && self.graph.edges.len() + 1 == self.graph.nodes.len();
-    if !is_linear {
+        let incoming_count = incoming.get(node.id.as_str()).copied().unwrap_or(0);
+        let outgoing_count = outgoing.get(node.id.as_str()).copied().unwrap_or(0);
+        (incoming_count <= 1 || node.handler == "engine.branch-result")
+          && (outgoing_count <= 1 || node.handler == "engine.branch-select")
+      });
+    if !topology_is_sequential_or_branching {
       issues.push(issue(
-                ModelIssueCode::UnsupportedNonSequentialDag,
-                "R2 executes only one unconditional sequential path; parallel and branching DAGs are staged.",
-            ));
+        ModelIssueCode::UnsupportedNonSequentialDag,
+        "The executable profile supports sequential and branch DAGs; unrelated fan-out remains staged.",
+      ));
     }
   }
 }

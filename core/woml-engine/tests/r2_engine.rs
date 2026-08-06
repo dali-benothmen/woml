@@ -50,7 +50,7 @@ fn accepts_the_existing_compiled_model_fixture_unchanged() {
 }
 
 #[test]
-fn accepts_only_the_frozen_model_v2_branch_shape_as_structurally_valid() {
+fn accepts_the_frozen_model_v2_branch_shape_as_structural_and_executable() {
   let original: Value = serde_json::from_str(BRANCH_MODEL).unwrap();
   let model = branch_model();
 
@@ -61,10 +61,7 @@ fn accepts_only_the_frozen_model_v2_branch_shape_as_structurally_valid() {
   assert_eq!(model.terminal_node_id(), Some("publishDecision"));
   assert_eq!(serde_json::to_value(&model).unwrap(), original);
 
-  let execution_issues = model.validate_for_execution().unwrap_err().issues;
-  assert!(execution_issues
-    .iter()
-    .any(|issue| issue.code == ModelIssueCode::UnsupportedBranch));
+  model.validate_for_execution().unwrap();
 
   let mut malformed_group = branch_model();
   malformed_group.graph.edges[1].id = "decision:when:1".to_string();
@@ -151,7 +148,7 @@ fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
 }
 
 #[test]
-fn rejects_every_staged_execution_construct_in_r2() {
+fn rejects_constructs_outside_the_current_executable_profile() {
   let mut unknown_handler = hello_model();
   unknown_handler.graph.nodes[0].handler = "services.http".to_string();
   assert!(unknown_handler
@@ -194,9 +191,6 @@ fn rejects_every_staged_execution_construct_in_r2() {
   assert!(branch_issues
     .iter()
     .any(|issue| issue.code == ModelIssueCode::UnsupportedEdgeCondition));
-  assert!(branch_issues
-    .iter()
-    .any(|issue| issue.code == ModelIssueCode::UnsupportedBranch));
 
   let mut parallel = hello_model();
   let mut third = parallel.graph.nodes[1].clone();

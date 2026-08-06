@@ -239,6 +239,10 @@ fn sqlite_reopen_and_recovery_preserve_the_exact_selected_arm() {
   assert_eq!(report.resumable_runs, 1);
 
   let mut resumed = DurableDagEngine::resume(reopened, "run_branch_01").unwrap();
+  assert_eq!(
+    resumed.ready_node_ids("run_branch_01").unwrap(),
+    ["reviewContent"]
+  );
   let changed = RunEventPayload::BranchSelected(BranchSelectedData {
     branch_id: "decision".to_string(),
     arm_id: "decision:otherwise".to_string(),

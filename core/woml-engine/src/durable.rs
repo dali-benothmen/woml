@@ -402,6 +402,50 @@ impl DurableEventStore {
     Ok((event, projection))
   }
 
+  pub(crate) fn append_payloads_atomically(
+    &mut self,
+    run_id: &str,
+    payloads: Vec<(String, DateTime<Utc>, RunEventPayload)>,
+  ) -> Result<RunProjection, DurableStoreError> {
+    if payloads.is_empty() {
+      return Err(DurableStoreError::Contract(
+        "An atomic event batch must not be empty.".to_string(),
+      ));
+    }
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, run_id)?;
+    let mut events = load_events(&transaction, run_id)?;
+    let event_schema_version = events
+      .first()
+      .map(|event| event.event_schema_version)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "An atomic event batch cannot be appended before run_started.".to_string(),
+        )
+      })?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+
+    for (event_id, occurred_at, payload) in payloads {
+      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+        .map_err(DurableStoreError::Contract)?;
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        event_id,
+        occurred_at,
+        event_schema_version,
+        payload,
+      )?;
+    }
+    let projection = fold_events(&events)?;
+    transaction.commit()?;
+    Ok(projection)
+  }
+
   pub fn events(&self, run_id: &str) -> Result<Vec<RunEvent>, DurableStoreError> {
     self.run_binding(run_id)?;
     load_events(&self.connection, run_id)
@@ -530,20 +574,10 @@ impl DurableEventStore {
     }
 
     let workflow = definition_for_run(&transaction, run_id)?;
-    if projection.context.steps.len() == workflow.graph.nodes.len() {
-      let terminal_node_id = workflow.terminal_node_id().ok_or_else(|| {
-        DurableStoreError::Contract("Stored workflow has no terminal node.".to_string())
-      })?;
-      let result = projection
-        .context
-        .steps
-        .get(terminal_node_id)
-        .cloned()
-        .ok_or_else(|| {
-          DurableStoreError::Contract(
-            "Completed durable run has no output for its terminal node.".to_string(),
-          )
-        })?;
+    let terminal_node_id = workflow.terminal_node_id().ok_or_else(|| {
+      DurableStoreError::Contract("Stored workflow has no terminal node.".to_string())
+    })?;
+    if let Some(result) = projection.context.steps.get(terminal_node_id).cloned() {
       append_to_history(
         &transaction,
         &mut events,
@@ -836,6 +870,54 @@ impl DurableDagEngine {
       .store
       .append_payload(run_id, event_id, occurred_at, payload)?;
     Ok(projection)
+  }
+
+  pub fn publish_pure_result(
+    &mut self,
+    run_id: &str,
+    node_id: &str,
+    invocation_id: &str,
+    output: Value,
+  ) -> Result<RunProjection, DurableEngineError> {
+    let node = self.workflow.node(node_id).ok_or_else(|| {
+      DurableEngineError::Contract(format!("Unknown pure result node {node_id:?}."))
+    })?;
+    if node.handler != "engine.branch-result" {
+      return Err(DurableEngineError::Contract(format!(
+        "Node {node_id:?} is not an engine.branch-result operation."
+      )));
+    }
+    let ready = self.ready_node_ids(run_id)?;
+    if !ready.iter().any(|ready_id| ready_id == node_id) {
+      return Err(DurableEngineError::Contract(format!(
+        "Node {node_id:?} is not ready for pure result publication."
+      )));
+    }
+    Ok(self.store.append_payloads_atomically(
+      run_id,
+      vec![
+        (
+          generated_event_id(),
+          Utc::now(),
+          RunEventPayload::StepAttemptStarted(crate::event::StepAttemptStartedData {
+            node_id: node_id.to_string(),
+            attempt: 1,
+            invocation_id: invocation_id.to_string(),
+            handler: node.handler.clone(),
+          }),
+        ),
+        (
+          generated_event_id(),
+          Utc::now(),
+          RunEventPayload::StepAttemptSucceeded(crate::event::StepAttemptSucceededData {
+            node_id: node_id.to_string(),
+            attempt: 1,
+            invocation_id: invocation_id.to_string(),
+            output,
+          }),
+        ),
+      ],
+    )?)
   }
 
   pub fn projection(&self, run_id: &str) -> Result<RunProjection, DurableEngineError> {
