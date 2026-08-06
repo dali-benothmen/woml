@@ -19,7 +19,7 @@
     "Multiple ready nodes represent parallelism in the model even when a v1 executor processes them one at a time.",
     "The core must not depend on WOML, XML, template-source syntax, embedded-JavaScript syntax, RAK, or editor concerns.",
     "Resolved secret values must not appear in this artifact.",
-    "A definition hash is computed over a canonical serialization of this semantic model and is stored outside the bytes being hashed. Compiler provenance is not part of the semantic hash."
+    "A definition hash is SHA-256 over the RFC 8785 JSON Canonicalization Scheme encoding of this complete semantic model, formatted as sha256:<lowercase hexadecimal>, and stored outside the bytes being hashed. Compiler provenance is not part of the semantic hash."
   ],
   "x-openQuestions": [
     {

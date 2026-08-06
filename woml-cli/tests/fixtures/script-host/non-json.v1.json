@@ -1,0 +1,15 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "inv_non_json_01",
+  "outcome": {
+    "kind": "failure",
+    "error": {
+      "kind": "invalid_script_result",
+      "code": "WOML_SCRIPT_NON_JSON_RESULT",
+      "message": "Script returned a value that cannot be represented as strict JSON."
+    }
+  },
+  "durationMs": 1
+}

@@ -1,0 +1,16 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 1,
+  "messageType": "execute",
+  "invocationId": "inv_01",
+  "runId": "run_01",
+  "nodeId": "a",
+  "attempt": 1,
+  "handler": "runtime.script",
+  "timeoutMs": 5000,
+  "source": "return { x: context.trigger.name ?? \"World\" };",
+  "context": {
+    "trigger": {},
+    "steps": {}
+  }
+}

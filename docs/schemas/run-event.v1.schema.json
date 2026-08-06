@@ -1,470 +1,89 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cronflow.dev/schemas/run-event/v1",
-  "title": "Cronflow Run Event Vocabulary v1",
-  "description": "Draft review contract for append-only workflow run events. Every persisted event carries schemaVersion 1. Names and payloads remain provisional until this artifact is approved.",
-  "x-status": "draft-for-review",
-  "x-eventTypes": [
-    "run.started",
-    "run.completed",
-    "run.failed",
-    "run.cancelled",
-    "run.paused",
-    "run.resumed",
-    "node.attempt.started",
-    "node.attempt.succeeded",
-    "node.attempt.failed",
-    "node.attempt.cancelled",
-    "node.retry.scheduled",
-    "node.skipped",
-    "node.waiting",
-    "node.resumed",
-    "branch.started",
-    "branch.completed",
-    "branch.failed",
-    "log.emitted"
+  "title": "WOML Run Event v1",
+  "description": "Append-only workflow run events used by the first event-driven Rust execution slice.",
+  "x-status": "frozen-for-rust-hello-slice",
+  "x-currentEventTypes": [
+    "run_started",
+    "step_attempt_started",
+    "step_attempt_succeeded",
+    "step_attempt_failed",
+    "run_succeeded",
+    "run_failed"
+  ],
+  "x-reservedEventTypes": [
+    "step_retry_scheduled",
+    "run_paused",
+    "run_resumed",
+    "branch_selected",
+    "parallel_group_started",
+    "parallel_group_completed"
   ],
   "x-invariants": [
-    "Events are append-only and immutable.",
-    "The pair (runId, sequence) is unique and sequence values increase monotonically without replacement.",
-    "eventId is globally unique.",
-    "run.started is the first event for a run and establishes workflowId, definitionHash, trigger data, and the root branch execution identity.",
-    "Derived context is produced by folding events; no event stores an authoritative full context snapshot.",
-    "A node output enters derived context only through node.attempt.succeeded.",
-    "Each logical node execution has a nodeExecutionId; every individual try has an attemptExecutionId and a one-based attempt number.",
-    "A terminal attempt event must correspond to an earlier node.attempt.started event with the same identity.",
-    "node.retry.scheduled follows a failed attempt and identifies the next attempt number, but does not itself prove that the next attempt started.",
-    "Every node lifecycle event carries a branchExecutionId, including the root branch, so parallel execution can be reconstructed.",
-    "A recovered started attempt without a terminal attempt event is failed as interrupted; it is not automatically replayed.",
-    "The vocabulary makes no exactly-once side-effect guarantee.",
-    "Resolved secret values must never appear in event payloads, error details, logs, pause data, resume data, or trigger data persisted by this schema.",
-    "Readers reject unsupported schemaVersion values rather than interpreting them as version 1."
-  ],
-  "x-openQuestions": [
-    {
-      "id": "event-vocabulary-finalization",
-      "question": "Are these event names, boundaries, and payloads the desired durable public vocabulary?",
-      "constraint": "Any approved change after persistence begins requires an explicit schema-version migration or upcaster."
-    },
-    {
-      "id": "idempotency-key-derivation",
-      "question": "Is the handler idempotency key derived from (run_id, node_id), (run_id, node_execution_id, attempt), or another identity?",
-      "constraint": "The duplicate-key handler contract is also unresolved; this schema does not claim idempotency is solved."
-    },
-    {
-      "id": "duplicate-idempotency-result",
-      "question": "When a handler receives an already-executed idempotency key, must it return the original result, a duplicate marker, or an error?",
-      "constraint": "The answer affects persisted attempt events and recovery semantics."
-    },
-    {
-      "id": "pause-scope",
-      "question": "Do run.paused/run.resumed represent operator-wide suspension while node.waiting/node.resumed represent human or external waits, or should one pair be removed?",
-      "constraint": "Parallel branches make run-wide and node-local waiting observably different."
-    },
-    {
-      "id": "branch-identity",
-      "question": "Are explicit branch lifecycle events required for every fan-out, or is branchExecutionId on node events sufficient for some graphs?",
-      "constraint": "Historic parallel execution must be reconstructable without reading mutable state."
-    },
-    {
-      "id": "context-run-fold",
-      "question": "Which approved event fields become the stable public context.run schema?",
-      "constraint": "context.run is unavailable to WOML v0.1 scripts. The event schema must not accidentally define public context fields by implication; exposure requires a future versioned language contract."
-    },
-    {
-      "id": "engine-control-audit",
-      "question": "Which control operations append run pause/cancel/resume events, and how is the actor authorized and represented?",
-      "constraint": "Engine control remains separate from context and external services."
-    }
+    "Events are immutable and append-only.",
+    "The pair (runId, sequence) is unique and sequence increases monotonically within a run.",
+    "run_started is the first event and binds the run to workflowId and the RFC 8785 JCS SHA-256 definitionHash.",
+    "Context and run status are projections derived by folding events.",
+    "Only step_attempt_succeeded publishes an output into context.steps.",
+    "A terminal attempt event corresponds to one earlier step_attempt_started with the same nodeId, attempt, and invocationId.",
+    "A recovered started attempt without a terminal event fails as interrupted and is not automatically replayed.",
+    "Resolved secret values never appear in event data or failure messages.",
+    "Readers reject unsupported eventSchemaVersion values."
   ],
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
+    "eventSchemaVersion",
     "eventId",
     "runId",
     "sequence",
-    "type",
     "occurredAt",
-    "payload"
+    "type",
+    "data"
   ],
   "properties": {
-    "schemaVersion": {
-      "const": 1,
-      "description": "Durable event envelope and vocabulary schema version."
-    },
-    "eventId": {
-      "$ref": "#/$defs/nonEmptyId"
-    },
-    "runId": {
-      "$ref": "#/$defs/nonEmptyId"
-    },
-    "sequence": {
-      "type": "integer",
-      "minimum": 1
-    },
+    "eventSchemaVersion": { "const": 1 },
+    "eventId": { "$ref": "#/$defs/nonEmptyId" },
+    "runId": { "$ref": "#/$defs/nonEmptyId" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
     "type": {
       "enum": [
-        "run.started",
-        "run.completed",
-        "run.failed",
-        "run.cancelled",
-        "run.paused",
-        "run.resumed",
-        "node.attempt.started",
-        "node.attempt.succeeded",
-        "node.attempt.failed",
-        "node.attempt.cancelled",
-        "node.retry.scheduled",
-        "node.skipped",
-        "node.waiting",
-        "node.resumed",
-        "branch.started",
-        "branch.completed",
-        "branch.failed",
-        "log.emitted"
+        "run_started",
+        "step_attempt_started",
+        "step_attempt_succeeded",
+        "step_attempt_failed",
+        "run_succeeded",
+        "run_failed"
       ]
     },
-    "occurredAt": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "causationEventId": {
-      "$ref": "#/$defs/nonEmptyId"
-    },
-    "correlationId": {
-      "$ref": "#/$defs/nonEmptyId"
-    },
-    "payload": {
-      "type": "object"
-    }
+    "data": {}
   },
   "allOf": [
     {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "run.started"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/runStartedPayload"
-          }
-        }
-      }
+      "if": { "properties": { "type": { "const": "run_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runStartedData" } } }
     },
     {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "run.completed"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/emptyPayload"
-          }
-        }
-      }
+      "if": { "properties": { "type": { "const": "step_attempt_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptStartedData" } } }
     },
     {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "run.failed"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/runFailedPayload"
-          }
-        }
-      }
+      "if": { "properties": { "type": { "const": "step_attempt_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptSucceededData" } } }
     },
     {
-      "if": {
-        "properties": {
-          "type": {
-            "enum": [
-              "run.cancelled",
-              "run.paused"
-            ]
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/runControlPayload"
-          }
-        }
-      }
+      "if": { "properties": { "type": { "const": "step_attempt_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptFailedData" } } }
     },
     {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "run.resumed"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/runResumePayload"
-          }
-        }
-      }
+      "if": { "properties": { "type": { "const": "run_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runSucceededData" } } }
     },
     {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.attempt.started"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeAttemptStartedPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.attempt.succeeded"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeAttemptSucceededPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.attempt.failed"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeAttemptFailedPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.attempt.cancelled"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeAttemptCancelledPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.retry.scheduled"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeRetryScheduledPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.skipped"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeSkippedPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.waiting"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeWaitingPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "node.resumed"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/nodeResumedPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "branch.started"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/branchStartedPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "branch.completed"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/branchTerminalPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "branch.failed"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/branchFailedPayload"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "log.emitted"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "payload": {
-            "$ref": "#/$defs/logEmittedPayload"
-          }
-        }
-      }
+      "if": { "properties": { "type": { "const": "run_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runFailedData" } } }
     }
   ],
   "$defs": {
@@ -473,499 +92,75 @@
       "minLength": 1,
       "maxLength": 256
     },
-    "emptyPayload": {
-      "type": "object",
-      "additionalProperties": false
+    "definitionHash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "SHA-256 of the RFC 8785 JSON Canonicalization Scheme encoding of the complete compiled workflow model, rendered as sha256 followed by a colon and lowercase hexadecimal."
     },
-    "runStartedPayload": {
+    "runStartedData": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "workflowId",
-        "definitionHash",
-        "trigger",
-        "rootBranchExecutionId"
-      ],
+      "required": ["workflowId", "definitionHash", "trigger"],
       "properties": {
-        "workflowId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "definitionHash": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
-        },
-        "trigger": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "type",
-            "data"
-          ],
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/nonEmptyId"
-            },
-            "type": {
-              "$ref": "#/$defs/nonEmptyId"
-            },
-            "data": {
-              "description": "JSON trigger data folded into the workflow context. Must not contain resolved secrets."
-            }
-          }
-        },
-        "rootBranchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
+        "workflowId": { "$ref": "#/$defs/nonEmptyId" },
+        "definitionHash": { "$ref": "#/$defs/definitionHash" },
+        "trigger": { "type": "object" }
+      }
+    },
+    "stepAttemptStartedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "handler"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "handler": { "$ref": "#/$defs/nonEmptyId" }
+      }
+    },
+    "stepAttemptSucceededData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "output"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "output": {}
+      }
+    },
+    "stepAttemptFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "failure"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "failure": {
+          "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/attemptFailure"
         }
       }
     },
-    "runFailedPayload": {
+    "runSucceededData": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "error"
-      ],
+      "required": ["terminalNodeId", "result"],
       "properties": {
-        "error": {
-          "$ref": "#/$defs/errorEnvelope"
-        }
+        "terminalNodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "result": {}
       }
     },
-    "runControlPayload": {
+    "runFailedData": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "controlId",
-        "reason",
-        "actor"
-      ],
+      "required": ["failure"],
       "properties": {
-        "controlId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "actor": {
-          "$ref": "#/$defs/actor"
-        }
-      }
-    },
-    "runResumePayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "controlId",
-        "actor"
-      ],
-      "properties": {
-        "controlId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "actor": {
-          "$ref": "#/$defs/actor"
-        }
-      }
-    },
-    "actor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "kind"
-      ],
-      "properties": {
-        "kind": {
-          "enum": [
-            "engine",
-            "operator",
-            "handler",
-            "external"
-          ]
-        },
-        "id": {
-          "$ref": "#/$defs/nonEmptyId"
-        }
-      }
-    },
-    "nodeAttemptIdentity": {
-      "type": "object",
-      "required": [
-        "nodeId",
-        "nodeExecutionId",
-        "attemptExecutionId",
-        "attempt",
-        "branchExecutionId"
-      ],
-      "properties": {
-        "nodeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "nodeExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "attemptExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "attempt": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        }
-      }
-    },
-    "nodeAttemptStartedPayload": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/nodeAttemptIdentity"
-        },
-        {
-          "type": "object",
-          "required": [
-            "handler"
-          ],
-          "properties": {
-            "handler": {
-              "$ref": "#/$defs/nonEmptyId"
-            }
-          }
-        }
-      ],
-      "unevaluatedProperties": false
-    },
-    "nodeAttemptSucceededPayload": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/nodeAttemptIdentity"
-        },
-        {
-          "type": "object",
-          "required": [
-            "output"
-          ],
-          "properties": {
-            "output": {
-              "description": "JSON node output folded into derived context."
-            }
-          }
-        }
-      ],
-      "unevaluatedProperties": false
-    },
-    "nodeAttemptFailedPayload": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/nodeAttemptIdentity"
-        },
-        {
-          "type": "object",
-          "required": [
-            "error"
-          ],
-          "properties": {
-            "error": {
-              "$ref": "#/$defs/errorEnvelope"
-            }
-          }
-        }
-      ],
-      "unevaluatedProperties": false
-    },
-    "nodeAttemptCancelledPayload": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/nodeAttemptIdentity"
-        },
-        {
-          "type": "object",
-          "required": [
-            "reason"
-          ],
-          "properties": {
-            "reason": {
-              "type": "string"
-            }
-          }
-        }
-      ],
-      "unevaluatedProperties": false
-    },
-    "nodeRetryScheduledPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "nodeId",
-        "nodeExecutionId",
-        "branchExecutionId",
-        "failedAttempt",
-        "nextAttempt",
-        "scheduledAt",
-        "delayMs",
-        "causeEventId"
-      ],
-      "properties": {
-        "nodeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "nodeExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "failedAttempt": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "nextAttempt": {
-          "type": "integer",
-          "minimum": 2
-        },
-        "scheduledAt": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "delayMs": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "causeEventId": {
-          "$ref": "#/$defs/nonEmptyId"
-        }
-      }
-    },
-    "nodeSkippedPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "nodeId",
-        "nodeExecutionId",
-        "branchExecutionId",
-        "reason"
-      ],
-      "properties": {
-        "nodeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "nodeExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "reason": {
-          "enum": [
-            "condition_false",
-            "upstream_failed",
-            "cancelled",
-            "not_selected"
-          ]
-        }
-      }
-    },
-    "nodeWaitingPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "nodeId",
-        "nodeExecutionId",
-        "branchExecutionId",
-        "waitId",
-        "waitKind"
-      ],
-      "properties": {
-        "nodeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "nodeExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "waitId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "waitKind": {
-          "enum": [
-            "human",
-            "signal",
-            "timer",
-            "external"
-          ]
-        },
-        "publicData": {
-          "description": "Optional JSON data safe to persist and expose. Never contains secrets or raw resume credentials."
-        }
-      }
-    },
-    "nodeResumedPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "nodeId",
-        "nodeExecutionId",
-        "branchExecutionId",
-        "waitId",
-        "actor"
-      ],
-      "properties": {
-        "nodeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "nodeExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "waitId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "actor": {
-          "$ref": "#/$defs/actor"
-        },
-        "input": {
-          "description": "Optional JSON resume input safe to persist."
-        }
-      }
-    },
-    "branchStartedPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "branchId",
-        "branchExecutionId",
-        "originNodeId",
-        "edgeId"
-      ],
-      "properties": {
-        "branchId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "parentBranchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "originNodeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "edgeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        }
-      }
-    },
-    "branchTerminalPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "branchId",
-        "branchExecutionId"
-      ],
-      "properties": {
-        "branchId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        }
-      }
-    },
-    "branchFailedPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "branchId",
-        "branchExecutionId",
-        "error"
-      ],
-      "properties": {
-        "branchId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "error": {
-          "$ref": "#/$defs/errorEnvelope"
-        }
-      }
-    },
-    "logEmittedPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "level",
-        "message"
-      ],
-      "properties": {
-        "level": {
-          "enum": [
-            "trace",
-            "debug",
-            "info",
-            "warn",
-            "error"
-          ]
-        },
-        "message": {
-          "type": "string"
-        },
-        "fields": {
-          "type": "object",
-          "additionalProperties": true,
-          "description": "Structured JSON log fields. Resolved secrets are forbidden."
-        },
-        "nodeId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "nodeExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "attemptExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "branchExecutionId": {
-          "$ref": "#/$defs/nonEmptyId"
-        }
-      }
-    },
-    "errorEnvelope": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "code",
-        "kind",
-        "message",
-        "retryable"
-      ],
-      "properties": {
-        "code": {
-          "$ref": "#/$defs/nonEmptyId"
-        },
-        "kind": {
-          "enum": [
-            "validation",
-            "handler",
-            "timeout",
-            "cancelled",
-            "interrupted",
-            "protocol",
-            "persistence",
-            "internal"
-          ]
-        },
-        "message": {
-          "type": "string"
-        },
-        "retryable": {
-          "type": "boolean"
-        },
-        "details": {
-          "description": "Optional JSON-safe public details. Resolved secrets and sensitive stacks are forbidden."
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "failure": {
+          "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/attemptFailure"
         }
       }
     }

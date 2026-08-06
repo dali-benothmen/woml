@@ -1,0 +1,19 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "inv_context_size_01",
+  "outcome": {
+    "kind": "failure",
+    "error": {
+      "kind": "context_too_large",
+      "code": "WOML_SCRIPT_CONTEXT_TOO_LARGE",
+      "message": "Invocation context exceeds the configured byte limit.",
+      "details": {
+        "actualBytes": 1200,
+        "limitBytes": 1000
+      }
+    }
+  },
+  "durationMs": 0
+}
