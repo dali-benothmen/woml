@@ -25,7 +25,10 @@ function parseError(source: string): WomlParseError {
 
 describe('parseWoml', () => {
   test('parses the Phase 0 workflow into an ordered, source-aware tree', () => {
-    const source = readFileSync(new URL('./fixtures/hello.woml', import.meta.url), 'utf8');
+    const source = readFileSync(
+      new URL('./fixtures/hello.woml', import.meta.url),
+      'utf8'
+    );
     const document = parseWoml(source, { file: 'hello.woml' });
 
     expect(document.root.name).toBe('workflow');
@@ -33,7 +36,7 @@ describe('parseWoml', () => {
     expect(document.root.attributes.name.value).toBe('Hello WOML');
     expect(document.root.span.start).toEqual({ line: 1, column: 1, offset: 0 });
     expect(document.root.span.end.offset).toBe(
-      source.lastIndexOf('</workflow>') + '</workflow>'.length,
+      source.lastIndexOf('</workflow>') + '</workflow>'.length
     );
     expect(document.span.end.offset).toBe(source.length);
 
@@ -57,10 +60,16 @@ describe('parseWoml', () => {
     expect(isWomlRawText(rawB)).toBe(true);
     if (!isWomlRawText(rawA) || !isWomlRawText(rawB)) return;
 
-    expect(rawA.value).toContain('const name = context.trigger.name ?? "World";');
+    expect(rawA.value).toContain(
+      'const name = context.trigger.name ?? "World";'
+    );
     expect(rawB.value).toContain('`Hello ${context.steps.a.x}`');
-    expect(source.slice(rawA.span.start.offset, rawA.span.end.offset)).toBe(rawA.value);
-    expect(source.slice(rawB.span.start.offset, rawB.span.end.offset)).toBe(rawB.value);
+    expect(source.slice(rawA.span.start.offset, rawA.span.end.offset)).toBe(
+      rawA.value
+    );
+    expect(source.slice(rawB.span.start.offset, rawB.span.end.offset)).toBe(
+      rawB.value
+    );
   });
 
   test('preserves XML-significant JavaScript byte-for-byte', () => {
@@ -85,7 +94,36 @@ describe('parseWoml', () => {
     expect(isWomlRawText(raw)).toBe(true);
     if (!isWomlRawText(raw)) return;
     expect(raw.value).toBe(rawScript);
-    expect(source.slice(raw.span.start.offset, raw.span.end.offset)).toBe(rawScript);
+    expect(source.slice(raw.span.start.offset, raw.span.end.offset)).toBe(
+      rawScript
+    );
+  });
+
+  test('preserves branch case order, reference values, and source spans', () => {
+    const source = readFileSync(
+      new URL('./fixtures/branch.woml', import.meta.url),
+      'utf8'
+    );
+    const document = parseWoml(source, { file: 'branch.woml' });
+    const [, steps] = elementChildren(document.root);
+    const branch = elementChildren(steps)[1];
+    const [when, otherwise] = elementChildren(branch);
+    const whenResult = elementChildren(when).at(-1);
+
+    expect(branch.name).toBe('branch');
+    expect(branch.attributes.id.value).toBe('decision');
+    expect([when.name, otherwise.name]).toEqual(['when', 'otherwise']);
+    expect(when.attributes.test.value).toBe(
+      '{{context.steps.checkContent.needsReview}}'
+    );
+    expect(whenResult?.name).toBe('result');
+    expect(whenResult?.attributes.value.value).toBe(
+      '{{context.steps.reviewContent}}'
+    );
+    expect(branch.openTagSpan.start.offset).toBe(source.indexOf('<branch'));
+    expect(when.attributes.test.valueSpan.start.offset).toBe(
+      source.indexOf('{{context.steps.checkContent.needsReview}}')
+    );
   });
 
   test('ignores markup-looking text inside script bodies', () => {
@@ -121,7 +159,11 @@ describe('parseWoml', () => {
     const error = parseError(source);
 
     expect(error.diagnostic.code).toBe('WOML_DECLARATION_NOT_ALLOWED');
-    expect(error.diagnostic.location.start).toEqual({ line: 1, column: 1, offset: 0 });
+    expect(error.diagnostic.location.start).toEqual({
+      line: 1,
+      column: 1,
+      offset: 0,
+    });
   });
 
   test('rejects a second root at the second root location', () => {

@@ -1,7 +1,7 @@
 # WOML Branch Implementation Plan
 
-Status: B0 complete — branch contracts and reviewed fixtures are frozen; B1 is
-next
+Status: B0–B1 complete — branch contracts are frozen and the WOML frontend
+validates branch syntax; B2 is next
 
 ## 1. Product Outcome
 
@@ -442,7 +442,7 @@ The compiled fixture is bound to:
 sha256:6a9b3aa53e81ae0e95414f80df0192de5ff11489e9b65b1254b69b71a496155a
 ```
 
-### B1 — Teach the WOML frontend the branch syntax
+### B1 — Teach the WOML frontend the branch syntax — complete
 
 Changes:
 
@@ -468,6 +468,17 @@ Result:
 
 WOML can understand and validate the branch language. Invalid files fail with
 useful source-located errors. Rust execution is not enabled yet.
+
+Completed proof:
+
+- The reviewed `branch.woml` fixture passes recursive structure, ID, exact
+  reference, and dominance validation before reaching an explicit B2 lowering
+  gate.
+- Nested branches and route-local results validate recursively.
+- Missing, duplicated, misplaced, malformed, unknown, forward, and cross-arm
+  cases produce the frozen source-located diagnostics.
+- Sequential model-v1 compilation remains unchanged and all frontend and CLI
+  regression tests pass.
 
 ### B2 — Lower branches into the compiled DAG
 
