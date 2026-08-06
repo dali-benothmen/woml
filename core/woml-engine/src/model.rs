@@ -1073,12 +1073,6 @@ impl CompiledWorkflowDefinition {
   }
 
   fn inspect_executable_profile(&self, issues: &mut Vec<ModelIssue>) {
-    if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V3 {
-      issues.push(issue(
-        ModelIssueCode::UnsupportedParallelExecution,
-        "Compiled model v3 is structurally valid, but parallel execution is enabled in phase P4.",
-      ));
-    }
     for trigger in &self.triggers {
       let is_empty_object = matches!(
           &trigger.config,

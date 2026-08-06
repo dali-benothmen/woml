@@ -1,8 +1,8 @@
 # WOML v0.1 Fundamental Syntax
 
-Status: design catalog draft; sequential scripts and conditional branches are
-implemented; parallel syntax, model-v3 lowering, and durable event-v3 state are
-implemented but concurrent runtime execution is not yet enabled
+Status: design catalog draft; sequential scripts, conditional branches, and
+successful parallel groups execute in Rust; parallel failure policies,
+cancellation, and public CLI exposure remain staged
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -60,7 +60,7 @@ includes conditional branches:
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
-| Parallel | Frozen | Frontend/model-v3 and Rust event-v3 durability implemented; execution unavailable until P4–P6 |
+| Parallel | Frozen | Successful groups execute concurrently in Rust; failure policies/cancellation are P5 and public CLI exposure is P6 |
 | Approval | Designed | Unavailable |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 
@@ -1100,9 +1100,10 @@ require defined semantics for missing failed-step outputs.
 The compiler represents the children as independent model-v3 DAG nodes using
 the frozen `engine.parallel-start`, ordered child edges, ordered join edges,
 and `engine.parallel-join` identities. Rust validates this structure at its
-model boundary. Until concurrent scheduling is enabled, execution remains
-explicitly gated; a runtime MUST NOT silently present sequential execution as
-parallel execution.
+model boundary and executes successful groups with bounded concurrent
+scheduling. Child-failure policy handling and cancellation remain explicitly
+gated until P5; a runtime MUST NOT silently substitute guessed failure
+semantics.
 
 Multi-step concurrent lanes are deferred. A future design may add an explicit
 `<sequence>` child, but `<branch>` is not used for that purpose.

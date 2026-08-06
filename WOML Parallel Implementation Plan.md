@@ -1,6 +1,6 @@
 # WOML Parallel Implementation Plan
 
-Status: P0–P3 complete — P4 concurrent Rust scheduling is next
+Status: P0–P4 complete — P5 failure policies and cancellation are next
 
 ## 1. Product Outcome
 
@@ -601,7 +601,7 @@ Gate:
 The same event history folds to the same context and group state before and
 after SQLite reopen, and successful children are never scheduled again.
 
-### P4 — Execute successful groups concurrently in Rust
+### P4 — Execute successful groups concurrently in Rust — complete
 
 Changes:
 

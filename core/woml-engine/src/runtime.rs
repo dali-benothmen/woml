@@ -1,4 +1,7 @@
+use std::future::{poll_fn, Future};
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::Poll;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -9,10 +12,11 @@ use crate::engine::{
   resolve_context_reference, selected_branch_arm, BranchEvaluationError, BranchEvaluationErrorKind,
 };
 use crate::event::{
-  BranchSelectedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunSucceededData,
-  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
+  BranchSelectedData, ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData,
+  RunFailedData, RunFailedDataV1, RunFailedDataV2, RunSucceededData, StepAttemptFailedData,
+  StepAttemptStartedData, StepAttemptSucceededData,
 };
-use crate::model::ValueExpression;
+use crate::model::{ParallelGroupDefinition, ValueExpression};
 use crate::protocol::{ExecuteMessage, HostOutcome};
 use crate::{
   run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind, BranchFailure,
@@ -69,6 +73,10 @@ pub enum RuntimeExecutionError {
   Stalled(String),
   #[error("runtime configuration is invalid: {0}")]
   InvalidConfiguration(String),
+  #[error(
+    "parallel group {parallel_id:?} recorded a child failure; failure-policy handling is enabled in P5"
+  )]
+  ParallelFailurePolicyPending { parallel_id: String },
 }
 
 #[derive(Debug, Error)]
@@ -183,6 +191,22 @@ async fn execute_with_host<E: RuntimeDagEngine>(
         "no node is ready before the run reached a terminal state".to_string(),
       ));
     };
+    if let Some(group) = engine.workflow().parallel_group_for_child(node_id) {
+      if ready.iter().any(|ready_id| {
+        engine
+          .workflow()
+          .parallel_group_for_child(ready_id)
+          .is_none_or(|owner| owner.parallel_id != group.parallel_id)
+      }) {
+        return Err(RuntimeExecutionError::Stalled(format!(
+          "parallel group {:?} became ready alongside an unrelated node",
+          group.parallel_id
+        )));
+      }
+      let completed = execute_parallel_group(engine, &run_id, group, options, host).await?;
+      execution_order.extend(completed);
+      continue;
+    }
     if ready.len() != 1 {
       return Err(RuntimeExecutionError::Stalled(
         "the current runtime received more than one ready node".to_string(),
@@ -202,6 +226,21 @@ async fn execute_with_host<E: RuntimeDagEngine>(
     };
 
     match handler.as_str() {
+      "engine.parallel-start" => {
+        let parallel_id = node_id
+          .strip_prefix("__woml_parallel__")
+          .and_then(|id| id.strip_suffix("__start"))
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "parallel start node {node_id:?} has no canonical group identity"
+            ))
+          })?
+          .to_string();
+        engine.append_payload(
+          &run_id,
+          RunEventPayload::ParallelGroupStarted(ParallelGroupStartedData { parallel_id }),
+        )?;
+      }
       "engine.branch-select" => {
         let context = engine.projection(&run_id)?.context;
         match selected_branch_arm(engine.workflow(), node_id, &context) {
@@ -302,6 +341,238 @@ async fn execute_with_host<E: RuntimeDagEngine>(
       }
     }
   }
+}
+
+#[derive(Debug)]
+struct ParallelInvocationCompletion {
+  node_id: String,
+  invocation_id: String,
+  outcome: Result<Value, AttemptFailure>,
+}
+
+type ParallelInvocationFuture<'a> =
+  Pin<Box<dyn Future<Output = ParallelInvocationCompletion> + Send + 'a>>;
+
+async fn next_parallel_completion(
+  active: &mut Vec<ParallelInvocationFuture<'_>>,
+) -> Option<ParallelInvocationCompletion> {
+  poll_fn(|context| {
+    for index in 0..active.len() {
+      if let Poll::Ready(completion) = active[index].as_mut().poll(context) {
+        drop(active.swap_remove(index));
+        return Poll::Ready(Some(completion));
+      }
+    }
+    if active.is_empty() {
+      Poll::Ready(None)
+    } else {
+      Poll::Pending
+    }
+  })
+  .await
+}
+
+async fn invoke_parallel_child(
+  host: &ScriptHostClient,
+  run_id: String,
+  node_id: String,
+  invocation_id: String,
+  source: String,
+  context: WorkflowContext,
+  timeout_ms: u64,
+  max_context_bytes: Option<usize>,
+) -> ParallelInvocationCompletion {
+  let outcome = if let Some(limit) = max_context_bytes {
+    match serde_json::to_vec(&context) {
+      Ok(encoded) if encoded.len() > limit => Err(AttemptFailure {
+        kind: AttemptFailureKind::ContextTooLarge,
+        code: AttemptFailureKind::ContextTooLarge.code().to_string(),
+        message: "Invocation context exceeds the configured byte limit.".to_string(),
+        details: Some(crate::FailureSizeDetails {
+          actual_bytes: Some(encoded.len() as u64),
+          limit_bytes: Some(limit as u64),
+        }),
+      }),
+      Err(error) => Err(AttemptFailure {
+        kind: AttemptFailureKind::InvalidScriptResult,
+        code: AttemptFailureKind::InvalidScriptResult.code().to_string(),
+        message: format!("Invocation context could not be encoded: {error}"),
+        details: None,
+      }),
+      _ => {
+        execute_parallel_request(
+          host,
+          &run_id,
+          &node_id,
+          &invocation_id,
+          &source,
+          &context,
+          timeout_ms,
+        )
+        .await
+      }
+    }
+  } else {
+    execute_parallel_request(
+      host,
+      &run_id,
+      &node_id,
+      &invocation_id,
+      &source,
+      &context,
+      timeout_ms,
+    )
+    .await
+  };
+  ParallelInvocationCompletion {
+    node_id,
+    invocation_id,
+    outcome,
+  }
+}
+
+async fn execute_parallel_request(
+  host: &ScriptHostClient,
+  run_id: &str,
+  node_id: &str,
+  invocation_id: &str,
+  source: &str,
+  context: &WorkflowContext,
+  timeout_ms: u64,
+) -> Result<Value, AttemptFailure> {
+  let request =
+    ExecuteMessage::runtime_script(invocation_id, run_id, node_id, timeout_ms, source, context);
+  match host.execute(&request).await {
+    Ok(completed) => match completed.outcome {
+      HostOutcome::Success { value } => Ok(value),
+      HostOutcome::Failure { error } => Err(error.into_attempt_failure()),
+    },
+    Err(error) => Err(AttemptFailure {
+      kind: AttemptFailureKind::HostCrashed,
+      code: AttemptFailureKind::HostCrashed.code().to_string(),
+      message: error.to_string(),
+      details: None,
+    }),
+  }
+}
+
+async fn execute_parallel_group<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  group: ParallelGroupDefinition,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<Vec<String>, RuntimeExecutionError> {
+  let projection = engine.projection(run_id)?;
+  let fork_context = projection
+    .parallel_groups
+    .get(&group.parallel_id)
+    .ok_or_else(|| {
+      RuntimeExecutionError::Stalled(format!(
+        "parallel group {:?} has no durable fork event",
+        group.parallel_id
+      ))
+    })?
+    .fork_context
+    .clone();
+  let attempted = projection.attempted_node_ids();
+  let child_ids = group
+    .child_node_ids
+    .iter()
+    .filter(|node_id| !attempted.contains(node_id.as_str()))
+    .cloned()
+    .collect::<Vec<_>>();
+  drop(attempted);
+
+  let mut next_child = 0;
+  let mut child_failed = false;
+  let mut completion_order = Vec::new();
+  let mut active: Vec<ParallelInvocationFuture<'_>> = Vec::new();
+
+  loop {
+    while !child_failed && active.len() < group.concurrency && next_child < child_ids.len() {
+      let node_id = child_ids[next_child].clone();
+      next_child += 1;
+      let source = engine
+        .workflow()
+        .node(&node_id)
+        .and_then(|node| node.script_source())
+        .ok_or_else(|| {
+          RuntimeExecutionError::Stalled(format!("parallel child {node_id:?} has no script source"))
+        })?
+        .to_string();
+      let invocation_id = generated_id("inv");
+      engine.append_payload(
+        run_id,
+        RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+          node_id: node_id.clone(),
+          attempt: 1,
+          invocation_id: invocation_id.clone(),
+          handler: "runtime.script".to_string(),
+        }),
+      )?;
+      active.push(Box::pin(invoke_parallel_child(
+        host,
+        run_id.to_string(),
+        node_id,
+        invocation_id,
+        source,
+        fork_context.clone(),
+        options.script_timeout_ms,
+        options.max_context_bytes,
+      )));
+    }
+
+    let Some(completion) = next_parallel_completion(&mut active).await else {
+      break;
+    };
+    completion_order.push(completion.node_id.clone());
+    match completion.outcome {
+      Ok(output) => engine.append_payload(
+        run_id,
+        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+          node_id: completion.node_id,
+          attempt: 1,
+          invocation_id: completion.invocation_id,
+          output,
+        }),
+      )?,
+      Err(failure) => {
+        child_failed = true;
+        engine.append_payload(
+          run_id,
+          RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+            node_id: completion.node_id,
+            attempt: 1,
+            invocation_id: completion.invocation_id,
+            failure,
+          }),
+        )?;
+      }
+    }
+  }
+
+  if child_failed {
+    return Err(RuntimeExecutionError::ParallelFailurePolicyPending {
+      parallel_id: group.parallel_id,
+    });
+  }
+  if next_child != child_ids.len() {
+    return Err(RuntimeExecutionError::Stalled(format!(
+      "parallel group {:?} stopped before every child was scheduled",
+      group.parallel_id
+    )));
+  }
+  engine.append_payload(
+    run_id,
+    RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+      parallel_id: group.parallel_id,
+      outcome: ParallelGroupOutcome::Succeeded,
+      failed_node_ids: Vec::new(),
+      cancelled_node_ids: Vec::new(),
+    }),
+  )?;
+  Ok(completion_order)
 }
 
 async fn execute_script_node<E: RuntimeDagEngine>(

@@ -108,7 +108,7 @@ fn accepts_the_frozen_model_v2_branch_shape_as_structural_and_executable() {
 }
 
 #[test]
-fn accepts_model_v3_structurally_but_keeps_parallel_execution_gated() {
+fn accepts_model_v3_for_parallel_execution() {
   let original: Value = serde_json::from_str(PARALLEL_MODEL).unwrap();
   let model = parallel_model();
 
@@ -128,10 +128,7 @@ fn accepts_model_v3_structurally_but_keeps_parallel_execution_gated() {
     4
   );
 
-  let execution_issues = model.validate_for_execution().unwrap_err().issues;
-  assert!(execution_issues
-    .iter()
-    .any(|issue| issue.code == ModelIssueCode::UnsupportedParallelExecution));
+  model.validate_for_execution().unwrap();
 
   let mut malformed_ordinal = parallel_model();
   malformed_ordinal.graph.edges[1].id = "fieldData:child:01".to_string();
