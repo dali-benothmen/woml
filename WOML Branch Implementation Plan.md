@@ -1,7 +1,7 @@
 # WOML Branch Implementation Plan
 
-Status: B0–B5 complete — packaged `woml run` now executes branches and reports
-source-located runtime failures; B6 hardening is next
+Status: B0–B6 complete — conditional branches are supported by the packaged
+WOML CLI
 
 ## 1. Product Outcome
 
@@ -683,7 +683,7 @@ Completed proof:
   the included Rust native engine and Bun script host without creating runtime
   files in the consumer project.
 
-### B6 — Harden, package, and close the milestone
+### B6 — Harden, package, and close the milestone — complete
 
 Changes:
 
@@ -706,6 +706,32 @@ Result:
 Branching is a supported WOML product feature rather than an experimental parser
 shape. The package can execute it, recover it, explain its failures, and prove
 its behavior from reviewed artifacts.
+
+Completed proof:
+
+- Complete frontend-to-Rust tests execute branches at the beginning, middle,
+  and end of workflows, recursively nested branches, and multiple true cases
+  where only the first match runs.
+- A 128 KiB selected result is published at the branch ID and consumed by a
+  downstream step. Separate tests prove that configured result and context byte
+  limits still fail with their existing stable codes at the correct script
+  node.
+- Durable recovery is tested before selection, after selection, before result
+  publication, after result publication, and during an in-flight selected
+  script. Safe boundaries resume without synthetic events; uncertain script
+  attempts fail closed; recorded selections never change.
+- Branch-result start and success remain one atomic durable operation, so no
+  recoverable partial result-publication state is introduced.
+- The branch fixture still compiles to its pinned model-v2 definition hash, and
+  historical sequential model-v1 tests continue to pass.
+- The clean installed package runs both the sequential and branch acceptance
+  workflows with the included native Rust engine and Bun script host.
+- Release verification passed 176 Bun/TypeScript tests and 39 Rust integration
+  tests, plus both TypeScript typechecks, Rust Clippy with warnings denied for
+  `woml-engine`, the full core build check, and whitespace validation.
+- A local cold-process timing sample on 2026-08-06 produced the reviewed branch
+  JSON after 227.63 ms and exited after 236.49 ms. This is recorded as a
+  regression datapoint, not a performance guarantee.
 
 ## 8. Verification Matrix
 

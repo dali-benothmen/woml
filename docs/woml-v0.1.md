@@ -1,6 +1,7 @@
 # WOML v0.1 Fundamental Syntax
 
-Status: design catalog draft; first CLI executable subset frozen for implementation
+Status: design catalog draft; sequential scripts and conditional branches are
+implemented in the published CLI profile
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -45,17 +46,20 @@ WOML separates syntax design from executable availability:
   runtime profile. A runtime MUST reject every designed-only construct with an
   unsupported-feature diagnostic.
 
-The first CLI vertical-slice profile is deliberately small:
+The CLI profile grows only through reviewed vertical milestones. The original
+walking skeleton proved sequential scripts; the current published profile also
+includes conditional branches:
 
-| Feature | Design status | First CLI profile |
+| Feature | Design status | Current CLI profile |
 |---|---|---|
-| Workflow `id`/`name`/`description`, manual trigger, sequential steps | Designed | Executable target |
-| `<script>` with `context.trigger` and `context.steps` | Designed | Executable target |
-| `{{context...}}` attribute-reference grammar | Frozen | Staged; no executable consumer in the walking skeleton |
+| Workflow `id`/`name`/`description`, manual trigger, sequential steps | Frozen | Executable and publishable |
+| `<script>` with `context.trigger` and `context.steps` | Frozen | Executable and publishable |
+| `{{context...}}` attribute-reference grammar | Frozen | Executable for branch `test` and `result` |
 | Workflow `tags`/`version` and step `retry`/`timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
-| Parallel, branch, and approval | Designed | Unavailable |
+| Branch | Frozen | Executable and publishable |
+| Parallel and approval | Designed | Unavailable |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
@@ -1342,12 +1346,11 @@ not WOML references. A referenced step must exist and dominate the consumer in
 the lowered DAG. A missing nested property at runtime produces
 `WOML_REFERENCE_NOT_AVAILABLE`; it never becomes `undefined` or an empty string.
 
-The first CLI walking skeleton has no reference-bearing declarative or
-control-flow tag, so it does not execute this attribute-reference grammar. Its
-second script reads `context.steps.<id>` directly in JavaScript. Reference
-resolution becomes executable only when the first staged reference-bearing tag
-is deliberately added. Mixed templates remain in the design catalog; their
-escaping rules must be approved before a publishable profile accepts them.
+The published branch profile resolves exact references in `<when test>` and
+`<result value>` without passing them through JavaScript. Scripts continue to
+read `context.steps.<id>` directly through the injected JavaScript context.
+Mixed templates remain in the design catalog; their escaping rules must be
+approved before a publishable profile accepts them.
 
 ## 16. Static Validation
 

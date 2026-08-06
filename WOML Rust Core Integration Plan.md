@@ -1,6 +1,7 @@
 # WOML Rust Core Integration Plan
 
-Status: R0–R6 complete; Rust is the only WOML workflow executor
+Status: R0–R6 complete; Rust is the only WOML workflow executor; the first
+post-cutover expansion, conditional branches, is also complete
 
 This document defines how WOML moves from the validated TypeScript execution
 slice to the intended production architecture: Bun and TypeScript own the WOML
@@ -709,8 +710,8 @@ tests, reviewed result/context fixtures, and black-box CLI tests.
 The first Rust cutover proves only sequential scripts. Later features follow
 separate design-and-implementation phases in this order:
 
-1. Resolve branch result merging, then implement `<branch>` and
-   `branch_selected` events. The executable milestone is specified in
+1. **Complete:** `<branch>`, stable merged results, and durable
+   `branch_selected` events. The executable milestone and its proof are in
    `WOML Branch Implementation Plan.md`.
 2. Implement `<parallel>` using the already-multiplexed protocol and explicit
    parallel-group events.
@@ -733,7 +734,6 @@ The Rust hello slice does not authorize defaults for:
 - Secret resolution or persistence.
 - Typed `contextReference` inputs.
 - Retry idempotency-key derivation and duplicate handling.
-- Branch result merging.
 - Cancellation and durable user state.
 - Service calls from scripts.
 - Approval token generation, storage, and hashing.

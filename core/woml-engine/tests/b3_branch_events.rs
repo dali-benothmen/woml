@@ -36,6 +36,40 @@ fn engine_with_ready_selector() -> InMemoryDagEngine {
   engine
 }
 
+fn persist_branch_prefix(database: &Path, event_count: usize) {
+  let fixture = branch_events();
+  let mut store = DurableEventStore::open(database).unwrap();
+  store
+    .register_definition(&branch_model(), BRANCH_HASH)
+    .unwrap();
+  for event in fixture.iter().take(event_count) {
+    match &event.payload {
+      RunEventPayload::RunStarted(data) => {
+        store
+          .start_run(
+            event.event_id.clone(),
+            event.run_id.clone(),
+            event.occurred_at,
+            data.workflow_id.clone(),
+            data.definition_hash.clone(),
+            data.trigger.clone(),
+          )
+          .unwrap();
+      }
+      payload => {
+        store
+          .append_payload(
+            event.run_id.clone(),
+            event.event_id.clone(),
+            event.occurred_at,
+            payload.clone(),
+          )
+          .unwrap();
+      }
+    }
+  }
+}
+
 struct TemporaryDatabase {
   path: PathBuf,
 }
@@ -258,6 +292,76 @@ fn sqlite_reopen_and_recovery_preserve_the_exact_selected_arm() {
     .to_string()
     .contains("immutable selection"));
   assert_eq!(resumed.events("run_branch_01").unwrap().len(), 4);
+}
+
+#[test]
+fn recovery_preserves_every_safe_boundary_around_selection_and_result_publication() {
+  for (label, event_count, expected_ready, expected_selection, has_result) in [
+    (
+      "before-selection",
+      3,
+      "__woml_branch__decision__select",
+      None,
+      false,
+    ),
+    (
+      "after-selection",
+      4,
+      "reviewContent",
+      Some("decision:when:0"),
+      false,
+    ),
+    (
+      "before-result-publication",
+      6,
+      "decision",
+      Some("decision:when:0"),
+      false,
+    ),
+    (
+      "after-result-publication",
+      8,
+      "publishDecision",
+      Some("decision:when:0"),
+      true,
+    ),
+  ] {
+    let database = TemporaryDatabase::new(label);
+    persist_branch_prefix(database.path(), event_count);
+
+    let mut reopened = DurableEventStore::open(database.path()).unwrap();
+    let report = reopened.recover_interrupted_runs().unwrap();
+    assert_eq!(report.recovered_runs, 0, "{label}");
+    assert_eq!(report.interrupted_attempts, 0, "{label}");
+    assert_eq!(report.resumable_runs, 1, "{label}");
+    assert_eq!(
+      reopened.events("run_branch_01").unwrap().len(),
+      event_count,
+      "safe recovery must not synthesize events at {label}"
+    );
+
+    let projection = reopened.projection("run_branch_01").unwrap();
+    assert_eq!(
+      projection
+        .branch_selections
+        .get("decision")
+        .map(String::as_str),
+      expected_selection,
+      "{label}"
+    );
+    assert_eq!(
+      projection.context.steps.contains_key("decision"),
+      has_result,
+      "{label}"
+    );
+
+    let resumed = DurableDagEngine::resume(reopened, "run_branch_01").unwrap();
+    assert_eq!(
+      resumed.ready_node_ids("run_branch_01").unwrap(),
+      [expected_ready],
+      "{label}"
+    );
+  }
 }
 
 #[test]

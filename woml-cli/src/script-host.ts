@@ -36,7 +36,7 @@ async function writeStdout(frame: Uint8Array): Promise<void> {
   });
 }
 
-async function main(): Promise<void> {
+export async function runScriptHost(): Promise<void> {
   const limits = limitsFromEnvironment();
   const decoder = new FrameDecoder({ maxFrameBytes: limits.maxFrameBytes });
   const writer = new SerializedFrameWriter(writeStdout);
@@ -74,4 +74,4 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) await runScriptHost();

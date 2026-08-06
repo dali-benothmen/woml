@@ -23,6 +23,14 @@ const crashingHostPath = resolve(
   packageRoot,
   'tests/fixtures/crashing-script-host.ts',
 );
+const contextLimitedHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/context-limited-script-host.ts',
+);
+const resultLimitedHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/result-limited-script-host.ts',
+);
 const nativeTest = nativeCorePath === undefined ? test.skip : test;
 
 async function helloWorkflow(): Promise<CompiledWorkflowDefinition> {
@@ -34,6 +42,108 @@ async function branchWorkflow(): Promise<CompiledWorkflowDefinition> {
   const path = resolve(packageRoot, '../woml/tests/fixtures/branch.woml');
   return compileWoml(parseWoml(await Bun.file(path).text(), { file: path }));
 }
+
+function compileSource(source: string, file = 'branch-hardening.woml') {
+  return compileWoml(parseWoml(source, { file }));
+}
+
+const branchAtBeginningSource = `<workflow version="0.1" id="branch-first">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <branch id="route">
+      <when test="{{context.trigger.primary}}">
+        <step id="primary"><script>return { selected: "primary" };</script></step>
+        <result value="{{context.steps.primary}}" />
+      </when>
+      <otherwise>
+        <step id="fallback"><script>return { selected: "fallback" };</script></step>
+        <result value="{{context.steps.fallback}}" />
+      </otherwise>
+    </branch>
+    <step id="finish"><script>return { selected: context.steps.route.selected };</script></step>
+  </steps>
+</workflow>`;
+
+const branchAtEndSource = `<workflow version="0.1" id="branch-last">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="choice"><script>return { primary: true };</script></step>
+    <branch id="route">
+      <when test="{{context.steps.choice.primary}}">
+        <step id="primary"><script>return { selected: "primary" };</script></step>
+        <result value="{{context.steps.primary}}" />
+      </when>
+      <otherwise>
+        <step id="fallback"><script>return { selected: "fallback" };</script></step>
+        <result value="{{context.steps.fallback}}" />
+      </otherwise>
+    </branch>
+  </steps>
+</workflow>`;
+
+const nestedBranchSource = `<workflow version="0.1" id="nested-branches">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <branch id="outer">
+      <when test="{{context.trigger.outer}}">
+        <branch id="inner">
+          <when test="{{context.trigger.inner}}">
+            <step id="nested"><script>return { selected: "nested" };</script></step>
+            <result value="{{context.steps.nested}}" />
+          </when>
+          <otherwise>
+            <step id="innerFallback"><script>return { selected: "inner-fallback" };</script></step>
+            <result value="{{context.steps.innerFallback}}" />
+          </otherwise>
+        </branch>
+        <result value="{{context.steps.inner}}" />
+      </when>
+      <otherwise>
+        <step id="outerFallback"><script>return { selected: "outer-fallback" };</script></step>
+        <result value="{{context.steps.outerFallback}}" />
+      </otherwise>
+    </branch>
+    <step id="finish"><script>return { selected: context.steps.outer.selected };</script></step>
+  </steps>
+</workflow>`;
+
+const multipleTrueSource = `<workflow version="0.1" id="first-match">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="flags"><script>return { first: true, second: true };</script></step>
+    <branch id="route">
+      <when test="{{context.steps.flags.first}}">
+        <step id="firstRoute"><script>return { selected: "first" };</script></step>
+        <result value="{{context.steps.firstRoute}}" />
+      </when>
+      <when test="{{context.steps.flags.second}}">
+        <step id="secondRoute"><script>return { selected: "second" };</script></step>
+        <result value="{{context.steps.secondRoute}}" />
+      </when>
+      <otherwise>
+        <step id="fallback"><script>return { selected: "fallback" };</script></step>
+        <result value="{{context.steps.fallback}}" />
+      </otherwise>
+    </branch>
+  </steps>
+</workflow>`;
+
+const largeBranchResultSource = `<workflow version="0.1" id="large-branch-result">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <branch id="route">
+      <when test="{{context.trigger.primary}}">
+        <step id="largeResult"><script>return { payload: "x".repeat(131072) };</script></step>
+        <result value="{{context.steps.largeResult}}" />
+      </when>
+      <otherwise>
+        <step id="fallback"><script>return { payload: "fallback" };</script></step>
+        <result value="{{context.steps.fallback}}" />
+      </otherwise>
+    </branch>
+    <step id="finish"><script>return { length: context.steps.route.payload.length };</script></step>
+  </steps>
+</workflow>`;
 
 function replaceFirstScript(
   workflow: CompiledWorkflowDefinition,
@@ -73,9 +183,15 @@ async function rustError(
 
 async function capturedRustExecutionError(
   workflow: CompiledWorkflowDefinition,
+  options: { readonly trigger?: Record<string, boolean> } = {},
+  scriptHostOverride = scriptHostPath,
 ): Promise<RustWorkflowExecutionError> {
   try {
-    await executeWorkflowWithRust(workflow, { nativeCorePath, scriptHostPath });
+    await executeWorkflowWithRust(workflow, {
+      nativeCorePath,
+      scriptHostPath: scriptHostOverride,
+      trigger: options.trigger,
+    });
   } catch (error) {
     if (error instanceof RustWorkflowExecutionError) return error;
     throw error;
@@ -151,6 +267,109 @@ describe('Rust to Bun workflow execution', () => {
     expect(rust.events.every((event) => event.eventSchemaVersion === 2)).toBe(
       true,
     );
+  });
+
+  nativeTest('executes branches at the beginning, middle, and end of a workflow', async () => {
+    const first = await executeWorkflowWithRust(
+      compileSource(branchAtBeginningSource),
+      { nativeCorePath, scriptHostPath, trigger: { primary: true } },
+    );
+    expect(first.result).toEqual({ selected: 'primary' });
+    expect(first.executionOrder).toEqual(['primary', 'route', 'finish']);
+    expect(first.context.steps.fallback).toBeUndefined();
+
+    const middle = await executeWorkflowWithRust(await branchWorkflow(), {
+      nativeCorePath,
+      scriptHostPath,
+    });
+    expect(middle.executionOrder).toEqual([
+      'checkContent',
+      'reviewContent',
+      'decision',
+      'publishDecision',
+    ]);
+
+    const last = await executeWorkflowWithRust(compileSource(branchAtEndSource), {
+      nativeCorePath,
+      scriptHostPath,
+    });
+    expect(last.result).toEqual({ selected: 'primary' });
+    expect(last.terminalNodeId).toBe('route');
+    expect(last.executionOrder).toEqual(['choice', 'primary', 'route']);
+  });
+
+  nativeTest('executes nested branches through the complete frontend and Rust path', async () => {
+    const execution = await executeWorkflowWithRust(
+      compileSource(nestedBranchSource),
+      {
+        nativeCorePath,
+        scriptHostPath,
+        trigger: { outer: true, inner: true },
+      },
+    );
+
+    expect(execution.result).toEqual({ selected: 'nested' });
+    expect(execution.executionOrder).toEqual([
+      'nested',
+      'inner',
+      'outer',
+      'finish',
+    ]);
+    expect(execution.context.steps.innerFallback).toBeUndefined();
+    expect(execution.context.steps.outerFallback).toBeUndefined();
+    expect(
+      execution.events
+        .filter((event) => event.type === 'branch_selected')
+        .map((event) => event.data),
+    ).toEqual([
+      { branchId: 'outer', armId: 'outer:when:0' },
+      { branchId: 'inner', armId: 'inner:when:0' },
+    ]);
+  });
+
+  nativeTest('selects only the first true when through the production boundary', async () => {
+    const execution = await executeWorkflowWithRust(
+      compileSource(multipleTrueSource),
+      { nativeCorePath, scriptHostPath },
+    );
+
+    expect(execution.result).toEqual({ selected: 'first' });
+    expect(execution.executionOrder).toEqual(['flags', 'firstRoute', 'route']);
+    expect(execution.context.steps.secondRoute).toBeUndefined();
+    expect(execution.context.steps.fallback).toBeUndefined();
+  });
+
+  nativeTest('carries large branch results and preserves script-host size limits', async () => {
+    const workflow = compileSource(largeBranchResultSource);
+    const execution = await executeWorkflowWithRust(workflow, {
+      nativeCorePath,
+      scriptHostPath,
+      trigger: { primary: true },
+    });
+    expect(execution.result).toEqual({ length: 131072 });
+    expect(
+      (execution.context.steps.route as { payload: string }).payload.length,
+    ).toBe(131072);
+
+    const contextError = await capturedRustExecutionError(
+      workflow,
+      {
+        trigger: { primary: true },
+      },
+      contextLimitedHostPath,
+    );
+    expect(contextError.code).toBe('WOML_SCRIPT_CONTEXT_TOO_LARGE');
+    expect(contextError.nodeId).toBe('finish');
+
+    const resultError = await capturedRustExecutionError(
+      workflow,
+      {
+        trigger: { primary: true },
+      },
+      resultLimitedHostPath,
+    );
+    expect(resultError.code).toBe('WOML_SCRIPT_RESULT_TOO_LARGE');
+    expect(resultError.nodeId).toBe('largeResult');
   });
 
   nativeTest('preserves structured branch identity, site, and reference details', async () => {
