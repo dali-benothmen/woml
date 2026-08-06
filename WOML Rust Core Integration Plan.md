@@ -710,7 +710,8 @@ The first Rust cutover proves only sequential scripts. Later features follow
 separate design-and-implementation phases in this order:
 
 1. Resolve branch result merging, then implement `<branch>` and
-   `branch_selected` events.
+   `branch_selected` events. The executable milestone is specified in
+   `WOML Branch Implementation Plan.md`.
 2. Implement `<parallel>` using the already-multiplexed protocol and explicit
    parallel-group events.
 3. Resolve approval token storage, then implement pause/resume and `<approval>`.

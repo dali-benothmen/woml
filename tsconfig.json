@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ES2022",
-    "moduleResolution": "node",
+    "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM"],
     "outDir": "./dist/dist",
     "rootDir": "./",
@@ -14,9 +14,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "types": ["node"],
-    "noEmit": false,
-    "baseUrl": ".",
-    "downlevelIteration": true
+    "noEmit": false
   },
   "include": [
     "src/**/*",

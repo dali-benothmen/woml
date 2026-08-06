@@ -11,7 +11,6 @@ export {
   createAdvancedTestHarness,
 } from './advanced';
 export type {
-  ServiceMock,
   TriggerMock,
   TestDataGenerator,
   TestCoverage,
