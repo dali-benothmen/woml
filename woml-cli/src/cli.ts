@@ -56,19 +56,24 @@ function stepSourcePosition(
   while (pending.length > 0) {
     const element = pending.shift()!;
     if (element.name === 'step' && element.attributes.id?.value === nodeId) {
-      const script = element.children.find(
-        (child) => isWomlElement(child) && child.name === 'script',
-      );
-      if (script !== undefined && isWomlElement(script)) {
-        return script.children[0]?.span.start ?? script.openTagSpan.start;
-      }
-      return element.openTagSpan.start;
+      return scriptSourcePosition(element);
     }
     for (const child of element.children) {
       if (isWomlElement(child)) pending.push(child);
     }
   }
   return undefined;
+}
+
+function scriptSourcePosition(element: WomlSourceElement): SourcePosition {
+  const script = childElements(element).find(
+    (child) => child.name === 'script',
+  );
+  return (
+    script?.children[0]?.span.start ??
+    script?.openTagSpan.start ??
+    element.openTagSpan.start
+  );
 }
 
 function childElements(element: WomlSourceElement): readonly WomlSourceElement[] {
@@ -90,9 +95,59 @@ function findBranch(
   return undefined;
 }
 
+function findParallel(
+  document: WomlSourceDocument,
+  parallelId: string,
+): WomlSourceElement | undefined {
+  const pending = [document.root];
+  while (pending.length > 0) {
+    const element = pending.shift()!;
+    if (
+      element.name === 'parallel' &&
+      element.attributes.id?.value === parallelId
+    ) {
+      return element;
+    }
+    pending.push(...childElements(element));
+  }
+  return undefined;
+}
+
 interface RuntimeSource {
   readonly position: SourcePosition;
   readonly subject: string;
+}
+
+function parallelRuntimeSource(
+  document: WomlSourceDocument | undefined,
+  error: RustWorkflowExecutionError,
+): RuntimeSource | undefined {
+  if (document === undefined || error.parallelId === undefined) return undefined;
+  const parallel = findParallel(document, error.parallelId);
+  if (parallel === undefined) return undefined;
+
+  if (
+    error.code === 'WOML_PARALLEL_CHILD_FAILED' &&
+    error.primaryNodeId !== undefined
+  ) {
+    const primary = childElements(parallel).find(
+      (child) =>
+        child.name === 'step' &&
+        child.attributes.id?.value === error.primaryNodeId,
+    );
+    if (primary !== undefined) {
+      return {
+        position: scriptSourcePosition(primary),
+        subject: `step "${error.primaryNodeId}" in parallel "${error.parallelId}"`,
+      };
+    }
+  }
+
+  return {
+    position:
+      parallel.attributes.id?.valueSpan.start ?? parallel.openTagSpan.start,
+    subject: `parallel "${error.parallelId}"`,
+  };
 }
 
 function branchRuntimeSource(
@@ -160,9 +215,12 @@ function formatError(
   }
 
   if (error instanceof RustWorkflowExecutionError) {
+    const parallelSource = parallelRuntimeSource(document, error);
     const branchSource = branchRuntimeSource(document, error);
     const position =
-      branchSource?.position ?? stepSourcePosition(document, error.nodeId);
+      parallelSource?.position ??
+      branchSource?.position ??
+      stepSourcePosition(document, error.nodeId);
     const location =
       position !== undefined && filePath !== undefined
         ? ` at ${filePath}:${position.line}:${position.column}`
@@ -170,6 +228,7 @@ function formatError(
           ? ''
           : ` in "${filePath}"`;
     const subject =
+      parallelSource?.subject ??
       branchSource?.subject ??
       (error.nodeId === undefined ? undefined : `step "${error.nodeId}"`);
     const identity = subject === undefined ? '' : ` (${subject})`;

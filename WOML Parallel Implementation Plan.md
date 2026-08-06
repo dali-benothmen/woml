@@ -1,6 +1,6 @@
 # WOML Parallel Implementation Plan
 
-Status: P0–P5 complete — P6 CLI exposure and diagnostics are next
+Status: P0–P6 complete — P7 hardening and milestone closure are next
 
 ## 1. Product Outcome
 
@@ -653,7 +653,7 @@ Tests prove wait-all runs every child, fail-fast starts no queued child after
 the first observed failure, active siblings receive cancellation, unrelated
 Workers survive, and no invocation receives two terminal outcomes.
 
-### P6 — Expose parallel execution through `woml run`
+### P6 — Expose parallel execution through `woml run` — complete
 
 Changes:
 

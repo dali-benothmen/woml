@@ -7,9 +7,19 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use woml_engine::{
   execute_workflow, execute_workflow_durable, recover_durable_runs, CompiledWorkflowDefinition,
-  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RuntimeExecutionError,
-  RuntimeExecutionOptions, ScriptHostProcessOptions,
+  ParallelFailurePolicy, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
+  RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
 };
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeParallelExecutionErrorDetails {
+  parallel_id: String,
+  policy: ParallelFailurePolicy,
+  primary_node_id: String,
+  failed_node_ids: Vec<String>,
+  cancelled_node_ids: Vec<String>,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +37,8 @@ struct NativeExecutionError {
   reference_path: Option<Vec<String>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   branch_site: Option<&'static str>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  details: Option<NativeParallelExecutionErrorDetails>,
 }
 
 fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
@@ -55,6 +67,7 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
         arm_id: None,
         reference_path: None,
         branch_site: None,
+        details: None,
       }
     }
     RuntimeExecutionError::BranchFailed(details) => NativeExecutionError {
@@ -66,6 +79,24 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       arm_id: details.arm_id.clone(),
       reference_path: details.path.clone(),
       branch_site: Some(details.site.as_str()),
+      details: None,
+    },
+    RuntimeExecutionError::ParallelFailed(details) => NativeExecutionError {
+      kind: "woml_execution_error",
+      code: details.code.clone(),
+      message: details.message.clone(),
+      node_id: Some(details.primary_node_id.clone()),
+      branch_id: None,
+      arm_id: None,
+      reference_path: None,
+      branch_site: None,
+      details: Some(NativeParallelExecutionErrorDetails {
+        parallel_id: details.parallel_id.clone(),
+        policy: details.policy,
+        primary_node_id: details.primary_node_id.clone(),
+        failed_node_ids: details.failed_node_ids.clone(),
+        cancelled_node_ids: details.cancelled_node_ids.clone(),
+      }),
     },
     error => NativeExecutionError {
       kind: "woml_execution_error",
@@ -76,6 +107,7 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       arm_id: None,
       reference_path: None,
       branch_site: None,
+      details: None,
     },
   };
   let reason = serde_json::to_string(&envelope).unwrap_or_else(|_| {

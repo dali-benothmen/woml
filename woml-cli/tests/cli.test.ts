@@ -27,6 +27,13 @@ const branchFixturePath = join(
   'fixtures',
   'branch.woml',
 );
+const parallelFixturePath = join(
+  projectRoot,
+  'woml',
+  'tests',
+  'fixtures',
+  'parallel.woml',
+);
 let temporaryDirectory: string;
 
 interface CommandResult {
@@ -118,6 +125,143 @@ describe('woml run', () => {
       stderr: '',
       exitCode: 0,
     });
+  });
+
+  test('runs parallel.woml through the public executable', async () => {
+    const expected = JSON.parse(
+      await Bun.file(
+        join(packageRoot, 'tests', 'fixtures', 'parallel.cli.v0.1.json'),
+      ).text(),
+    );
+
+    const result = await runCli('run', parallelFixturePath);
+
+    expect(result).toEqual({
+      stdout: expected.stdout,
+      stderr: expected.stderr,
+      exitCode: expected.exitCode,
+    });
+  });
+
+  test('runs a one-child parallel group as a valid trivial group', async () => {
+    const workflowPath = join(temporaryDirectory, 'parallel-one-child.woml');
+    await writeFile(
+      workflowPath,
+      `<workflow version="0.1" id="one-child-parallel">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="checks" concurrency="1" on-error="wait-all">
+      <step id="onlyCheck"><script>return { value: 42 };</script></step>
+    </parallel>
+    <step id="finish"><script>return { value: context.steps.onlyCheck.value };</script></step>
+  </steps>
+</workflow>`,
+    );
+
+    expect(await runCli('run', workflowPath)).toEqual({
+      stdout: '{"value":42}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+  });
+
+  test('gives every parallel child the same pre-fork context', async () => {
+    const workflowPath = join(temporaryDirectory, 'parallel-snapshot.woml');
+    await writeFile(
+      workflowPath,
+      `<workflow version="0.1" id="parallel-snapshot">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="checks" concurrency="2" on-error="wait-all">
+      <step id="probe"><script>await new Promise(resolve => setTimeout(resolve, 50)); return { sawSibling: context.steps.sibling !== undefined };</script></step>
+      <step id="sibling"><script>return { completed: true };</script></step>
+    </parallel>
+    <step id="finish"><script>return { sawSibling: context.steps.probe.sawSibling };</script></step>
+  </steps>
+</workflow>`,
+    );
+
+    expect(await runCli('run', workflowPath)).toEqual({
+      stdout: '{"sawSibling":false}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+  });
+
+  for (const policy of ['wait-all', 'fail-fast'] as const) {
+    test(`maps a ${policy} child failure to its original script`, async () => {
+      const workflowPath = join(
+        temporaryDirectory,
+        `parallel-${policy}-failure.woml`,
+      );
+      const source = (await Bun.file(parallelFixturePath).text())
+        .replace('on-error="wait-all"', `on-error="${policy}"`)
+        .replace(
+          'await new Promise(resolve => setTimeout(resolve, 80));\n          return {\n            fieldId: context.steps.loadField.fieldId,\n            temperature: 22\n          };',
+          'throw new Error("weather unavailable");',
+        );
+      await writeFile(workflowPath, source);
+
+      const result = await runCli('run', workflowPath);
+
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain(
+        'WOML runtime error [WOML_PARALLEL_CHILD_FAILED]',
+      );
+      expect(result.stderr).toContain(`${workflowPath}:15:`);
+      expect(result.stderr).toContain(
+        'step "loadWeather" in parallel "fieldData"',
+      );
+      expect(result.exitCode).toBe(1);
+    });
+  }
+
+  test('rejects invalid parallel concurrency through woml run', async () => {
+    const workflowPath = join(
+      temporaryDirectory,
+      'parallel-invalid-concurrency.woml',
+    );
+    const source = (await Bun.file(parallelFixturePath).text()).replace(
+      'concurrency="2"',
+      'concurrency="3"',
+    );
+    await writeFile(workflowPath, source);
+
+    const result = await runCli('run', workflowPath);
+
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      'WOML validation error [WOML_PARALLEL_INVALID_CONCURRENCY]',
+    );
+    expect(result.stderr).toContain(`${workflowPath}:13:`);
+    expect(result.exitCode).toBe(1);
+  });
+
+  test('rejects a terminal parallel group through woml run', async () => {
+    const workflowPath = join(
+      temporaryDirectory,
+      'parallel-terminal.woml',
+    );
+    await writeFile(
+      workflowPath,
+      `<workflow version="0.1" id="terminal-parallel">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="checks">
+      <step id="check"><script>return { ok: true };</script></step>
+    </parallel>
+  </steps>
+</workflow>`,
+    );
+
+    const result = await runCli('run', workflowPath);
+
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      'WOML validation error [WOML_PARALLEL_TERMINAL_UNSUPPORTED]',
+    );
+    expect(result.stderr).toContain(`${workflowPath}:4:`);
+    expect(result.exitCode).toBe(1);
   });
 
   test('rejects invalid command arguments with usage and exit code 2', async () => {
@@ -254,6 +398,10 @@ describe('woml run', () => {
       join(consumerDirectory, 'branch.woml'),
       await Bun.file(branchFixturePath).text(),
     );
+    await Bun.write(
+      join(consumerDirectory, 'parallel.woml'),
+      await Bun.file(parallelFixturePath).text(),
+    );
 
     const packed = Bun.spawnSync(
       [
@@ -302,6 +450,14 @@ describe('woml run', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+    const parallelResult = Bun.spawnSync(
+      [executable, 'run', 'parallel.woml'],
+      {
+        cwd: consumerDirectory,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    );
 
     expect(helloResult.stdout.toString()).toBe('{"message":"Hello World"}\n');
     expect(helloResult.stderr.toString()).toBe('');
@@ -311,6 +467,11 @@ describe('woml run', () => {
     );
     expect(branchResult.stderr.toString()).toBe('');
     expect(branchResult.exitCode).toBe(0);
+    expect(parallelResult.stdout.toString()).toBe(
+      '{"summary":"Weather 22°C, soil 41%"}\n',
+    );
+    expect(parallelResult.stderr.toString()).toBe('');
+    expect(parallelResult.exitCode).toBe(0);
     expect((await readdir(consumerDirectory)).sort()).toEqual(entriesBeforeRun);
     expect(
       await Bun.file(

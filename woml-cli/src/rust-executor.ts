@@ -50,6 +50,15 @@ interface NativeExecutionErrorEnvelope {
   readonly armId?: string;
   readonly referencePath?: readonly string[];
   readonly branchSite?: 'test' | 'result' | 'selection';
+  readonly details?: NativeParallelExecutionErrorDetails;
+}
+
+export interface NativeParallelExecutionErrorDetails {
+  readonly parallelId: string;
+  readonly policy: 'fail-fast' | 'wait-all';
+  readonly primaryNodeId: string;
+  readonly failedNodeIds: readonly string[];
+  readonly cancelledNodeIds: readonly string[];
 }
 
 export class RustWorkflowExecutionError extends Error {
@@ -59,6 +68,11 @@ export class RustWorkflowExecutionError extends Error {
   readonly armId?: string;
   readonly referencePath?: readonly string[];
   readonly branchSite?: 'test' | 'result' | 'selection';
+  readonly parallelId?: string;
+  readonly parallelPolicy?: 'fail-fast' | 'wait-all';
+  readonly primaryNodeId?: string;
+  readonly failedNodeIds?: readonly string[];
+  readonly cancelledNodeIds?: readonly string[];
 
   constructor(
     code: string,
@@ -69,6 +83,7 @@ export class RustWorkflowExecutionError extends Error {
       readonly armId?: string;
       readonly referencePath?: readonly string[];
       readonly branchSite?: 'test' | 'result' | 'selection';
+      readonly parallel?: NativeParallelExecutionErrorDetails;
     } = {}
   ) {
     super(message);
@@ -81,6 +96,13 @@ export class RustWorkflowExecutionError extends Error {
       this.referencePath = details.referencePath;
     }
     if (details.branchSite !== undefined) this.branchSite = details.branchSite;
+    if (details.parallel !== undefined) {
+      this.parallelId = details.parallel.parallelId;
+      this.parallelPolicy = details.parallel.policy;
+      this.primaryNodeId = details.parallel.primaryNodeId;
+      this.failedNodeIds = details.parallel.failedNodeIds;
+      this.cancelledNodeIds = details.parallel.cancelledNodeIds;
+    }
   }
 }
 
@@ -179,6 +201,23 @@ function decodeNativeExecutionError(error: unknown): never {
       const decoded = JSON.parse(
         message.slice(jsonStart)
       ) as Partial<NativeExecutionErrorEnvelope>;
+      const parallelDetails = decoded.details;
+      const validParallelDetails =
+        parallelDetails === undefined ||
+        (typeof parallelDetails === 'object' &&
+          parallelDetails !== null &&
+          typeof parallelDetails.parallelId === 'string' &&
+          (parallelDetails.policy === 'fail-fast' ||
+            parallelDetails.policy === 'wait-all') &&
+          typeof parallelDetails.primaryNodeId === 'string' &&
+          Array.isArray(parallelDetails.failedNodeIds) &&
+          parallelDetails.failedNodeIds.every(
+            nodeId => typeof nodeId === 'string'
+          ) &&
+          Array.isArray(parallelDetails.cancelledNodeIds) &&
+          parallelDetails.cancelledNodeIds.every(
+            nodeId => typeof nodeId === 'string'
+          ));
       if (
         decoded.kind === 'woml_execution_error' &&
         typeof decoded.code === 'string' &&
@@ -193,7 +232,8 @@ function decodeNativeExecutionError(error: unknown): never {
         (decoded.branchSite === undefined ||
           decoded.branchSite === 'test' ||
           decoded.branchSite === 'result' ||
-          decoded.branchSite === 'selection')
+          decoded.branchSite === 'selection') &&
+        validParallelDetails
       ) {
         throw new RustWorkflowExecutionError(decoded.code, decoded.message, {
           nodeId: decoded.nodeId,
@@ -201,6 +241,7 @@ function decodeNativeExecutionError(error: unknown): never {
           armId: decoded.armId,
           referencePath: decoded.referencePath,
           branchSite: decoded.branchSite,
+          parallel: parallelDetails,
         });
       }
     } catch (decodedError) {

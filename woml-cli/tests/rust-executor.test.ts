@@ -44,6 +44,11 @@ async function parallelWorkflow(): Promise<CompiledWorkflowDefinition> {
   return compileWoml(parseWoml(await Bun.file(path).text(), { file: path }));
 }
 
+async function parallelSource(): Promise<string> {
+  const path = resolve(packageRoot, '../woml/tests/fixtures/parallel.woml');
+  return await Bun.file(path).text();
+}
+
 function compileSource(source: string, file = 'branch-hardening.woml') {
   return compileWoml(parseWoml(source, { file }));
 }
@@ -285,6 +290,91 @@ describe('Rust to Bun workflow execution', () => {
       expect(rust.events.every(event => event.eventSchemaVersion === 2)).toBe(
         true
       );
+    }
+  );
+
+  nativeTest(
+    'carries model v3 and event v3 through the production native boundary',
+    async () => {
+      const execution = await executeWorkflowWithRust(
+        await parallelWorkflow(),
+        { nativeCorePath, scriptHostPath }
+      );
+
+      expect(execution.result).toEqual({
+        summary: 'Weather 22°C, soil 41%',
+      });
+      expect(execution.context.steps.loadWeather).toEqual({
+        fieldId: 'field-42',
+        temperature: 22,
+      });
+      expect(execution.context.steps.loadSoil).toEqual({
+        fieldId: 'field-42',
+        moisture: 41,
+      });
+      expect(execution.context.steps.fieldData).toBeUndefined();
+      expect(
+        execution.events.every(event => event.eventSchemaVersion === 3)
+      ).toBe(true);
+      const weatherStart = execution.events.findIndex(
+        event =>
+          event.type === 'step_attempt_started' &&
+          (event.data as { nodeId?: string }).nodeId === 'loadWeather'
+      );
+      const soilStart = execution.events.findIndex(
+        event =>
+          event.type === 'step_attempt_started' &&
+          (event.data as { nodeId?: string }).nodeId === 'loadSoil'
+      );
+      const firstChildTerminal = execution.events.findIndex(
+        event =>
+          (event.type === 'step_attempt_succeeded' ||
+            event.type === 'step_attempt_failed') &&
+          ['loadWeather', 'loadSoil'].includes(
+            (event.data as { nodeId?: string }).nodeId ?? ''
+          )
+      );
+      expect(weatherStart).toBeGreaterThan(-1);
+      expect(soilStart).toBeGreaterThan(-1);
+      expect(weatherStart).toBeLessThan(firstChildTerminal);
+      expect(soilStart).toBeLessThan(firstChildTerminal);
+    }
+  );
+
+  nativeTest(
+    'preserves the frozen structured details for both parallel error policies',
+    async () => {
+      const source = await parallelSource();
+      const failingWeather = source.replace(
+        'await new Promise(resolve => setTimeout(resolve, 80));\n          return {\n            fieldId: context.steps.loadField.fieldId,\n            temperature: 22\n          };',
+        'throw new Error("weather unavailable");'
+      );
+      const waitAllError = await capturedRustExecutionError(
+        compileSource(failingWeather, 'parallel-wait-all.woml')
+      );
+      expect(waitAllError.code).toBe('WOML_PARALLEL_CHILD_FAILED');
+      expect(waitAllError.nodeId).toBe('loadWeather');
+      expect(waitAllError.parallelId).toBe('fieldData');
+      expect(waitAllError.parallelPolicy).toBe('wait-all');
+      expect(waitAllError.primaryNodeId).toBe('loadWeather');
+      expect(waitAllError.failedNodeIds).toEqual(['loadWeather']);
+      expect(waitAllError.cancelledNodeIds).toEqual([]);
+
+      const failFastSource = failingWeather
+        .replace('on-error="wait-all"', 'on-error="fail-fast"')
+        .replace(
+          'await new Promise(resolve => setTimeout(resolve, 80));\n          return {\n            fieldId: context.steps.loadField.fieldId,\n            moisture: 41\n          };',
+          'await new Promise(resolve => setTimeout(resolve, 1500)); return { moisture: 41 };'
+        );
+      const failFastError = await capturedRustExecutionError(
+        compileSource(failFastSource, 'parallel-fail-fast.woml')
+      );
+      expect(failFastError.code).toBe('WOML_PARALLEL_CHILD_FAILED');
+      expect(failFastError.parallelId).toBe('fieldData');
+      expect(failFastError.parallelPolicy).toBe('fail-fast');
+      expect(failFastError.primaryNodeId).toBe('loadWeather');
+      expect(failFastError.failedNodeIds).toEqual(['loadWeather']);
+      expect(failFastError.cancelledNodeIds).toEqual(['loadSoil']);
     }
   );
 
