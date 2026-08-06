@@ -6,7 +6,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::event::{
-  RunFailedData, RunSucceededData, StepAttemptFailedData, StepAttemptStartedData,
+  RunFailedData, RunFailedDataV1, RunSucceededData, StepAttemptFailedData, StepAttemptStartedData,
   StepAttemptSucceededData,
 };
 use crate::protocol::{ExecuteMessage, HostOutcome};
@@ -14,7 +14,7 @@ use crate::{
   AttemptFailure, AttemptFailureKind, CompiledWorkflowDefinition, DurableDagEngine,
   DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
   RecoveryReport, RunEvent, RunEventPayload, RunProjection, RunStatus, ScriptHostClient,
-  ScriptHostClientError, ScriptHostProcessOptions, WorkflowContext, RUN_EVENT_SCHEMA_VERSION,
+  ScriptHostClientError, ScriptHostProcessOptions, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
 };
 
 #[derive(Debug, Clone)]
@@ -290,12 +290,12 @@ fn fail_attempt<T, E: RuntimeDagEngine>(
   )?;
   engine.append_payload(
     run_id,
-    RunEventPayload::RunFailed(RunFailedData {
+    RunEventPayload::RunFailed(RunFailedData::V1(RunFailedDataV1 {
       node_id: Some(node_id.to_string()),
       attempt: Some(1),
       invocation_id: Some(invocation_id.to_string()),
       failure: failure.clone(),
-    }),
+    })),
   )?;
   Err(RuntimeExecutionError::RunFailed(Box::new(
     FailedRunDetails {
@@ -345,7 +345,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
   ) -> Result<(), RuntimeExecutionError> {
     let sequence = self.events(run_id).len() as u64 + 1;
     self.append_event(RunEvent {
-      event_schema_version: RUN_EVENT_SCHEMA_VERSION,
+      event_schema_version: RUN_EVENT_SCHEMA_VERSION_V1,
       event_id: generated_id("evt"),
       run_id: run_id.to_string(),
       sequence,

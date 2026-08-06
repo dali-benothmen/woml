@@ -1,11 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::event::{
-  AttemptFailure, EventValidationError, RunEvent, RunEventPayload, StepAttemptStartedData,
+  AttemptFailure, BranchFailure, EventValidationError, RunEvent, RunEventPayload, RunFailedData,
+  RunFailedDataV2, StepAttemptStartedData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -45,17 +46,25 @@ pub struct AttemptProjection {
   pub status: AttemptStatus,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunFailure {
+  Attempt(AttemptFailure),
+  Branch(BranchFailure),
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RunProjection {
+  pub event_schema_version: Option<u32>,
   pub run_id: Option<String>,
   pub workflow_id: Option<String>,
   pub definition_hash: Option<String>,
   pub status: RunStatus,
   pub context: WorkflowContext,
   pub attempts: Vec<AttemptProjection>,
+  pub branch_selections: BTreeMap<String, String>,
   pub terminal_node_id: Option<String>,
   pub result: Option<Value>,
-  pub failure: Option<AttemptFailure>,
+  pub failure: Option<RunFailure>,
   pub last_sequence: u64,
 }
 
@@ -125,6 +134,14 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         )));
       }
     }
+    if let Some(event_schema_version) = projection.event_schema_version {
+      if event_schema_version != event.event_schema_version {
+        return Err(FoldError::InvalidHistory(format!(
+          "Run history mixes event schema versions {event_schema_version} and {}.",
+          event.event_schema_version
+        )));
+      }
+    }
     if matches!(projection.status, RunStatus::Succeeded | RunStatus::Failed) {
       return Err(FoldError::InvalidHistory(
         "A terminal run event must be the final event.".to_string(),
@@ -139,6 +156,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           ));
         }
         projection.run_id = Some(event.run_id.clone());
+        projection.event_schema_version = Some(event.event_schema_version);
         projection.workflow_id = Some(data.workflow_id.clone());
         projection.definition_hash = Some(data.definition_hash.clone());
         projection.context.trigger = data.trigger.clone();
@@ -207,6 +225,18 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           failure: data.failure.clone(),
         };
       }
+      RunEventPayload::BranchSelected(data) => {
+        require_running(&projection)?;
+        if let Some(selected_arm) = projection.branch_selections.get(&data.branch_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Branch {:?} was already selected as arm {:?}.",
+            data.branch_id, selected_arm
+          )));
+        }
+        projection
+          .branch_selections
+          .insert(data.branch_id.clone(), data.arm_id.clone());
+      }
       RunEventPayload::RunSucceeded(data) => {
         require_running(&projection)?;
         if !projection
@@ -225,31 +255,71 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
       }
       RunEventPayload::RunFailed(data) => {
         require_running(&projection)?;
-        if let (Some(node_id), Some(attempt), Some(invocation_id)) =
-          (&data.node_id, data.attempt, &data.invocation_id)
-        {
-          let key = identity(node_id, attempt, invocation_id);
-          let attempt_index = attempt_indexes.get(&key).ok_or_else(|| {
-            FoldError::InvalidHistory(format!(
-              "run_failed references unknown attempt {invocation_id:?}."
-            ))
-          })?;
-          if !matches!(
-            projection.attempts[*attempt_index].status,
-            AttemptStatus::Failed { .. }
-          ) {
-            return Err(FoldError::InvalidHistory(format!(
-              "run_failed references attempt {invocation_id:?} before it failed."
-            )));
+        let failure = match data {
+          RunFailedData::V1(data) => {
+            if let (Some(node_id), Some(attempt), Some(invocation_id)) =
+              (&data.node_id, data.attempt, &data.invocation_id)
+            {
+              require_failed_attempt(
+                &projection,
+                &attempt_indexes,
+                node_id,
+                attempt,
+                invocation_id,
+              )?;
+            }
+            RunFailure::Attempt(data.failure.clone())
           }
-        }
+          RunFailedData::V2(RunFailedDataV2::Attempt {
+            node_id,
+            attempt,
+            invocation_id,
+            failure,
+          }) => {
+            require_failed_attempt(
+              &projection,
+              &attempt_indexes,
+              node_id,
+              *attempt,
+              invocation_id,
+            )?;
+            RunFailure::Attempt(failure.clone())
+          }
+          RunFailedData::V2(RunFailedDataV2::Branch { failure, .. }) => {
+            RunFailure::Branch(failure.clone())
+          }
+        };
         projection.status = RunStatus::Failed;
-        projection.failure = Some(data.failure.clone());
+        projection.failure = Some(failure);
       }
     }
     projection.last_sequence = event.sequence;
   }
   Ok(projection)
+}
+
+fn require_failed_attempt(
+  projection: &RunProjection,
+  attempt_indexes: &HashMap<AttemptIdentity, usize>,
+  node_id: &str,
+  attempt: u32,
+  invocation_id: &str,
+) -> Result<(), FoldError> {
+  let key = identity(node_id, attempt, invocation_id);
+  let attempt_index = attempt_indexes.get(&key).ok_or_else(|| {
+    FoldError::InvalidHistory(format!(
+      "run_failed references unknown attempt {invocation_id:?}."
+    ))
+  })?;
+  if !matches!(
+    projection.attempts[*attempt_index].status,
+    AttemptStatus::Failed { .. }
+  ) {
+    return Err(FoldError::InvalidHistory(format!(
+      "run_failed references attempt {invocation_id:?} before it failed."
+    )));
+  }
+  Ok(())
 }
 
 fn require_running(projection: &RunProjection) -> Result<(), FoldError> {

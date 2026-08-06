@@ -8,7 +8,7 @@ use woml_engine::event::{RunStartedData, StepAttemptFailedData, StepAttemptStart
 use woml_engine::projection::AttemptStatus;
 use woml_engine::{
   fold_events, AttemptFailure, AttemptFailureKind, CompiledWorkflowDefinition, DurableDagEngine,
-  DurableEventStore, DurableStoreError, RunEvent, RunEventPayload, RunStatus,
+  DurableEventStore, DurableStoreError, RunEvent, RunEventPayload, RunFailure, RunStatus,
 };
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
@@ -151,7 +151,13 @@ fn recovery_atomically_fails_an_uncertain_attempt_without_replaying_it() {
   assert_eq!(projection.status, RunStatus::Failed);
   assert!(projection.context.steps.is_empty());
   assert_eq!(
-    projection.failure.as_ref().map(|failure| failure.kind),
+    projection
+      .failure
+      .as_ref()
+      .and_then(|failure| match failure {
+        RunFailure::Attempt(failure) => Some(failure.kind),
+        RunFailure::Branch(_) => None,
+      }),
     Some(AttemptFailureKind::Interrupted)
   );
   assert!(matches!(
@@ -385,7 +391,7 @@ fn recovery_finishes_a_known_failure_without_reclassifying_it_as_interrupted() {
   assert_eq!(store.events("run_known_failure").unwrap().len(), 4);
   let projection = store.projection("run_known_failure").unwrap();
   assert_eq!(projection.status, RunStatus::Failed);
-  assert_eq!(projection.failure, Some(failure));
+  assert_eq!(projection.failure, Some(RunFailure::Attempt(failure)));
 }
 
 #[test]

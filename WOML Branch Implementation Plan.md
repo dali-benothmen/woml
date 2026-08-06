@@ -1,7 +1,7 @@
 # WOML Branch Implementation Plan
 
-Status: B0–B2 complete — branch syntax compiles into the frozen model-v2 DAG
-and Rust validates it structurally; B3 is next
+Status: B0–B3 complete — branch syntax compiles into the frozen model-v2 DAG,
+and Rust now persists and recovers an immutable selected arm; B4 is next
 
 ## 1. Product Outcome
 
@@ -558,6 +558,25 @@ Result:
 
 Rust can append, fold, persist, and recover one immutable branch selection. A
 restart cannot silently select a different route.
+
+Completed proof:
+
+- Compiled model v1 starts event-v1 histories, while model v2 starts event-v2
+  histories; the fold rejects a history that mixes versions.
+- Rust validates `branch_selected` against the immutable definition, including
+  the canonical selector, selected arm, and selector-ready ordering.
+- `RunProjection.branch_selections` is derived exclusively by folding the event
+  log and never appears in script-facing context.
+- A second selection is rejected whether it repeats the recorded arm or tries
+  to replace it with another arm.
+- Event-v2 `run_failed` keeps attempt failures and branch-evaluation failures in
+  separate closed scopes while `step_attempt_failed` remains attempt-only.
+- SQLite round-trips the reviewed complete event-v2 history exactly, and reopen
+  plus recovery reconstructs the same branch selection.
+- Recovery of an interrupted selected-route attempt appends an event-v2
+  attempt-scoped run failure and preserves the already recorded arm.
+- Existing event-v1 fixtures, sequential execution, CLI tests, and frontend
+  tests remain compatible.
 
 ### B4 — Execute only the selected route in Rust
 

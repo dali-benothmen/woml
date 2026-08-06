@@ -4,10 +4,12 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::event::{is_definition_hash, RunEventPayload, RunStartedData};
+use crate::event::{
+  is_definition_hash, RunEventPayload, RunFailedData, RunFailedDataV2, RunStartedData,
+};
 use crate::{
-  CompiledWorkflowDefinition, EventStoreError, FoldError, InMemoryEventStore, ModelValidationError,
-  RunEvent, RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION,
+  run_event_schema_version_for_model, CompiledWorkflowDefinition, EventStoreError, FoldError,
+  InMemoryEventStore, ModelValidationError, RunEvent, RunProjection, RunStatus,
 };
 
 #[derive(Debug, Error)]
@@ -48,6 +50,24 @@ impl InMemoryDagEngine {
     })
   }
 
+  pub fn new_for_event_history(
+    workflow: CompiledWorkflowDefinition,
+    definition_hash: impl Into<String>,
+  ) -> Result<Self, EngineError> {
+    workflow.validate_structure()?;
+    let definition_hash = definition_hash.into();
+    if !is_definition_hash(&definition_hash) {
+      return Err(EngineError::Contract(
+        "The engine requires a valid RFC 8785 SHA-256 definition hash.".to_string(),
+      ));
+    }
+    Ok(Self {
+      workflow,
+      definition_hash,
+      store: InMemoryEventStore::default(),
+    })
+  }
+
   pub fn workflow(&self) -> &CompiledWorkflowDefinition {
     &self.workflow
   }
@@ -60,7 +80,7 @@ impl InMemoryDagEngine {
     trigger: Map<String, Value>,
   ) -> Result<RunProjection, EngineError> {
     let event = RunEvent {
-      event_schema_version: RUN_EVENT_SCHEMA_VERSION,
+      event_schema_version: run_event_schema_version_for_model(self.workflow.schema_version),
       event_id: event_id.into(),
       run_id: run_id.into(),
       sequence: 1,
@@ -75,6 +95,13 @@ impl InMemoryDagEngine {
   }
 
   pub fn append_event(&mut self, event: RunEvent) -> Result<RunProjection, EngineError> {
+    let expected_version = run_event_schema_version_for_model(self.workflow.schema_version);
+    if event.event_schema_version != expected_version {
+      return Err(EngineError::Contract(format!(
+        "Compiled model v{} requires run-event schema v{expected_version}, received v{}.",
+        self.workflow.schema_version, event.event_schema_version
+      )));
+    }
     validate_payload_against_definition(&self.workflow, &self.definition_hash, &event.payload)
       .map_err(EngineError::Contract)?;
     if let RunEventPayload::StepAttemptStarted(data) = &event.payload {
@@ -83,6 +110,22 @@ impl InMemoryDagEngine {
         return Err(EngineError::Contract(format!(
           "Node {:?} is not ready for execution.",
           data.node_id
+        )));
+      }
+    }
+    if let RunEventPayload::BranchSelected(data) = &event.payload {
+      let projection = self.projection(&event.run_id)?;
+      if projection.branch_selections.contains_key(&data.branch_id) {
+        return Err(EngineError::Contract(format!(
+          "Branch {:?} already has an immutable selection.",
+          data.branch_id
+        )));
+      }
+      let selector_id = format!("__woml_branch__{}__select", data.branch_id);
+      let ready = self.ready_node_ids(&event.run_id)?;
+      if !ready.iter().any(|node_id| node_id == &selector_id) {
+        return Err(EngineError::Contract(format!(
+          "Branch selector {selector_id:?} is not ready for selection."
         )));
       }
     }
@@ -206,6 +249,32 @@ pub(crate) fn validate_payload_against_definition(
         ));
       }
     }
+    RunEventPayload::BranchSelected(data) => {
+      let selector_id = format!("__woml_branch__{}__select", data.branch_id);
+      let selector = workflow.node(&selector_id).ok_or_else(|| {
+        format!(
+          "branch_selected references unknown branch {:?}.",
+          data.branch_id
+        )
+      })?;
+      if selector.handler != "engine.branch-select" {
+        return Err(format!(
+          "Branch {:?} does not have its canonical selector.",
+          data.branch_id
+        ));
+      }
+      let valid_arm = workflow.graph.edges.iter().any(|edge| {
+        edge.from == selector_id
+          && edge.id == data.arm_id
+          && edge.branch_id.as_deref() == Some(data.branch_id.as_str())
+      });
+      if !valid_arm {
+        return Err(format!(
+          "Arm {:?} is not selectable for branch {:?}.",
+          data.arm_id, data.branch_id
+        ));
+      }
+    }
     RunEventPayload::RunSucceeded(data) => {
       if workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
         return Err(format!(
@@ -215,9 +284,35 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunFailed(data) => {
-      if let Some(node_id) = &data.node_id {
-        if workflow.node(node_id).is_none() {
-          return Err(format!("run_failed references unknown node {node_id:?}."));
+      let (node_id, branch_identity) = match data {
+        RunFailedData::V1(data) => (data.node_id.as_deref(), None),
+        RunFailedData::V2(RunFailedDataV2::Attempt { node_id, .. }) => {
+          (Some(node_id.as_str()), None)
+        }
+        RunFailedData::V2(RunFailedDataV2::Branch {
+          branch_id, arm_id, ..
+        }) => (None, Some((branch_id.as_str(), arm_id.as_deref()))),
+      };
+      if node_id.is_some_and(|node_id| workflow.node(node_id).is_none()) {
+        return Err(format!("run_failed references unknown node {node_id:?}."));
+      }
+      if let Some((branch_id, arm_id)) = branch_identity {
+        let selector_id = format!("__woml_branch__{branch_id}__select");
+        if workflow.node(&selector_id).is_none() {
+          return Err(format!(
+            "run_failed references unknown branch {branch_id:?}."
+          ));
+        }
+        if arm_id.is_some_and(|arm_id| {
+          !workflow.graph.edges.iter().any(|edge| {
+            edge.from == selector_id
+              && edge.id == arm_id
+              && edge.branch_id.as_deref() == Some(branch_id)
+          })
+        }) {
+          return Err(format!(
+            "run_failed references an unknown arm for branch {branch_id:?}."
+          ));
         }
       }
     }

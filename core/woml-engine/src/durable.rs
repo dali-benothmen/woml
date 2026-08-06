@@ -10,13 +10,14 @@ use uuid::Uuid;
 
 use crate::engine::{ready_node_ids_for_projection, validate_payload_against_definition};
 use crate::event::{
-  is_definition_hash, RunFailedData, RunStartedData, RunSucceededData, StepAttemptFailedData,
+  is_definition_hash, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunStartedData,
+  RunSucceededData, StepAttemptFailedData,
 };
 use crate::projection::AttemptStatus;
 use crate::{
-  fold_events, AttemptFailure, AttemptFailureKind, CompiledWorkflowDefinition, FoldError,
-  ModelValidationError, RunEvent, RunEventPayload, RunProjection, RunStatus,
-  RUN_EVENT_SCHEMA_VERSION,
+  fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
+  CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
+  RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
 const STORE_SCHEMA_VERSION: &str = "1";
@@ -188,7 +189,7 @@ impl DurableEventStore {
     workflow: &CompiledWorkflowDefinition,
     definition_hash: &str,
   ) -> Result<(), DurableStoreError> {
-    workflow.validate_for_execution()?;
+    workflow.validate_structure()?;
     if !is_definition_hash(definition_hash) {
       return Err(DurableStoreError::Contract(
         "A durable definition requires a valid RFC 8785 SHA-256 hash.".to_string(),
@@ -245,7 +246,7 @@ impl DurableEventStore {
       .optional()?
       .ok_or_else(|| DurableStoreError::DefinitionNotFound(definition_hash.to_string()))?;
     let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
-    workflow.validate_for_execution()?;
+    workflow.validate_structure()?;
     Ok(workflow)
   }
 
@@ -303,7 +304,7 @@ impl DurableEventStore {
       .connection
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
-    match &payload {
+    let event_schema_version = match &payload {
       RunEventPayload::RunStarted(data) => {
         let existing: Option<String> = transaction
           .query_row(
@@ -315,14 +316,14 @@ impl DurableEventStore {
         if existing.is_some() {
           return Err(DurableStoreError::RunAlreadyExists(run_id));
         }
-        let registered_workflow: Option<String> = transaction
+        let registered_workflow: Option<(String, i64)> = transaction
           .query_row(
-            "SELECT workflow_id FROM woml_definitions WHERE definition_hash = ?1",
+            "SELECT workflow_id, schema_version FROM woml_definitions WHERE definition_hash = ?1",
             [&data.definition_hash],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
           )
           .optional()?;
-        let registered_workflow = registered_workflow
+        let (registered_workflow, model_schema_version) = registered_workflow
           .ok_or_else(|| DurableStoreError::DefinitionNotFound(data.definition_hash.clone()))?;
         if registered_workflow != data.workflow_id {
           return Err(DurableStoreError::Contract(
@@ -339,19 +340,61 @@ impl DurableEventStore {
             occurred_at.to_rfc3339(),
           ],
         )?;
+        let model_schema_version = u32::try_from(model_schema_version).map_err(|_| {
+          DurableStoreError::Contract(
+            "Stored compiled-model schema version is invalid.".to_string(),
+          )
+        })?;
+        run_event_schema_version_for_model(model_schema_version)
       }
       _ => {
         ensure_run_exists(&transaction, &run_id)?;
+        let existing = load_events(&transaction, &run_id)?;
+        existing
+          .first()
+          .map(|event| event.event_schema_version)
+          .ok_or_else(|| {
+            DurableStoreError::Contract(
+              "A non-start event cannot be appended before run_started.".to_string(),
+            )
+          })?
       }
-    }
+    };
 
     let mut events = load_events(&transaction, &run_id)?;
+    let workflow = match &payload {
+      RunEventPayload::RunStarted(_) => None,
+      _ => Some(definition_for_run(&transaction, &run_id)?),
+    };
+    if let Some(workflow) = &workflow {
+      let binding = run_binding_in_transaction(&transaction, &run_id)?;
+      validate_payload_against_definition(workflow, &binding.definition_hash, &payload)
+        .map_err(DurableStoreError::Contract)?;
+      if let RunEventPayload::BranchSelected(data) = &payload {
+        let projection = fold_events(&events)?;
+        if projection.branch_selections.contains_key(&data.branch_id) {
+          return Err(DurableStoreError::Contract(format!(
+            "Branch {:?} already has an immutable selection.",
+            data.branch_id
+          )));
+        }
+        let selector_id = format!("__woml_branch__{}__select", data.branch_id);
+        let ready = ready_node_ids_for_projection(workflow, &binding.definition_hash, &projection)
+          .map_err(DurableStoreError::Contract)?;
+        if !ready.iter().any(|node_id| node_id == &selector_id) {
+          return Err(DurableStoreError::Contract(format!(
+            "Branch selector {selector_id:?} is not ready for selection."
+          )));
+        }
+      }
+    }
     let event = append_to_history(
       &transaction,
       &mut events,
       &run_id,
       event_id,
       occurred_at,
+      event_schema_version,
       payload,
     )?;
     let projection = fold_events(&events)?;
@@ -406,6 +449,9 @@ impl DurableEventStore {
     ensure_run_exists(&transaction, run_id)?;
     let mut events = load_events(&transaction, run_id)?;
     let projection = fold_events(&events)?;
+    let event_schema_version = projection.event_schema_version.ok_or_else(|| {
+      DurableStoreError::Contract("A stored run has no event schema version.".to_string())
+    })?;
     if projection.status != RunStatus::Running {
       return Ok(RunRecovery::Unchanged);
     }
@@ -424,6 +470,7 @@ impl DurableEventStore {
           run_id,
           generated_event_id(),
           Utc::now(),
+          event_schema_version,
           RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
             node_id: attempt.node_id.clone(),
             attempt: attempt.attempt,
@@ -438,12 +485,14 @@ impl DurableEventStore {
         run_id,
         generated_event_id(),
         Utc::now(),
-        RunEventPayload::RunFailed(RunFailedData {
-          node_id: Some(first.node_id),
-          attempt: Some(first.attempt),
-          invocation_id: Some(first.invocation_id),
+        event_schema_version,
+        RunEventPayload::RunFailed(attempt_run_failed_data(
+          event_schema_version,
+          first.node_id,
+          first.attempt,
+          first.invocation_id,
           failure,
-        }),
+        )),
       )?;
       transaction.commit()?;
       return Ok(RunRecovery::Recovered {
@@ -465,12 +514,14 @@ impl DurableEventStore {
         run_id,
         generated_event_id(),
         Utc::now(),
-        RunEventPayload::RunFailed(RunFailedData {
-          node_id: Some(identity.node_id),
-          attempt: Some(identity.attempt),
-          invocation_id: Some(identity.invocation_id),
+        event_schema_version,
+        RunEventPayload::RunFailed(attempt_run_failed_data(
+          event_schema_version,
+          identity.node_id,
+          identity.attempt,
+          identity.invocation_id,
           failure,
-        }),
+        )),
       )?;
       transaction.commit()?;
       return Ok(RunRecovery::Recovered {
@@ -499,6 +550,7 @@ impl DurableEventStore {
         run_id,
         generated_event_id(),
         Utc::now(),
+        event_schema_version,
         RunEventPayload::RunSucceeded(RunSucceededData {
           terminal_node_id: terminal_node_id.to_string(),
           result,
@@ -526,6 +578,26 @@ fn ensure_run_exists(connection: &Connection, run_id: &str) -> Result<(), Durabl
   Ok(())
 }
 
+fn run_binding_in_transaction(
+  connection: &Connection,
+  run_id: &str,
+) -> Result<RunDefinitionBinding, DurableStoreError> {
+  connection
+    .query_row(
+      "SELECT workflow_id, definition_hash FROM woml_runs WHERE run_id = ?1",
+      [run_id],
+      |row| {
+        Ok(RunDefinitionBinding {
+          run_id: run_id.to_string(),
+          workflow_id: row.get(0)?,
+          definition_hash: row.get(1)?,
+        })
+      },
+    )
+    .optional()?
+    .ok_or_else(|| DurableStoreError::RunNotFound(run_id.to_string()))
+}
+
 fn definition_for_run(
   connection: &Connection,
   run_id: &str,
@@ -543,7 +615,7 @@ fn definition_for_run(
     .optional()?
     .ok_or_else(|| DurableStoreError::RunNotFound(run_id.to_string()))?;
   let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
-  workflow.validate_for_execution()?;
+  workflow.validate_structure()?;
   Ok(workflow)
 }
 
@@ -581,11 +653,12 @@ fn append_to_history(
   run_id: &str,
   event_id: String,
   occurred_at: DateTime<Utc>,
+  event_schema_version: u32,
   payload: RunEventPayload,
 ) -> Result<RunEvent, DurableStoreError> {
   let sequence = events.len() as u64 + 1;
   let event = RunEvent {
-    event_schema_version: RUN_EVENT_SCHEMA_VERSION,
+    event_schema_version,
     event_id,
     run_id: run_id.to_string(),
     sequence,
@@ -624,6 +697,30 @@ fn interrupted_failure() -> AttemptFailure {
   }
 }
 
+fn attempt_run_failed_data(
+  event_schema_version: u32,
+  node_id: String,
+  attempt: u32,
+  invocation_id: String,
+  failure: AttemptFailure,
+) -> RunFailedData {
+  match event_schema_version {
+    RUN_EVENT_SCHEMA_VERSION_V1 => RunFailedData::V1(RunFailedDataV1 {
+      node_id: Some(node_id),
+      attempt: Some(attempt),
+      invocation_id: Some(invocation_id),
+      failure,
+    }),
+    RUN_EVENT_SCHEMA_VERSION_V2 => RunFailedData::V2(RunFailedDataV2::Attempt {
+      node_id,
+      attempt,
+      invocation_id,
+      failure,
+    }),
+    _ => unreachable!("event versions are validated before recovery"),
+  }
+}
+
 fn generated_event_id() -> String {
   format!("evt_{}", Uuid::new_v4().simple())
 }
@@ -652,6 +749,21 @@ impl DurableDagEngine {
     mut store: DurableEventStore,
   ) -> Result<Self, DurableEngineError> {
     workflow.validate_for_execution()?;
+    let definition_hash = definition_hash.into();
+    store.register_definition(&workflow, &definition_hash)?;
+    Ok(Self {
+      workflow,
+      definition_hash,
+      store,
+    })
+  }
+
+  pub fn new_for_event_history(
+    workflow: CompiledWorkflowDefinition,
+    definition_hash: impl Into<String>,
+    mut store: DurableEventStore,
+  ) -> Result<Self, DurableEngineError> {
+    workflow.validate_structure()?;
     let definition_hash = definition_hash.into();
     store.register_definition(&workflow, &definition_hash)?;
     Ok(Self {
