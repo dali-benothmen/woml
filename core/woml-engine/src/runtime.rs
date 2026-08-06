@@ -85,8 +85,29 @@ pub struct FailedRunDetails {
 pub struct FailedBranchDetails {
   pub code: String,
   pub message: String,
+  pub branch_id: String,
+  pub arm_id: Option<String>,
+  pub path: Option<Vec<String>>,
+  pub site: BranchFailureSite,
   pub failure: BranchFailure,
   pub events: Vec<RunEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchFailureSite {
+  Test,
+  Result,
+  Selection,
+}
+
+impl BranchFailureSite {
+  pub const fn as_str(self) -> &'static str {
+    match self {
+      Self::Test => "test",
+      Self::Result => "result",
+      Self::Selection => "selection",
+    }
+  }
 }
 
 pub async fn execute_workflow(
@@ -197,7 +218,14 @@ async fn execute_with_host<E: RuntimeDagEngine>(
               RunEventPayload::BranchSelected(BranchSelectedData { branch_id, arm_id }),
             )?;
           }
-          Err(error) => return fail_branch(engine, &run_id, error),
+          Err(error) => {
+            let site = if matches!(error.kind, BranchEvaluationErrorKind::SelectionInvalid) {
+              BranchFailureSite::Selection
+            } else {
+              BranchFailureSite::Test
+            };
+            return fail_branch(engine, &run_id, error, site);
+          }
         }
       }
       "engine.branch-result" => {
@@ -233,6 +261,7 @@ async fn execute_with_host<E: RuntimeDagEngine>(
                 path: Some(error.path),
                 kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
               },
+              BranchFailureSite::Result,
             );
           }
         };
@@ -428,6 +457,7 @@ fn fail_branch<T, E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
   error: BranchEvaluationError,
+  site: BranchFailureSite,
 ) -> Result<T, RuntimeExecutionError> {
   let BranchEvaluationError {
     branch_id,
@@ -465,6 +495,9 @@ fn fail_branch<T, E: RuntimeDagEngine>(
     | BranchFailure::ReferenceNotAvailable { message, .. }
     | BranchFailure::BranchSelectionInvalid { message, .. } => message.clone(),
   };
+  let details_branch_id = branch_id.clone();
+  let details_arm_id = arm_id.clone();
+  let details_path = path.clone();
   engine.append_payload(
     run_id,
     RunEventPayload::RunFailed(RunFailedData::V2(RunFailedDataV2::Branch {
@@ -478,6 +511,10 @@ fn fail_branch<T, E: RuntimeDagEngine>(
     FailedBranchDetails {
       code,
       message,
+      branch_id: details_branch_id,
+      arm_id: details_arm_id,
+      path: details_path,
+      site,
       failure,
       events: engine.events(run_id)?,
     },

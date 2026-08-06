@@ -10,6 +10,7 @@ import {
   WomlDiagnosticError,
   type SourcePosition,
   type WomlSourceDocument,
+  type WomlSourceElement,
 } from 'woml';
 import {
   executeWorkflowWithRust,
@@ -70,6 +71,76 @@ function stepSourcePosition(
   return undefined;
 }
 
+function childElements(element: WomlSourceElement): readonly WomlSourceElement[] {
+  return element.children.filter(isWomlElement);
+}
+
+function findBranch(
+  document: WomlSourceDocument,
+  branchId: string,
+): WomlSourceElement | undefined {
+  const pending = [document.root];
+  while (pending.length > 0) {
+    const element = pending.shift()!;
+    if (element.name === 'branch' && element.attributes.id?.value === branchId) {
+      return element;
+    }
+    pending.push(...childElements(element));
+  }
+  return undefined;
+}
+
+interface RuntimeSource {
+  readonly position: SourcePosition;
+  readonly subject: string;
+}
+
+function branchRuntimeSource(
+  document: WomlSourceDocument | undefined,
+  error: RustWorkflowExecutionError,
+): RuntimeSource | undefined {
+  if (document === undefined || error.branchId === undefined) return undefined;
+  const branch = findBranch(document, error.branchId);
+  if (branch === undefined) return undefined;
+
+  if (error.branchSite === 'selection') {
+    return {
+      position: branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
+      subject: `branch "${error.branchId}"`,
+    };
+  }
+
+  const arm = childElements(branch).find((candidate, index) => {
+    const armId =
+      candidate.name === 'otherwise'
+        ? `${error.branchId}:otherwise`
+        : `${error.branchId}:when:${index}`;
+    return armId === error.armId;
+  });
+  if (arm === undefined) {
+    return {
+      position: branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
+      subject: `branch "${error.branchId}"`,
+    };
+  }
+
+  if (error.branchSite === 'test') {
+    return {
+      position: arm.attributes.test?.valueSpan.start ?? arm.openTagSpan.start,
+      subject: `<when test> in branch "${error.branchId}"`,
+    };
+  }
+
+  const result = childElements(arm).find((element) => element.name === 'result');
+  return {
+    position:
+      result?.attributes.value?.valueSpan.start ??
+      result?.openTagSpan.start ??
+      arm.openTagSpan.start,
+    subject: `<result value> in branch "${error.branchId}"`,
+  };
+}
+
 function formatError(
   error: unknown,
   filePath?: string,
@@ -89,15 +160,20 @@ function formatError(
   }
 
   if (error instanceof RustWorkflowExecutionError) {
-    const position = stepSourcePosition(document, error.nodeId);
+    const branchSource = branchRuntimeSource(document, error);
+    const position =
+      branchSource?.position ?? stepSourcePosition(document, error.nodeId);
     const location =
       position !== undefined && filePath !== undefined
         ? ` at ${filePath}:${position.line}:${position.column}`
         : filePath === undefined
           ? ''
           : ` in "${filePath}"`;
-    const node = error.nodeId === undefined ? '' : ` at step "${error.nodeId}"`;
-    return `WOML runtime error [${runtimeCode(error.code)}]${location}${node}: ${error.message}`;
+    const subject =
+      branchSource?.subject ??
+      (error.nodeId === undefined ? undefined : `step "${error.nodeId}"`);
+    const identity = subject === undefined ? '' : ` (${subject})`;
+    return `WOML runtime error [${runtimeCode(error.code)}]${location}${identity}: ${error.message}`;
   }
 
   const message = error instanceof Error ? error.message : String(error);

@@ -71,6 +71,18 @@ async function rustError(
   }
 }
 
+async function capturedRustExecutionError(
+  workflow: CompiledWorkflowDefinition,
+): Promise<RustWorkflowExecutionError> {
+  try {
+    await executeWorkflowWithRust(workflow, { nativeCorePath, scriptHostPath });
+  } catch (error) {
+    if (error instanceof RustWorkflowExecutionError) return error;
+    throw error;
+  }
+  throw new Error('Expected Rust execution to fail.');
+}
+
 describe('Rust to Bun workflow execution', () => {
   test('pins the production definition hash for hello.woml', async () => {
     expect(compiledDefinitionHash(await helloWorkflow())).toBe(
@@ -139,6 +151,50 @@ describe('Rust to Bun workflow execution', () => {
     expect(rust.events.every((event) => event.eventSchemaVersion === 2)).toBe(
       true,
     );
+  });
+
+  nativeTest('preserves structured branch identity, site, and reference details', async () => {
+    const fixturePath = resolve(
+      packageRoot,
+      '../woml/tests/fixtures/branch.woml',
+    );
+    const source = await Bun.file(fixturePath).text();
+    const conditionWorkflow = compileWoml(
+      parseWoml(source.replace('needsReview: true', 'otherProperty: true'), {
+        file: fixturePath,
+      }),
+    );
+    const conditionError = await capturedRustExecutionError(conditionWorkflow);
+    expect(conditionError.code).toBe('WOML_REFERENCE_NOT_AVAILABLE');
+    expect(conditionError.branchId).toBe('decision');
+    expect(conditionError.armId).toBe('decision:when:0');
+    expect(conditionError.referencePath).toEqual([
+      'steps',
+      'checkContent',
+      'needsReview',
+    ]);
+    expect(conditionError.branchSite).toBe('test');
+    expect(conditionError.nodeId).toBeUndefined();
+
+    const resultWorkflow = compileWoml(
+      parseWoml(
+        source.replace(
+          '{{context.steps.reviewContent}}',
+          '{{context.steps.reviewContent.missing}}',
+        ),
+        { file: fixturePath },
+      ),
+    );
+    const resultError = await capturedRustExecutionError(resultWorkflow);
+    expect(resultError.code).toBe('WOML_REFERENCE_NOT_AVAILABLE');
+    expect(resultError.branchId).toBe('decision');
+    expect(resultError.armId).toBe('decision:when:0');
+    expect(resultError.referencePath).toEqual([
+      'steps',
+      'reviewContent',
+      'missing',
+    ]);
+    expect(resultError.branchSite).toBe('result');
   });
 
   nativeTest('preserves script throw, timeout, invalid result, and host crash', async () => {

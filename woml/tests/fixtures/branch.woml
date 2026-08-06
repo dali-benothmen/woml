@@ -20,7 +20,7 @@
         <step id="reviewContent">
           <script>
             return {
-              status: "reviewed",
+              status: "reviewed last night",
               accepted: true
             };
           </script>

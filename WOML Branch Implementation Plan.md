@@ -1,7 +1,7 @@
 # WOML Branch Implementation Plan
 
-Status: B0–B4 complete — Rust now evaluates branches, executes only the
-selected route, and publishes its stable merged result; B5 is next
+Status: B0–B5 complete — packaged `woml run` now executes branches and reports
+source-located runtime failures; B6 hardening is next
 
 ## 1. Product Outcome
 
@@ -633,7 +633,7 @@ Completed proof:
   B5 remains responsible for the complete public CLI error and packaging
   surface.
 
-### B5 — Expose branch behavior through `woml run`
+### B5 — Expose branch behavior through `woml run` — complete
 
 Changes:
 
@@ -665,6 +665,23 @@ woml run branch.woml
 ```
 
 and receive the correct result from the selected route.
+
+Completed proof:
+
+- The native error envelope preserves branch ID, selected arm ID, typed
+  reference path, and the failing language site (`test`, `result`, or
+  `selection`) as structured fields.
+- The CLI maps condition failures to the original `<when test>` attribute and
+  result failures to the selected `<result value>` attribute, including the
+  WOML filename, line, column, stable code, and branch identity.
+- Black-box CLI tests cover a selected `<when>`, the `<otherwise>` fallback, a
+  non-boolean test, a missing condition property, and a missing result
+  property.
+- Successful commands write only the final JSON to stdout. Runtime failures
+  write only their diagnostic to stderr and return exit code 1.
+- A packed clean installation runs both `hello.woml` and `branch.woml` through
+  the included Rust native engine and Bun script host without creating runtime
+  files in the consumer project.
 
 ### B6 — Harden, package, and close the milestone
 

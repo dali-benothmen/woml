@@ -19,6 +19,14 @@ struct NativeExecutionError {
   message: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   node_id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  branch_id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  arm_id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  reference_path: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  branch_site: Option<&'static str>,
 }
 
 fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
@@ -40,6 +48,10 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
         code: details.code.clone(),
         message: details.message.clone(),
         node_id,
+        branch_id: None,
+        arm_id: None,
+        reference_path: None,
+        branch_site: None,
       }
     }
     RuntimeExecutionError::BranchFailed(details) => NativeExecutionError {
@@ -47,12 +59,20 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       code: details.code.clone(),
       message: details.message.clone(),
       node_id: None,
+      branch_id: Some(details.branch_id.clone()),
+      arm_id: details.arm_id.clone(),
+      reference_path: details.path.clone(),
+      branch_site: Some(details.site.as_str()),
     },
     error => NativeExecutionError {
       kind: "woml_execution_error",
       code: "WOML_RUST_EXECUTION_FAILED".to_string(),
       message: error.to_string(),
       node_id: None,
+      branch_id: None,
+      arm_id: None,
+      reference_path: None,
+      branch_site: None,
     },
   };
   let reason = serde_json::to_string(&envelope).unwrap_or_else(|_| {

@@ -20,6 +20,13 @@ const helloFixturePath = join(
   'fixtures',
   'hello.woml',
 );
+const branchFixturePath = join(
+  projectRoot,
+  'woml',
+  'tests',
+  'fixtures',
+  'branch.woml',
+);
 let temporaryDirectory: string;
 
 interface CommandResult {
@@ -86,6 +93,33 @@ describe('woml run', () => {
     });
   });
 
+  test('runs the selected when route through the public executable', async () => {
+    const result = await runCli('run', branchFixturePath);
+
+    expect(result).toEqual({
+      stdout: '{"message":"Final status: reviewed"}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+  });
+
+  test('runs otherwise when no condition is true', async () => {
+    const workflowPath = join(temporaryDirectory, 'branch-otherwise.woml');
+    const source = (await Bun.file(branchFixturePath).text()).replace(
+      'needsReview: true',
+      'needsReview: false',
+    );
+    await writeFile(workflowPath, source);
+
+    const result = await runCli('run', workflowPath);
+
+    expect(result).toEqual({
+      stdout: '{"message":"Final status: accepted-automatically"}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+  });
+
   test('rejects invalid command arguments with usage and exit code 2', async () => {
     const result = await runCli('hello.woml');
 
@@ -135,6 +169,70 @@ describe('woml run', () => {
     expect(result.exitCode).toBe(1);
   });
 
+  test('points a non-boolean branch test to its original test attribute', async () => {
+    const workflowPath = join(temporaryDirectory, 'branch-non-boolean.woml');
+    const source = (await Bun.file(branchFixturePath).text()).replace(
+      'needsReview: true',
+      'needsReview: "yes"',
+    );
+    await writeFile(workflowPath, source);
+
+    const result = await runCli('run', workflowPath);
+
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      'WOML runtime error [WOML_BRANCH_TEST_NOT_BOOLEAN]',
+    );
+    expect(result.stderr).toContain(`${workflowPath}:19:`);
+    expect(result.stderr).toContain('<when test> in branch "decision"');
+    expect(result.stderr).toContain('must resolve to a JSON boolean');
+    expect(result.exitCode).toBe(1);
+  });
+
+  test('points a missing condition reference to its original test attribute', async () => {
+    const workflowPath = join(temporaryDirectory, 'branch-missing-test.woml');
+    const source = (await Bun.file(branchFixturePath).text()).replace(
+      'needsReview: true',
+      'otherProperty: true',
+    );
+    await writeFile(workflowPath, source);
+
+    const result = await runCli('run', workflowPath);
+
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]',
+    );
+    expect(result.stderr).toContain(`${workflowPath}:19:`);
+    expect(result.stderr).toContain('<when test> in branch "decision"');
+    expect(result.stderr).toContain(
+      'context.steps.checkContent.needsReview',
+    );
+    expect(result.exitCode).toBe(1);
+  });
+
+  test('points a missing result reference to its original result attribute', async () => {
+    const workflowPath = join(temporaryDirectory, 'branch-missing-result.woml');
+    const source = (await Bun.file(branchFixturePath).text()).replace(
+      '{{context.steps.reviewContent}}',
+      '{{context.steps.reviewContent.missing}}',
+    );
+    await writeFile(workflowPath, source);
+
+    const result = await runCli('run', workflowPath);
+
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]',
+    );
+    expect(result.stderr).toContain(`${workflowPath}:29:`);
+    expect(result.stderr).toContain('<result value> in branch "decision"');
+    expect(result.stderr).toContain(
+      'context.steps.reviewContent.missing',
+    );
+    expect(result.exitCode).toBe(1);
+  });
+
   test('runs from a clean package installation with its native Rust engine', async () => {
     const packageDirectory = join(temporaryDirectory, 'package');
     const consumerDirectory = join(temporaryDirectory, 'consumer');
@@ -151,6 +249,10 @@ describe('woml run', () => {
     await Bun.write(
       join(consumerDirectory, 'hello.woml'),
       await Bun.file(helloFixturePath).text(),
+    );
+    await Bun.write(
+      join(consumerDirectory, 'branch.woml'),
+      await Bun.file(branchFixturePath).text(),
     );
 
     const packed = Bun.spawnSync(
@@ -190,15 +292,25 @@ describe('woml run', () => {
     }
     const entriesBeforeRun = (await readdir(consumerDirectory)).sort();
     const executable = join(consumerDirectory, 'node_modules', '.bin', 'woml');
-    const result = Bun.spawnSync([executable, 'run', 'hello.woml'], {
+    const helloResult = Bun.spawnSync([executable, 'run', 'hello.woml'], {
+      cwd: consumerDirectory,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const branchResult = Bun.spawnSync([executable, 'run', 'branch.woml'], {
       cwd: consumerDirectory,
       stdout: 'pipe',
       stderr: 'pipe',
     });
 
-    expect(result.stdout.toString()).toBe('{"message":"Hello World"}\n');
-    expect(result.stderr.toString()).toBe('');
-    expect(result.exitCode).toBe(0);
+    expect(helloResult.stdout.toString()).toBe('{"message":"Hello World"}\n');
+    expect(helloResult.stderr.toString()).toBe('');
+    expect(helloResult.exitCode).toBe(0);
+    expect(branchResult.stdout.toString()).toBe(
+      '{"message":"Final status: reviewed"}\n',
+    );
+    expect(branchResult.stderr.toString()).toBe('');
+    expect(branchResult.exitCode).toBe(0);
     expect((await readdir(consumerDirectory)).sort()).toEqual(entriesBeforeRun);
     expect(
       await Bun.file(

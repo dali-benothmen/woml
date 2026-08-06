@@ -7,7 +7,7 @@ use woml_engine::model::{
 };
 use woml_engine::{
   execute_workflow, execute_workflow_durable, recover_durable_runs, BranchFailure,
-  CompiledWorkflowDefinition, RuntimeExecutionError, RuntimeExecutionOptions,
+  BranchFailureSite, CompiledWorkflowDefinition, RuntimeExecutionError, RuntimeExecutionOptions,
   ScriptHostProcessOptions,
 };
 
@@ -471,6 +471,17 @@ async fn non_boolean_and_missing_condition_values_fail_as_branch_errors() {
       panic!("expected branch-scoped runtime failure");
     };
     assert_eq!(details.code, expected_code);
+    assert_eq!(details.branch_id, "decision");
+    assert_eq!(details.arm_id.as_deref(), Some("decision:when:0"));
+    assert_eq!(
+      details.path.as_deref(),
+      Some(
+        ["steps", "checkContent", "needsReview"]
+          .map(str::to_string)
+          .as_slice()
+      )
+    );
+    assert_eq!(details.site, BranchFailureSite::Test);
     assert!(matches!(
       details.events.last().map(|event| &event.payload),
       Some(woml_engine::RunEventPayload::RunFailed(_))
@@ -486,6 +497,51 @@ async fn non_boolean_and_missing_condition_values_fail_as_branch_errors() {
       }
     }
   }
+}
+
+#[tokio::test]
+async fn missing_selected_result_keeps_result_site_and_reference_details() {
+  let Some(host) = host_options() else {
+    return;
+  };
+  let mut workflow = branch_model();
+  let result_node = workflow
+    .graph
+    .nodes
+    .iter_mut()
+    .find(|node| node.id == "decision")
+    .unwrap();
+  let ValueExpression::Object { fields } = &mut result_node.inputs else {
+    panic!("expected branch result inputs");
+  };
+  fields.insert(
+    "decision:when:0".to_string(),
+    reference(&["steps", "reviewContent", "missing"]),
+  );
+
+  let error = execute_workflow(
+    workflow,
+    MODIFIED_HASH.to_string(),
+    Map::new(),
+    runtime_options(host),
+  )
+  .await
+  .unwrap_err();
+  let RuntimeExecutionError::BranchFailed(details) = error else {
+    panic!("expected branch-scoped runtime failure");
+  };
+  assert_eq!(details.code, "WOML_REFERENCE_NOT_AVAILABLE");
+  assert_eq!(details.branch_id, "decision");
+  assert_eq!(details.arm_id.as_deref(), Some("decision:when:0"));
+  assert_eq!(
+    details.path,
+    Some(
+      ["steps", "reviewContent", "missing"]
+        .map(str::to_string)
+        .to_vec()
+    )
+  );
+  assert_eq!(details.site, BranchFailureSite::Result);
 }
 
 #[tokio::test]

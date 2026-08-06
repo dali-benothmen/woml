@@ -29,8 +29,8 @@ pub use projection::{
   fold_events, FoldError, RunFailure, RunProjection, RunStatus, WorkflowContext,
 };
 pub use runtime::{
-  execute_workflow, execute_workflow_durable, recover_durable_runs, RuntimeExecutionError,
-  RuntimeExecutionOptions, WorkflowExecutionResult,
+  execute_workflow, execute_workflow_durable, recover_durable_runs, BranchFailureSite,
+  RuntimeExecutionError, RuntimeExecutionOptions, WorkflowExecutionResult,
 };
 pub use store::{EventStoreError, InMemoryEventStore};
 

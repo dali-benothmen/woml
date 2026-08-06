@@ -50,17 +50,41 @@ interface NativeExecutionErrorEnvelope {
   readonly code: string;
   readonly message: string;
   readonly nodeId?: string;
+  readonly branchId?: string;
+  readonly armId?: string;
+  readonly referencePath?: readonly string[];
+  readonly branchSite?: 'test' | 'result' | 'selection';
 }
 
 export class RustWorkflowExecutionError extends Error {
   readonly code: string;
   readonly nodeId?: string;
+  readonly branchId?: string;
+  readonly armId?: string;
+  readonly referencePath?: readonly string[];
+  readonly branchSite?: 'test' | 'result' | 'selection';
 
-  constructor(code: string, message: string, nodeId?: string) {
+  constructor(
+    code: string,
+    message: string,
+    details: {
+      readonly nodeId?: string;
+      readonly branchId?: string;
+      readonly armId?: string;
+      readonly referencePath?: readonly string[];
+      readonly branchSite?: 'test' | 'result' | 'selection';
+    } = {},
+  ) {
     super(message);
     this.name = 'RustWorkflowExecutionError';
     this.code = code;
-    if (nodeId !== undefined) this.nodeId = nodeId;
+    if (details.nodeId !== undefined) this.nodeId = details.nodeId;
+    if (details.branchId !== undefined) this.branchId = details.branchId;
+    if (details.armId !== undefined) this.armId = details.armId;
+    if (details.referencePath !== undefined) {
+      this.referencePath = details.referencePath;
+    }
+    if (details.branchSite !== undefined) this.branchSite = details.branchSite;
   }
 }
 
@@ -156,12 +180,27 @@ function decodeNativeExecutionError(error: unknown): never {
         decoded.kind === 'woml_execution_error' &&
         typeof decoded.code === 'string' &&
         typeof decoded.message === 'string' &&
-        (decoded.nodeId === undefined || typeof decoded.nodeId === 'string')
+        (decoded.nodeId === undefined || typeof decoded.nodeId === 'string') &&
+        (decoded.branchId === undefined || typeof decoded.branchId === 'string') &&
+        (decoded.armId === undefined || typeof decoded.armId === 'string') &&
+        (decoded.referencePath === undefined ||
+          (Array.isArray(decoded.referencePath) &&
+            decoded.referencePath.every((part) => typeof part === 'string'))) &&
+        (decoded.branchSite === undefined ||
+          decoded.branchSite === 'test' ||
+          decoded.branchSite === 'result' ||
+          decoded.branchSite === 'selection')
       ) {
         throw new RustWorkflowExecutionError(
           decoded.code,
           decoded.message,
-          decoded.nodeId,
+          {
+            nodeId: decoded.nodeId,
+            branchId: decoded.branchId,
+            armId: decoded.armId,
+            referencePath: decoded.referencePath,
+            branchSite: decoded.branchSite,
+          },
         );
       }
     } catch (decodedError) {
