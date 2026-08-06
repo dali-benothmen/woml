@@ -74,6 +74,95 @@ async fn rust_client_multiplexes_and_correlates_out_of_order_utf8_frames() {
 }
 
 #[tokio::test]
+async fn rust_client_cancels_only_the_target_invocation() {
+  let Some(options) = host_options() else {
+    return;
+  };
+  let host = ScriptHostClient::spawn(options).await.unwrap();
+  let context = context();
+  let cancelled = ExecuteMessage::runtime_script(
+    "inv_rust_cancelled",
+    "run_rust_cancel",
+    "cancelled",
+    3_000,
+    "await new Promise(resolve => setTimeout(resolve, 1500)); return { value: 'too late' };",
+    &context,
+  );
+  let survivor = ExecuteMessage::runtime_script(
+    "inv_rust_survivor",
+    "run_rust_cancel",
+    "survivor",
+    3_000,
+    "await new Promise(resolve => setTimeout(resolve, 160)); return { value: 'survived' };",
+    &context,
+  );
+
+  let cancel = async {
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    host.cancel("inv_rust_cancelled").await
+  };
+  let (cancelled_result, survivor_result, cancel_result) =
+    tokio::join!(host.execute(&cancelled), host.execute(&survivor), cancel);
+  cancel_result.unwrap();
+  assert!(matches!(
+    cancelled_result.unwrap().outcome,
+    HostOutcome::Failure { error }
+      if error.kind == woml_engine::protocol::HostReportedFailureKind::InvocationCancelled
+        && error.code == "WOML_SCRIPT_CANCELLED"
+  ));
+  assert_eq!(
+    survivor_result.unwrap().outcome,
+    HostOutcome::Success {
+      value: json!({ "value": "survived" })
+    }
+  );
+  host.shutdown().await;
+}
+
+#[tokio::test]
+async fn host_loss_during_cancellation_stays_a_host_crash() {
+  let Some(mut options) = host_options() else {
+    return;
+  };
+  options.host_script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .join("../../woml-cli/tests/fixtures/crashing-script-host.ts");
+  let host = ScriptHostClient::spawn(options).await.unwrap();
+  let context = context();
+  let first = ExecuteMessage::runtime_script(
+    "inv_host_loss_first",
+    "run_host_loss",
+    "first",
+    3_000,
+    "await new Promise(resolve => setTimeout(resolve, 1000)); return {};",
+    &context,
+  );
+  let second = ExecuteMessage::runtime_script(
+    "inv_host_loss_second",
+    "run_host_loss",
+    "second",
+    3_000,
+    "await new Promise(resolve => setTimeout(resolve, 1000)); return {};",
+    &context,
+  );
+  let cancel = async {
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    host.cancel("inv_host_loss_second").await
+  };
+
+  let (first_result, second_result, _) =
+    tokio::join!(host.execute(&first), host.execute(&second), cancel);
+  assert!(matches!(
+    first_result,
+    Err(woml_engine::ScriptHostClientError::HostCrashed(_))
+  ));
+  assert!(matches!(
+    second_result,
+    Err(woml_engine::ScriptHostClientError::HostCrashed(_))
+  ));
+  host.shutdown().await;
+}
+
+#[tokio::test]
 async fn runtime_appends_canonical_failure_events_for_script_errors() {
   let Some(host) = host_options() else {
     return;

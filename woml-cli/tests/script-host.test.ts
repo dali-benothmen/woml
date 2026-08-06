@@ -9,6 +9,7 @@ import {
 import { ScriptHost } from '../src/script-host/host';
 import { isScriptHostMessage } from '../src/script-host/protocol';
 import type {
+  CancelMessage,
   CompletedMessage,
   ExecuteMessage,
   ScriptHostMessage,
@@ -27,11 +28,12 @@ function execute(
   options: {
     readonly context?: ExecuteMessage['context'];
     readonly timeoutMs?: number;
-  } = {},
+    readonly protocolVersion?: 1 | 2;
+  } = {}
 ): ExecuteMessage {
   return {
     protocol: 'woml.script-host',
-    protocolVersion: 1,
+    protocolVersion: options.protocolVersion ?? 2,
     messageType: 'execute',
     invocationId,
     runId: 'run_host_test_01',
@@ -44,6 +46,16 @@ function execute(
   };
 }
 
+function cancel(invocationId: string): CancelMessage {
+  return {
+    protocol: 'woml.script-host',
+    protocolVersion: 2,
+    messageType: 'cancel',
+    invocationId,
+    reason: 'parallel_fail_fast',
+  };
+}
+
 interface HostRunResult {
   readonly messages: ScriptHostMessage[];
   readonly stderr: string;
@@ -52,7 +64,7 @@ interface HostRunResult {
 
 async function runHost(
   messages: readonly unknown[],
-  environment: Readonly<Record<string, string>> = {},
+  environment: Readonly<Record<string, string>> = {}
 ): Promise<HostRunResult> {
   const input = Buffer.concat(messages.map(encodeFrame));
   const child = Bun.spawn([bunExecutable, hostEntry], {
@@ -75,7 +87,8 @@ async function runHost(
   const decoder = new FrameDecoder();
   const decoded = decoder.push(new Uint8Array(stdout));
   decoder.finish();
-  for (const message of decoded) expect(isScriptHostMessage(message)).toBe(true);
+  for (const message of decoded)
+    expect(isScriptHostMessage(message)).toBe(true);
 
   return {
     messages: decoded as ScriptHostMessage[],
@@ -84,17 +97,20 @@ async function runHost(
   };
 }
 
-function completions(messages: readonly ScriptHostMessage[]): CompletedMessage[] {
+function completions(
+  messages: readonly ScriptHostMessage[]
+): CompletedMessage[] {
   return messages.filter(
-    (message): message is CompletedMessage => message.messageType === 'completed',
+    (message): message is CompletedMessage =>
+      message.messageType === 'completed'
   );
 }
 
 function byInvocation(
-  messages: readonly ScriptHostMessage[],
+  messages: readonly ScriptHostMessage[]
 ): ReadonlyMap<string, CompletedMessage> {
   return new Map(
-    completions(messages).map((message) => [message.invocationId, message]),
+    completions(messages).map(message => [message.invocationId, message])
   );
 }
 
@@ -103,16 +119,19 @@ describe('production Content-Length framing', () => {
     const fixture = await Bun.file(
       resolve(
         packageRoot,
-        'tests/fixtures/script-host/unicode-crlf.execute.v1.json',
-      ),
+        'tests/fixtures/script-host/unicode-crlf.execute.v1.json'
+      )
     ).json();
     const frame = encodeFrame(fixture);
     const body = JSON.stringify(fixture);
-    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(body.length);
+    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(
+      body.length
+    );
 
     const decoder = new FrameDecoder();
     const messages: unknown[] = [];
-    for (const byte of frame) messages.push(...decoder.push(Uint8Array.of(byte)));
+    for (const byte of frame)
+      messages.push(...decoder.push(Uint8Array.of(byte)));
     decoder.finish();
 
     expect(messages).toEqual([fixture]);
@@ -123,17 +142,19 @@ describe('production Content-Length framing', () => {
     const second = { id: 2 };
     const decoder = new FrameDecoder();
     expect(
-      decoder.push(Buffer.concat([encodeFrame(first), encodeFrame(second)])),
+      decoder.push(Buffer.concat([encodeFrame(first), encodeFrame(second)]))
     ).toEqual([first, second]);
     decoder.finish();
 
     expect(() =>
-      new FrameDecoder().push(Buffer.from('Content-Length: nope\r\n\r\n', 'ascii')),
+      new FrameDecoder().push(
+        Buffer.from('Content-Length: nope\r\n\r\n', 'ascii')
+      )
     ).toThrow(FrameProtocolError);
     expect(() =>
       new FrameDecoder({ maxFrameBytes: 10 }).push(
-        Buffer.from('Content-Length: 11\r\n\r\n', 'ascii'),
-      ),
+        Buffer.from('Content-Length: 11\r\n\r\n', 'ascii')
+      )
     ).toThrow(FrameProtocolError);
     const incomplete = new FrameDecoder();
     incomplete.push(Buffer.from('Content-Length: 4\r\n\r\n{}', 'ascii'));
@@ -144,13 +165,33 @@ describe('production Content-Length framing', () => {
         Buffer.concat([
           Buffer.from('Content-Length: 4\r\n\r\n', 'ascii'),
           invalidUtf8Body,
-        ]),
-      ),
+        ])
+      )
     ).toThrow(FrameProtocolError);
   });
 });
 
 describe('long-lived Bun script host', () => {
+  test('preserves protocol v1 execution when explicitly requested', async () => {
+    const result = await runHost(
+      [
+        execute('inv_legacy_v1', 'return { legacy: true };', {
+          protocolVersion: 1,
+        }),
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '1' }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.messages[0]).toMatchObject({
+      messageType: 'ready',
+      protocolVersion: 1,
+    });
+    expect(byInvocation(result.messages).get('inv_legacy_v1')).toMatchObject({
+      protocolVersion: 1,
+      outcome: { kind: 'success', value: { legacy: true } },
+    });
+  });
+
   test('provides the frozen context contract with top-level await', async () => {
     const result = await runHost([
       execute(
@@ -161,12 +202,12 @@ return {
   hasRun: "run" in context,
   hasServices: typeof services !== "undefined"
 };`,
-        { context: { trigger: { name: 'Ada' }, steps: {} } },
+        { context: { trigger: { name: 'Ada' }, steps: {} } }
       ),
       execute(
         'inv_frozen_context',
         'context.trigger.name = "Changed"; return { unreachable: true };',
-        { context: { trigger: { name: 'Original' }, steps: {} } },
+        { context: { trigger: { name: 'Original' }, steps: {} } }
       ),
     ]);
     const indexed = byInvocation(result.messages);
@@ -189,26 +230,24 @@ return {
     const result = await runHost([
       execute(
         'inv_slow',
-        'await new Promise((resolve) => setTimeout(resolve, 180)); return { order: "slow" };',
+        'await new Promise((resolve) => setTimeout(resolve, 180)); return { order: "slow" };'
       ),
       execute(
         'inv_fast',
-        'await new Promise((resolve) => setTimeout(resolve, 5)); return { order: "fast" };',
+        'await new Promise((resolve) => setTimeout(resolve, 5)); return { order: "fast" };'
       ),
       execute(
         'inv_middle',
-        'await new Promise((resolve) => setTimeout(resolve, 80)); return { order: "middle" };',
+        'await new Promise((resolve) => setTimeout(resolve, 80)); return { order: "middle" };'
       ),
     ]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.messages[0].messageType).toBe('ready');
-    expect(completions(result.messages).map((message) => message.invocationId)).toEqual([
-      'inv_fast',
-      'inv_middle',
-      'inv_slow',
-    ]);
+    expect(
+      completions(result.messages).map(message => message.invocationId)
+    ).toEqual(['inv_fast', 'inv_middle', 'inv_slow']);
     const indexed = byInvocation(result.messages);
     expect(indexed.get('inv_fast')?.outcome).toEqual({
       kind: 'success',
@@ -220,23 +259,79 @@ return {
     });
   });
 
+  test('cancels only the addressed Worker and emits one terminal response', async () => {
+    const result = await runHost([
+      execute(
+        'inv_cancel_me',
+        'await new Promise(resolve => setTimeout(resolve, 500)); return { tooLate: true };'
+      ),
+      execute('inv_unrelated', 'return { survived: true };'),
+      cancel('inv_cancel_me'),
+      cancel('inv_unknown'),
+    ]);
+    const indexed = byInvocation(result.messages);
+
+    expect(result.exitCode).toBe(0);
+    expect(indexed.get('inv_cancel_me')?.outcome).toEqual({
+      kind: 'failure',
+      error: {
+        kind: 'invocation_cancelled',
+        code: 'WOML_SCRIPT_CANCELLED',
+        message: 'Invocation was cancelled by parallel fail-fast.',
+      },
+    });
+    expect(indexed.get('inv_unrelated')?.outcome).toEqual({
+      kind: 'success',
+      value: { survived: true },
+    });
+    expect(
+      completions(result.messages).filter(
+        message => message.invocationId === 'inv_cancel_me'
+      )
+    ).toHaveLength(1);
+  });
+
+  test('a late cancel is a safe no-op after the real completion wins', async () => {
+    const sent: CompletedMessage[] = [];
+    const host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 2,
+      send: async message => {
+        sent.push(message);
+      },
+    });
+    host.accept(execute('inv_completed_first', 'return { won: true };'));
+    await host.drain();
+    host.accept(cancel('inv_completed_first'));
+    host.accept(cancel('inv_never_existed'));
+    await host.drain();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].outcome).toEqual({
+      kind: 'success',
+      value: { won: true },
+    });
+  });
+
   test('uses fresh Worker globals and does not pass host environment secrets', async () => {
     const result = await runHost(
       [
         execute(
           'inv_set_global',
-          'globalThis.__womlLeak = "secret-state"; return { set: true };',
+          'globalThis.__womlLeak = "secret-state"; return { set: true };'
         ),
         execute(
           'inv_read_global',
-          'await new Promise((resolve) => setTimeout(resolve, 40)); return { leaked: globalThis.__womlLeak ?? null, env: process.env.WOML_TEST_SECRET ?? null };',
+          'await new Promise((resolve) => setTimeout(resolve, 40)); return { leaked: globalThis.__womlLeak ?? null, env: process.env.WOML_TEST_SECRET ?? null };'
         ),
       ],
-      { WOML_TEST_SECRET: 'must-not-enter-worker' },
+      { WOML_TEST_SECRET: 'must-not-enter-worker' }
     );
 
     expect(result.exitCode).toBe(0);
-    expect(byInvocation(result.messages).get('inv_read_global')?.outcome).toEqual({
+    expect(
+      byInvocation(result.messages).get('inv_read_global')?.outcome
+    ).toEqual({
       kind: 'success',
       value: { leaked: null, env: null },
     });
@@ -280,7 +375,7 @@ return {
       execute('inv_function', 'return { callback() {} };'),
       execute(
         'inv_circular',
-        'const value = {}; value.self = value; return value;',
+        'const value = {}; value.self = value; return value;'
       ),
     ]);
     const indexed = byInvocation(result.messages);
@@ -301,16 +396,17 @@ return {
     }
   });
 
-  test('reports a Worker startup crash separately', async () => {
+  test('a Worker crash racing with cancel keeps one real crash outcome', async () => {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({
       workerUrl: new URL('./fixtures/missing-worker.ts', import.meta.url),
-      send: async (message) => {
+      send: async message => {
         sent.push(message);
       },
     });
 
     host.accept(execute('inv_worker_crash', 'return { unreachable: true };'));
+    host.accept(cancel('inv_worker_crash'));
     await host.drain();
 
     expect(sent).toHaveLength(1);
@@ -329,15 +425,12 @@ return {
             steps: {},
           },
         }),
-        execute(
-          'inv_result_large',
-          'return { payload: "x".repeat(300) };',
-        ),
+        execute('inv_result_large', 'return { payload: "x".repeat(300) };'),
       ],
       {
         WOML_SCRIPT_HOST_MAX_CONTEXT_BYTES: '200',
         WOML_SCRIPT_HOST_MAX_RESULT_BYTES: '200',
-      },
+      }
     );
     const indexed = byInvocation(result.messages);
 
@@ -362,7 +455,7 @@ return {
   test('fails closed on a schema-invalid Rust message', async () => {
     const invalid = {
       ...execute('inv_invalid', 'return { ok: true };'),
-      protocolVersion: 2,
+      protocolVersion: 3,
     };
     const result = await runHost([invalid]);
 

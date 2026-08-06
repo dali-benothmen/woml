@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::{AttemptFailure, AttemptFailureKind, FailureSizeDetails, WorkflowContext};
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 1;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -23,9 +23,31 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v1 ready message.".to_string());
+      return Err("The child did not send a valid script-host v2 ready message.".to_string());
     }
     Ok(())
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelMessage<'a> {
+  pub protocol: &'static str,
+  pub protocol_version: u32,
+  pub message_type: &'static str,
+  pub invocation_id: &'a str,
+  pub reason: &'static str,
+}
+
+impl<'a> CancelMessage<'a> {
+  pub fn parallel_fail_fast(invocation_id: &'a str) -> Self {
+    Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "cancel",
+      invocation_id,
+      reason: "parallel_fail_fast",
+    }
   }
 }
 
@@ -91,7 +113,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v1 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v2 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;
@@ -116,6 +138,7 @@ pub enum HostReportedFailureKind {
   ContextTooLarge,
   ResultTooLarge,
   WorkerCrashed,
+  InvocationCancelled,
 }
 
 impl HostReportedFailureKind {
@@ -127,6 +150,7 @@ impl HostReportedFailureKind {
       Self::ContextTooLarge => AttemptFailureKind::ContextTooLarge,
       Self::ResultTooLarge => AttemptFailureKind::ResultTooLarge,
       Self::WorkerCrashed => AttemptFailureKind::WorkerCrashed,
+      Self::InvocationCancelled => AttemptFailureKind::InvocationCancelled,
     }
   }
 }

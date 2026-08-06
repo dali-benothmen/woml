@@ -11,14 +11,14 @@ export interface ScriptContext extends JsonObject {
 
 export interface ReadyMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: 1 | 2;
   readonly messageType: 'ready';
   readonly hostInstanceId: string;
 }
 
 export interface ExecuteMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: 1 | 2;
   readonly messageType: 'execute';
   readonly invocationId: string;
   readonly runId: string;
@@ -30,13 +30,22 @@ export interface ExecuteMessage {
   readonly context: ScriptContext;
 }
 
+export interface CancelMessage {
+  readonly protocol: 'woml.script-host';
+  readonly protocolVersion: 2;
+  readonly messageType: 'cancel';
+  readonly invocationId: string;
+  readonly reason: 'parallel_fail_fast';
+}
+
 export type HostReportedFailureKind =
   | 'script_threw'
   | 'script_timed_out'
   | 'invalid_script_result'
   | 'context_too_large'
   | 'result_too_large'
-  | 'worker_crashed';
+  | 'worker_crashed'
+  | 'invocation_cancelled';
 
 export type HostReportedFailureCode =
   | 'WOML_SCRIPT_THROWN'
@@ -44,7 +53,8 @@ export type HostReportedFailureCode =
   | 'WOML_SCRIPT_NON_JSON_RESULT'
   | 'WOML_SCRIPT_CONTEXT_TOO_LARGE'
   | 'WOML_SCRIPT_RESULT_TOO_LARGE'
-  | 'WOML_SCRIPT_WORKER_CRASHED';
+  | 'WOML_SCRIPT_WORKER_CRASHED'
+  | 'WOML_SCRIPT_CANCELLED';
 
 export interface HostReportedFailure {
   readonly kind: HostReportedFailureKind;
@@ -58,7 +68,7 @@ export interface HostReportedFailure {
 
 export interface SuccessMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: 1 | 2;
   readonly messageType: 'completed';
   readonly invocationId: string;
   readonly outcome: {
@@ -70,7 +80,7 @@ export interface SuccessMessage {
 
 export interface FailureMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: 1 | 2;
   readonly messageType: 'completed';
   readonly invocationId: string;
   readonly outcome: {
@@ -81,7 +91,11 @@ export interface FailureMessage {
 }
 
 export type CompletedMessage = SuccessMessage | FailureMessage;
-export type ScriptHostMessage = ReadyMessage | ExecuteMessage | CompletedMessage;
+export type ScriptHostMessage =
+  | ReadyMessage
+  | ExecuteMessage
+  | CancelMessage
+  | CompletedMessage;
 
 export interface ScriptHostLimits {
   readonly maxContextBytes?: number;

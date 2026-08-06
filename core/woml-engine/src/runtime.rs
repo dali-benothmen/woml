@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::future::{poll_fn, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -12,9 +13,10 @@ use crate::engine::{
   resolve_context_reference, selected_branch_arm, BranchEvaluationError, BranchEvaluationErrorKind,
 };
 use crate::event::{
-  BranchSelectedData, ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData,
-  RunFailedData, RunFailedDataV1, RunFailedDataV2, RunSucceededData, StepAttemptFailedData,
-  StepAttemptStartedData, StepAttemptSucceededData,
+  BranchSelectedData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
+  RunFailedDataV3, RunSucceededData, StepAttemptFailedData, StepAttemptStartedData,
+  StepAttemptSucceededData,
 };
 use crate::model::{ParallelGroupDefinition, ValueExpression};
 use crate::protocol::{ExecuteMessage, HostOutcome};
@@ -69,14 +71,12 @@ pub enum RuntimeExecutionError {
   RunFailed(Box<FailedRunDetails>),
   #[error(transparent)]
   BranchFailed(Box<FailedBranchDetails>),
+  #[error(transparent)]
+  ParallelFailed(Box<FailedParallelDetails>),
   #[error("workflow execution stalled: {0}")]
   Stalled(String),
   #[error("runtime configuration is invalid: {0}")]
   InvalidConfiguration(String),
-  #[error(
-    "parallel group {parallel_id:?} recorded a child failure; failure-policy handling is enabled in P5"
-  )]
-  ParallelFailurePolicyPending { parallel_id: String },
 }
 
 #[derive(Debug, Error)]
@@ -98,6 +98,20 @@ pub struct FailedBranchDetails {
   pub path: Option<Vec<String>>,
   pub site: BranchFailureSite,
   pub failure: BranchFailure,
+  pub events: Vec<RunEvent>,
+}
+
+#[derive(Debug, Error)]
+#[error("workflow parallel group failed [{code}]: {message}")]
+pub struct FailedParallelDetails {
+  pub code: String,
+  pub message: String,
+  pub parallel_id: String,
+  pub policy: ParallelFailurePolicy,
+  pub primary_node_id: String,
+  pub failed_node_ids: Vec<String>,
+  pub cancelled_node_ids: Vec<String>,
+  pub failure: ParallelFailure,
   pub events: Vec<RunEvent>,
 }
 
@@ -353,12 +367,17 @@ struct ParallelInvocationCompletion {
 type ParallelInvocationFuture<'a> =
   Pin<Box<dyn Future<Output = ParallelInvocationCompletion> + Send + 'a>>;
 
+struct ActiveParallelInvocation<'a> {
+  invocation_id: String,
+  future: ParallelInvocationFuture<'a>,
+}
+
 async fn next_parallel_completion(
-  active: &mut Vec<ParallelInvocationFuture<'_>>,
+  active: &mut Vec<ActiveParallelInvocation<'_>>,
 ) -> Option<ParallelInvocationCompletion> {
   poll_fn(|context| {
     for index in 0..active.len() {
-      if let Poll::Ready(completion) = active[index].as_mut().poll(context) {
+      if let Poll::Ready(completion) = active[index].future.as_mut().poll(context) {
         drop(active.swap_remove(index));
         return Poll::Ready(Some(completion));
       }
@@ -463,6 +482,16 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
   options: &RuntimeExecutionOptions,
   host: &ScriptHostClient,
 ) -> Result<Vec<String>, RuntimeExecutionError> {
+  let policy = match group.on_error.as_str() {
+    "fail-fast" => ParallelFailurePolicy::FailFast,
+    "wait-all" => ParallelFailurePolicy::WaitAll,
+    _ => {
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "parallel group {:?} has an unknown failure policy",
+        group.parallel_id
+      )));
+    }
+  };
   let projection = engine.projection(run_id)?;
   let fork_context = projection
     .parallel_groups
@@ -485,12 +514,15 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
   drop(attempted);
 
   let mut next_child = 0;
-  let mut child_failed = false;
+  let mut primary_failure: Option<String> = None;
+  let mut failed_nodes = HashSet::new();
+  let mut cancelled_nodes = HashSet::new();
   let mut completion_order = Vec::new();
-  let mut active: Vec<ParallelInvocationFuture<'_>> = Vec::new();
+  let mut active: Vec<ActiveParallelInvocation<'_>> = Vec::new();
 
   loop {
-    while !child_failed && active.len() < group.concurrency && next_child < child_ids.len() {
+    let may_schedule = policy == ParallelFailurePolicy::WaitAll || primary_failure.is_none();
+    while may_schedule && active.len() < group.concurrency && next_child < child_ids.len() {
       let node_id = child_ids[next_child].clone();
       next_child += 1;
       let source = engine
@@ -511,16 +543,19 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
           handler: "runtime.script".to_string(),
         }),
       )?;
-      active.push(Box::pin(invoke_parallel_child(
-        host,
-        run_id.to_string(),
-        node_id,
-        invocation_id,
-        source,
-        fork_context.clone(),
-        options.script_timeout_ms,
-        options.max_context_bytes,
-      )));
+      active.push(ActiveParallelInvocation {
+        invocation_id: invocation_id.clone(),
+        future: Box::pin(invoke_parallel_child(
+          host,
+          run_id.to_string(),
+          node_id,
+          invocation_id,
+          source,
+          fork_context.clone(),
+          options.script_timeout_ms,
+          options.max_context_bytes,
+        )),
+      });
     }
 
     let Some(completion) = next_parallel_completion(&mut active).await else {
@@ -538,7 +573,8 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         }),
       )?,
       Err(failure) => {
-        child_failed = true;
+        let node_id = completion.node_id.clone();
+        let cancellation = failure.kind == AttemptFailureKind::InvocationCancelled;
         engine.append_payload(
           run_id,
           RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
@@ -548,14 +584,88 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             failure,
           }),
         )?;
+        if cancellation {
+          cancelled_nodes.insert(node_id);
+        } else {
+          failed_nodes.insert(node_id.clone());
+          if primary_failure.is_none() {
+            primary_failure = Some(node_id);
+            if policy == ParallelFailurePolicy::FailFast {
+              let active_invocation_ids = active
+                .iter()
+                .map(|invocation| invocation.invocation_id.clone())
+                .collect::<Vec<_>>();
+              for invocation_id in active_invocation_ids {
+                let _ = host.cancel(&invocation_id).await;
+              }
+            }
+          }
+        }
       }
     }
   }
 
-  if child_failed {
-    return Err(RuntimeExecutionError::ParallelFailurePolicyPending {
-      parallel_id: group.parallel_id,
-    });
+  if let Some(primary_node_id) = primary_failure {
+    let failed_node_ids = group
+      .child_node_ids
+      .iter()
+      .filter(|node_id| failed_nodes.contains(*node_id))
+      .cloned()
+      .collect::<Vec<_>>();
+    let cancelled_node_ids = group
+      .child_node_ids
+      .iter()
+      .filter(|node_id| cancelled_nodes.contains(*node_id))
+      .cloned()
+      .collect::<Vec<_>>();
+    let message = match policy {
+      ParallelFailurePolicy::FailFast => {
+        "A parallel child failed; active siblings were cancelled.".to_string()
+      }
+      ParallelFailurePolicy::WaitAll if failed_node_ids.len() == 1 => {
+        "One parallel child failed.".to_string()
+      }
+      ParallelFailurePolicy::WaitAll => {
+        format!("{} parallel children failed.", failed_node_ids.len())
+      }
+    };
+    let failure = ParallelFailure {
+      kind: "parallel_child_failed".to_string(),
+      code: "WOML_PARALLEL_CHILD_FAILED".to_string(),
+      message: message.clone(),
+    };
+    engine.append_payloads(
+      run_id,
+      vec![
+        RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+          parallel_id: group.parallel_id.clone(),
+          outcome: ParallelGroupOutcome::Failed,
+          failed_node_ids: failed_node_ids.clone(),
+          cancelled_node_ids: cancelled_node_ids.clone(),
+        }),
+        RunEventPayload::RunFailed(RunFailedData::V3(RunFailedDataV3::Parallel {
+          parallel_id: group.parallel_id.clone(),
+          policy,
+          primary_node_id: primary_node_id.clone(),
+          failed_node_ids: failed_node_ids.clone(),
+          cancelled_node_ids: cancelled_node_ids.clone(),
+          failure: failure.clone(),
+        })),
+      ],
+    )?;
+    return Err(RuntimeExecutionError::ParallelFailed(Box::new(
+      FailedParallelDetails {
+        code: failure.code.clone(),
+        message,
+        parallel_id: group.parallel_id,
+        policy,
+        primary_node_id,
+        failed_node_ids,
+        cancelled_node_ids,
+        failure,
+        events: engine.events(run_id)?,
+      },
+    )));
   }
   if next_child != child_ids.len() {
     return Err(RuntimeExecutionError::Stalled(format!(
@@ -705,12 +815,14 @@ fn fail_attempt<T, E: RuntimeDagEngine>(
         invocation_id: Some(invocation_id.to_string()),
         failure: failure.clone(),
       }),
-      RUN_EVENT_SCHEMA_VERSION_V2 => RunFailedData::V2(RunFailedDataV2::Attempt {
-        node_id: node_id.to_string(),
-        attempt: 1,
-        invocation_id: invocation_id.to_string(),
-        failure: failure.clone(),
-      }),
+      RUN_EVENT_SCHEMA_VERSION_V2 | crate::RUN_EVENT_SCHEMA_VERSION_V3 => {
+        RunFailedData::V2(RunFailedDataV2::Attempt {
+          node_id: node_id.to_string(),
+          attempt: 1,
+          invocation_id: invocation_id.to_string(),
+          failure: failure.clone(),
+        })
+      }
       _ => unreachable!("compiled models select a supported run-event version"),
     }),
   )?;
@@ -807,6 +919,16 @@ trait RuntimeDagEngine {
   fn projection(&self, run_id: &str) -> Result<RunProjection, RuntimeExecutionError>;
   fn events(&self, run_id: &str) -> Result<Vec<RunEvent>, RuntimeExecutionError>;
   fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, RuntimeExecutionError>;
+  fn append_payloads(
+    &mut self,
+    run_id: &str,
+    payloads: Vec<RunEventPayload>,
+  ) -> Result<(), RuntimeExecutionError> {
+    for payload in payloads {
+      self.append_payload(run_id, payload)?;
+    }
+    Ok(())
+  }
   fn event_schema_version(&self) -> u32 {
     run_event_schema_version_for_model(self.workflow().schema_version)
   }
@@ -916,6 +1038,15 @@ impl RuntimeDagEngine for DurableDagEngine {
 
   fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, RuntimeExecutionError> {
     Ok(self.ready_node_ids(run_id)?)
+  }
+
+  fn append_payloads(
+    &mut self,
+    run_id: &str,
+    payloads: Vec<RunEventPayload>,
+  ) -> Result<(), RuntimeExecutionError> {
+    self.append_payloads_atomically(run_id, payloads)?;
+    Ok(())
   }
 
   fn publish_pure_result(

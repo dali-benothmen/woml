@@ -965,6 +965,22 @@ impl DurableDagEngine {
       .map_err(DurableEngineError::Contract)
   }
 
+  pub(crate) fn append_payloads_atomically(
+    &mut self,
+    run_id: &str,
+    payloads: Vec<RunEventPayload>,
+  ) -> Result<RunProjection, DurableEngineError> {
+    Ok(
+      self.store.append_payloads_atomically(
+        run_id,
+        payloads
+          .into_iter()
+          .map(|payload| (generated_event_id(), Utc::now(), payload))
+          .collect(),
+      )?,
+    )
+  }
+
   pub fn recover_interrupted_runs(&mut self) -> Result<RecoveryReport, DurableEngineError> {
     Ok(self.store.recover_interrupted_runs()?)
   }

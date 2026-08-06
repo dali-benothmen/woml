@@ -33,7 +33,7 @@ pub use projection::{
 };
 pub use runtime::{
   execute_workflow, execute_workflow_durable, recover_durable_runs, BranchFailureSite,
-  RuntimeExecutionError, RuntimeExecutionOptions, WorkflowExecutionResult,
+  FailedParallelDetails, RuntimeExecutionError, RuntimeExecutionOptions, WorkflowExecutionResult,
 };
 pub use store::{EventStoreError, InMemoryEventStore};
 

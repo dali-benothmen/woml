@@ -1,6 +1,7 @@
 import { findJsonViolation } from './json';
-import { assertExecuteMessage, MessageProtocolError } from './protocol';
+import { assertInboundMessage, MessageProtocolError } from './protocol';
 import type {
+  CancelMessage,
   CompletedMessage,
   ExecuteMessage,
   FailureMessage,
@@ -15,11 +16,13 @@ export interface ScriptHostOptions {
   readonly workerUrl: URL;
   readonly limits?: ScriptHostLimits;
   readonly send: (message: CompletedMessage) => Promise<void>;
+  readonly protocolVersion?: 1 | 2;
 }
 
 type WorkerOutcome =
   | { readonly kind: 'response'; readonly response: ScriptWorkerResponse }
   | { readonly kind: 'timeout' }
+  | { readonly kind: 'cancelled' }
   | { readonly kind: 'crashed'; readonly message: string };
 
 function elapsedMilliseconds(startedAt: number): number {
@@ -29,11 +32,11 @@ function elapsedMilliseconds(startedAt: number): number {
 function failureMessage(
   request: ExecuteMessage,
   startedAt: number,
-  error: HostReportedFailure,
+  error: HostReportedFailure
 ): FailureMessage {
   return {
     protocol: 'woml.script-host',
-    protocolVersion: 1,
+    protocolVersion: request.protocolVersion,
     messageType: 'completed',
     invocationId: request.invocationId,
     outcome: { kind: 'failure', error },
@@ -44,11 +47,11 @@ function failureMessage(
 function successMessage(
   request: ExecuteMessage,
   startedAt: number,
-  value: JsonValue,
+  value: JsonValue
 ): SuccessMessage {
   return {
     protocol: 'woml.script-host',
-    protocolVersion: 1,
+    protocolVersion: request.protocolVersion,
     messageType: 'completed',
     invocationId: request.invocationId,
     outcome: { kind: 'success', value },
@@ -64,29 +67,37 @@ export class ScriptHost {
   readonly #workerUrl: URL;
   readonly #limits: ScriptHostLimits;
   readonly #send: (message: CompletedMessage) => Promise<void>;
+  readonly #protocolVersion: 1 | 2;
   readonly #tasks = new Map<string, Promise<void>>();
-  readonly #workers = new Set<Worker>();
+  readonly #workers = new Map<string, Worker>();
+  readonly #cancellations = new Map<string, () => void>();
   #aborted = false;
 
   constructor(options: ScriptHostOptions) {
     this.#workerUrl = options.workerUrl;
     this.#limits = options.limits ?? {};
     this.#send = options.send;
+    this.#protocolVersion = options.protocolVersion ?? 2;
   }
 
   accept(message: unknown): void {
     if (this.#aborted) {
       throw new MessageProtocolError('The script host is shutting down.');
     }
-    assertExecuteMessage(message);
+    assertInboundMessage(message, this.#protocolVersion);
+    if (message.messageType === 'cancel') {
+      this.#cancel(message);
+      return;
+    }
     if (this.#tasks.has(message.invocationId)) {
       throw new MessageProtocolError(
-        `Invocation ID "${message.invocationId}" is already active.`,
+        `Invocation ID "${message.invocationId}" is already active.`
       );
     }
 
     const task = this.#execute(message).finally(() => {
       this.#tasks.delete(message.invocationId);
+      this.#cancellations.delete(message.invocationId);
     });
     this.#tasks.set(message.invocationId, task);
   }
@@ -99,8 +110,13 @@ export class ScriptHost {
 
   abort(): void {
     this.#aborted = true;
-    for (const worker of this.#workers) worker.terminate();
+    for (const worker of this.#workers.values()) worker.terminate();
     this.#workers.clear();
+    this.#cancellations.clear();
+  }
+
+  #cancel(message: CancelMessage): void {
+    this.#cancellations.get(message.invocationId)?.();
   }
 
   async #execute(request: ExecuteMessage): Promise<void> {
@@ -119,7 +135,7 @@ export class ScriptHost {
             actualBytes: contextBytes,
             limitBytes: this.#limits.maxContextBytes,
           },
-        }),
+        })
       );
       return;
     }
@@ -131,7 +147,17 @@ export class ScriptHost {
           kind: 'script_timed_out',
           code: 'WOML_SCRIPT_TIMEOUT',
           message: 'Script exceeded its execution deadline.',
-        }),
+        })
+      );
+      return;
+    }
+    if (outcome.kind === 'cancelled') {
+      await this.#send(
+        failureMessage(request, startedAt, {
+          kind: 'invocation_cancelled',
+          code: 'WOML_SCRIPT_CANCELLED',
+          message: 'Invocation was cancelled by parallel fail-fast.',
+        })
       );
       return;
     }
@@ -141,7 +167,7 @@ export class ScriptHost {
           kind: 'worker_crashed',
           code: 'WOML_SCRIPT_WORKER_CRASHED',
           message: outcome.message,
-        }),
+        })
       );
       return;
     }
@@ -159,7 +185,7 @@ export class ScriptHost {
               ? 'WOML_SCRIPT_NON_JSON_RESULT'
               : 'WOML_SCRIPT_THROWN',
           message: response.error.message,
-        }),
+        })
       );
       return;
     }
@@ -171,7 +197,7 @@ export class ScriptHost {
           kind: 'invalid_script_result',
           code: 'WOML_SCRIPT_NON_JSON_RESULT',
           message: `${violation.path}: ${violation.reason}`,
-        }),
+        })
       );
       return;
     }
@@ -190,13 +216,13 @@ export class ScriptHost {
             actualBytes: resultBytes,
             limitBytes: this.#limits.maxResultBytes,
           },
-        }),
+        })
       );
       return;
     }
 
     await this.#send(
-      successMessage(request, startedAt, response.result as JsonValue),
+      successMessage(request, startedAt, response.result as JsonValue)
     );
   }
 
@@ -215,22 +241,26 @@ export class ScriptHost {
         message: 'The isolated script Worker could not be started.',
       });
     }
-    this.#workers.add(worker);
+    this.#workers.set(request.invocationId, worker);
 
-    return new Promise<WorkerOutcome>((resolve) => {
+    return new Promise<WorkerOutcome>(resolve => {
       let settled = false;
       const finish = (outcome: WorkerOutcome) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        this.#workers.delete(worker);
+        this.#workers.delete(request.invocationId);
+        this.#cancellations.delete(request.invocationId);
         worker.terminate();
         resolve(outcome);
       };
       const timeout = setTimeout(
         () => finish({ kind: 'timeout' }),
-        request.timeoutMs,
+        request.timeoutMs
       );
+      this.#cancellations.set(request.invocationId, () => {
+        finish({ kind: 'cancelled' });
+      });
 
       worker.onmessage = (event: MessageEvent<ScriptWorkerResponse>) => {
         finish({ kind: 'response', response: event.data });
@@ -264,7 +294,8 @@ export class ScriptHost {
       } catch {
         finish({
           kind: 'crashed',
-          message: 'The invocation could not be delivered to its script Worker.',
+          message:
+            'The invocation could not be delivered to its script Worker.',
         });
       }
     });

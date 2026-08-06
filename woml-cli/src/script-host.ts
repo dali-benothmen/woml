@@ -2,10 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import {
-  FrameDecoder,
-  SerializedFrameWriter,
-} from './script-host/framing';
+import { FrameDecoder, SerializedFrameWriter } from './script-host/framing';
 import { ScriptHost } from './script-host/host';
 import type { ReadyMessage, ScriptHostLimits } from './script-host/types';
 
@@ -27,9 +24,15 @@ function limitsFromEnvironment(): ScriptHostLimits {
   };
 }
 
+function protocolVersionFromEnvironment(): 1 | 2 {
+  const raw = process.env.WOML_SCRIPT_HOST_PROTOCOL_VERSION ?? '2';
+  if (raw === '1' || raw === '2') return Number(raw) as 1 | 2;
+  throw new Error('WOML_SCRIPT_HOST_PROTOCOL_VERSION must be 1 or 2.');
+}
+
 async function writeStdout(frame: Uint8Array): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    process.stdout.write(frame, (error) => {
+    process.stdout.write(frame, error => {
       if (error === null || error === undefined) resolve();
       else reject(error);
     });
@@ -38,6 +41,7 @@ async function writeStdout(frame: Uint8Array): Promise<void> {
 
 export async function runScriptHost(): Promise<void> {
   const limits = limitsFromEnvironment();
+  const protocolVersion = protocolVersionFromEnvironment();
   const decoder = new FrameDecoder({ maxFrameBytes: limits.maxFrameBytes });
   const writer = new SerializedFrameWriter(writeStdout);
   const workerEntry = import.meta.url.endsWith('.ts')
@@ -46,11 +50,12 @@ export async function runScriptHost(): Promise<void> {
   const host = new ScriptHost({
     workerUrl: new URL(workerEntry, import.meta.url),
     limits,
-    send: (message) => writer.send(message),
+    protocolVersion,
+    send: message => writer.send(message),
   });
   const ready: ReadyMessage = {
     protocol: 'woml.script-host',
-    protocolVersion: 1,
+    protocolVersion,
     messageType: 'ready',
     hostInstanceId: `host_${randomUUID()}`,
   };
@@ -68,7 +73,10 @@ export async function runScriptHost(): Promise<void> {
     await writer.drain();
   } catch (error) {
     host.abort();
-    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const message =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
     process.stderr.write(`WOML script host failed: ${message}\n`);
     process.exitCode = 1;
   }

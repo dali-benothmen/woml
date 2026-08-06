@@ -5,7 +5,7 @@ use uuid::Uuid;
 use woml_engine::model::ValueExpression;
 use woml_engine::{
   execute_workflow, execute_workflow_durable, CompiledWorkflowDefinition, ParallelGroupOutcome,
-  RunEventPayload, RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
+  RunEventPayload, RuntimeExecutionOptions, ScriptHostProcessOptions,
 };
 
 const MODEL: &str = include_str!("../../../woml/tests/fixtures/parallel.compiled.v3.json");
@@ -280,25 +280,4 @@ async fn durable_parallel_execution_serializes_events_and_reopens_as_complete() 
   let reopened = store.projection(&result.run_id).unwrap();
   assert_eq!(reopened.status, woml_engine::RunStatus::Succeeded);
   assert_eq!(reopened.context, result.context);
-}
-
-#[tokio::test]
-async fn child_failure_stays_explicitly_gated_until_p5() {
-  let Some(host) = host_options() else {
-    return;
-  };
-  let mut workflow = model();
-  set_script(
-    &mut workflow,
-    "loadWeather",
-    "throw new Error('no weather');",
-  );
-  let error = execute_workflow(workflow, HASH.to_string(), Map::new(), options(host))
-    .await
-    .unwrap_err();
-  assert!(matches!(
-    error,
-    RuntimeExecutionError::ParallelFailurePolicyPending { parallel_id }
-      if parallel_id == "fieldData"
-  ));
 }

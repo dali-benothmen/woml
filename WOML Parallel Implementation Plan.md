@@ -1,6 +1,6 @@
 # WOML Parallel Implementation Plan
 
-Status: P0–P4 complete — P5 failure policies and cancellation are next
+Status: P0–P5 complete — P6 CLI exposure and diagnostics are next
 
 ## 1. Product Outcome
 
@@ -627,7 +627,7 @@ The reviewed event log shows multiple attempt starts before the first terminal
 attempt, maximum active count never exceeds `concurrency`, and no child can
 observe a sibling output.
 
-### P5 — Implement failure policies and cancellation
+### P5 — Implement failure policies and cancellation — complete
 
 Changes:
 

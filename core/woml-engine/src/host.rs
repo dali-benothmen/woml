@@ -13,7 +13,7 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-use crate::protocol::{CompletedMessage, ExecuteMessage, ReadyMessage};
+use crate::protocol::{CancelMessage, CompletedMessage, ExecuteMessage, ReadyMessage};
 
 const HEADER_PREFIX: &str = "Content-Length: ";
 const MAX_HEADER_BYTES: usize = 128;
@@ -158,6 +158,17 @@ impl ScriptHostClient {
         "the completion channel closed without a response".to_string(),
       ))
     })
+  }
+
+  pub async fn cancel(&self, invocation_id: &str) -> Result<(), ScriptHostClientError> {
+    if let Err(error) = self
+      .write_message(&CancelMessage::parallel_fail_fast(invocation_id))
+      .await
+    {
+      fail_all(&self.shared, error.clone()).await;
+      return Err(error);
+    }
+    Ok(())
   }
 
   async fn write_message<T: Serialize>(&self, message: &T) -> Result<(), ScriptHostClientError> {
