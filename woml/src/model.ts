@@ -77,6 +77,11 @@ export interface TruthyEdgeCondition {
   readonly value: ValueExpression;
 }
 
+export interface BooleanEdgeCondition {
+  readonly kind: 'boolean';
+  readonly value: ContextReferenceExpression;
+}
+
 export interface EqualsEdgeCondition {
   readonly kind: 'equals';
   readonly left: ValueExpression;
@@ -85,6 +90,7 @@ export interface EqualsEdgeCondition {
 
 export type EdgeCondition =
   | AlwaysEdgeCondition
+  | BooleanEdgeCondition
   | TruthyEdgeCondition
   | EqualsEdgeCondition;
 
@@ -124,13 +130,26 @@ export interface CompiledWorkflowGraph {
   readonly edges: readonly CompiledWorkflowEdge[];
 }
 
-export interface CompiledWorkflowDefinition {
-  readonly schemaVersion: 1;
+interface CompiledWorkflowDefinitionBase {
   readonly workflowId: string;
   readonly metadata?: CompiledWorkflowMetadata;
   readonly triggers: readonly CompiledTrigger[];
   readonly graph: CompiledWorkflowGraph;
 }
+
+export interface CompiledWorkflowDefinitionV1
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 1;
+}
+
+export interface CompiledWorkflowDefinitionV2
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 2;
+}
+
+export type CompiledWorkflowDefinition =
+  | CompiledWorkflowDefinitionV1
+  | CompiledWorkflowDefinitionV2;
 
 export interface CompiledGraphIssue {
   readonly code:
@@ -141,7 +160,10 @@ export interface CompiledGraphIssue {
     | 'INVALID_ENTRY_NODE'
     | 'UNREACHABLE_NODE'
     | 'CYCLIC_GRAPH'
-    | 'TERMINAL_NODE_COUNT';
+    | 'TERMINAL_NODE_COUNT'
+    | 'INVALID_BRANCH_SELECTOR'
+    | 'INVALID_BRANCH_GROUP'
+    | 'INVALID_BRANCH_RESULT';
   readonly message: string;
 }
 
@@ -269,5 +291,183 @@ export function inspectCompiledWorkflowGraph(
     }
   }
 
+  inspectBranchGroups(graph, issues);
+
   return issues;
+}
+
+const publicStructuralIdPattern = /^[a-z][A-Za-z0-9]*$/;
+
+function isBranchContextReference(
+  expression: ValueExpression | undefined,
+): expression is ContextReferenceExpression {
+  if (expression?.kind !== 'contextReference') return false;
+  const [root, structuralId] = expression.path;
+  return (
+    (root === 'trigger' && expression.path.length >= 1) ||
+    (root === 'steps' &&
+      structuralId !== undefined &&
+      publicStructuralIdPattern.test(structuralId))
+  );
+}
+
+function inspectBranchGroups(
+  graph: CompiledWorkflowGraph,
+  issues: CompiledGraphIssue[],
+): void {
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const groups = new Map<string, CompiledWorkflowEdge[]>();
+
+  for (const edge of graph.edges) {
+    if (edge.branchId === undefined) {
+      if (edge.condition.kind === 'boolean') {
+        issues.push({
+          code: 'INVALID_BRANCH_GROUP',
+          message: `Boolean edge "${edge.id}" must carry a branchId.`,
+        });
+      }
+      continue;
+    }
+    const group = groups.get(edge.branchId) ?? [];
+    group.push(edge);
+    groups.set(edge.branchId, group);
+  }
+
+  for (const node of graph.nodes) {
+    if (node.handler === 'engine.branch-select') {
+      const match = /^__woml_branch__([a-z][A-Za-z0-9]*)__select$/.exec(
+        node.id,
+      );
+      const branchId = match?.[1];
+      const inputsAreEmpty =
+        node.inputs.kind === 'object' &&
+        Object.keys(node.inputs.fields).length === 0;
+      if (branchId === undefined || !inputsAreEmpty || !groups.has(branchId)) {
+        issues.push({
+          code: 'INVALID_BRANCH_SELECTOR',
+          message: `Branch selector "${node.id}" does not match the frozen selector identity, inputs, and edge-group contract.`,
+        });
+      }
+    }
+  }
+
+  for (const [branchId, edges] of groups) {
+    const selectorId = `__woml_branch__${branchId}__select`;
+    const selector = nodes.get(selectorId);
+    const selectorOutgoing = graph.edges.filter(
+      (edge) => edge.from === selectorId,
+    );
+    if (
+      !publicStructuralIdPattern.test(branchId) ||
+      selector?.handler !== 'engine.branch-select' ||
+      edges.some((edge) => edge.from !== selectorId) ||
+      selectorOutgoing.length !== edges.length ||
+      selectorOutgoing.some((edge) => edge.branchId !== branchId)
+    ) {
+      issues.push({
+        code: 'INVALID_BRANCH_GROUP',
+        message: `Branch group "${branchId}" must originate from its canonical selector.`,
+      });
+    }
+
+    const whenEdges = edges.slice(0, -1);
+    const otherwiseEdge = edges.at(-1);
+    const validWhens =
+      whenEdges.length > 0 &&
+      whenEdges.every(
+        (edge, index) =>
+          edge.id === `${branchId}:when:${index}` &&
+          edge.condition.kind === 'boolean' &&
+          isBranchContextReference(edge.condition.value),
+      );
+    const validOtherwise =
+      otherwiseEdge?.id === `${branchId}:otherwise` &&
+      otherwiseEdge.condition.kind === 'always';
+    if (!validWhens || !validOtherwise) {
+      issues.push({
+        code: 'INVALID_BRANCH_GROUP',
+        message: `Branch group "${branchId}" must contain contiguous ordered boolean cases followed by one fallback.`,
+      });
+    }
+
+    const result = nodes.get(branchId);
+    const fields = result?.inputs.kind === 'object' ? result.inputs.fields : {};
+    const expectedKeys = edges.map((edge) => edge.id);
+    const actualKeys = Object.keys(fields);
+    if (
+      result?.handler !== 'engine.branch-result' ||
+      actualKeys.length !== expectedKeys.length ||
+      expectedKeys.some((key) => !isBranchContextReference(fields[key]))
+    ) {
+      issues.push({
+        code: 'INVALID_BRANCH_RESULT',
+        message: `Branch result "${branchId}" must expose one context reference for every ordered branch arm.`,
+      });
+    }
+
+    const incomingResultEdges = graph.edges.filter(
+      (edge) => edge.to === branchId,
+    );
+    const validJoins =
+      incomingResultEdges.length === edges.length &&
+      incomingResultEdges.every(
+        (edge) =>
+          edge.branchId === undefined && edge.condition.kind === 'always',
+      );
+    const adjacency = new Map<string, string[]>();
+    for (const edge of graph.edges) {
+      const outgoing = adjacency.get(edge.from) ?? [];
+      outgoing.push(edge.to);
+      adjacency.set(edge.from, outgoing);
+    }
+    const routeNodeSets = edges.map((edge) => {
+      const visited = new Set<string>();
+      const queue = [edge.to];
+      let reachesResult = false;
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (current === branchId) {
+          reachesResult = true;
+          continue;
+        }
+        if (visited.has(current)) continue;
+        visited.add(current);
+        queue.push(...(adjacency.get(current) ?? []));
+      }
+      return { reachesResult, visited };
+    });
+    const routesAreDisjoint = routeNodeSets.every((route, index) =>
+      routeNodeSets
+        .slice(index + 1)
+        .every(
+          (other) =>
+            ![...route.visited].some((nodeId) => other.visited.has(nodeId)),
+        ),
+    );
+    const joinsBelongToDistinctRoutes = incomingResultEdges.every(
+      (join) =>
+        routeNodeSets.filter((route) => route.visited.has(join.from)).length ===
+        1,
+    );
+    if (
+      !validJoins ||
+      routeNodeSets.some((route) => !route.reachesResult) ||
+      !routesAreDisjoint ||
+      !joinsBelongToDistinctRoutes
+    ) {
+      issues.push({
+        code: 'INVALID_BRANCH_GROUP',
+        message: `Branch group "${branchId}" must contain disjoint routes with one ordinary join into its result per arm.`,
+      });
+    }
+  }
+
+  for (const node of graph.nodes) {
+    if (node.handler === 'engine.branch-result' && !groups.has(node.id)) {
+      issues.push({
+        code: 'INVALID_BRANCH_RESULT',
+        message: `Branch result "${node.id}" has no matching branch edge group.`,
+      });
+    }
+  }
 }

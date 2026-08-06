@@ -1,7 +1,7 @@
 # WOML Branch Implementation Plan
 
-Status: B0–B1 complete — branch contracts are frozen and the WOML frontend
-validates branch syntax; B2 is next
+Status: B0–B2 complete — branch syntax compiles into the frozen model-v2 DAG
+and Rust validates it structurally; B3 is next
 
 ## 1. Product Outcome
 
@@ -480,7 +480,7 @@ Completed proof:
 - Sequential model-v1 compilation remains unchanged and all frontend and CLI
   regression tests pass.
 
-### B2 — Lower branches into the compiled DAG
+### B2 — Lower branches into the compiled DAG — complete
 
 Changes:
 
@@ -510,7 +510,23 @@ Reuse:
 Result:
 
 The reviewed branch WOML fixture compiles deterministically into the reviewed
-language-neutral DAG, and Rust accepts that DAG as structurally executable.
+language-neutral DAG, and Rust accepts that DAG as structurally valid while
+branch execution remains gated until B4.
+
+Completed proof:
+
+- Sequential workflows remain byte-for-structure compatible model-v1
+  definitions; workflows containing branches become model v2.
+- Recursive lowering emits canonical selector, ordered arm, route, result/join,
+  and downstream nodes and edges.
+- The reviewed `branch.woml` compiles exactly to
+  `branch.compiled.v2.json` and retains its frozen definition hash.
+- TypeScript and Rust independently reject malformed selectors, arm ordering,
+  references, result maps, missing joins, overlapping routes, unreachable
+  nodes, and cycles.
+- Rust deserializes and structurally validates model v2 while deliberately
+  rejecting branch execution until conditional scheduling is implemented in
+  B4.
 
 ### B3 — Add durable branch selection and folding
 

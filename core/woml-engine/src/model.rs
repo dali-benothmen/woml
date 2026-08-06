@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::COMPILED_MODEL_SCHEMA_VERSION;
+use crate::{COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -102,6 +102,8 @@ pub enum TemplatePart {
 pub enum EdgeCondition {
   #[serde(rename = "always")]
   Always,
+  #[serde(rename = "boolean")]
+  Boolean { value: ValueExpression },
   #[serde(rename = "truthy")]
   Truthy { value: ValueExpression },
   #[serde(rename = "equals")]
@@ -163,6 +165,9 @@ pub enum ModelIssueCode {
   UnsupportedTimeout,
   UnsupportedNonSequentialDag,
   InvalidValueExpression,
+  InvalidBranchSelector,
+  InvalidBranchGroup,
+  InvalidBranchResult,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -201,6 +206,33 @@ fn issue(code: ModelIssueCode, message: impl Into<String>) -> ModelIssue {
 
 fn valid_id(value: &str) -> bool {
   !value.is_empty() && value.chars().count() <= 256
+}
+
+fn valid_public_structural_id(value: &str) -> bool {
+  let mut characters = value.chars();
+  matches!(characters.next(), Some(first) if first.is_ascii_lowercase())
+    && characters.all(|character| character.is_ascii_alphanumeric())
+    && value.chars().count() <= 256
+}
+
+fn selector_branch_id(value: &str) -> Option<&str> {
+  value
+    .strip_prefix("__woml_branch__")?
+    .strip_suffix("__select")
+    .filter(|branch_id| valid_public_structural_id(branch_id))
+}
+
+fn is_branch_context_reference(expression: &ValueExpression) -> bool {
+  let ValueExpression::ContextReference { path } = expression else {
+    return false;
+  };
+  match path.as_slice() {
+    [root, rest @ ..] if root == "trigger" => rest.iter().all(|segment| !segment.is_empty()),
+    [root, structural_id, rest @ ..] if root == "steps" => {
+      valid_public_structural_id(structural_id) && rest.iter().all(|segment| !segment.is_empty())
+    }
+    _ => false,
+  }
 }
 
 fn inspect_expression(expression: &ValueExpression, at: &str, issues: &mut Vec<ModelIssue>) {
@@ -247,6 +279,225 @@ fn inspect_expression(expression: &ValueExpression, at: &str, issues: &mut Vec<M
   }
 }
 
+fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec<ModelIssue>) {
+  let nodes: HashMap<&str, &CompiledWorkflowNode> = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| (node.id.as_str(), node))
+    .collect();
+  let mut groups: BTreeMap<&str, Vec<&CompiledWorkflowEdge>> = BTreeMap::new();
+  let mut adjacency: HashMap<&str, Vec<&str>> = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| (node.id.as_str(), Vec::new()))
+    .collect();
+  for edge in &workflow.graph.edges {
+    adjacency
+      .entry(edge.from.as_str())
+      .or_default()
+      .push(edge.to.as_str());
+  }
+
+  for edge in &workflow.graph.edges {
+    if workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V2
+      && matches!(
+        edge.condition,
+        EdgeCondition::Truthy { .. } | EdgeCondition::Equals { .. }
+      )
+    {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedEdgeCondition,
+        format!(
+          "Model v2 edge {:?} uses a condition outside the frozen branch profile.",
+          edge.id
+        ),
+      ));
+    }
+    if workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V1
+      && matches!(edge.condition, EdgeCondition::Boolean { .. })
+    {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedEdgeCondition,
+        format!(
+          "Model v1 edge {:?} cannot use a boolean condition.",
+          edge.id
+        ),
+      ));
+    }
+
+    if let Some(branch_id) = edge.branch_id.as_deref() {
+      groups.entry(branch_id).or_default().push(edge);
+    } else if matches!(edge.condition, EdgeCondition::Boolean { .. }) {
+      issues.push(issue(
+        ModelIssueCode::InvalidBranchGroup,
+        format!("Boolean edge {:?} must carry a branchId.", edge.id),
+      ));
+    }
+  }
+
+  if workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V1 && !groups.is_empty() {
+    issues.push(issue(
+      ModelIssueCode::InvalidBranchGroup,
+      "Compiled model v1 cannot contain frozen model-v2 branch groups.",
+    ));
+  }
+
+  for (branch_id, edges) in &groups {
+    let selector_id = format!("__woml_branch__{branch_id}__select");
+    let selector = nodes.get(selector_id.as_str()).copied();
+    let selector_inputs_are_empty = matches!(
+      selector.map(|node| &node.inputs),
+      Some(ValueExpression::Object { fields }) if fields.is_empty()
+    );
+    let selector_outgoing: Vec<_> = workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.from == selector_id)
+      .collect();
+    if !valid_public_structural_id(branch_id)
+      || selector.map(|node| node.handler.as_str()) != Some("engine.branch-select")
+      || !selector_inputs_are_empty
+      || edges.iter().any(|edge| edge.from != selector_id)
+      || selector_outgoing.len() != edges.len()
+      || selector_outgoing
+        .iter()
+        .any(|edge| edge.branch_id.as_deref() != Some(*branch_id))
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidBranchSelector,
+        format!(
+          "Branch group {branch_id:?} must originate exclusively from its canonical empty selector."
+        ),
+      ));
+    }
+
+    let (otherwise, when_edges) = match edges.split_last() {
+      Some(parts) => parts,
+      None => {
+        issues.push(issue(
+          ModelIssueCode::InvalidBranchGroup,
+          format!("Branch group {branch_id:?} has no cases."),
+        ));
+        continue;
+      }
+    };
+    let valid_when_edges = !when_edges.is_empty()
+      && when_edges.iter().enumerate().all(|(index, edge)| {
+        edge.id == format!("{branch_id}:when:{index}")
+          && matches!(&edge.condition, EdgeCondition::Boolean { value } if is_branch_context_reference(value))
+      });
+    let valid_otherwise = otherwise.id == format!("{branch_id}:otherwise")
+      && matches!(otherwise.condition, EdgeCondition::Always);
+    if !valid_when_edges || !valid_otherwise {
+      issues.push(issue(
+        ModelIssueCode::InvalidBranchGroup,
+        format!(
+          "Branch group {branch_id:?} must contain contiguous ordered boolean cases followed by one fallback."
+        ),
+      ));
+    }
+
+    let result = nodes.get(branch_id).copied();
+    let expected_keys: HashSet<&str> = edges.iter().map(|edge| edge.id.as_str()).collect();
+    let valid_result_inputs = match result.map(|node| &node.inputs) {
+      Some(ValueExpression::Object { fields }) => {
+        fields.len() == expected_keys.len()
+          && fields.iter().all(|(key, value)| {
+            expected_keys.contains(key.as_str()) && is_branch_context_reference(value)
+          })
+      }
+      _ => false,
+    };
+    if result.map(|node| node.handler.as_str()) != Some("engine.branch-result")
+      || !valid_result_inputs
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidBranchResult,
+        format!(
+          "Branch result {branch_id:?} must expose one context reference for every branch arm."
+        ),
+      ));
+    }
+
+    let incoming_result_edges: Vec<_> = workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.to.as_str() == *branch_id)
+      .collect();
+    let valid_joins = incoming_result_edges.len() == edges.len()
+      && incoming_result_edges
+        .iter()
+        .all(|edge| edge.branch_id.is_none() && matches!(edge.condition, EdgeCondition::Always));
+    let route_sets: Vec<_> = edges
+      .iter()
+      .map(|edge| {
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::from([edge.to.as_str()]);
+        let mut reaches_result = false;
+        while let Some(current) = queue.pop_front() {
+          if current == *branch_id {
+            reaches_result = true;
+            continue;
+          }
+          if !visited.insert(current) {
+            continue;
+          }
+          queue.extend(adjacency.get(current).into_iter().flatten().copied());
+        }
+        (reaches_result, visited)
+      })
+      .collect();
+    let routes_are_disjoint = route_sets.iter().enumerate().all(|(index, (_, route))| {
+      route_sets[index + 1..]
+        .iter()
+        .all(|(_, other)| route.is_disjoint(other))
+    });
+    let joins_belong_to_distinct_routes = incoming_result_edges.iter().all(|join| {
+      route_sets
+        .iter()
+        .filter(|(_, route)| route.contains(join.from.as_str()))
+        .count()
+        == 1
+    });
+    if !valid_joins
+      || route_sets.iter().any(|(reaches, _)| !reaches)
+      || !routes_are_disjoint
+      || !joins_belong_to_distinct_routes
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidBranchGroup,
+        format!(
+          "Branch group {branch_id:?} must contain disjoint routes with one ordinary join into its result per arm."
+        ),
+      ));
+    }
+  }
+
+  for node in &workflow.graph.nodes {
+    if node.handler == "engine.branch-select" {
+      let branch_id = selector_branch_id(&node.id);
+      if branch_id.is_none_or(|id| !groups.contains_key(id)) {
+        issues.push(issue(
+          ModelIssueCode::InvalidBranchSelector,
+          format!(
+            "Branch selector {:?} has no matching canonical edge group.",
+            node.id
+          ),
+        ));
+      }
+    } else if node.handler == "engine.branch-result" && !groups.contains_key(node.id.as_str()) {
+      issues.push(issue(
+        ModelIssueCode::InvalidBranchResult,
+        format!("Branch result {:?} has no matching edge group.", node.id),
+      ));
+    }
+  }
+}
+
 impl CompiledWorkflowDefinition {
   pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
     serde_json::from_str(json)
@@ -285,9 +536,21 @@ impl CompiledWorkflowDefinition {
     }
   }
 
+  pub fn validate_structure(&self) -> Result<(), ModelValidationError> {
+    let issues = self.inspect_structure();
+    if issues.is_empty() {
+      Ok(())
+    } else {
+      Err(ModelValidationError::new(issues))
+    }
+  }
+
   pub fn inspect_structure(&self) -> Vec<ModelIssue> {
     let mut issues = Vec::new();
-    if self.schema_version != COMPILED_MODEL_SCHEMA_VERSION {
+    if !matches!(
+      self.schema_version,
+      COMPILED_MODEL_SCHEMA_VERSION_V1 | COMPILED_MODEL_SCHEMA_VERSION_V2
+    ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
         format!(
@@ -533,6 +796,7 @@ impl CompiledWorkflowDefinition {
                 ),
             ));
     }
+    inspect_branch_contract(self, &mut issues);
     issues
   }
 

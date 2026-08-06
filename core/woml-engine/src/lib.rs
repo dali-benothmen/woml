@@ -31,5 +31,7 @@ pub use runtime::{
 };
 pub use store::{EventStoreError, InMemoryEventStore};
 
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = 1;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V1: u32 = 1;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V2: u32 = 2;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V2;
 pub const RUN_EVENT_SCHEMA_VERSION: u32 = 1;

@@ -8,6 +8,7 @@ use woml_engine::{
 };
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
+const BRANCH_MODEL: &str = include_str!("../../../woml/tests/fixtures/branch.compiled.v2.json");
 const HELLO_EVENTS: &str =
   include_str!("../../../woml/tests/fixtures/run-events/hello.events.v1.json");
 const HOST_CRASHED_EVENT: &str =
@@ -22,6 +23,10 @@ fn hello_model() -> CompiledWorkflowDefinition {
 
 fn hello_events() -> Vec<RunEvent> {
   serde_json::from_str(HELLO_EVENTS).expect("hello events must deserialize")
+}
+
+fn branch_model() -> CompiledWorkflowDefinition {
+  CompiledWorkflowDefinition::from_json(BRANCH_MODEL).expect("branch model must deserialize")
 }
 
 #[test]
@@ -45,9 +50,65 @@ fn accepts_the_existing_compiled_model_fixture_unchanged() {
 }
 
 #[test]
+fn accepts_only_the_frozen_model_v2_branch_shape_as_structurally_valid() {
+  let original: Value = serde_json::from_str(BRANCH_MODEL).unwrap();
+  let model = branch_model();
+
+  model.validate_structure().unwrap();
+  assert_eq!(model.schema_version, 2);
+  assert_eq!(model.workflow_id, "review-content");
+  assert_eq!(model.graph.entry_node_ids, ["checkContent"]);
+  assert_eq!(model.terminal_node_id(), Some("publishDecision"));
+  assert_eq!(serde_json::to_value(&model).unwrap(), original);
+
+  let execution_issues = model.validate_for_execution().unwrap_err().issues;
+  assert!(execution_issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::UnsupportedBranch));
+
+  let mut malformed_group = branch_model();
+  malformed_group.graph.edges[1].id = "decision:when:1".to_string();
+  assert!(malformed_group
+    .validate_structure()
+    .unwrap_err()
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::InvalidBranchGroup));
+
+  let mut malformed_result = branch_model();
+  let result = malformed_result
+    .graph
+    .nodes
+    .iter_mut()
+    .find(|node| node.id == "decision")
+    .unwrap();
+  result.inputs = woml_engine::model::ValueExpression::Object {
+    fields: Default::default(),
+  };
+  assert!(malformed_result
+    .validate_structure()
+    .unwrap_err()
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::InvalidBranchResult));
+
+  let mut malformed_join = branch_model();
+  malformed_join
+    .graph
+    .edges
+    .retain(|edge| edge.id != "acceptContent-to-decision");
+  assert!(malformed_join
+    .validate_structure()
+    .unwrap_err()
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::InvalidBranchGroup));
+}
+
+#[test]
 fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
   let mut bad_version = hello_model();
-  bad_version.schema_version = 2;
+  bad_version.schema_version = 3;
   let codes: Vec<_> = bad_version
     .validate_for_execution()
     .unwrap_err()

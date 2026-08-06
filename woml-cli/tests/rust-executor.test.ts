@@ -30,6 +30,11 @@ async function helloWorkflow(): Promise<CompiledWorkflowDefinition> {
   return compileWoml(parseWoml(await Bun.file(path).text(), { file: path }));
 }
 
+async function branchWorkflow(): Promise<CompiledWorkflowDefinition> {
+  const path = resolve(packageRoot, '../woml/tests/fixtures/branch.woml');
+  return compileWoml(parseWoml(await Bun.file(path).text(), { file: path }));
+}
+
 function replaceFirstScript(
   workflow: CompiledWorkflowDefinition,
   source: string,
@@ -70,6 +75,15 @@ describe('Rust to Bun workflow execution', () => {
   test('pins the production definition hash for hello.woml', async () => {
     expect(compiledDefinitionHash(await helloWorkflow())).toBe(
       'sha256:97788d011d2306b254e9ab36ec9262887517a682357a955d770242774317939a',
+    );
+  });
+
+  test('pins the generated model-v2 definition hash for branch.woml', async () => {
+    const workflow = await branchWorkflow();
+
+    expect(workflow.schemaVersion).toBe(2);
+    expect(compiledDefinitionHash(workflow)).toBe(
+      'sha256:6a9b3aa53e81ae0e95414f80df0192de5ff11489e9b65b1254b69b71a496155a',
     );
   });
 

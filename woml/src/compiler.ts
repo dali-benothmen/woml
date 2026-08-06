@@ -1,8 +1,11 @@
 import {
   inspectCompiledWorkflowGraph,
   type CompiledWorkflowDefinition,
+  type CompiledWorkflowEdge,
+  type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,
   type CompiledWorkflowNode,
+  type ContextReferenceExpression,
   type JsonValue,
 } from './model';
 import {
@@ -56,6 +59,13 @@ type ValidatedFlowItem = ValidatedStep | ValidatedBranch;
 interface ValidatedFlow {
   readonly items: readonly ValidatedFlowItem[];
   readonly firstBranch?: WomlSourceElement;
+}
+
+interface LoweredFlowFragment {
+  readonly entryId: string;
+  readonly exitId: string;
+  readonly nodes: readonly CompiledWorkflowNode[];
+  readonly edges: readonly CompiledWorkflowEdge[];
 }
 
 const supportedElements = new Set([
@@ -776,10 +786,8 @@ function validateSteps(
   return { items, firstBranch };
 }
 
-function lowerNodes(
-  steps: readonly ValidatedStep[]
-): readonly CompiledWorkflowNode[] {
-  return steps.map(step => ({
+function lowerStep(step: ValidatedStep): LoweredFlowFragment {
+  const node: CompiledWorkflowNode = {
     id: step.id,
     handler: 'runtime.script',
     ...(step.metadata === undefined ? {} : { metadata: step.metadata }),
@@ -789,7 +797,117 @@ function lowerNodes(
         source: { kind: 'literal', value: step.source },
       },
     },
-  }));
+  };
+  return {
+    entryId: step.id,
+    exitId: step.id,
+    nodes: [node],
+    edges: [],
+  };
+}
+
+function referenceExpression(
+  reference: ValidatedReference
+): ContextReferenceExpression {
+  return { kind: 'contextReference', path: reference.path };
+}
+
+function alwaysEdge(from: string, to: string): CompiledWorkflowEdge {
+  return {
+    id: `${from}-to-${to}`,
+    from,
+    to,
+    condition: { kind: 'always' },
+  };
+}
+
+function lowerBranch(branch: ValidatedBranch): LoweredFlowFragment {
+  const selectorId = `__woml_branch__${branch.id}__select`;
+  const armFragments = branch.arms.map(arm => lowerFlowItems(arm.items));
+  const armIds = branch.arms.map((arm, index) =>
+    arm.kind === 'when'
+      ? `${branch.id}:when:${index}`
+      : `${branch.id}:otherwise`
+  );
+
+  const selector: CompiledWorkflowNode = {
+    id: selectorId,
+    handler: 'engine.branch-select',
+    inputs: { kind: 'object', fields: {} },
+    ...(branch.metadata === undefined ? {} : { metadata: branch.metadata }),
+  };
+  const result: CompiledWorkflowNode = {
+    id: branch.id,
+    handler: 'engine.branch-result',
+    inputs: {
+      kind: 'object',
+      fields: Object.fromEntries(
+        branch.arms.map((arm, index) => [
+          armIds[index],
+          referenceExpression(arm.result),
+        ])
+      ),
+    },
+  };
+
+  const selectionEdges: CompiledWorkflowEdge[] = branch.arms.map(
+    (arm, index) => ({
+      id: armIds[index],
+      from: selectorId,
+      to: armFragments[index].entryId,
+      condition:
+        arm.kind === 'when'
+          ? {
+              kind: 'boolean',
+              value: referenceExpression(arm.test!),
+            }
+          : { kind: 'always' },
+      branchId: branch.id,
+    })
+  );
+
+  return {
+    entryId: selectorId,
+    exitId: branch.id,
+    nodes: [
+      selector,
+      ...armFragments.flatMap(fragment => fragment.nodes),
+      result,
+    ],
+    edges: [
+      ...selectionEdges,
+      ...armFragments.flatMap(fragment => fragment.edges),
+      ...armFragments.map(fragment => alwaysEdge(fragment.exitId, branch.id)),
+    ],
+  };
+}
+
+function lowerFlowItem(item: ValidatedFlowItem): LoweredFlowFragment {
+  return item.kind === 'step' ? lowerStep(item) : lowerBranch(item);
+}
+
+function lowerFlowItems(
+  items: readonly ValidatedFlowItem[]
+): LoweredFlowFragment {
+  const fragments = items.map(lowerFlowItem);
+  const nodes: CompiledWorkflowNode[] = [];
+  const edges: CompiledWorkflowEdge[] = [];
+
+  for (let index = 0; index < fragments.length; index += 1) {
+    const fragment = fragments[index];
+    nodes.push(...fragment.nodes);
+    if (index > 0) {
+      edges.push(alwaysEdge(fragments[index - 1].exitId, fragment.entryId));
+    }
+    edges.push(...fragment.edges);
+  }
+
+  return {
+    entryId: fragments[0].entryId,
+    exitId: fragments.at(-1)!.exitId,
+    nodes,
+    edges,
+  };
 }
 
 export function compileWoml(
@@ -818,41 +936,27 @@ export function compileWoml(
   );
   const triggerId = validateManualTrigger(document, triggersElement);
   const flow = validateSteps(document, stepsElement);
-  if (flow.firstBranch !== undefined) {
-    failCompile(
-      document,
-      'WOML_FEATURE_NOT_EXECUTABLE',
-      '<branch> is valid WOML, but compiled-model v2 lowering is introduced in phase B2.',
-      flow.firstBranch.openTagSpan
-    );
-  }
-  const steps = flow.items as readonly ValidatedStep[];
-
-  const compiled: CompiledWorkflowDefinition = {
-    schemaVersion: 1,
+  const lowered = lowerFlowItems(flow.items);
+  const definition = {
     workflowId,
     ...(metadata === undefined ? {} : { metadata }),
     triggers: [
       {
         id: triggerId,
         handler: 'trigger.manual',
-        config: { kind: 'object', fields: {} },
+        config: { kind: 'object' as const, fields: {} },
       },
     ],
     graph: {
-      entryNodeIds: [steps[0].id],
-      nodes: lowerNodes(steps),
-      edges: steps.slice(1).map((step, index) => {
-        const previous = steps[index];
-        return {
-          id: `${previous.id}-to-${step.id}`,
-          from: previous.id,
-          to: step.id,
-          condition: { kind: 'always' as const },
-        };
-      }),
-    },
+      entryNodeIds: [lowered.entryId],
+      nodes: lowered.nodes,
+      edges: lowered.edges,
+    } satisfies CompiledWorkflowGraph,
   };
+  const compiled: CompiledWorkflowDefinition =
+    flow.firstBranch === undefined
+      ? { schemaVersion: 1, ...definition }
+      : { schemaVersion: 2, ...definition };
 
   const graphIssues = inspectCompiledWorkflowGraph(compiled.graph, {
     requireSingleTerminal: true,

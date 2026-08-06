@@ -223,23 +223,26 @@ describe('compileWoml', () => {
     expect(error.diagnostic.location.start.offset).toBe(secondIdOffset);
   });
 
-  test('fully validates the reviewed branch fixture before the B2 lowering gate', () => {
+  test('lowers the reviewed branch fixture exactly to compiled model v2', () => {
     const source = readFileSync(
       new URL('./fixtures/branch.woml', import.meta.url),
       'utf8'
     );
-    const error = compileError(source);
-
-    expect(error.diagnostic.code).toBe('WOML_FEATURE_NOT_EXECUTABLE');
-    expect(error.diagnostic.phase).toBe('compile');
-    expect(error.diagnostic.message).toContain('valid WOML');
-    expect(error.diagnostic.message).toContain('B2');
-    expect(error.diagnostic.location.start.offset).toBe(
-      source.indexOf('<branch')
+    const expected = JSON.parse(
+      readFileSync(
+        new URL('./fixtures/branch.compiled.v2.json', import.meta.url),
+        'utf8'
+      )
     );
+    const compiled = compile(source);
+
+    expect(compiled).toEqual(expected);
+    expect(compiled.schemaVersion).toBe(2);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+    expect(compile(source)).toEqual(compiled);
   });
 
-  test('accepts recursively nested branch structure and route-local results', () => {
+  test('lowers recursively nested branches and route-local results into one valid DAG', () => {
     const source = validWorkflow(`
     <step id="ready"><script>return true;</script></step>
     <branch id="outer">
@@ -262,9 +265,12 @@ describe('compileWoml', () => {
       </otherwise>
     </branch>`);
 
-    expect(compileError(source).diagnostic.code).toBe(
-      'WOML_FEATURE_NOT_EXECUTABLE'
-    );
+    const compiled = compile(source);
+    expect(compiled.schemaVersion).toBe(2);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+    expect(compiled.graph.entryNodeIds).toEqual(['ready']);
+    expect(compiled.graph.nodes.map(node => node.id)).toContain('inner');
+    expect(compiled.graph.nodes.map(node => node.id)).toContain('outer');
   });
 
   test('enforces required branch cases and their order', () => {
@@ -665,5 +671,55 @@ describe('inspectCompiledWorkflowGraph', () => {
         issue => issue.code
       )
     ).toContain('TERMINAL_NODE_COUNT');
+  });
+
+  test('rejects malformed branch selector, group, and result contracts', () => {
+    const source = readFileSync(
+      new URL('./fixtures/branch.woml', import.meta.url),
+      'utf8'
+    );
+    const compiled = compile(source);
+
+    const badSelector = {
+      ...compiled.graph,
+      nodes: compiled.graph.nodes.map((node, index) =>
+        index === 1 ? { ...node, id: '__woml_branch__wrong__select' } : node
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(badSelector).map(issue => issue.code)
+    ).toContain('INVALID_BRANCH_SELECTOR');
+
+    const badGroup = {
+      ...compiled.graph,
+      edges: compiled.graph.edges.map((edge, index) =>
+        index === 1 ? { ...edge, id: 'decision:when:1' } : edge
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(badGroup).map(issue => issue.code)
+    ).toContain('INVALID_BRANCH_GROUP');
+
+    const badResult = {
+      ...compiled.graph,
+      nodes: compiled.graph.nodes.map(node =>
+        node.id === 'decision'
+          ? { ...node, inputs: { kind: 'object' as const, fields: {} } }
+          : node
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(badResult).map(issue => issue.code)
+    ).toContain('INVALID_BRANCH_RESULT');
+
+    const badJoin = {
+      ...compiled.graph,
+      edges: compiled.graph.edges.filter(
+        edge => edge.id !== 'acceptContent-to-decision'
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(badJoin).map(issue => issue.code)
+    ).toContain('INVALID_BRANCH_GROUP');
   });
 });
