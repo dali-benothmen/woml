@@ -8,7 +8,10 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::engine::{ready_node_ids_for_projection, validate_payload_against_definition};
+use crate::engine::{
+  ready_node_ids_for_projection, validate_event_history_against_definition,
+  validate_payload_against_definition,
+};
 use crate::event::{
   is_definition_hash, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunStartedData,
   RunSucceededData, StepAttemptFailedData,
@@ -18,6 +21,7 @@ use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
+  RUN_EVENT_SCHEMA_VERSION_V3,
 };
 
 const STORE_SCHEMA_VERSION: &str = "1";
@@ -362,30 +366,25 @@ impl DurableEventStore {
     };
 
     let mut events = load_events(&transaction, &run_id)?;
-    let workflow = match &payload {
-      RunEventPayload::RunStarted(_) => None,
-      _ => Some(definition_for_run(&transaction, &run_id)?),
-    };
-    if let Some(workflow) = &workflow {
-      let binding = run_binding_in_transaction(&transaction, &run_id)?;
-      validate_payload_against_definition(workflow, &binding.definition_hash, &payload)
+    let workflow = definition_for_run(&transaction, &run_id)?;
+    let binding = run_binding_in_transaction(&transaction, &run_id)?;
+    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    if let RunEventPayload::BranchSelected(data) = &payload {
+      let projection = fold_events(&events)?;
+      if projection.branch_selections.contains_key(&data.branch_id) {
+        return Err(DurableStoreError::Contract(format!(
+          "Branch {:?} already has an immutable selection.",
+          data.branch_id
+        )));
+      }
+      let selector_id = format!("__woml_branch__{}__select", data.branch_id);
+      let ready = ready_node_ids_for_projection(&workflow, &binding.definition_hash, &projection)
         .map_err(DurableStoreError::Contract)?;
-      if let RunEventPayload::BranchSelected(data) = &payload {
-        let projection = fold_events(&events)?;
-        if projection.branch_selections.contains_key(&data.branch_id) {
-          return Err(DurableStoreError::Contract(format!(
-            "Branch {:?} already has an immutable selection.",
-            data.branch_id
-          )));
-        }
-        let selector_id = format!("__woml_branch__{}__select", data.branch_id);
-        let ready = ready_node_ids_for_projection(workflow, &binding.definition_hash, &projection)
-          .map_err(DurableStoreError::Contract)?;
-        if !ready.iter().any(|node_id| node_id == &selector_id) {
-          return Err(DurableStoreError::Contract(format!(
-            "Branch selector {selector_id:?} is not ready for selection."
-          )));
-        }
+      if !ready.iter().any(|node_id| node_id == &selector_id) {
+        return Err(DurableStoreError::Contract(format!(
+          "Branch selector {selector_id:?} is not ready for selection."
+        )));
       }
     }
     let event = append_to_history(
@@ -397,6 +396,8 @@ impl DurableEventStore {
       event_schema_version,
       payload,
     )?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
     transaction.commit()?;
     Ok((event, projection))
@@ -441,6 +442,8 @@ impl DurableEventStore {
         payload,
       )?;
     }
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
     transaction.commit()?;
     Ok(projection)
@@ -452,7 +455,12 @@ impl DurableEventStore {
   }
 
   pub fn projection(&self, run_id: &str) -> Result<RunProjection, DurableStoreError> {
-    Ok(fold_events(&self.events(run_id)?)?)
+    let events = self.events(run_id)?;
+    let binding = self.run_binding(run_id)?;
+    let workflow = self.definition(&binding.definition_hash)?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    Ok(fold_events(&events)?)
   }
 
   pub fn recover_interrupted_runs(&mut self) -> Result<RecoveryReport, DurableStoreError> {
@@ -492,6 +500,10 @@ impl DurableEventStore {
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
     ensure_run_exists(&transaction, run_id)?;
     let mut events = load_events(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
     let event_schema_version = projection.event_schema_version.ok_or_else(|| {
       DurableStoreError::Contract("A stored run has no event schema version.".to_string())
@@ -523,6 +535,18 @@ impl DurableEventStore {
           }),
         )?;
       }
+      if started.iter().any(|attempt| {
+        workflow
+          .parallel_group_for_child(&attempt.node_id)
+          .is_some()
+      }) {
+        validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+          .map_err(DurableStoreError::Contract)?;
+        transaction.commit()?;
+        return Ok(RunRecovery::Recovered {
+          interrupted_attempts: started.len(),
+        });
+      }
       append_to_history(
         &transaction,
         &mut events,
@@ -552,6 +576,12 @@ impl DurableEventStore {
       }
     });
     if let Some((identity, failure)) = failed_attempt {
+      if workflow
+        .parallel_group_for_child(&identity.node_id)
+        .is_some_and(|group| projection.parallel_groups.contains_key(&group.parallel_id))
+      {
+        return Ok(RunRecovery::Resumable);
+      }
       append_to_history(
         &transaction,
         &mut events,
@@ -573,7 +603,6 @@ impl DurableEventStore {
       });
     }
 
-    let workflow = definition_for_run(&transaction, run_id)?;
     let terminal_node_id = workflow.terminal_node_id().ok_or_else(|| {
       DurableStoreError::Contract("Stored workflow has no terminal node.".to_string())
     })?;
@@ -745,12 +774,14 @@ fn attempt_run_failed_data(
       invocation_id: Some(invocation_id),
       failure,
     }),
-    RUN_EVENT_SCHEMA_VERSION_V2 => RunFailedData::V2(RunFailedDataV2::Attempt {
-      node_id,
-      attempt,
-      invocation_id,
-      failure,
-    }),
+    RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 => {
+      RunFailedData::V2(RunFailedDataV2::Attempt {
+        node_id,
+        attempt,
+        invocation_id,
+        failure,
+      })
+    }
     _ => unreachable!("event versions are validated before recovery"),
   }
 }

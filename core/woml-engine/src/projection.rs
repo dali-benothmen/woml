@@ -5,8 +5,9 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::event::{
-  AttemptFailure, BranchFailure, EventValidationError, RunEvent, RunEventPayload, RunFailedData,
-  RunFailedDataV2, StepAttemptStartedData,
+  AttemptFailure, BranchFailure, EventValidationError, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupOutcome, RunEvent, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
+  StepAttemptStartedData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -47,9 +48,34 @@ pub struct AttemptProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParallelGroupStatus {
+  Started,
+  Completed {
+    outcome: ParallelGroupOutcome,
+    failed_node_ids: Vec<String>,
+    cancelled_node_ids: Vec<String>,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParallelGroupProjection {
+  pub parallel_id: String,
+  pub fork_context: WorkflowContext,
+  pub status: ParallelGroupStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunFailure {
   Attempt(AttemptFailure),
   Branch(BranchFailure),
+  Parallel {
+    parallel_id: String,
+    policy: ParallelFailurePolicy,
+    primary_node_id: String,
+    failed_node_ids: Vec<String>,
+    cancelled_node_ids: Vec<String>,
+    failure: ParallelFailure,
+  },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -62,6 +88,7 @@ pub struct RunProjection {
   pub context: WorkflowContext,
   pub attempts: Vec<AttemptProjection>,
   pub branch_selections: BTreeMap<String, String>,
+  pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
   pub terminal_node_id: Option<String>,
   pub result: Option<Value>,
   pub failure: Option<RunFailure>,
@@ -237,6 +264,46 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           .branch_selections
           .insert(data.branch_id.clone(), data.arm_id.clone());
       }
+      RunEventPayload::ParallelGroupStarted(data) => {
+        require_running(&projection)?;
+        if projection.parallel_groups.contains_key(&data.parallel_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Parallel group {:?} was started more than once.",
+            data.parallel_id
+          )));
+        }
+        projection.parallel_groups.insert(
+          data.parallel_id.clone(),
+          ParallelGroupProjection {
+            parallel_id: data.parallel_id.clone(),
+            fork_context: projection.context.clone(),
+            status: ParallelGroupStatus::Started,
+          },
+        );
+      }
+      RunEventPayload::ParallelGroupCompleted(data) => {
+        require_running(&projection)?;
+        let group = projection
+          .parallel_groups
+          .get_mut(&data.parallel_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(format!(
+              "Parallel group {:?} completed before it started.",
+              data.parallel_id
+            ))
+          })?;
+        if !matches!(group.status, ParallelGroupStatus::Started) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Parallel group {:?} was completed more than once.",
+            data.parallel_id
+          )));
+        }
+        group.status = ParallelGroupStatus::Completed {
+          outcome: data.outcome,
+          failed_node_ids: data.failed_node_ids.clone(),
+          cancelled_node_ids: data.cancelled_node_ids.clone(),
+        };
+      }
       RunEventPayload::RunSucceeded(data) => {
         require_running(&projection)?;
         if !projection
@@ -287,6 +354,41 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           }
           RunFailedData::V2(RunFailedDataV2::Branch { failure, .. }) => {
             RunFailure::Branch(failure.clone())
+          }
+          RunFailedData::V3(RunFailedDataV3::Parallel {
+            parallel_id,
+            policy,
+            primary_node_id,
+            failed_node_ids,
+            cancelled_node_ids,
+            failure,
+          }) => {
+            let group = projection.parallel_groups.get(parallel_id).ok_or_else(|| {
+              FoldError::InvalidHistory(format!(
+                "run_failed references parallel group {parallel_id:?} before it started."
+              ))
+            })?;
+            match &group.status {
+              ParallelGroupStatus::Completed {
+                outcome: ParallelGroupOutcome::Failed,
+                failed_node_ids: completed_failed,
+                cancelled_node_ids: completed_cancelled,
+              } if completed_failed == failed_node_ids
+                && completed_cancelled == cancelled_node_ids => {}
+              _ => {
+                return Err(FoldError::InvalidHistory(format!(
+                  "run_failed does not match the failed completion of parallel group {parallel_id:?}."
+                )));
+              }
+            }
+            RunFailure::Parallel {
+              parallel_id: parallel_id.clone(),
+              policy: *policy,
+              primary_node_id: primary_node_id.clone(),
+              failed_node_ids: failed_node_ids.clone(),
+              cancelled_node_ids: cancelled_node_ids.clone(),
+              failure: failure.clone(),
+            }
           }
         };
         projection.status = RunStatus::Failed;

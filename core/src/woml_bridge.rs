@@ -7,8 +7,8 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use woml_engine::{
   execute_workflow, execute_workflow_durable, recover_durable_runs, CompiledWorkflowDefinition,
-  RunEventPayload, RunFailedData, RunFailedDataV2, RuntimeExecutionError, RuntimeExecutionOptions,
-  ScriptHostProcessOptions,
+  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RuntimeExecutionError,
+  RuntimeExecutionOptions, ScriptHostProcessOptions,
 };
 
 #[derive(Serialize)]
@@ -38,6 +38,9 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
             RunFailedData::V1(data) => data.node_id.clone(),
             RunFailedData::V2(RunFailedDataV2::Attempt { node_id, .. }) => Some(node_id.clone()),
             RunFailedData::V2(RunFailedDataV2::Branch { .. }) => None,
+            RunFailedData::V3(RunFailedDataV3::Parallel {
+              primary_node_id, ..
+            }) => Some(primary_node_id.clone()),
           }
         } else {
           None

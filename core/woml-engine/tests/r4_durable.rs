@@ -157,6 +157,7 @@ fn recovery_atomically_fails_an_uncertain_attempt_without_replaying_it() {
       .and_then(|failure| match failure {
         RunFailure::Attempt(failure) => Some(failure.kind),
         RunFailure::Branch(_) => None,
+        RunFailure::Parallel { .. } => None,
       }),
     Some(AttemptFailureKind::Interrupted)
   );

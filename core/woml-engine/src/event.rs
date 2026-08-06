@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::{RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2};
+use crate::{
+  RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,6 +27,8 @@ pub enum RunEventPayload {
   StepAttemptSucceeded(StepAttemptSucceededData),
   StepAttemptFailed(StepAttemptFailedData),
   BranchSelected(BranchSelectedData),
+  ParallelGroupStarted(ParallelGroupStartedData),
+  ParallelGroupCompleted(ParallelGroupCompletedData),
   RunSucceeded(RunSucceededData),
   RunFailed(RunFailedData),
 }
@@ -71,6 +75,28 @@ pub struct BranchSelectedData {
   pub arm_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ParallelGroupStartedData {
+  pub parallel_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelGroupOutcome {
+  Succeeded,
+  Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ParallelGroupCompletedData {
+  pub parallel_id: String,
+  pub outcome: ParallelGroupOutcome,
+  pub failed_node_ids: Vec<String>,
+  pub cancelled_node_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunSucceededData {
@@ -112,9 +138,60 @@ pub enum RunFailedDataV2 {
   },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ParallelFailurePolicy {
+  #[serde(rename = "fail-fast")]
+  FailFast,
+  #[serde(rename = "wait-all")]
+  WaitAll,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParallelFailure {
+  pub kind: String,
+  pub code: String,
+  pub message: String,
+}
+
+impl ParallelFailure {
+  pub fn validate(&self) -> Result<(), EventValidationError> {
+    if self.kind != "parallel_child_failed" || self.code != "WOML_PARALLEL_CHILD_FAILED" {
+      return Err(EventValidationError::Invalid(
+        "Parallel failure requires kind parallel_child_failed and code WOML_PARALLEL_CHILD_FAILED."
+          .to_string(),
+      ));
+    }
+    if self.message.is_empty() {
+      return Err(EventValidationError::Invalid(
+        "Parallel failure message must not be empty.".to_string(),
+      ));
+    }
+    Ok(())
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "failureScope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RunFailedDataV3 {
+  Parallel {
+    #[serde(rename = "parallelId")]
+    parallel_id: String,
+    policy: ParallelFailurePolicy,
+    #[serde(rename = "primaryNodeId")]
+    primary_node_id: String,
+    #[serde(rename = "failedNodeIds")]
+    failed_node_ids: Vec<String>,
+    #[serde(rename = "cancelledNodeIds")]
+    cancelled_node_ids: Vec<String>,
+    failure: ParallelFailure,
+  },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RunFailedData {
+  V3(RunFailedDataV3),
   V2(RunFailedDataV2),
   V1(RunFailedDataV1),
 }
@@ -129,6 +206,7 @@ pub enum AttemptFailureKind {
   ResultTooLarge,
   WorkerCrashed,
   HostCrashed,
+  InvocationCancelled,
   Interrupted,
 }
 
@@ -142,6 +220,7 @@ impl AttemptFailureKind {
       Self::ResultTooLarge => "WOML_SCRIPT_RESULT_TOO_LARGE",
       Self::WorkerCrashed => "WOML_SCRIPT_WORKER_CRASHED",
       Self::HostCrashed => "WOML_SCRIPT_HOST_CRASHED",
+      Self::InvocationCancelled => "WOML_SCRIPT_CANCELLED",
       Self::Interrupted => "WOML_STEP_INTERRUPTED",
     }
   }
@@ -265,6 +344,14 @@ fn valid_branch_arm_id(branch_id: &str, arm_id: &str) -> bool {
     && arm_id.chars().count() <= 256
 }
 
+fn valid_ordered_id_lists(first: &[String], second: &[String]) -> bool {
+  let mut seen = std::collections::HashSet::new();
+  first
+    .iter()
+    .chain(second)
+    .all(|node_id| valid_public_structural_id(node_id) && seen.insert(node_id))
+}
+
 fn validate_identity(
   node_id: &str,
   attempt: u32,
@@ -311,7 +398,7 @@ impl RunEvent {
   pub fn validate(&self) -> Result<(), EventValidationError> {
     if !matches!(
       self.event_schema_version,
-      RUN_EVENT_SCHEMA_VERSION_V1 | RUN_EVENT_SCHEMA_VERSION_V2
+      RUN_EVENT_SCHEMA_VERSION_V1 | RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -344,11 +431,21 @@ impl RunEvent {
       RunEventPayload::StepAttemptFailed(data) => {
         validate_identity(&data.node_id, data.attempt, &data.invocation_id)?;
         data.failure.validate()?;
+        if data.failure.kind == AttemptFailureKind::InvocationCancelled
+          && self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V3
+        {
+          return Err(EventValidationError::Invalid(
+            "invocation_cancelled is available only in run-event schema v3.".to_string(),
+          ));
+        }
       }
       RunEventPayload::BranchSelected(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V2 {
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3
+        ) {
           return Err(EventValidationError::Invalid(
-            "branch_selected is available only in run-event schema v2.".to_string(),
+            "branch_selected is available only in run-event schema v2 or v3.".to_string(),
           ));
         }
         if !valid_public_structural_id(&data.branch_id)
@@ -356,6 +453,30 @@ impl RunEvent {
         {
           return Err(EventValidationError::Invalid(
             "branch_selected requires a valid branchId and matching canonical armId.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ParallelGroupStarted(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V3
+          || !valid_public_structural_id(&data.parallel_id)
+        {
+          return Err(EventValidationError::Invalid(
+            "parallel_group_started requires event schema v3 and a valid parallelId.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ParallelGroupCompleted(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V3
+          || !valid_public_structural_id(&data.parallel_id)
+          || !valid_ordered_id_lists(&data.failed_node_ids, &data.cancelled_node_ids)
+          || (data.outcome == ParallelGroupOutcome::Succeeded
+            && (!data.failed_node_ids.is_empty() || !data.cancelled_node_ids.is_empty()))
+          || (data.outcome == ParallelGroupOutcome::Failed
+            && data.failed_node_ids.is_empty()
+            && data.cancelled_node_ids.is_empty())
+        {
+          return Err(EventValidationError::Invalid(
+            "parallel_group_completed contains an invalid outcome or node list.".to_string(),
           ));
         }
       }
@@ -389,7 +510,7 @@ impl RunEvent {
           data.failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V2,
+          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3,
           RunFailedData::V2(RunFailedDataV2::Attempt {
             node_id,
             attempt,
@@ -401,7 +522,7 @@ impl RunEvent {
           failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V2,
+          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3,
           RunFailedData::V2(RunFailedDataV2::Branch {
             branch_id,
             arm_id,
@@ -433,6 +554,32 @@ impl RunEvent {
               ));
             }
             _ => {}
+          }
+          failure.validate()?;
+        }
+        (
+          RUN_EVENT_SCHEMA_VERSION_V3,
+          RunFailedData::V3(RunFailedDataV3::Parallel {
+            parallel_id,
+            primary_node_id,
+            failed_node_ids,
+            cancelled_node_ids,
+            failure,
+            ..
+          }),
+        ) => {
+          if !valid_public_structural_id(parallel_id)
+            || !valid_public_structural_id(primary_node_id)
+            || !valid_ordered_id_lists(failed_node_ids, cancelled_node_ids)
+            || failed_node_ids.is_empty()
+            || !failed_node_ids
+              .iter()
+              .any(|node_id| node_id == primary_node_id)
+          {
+            return Err(EventValidationError::Invalid(
+              "Parallel-scoped run_failed contains an invalid group or child identity list."
+                .to_string(),
+            ));
           }
           failure.validate()?;
         }

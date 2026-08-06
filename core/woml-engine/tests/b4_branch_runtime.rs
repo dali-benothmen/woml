@@ -129,6 +129,8 @@ async fn reviewed_branch_executes_only_the_true_route_and_publishes_one_result()
         woml_engine::RunEventPayload::StepAttemptSucceeded(_) => "step_attempt_succeeded",
         woml_engine::RunEventPayload::StepAttemptFailed(_) => "step_attempt_failed",
         woml_engine::RunEventPayload::BranchSelected(_) => "branch_selected",
+        woml_engine::RunEventPayload::ParallelGroupStarted(_) => "parallel_group_started",
+        woml_engine::RunEventPayload::ParallelGroupCompleted(_) => "parallel_group_completed",
         woml_engine::RunEventPayload::RunSucceeded(_) => "run_succeeded",
         woml_engine::RunEventPayload::RunFailed(_) => "run_failed",
       })

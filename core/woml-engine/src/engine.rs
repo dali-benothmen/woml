@@ -5,12 +5,14 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::event::{
-  is_definition_hash, RunEventPayload, RunFailedData, RunFailedDataV2, RunStartedData,
+  is_definition_hash, AttemptFailureKind, ParallelFailurePolicy, ParallelGroupOutcome,
+  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RunStartedData,
 };
 use crate::{
   model::{EdgeCondition, ValueExpression},
   run_event_schema_version_for_model, CompiledWorkflowDefinition, EventStoreError, FoldError,
-  InMemoryEventStore, ModelValidationError, RunEvent, RunProjection, RunStatus, WorkflowContext,
+  InMemoryEventStore, ModelValidationError, ParallelGroupStatus, RunEvent, RunProjection,
+  RunStatus, WorkflowContext,
 };
 
 #[derive(Debug, Error)]
@@ -130,6 +132,10 @@ impl InMemoryDagEngine {
         )));
       }
     }
+    let mut candidate = self.store.events(&event.run_id).to_vec();
+    candidate.push(event.clone());
+    validate_event_history_against_definition(&self.workflow, &self.definition_hash, &candidate)
+      .map_err(EngineError::Contract)?;
     Ok(self.store.append(event)?)
   }
 
@@ -252,6 +258,27 @@ fn node_is_complete(node: &crate::model::CompiledWorkflowNode, projection: &RunP
   if node.handler == "engine.branch-select" {
     return selector_branch_id(&node.id)
       .is_some_and(|branch_id| projection.branch_selections.contains_key(branch_id));
+  }
+  if node.handler == "engine.parallel-start" {
+    return node
+      .id
+      .strip_prefix("__woml_parallel__")
+      .and_then(|id| id.strip_suffix("__start"))
+      .is_some_and(|parallel_id| projection.parallel_groups.contains_key(parallel_id));
+  }
+  if node.handler == "engine.parallel-join" {
+    return projection
+      .parallel_groups
+      .get(&node.id)
+      .is_some_and(|group| {
+        matches!(
+          group.status,
+          ParallelGroupStatus::Completed {
+            outcome: ParallelGroupOutcome::Succeeded,
+            ..
+          }
+        )
+      });
   }
   projection.context.steps.contains_key(&node.id)
 }
@@ -450,6 +477,33 @@ pub(crate) fn validate_payload_against_definition(
         ));
       }
     }
+    RunEventPayload::ParallelGroupStarted(data) => {
+      if workflow.parallel_group(&data.parallel_id).is_none() {
+        return Err(format!(
+          "parallel_group_started references unknown parallel group {:?}.",
+          data.parallel_id
+        ));
+      }
+    }
+    RunEventPayload::ParallelGroupCompleted(data) => {
+      let group = workflow.parallel_group(&data.parallel_id).ok_or_else(|| {
+        format!(
+          "parallel_group_completed references unknown parallel group {:?}.",
+          data.parallel_id
+        )
+      })?;
+      if data
+        .failed_node_ids
+        .iter()
+        .chain(&data.cancelled_node_ids)
+        .any(|node_id| !group.child_node_ids.contains(node_id))
+      {
+        return Err(format!(
+          "parallel_group_completed for {:?} references a node outside that group.",
+          data.parallel_id
+        ));
+      }
+    }
     RunEventPayload::RunSucceeded(data) => {
       if workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
         return Err(format!(
@@ -459,14 +513,32 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunFailed(data) => {
-      let (node_id, branch_identity) = match data {
-        RunFailedData::V1(data) => (data.node_id.as_deref(), None),
+      let (node_id, branch_identity, parallel_identity) = match data {
+        RunFailedData::V1(data) => (data.node_id.as_deref(), None, None),
         RunFailedData::V2(RunFailedDataV2::Attempt { node_id, .. }) => {
-          (Some(node_id.as_str()), None)
+          (Some(node_id.as_str()), None, None)
         }
         RunFailedData::V2(RunFailedDataV2::Branch {
           branch_id, arm_id, ..
-        }) => (None, Some((branch_id.as_str(), arm_id.as_deref()))),
+        }) => (None, Some((branch_id.as_str(), arm_id.as_deref())), None),
+        RunFailedData::V3(RunFailedDataV3::Parallel {
+          parallel_id,
+          policy,
+          primary_node_id,
+          failed_node_ids,
+          cancelled_node_ids,
+          ..
+        }) => (
+          None,
+          None,
+          Some((
+            parallel_id.as_str(),
+            *policy,
+            primary_node_id.as_str(),
+            failed_node_ids,
+            cancelled_node_ids,
+          )),
+        ),
       };
       if node_id.is_some_and(|node_id| workflow.node(node_id).is_none()) {
         return Err(format!("run_failed references unknown node {node_id:?}."));
@@ -490,8 +562,196 @@ pub(crate) fn validate_payload_against_definition(
           ));
         }
       }
+      if let Some((parallel_id, policy, primary_node_id, failed, cancelled)) = parallel_identity {
+        let group = workflow.parallel_group(parallel_id).ok_or_else(|| {
+          format!("run_failed references unknown parallel group {parallel_id:?}.")
+        })?;
+        let expected_policy = match group.on_error.as_str() {
+          "fail-fast" => ParallelFailurePolicy::FailFast,
+          "wait-all" => ParallelFailurePolicy::WaitAll,
+          _ => {
+            return Err(format!(
+              "Parallel group {parallel_id:?} has an invalid policy."
+            ))
+          }
+        };
+        if policy != expected_policy
+          || !failed.iter().any(|node_id| node_id == primary_node_id)
+          || failed
+            .iter()
+            .chain(cancelled)
+            .any(|node_id| !group.child_node_ids.contains(node_id))
+        {
+          return Err(format!(
+            "run_failed does not match parallel group {parallel_id:?} and its compiled policy."
+          ));
+        }
+      }
     }
   }
 
+  Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParallelChildState {
+  Active,
+  Succeeded,
+  Failed(AttemptFailureKind),
+}
+
+pub(crate) fn validate_event_history_against_definition(
+  workflow: &CompiledWorkflowDefinition,
+  definition_hash: &str,
+  events: &[RunEvent],
+) -> Result<(), String> {
+  crate::fold_events(events).map_err(|error| error.to_string())?;
+  let mut child_states: HashMap<String, ParallelChildState> = HashMap::new();
+
+  for (index, event) in events.iter().enumerate() {
+    validate_payload_against_definition(workflow, definition_hash, &event.payload)?;
+    match &event.payload {
+      RunEventPayload::ParallelGroupStarted(data) => {
+        let group = workflow
+          .parallel_group(&data.parallel_id)
+          .ok_or_else(|| format!("Unknown parallel group {:?}.", data.parallel_id))?;
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        if !ready.iter().any(|node_id| node_id == &group.start_node_id) {
+          return Err(format!(
+            "Parallel group {:?} was started before its fork was ready.",
+            data.parallel_id
+          ));
+        }
+      }
+      RunEventPayload::StepAttemptStarted(data) => {
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        if !ready.iter().any(|node_id| node_id == &data.node_id) {
+          return Err(format!(
+            "Node {:?} started before it was ready.",
+            data.node_id
+          ));
+        }
+        let Some(group) = workflow.parallel_group_for_child(&data.node_id) else {
+          continue;
+        };
+        if !matches!(
+          prefix
+            .parallel_groups
+            .get(&group.parallel_id)
+            .map(|state| &state.status),
+          Some(ParallelGroupStatus::Started)
+        ) {
+          return Err(format!(
+            "Parallel child {:?} started outside its active group {:?}.",
+            data.node_id, group.parallel_id
+          ));
+        }
+        let active = group
+          .child_node_ids
+          .iter()
+          .filter(|node_id| child_states.get(*node_id) == Some(&ParallelChildState::Active))
+          .count();
+        if active >= group.concurrency {
+          return Err(format!(
+            "Parallel group {:?} exceeds its concurrency cap of {}.",
+            group.parallel_id, group.concurrency
+          ));
+        }
+        child_states.insert(data.node_id.clone(), ParallelChildState::Active);
+      }
+      RunEventPayload::StepAttemptSucceeded(data) => {
+        if workflow.parallel_group_for_child(&data.node_id).is_some() {
+          child_states.insert(data.node_id.clone(), ParallelChildState::Succeeded);
+        }
+      }
+      RunEventPayload::StepAttemptFailed(data) => {
+        if workflow.parallel_group_for_child(&data.node_id).is_some() {
+          child_states.insert(
+            data.node_id.clone(),
+            ParallelChildState::Failed(data.failure.kind),
+          );
+        }
+      }
+      RunEventPayload::ParallelGroupCompleted(data) => {
+        let group = workflow
+          .parallel_group(&data.parallel_id)
+          .ok_or_else(|| format!("Unknown parallel group {:?}.", data.parallel_id))?;
+        let failed = group
+          .child_node_ids
+          .iter()
+          .filter(|node_id| {
+            matches!(
+              child_states.get(*node_id),
+              Some(ParallelChildState::Failed(kind))
+                if *kind != AttemptFailureKind::InvocationCancelled
+            )
+          })
+          .cloned()
+          .collect::<Vec<_>>();
+        let cancelled = group
+          .child_node_ids
+          .iter()
+          .filter(|node_id| {
+            matches!(
+              child_states.get(*node_id),
+              Some(ParallelChildState::Failed(
+                AttemptFailureKind::InvocationCancelled
+              ))
+            )
+          })
+          .cloned()
+          .collect::<Vec<_>>();
+        let active = group
+          .child_node_ids
+          .iter()
+          .any(|node_id| child_states.get(node_id) == Some(&ParallelChildState::Active));
+        let every_succeeded = group
+          .child_node_ids
+          .iter()
+          .all(|node_id| child_states.get(node_id) == Some(&ParallelChildState::Succeeded));
+        let every_terminal = group.child_node_ids.iter().all(|node_id| {
+          matches!(
+            child_states.get(node_id),
+            Some(ParallelChildState::Succeeded | ParallelChildState::Failed(_))
+          )
+        });
+        let valid_outcome = match data.outcome {
+          ParallelGroupOutcome::Succeeded => every_succeeded,
+          ParallelGroupOutcome::Failed if group.on_error == "wait-all" => every_terminal,
+          ParallelGroupOutcome::Failed => !active,
+        };
+        if !valid_outcome || data.failed_node_ids != failed || data.cancelled_node_ids != cancelled
+        {
+          return Err(format!(
+            "Parallel completion for {:?} does not match its durable child outcomes.",
+            data.parallel_id
+          ));
+        }
+      }
+      RunEventPayload::RunSucceeded(_) => {
+        let projection =
+          crate::fold_events(&events[..=index]).map_err(|error| error.to_string())?;
+        if projection.parallel_groups.values().any(|group| {
+          !matches!(
+            group.status,
+            ParallelGroupStatus::Completed {
+              outcome: ParallelGroupOutcome::Succeeded,
+              ..
+            }
+          )
+        }) {
+          return Err(
+            "A run cannot succeed while a started parallel group is incomplete or failed."
+              .to_string(),
+          );
+        }
+      }
+      RunEventPayload::RunStarted(_)
+      | RunEventPayload::BranchSelected(_)
+      | RunEventPayload::RunFailed(_) => {}
+    }
+  }
   Ok(())
 }

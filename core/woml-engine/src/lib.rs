@@ -21,12 +21,15 @@ pub use durable::{
 pub use engine::{EngineError, InMemoryDagEngine};
 pub use event::{
   AttemptFailure, AttemptFailureKind, BranchFailure, BranchSelectedData, FailureSizeDetails,
-  JsonValueType, RunEvent, RunEventPayload, RunFailedData, RunFailedDataV1, RunFailedDataV2,
+  JsonValueType, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  ParallelGroupOutcome, ParallelGroupStartedData, RunEvent, RunEventPayload, RunFailedData,
+  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
 };
 pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions};
 pub use model::{CompiledWorkflowDefinition, ModelIssue, ModelIssueCode, ModelValidationError};
 pub use projection::{
-  fold_events, FoldError, RunFailure, RunProjection, RunStatus, WorkflowContext,
+  fold_events, FoldError, ParallelGroupProjection, ParallelGroupStatus, RunFailure, RunProjection,
+  RunStatus, WorkflowContext,
 };
 pub use runtime::{
   execute_workflow, execute_workflow_durable, recover_durable_runs, BranchFailureSite,
@@ -40,10 +43,13 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V3: u32 = 3;
 pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V3;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V2;
+pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V3;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V2 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V3 {
+    RUN_EVENT_SCHEMA_VERSION_V3
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V2 {
     RUN_EVENT_SCHEMA_VERSION_V2
   } else {
     RUN_EVENT_SCHEMA_VERSION_V1

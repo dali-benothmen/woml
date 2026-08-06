@@ -1,8 +1,8 @@
 # WOML v0.1 Fundamental Syntax
 
 Status: design catalog draft; sequential scripts and conditional branches are
-implemented; parallel syntax and model-v3 lowering are implemented but runtime
-execution is not yet enabled
+implemented; parallel syntax, model-v3 lowering, and durable event-v3 state are
+implemented but concurrent runtime execution is not yet enabled
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -60,7 +60,7 @@ includes conditional branches:
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
-| Parallel | Frozen | Frontend validation and model-v3 lowering implemented; execution unavailable until P3–P6 |
+| Parallel | Frozen | Frontend/model-v3 and Rust event-v3 durability implemented; execution unavailable until P4–P6 |
 | Approval | Designed | Unavailable |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 

@@ -125,6 +125,15 @@ pub struct RetryPolicy {
   pub backoff: BackoffPolicy,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParallelGroupDefinition {
+  pub parallel_id: String,
+  pub start_node_id: String,
+  pub child_node_ids: Vec<String>,
+  pub concurrency: usize,
+  pub on_error: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum BackoffPolicy {
@@ -709,6 +718,62 @@ impl CompiledWorkflowDefinition {
 
   pub fn node(&self, node_id: &str) -> Option<&CompiledWorkflowNode> {
     self.graph.nodes.iter().find(|node| node.id == node_id)
+  }
+
+  pub(crate) fn parallel_group(&self, parallel_id: &str) -> Option<ParallelGroupDefinition> {
+    let start_node_id = format!("__woml_parallel__{parallel_id}__start");
+    let start = self.node(&start_node_id)?;
+    if start.handler != "engine.parallel-start" {
+      return None;
+    }
+    let ValueExpression::Object { fields } = &start.inputs else {
+      return None;
+    };
+    let concurrency = fields
+      .get("concurrency")
+      .and_then(|expression| match expression {
+        ValueExpression::Literal { value } => {
+          value.as_u64().and_then(|value| usize::try_from(value).ok())
+        }
+        _ => None,
+      })?;
+    let on_error = fields
+      .get("onError")
+      .and_then(|expression| match expression {
+        ValueExpression::Literal { value } => value.as_str().map(str::to_string),
+        _ => None,
+      })?;
+    let mut child_edges = self
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.from == start_node_id && edge.parallel_id.as_deref() == Some(parallel_id))
+      .collect::<Vec<_>>();
+    child_edges.sort_by_key(|edge| {
+      edge
+        .id
+        .strip_prefix(&format!("{parallel_id}:child:"))
+        .and_then(|index| index.parse::<usize>().ok())
+        .unwrap_or(usize::MAX)
+    });
+    Some(ParallelGroupDefinition {
+      parallel_id: parallel_id.to_string(),
+      start_node_id,
+      child_node_ids: child_edges.iter().map(|edge| edge.to.clone()).collect(),
+      concurrency,
+      on_error,
+    })
+  }
+
+  pub(crate) fn parallel_group_for_child(&self, node_id: &str) -> Option<ParallelGroupDefinition> {
+    let parallel_id = self
+      .graph
+      .edges
+      .iter()
+      .find(|edge| edge.to == node_id && edge.parallel_id.is_some())?
+      .parallel_id
+      .as_deref()?;
+    self.parallel_group(parallel_id)
   }
 
   pub fn terminal_node_id(&self) -> Option<&str> {

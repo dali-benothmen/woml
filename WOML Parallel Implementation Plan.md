@@ -1,6 +1,6 @@
 # WOML Parallel Implementation Plan
 
-Status: P0–P2 complete — P3 durable parallel events and folding is next
+Status: P0–P3 complete — P4 concurrent Rust scheduling is next
 
 ## 1. Product Outcome
 
@@ -576,7 +576,7 @@ Gate:
 The generated model deep-equals the reviewed fixture, validates against the
 schema in TypeScript and Rust, and changes no frozen v1/v2 artifact.
 
-### P3 — Add durable group events, folding, and recovery
+### P3 — Add durable group events, folding, and recovery — complete
 
 Changes:
 
