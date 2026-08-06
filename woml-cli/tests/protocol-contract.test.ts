@@ -18,6 +18,10 @@ const protocolFixtureDirectory = resolve(
   import.meta.dir,
   'fixtures/script-host'
 );
+const protocolV2FixtureDirectory = resolve(
+  import.meta.dir,
+  'fixtures/script-host-v2'
+);
 const runEventFixtureDirectory = resolve(
   projectRoot,
   'woml/tests/fixtures/run-events'
@@ -66,6 +70,10 @@ async function validators(): Promise<{
   readonly event: ValidateFunction;
   readonly compiledModelV2: ValidateFunction;
   readonly eventV2: ValidateFunction;
+  readonly failureV2: ValidateFunction;
+  readonly protocolV2: ValidateFunction;
+  readonly compiledModelV3: ValidateFunction;
+  readonly eventV3: ValidateFunction;
 }> {
   const ajv = new Ajv2020({
     allErrors: true,
@@ -82,16 +90,33 @@ async function validators(): Promise<{
     'compiled-workflow-model.v2.schema.json'
   );
   const eventV2Schema = await schema('run-event.v2.schema.json');
+  const failureV2Schema = await schema('attempt-failure.v2.schema.json');
+  const protocolV2Schema = await schema('script-host-protocol.v2.schema.json');
+  const compiledModelV3Schema = await schema(
+    'compiled-workflow-model.v3.schema.json'
+  );
+  const eventV3Schema = await schema('run-event.v3.schema.json');
   ajv.addSchema(failureSchema);
   ajv.addSchema(compiledModelV1Schema);
   ajv.addSchema(eventSchema);
+  ajv.addSchema(compiledModelV2Schema);
+  ajv.addSchema(eventV2Schema);
+  ajv.addSchema(failureV2Schema);
 
   return {
     failure: ajv.getSchema('https://cronflow.dev/schemas/attempt-failure/v1')!,
     protocol: ajv.compile(protocolSchema),
     event: ajv.getSchema('https://cronflow.dev/schemas/run-event/v1')!,
-    compiledModelV2: ajv.compile(compiledModelV2Schema),
-    eventV2: ajv.compile(eventV2Schema),
+    compiledModelV2: ajv.getSchema(
+      'https://cronflow.dev/schemas/compiled-workflow-model/v2'
+    )!,
+    eventV2: ajv.getSchema('https://cronflow.dev/schemas/run-event/v2')!,
+    failureV2: ajv.getSchema(
+      'https://cronflow.dev/schemas/attempt-failure/v2'
+    )!,
+    protocolV2: ajv.compile(protocolV2Schema),
+    compiledModelV3: ajv.compile(compiledModelV3Schema),
+    eventV3: ajv.compile(eventV3Schema),
   };
 }
 
@@ -424,6 +449,250 @@ describe('compiled workflow model v2 branch contract', () => {
     expect(compiledModelV2({ ...compiled, graph: malformedArmGraph })).toBe(
       false
     );
+  });
+});
+
+describe('parallel P0 contracts', () => {
+  test('the reviewed compiled fixture validates against model v3 and pins its hash', async () => {
+    const { compiledModelV3 } = await validators();
+    const compiled = await readJson(
+      resolve(projectRoot, 'woml/tests/fixtures/parallel.compiled.v3.json')
+    );
+
+    expect(compiledModelV3(compiled), validationMessage(compiledModelV3)).toBe(
+      true
+    );
+    expect(definitionHash(compiled)).toBe(
+      'sha256:d58dfcefdcd6c40db659042c41e17ca6c8d652033f90f120734d5cd95819b45c'
+    );
+  });
+
+  test('pins start, ordered fan-out, ordered join, and control-only join identities', async () => {
+    const compiled = (await readJson(
+      resolve(projectRoot, 'woml/tests/fixtures/parallel.compiled.v3.json')
+    )) as {
+      graph: {
+        nodes: Array<{
+          id: string;
+          handler: string;
+          inputs: JsonObject;
+          metadata?: JsonObject;
+        }>;
+        edges: Array<{
+          id: string;
+          from: string;
+          to: string;
+          parallelId?: string;
+        }>;
+      };
+    };
+    const start = compiled.graph.nodes.find(
+      node => node.handler === 'engine.parallel-start'
+    );
+    const join = compiled.graph.nodes.find(
+      node => node.handler === 'engine.parallel-join'
+    );
+
+    expect(start).toEqual({
+      id: '__woml_parallel__fieldData__start',
+      handler: 'engine.parallel-start',
+      inputs: {
+        kind: 'object',
+        fields: {
+          concurrency: { kind: 'literal', value: 2 },
+          onError: { kind: 'literal', value: 'wait-all' },
+        },
+      },
+      metadata: {
+        name: 'Load field data',
+        description: 'Load independent readings',
+      },
+    });
+    expect(join).toEqual({
+      id: 'fieldData',
+      handler: 'engine.parallel-join',
+      inputs: { kind: 'object', fields: {} },
+    });
+    expect(
+      compiled.graph.edges
+        .filter(edge => edge.parallelId === 'fieldData')
+        .map(({ id, from, to }) => ({ id, from, to }))
+    ).toEqual([
+      {
+        id: 'fieldData:child:0',
+        from: '__woml_parallel__fieldData__start',
+        to: 'loadWeather',
+      },
+      {
+        id: 'fieldData:child:1',
+        from: '__woml_parallel__fieldData__start',
+        to: 'loadSoil',
+      },
+      { id: 'fieldData:join:0', from: 'loadWeather', to: 'fieldData' },
+      { id: 'fieldData:join:1', from: 'loadSoil', to: 'fieldData' },
+    ]);
+  });
+
+  test('model v3 rejects unowned, confused, and malformed parallel edges', async () => {
+    const { compiledModelV3 } = await validators();
+    const compiled = (await readJson(
+      resolve(projectRoot, 'woml/tests/fixtures/parallel.compiled.v3.json')
+    )) as JsonObject;
+    const graph = structuredClone(compiled.graph) as {
+      edges: Array<JsonObject>;
+    };
+
+    const missingOwner = structuredClone(graph);
+    delete missingOwner.edges[1].parallelId;
+    expect(compiledModelV3({ ...compiled, graph: missingOwner })).toBe(false);
+
+    const branchOwner = structuredClone(graph);
+    branchOwner.edges[1].branchId = branchOwner.edges[1].parallelId;
+    delete branchOwner.edges[1].parallelId;
+    expect(compiledModelV3({ ...compiled, graph: branchOwner })).toBe(false);
+
+    const malformedOrdinal = structuredClone(graph);
+    malformedOrdinal.edges[1].id = 'fieldData:child:01';
+    expect(compiledModelV3({ ...compiled, graph: malformedOrdinal })).toBe(
+      false
+    );
+
+    const malformedStartGraph = structuredClone(compiled.graph) as {
+      nodes: Array<JsonObject>;
+      edges: Array<JsonObject>;
+    };
+    const start = malformedStartGraph.nodes.find(
+      node => node.handler === 'engine.parallel-start'
+    )!;
+    start.inputs = {
+      kind: 'object',
+      fields: {
+        concurrency: { kind: 'literal', value: 0 },
+        onError: { kind: 'literal', value: 'continue' },
+      },
+    };
+    expect(compiledModelV3({ ...compiled, graph: malformedStartGraph })).toBe(
+      false
+    );
+
+    const outputProducingJoinGraph = structuredClone(compiled.graph) as {
+      nodes: Array<JsonObject>;
+      edges: Array<JsonObject>;
+    };
+    const join = outputProducingJoinGraph.nodes.find(
+      node => node.handler === 'engine.parallel-join'
+    )!;
+    join.inputs = {
+      kind: 'object',
+      fields: { result: { kind: 'literal', value: 'implicit' } },
+    };
+    expect(
+      compiledModelV3({ ...compiled, graph: outputProducingJoinGraph })
+    ).toBe(false);
+  });
+
+  test('all protocol-v2 fixtures validate and cancellation is a strict new shape', async () => {
+    const { protocolV2 } = await validators();
+    const fixtureNames = readdirSync(protocolV2FixtureDirectory)
+      .filter(name => name.endsWith('.json'))
+      .sort();
+    expect(fixtureNames).toEqual([
+      'cancel.v2.json',
+      'cancelled.v2.json',
+      'execute.v2.json',
+      'ready.v2.json',
+      'success.v2.json',
+    ]);
+
+    for (const fixtureName of fixtureNames) {
+      const fixture = await readJson(
+        resolve(protocolV2FixtureDirectory, fixtureName)
+      );
+      expect(
+        protocolV2(fixture),
+        `${fixtureName}: ${validationMessage(protocolV2)}`
+      ).toBe(true);
+    }
+
+    const cancel = (await readJson(
+      resolve(protocolV2FixtureDirectory, 'cancel.v2.json')
+    )) as JsonObject;
+    expect(protocolV2({ ...cancel, reason: 'workflow_cancelled' })).toBe(false);
+    expect(protocolV2({ ...cancel, protocolVersion: 1 })).toBe(false);
+    expect(protocolV2({ ...cancel, nodeId: 'loadSoil' })).toBe(false);
+  });
+
+  test('event-v3 success and failure-policy histories validate', async () => {
+    const { eventV3 } = await validators();
+    const fixtureNames = [
+      'parallel-succeeded.events.v3.json',
+      'parallel-wait-all-failed.events.v3.json',
+      'parallel-fail-fast.events.v3.json',
+    ];
+    for (const fixtureName of fixtureNames) {
+      const history = (await readJson(
+        resolve(runEventFixtureDirectory, fixtureName)
+      )) as unknown[];
+      for (const [index, runEvent] of history.entries()) {
+        expect(
+          eventV3(runEvent),
+          `${fixtureName} event ${index + 1}: ${validationMessage(eventV3)}`
+        ).toBe(true);
+      }
+    }
+  });
+
+  test('the success history proves both children started before either completed', async () => {
+    const history = (await readJson(
+      resolve(runEventFixtureDirectory, 'parallel-succeeded.events.v3.json')
+    )) as Array<{ type: string; data: JsonObject }>;
+    const weatherStart = history.findIndex(
+      event =>
+        event.type === 'step_attempt_started' &&
+        event.data.nodeId === 'loadWeather'
+    );
+    const soilStart = history.findIndex(
+      event =>
+        event.type === 'step_attempt_started' &&
+        event.data.nodeId === 'loadSoil'
+    );
+    const firstChildCompletion = history.findIndex(
+      event =>
+        (event.type === 'step_attempt_succeeded' ||
+          event.type === 'step_attempt_failed') &&
+        (event.data.nodeId === 'loadWeather' ||
+          event.data.nodeId === 'loadSoil')
+    );
+
+    expect(weatherStart).toBeGreaterThan(-1);
+    expect(soilStart).toBeGreaterThan(-1);
+    expect(weatherStart).toBeLessThan(firstChildCompletion);
+    expect(soilStart).toBeLessThan(firstChildCompletion);
+  });
+
+  test('the frozen fork context and CLI result fixtures match the product contract', async () => {
+    expect(
+      await readJson(
+        resolve(projectRoot, 'woml/tests/fixtures/parallel.context.v0.1.json')
+      )
+    ).toEqual({
+      trigger: {},
+      steps: { loadField: { fieldId: 'field-42' } },
+    });
+    expect(
+      await readJson(
+        resolve(projectRoot, 'woml/tests/fixtures/parallel.result.v0.1.json')
+      )
+    ).toEqual({ summary: 'Weather 22°C, soil 41%' });
+    expect(
+      await readJson(
+        resolve(import.meta.dir, 'fixtures/parallel.cli.v0.1.json')
+      )
+    ).toMatchObject({
+      stdout: '{"summary":"Weather 22°C, soil 41%"}\n',
+      stderr: '',
+      exitCode: 0,
+    });
   });
 });
 

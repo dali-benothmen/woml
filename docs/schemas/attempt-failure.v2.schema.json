@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/attempt-failure/v2",
+  "title": "WOML Attempt Failure v2",
+  "description": "Attempt failure taxonomy for parallel execution. Version 2 preserves every v1 failure and adds engine-requested invocation cancellation.",
+  "x-status": "parallel-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/attempt-failure/v1",
+  "$ref": "#/$defs/attemptFailure",
+  "$defs": {
+    "attemptFailure": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/attemptFailure" },
+        { "$ref": "#/$defs/invocationCancelled" }
+      ]
+    },
+    "hostReportedFailure": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/hostReportedFailure" },
+        { "$ref": "#/$defs/invocationCancelled" }
+      ]
+    },
+    "invocationCancelled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "invocation_cancelled" },
+        "code": { "const": "WOML_SCRIPT_CANCELLED" },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

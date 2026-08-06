@@ -1,0 +1,7 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 2,
+  "messageType": "cancel",
+  "invocationId": "inv_load_weather_01",
+  "reason": "parallel_fail_fast"
+}

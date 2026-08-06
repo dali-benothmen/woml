@@ -54,11 +54,22 @@ interface ValidatedBranch {
   readonly arms: readonly ValidatedBranchArm[];
 }
 
-type ValidatedFlowItem = ValidatedStep | ValidatedBranch;
+interface ValidatedParallel {
+  readonly kind: 'parallel';
+  readonly id: string;
+  readonly element: WomlSourceElement;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+  readonly concurrency: number;
+  readonly onError: 'fail-fast' | 'wait-all';
+  readonly children: readonly ValidatedStep[];
+}
+
+type ValidatedFlowItem = ValidatedStep | ValidatedBranch | ValidatedParallel;
 
 interface ValidatedFlow {
   readonly items: readonly ValidatedFlowItem[];
   readonly firstBranch?: WomlSourceElement;
+  readonly firstParallel?: WomlSourceElement;
 }
 
 interface LoweredFlowFragment {
@@ -76,6 +87,7 @@ const supportedElements = new Set([
   'step',
   'script',
   'branch',
+  'parallel',
   'when',
   'otherwise',
   'result',
@@ -91,7 +103,6 @@ const stagedElements = new Set([
   'schedule',
   'interval',
   'event',
-  'parallel',
   'approval',
   'notify',
   'when-approved',
@@ -112,6 +123,15 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   script: { attributes: new Set() },
   branch: { attributes: new Set(['id', 'name', 'description']) },
+  parallel: {
+    attributes: new Set([
+      'id',
+      'name',
+      'description',
+      'concurrency',
+      'on-error',
+    ]),
+  },
   when: { attributes: new Set(['test']) },
   otherwise: { attributes: new Set() },
   result: { attributes: new Set(['value']) },
@@ -279,7 +299,7 @@ function validateWorkflowId(
 function validateJavaScriptSafeId(
   document: WomlSourceDocument,
   attribute: WomlSourceAttribute,
-  role: 'trigger' | 'step' | 'branch'
+  role: 'trigger' | 'step' | 'branch' | 'parallel'
 ): string {
   if (
     attribute.value.length > 256 ||
@@ -288,7 +308,7 @@ function validateJavaScriptSafeId(
     failValidation(
       document,
       'WOML_INVALID_ID',
-      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
+      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'parallel' ? 'Parallel' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
       attribute.valueSpan,
       'Use letters and numbers, start with a lowercase letter, and do not use hyphens.'
     );
@@ -494,14 +514,14 @@ function registerStructuralId(
   document: WomlSourceDocument,
   registry: Set<string>,
   attribute: WomlSourceAttribute,
-  role: 'step' | 'branch'
+  role: 'step' | 'branch' | 'parallel'
 ): string {
   const id = validateJavaScriptSafeId(document, attribute, role);
   if (registry.has(id)) {
     failValidation(
       document,
       'WOML_DUPLICATE_ID',
-      `Structural ID "${id}" is duplicated across workflow steps and branches.`,
+      `Structural ID "${id}" is duplicated across workflow steps, branches, and parallel groups.`,
       attribute.valueSpan
     );
   }
@@ -680,6 +700,87 @@ function validateBranch(
   };
 }
 
+function validateParallel(
+  document: WomlSourceDocument,
+  parallel: WomlSourceElement,
+  registry: Set<string>
+): ValidatedParallel {
+  const id = registerStructuralId(
+    document,
+    registry,
+    requiredAttribute(document, parallel, 'id'),
+    'parallel'
+  );
+  const metadata = flowItemMetadata(document, parallel);
+  const childElements = elementChildren(document, parallel);
+
+  if (childElements.length === 0) {
+    failValidation(
+      document,
+      'WOML_PARALLEL_EMPTY',
+      `<parallel id="${id}"> must contain at least one direct <step> child.`,
+      parallel.openTagSpan
+    );
+  }
+
+  const unsupportedChild = childElements.find(child => child.name !== 'step');
+  if (unsupportedChild !== undefined) {
+    failValidation(
+      document,
+      'WOML_PARALLEL_CHILD_UNSUPPORTED',
+      `<parallel id="${id}"> accepts direct <step> children only in this profile; found <${unsupportedChild.name}>.`,
+      unsupportedChild.openTagSpan,
+      'Move branching around the parallel group, or wait for a future explicit lane/sequence construct.'
+    );
+  }
+
+  const children = childElements.map(child =>
+    validateStep(document, child, registry)
+  );
+  const concurrencyAttribute = parallel.attributes.concurrency;
+  let concurrency = children.length;
+  if (concurrencyAttribute !== undefined) {
+    if (!/^[1-9][0-9]*$/.test(concurrencyAttribute.value)) {
+      failValidation(
+        document,
+        'WOML_PARALLEL_INVALID_CONCURRENCY',
+        `Parallel concurrency "${concurrencyAttribute.value}" must be a positive integer.`,
+        concurrencyAttribute.valueSpan
+      );
+    }
+    concurrency = Number(concurrencyAttribute.value);
+    if (!Number.isSafeInteger(concurrency) || concurrency > children.length) {
+      failValidation(
+        document,
+        'WOML_PARALLEL_INVALID_CONCURRENCY',
+        `Parallel concurrency must not exceed its ${children.length} direct child${children.length === 1 ? '' : 'ren'}.`,
+        concurrencyAttribute.valueSpan
+      );
+    }
+  }
+
+  const onErrorAttribute = parallel.attributes['on-error'];
+  const onError = onErrorAttribute?.value ?? 'fail-fast';
+  if (onError !== 'fail-fast' && onError !== 'wait-all') {
+    failValidation(
+      document,
+      'WOML_PARALLEL_INVALID_POLICY',
+      `Parallel on-error must be "fail-fast" or "wait-all", found "${onError}".`,
+      onErrorAttribute!.valueSpan
+    );
+  }
+
+  return {
+    kind: 'parallel',
+    id,
+    element: parallel,
+    metadata,
+    concurrency,
+    onError,
+    children,
+  };
+}
+
 function validateFlowItem(
   document: WomlSourceDocument,
   element: WomlSourceElement,
@@ -689,6 +790,9 @@ function validateFlowItem(
   if (element.name === 'step') return validateStep(document, element, registry);
   if (element.name === 'branch') {
     return validateBranch(document, element, registry);
+  }
+  if (element.name === 'parallel') {
+    return validateParallel(document, element, registry);
   }
   failValidation(
     document,
@@ -737,6 +841,11 @@ function validateReferenceAvailability(
       continue;
     }
 
+    if (item.kind === 'parallel') {
+      for (const child of item.children) available.add(child.id);
+      continue;
+    }
+
     for (const arm of item.arms) {
       if (arm.test !== undefined) {
         assertReferenceAvailable(document, arm.test, allIds, available);
@@ -774,16 +883,49 @@ function validateSteps(
   );
   validateReferenceAvailability(document, items, structuralIds);
 
-  const firstBranch = (function findBranch(
+  const terminal = items.at(-1);
+  if (terminal?.kind === 'parallel') {
+    failValidation(
+      document,
+      'WOML_PARALLEL_TERMINAL_UNSUPPORTED',
+      `Root <parallel id="${terminal.id}"> cannot be the final workflow item because a parallel group has no aggregate result.`,
+      terminal.element.openTagSpan,
+      'Add a downstream <step> that builds the workflow result.'
+    );
+  }
+
+  const findFirstBranch = (
     flowItems: readonly ValidatedFlowItem[]
-  ): WomlSourceElement | undefined {
+  ): WomlSourceElement | undefined => {
     for (const item of flowItems) {
-      if (item.kind === 'branch') return item.element;
+      if (item.kind === 'branch') {
+        return item.element;
+      }
     }
     return undefined;
-  })(items);
+  };
+  const findFirstParallel = (
+    flowItems: readonly ValidatedFlowItem[]
+  ): WomlSourceElement | undefined => {
+    for (const item of flowItems) {
+      if (item.kind === 'parallel') return item.element;
+      if (item.kind === 'branch') {
+        for (const arm of item.arms) {
+          const nested = findFirstParallel(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+    }
+    return undefined;
+  };
+  const firstBranch = findFirstBranch(items);
+  const firstParallel = findFirstParallel(items);
 
-  return { items, firstBranch };
+  return {
+    items,
+    ...(firstBranch === undefined ? {} : { firstBranch }),
+    ...(firstParallel === undefined ? {} : { firstParallel }),
+  };
 }
 
 function lowerStep(step: ValidatedStep): LoweredFlowFragment {
@@ -883,7 +1025,9 @@ function lowerBranch(branch: ValidatedBranch): LoweredFlowFragment {
 }
 
 function lowerFlowItem(item: ValidatedFlowItem): LoweredFlowFragment {
-  return item.kind === 'step' ? lowerStep(item) : lowerBranch(item);
+  if (item.kind === 'step') return lowerStep(item);
+  if (item.kind === 'branch') return lowerBranch(item);
+  throw new Error('Validated parallel lowering is gated until phase P2.');
 }
 
 function lowerFlowItems(
@@ -936,6 +1080,14 @@ export function compileWoml(
   );
   const triggerId = validateManualTrigger(document, triggersElement);
   const flow = validateSteps(document, stepsElement);
+  if (flow.firstParallel !== undefined) {
+    failCompile(
+      document,
+      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED',
+      'This parallel group is valid, but parallel DAG lowering is introduced in phase P2.',
+      flow.firstParallel.openTagSpan
+    );
+  }
   const lowered = lowerFlowItems(flow.items);
   const definition = {
     workflowId,

@@ -1,7 +1,7 @@
 # WOML v0.1 Fundamental Syntax
 
 Status: design catalog draft; sequential scripts and conditional branches are
-implemented in the published CLI profile
+implemented; parallel syntax is frozen and validated but not yet executable
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -59,7 +59,8 @@ includes conditional branches:
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
-| Parallel and approval | Designed | Unavailable |
+| Parallel | Frozen | Frontend validation implemented; lowering and execution unavailable until P2–P6 |
+| Approval | Designed | Unavailable |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
@@ -1067,6 +1068,9 @@ Structural and data rules:
   when a computed branch list happens to contain one item.
 - Optional `name` and `description` attributes describe the group.
 - When present, `concurrency` MUST NOT exceed the number of child steps.
+- A parallel group may appear in root `<steps>` or inside a branch arm.
+- A direct parallel child cannot be a branch, parallel group, approval, or
+  other control container in this profile.
 - All children receive the same context view from immediately before the fork.
 - A child MUST NOT reference a sibling's output.
 - Each successful child writes its own `context.steps.<stepId>` output.
@@ -1076,6 +1080,10 @@ Structural and data rules:
 - The next flow item becomes ready only after the group reaches its terminal
   outcome.
 - After a successful join, every child output is available downstream.
+- A root parallel group cannot be the final workflow item in the current CLI
+  profile because the group has no aggregate output. Authors add a downstream
+  result-building step. A group inside a branch arm may be followed by that
+  arm's `<result>` selecting a guaranteed child output.
 
 Error policies:
 
@@ -1088,10 +1096,12 @@ Both designed policies fail the group when a child fails. The previously
 considered value `continue` is reserved because continuing downstream would
 require defined semantics for missing failed-step outputs.
 
-The compiled model represents the children as independent DAG nodes. A runtime
-that does not support concurrent scheduling MUST reject `<parallel>` as an
-unsupported feature; it MUST NOT silently present sequential execution as
-parallel execution.
+The compiled model represents the children as independent DAG nodes. Until
+model-v3 lowering is implemented, the frontend accepts and validates the
+frozen syntax, then fails at the explicit compile gate
+`WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED`. A runtime that does not support
+concurrent scheduling MUST reject `<parallel>`; it MUST NOT silently present
+sequential execution as parallel execution.
 
 Multi-step concurrent lanes are deferred. A future design may add an explicit
 `<sequence>` child, but `<branch>` is not used for that purpose.
@@ -1368,6 +1378,9 @@ conditions hold.
 - A singleton child occurs more than once.
 - `<steps>` contains no step items.
 - `<parallel>` contains no steps.
+- `<parallel>` directly contains anything other than `<step>`.
+- A root workflow ends with `<parallel>` without a downstream result-building
+  step.
 - `<branch>` has no `<when>`.
 - `<branch>` has no `<otherwise>` in the executable branch profile.
 - A `<when>` or `<otherwise>` arm contains no step items.
@@ -1395,6 +1408,7 @@ conditions hold.
 
 - A duration has no unit or uses an unsupported unit.
 - `concurrency` or a rate count is not a positive integer.
+- Parallel `concurrency` exceeds its direct child count.
 - `retry` is present with any value other than the integer `1`.
 - An enum attribute contains an unsupported value.
 - Inline webhook JSON Schema is malformed or invalid.

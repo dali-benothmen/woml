@@ -126,6 +126,41 @@ describe('parseWoml', () => {
     );
   });
 
+  test('preserves parallel child order, attributes, scripts, and source spans', () => {
+    const source = readFileSync(
+      new URL('./fixtures/parallel.woml', import.meta.url),
+      'utf8'
+    );
+    const document = parseWoml(source, { file: 'parallel.woml' });
+    const [, steps] = elementChildren(document.root);
+    const parallel = elementChildren(steps)[1];
+    const [weather, soil] = elementChildren(parallel);
+    const weatherScript = elementChildren(weather)[0].children[0];
+
+    expect(parallel.name).toBe('parallel');
+    expect(parallel.attributes).toMatchObject({
+      id: { value: 'fieldData' },
+      name: { value: 'Load field data' },
+      description: { value: 'Load independent readings' },
+      concurrency: { value: '2' },
+      'on-error': { value: 'wait-all' },
+    });
+    expect([weather.attributes.id.value, soil.attributes.id.value]).toEqual([
+      'loadWeather',
+      'loadSoil',
+    ]);
+    expect(isWomlRawText(weatherScript)).toBe(true);
+    if (!isWomlRawText(weatherScript)) return;
+    expect(weatherScript.value).toContain('context.steps.loadField.fieldId');
+    expect(parallel.openTagSpan.start.offset).toBe(source.indexOf('<parallel'));
+    expect(
+      source.slice(
+        weatherScript.span.start.offset,
+        weatherScript.span.end.offset
+      )
+    ).toBe(weatherScript.value);
+  });
+
   test('ignores markup-looking text inside script bodies', () => {
     const source = `<workflow>
   <script>

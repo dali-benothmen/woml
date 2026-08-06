@@ -1,0 +1,45 @@
+[
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_001", "runId": "run_fast_01", "sequence": 1,
+    "occurredAt": "2026-08-06T14:20:00.000Z", "type": "run_started",
+    "data": { "workflowId": "field-report", "definitionHash": "sha256:d58dfcefdcd6c40db659042c41e17ca6c8d652033f90f120734d5cd95819b45c", "trigger": {} }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_002", "runId": "run_fast_01", "sequence": 2,
+    "occurredAt": "2026-08-06T14:20:00.001Z", "type": "parallel_group_started", "data": { "parallelId": "fieldData" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_003", "runId": "run_fast_01", "sequence": 3,
+    "occurredAt": "2026-08-06T14:20:00.002Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadWeather", "attempt": 1, "invocationId": "inv_fast_weather", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_004", "runId": "run_fast_01", "sequence": 4,
+    "occurredAt": "2026-08-06T14:20:00.003Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadSoil", "attempt": 1, "invocationId": "inv_fast_soil", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_005", "runId": "run_fast_01", "sequence": 5,
+    "occurredAt": "2026-08-06T14:20:00.004Z", "type": "step_attempt_failed",
+    "data": { "nodeId": "loadWeather", "attempt": 1, "invocationId": "inv_fast_weather", "failure": { "kind": "script_threw", "code": "WOML_SCRIPT_THROWN", "message": "Weather service failed." } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_006", "runId": "run_fast_01", "sequence": 6,
+    "occurredAt": "2026-08-06T14:20:00.005Z", "type": "step_attempt_failed",
+    "data": { "nodeId": "loadSoil", "attempt": 1, "invocationId": "inv_fast_soil", "failure": { "kind": "invocation_cancelled", "code": "WOML_SCRIPT_CANCELLED", "message": "Invocation was cancelled by parallel fail-fast." } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_007", "runId": "run_fast_01", "sequence": 7,
+    "occurredAt": "2026-08-06T14:20:00.006Z", "type": "parallel_group_completed",
+    "data": { "parallelId": "fieldData", "outcome": "failed", "failedNodeIds": ["loadWeather"], "cancelledNodeIds": ["loadSoil"] }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_fast_008", "runId": "run_fast_01", "sequence": 8,
+    "occurredAt": "2026-08-06T14:20:00.007Z", "type": "run_failed",
+    "data": {
+      "failureScope": "parallel", "parallelId": "fieldData", "policy": "fail-fast", "primaryNodeId": "loadWeather",
+      "failedNodeIds": ["loadWeather"], "cancelledNodeIds": ["loadSoil"],
+      "failure": { "kind": "parallel_child_failed", "code": "WOML_PARALLEL_CHILD_FAILED", "message": "A parallel child failed; active siblings were cancelled." }
+    }
+  }
+]

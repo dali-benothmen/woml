@@ -131,19 +131,209 @@ describe('compileWoml', () => {
     ]);
   });
 
-  test('rejects staged elements with a source-located feature error', () => {
+  test('accepts valid parallel syntax but stops at the explicit P2 lowering gate', () => {
     const source = validWorkflow(`
     <parallel id="work">
       <step id="a"><script>return 1;</script></step>
-    </parallel>`);
-    const error = validationError(source);
+    </parallel>
+    <step id="result"><script>return context.steps.a;</script></step>`);
+    const error = compileError(source);
 
-    expect(error.diagnostic.code).toBe('WOML_FEATURE_NOT_EXECUTABLE');
-    expect(error.diagnostic.phase).toBe('validation');
+    expect(error.diagnostic.code).toBe(
+      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
+    );
+    expect(error.diagnostic.phase).toBe('compile');
     expect(error.diagnostic.location.start.offset).toBe(
       source.indexOf('<parallel')
     );
-    expect(error.diagnostic.message).toContain('<parallel>');
+    expect(error.diagnostic.message).toContain('phase P2');
+  });
+
+  test('validates one-child groups and default policy/cap before the P2 gate', () => {
+    const source = validWorkflow(`
+    <parallel id="one" name="One child" description="Degenerate group">
+      <step id="child"><script>return 1;</script></step>
+    </parallel>
+    <step id="result"><script>return context.steps.child;</script></step>`);
+
+    expect(compileError(source).diagnostic.code).toBe(
+      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
+    );
+  });
+
+  test('validates parallel inside a branch arm before the P2 gate', () => {
+    const source = validWorkflow(`
+    <step id="ready"><script>return true;</script></step>
+    <branch id="route">
+      <when test="{{context.steps.ready}}">
+        <parallel id="checks" concurrency="2" on-error="wait-all">
+          <step id="left"><script>return 1;</script></step>
+          <step id="right"><script>return 2;</script></step>
+        </parallel>
+        <result value="{{context.steps.left}}" />
+      </when>
+      <otherwise>
+        <step id="fallback"><script>return 0;</script></step>
+        <result value="{{context.steps.fallback}}" />
+      </otherwise>
+    </branch>`);
+
+    expect(compileError(source).diagnostic.code).toBe(
+      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
+    );
+  });
+
+  test('rejects empty and unsupported parallel children at their source', () => {
+    const emptySource = validWorkflow(`
+    <parallel id="empty"></parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    expect(validationError(emptySource).diagnostic.code).toBe(
+      'WOML_PARALLEL_EMPTY'
+    );
+
+    const nestedSource = validWorkflow(`
+    <parallel id="outer">
+      <branch id="inner">
+        <when test="{{context.trigger.ok}}">
+          <step id="yes"><script>return 1;</script></step>
+          <result value="{{context.steps.yes}}" />
+        </when>
+        <otherwise>
+          <step id="no"><script>return 0;</script></step>
+          <result value="{{context.steps.no}}" />
+        </otherwise>
+      </branch>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    const nestedError = validationError(nestedSource);
+    expect(nestedError.diagnostic.code).toBe('WOML_PARALLEL_CHILD_UNSUPPORTED');
+    expect(nestedError.diagnostic.location.start.offset).toBe(
+      nestedSource.indexOf('<branch')
+    );
+  });
+
+  test('validates parallel concurrency and failure policy', () => {
+    for (const value of ['0', '-1', '1.5', 'two']) {
+      const source = validWorkflow(`
+      <parallel id="group" concurrency="${value}">
+        <step id="child"><script>return 1;</script></step>
+      </parallel>
+      <step id="result"><script>return 1;</script></step>`);
+      expect(validationError(source).diagnostic.code).toBe(
+        'WOML_PARALLEL_INVALID_CONCURRENCY'
+      );
+    }
+
+    const excessive = validWorkflow(`
+    <parallel id="group" concurrency="3">
+      <step id="left"><script>return 1;</script></step>
+      <step id="right"><script>return 2;</script></step>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    expect(validationError(excessive).diagnostic.code).toBe(
+      'WOML_PARALLEL_INVALID_CONCURRENCY'
+    );
+
+    const badPolicy = validWorkflow(`
+    <parallel id="group" on-error="continue">
+      <step id="child"><script>return 1;</script></step>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    expect(validationError(badPolicy).diagnostic.code).toBe(
+      'WOML_PARALLEL_INVALID_POLICY'
+    );
+  });
+
+  test('validates parallel identity, metadata, and attributes', () => {
+    const missingId = validWorkflow(`
+    <parallel>
+      <step id="child"><script>return 1;</script></step>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    expect(validationError(missingId).diagnostic.code).toBe(
+      'WOML_MISSING_ATTRIBUTE'
+    );
+
+    const invalidId = validWorkflow(`
+    <parallel id="bad-id">
+      <step id="child"><script>return 1;</script></step>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    expect(validationError(invalidId).diagnostic.code).toBe('WOML_INVALID_ID');
+
+    const emptyName = validWorkflow(`
+    <parallel id="group" name="  ">
+      <step id="child"><script>return 1;</script></step>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    expect(validationError(emptyName).diagnostic.code).toBe(
+      'WOML_EMPTY_METADATA'
+    );
+
+    const unknownAttribute = validWorkflow(`
+    <parallel id="group" mode="fast">
+      <step id="child"><script>return 1;</script></step>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    expect(validationError(unknownAttribute).diagnostic.code).toBe(
+      'WOML_UNKNOWN_ATTRIBUTE'
+    );
+  });
+
+  test('keeps parallel, branch, and step IDs in one namespace', () => {
+    const source = validWorkflow(`
+    <step id="shared"><script>return 1;</script></step>
+    <parallel id="shared">
+      <step id="child"><script>return 2;</script></step>
+    </parallel>
+    <step id="result"><script>return 1;</script></step>`);
+    const error = validationError(source);
+
+    expect(error.diagnostic.code).toBe('WOML_DUPLICATE_ID');
+    expect(error.diagnostic.location.start.offset).toBe(
+      source.indexOf('shared', source.indexOf('<parallel'))
+    );
+  });
+
+  test('rejects a root terminal parallel because it has no aggregate result', () => {
+    const source = validWorkflow(`
+    <parallel id="finalGroup">
+      <step id="child"><script>return 1;</script></step>
+    </parallel>`);
+    const error = validationError(source);
+
+    expect(error.diagnostic.code).toBe('WOML_PARALLEL_TERMINAL_UNSUPPORTED');
+    expect(error.diagnostic.location.start.offset).toBe(
+      source.indexOf('<parallel')
+    );
+  });
+
+  test('parallel IDs are structural only while child outputs dominate downstream references', () => {
+    const invalidSource = validWorkflow(`
+    <parallel id="group">
+      <step id="child"><script>return true;</script></step>
+    </parallel>
+    <branch id="route">
+      <when test="{{context.steps.group}}">
+        <step id="yes"><script>return 1;</script></step>
+        <result value="{{context.steps.yes}}" />
+      </when>
+      <otherwise>
+        <step id="no"><script>return 0;</script></step>
+        <result value="{{context.steps.no}}" />
+      </otherwise>
+    </branch>`);
+    expect(compileError(invalidSource).diagnostic.code).toBe(
+      'WOML_REFERENCE_NOT_DOMINATING'
+    );
+
+    const validSource = invalidSource.replace(
+      '{{context.steps.group}}',
+      '{{context.steps.child}}'
+    );
+    expect(compileError(validSource).diagnostic.code).toBe(
+      'WOML_PARALLEL_LOWERING_NOT_IMPLEMENTED'
+    );
   });
 
   test('rejects staged attributes instead of silently ignoring them', () => {
