@@ -64,12 +64,35 @@ interface ValidatedParallel {
   readonly children: readonly ValidatedStep[];
 }
 
-type ValidatedFlowItem = ValidatedStep | ValidatedBranch | ValidatedParallel;
+interface ValidatedApproval {
+  readonly kind: 'approval';
+  readonly id: string;
+  readonly element: WomlSourceElement;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+  readonly timeoutMs?: number;
+  readonly onTimeout: 'reject' | 'fail';
+  readonly approvedItems: readonly ValidatedFlowItem[];
+  readonly rejectedItems: readonly ValidatedFlowItem[];
+}
+
+type ValidatedFlowItem =
+  | ValidatedStep
+  | ValidatedBranch
+  | ValidatedParallel
+  | ValidatedApproval;
 
 interface ValidatedFlow {
   readonly items: readonly ValidatedFlowItem[];
   readonly firstBranch?: WomlSourceElement;
   readonly firstParallel?: WomlSourceElement;
+  readonly firstApproval?: WomlSourceElement;
+}
+
+interface ValidatedWorkflow {
+  readonly workflowId: string;
+  readonly metadata?: CompiledWorkflowMetadata;
+  readonly triggerId: string;
+  readonly flow: ValidatedFlow;
 }
 
 interface LoweredFlowFragment {
@@ -91,6 +114,9 @@ const supportedElements = new Set([
   'when',
   'otherwise',
   'result',
+  'approval',
+  'when-approved',
+  'when-rejected',
 ]);
 
 const stagedElements = new Set([
@@ -103,10 +129,7 @@ const stagedElements = new Set([
   'schedule',
   'interval',
   'event',
-  'approval',
   'notify',
-  'when-approved',
-  'when-rejected',
 ]);
 
 const elementProfiles: Readonly<Record<string, ElementProfile>> = {
@@ -135,6 +158,11 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   when: { attributes: new Set(['test']) },
   otherwise: { attributes: new Set() },
   result: { attributes: new Set(['value']) },
+  approval: {
+    attributes: new Set(['id', 'name', 'description', 'timeout', 'on-timeout']),
+  },
+  'when-approved': { attributes: new Set() },
+  'when-rejected': { attributes: new Set() },
 };
 
 const workflowIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -299,7 +327,7 @@ function validateWorkflowId(
 function validateJavaScriptSafeId(
   document: WomlSourceDocument,
   attribute: WomlSourceAttribute,
-  role: 'trigger' | 'step' | 'branch' | 'parallel'
+  role: 'trigger' | 'step' | 'branch' | 'parallel' | 'approval'
 ): string {
   if (
     attribute.value.length > 256 ||
@@ -308,7 +336,7 @@ function validateJavaScriptSafeId(
     failValidation(
       document,
       'WOML_INVALID_ID',
-      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'parallel' ? 'Parallel' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
+      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
       attribute.valueSpan,
       'Use letters and numbers, start with a lowercase letter, and do not use hyphens.'
     );
@@ -514,19 +542,154 @@ function registerStructuralId(
   document: WomlSourceDocument,
   registry: Set<string>,
   attribute: WomlSourceAttribute,
-  role: 'step' | 'branch' | 'parallel'
+  role: 'step' | 'branch' | 'parallel' | 'approval'
 ): string {
   const id = validateJavaScriptSafeId(document, attribute, role);
   if (registry.has(id)) {
     failValidation(
       document,
       'WOML_DUPLICATE_ID',
-      `Structural ID "${id}" is duplicated across workflow steps, branches, and parallel groups.`,
+      `Structural ID "${id}" is duplicated across workflow steps, branches, parallel groups, and approvals.`,
       attribute.valueSpan
     );
   }
   registry.add(id);
   return id;
+}
+
+const durationUnitsMs = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+} as const;
+
+function approvalTimeoutMs(
+  document: WomlSourceDocument,
+  approval: WomlSourceElement
+): number | undefined {
+  const timeout = approval.attributes.timeout;
+  const onTimeout = approval.attributes['on-timeout'];
+  if (timeout === undefined) {
+    if (onTimeout !== undefined) {
+      failValidation(
+        document,
+        'WOML_APPROVAL_TIMEOUT_INVALID',
+        '<approval> cannot declare on-timeout without a timeout.',
+        onTimeout.nameSpan
+      );
+    }
+    return undefined;
+  }
+
+  const match =
+    /^(?:(?:[1-9][0-9]*)(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)(ms|s|m|h|d)$/.exec(
+      timeout.value
+    );
+  if (match === null) {
+    failValidation(
+      document,
+      'WOML_APPROVAL_TIMEOUT_INVALID',
+      `Approval timeout "${timeout.value}" must be a positive duration using ms, s, m, h, or d.`,
+      timeout.valueSpan,
+      'Examples: 500ms, 30m, 24h'
+    );
+  }
+
+  const numeric = Number(timeout.value.slice(0, -match[1].length));
+  const milliseconds =
+    numeric * durationUnitsMs[match[1] as keyof typeof durationUnitsMs];
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 1) {
+    failValidation(
+      document,
+      'WOML_APPROVAL_TIMEOUT_INVALID',
+      `Approval timeout "${timeout.value}" must resolve to a positive safe integer number of milliseconds.`,
+      timeout.valueSpan
+    );
+  }
+  return milliseconds;
+}
+
+function validateApprovalArm(
+  document: WomlSourceDocument,
+  arm: WomlSourceElement,
+  registry: Set<string>
+): readonly ValidatedFlowItem[] {
+  return elementChildren(document, arm).map(child =>
+    validateFlowItem(document, child, registry, `<${arm.name}>`)
+  );
+}
+
+function validateApproval(
+  document: WomlSourceDocument,
+  approval: WomlSourceElement,
+  registry: Set<string>
+): ValidatedApproval {
+  const id = registerStructuralId(
+    document,
+    registry,
+    requiredAttribute(document, approval, 'id'),
+    'approval'
+  );
+  const children = elementChildren(document, approval);
+  const approved = children.filter(child => child.name === 'when-approved');
+  const rejected = children.filter(child => child.name === 'when-rejected');
+  const invalidChild = children.find(
+    child => child.name !== 'when-approved' && child.name !== 'when-rejected'
+  );
+
+  if (invalidChild !== undefined) {
+    failValidation(
+      document,
+      'WOML_APPROVAL_STRUCTURE_INVALID',
+      `<approval id="${id}"> may contain <when-approved> followed by <when-rejected> only.`,
+      invalidChild.openTagSpan
+    );
+  }
+  if (approved.length !== 1 || rejected.length !== 1) {
+    const duplicate = approved[1] ?? rejected[1];
+    failValidation(
+      document,
+      'WOML_APPROVAL_STRUCTURE_INVALID',
+      `<approval id="${id}"> requires exactly one <when-approved> and one <when-rejected>.`,
+      duplicate?.openTagSpan ?? approval.openTagSpan
+    );
+  }
+  if (
+    children.length !== 2 ||
+    children[0] !== approved[0] ||
+    children[1] !== rejected[0]
+  ) {
+    failValidation(
+      document,
+      'WOML_APPROVAL_STRUCTURE_INVALID',
+      '<when-approved> must appear before <when-rejected> inside <approval>.',
+      children[0]?.openTagSpan ?? approval.openTagSpan
+    );
+  }
+
+  const onTimeoutAttribute = approval.attributes['on-timeout'];
+  const onTimeout = onTimeoutAttribute?.value ?? 'fail';
+  if (onTimeout !== 'reject' && onTimeout !== 'fail') {
+    failValidation(
+      document,
+      'WOML_APPROVAL_TIMEOUT_INVALID',
+      `Approval on-timeout must be "reject" or "fail", found "${onTimeout}".`,
+      onTimeoutAttribute!.valueSpan
+    );
+  }
+
+  return {
+    kind: 'approval',
+    id,
+    element: approval,
+    metadata: flowItemMetadata(document, approval),
+    timeoutMs: approvalTimeoutMs(document, approval),
+    onTimeout,
+    approvedItems: validateApprovalArm(document, approved[0], registry),
+    rejectedItems: validateApprovalArm(document, rejected[0], registry),
+  };
 }
 
 function validateStep(
@@ -725,6 +888,15 @@ function validateParallel(
 
   const unsupportedChild = childElements.find(child => child.name !== 'step');
   if (unsupportedChild !== undefined) {
+    if (unsupportedChild.name === 'approval') {
+      failValidation(
+        document,
+        'WOML_APPROVAL_PLACEMENT_INVALID',
+        `<approval> cannot be a direct child of <parallel id="${id}"> in this profile.`,
+        unsupportedChild.openTagSpan,
+        'Place the approval before or after the parallel group, or inside a selected branch arm.'
+      );
+    }
     failValidation(
       document,
       'WOML_PARALLEL_CHILD_UNSUPPORTED',
@@ -794,6 +966,17 @@ function validateFlowItem(
   if (element.name === 'parallel') {
     return validateParallel(document, element, registry);
   }
+  if (element.name === 'approval') {
+    return validateApproval(document, element, registry);
+  }
+  if (element.name === 'when-approved' || element.name === 'when-rejected') {
+    failValidation(
+      document,
+      'WOML_APPROVAL_PLACEMENT_INVALID',
+      `<${element.name}> is valid only as a direct child of <approval>.`,
+      element.openTagSpan
+    );
+  }
   failValidation(
     document,
     'WOML_INVALID_STRUCTURE',
@@ -843,6 +1026,25 @@ function validateReferenceAvailability(
 
     if (item.kind === 'parallel') {
       for (const child of item.children) available.add(child.id);
+      continue;
+    }
+
+    if (item.kind === 'approval') {
+      const armInput = new Set(available);
+      armInput.add(item.id);
+      validateReferenceAvailability(
+        document,
+        item.approvedItems,
+        allIds,
+        armInput
+      );
+      validateReferenceAvailability(
+        document,
+        item.rejectedItems,
+        allIds,
+        armInput
+      );
+      available.add(item.id);
       continue;
     }
 
@@ -901,6 +1103,12 @@ function validateSteps(
       if (item.kind === 'branch') {
         return item.element;
       }
+      if (item.kind === 'approval') {
+        const approved = findFirstBranch(item.approvedItems);
+        if (approved !== undefined) return approved;
+        const rejected = findFirstBranch(item.rejectedItems);
+        if (rejected !== undefined) return rejected;
+      }
     }
     return undefined;
   };
@@ -915,16 +1123,38 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
+      if (item.kind === 'approval') {
+        const approved = findFirstParallel(item.approvedItems);
+        if (approved !== undefined) return approved;
+        const rejected = findFirstParallel(item.rejectedItems);
+        if (rejected !== undefined) return rejected;
+      }
+    }
+    return undefined;
+  };
+  const findFirstApproval = (
+    flowItems: readonly ValidatedFlowItem[]
+  ): WomlSourceElement | undefined => {
+    for (const item of flowItems) {
+      if (item.kind === 'approval') return item.element;
+      if (item.kind === 'branch') {
+        for (const arm of item.arms) {
+          const nested = findFirstApproval(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
     }
     return undefined;
   };
   const firstBranch = findFirstBranch(items);
   const firstParallel = findFirstParallel(items);
+  const firstApproval = findFirstApproval(items);
 
   return {
     items,
     ...(firstBranch === undefined ? {} : { firstBranch }),
     ...(firstParallel === undefined ? {} : { firstParallel }),
+    ...(firstApproval === undefined ? {} : { firstApproval }),
   };
 }
 
@@ -1078,7 +1308,8 @@ function lowerParallel(parallel: ValidatedParallel): LoweredFlowFragment {
 function lowerFlowItem(item: ValidatedFlowItem): LoweredFlowFragment {
   if (item.kind === 'step') return lowerStep(item);
   if (item.kind === 'branch') return lowerBranch(item);
-  return lowerParallel(item);
+  if (item.kind === 'parallel') return lowerParallel(item);
+  throw new Error('Approval lowering is implemented in A2.');
 }
 
 function lowerFlowItems(
@@ -1105,9 +1336,7 @@ function lowerFlowItems(
   };
 }
 
-export function compileWoml(
-  document: WomlSourceDocument
-): CompiledWorkflowDefinition {
+function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
   const workflow = document.root;
   if (workflow.name !== 'workflow') {
     failValidation(
@@ -1131,6 +1360,32 @@ export function compileWoml(
   );
   const triggerId = validateManualTrigger(document, triggersElement);
   const flow = validateSteps(document, stepsElement);
+
+  return {
+    workflowId,
+    ...(metadata === undefined ? {} : { metadata }),
+    triggerId,
+    flow,
+  };
+}
+
+export function validateWoml(document: WomlSourceDocument): void {
+  validateDocument(document);
+}
+
+export function compileWoml(
+  document: WomlSourceDocument
+): CompiledWorkflowDefinition {
+  const workflow = document.root;
+  const { workflowId, metadata, triggerId, flow } = validateDocument(document);
+  if (flow.firstApproval !== undefined) {
+    failCompile(
+      document,
+      'WOML_APPROVAL_LOWERING_UNAVAILABLE',
+      'Approval syntax is valid, but compiled model v4 lowering is implemented in A2.',
+      flow.firstApproval.openTagSpan
+    );
+  }
   const lowered = lowerFlowItems(flow.items);
   const definition = {
     workflowId,

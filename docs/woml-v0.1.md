@@ -61,7 +61,7 @@ includes conditional branches and bounded parallel groups:
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
-| Approval | Designed | Unavailable |
+| Approval | Frozen; A1 validation implemented | Unavailable until model-v4 lowering and runtime phases A2–A7 |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
@@ -955,6 +955,10 @@ an attribute on `<step>` and is not wrapped by `<step>`.
 Like the other structural elements, `<approval>` does not accept child metadata
 tags.
 
+`on-timeout` without `timeout` is invalid because the policy could never take
+effect. Executable approval durations must use `ms`, `s`, `m`, `h`, or `d` and
+resolve to a positive safe integer number of milliseconds.
+
 The child order is fixed:
 
 1. Optional `<notify>` containing exactly one `<script>`.
@@ -968,12 +972,12 @@ An empty arm is a valid no-op continuation.
 
 ### 12.1 Durable waiting and notification
 
-When execution reaches an approval, the runtime:
+The frozen runtime contract says that when execution reaches an approval it:
 
 1. Generates a cryptographically opaque token scoped to this run and approval.
 2. Persists the waiting state and token identity before any notification side
    effect occurs.
-3. Executes `<notify>`, when present.
+3. Delivers the approval through an executable notification surface.
 4. Suspends further scheduling along this path until a decision or timeout is
    durably recorded.
 
@@ -981,24 +985,28 @@ A process restart leaves the approval waiting. An in-memory Promise, callback,
 or timer is never the authoritative state. The token is runtime identity; it is
 not WOML source text and is not a compiled constant.
 
-`<notify>` is ordinary script execution and receives the same `context` and
-`services` bindings as a step script. The Slack call above illustrates a service
-provided by a future capability package; Slack is not a fundamental WOML tag.
-How the opaque token is delivered to the reviewer or approval UI remains an open
-integration contract in Section 18.
+`<notify>` remains designed but is not executable in the first Human Approval
+profile. The local CLI itself prints the approval URL. Executable notification
+scripts wait for the services/capabilities milestone, notification idempotency,
+and a safe non-persisted URL binding. A runtime rejects `<notify>` with
+`WOML_FEATURE_NOT_EXECUTABLE`; it never silently ignores it.
 
-### 12.2 Resuming an approval
+### 12.2 Resolving an approval
 
-The host application resumes a waiting approval through the WOML runtime API:
+A reviewer resolves a waiting approval through the WOML HTTP endpoint:
 
-```js
-await woml.resume(token, "approved");
-await woml.resume(token, "rejected");
+```http
+POST /api/v1/approvals/{token}/decision
+Content-Type: application/json
+
+{
+  "decision": "approved"
+}
 ```
 
 Only the exact decisions `"approved"` and `"rejected"` are accepted in v0.1.
-`woml.resume` is an external runtime API; it is not a WOML element and is not an
-in-script control-flow function.
+HTTP is the public decision mechanism. WOML does not expose a `woml.resume()`
+package API or an in-script control-flow function.
 
 The runtime validates the token, atomically records the decision, and makes the
 approval output available as `context.steps.<approvalId>`. The initial output
@@ -1013,8 +1021,9 @@ shape is:
 ```
 
 `decision` is `approved` or `rejected`; `source` is `human` or `timeout`.
-`decidedAt` is the timestamp recorded by the runtime. A successful human resume
-selects the matching arm. An unknown, expired, or conflicting token is rejected.
+`decidedAt` is the timestamp recorded by the runtime. A successful human
+decision selects the matching arm. An unknown, expired, or conflicting token is
+rejected.
 Repeating the same already-recorded decision is idempotent; attempting a
 different decision for the same approval is a conflict.
 
@@ -1025,8 +1034,8 @@ With `on-timeout="reject"`, expiry durably records a rejected decision with
 `<when-rejected>`. With `on-timeout="fail"`, expiry fails the run and neither
 decision arm executes. Omitting `on-timeout` uses `fail`.
 
-Timeout processing and `woml.resume` must compete through one atomic persistence
-decision so only one terminal outcome wins.
+Timeout processing and HTTP decisions must compete through one atomic
+persistence decision so only one terminal outcome wins.
 
 ## 13. `<parallel>`
 
@@ -1415,6 +1424,7 @@ conditions hold.
 - An enum attribute contains an unsupported value.
 - Inline webhook JSON Schema is malformed or invalid.
 - Approval `timeout` is invalid or `on-timeout` is not `reject` or `fail`.
+- Approval declares `on-timeout` without a `timeout`.
 - A `<when>` test is not exactly one context reference.
 - A `<result>` value is not exactly one context reference.
 
@@ -1429,6 +1439,9 @@ conditions hold.
   selected arm or before the branch.
 - A downstream WOML attribute unconditionally references an output that only
   exists on some conditional paths instead of the stable branch result.
+- An approval arm or downstream item references a route-local output that is
+  not guaranteed; the approval's own stable decision output is the portable
+  cross-route value.
 
 Context references do not automatically create graph dependencies. Structural
 order and nesting create the DAG; references are validated against it.
@@ -1549,25 +1562,25 @@ Define an explicit failed-output or outcome model before adding
 `on-error="continue"`. The current grammar accepts only `fail-fast` and
 `wait-all`, both of which fail the parallel group when any child fails.
 
-### 18.3 Approval notification and token delivery
+### 18.3 Approval notifications and production hosting
 
-The durable state transition and public call shape
-`woml.resume(token, decision)` are designed. Approval remains unavailable in a
-publishable profile until the integration surrounding that call has a security
-and delivery contract:
+A0 froze the local HTTP, token, store, event, native-outcome, timeout, and
+diagnostic contracts in `WOML Human Approval Implementation Plan.md` and
+`docs/protocols/approval-*.md`. HTTP is the only public decision mechanism.
 
-- How `<notify>` or an approval UI receives a reviewer-safe form of the opaque
-  token.
-- How a reviewer is authenticated and authorized for an approval.
-- Whether notification delivery has an idempotency key and what happens when
-  the notification script fails after the waiting state has been persisted.
-- How long resolved token records remain available so identical duplicate
-  resume calls can remain idempotent.
-- Whether a later WOML version extends the decision call with structured
-  reviewer metadata or a validated payload.
+The remaining approval-adjacent decisions do not block the local terminal-URL
+profile:
 
-These are explicitly open. They do not change the designed two-decision control
-flow, timeout behavior, or `woml.resume` name.
+- Executable `<notify>` waits for services, safe non-persisted URL delivery,
+  secrets, and notification idempotency.
+- Remote hosting waits for TLS, reviewer authentication/authorization, and
+  deployment ownership.
+- Structured reviewer metadata, custom forms, and validated decision payloads
+  require a later language version.
+- Credential cleanup waits for an explicit retention/audit contract.
+
+None of these changes the frozen two-decision flow or timeout behavior. WOML
+will not add a package-level resume function.
 
 ## 19. Explicitly Deferred Syntax
 

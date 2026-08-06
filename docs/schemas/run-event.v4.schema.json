@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v4",
+  "title": "WOML Run Event v4",
+  "description": "Append-only workflow events for sequential, branch, parallel, and durable human-approval execution.",
+  "x-status": "approval-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v3",
+  "x-currentEventTypes": [
+    "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed",
+    "branch_selected", "parallel_group_started", "parallel_group_completed",
+    "approval_requested", "approval_resolved", "run_succeeded", "run_failed"
+  ],
+  "x-invariants": [
+    "Events are immutable, append-only, contiguous by run sequence, and never mix schema versions within one run.",
+    "approval_requested is persisted before any capability token or approval URL is exposed.",
+    "approval_resolved is the only event that publishes context.steps.<approvalId> for decision resolutions.",
+    "One request ID resolves at most once; human decision and timeout compete in one immediate SQLite transaction.",
+    "timeout_failure and approval-scoped run_failed are appended atomically and publish no approval output.",
+    "Tokens, token IDs, token hashes, URLs, ports, and reviewer credentials never appear in run events."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 4 },
+    "eventId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "runId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed",
+        "branch_selected", "parallel_group_started", "parallel_group_completed",
+        "approval_requested", "approval_resolved", "run_succeeded", "run_failed"
+      ]
+    },
+    "data": {}
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "run_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptSucceededData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/stepAttemptFailedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "branch_selected" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v2#/$defs/branchSelectedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "parallel_group_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "parallel_group_completed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupCompletedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "approval_requested" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/approvalRequestedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "approval_resolved" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/approvalResolvedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "run_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runSucceededData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "run_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runFailedData" } } }
+    }
+  ],
+  "$defs": {
+    "publicStructuralId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^aprreq_[A-Za-z0-9_-]+$",
+      "minLength": 10,
+      "maxLength": 256
+    },
+    "approvalRequestedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvalId", "requestId", "onTimeout"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/publicStructuralId" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "onTimeout": { "enum": ["reject", "fail"] }
+      }
+    },
+    "approvalResolvedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvalId", "requestId", "resolution"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/publicStructuralId" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "resolution": { "$ref": "#/$defs/approvalResolution" }
+      }
+    },
+    "approvalResolution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "decision", "source"],
+          "properties": {
+            "kind": { "const": "decision" },
+            "decision": { "enum": ["approved", "rejected"] },
+            "source": { "const": "human" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "decision", "source"],
+          "properties": {
+            "kind": { "const": "decision" },
+            "decision": { "const": "rejected" },
+            "source": { "const": "timeout" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "timeout_failure" }
+          }
+        }
+      ]
+    },
+    "runFailedData": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/attemptRunFailedData" },
+        { "$ref": "https://cronflow.dev/schemas/run-event/v2#/$defs/branchRunFailedData" },
+        { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelRunFailedData" },
+        { "$ref": "#/$defs/approvalRunFailedData" }
+      ]
+    },
+    "approvalRunFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failureScope", "approvalId", "requestId", "failure"],
+      "properties": {
+        "failureScope": { "const": "approval" },
+        "approvalId": { "$ref": "#/$defs/publicStructuralId" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "failure": { "$ref": "#/$defs/approvalFailure" }
+      }
+    },
+    "approvalFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "approval_timeout" },
+        "code": { "const": "WOML_APPROVAL_TIMEOUT" },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

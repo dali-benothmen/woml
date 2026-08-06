@@ -1,0 +1,56 @@
+<workflow version="0.1" id="publish-article" name="Publish Article">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="prepareArticle">
+      <script>
+        return {
+          title: "WOML reaches human review",
+          ready: true
+        };
+      </script>
+    </step>
+
+    <approval
+      id="editorApproval"
+      name="Editorial approval"
+      description="Approve the prepared article for publication"
+      timeout="24h"
+      on-timeout="reject">
+      <when-approved>
+        <step id="publish">
+          <script>
+            return {
+              published: true,
+              title: context.steps.prepareArticle.title
+            };
+          </script>
+        </step>
+      </when-approved>
+
+      <when-rejected>
+        <step id="recordRejection">
+          <script>
+            return {
+              published: false,
+              reason: "Human review rejected publication"
+            };
+          </script>
+        </step>
+      </when-rejected>
+    </approval>
+
+    <step id="finalStatus">
+      <script>
+        return {
+          decision: context.steps.editorApproval.decision,
+          source: context.steps.editorApproval.source,
+          published:
+            context.steps.editorApproval.decision === "approved"
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>

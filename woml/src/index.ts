@@ -1,4 +1,4 @@
-export { compileWoml } from './compiler';
+export { compileWoml, validateWoml } from './compiler';
 export {
   inspectCompiledWorkflowGraph,
   type ArrayExpression,
@@ -10,6 +10,7 @@ export {
   type CompiledWorkflowDefinitionV1,
   type CompiledWorkflowDefinitionV2,
   type CompiledWorkflowDefinitionV3,
+  type CompiledWorkflowDefinitionV4,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,

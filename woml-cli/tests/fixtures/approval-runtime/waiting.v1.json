@@ -1,0 +1,17 @@
+{
+  "contract": "woml.runtime-outcome",
+  "version": 1,
+  "status": "waiting",
+  "workflowId": "publish-article",
+  "runId": "run_approval_ok",
+  "approval": {
+    "approvalId": "editorApproval",
+    "requestId": "aprreq_editor_ok",
+    "name": "Editorial approval",
+    "description": "Approve the prepared article for publication",
+    "expiresAt": "2026-08-08T10:00:00.003Z",
+    "onTimeout": "reject",
+    "token": "apr_testtoken01.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdef",
+    "credentialExpiresAt": "2026-08-08T10:00:00.003Z"
+  }
+}

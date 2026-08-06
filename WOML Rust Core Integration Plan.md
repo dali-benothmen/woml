@@ -717,7 +717,11 @@ separate design-and-implementation phases in this order:
    `wait-all`, `fail-fast`, protocol-v2 Worker cancellation, durable recovery,
    and packaged CLI diagnostics. The milestone proof is in
    `WOML Parallel Implementation Plan.md`.
-3. Resolve approval token storage, then implement pause/resume and `<approval>`.
+3. **In progress — A0/A1 complete:** approval model v4, event v4, store v2,
+   HTTP v1, native-outcome v1, token, timeout, diagnostic, and fixture contracts
+   are frozen, and frontend validation is implemented. A2 begins deterministic
+   lowering; later phases add Rust waiting/resolution and the HTTP-only decision
+   flow defined in `WOML Human Approval Implementation Plan.md`.
 4. Resolve idempotency keys, then enable retry values greater than one.
 5. Add the remaining triggers, lifecycle behavior, services, and engine-control
    operations required for product parity.
@@ -739,7 +743,8 @@ The Rust hello slice does not authorize defaults for:
 - Workflow-level cancellation and durable user state. Internal fail-fast
   Worker cancellation is implemented and remains a separate engine concern.
 - Service calls from scripts.
-- Approval token generation, storage, and hashing.
+- Approval token generation, storage, and hashing are frozen by A0 but remain
+  unimplemented until A3; the Rust hello slice must not invent a second shape.
 - Default production timeout.
 - Default context, result, and frame byte limits.
 - Per-workflow overrides for runtime resource limits.
@@ -748,8 +753,9 @@ For the first slice:
 
 - `context` contains only `trigger` and successful `steps` outputs.
 - Retry has one attempt.
-- Branch, parallel, approval, lifecycle, and services are rejected before
-  execution.
+- Approval, lifecycle, and services are rejected before Rust execution. Branch
+  and parallel are executable; approval syntax passes frontend validation but
+  lowering remains explicitly gated until A2.
 - Secrets never appear in compiled inputs, context, protocol messages, or
   events.
 
@@ -765,7 +771,8 @@ Kept:
 - TypeScript XML parsing.
 - Source locations and diagnostics.
 - WOML validation and DAG compilation.
-- Versioned Compiled Workflow Models v1–v3.
+- Executable Compiled Workflow Models v1–v3 and the frozen model-v4 approval
+  contract, which becomes executable through A2–A7.
 - The CLI command surface.
 - The isolated Bun Worker implementation where compatible with protocol v1.
 - Existing fixtures and expected outputs.

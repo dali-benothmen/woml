@@ -123,6 +123,7 @@ export interface CompiledWorkflowEdge {
   readonly condition: EdgeCondition;
   readonly branchId?: string;
   readonly parallelId?: string;
+  readonly approvalId?: string;
 }
 
 export interface CompiledWorkflowGraph {
@@ -153,10 +154,16 @@ export interface CompiledWorkflowDefinitionV3
   readonly schemaVersion: 3;
 }
 
+export interface CompiledWorkflowDefinitionV4
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 4;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
-  | CompiledWorkflowDefinitionV3;
+  | CompiledWorkflowDefinitionV3
+  | CompiledWorkflowDefinitionV4;
 
 export interface CompiledGraphIssue {
   readonly code:

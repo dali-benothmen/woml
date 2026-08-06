@@ -787,7 +787,7 @@ Parallel must not silently resolve unrelated architecture questions:
 - `context.run` remains unavailable.
 - `context.env` and resolved secrets remain unavailable and unpersisted.
 - Retry idempotency-key derivation remains unresolved.
-- Approval token storage and `woml.resume` remain separate.
+- Approval token storage and the HTTP decision endpoint remain separate.
 - Engine cancellation of a workflow remains distinct from internal
   fail-fast child cancellation.
 - Default production context, result, and frame byte limits remain
@@ -801,8 +801,10 @@ contract review rather than selecting a default.
 
 After P0–P7, product expansion continues in the existing order:
 
-1. **Human approval** — `<approval>`, notification, pause/resume, durable token
-   storage, timeout competition, and `woml.resume(token, decision)`.
+1. **Human approval — A0/A1 complete** — versioned model/event/HTTP/token
+   contracts and frontend validation are complete; A2–A7 add lowering, Rust
+   waiting/resolution, recovery, and the HTTP-only product flow defined in
+   `WOML Human Approval Implementation Plan.md`.
 2. **Retries and idempotency** — idempotency-key derivation, duplicate
    handling, durable retry scheduling, and backoff.
 3. **Production triggers** — webhook, schedule, interval, and event triggers

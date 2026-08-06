@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/approval-runtime-outcome/v1",
+  "title": "WOML Native Runtime Outcome v1",
+  "description": "Discriminated N-API outcome returned when a durable model-v4 workflow succeeds or waits for Human Approval.",
+  "x-status": "approval-runtime-outcome-v1-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/succeededOutcome" },
+    { "$ref": "#/$defs/waitingOutcome" }
+  ],
+  "$defs": {
+    "publicStructuralId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^aprreq_[A-Za-z0-9_-]+$",
+      "minLength": 10,
+      "maxLength": 256
+    },
+    "base": {
+      "type": "object",
+      "required": ["contract", "version", "status"],
+      "properties": {
+        "contract": { "const": "woml.runtime-outcome" },
+        "version": { "const": 1 },
+        "status": { "enum": ["succeeded", "waiting"] }
+      }
+    },
+    "succeededOutcome": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contract", "version", "status", "execution"],
+          "properties": {
+            "contract": { "const": "woml.runtime-outcome" },
+            "version": { "const": 1 },
+            "status": { "const": "succeeded" },
+            "execution": { "$ref": "#/$defs/execution" }
+          }
+        }
+      ]
+    },
+    "waitingOutcome": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contract", "version", "status", "workflowId", "runId", "approval"],
+          "properties": {
+            "contract": { "const": "woml.runtime-outcome" },
+            "version": { "const": 1 },
+            "status": { "const": "waiting" },
+            "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "approval": { "$ref": "#/$defs/waitingApproval" }
+          }
+        }
+      ]
+    },
+    "waitingApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvalId", "requestId", "onTimeout", "token", "credentialExpiresAt"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/publicStructuralId" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "onTimeout": { "enum": ["reject", "fail"] },
+        "token": {
+          "type": "string",
+          "pattern": "^apr_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "minLength": 40,
+          "maxLength": 512
+        },
+        "credentialExpiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowId", "runId", "terminalNodeId", "result", "context", "executionOrder", "events"],
+      "properties": {
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "terminalNodeId": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "result": {},
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["trigger", "steps"],
+          "properties": {
+            "trigger": { "type": "object" },
+            "steps": { "type": "object" }
+          }
+        },
+        "executionOrder": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "https://cronflow.dev/schemas/run-event/v4" }
+        }
+      }
+    }
+  }
+}

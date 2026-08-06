@@ -775,8 +775,10 @@ Once B0–B6 are complete, product expansion continues in this order:
    children through the multiplexed Bun protocol, joins them, implements both
    failure policies and targeted cancellation, and persists durable
    parallel-group events.
-2. **Human approval** — implement `<approval>`, notifications, pause/resume,
-   durable approval tokens, and `woml.resume(token, decision)`.
+2. **Human approval — A0/A1 complete** — versioned model/event/HTTP/token
+   contracts and frontend validation are complete; A2–A7 add lowering, Rust
+   waiting/resolution, recovery, and the HTTP-only product flow in
+   `WOML Human Approval Implementation Plan.md`.
 3. **Retries and idempotency** — freeze idempotency-key derivation and duplicate
    behavior, then enable retry values greater than one with durable attempt
    events and backoff.

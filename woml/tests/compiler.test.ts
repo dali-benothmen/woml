@@ -5,6 +5,7 @@ import {
   compileWoml,
   inspectCompiledWorkflowGraph,
   parseWoml,
+  validateWoml,
   WomlCompileError,
   WomlValidationError,
   type CompiledWorkflowGraph,
@@ -44,6 +45,206 @@ function validWorkflow(
 }
 
 describe('compileWoml', () => {
+  test('A1 validates the reviewed approval syntax before A2 lowering', () => {
+    const source = readFileSync(
+      new URL('./fixtures/approval.woml', import.meta.url),
+      'utf8'
+    );
+    const document = parseWoml(source, { file: 'approval.woml' });
+
+    expect(() => validateWoml(document)).not.toThrow();
+    try {
+      compileWoml(document);
+      throw new Error('Expected approval lowering to remain gated on A2.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WomlCompileError);
+      expect((error as WomlCompileError).diagnostic.code).toBe(
+        'WOML_APPROVAL_LOWERING_UNAVAILABLE'
+      );
+      expect((error as WomlCompileError).diagnostic.location.start.offset).toBe(
+        source.indexOf('<approval')
+      );
+    }
+  });
+
+  test('accepts empty arms, nested approvals, and approval output references inside decision arms', () => {
+    const source = validWorkflow(`
+    <step id="calculate"><script>return { ready: true };</script></step>
+    <approval id="outerApproval" timeout="1.5h">
+      <when-approved>
+        <branch id="approvedRoute">
+          <when test="{{context.steps.calculate.ready}}">
+            <approval id="nestedApproval">
+              <when-approved></when-approved>
+              <when-rejected />
+            </approval>
+            <result value="{{context.steps.nestedApproval}}" />
+          </when>
+          <otherwise>
+            <step id="fallback"><script>return false;</script></step>
+            <result value="{{context.steps.outerApproval}}" />
+          </otherwise>
+        </branch>
+      </when-approved>
+      <when-rejected />
+    </approval>
+    <step id="finish"><script>return context.steps.outerApproval;</script></step>`);
+
+    expect(() =>
+      validateWoml(parseWoml(source, { file: 'workflow.woml' }))
+    ).not.toThrow();
+  });
+
+  test('requires exactly ordered approval arms', () => {
+    const missing = validWorkflow(`
+    <approval id="review">
+      <when-approved />
+    </approval>`);
+    expect(validationError(missing).diagnostic.code).toBe(
+      'WOML_APPROVAL_STRUCTURE_INVALID'
+    );
+
+    const duplicate = validWorkflow(`
+    <approval id="review">
+      <when-approved />
+      <when-rejected />
+      <when-rejected />
+    </approval>`);
+    const duplicateError = validationError(duplicate);
+    expect(duplicateError.diagnostic.code).toBe(
+      'WOML_APPROVAL_STRUCTURE_INVALID'
+    );
+    expect(duplicateError.diagnostic.location.start.offset).toBe(
+      duplicate.lastIndexOf('<when-rejected')
+    );
+
+    const reversed = validWorkflow(`
+    <approval id="review">
+      <when-rejected />
+      <when-approved />
+    </approval>`);
+    const reversedError = validationError(reversed);
+    expect(reversedError.diagnostic.code).toBe(
+      'WOML_APPROVAL_STRUCTURE_INVALID'
+    );
+    expect(reversedError.diagnostic.location.start.offset).toBe(
+      reversed.indexOf('<when-rejected')
+    );
+
+    const directStep = validWorkflow(`
+    <approval id="review">
+      <step id="wrong"><script>return 1;</script></step>
+      <when-approved />
+      <when-rejected />
+    </approval>`);
+    expect(validationError(directStep).diagnostic.code).toBe(
+      'WOML_APPROVAL_STRUCTURE_INVALID'
+    );
+  });
+
+  test('validates approval duration and timeout policy without ambiguity', () => {
+    for (const timeout of ['500ms', '0.5s', '30m', '24h', '2d']) {
+      const source = validWorkflow(`
+      <approval id="review" timeout="${timeout}">
+        <when-approved />
+        <when-rejected />
+      </approval>`);
+      expect(() =>
+        validateWoml(parseWoml(source, { file: 'workflow.woml' }))
+      ).not.toThrow();
+    }
+
+    for (const timeout of [
+      '0ms',
+      '0.1ms',
+      '24',
+      '-1h',
+      '1w',
+      '1e3s',
+      '999999999999999999999d',
+    ]) {
+      const source = validWorkflow(`
+      <approval id="review" timeout="${timeout}">
+        <when-approved />
+        <when-rejected />
+      </approval>`);
+      expect(validationError(source).diagnostic.code).toBe(
+        'WOML_APPROVAL_TIMEOUT_INVALID'
+      );
+    }
+
+    const policyWithoutTimeout = validWorkflow(`
+    <approval id="review" on-timeout="reject">
+      <when-approved />
+      <when-rejected />
+    </approval>`);
+    expect(validationError(policyWithoutTimeout).diagnostic.code).toBe(
+      'WOML_APPROVAL_TIMEOUT_INVALID'
+    );
+
+    const invalidPolicy = validWorkflow(`
+    <approval id="review" timeout="1h" on-timeout="approve">
+      <when-approved />
+      <when-rejected />
+    </approval>`);
+    expect(validationError(invalidPolicy).diagnostic.code).toBe(
+      'WOML_APPROVAL_TIMEOUT_INVALID'
+    );
+  });
+
+  test('shares approval IDs with the workflow structural namespace', () => {
+    const source = validWorkflow(`
+    <step id="review"><script>return true;</script></step>
+    <approval id="review">
+      <when-approved />
+      <when-rejected />
+    </approval>`);
+    const error = validationError(source);
+
+    expect(error.diagnostic.code).toBe('WOML_DUPLICATE_ID');
+    expect(error.diagnostic.location.start.offset).toBe(
+      source.indexOf('review', source.indexOf('<approval'))
+    );
+  });
+
+  test('rejects approval-only children outside approval and approval inside parallel', () => {
+    const looseArm = validWorkflow('<when-approved />');
+    expect(validationError(looseArm).diagnostic.code).toBe(
+      'WOML_APPROVAL_PLACEMENT_INVALID'
+    );
+
+    const parallelApproval = validWorkflow(`
+    <parallel id="checks">
+      <approval id="review">
+        <when-approved />
+        <when-rejected />
+      </approval>
+    </parallel>
+    <step id="finish"><script>return true;</script></step>`);
+    const placementError = validationError(parallelApproval);
+    expect(placementError.diagnostic.code).toBe(
+      'WOML_APPROVAL_PLACEMENT_INVALID'
+    );
+    expect(placementError.diagnostic.location.start.offset).toBe(
+      parallelApproval.indexOf('<approval')
+    );
+  });
+
+  test('keeps notify explicitly staged at its source location', () => {
+    const source = validWorkflow(`
+    <approval id="review">
+      <notify><script>return { sent: true };</script></notify>
+      <when-approved />
+      <when-rejected />
+    </approval>`);
+    const error = validationError(source);
+
+    expect(error.diagnostic.code).toBe('WOML_FEATURE_NOT_EXECUTABLE');
+    expect(error.diagnostic.location.start.offset).toBe(
+      source.indexOf('<notify')
+    );
+  });
+
   test('deep-equals the reviewed Phase 0 compiled fixture', () => {
     const source = readFileSync(
       new URL('./fixtures/hello.woml', import.meta.url),

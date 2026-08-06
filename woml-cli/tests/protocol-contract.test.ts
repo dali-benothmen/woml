@@ -74,6 +74,10 @@ async function validators(): Promise<{
   readonly protocolV2: ValidateFunction;
   readonly compiledModelV3: ValidateFunction;
   readonly eventV3: ValidateFunction;
+  readonly compiledModelV4: ValidateFunction;
+  readonly eventV4: ValidateFunction;
+  readonly approvalHttpV1: ValidateFunction;
+  readonly approvalRuntimeOutcomeV1: ValidateFunction;
 }> {
   const ajv = new Ajv2020({
     allErrors: true,
@@ -96,12 +100,23 @@ async function validators(): Promise<{
     'compiled-workflow-model.v3.schema.json'
   );
   const eventV3Schema = await schema('run-event.v3.schema.json');
+  const compiledModelV4Schema = await schema(
+    'compiled-workflow-model.v4.schema.json'
+  );
+  const eventV4Schema = await schema('run-event.v4.schema.json');
+  const approvalHttpV1Schema = await schema('approval-http.v1.schema.json');
+  const approvalRuntimeOutcomeV1Schema = await schema(
+    'approval-runtime-outcome.v1.schema.json'
+  );
   ajv.addSchema(failureSchema);
   ajv.addSchema(compiledModelV1Schema);
   ajv.addSchema(eventSchema);
   ajv.addSchema(compiledModelV2Schema);
   ajv.addSchema(eventV2Schema);
   ajv.addSchema(failureV2Schema);
+  ajv.addSchema(compiledModelV3Schema);
+  ajv.addSchema(eventV3Schema);
+  ajv.addSchema(eventV4Schema);
 
   return {
     failure: ajv.getSchema('https://cronflow.dev/schemas/attempt-failure/v1')!,
@@ -115,8 +130,14 @@ async function validators(): Promise<{
       'https://cronflow.dev/schemas/attempt-failure/v2'
     )!,
     protocolV2: ajv.compile(protocolV2Schema),
-    compiledModelV3: ajv.compile(compiledModelV3Schema),
-    eventV3: ajv.compile(eventV3Schema),
+    compiledModelV3: ajv.getSchema(
+      'https://cronflow.dev/schemas/compiled-workflow-model/v3'
+    )!,
+    eventV3: ajv.getSchema('https://cronflow.dev/schemas/run-event/v3')!,
+    compiledModelV4: ajv.compile(compiledModelV4Schema),
+    eventV4: ajv.getSchema('https://cronflow.dev/schemas/run-event/v4')!,
+    approvalHttpV1: ajv.compile(approvalHttpV1Schema),
+    approvalRuntimeOutcomeV1: ajv.compile(approvalRuntimeOutcomeV1Schema),
   };
 }
 
@@ -949,6 +970,309 @@ describe('run-event v2 branch contract', () => {
           failure: branchFailureData.failure,
         },
       })
+    ).toBe(false);
+  });
+});
+
+describe('Human Approval A0 contracts', () => {
+  const approvalHttpFixtureDirectory = resolve(
+    import.meta.dir,
+    'fixtures/approval-http'
+  );
+  const approvalRuntimeFixtureDirectory = resolve(
+    import.meta.dir,
+    'fixtures/approval-runtime'
+  );
+
+  test('pins the reviewed model-v4 approval DAG and canonical hash', async () => {
+    const { compiledModelV4 } = await validators();
+    const compiled = (await readJson(
+      resolve(projectRoot, 'woml/tests/fixtures/approval.compiled.v4.json')
+    )) as {
+      graph: {
+        nodes: Array<{ id: string; handler: string; inputs: JsonObject }>;
+        edges: Array<{
+          id: string;
+          from: string;
+          to: string;
+          approvalId?: string;
+        }>;
+      };
+    };
+
+    expect(compiledModelV4(compiled), validationMessage(compiledModelV4)).toBe(
+      true
+    );
+    expect(definitionHash(compiled)).toBe(
+      'sha256:c85377270773c4abb178ba2811109843be53df66c91fedea04bb37d586901aa9'
+    );
+    expect(
+      compiled.graph.nodes.map(({ id, handler }) => ({ id, handler }))
+    ).toEqual([
+      { id: 'prepareArticle', handler: 'runtime.script' },
+      { id: 'editorApproval', handler: 'engine.approval-wait' },
+      { id: 'publish', handler: 'runtime.script' },
+      { id: 'recordRejection', handler: 'runtime.script' },
+      {
+        id: '__woml_approval__editorApproval__join',
+        handler: 'engine.approval-join',
+      },
+      { id: 'finalStatus', handler: 'runtime.script' },
+    ]);
+    expect(
+      compiled.graph.edges
+        .filter(edge => edge.approvalId === 'editorApproval')
+        .map(({ id, from, to }) => ({ id, from, to }))
+    ).toEqual([
+      {
+        id: 'editorApproval:approved',
+        from: 'editorApproval',
+        to: 'publish',
+      },
+      {
+        id: 'editorApproval:rejected',
+        from: 'editorApproval',
+        to: 'recordRejection',
+      },
+      {
+        id: 'editorApproval:approved:join',
+        from: 'publish',
+        to: '__woml_approval__editorApproval__join',
+      },
+      {
+        id: 'editorApproval:rejected:join',
+        from: 'recordRejection',
+        to: '__woml_approval__editorApproval__join',
+      },
+    ]);
+    expect(JSON.stringify(compiled)).not.toMatch(/token|https?:\/\//i);
+  });
+
+  test('pins approval script bodies without rewriting JavaScript', async () => {
+    const sourcePath = resolve(
+      projectRoot,
+      'woml/tests/fixtures/approval.woml'
+    );
+    const document = parseWoml(await Bun.file(sourcePath).text(), {
+      file: sourcePath,
+    });
+    const compiled = (await readJson(
+      resolve(projectRoot, 'woml/tests/fixtures/approval.compiled.v4.json')
+    )) as {
+      graph: {
+        nodes: Array<{
+          id: string;
+          handler: string;
+          inputs: { fields?: Record<string, { value?: unknown }> };
+        }>;
+      };
+    };
+    const sourceByStepId = new Map<string, string>();
+    const pending: WomlSourceElement[] = [document.root];
+    while (pending.length > 0) {
+      const element = pending.shift()!;
+      if (element.name === 'step') {
+        const script = element.children.find(
+          child => isWomlElement(child) && child.name === 'script'
+        );
+        const raw =
+          script !== undefined && isWomlElement(script)
+            ? script.children.find(isWomlRawText)
+            : undefined;
+        sourceByStepId.set(element.attributes.id!.value, raw?.value ?? '');
+      }
+      for (const child of element.children) {
+        if (isWomlElement(child)) pending.push(child);
+      }
+    }
+
+    const compiledScripts = compiled.graph.nodes.filter(
+      node => node.handler === 'runtime.script'
+    );
+    expect(compiledScripts.map(node => node.id)).toEqual([
+      'prepareArticle',
+      'publish',
+      'recordRejection',
+      'finalStatus',
+    ]);
+    for (const node of compiledScripts) {
+      expect(node.inputs.fields?.source?.value).toBe(
+        sourceByStepId.get(node.id)
+      );
+    }
+  });
+
+  test('model v4 rejects unowned approval routes and runtime credential fields', async () => {
+    const { compiledModelV4 } = await validators();
+    const compiled = (await readJson(
+      resolve(projectRoot, 'woml/tests/fixtures/approval.compiled.v4.json')
+    )) as JsonObject;
+    const missingOwner = structuredClone(compiled) as {
+      graph: { edges: JsonObject[] };
+    };
+    delete missingOwner.graph.edges[1].approvalId;
+    expect(compiledModelV4(missingOwner)).toBe(false);
+
+    const leakedToken = structuredClone(compiled) as {
+      graph: { nodes: Array<{ handler: string; token?: string }> };
+    };
+    leakedToken.graph.nodes.find(
+      node => node.handler === 'engine.approval-wait'
+    )!.token = 'forbidden';
+    expect(compiledModelV4(leakedToken)).toBe(false);
+
+    expect(compiledModelV4({ ...compiled, schemaVersion: 3 })).toBe(false);
+  });
+
+  test('all four reviewed event-v4 histories validate and contain no credential data', async () => {
+    const { eventV4 } = await validators();
+    const fixtureNames = readdirSync(runEventFixtureDirectory)
+      .filter(name => name.startsWith('approval-') && name.endsWith('.v4.json'))
+      .sort();
+
+    expect(fixtureNames).toEqual([
+      'approval-approved.events.v4.json',
+      'approval-rejected.events.v4.json',
+      'approval-timeout-failed.events.v4.json',
+      'approval-timeout-rejected.events.v4.json',
+    ]);
+    for (const fixtureName of fixtureNames) {
+      const events = (await readJson(
+        resolve(runEventFixtureDirectory, fixtureName)
+      )) as JsonObject[];
+      for (const event of events) {
+        expect(
+          eventV4(event),
+          `${fixtureName}: ${validationMessage(eventV4)}`
+        ).toBe(true);
+      }
+      expect(JSON.stringify(events)).not.toMatch(
+        /"(?:token|tokenId|secretHash|url|port)"/i
+      );
+    }
+  });
+
+  test('event v4 rejects credential leakage and impossible timeout decisions', async () => {
+    const { eventV4 } = await validators();
+    const events = (await readJson(
+      resolve(
+        runEventFixtureDirectory,
+        'approval-timeout-rejected.events.v4.json'
+      )
+    )) as JsonObject[];
+    const resolved = structuredClone(events[4]);
+
+    (resolved.data as JsonObject).token = 'forbidden';
+    expect(eventV4(resolved)).toBe(false);
+
+    const timeoutApproved = structuredClone(events[4]);
+    ((timeoutApproved.data as JsonObject).resolution as JsonObject).decision =
+      'approved';
+    expect(eventV4(timeoutApproved)).toBe(false);
+
+    expect(eventV4({ ...events[4], eventSchemaVersion: 3 })).toBe(false);
+  });
+
+  test('approved history folds to the reviewed public context and selected route', async () => {
+    const events = (await readJson(
+      resolve(runEventFixtureDirectory, 'approval-approved.events.v4.json')
+    )) as Array<{ occurredAt: string; type: string; data: JsonObject }>;
+    const context = { trigger: {}, steps: {} as Record<string, unknown> };
+
+    for (const event of events) {
+      if (event.type === 'step_attempt_succeeded') {
+        context.steps[event.data.nodeId as string] = event.data.output;
+      }
+      if (event.type === 'approval_resolved') {
+        const resolution = event.data.resolution as JsonObject;
+        if (resolution.kind === 'decision') {
+          context.steps[event.data.approvalId as string] = {
+            decision: resolution.decision,
+            source: resolution.source,
+            decidedAt: event.occurredAt,
+          };
+        }
+      }
+    }
+
+    expect(context).toEqual(
+      (await readJson(
+        resolve(projectRoot, 'woml/tests/fixtures/approval.context.v0.1.json')
+      )) as typeof context
+    );
+    expect(events.some(event => event.data.nodeId === 'recordRejection')).toBe(
+      false
+    );
+    expect(events.at(-1)?.data.result).toEqual(
+      await readJson(
+        resolve(projectRoot, 'woml/tests/fixtures/approval.result.v0.1.json')
+      )
+    );
+  });
+
+  test('all reviewed HTTP bodies validate and fail closed on extra fields', async () => {
+    const { approvalHttpV1 } = await validators();
+    const fixtureNames = readdirSync(approvalHttpFixtureDirectory)
+      .filter(name => name.endsWith('.json'))
+      .sort();
+
+    expect(fixtureNames).toEqual([
+      'decision-accepted.response.v1.json',
+      'decision-approved.request.v1.json',
+      'decision-conflict.response.v1.json',
+      'decision-idempotent.response.v1.json',
+      'decision-rejected.request.v1.json',
+      'request-invalid.response.v1.json',
+      'token-expired.response.v1.json',
+      'token-invalid.response.v1.json',
+    ]);
+    for (const fixtureName of fixtureNames) {
+      const fixture = await readJson(
+        resolve(approvalHttpFixtureDirectory, fixtureName)
+      );
+      expect(
+        approvalHttpV1(fixture),
+        `${fixtureName}: ${validationMessage(approvalHttpV1)}`
+      ).toBe(true);
+    }
+
+    expect(approvalHttpV1({ decision: 'pending' })).toBe(false);
+    expect(approvalHttpV1({ decision: 'approved', comment: 'extra' })).toBe(
+      false
+    );
+    const success = (await readJson(
+      resolve(
+        approvalHttpFixtureDirectory,
+        'decision-accepted.response.v1.json'
+      )
+    )) as JsonObject;
+    expect(approvalHttpV1({ ...success, token: 'forbidden' })).toBe(false);
+  });
+
+  test('pins waiting and succeeded N-API outcomes without transport URLs', async () => {
+    const { approvalRuntimeOutcomeV1 } = await validators();
+    const fixtureNames = readdirSync(approvalRuntimeFixtureDirectory)
+      .filter(name => name.endsWith('.json'))
+      .sort();
+
+    expect(fixtureNames).toEqual(['succeeded.v1.json', 'waiting.v1.json']);
+    for (const fixtureName of fixtureNames) {
+      const fixture = await readJson(
+        resolve(approvalRuntimeFixtureDirectory, fixtureName)
+      );
+      expect(
+        approvalRuntimeOutcomeV1(fixture),
+        `${fixtureName}: ${validationMessage(approvalRuntimeOutcomeV1)}`
+      ).toBe(true);
+    }
+
+    const waiting = (await readJson(
+      resolve(approvalRuntimeFixtureDirectory, 'waiting.v1.json')
+    )) as JsonObject;
+    expect(waiting).not.toHaveProperty('url');
+    expect(waiting).not.toHaveProperty('port');
+    expect(
+      approvalRuntimeOutcomeV1({ ...waiting, url: 'http://localhost' })
     ).toBe(false);
   });
 });
