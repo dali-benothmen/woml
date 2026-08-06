@@ -13,22 +13,18 @@
       name="Choose greeting name"
       description="Use the trigger name or default to World">
       <script>
-        const name = context.trigger.name ?? "DALI";
-        const age = 10 + 20
+        const name = context.trigger.name ?? "World";
 
         return {
-          name,
-          age
+          x: name
         };
       </script>
     </step>
 
     <step id="b">
       <script>
-        const {name, age} = context.steps.a
-
         return {
-          message: `Hello i'm ${name} and i'm ${age} years old`
+          message: `Hello ${context.steps.a.x}`
         };
       </script>
     </step>

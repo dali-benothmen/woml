@@ -1,6 +1,6 @@
 # WOML CLI Vertical Slice Implementation Plan
 
-Status: Phase 4 complete; Phase 5 not started
+Status: Phases 0–5 complete; the packaged CLI journey is verified
 Target: `woml run hello.woml` parses, compiles, and executes a real WOML
 workflow through Bun
 Scope: the smallest end-to-end implementation that proves the WOML syntax and
@@ -582,7 +582,7 @@ Gate:
 - Invalid WOML and script failure exit nonzero without a success JSON result.
 - A successful run writes nothing to stderr.
 
-### Phase 5 — Verify the real package journey
+### Phase 5 — Verify the real package journey — complete
 
 Work:
 
@@ -608,6 +608,12 @@ The final gate checks:
 - exit status is `0`.
 - no SQLite database, run-state file, cache file, or generated workflow artifact
   appears beside the source.
+
+Implementation note: this deferred gate was completed during Rust integration
+R5. The packed `woml-cli` artifact was installed into a clean temporary Bun
+project, its public `node_modules/.bin/woml` executable ran the reviewed
+`hello.woml` through the packaged Rust addon, and the source directory remained
+unchanged.
 
 ## 8. Verification Matrix
 

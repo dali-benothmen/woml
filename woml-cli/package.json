@@ -10,7 +10,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/cli.ts --outfile dist/cli.js --target bun && bun build ../woml/src/script-worker.ts --outfile dist/script-worker.ts --target bun && bun build src/script-host.ts --outfile dist/script-host.js --target bun && bun build src/script-host-worker.ts --outfile dist/script-host-worker.js --target bun",
+    "build": "bun run build:native && bun run build:js",
+    "build:native": "cargo build --manifest-path ../core/Cargo.toml --lib --release && bun scripts/stage-native.ts",
+    "build:js": "bun build src/cli.ts --outfile dist/cli.js --target bun && bun build src/script-host.ts --outfile dist/script-host.js --target bun && bun build src/script-host-worker.ts --outfile dist/script-host-worker.js --target bun",
     "test": "bun test",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"

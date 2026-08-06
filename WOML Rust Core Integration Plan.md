@@ -1,6 +1,6 @@
 # WOML Rust Core Integration Plan
 
-Status: R1 complete; multiplexed Bun script host implemented; R2 not started
+Status: R0–R5 complete; the public CLI now executes workflows through Rust
 
 This document defines how WOML moves from the validated TypeScript execution
 slice to the intended production architecture: Bun and TypeScript own the WOML
@@ -8,8 +8,8 @@ language frontend, Rust owns workflow orchestration and state, and Bun executes
 JavaScript in isolated workers.
 
 The earlier `WOML CLI Vertical Slice Plan.md` proved that a real `.woml` file
-can be parsed, compiled, and executed. Its Phase 5 packaging exercise remains
-deferred until the CLI uses the Rust execution path described here.
+can be parsed, compiled, and executed. Its Phase 5 packaging exercise was
+completed during R5 against the production Rust execution path.
 
 ## 1. Product Outcome
 
@@ -635,7 +635,7 @@ a missing final run event when the terminal step outcome is already known, but
 an attempt left in progress is recorded as `interrupted` and is never replayed.
 The public `woml run` command remains unchanged until the R5 cutover.
 
-### R5 — Move the public CLI to Rust execution
+### R5 — Move the public CLI to Rust execution — complete
 
 One phrase: make the working `woml run` command use Rust as its only production
 workflow executor.
@@ -662,6 +662,15 @@ Gate:
 - The packaged CLI works from a clean temporary installation.
 - Normal success writes nothing to stderr or beside the workflow source.
 - Runtime error behavior remains stable and source-aware.
+
+Implementation note: the CLI still uses Bun and TypeScript to parse, validate,
+and compile WOML, then sends only the compiled model to Rust through N-API.
+Release builds package the platform-specific native addon, long-lived Bun host,
+and isolated Worker entry point. The ordinary `woml run` command uses Rust's
+in-memory event engine and does not create a database implicitly; the explicit
+durable API from R4 remains available for a later product surface. The
+TypeScript executor is no longer reachable from the production CLI and remains
+only as the equivalence oracle to be removed in R6.
 
 ### R6 — Retire the TypeScript execution implementation
 

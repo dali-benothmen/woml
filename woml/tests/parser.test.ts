@@ -25,7 +25,7 @@ function parseError(source: string): WomlParseError {
 
 describe('parseWoml', () => {
   test('parses the Phase 0 workflow into an ordered, source-aware tree', () => {
-    const source = readFileSync(new URL('../../hello.woml', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('./fixtures/hello.woml', import.meta.url), 'utf8');
     const document = parseWoml(source, { file: 'hello.woml' });
 
     expect(document.root.name).toBe('workflow');

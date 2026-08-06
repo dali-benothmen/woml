@@ -3,11 +3,52 @@
 use std::path::PathBuf;
 
 use napi_derive::napi;
+use serde::Serialize;
 use serde_json::{Map, Value};
 use woml_engine::{
   execute_workflow, execute_workflow_durable, recover_durable_runs, CompiledWorkflowDefinition,
-  RuntimeExecutionOptions, ScriptHostProcessOptions,
+  RunEventPayload, RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
 };
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeExecutionError {
+  kind: &'static str,
+  code: String,
+  message: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  node_id: Option<String>,
+}
+
+fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
+  let envelope = match error {
+    RuntimeExecutionError::RunFailed(details) => {
+      let node_id = details.events.iter().rev().find_map(|event| {
+        if let RunEventPayload::RunFailed(data) = &event.payload {
+          data.node_id.clone()
+        } else {
+          None
+        }
+      });
+      NativeExecutionError {
+        kind: "woml_execution_error",
+        code: details.code.clone(),
+        message: details.message.clone(),
+        node_id,
+      }
+    }
+    error => NativeExecutionError {
+      kind: "woml_execution_error",
+      code: "WOML_RUST_EXECUTION_FAILED".to_string(),
+      message: error.to_string(),
+      node_id: None,
+    },
+  };
+  let reason = serde_json::to_string(&envelope).unwrap_or_else(|_| {
+    "WOML Rust execution failed and its error could not be encoded.".to_string()
+  });
+  napi::Error::from_reason(reason)
+}
 
 #[napi(ts_return_type = "Promise<string>")]
 pub async fn execute_woml_workflow(
@@ -31,7 +72,7 @@ pub async fn execute_woml_workflow(
   let options = RuntimeExecutionOptions::new(host_options, u64::from(script_timeout_ms));
   let result = execute_workflow(workflow, definition_hash, trigger, options)
     .await
-    .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    .map_err(native_execution_error)?;
   serde_json::to_string(&result)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))
 }
@@ -65,7 +106,7 @@ pub async fn execute_woml_workflow_durable(
     PathBuf::from(event_store_path),
   )
   .await
-  .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+  .map_err(native_execution_error)?;
   serde_json::to_string(&result)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))
 }

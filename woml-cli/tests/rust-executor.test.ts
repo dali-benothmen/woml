@@ -14,11 +14,11 @@ import {
   executeWorkflowWithRustDurable,
   executeWorkflowWithRust,
   recoverDurableRuns,
+  RustWorkflowExecutionError,
 } from '../src/rust-executor';
 
 const nativeCorePath = process.env.WOML_RUST_CORE_PATH;
 const packageRoot = resolve(import.meta.dir, '..');
-const projectRoot = resolve(packageRoot, '..');
 const scriptHostPath = resolve(packageRoot, 'src/script-host.ts');
 const crashingHostPath = resolve(
   packageRoot,
@@ -27,7 +27,7 @@ const crashingHostPath = resolve(
 const nativeTest = nativeCorePath === undefined ? test.skip : test;
 
 async function helloWorkflow(): Promise<CompiledWorkflowDefinition> {
-  const path = resolve(projectRoot, 'hello.woml');
+  const path = resolve(packageRoot, '../woml/tests/fixtures/hello.woml');
   return compileWoml(parseWoml(await Bun.file(path).text(), { file: path }));
 }
 
@@ -60,6 +60,9 @@ async function rustError(
     });
     throw new Error('Expected Rust execution to fail.');
   } catch (error) {
+    if (error instanceof RustWorkflowExecutionError) {
+      return `${error.code}: ${error.message}`;
+    }
     return error instanceof Error ? error.message : String(error);
   }
 }

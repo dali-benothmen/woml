@@ -38,7 +38,7 @@ async function executionError(
 
 describe('executeWorkflow', () => {
   test('executes hello.woml and threads context between both script workers', async () => {
-    const source = readFileSync(new URL('../../hello.woml', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('./fixtures/hello.woml', import.meta.url), 'utf8');
     const expectedContexts = JSON.parse(
       readFileSync(
         new URL('./fixtures/hello.context.v0.1.json', import.meta.url),

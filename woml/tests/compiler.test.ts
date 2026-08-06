@@ -32,7 +32,7 @@ function validWorkflow(stepMarkup = '<step id="a"><script>return { ok: true };</
 
 describe('compileWoml', () => {
   test('deep-equals the reviewed Phase 0 compiled fixture', () => {
-    const source = readFileSync(new URL('../../hello.woml', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('./fixtures/hello.woml', import.meta.url), 'utf8');
     const expected = JSON.parse(
       readFileSync(
         new URL('./fixtures/hello.compiled.v1.json', import.meta.url),

@@ -45,6 +45,25 @@ export interface RustRecoveryReport {
   readonly resumableRuns: number;
 }
 
+interface NativeExecutionErrorEnvelope {
+  readonly kind: 'woml_execution_error';
+  readonly code: string;
+  readonly message: string;
+  readonly nodeId?: string;
+}
+
+export class RustWorkflowExecutionError extends Error {
+  readonly code: string;
+  readonly nodeId?: string;
+
+  constructor(code: string, message: string, nodeId?: string) {
+    super(message);
+    this.name = 'RustWorkflowExecutionError';
+    this.code = code;
+    if (nodeId !== undefined) this.nodeId = nodeId;
+  }
+}
+
 interface NativeCore {
   readonly executeWomlWorkflow: (
     compiledModelJson: string,
@@ -101,12 +120,17 @@ export function compiledDefinitionHash(
 }
 
 function defaultNativeCorePath(): string {
-  if (process.platform !== 'linux' || process.arch !== 'x64') {
-    throw new Error(
-      'R3 requires nativeCorePath outside the current Linux x64 development target.',
-    );
-  }
-  return resolve(import.meta.dir, '../../core/core.linux-x64-gnu.node');
+  const override = process.env.WOML_RUST_CORE_PATH;
+  return override === undefined
+    ? resolve(import.meta.dir, `woml-core.${process.platform}-${process.arch}.node`)
+    : resolve(override);
+}
+
+function defaultScriptHostPath(): string {
+  return resolve(
+    import.meta.dir,
+    import.meta.url.endsWith('.ts') ? 'script-host.ts' : 'script-host.js',
+  );
 }
 
 function loadNativeCore(path: string): NativeCore {
@@ -120,6 +144,33 @@ function loadNativeCore(path: string): NativeCore {
   return loaded as NativeCore;
 }
 
+function decodeNativeExecutionError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  const jsonStart = message.indexOf('{');
+  if (jsonStart !== -1) {
+    try {
+      const decoded = JSON.parse(
+        message.slice(jsonStart),
+      ) as Partial<NativeExecutionErrorEnvelope>;
+      if (
+        decoded.kind === 'woml_execution_error' &&
+        typeof decoded.code === 'string' &&
+        typeof decoded.message === 'string' &&
+        (decoded.nodeId === undefined || typeof decoded.nodeId === 'string')
+      ) {
+        throw new RustWorkflowExecutionError(
+          decoded.code,
+          decoded.message,
+          decoded.nodeId,
+        );
+      }
+    } catch (decodedError) {
+      if (decodedError instanceof RustWorkflowExecutionError) throw decodedError;
+    }
+  }
+  throw error;
+}
+
 export async function executeWorkflowWithRust(
   workflow: CompiledWorkflowDefinition,
   options: RustExecutorOptions = {},
@@ -131,17 +182,22 @@ export async function executeWorkflowWithRust(
 
   const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
   const scriptHostPath =
-    options.scriptHostPath ?? resolve(import.meta.dir, 'script-host.ts');
+    options.scriptHostPath ?? defaultScriptHostPath();
   const bunExecutable = options.bunExecutable ?? process.execPath;
   const native = loadNativeCore(nativePath);
-  const resultJson = await native.executeWomlWorkflow(
-    JSON.stringify(workflow),
-    compiledDefinitionHash(workflow),
-    JSON.stringify(options.trigger ?? {}),
-    bunExecutable,
-    scriptHostPath,
-    timeoutMs,
-  );
+  let resultJson: string;
+  try {
+    resultJson = await native.executeWomlWorkflow(
+      JSON.stringify(workflow),
+      compiledDefinitionHash(workflow),
+      JSON.stringify(options.trigger ?? {}),
+      bunExecutable,
+      scriptHostPath,
+      timeoutMs,
+    );
+  } catch (error) {
+    decodeNativeExecutionError(error);
+  }
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
 }
 
@@ -170,10 +226,10 @@ export async function executeWorkflowWithRustDurable(
     compiledDefinitionHash(workflow),
     JSON.stringify(options.trigger ?? {}),
     options.bunExecutable ?? process.execPath,
-    options.scriptHostPath ?? resolve(import.meta.dir, 'script-host.ts'),
+    options.scriptHostPath ?? defaultScriptHostPath(),
     timeoutMs,
     eventStorePath,
-  );
+  ).catch(decodeNativeExecutionError);
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
 }
 

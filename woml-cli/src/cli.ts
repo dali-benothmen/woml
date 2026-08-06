@@ -5,11 +5,16 @@ import { extname } from 'node:path';
 
 import {
   compileWoml,
-  executeWorkflow,
+  isWomlElement,
   parseWoml,
   WomlDiagnosticError,
-  WorkflowExecutionError,
+  type SourcePosition,
+  type WomlSourceDocument,
 } from 'woml';
+import {
+  executeWorkflowWithRust,
+  RustWorkflowExecutionError,
+} from './rust-executor';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -35,7 +40,41 @@ function usage(): string {
   return 'Usage: woml run <workflow.woml>';
 }
 
-function formatError(error: unknown, filePath?: string): string {
+function runtimeCode(code: string): string {
+  if (code === 'WOML_SCRIPT_NON_JSON_RESULT') return 'WOML_NON_JSON_RESULT';
+  if (code.startsWith('WOML_SCRIPT_')) return 'WOML_SCRIPT_FAILED';
+  return code;
+}
+
+function stepSourcePosition(
+  document: WomlSourceDocument | undefined,
+  nodeId: string | undefined,
+): SourcePosition | undefined {
+  if (document === undefined || nodeId === undefined) return undefined;
+  const pending = [document.root];
+  while (pending.length > 0) {
+    const element = pending.shift()!;
+    if (element.name === 'step' && element.attributes.id?.value === nodeId) {
+      const script = element.children.find(
+        (child) => isWomlElement(child) && child.name === 'script',
+      );
+      if (script !== undefined && isWomlElement(script)) {
+        return script.children[0]?.span.start ?? script.openTagSpan.start;
+      }
+      return element.openTagSpan.start;
+    }
+    for (const child of element.children) {
+      if (isWomlElement(child)) pending.push(child);
+    }
+  }
+  return undefined;
+}
+
+function formatError(
+  error: unknown,
+  filePath?: string,
+  document?: WomlSourceDocument,
+): string {
   if (error instanceof CliInputError) {
     return `WOML input error [${error.code}]${
       filePath === undefined ? '' : ` in "${filePath}"`
@@ -49,10 +88,16 @@ function formatError(error: unknown, filePath?: string): string {
     return `WOML ${diagnostic.phase} error [${diagnostic.code}] at ${location}: ${diagnostic.message}${hint}`;
   }
 
-  if (error instanceof WorkflowExecutionError) {
-    const location = filePath === undefined ? '' : ` in "${filePath}"`;
+  if (error instanceof RustWorkflowExecutionError) {
+    const position = stepSourcePosition(document, error.nodeId);
+    const location =
+      position !== undefined && filePath !== undefined
+        ? ` at ${filePath}:${position.line}:${position.column}`
+        : filePath === undefined
+          ? ''
+          : ` in "${filePath}"`;
     const node = error.nodeId === undefined ? '' : ` at step "${error.nodeId}"`;
-    return `WOML runtime error [${error.code}]${location}${node}: ${error.message}`;
+    return `WOML runtime error [${runtimeCode(error.code)}]${location}${node}: ${error.message}`;
   }
 
   const message = error instanceof Error ? error.message : String(error);
@@ -107,15 +152,16 @@ export async function runCli(
     return 2;
   }
 
+  let document: WomlSourceDocument | undefined;
   try {
     const source = await readWorkflow(filePath);
-    const document = parseWoml(source, { file: filePath });
+    document = parseWoml(source, { file: filePath });
     const workflow = compileWoml(document);
-    const execution = await executeWorkflow(workflow);
+    const execution = await executeWorkflowWithRust(workflow);
     io.stdout(`${JSON.stringify(execution.result)}\n`);
     return 0;
   } catch (error) {
-    io.stderr(`${formatError(error, filePath)}\n`);
+    io.stderr(`${formatError(error, filePath, document)}\n`);
     return 1;
   }
 }
