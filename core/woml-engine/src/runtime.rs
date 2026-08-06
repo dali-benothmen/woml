@@ -19,13 +19,15 @@ use crate::event::{
   StepAttemptSucceededData,
 };
 use crate::model::{ParallelGroupDefinition, ValueExpression};
+use crate::projection::AttemptStatus;
 use crate::protocol::{ExecuteMessage, HostOutcome};
 use crate::{
   run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind, BranchFailure,
   CompiledWorkflowDefinition, DurableDagEngine, DurableEngineError, DurableEventStore,
   DurableStoreError, EngineError, InMemoryDagEngine, RecoveryReport, RunEvent, RunEventPayload,
-  RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions,
-  WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
+  RunFailure, RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError,
+  ScriptHostProcessOptions, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
+  RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
 #[derive(Debug, Clone)]
@@ -155,6 +157,17 @@ pub async fn execute_workflow_durable(
   execute_with_engine(engine, trigger, options).await
 }
 
+pub async fn resume_workflow_durable(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+  let mut store = DurableEventStore::open(database_path)?;
+  store.recover_interrupted_runs()?;
+  let engine = DurableDagEngine::resume(store, run_id)?;
+  resume_with_engine(engine, run_id, options).await
+}
+
 pub fn recover_durable_runs(
   database_path: PathBuf,
 ) -> Result<RecoveryReport, RuntimeExecutionError> {
@@ -179,6 +192,47 @@ async fn execute_with_engine<E: RuntimeDagEngine>(
   execution
 }
 
+async fn resume_with_engine<E: RuntimeDagEngine>(
+  mut engine: E,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+  if options.script_timeout_ms == 0 {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "script_timeout_ms must be greater than zero".to_string(),
+    ));
+  }
+  let projection = engine.projection(run_id)?;
+  let execution_order = recorded_execution_order(&engine.events(run_id)?);
+  match projection.status {
+    RunStatus::Succeeded => return final_result(&engine, run_id, execution_order),
+    RunStatus::Failed => return Err(resumed_failure(&engine, run_id, projection)?),
+    RunStatus::Running => {}
+    RunStatus::NotStarted => {
+      return Err(RuntimeExecutionError::Stalled(
+        "stored run has no run_started event".to_string(),
+      ));
+    }
+  }
+  let terminal_node_id = engine
+    .workflow()
+    .terminal_node_id()
+    .ok_or_else(|| RuntimeExecutionError::Stalled("no terminal node exists".to_string()))?
+    .to_string();
+  let host = ScriptHostClient::spawn(options.script_host.clone()).await?;
+  let execution = continue_with_host(
+    &mut engine,
+    run_id,
+    terminal_node_id,
+    execution_order,
+    &options,
+    &host,
+  )
+  .await;
+  host.shutdown().await;
+  execution
+}
+
 async fn execute_with_host<E: RuntimeDagEngine>(
   engine: &mut E,
   trigger: Map<String, Value>,
@@ -192,14 +246,23 @@ async fn execute_with_host<E: RuntimeDagEngine>(
     .to_string();
   let run_id = generated_id("run");
   engine.start_run(&run_id, trigger)?;
-  let mut execution_order = Vec::new();
+  continue_with_host(engine, &run_id, terminal_node_id, Vec::new(), options, host).await
+}
 
+async fn continue_with_host<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  terminal_node_id: String,
+  mut execution_order: Vec<String>,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
   loop {
-    let ready = engine.ready_node_ids(&run_id)?;
+    let ready = engine.ready_node_ids(run_id)?;
     let Some(node_id) = ready.first() else {
-      let projection = engine.projection(&run_id)?;
+      let projection = engine.projection(run_id)?;
       if projection.status == RunStatus::Succeeded {
-        return final_result(engine, &run_id, execution_order);
+        return final_result(engine, run_id, execution_order);
       }
       return Err(RuntimeExecutionError::Stalled(
         "no node is ready before the run reached a terminal state".to_string(),
@@ -217,7 +280,7 @@ async fn execute_with_host<E: RuntimeDagEngine>(
           group.parallel_id
         )));
       }
-      let completed = execute_parallel_group(engine, &run_id, group, options, host).await?;
+      let completed = execute_parallel_group(engine, run_id, group, options, host).await?;
       execution_order.extend(completed);
       continue;
     }
@@ -251,12 +314,12 @@ async fn execute_with_host<E: RuntimeDagEngine>(
           })?
           .to_string();
         engine.append_payload(
-          &run_id,
+          run_id,
           RunEventPayload::ParallelGroupStarted(ParallelGroupStartedData { parallel_id }),
         )?;
       }
       "engine.branch-select" => {
-        let context = engine.projection(&run_id)?.context;
+        let context = engine.projection(run_id)?.context;
         match selected_branch_arm(engine.workflow(), node_id, &context) {
           Ok(arm_id) => {
             let branch_id = crate::engine::selector_branch_id(node_id)
@@ -267,7 +330,7 @@ async fn execute_with_host<E: RuntimeDagEngine>(
               })?
               .to_string();
             engine.append_payload(
-              &run_id,
+              run_id,
               RunEventPayload::BranchSelected(BranchSelectedData { branch_id, arm_id }),
             )?;
           }
@@ -277,12 +340,12 @@ async fn execute_with_host<E: RuntimeDagEngine>(
             } else {
               BranchFailureSite::Test
             };
-            return fail_branch(engine, &run_id, error, site);
+            return fail_branch(engine, run_id, error, site);
           }
         }
       }
       "engine.branch-result" => {
-        let projection = engine.projection(&run_id)?;
+        let projection = engine.projection(run_id)?;
         let arm_id = projection
           .branch_selections
           .get(node_id)
@@ -307,7 +370,7 @@ async fn execute_with_host<E: RuntimeDagEngine>(
           Err(error) => {
             return fail_branch(
               engine,
-              &run_id,
+              run_id,
               BranchEvaluationError {
                 branch_id: node_id.clone(),
                 arm_id: Some(arm_id),
@@ -318,34 +381,34 @@ async fn execute_with_host<E: RuntimeDagEngine>(
             );
           }
         };
-        engine.publish_pure_result(&run_id, node_id, output.clone())?;
+        engine.publish_pure_result(run_id, node_id, output.clone())?;
         execution_order.push(node_id.clone());
         if node_id == &terminal_node_id {
           engine.append_payload(
-            &run_id,
+            run_id,
             RunEventPayload::RunSucceeded(RunSucceededData {
               terminal_node_id: terminal_node_id.clone(),
               result: output,
             }),
           )?;
-          return final_result(engine, &run_id, execution_order);
+          return final_result(engine, run_id, execution_order);
         }
       }
       "runtime.script" => {
         let source = source.ok_or_else(|| {
           RuntimeExecutionError::Stalled(format!("node {node_id:?} has no script source"))
         })?;
-        let output = execute_script_node(engine, &run_id, node_id, &source, options, host).await?;
+        let output = execute_script_node(engine, run_id, node_id, &source, options, host).await?;
         execution_order.push(node_id.clone());
         if node_id == &terminal_node_id {
           engine.append_payload(
-            &run_id,
+            run_id,
             RunEventPayload::RunSucceeded(RunSucceededData {
               terminal_node_id: terminal_node_id.clone(),
               result: output,
             }),
           )?;
-          return final_result(engine, &run_id, execution_order);
+          return final_result(engine, run_id, execution_order);
         }
       }
       _ => {
@@ -372,6 +435,16 @@ struct ActiveParallelInvocation<'a> {
   future: ParallelInvocationFuture<'a>,
 }
 
+struct ParallelInvocationRequest {
+  run_id: String,
+  node_id: String,
+  invocation_id: String,
+  source: String,
+  context: WorkflowContext,
+  timeout_ms: u64,
+  max_context_bytes: Option<usize>,
+}
+
 async fn next_parallel_completion(
   active: &mut Vec<ActiveParallelInvocation<'_>>,
 ) -> Option<ParallelInvocationCompletion> {
@@ -393,14 +466,17 @@ async fn next_parallel_completion(
 
 async fn invoke_parallel_child(
   host: &ScriptHostClient,
-  run_id: String,
-  node_id: String,
-  invocation_id: String,
-  source: String,
-  context: WorkflowContext,
-  timeout_ms: u64,
-  max_context_bytes: Option<usize>,
+  request: ParallelInvocationRequest,
 ) -> ParallelInvocationCompletion {
+  let ParallelInvocationRequest {
+    run_id,
+    node_id,
+    invocation_id,
+    source,
+    context,
+    timeout_ms,
+    max_context_bytes,
+  } = request;
   let outcome = if let Some(limit) = max_context_bytes {
     match serde_json::to_vec(&context) {
       Ok(encoded) if encoded.len() > limit => Err(AttemptFailure {
@@ -514,9 +590,29 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
   drop(attempted);
 
   let mut next_child = 0;
-  let mut primary_failure: Option<String> = None;
   let mut failed_nodes = HashSet::new();
   let mut cancelled_nodes = HashSet::new();
+  for attempt in &projection.attempts {
+    if !group.child_node_ids.contains(&attempt.identity.node_id) {
+      continue;
+    }
+    if let AttemptStatus::Failed { failure } = &attempt.status {
+      if failure.kind == AttemptFailureKind::InvocationCancelled {
+        cancelled_nodes.insert(attempt.identity.node_id.clone());
+      } else {
+        failed_nodes.insert(attempt.identity.node_id.clone());
+      }
+    }
+  }
+  let mut primary_failure = engine.events(run_id)?.iter().find_map(|event| {
+    if let RunEventPayload::StepAttemptFailed(data) = &event.payload {
+      failed_nodes
+        .contains(&data.node_id)
+        .then(|| data.node_id.clone())
+    } else {
+      None
+    }
+  });
   let mut completion_order = Vec::new();
   let mut active: Vec<ActiveParallelInvocation<'_>> = Vec::new();
 
@@ -547,13 +643,15 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         invocation_id: invocation_id.clone(),
         future: Box::pin(invoke_parallel_child(
           host,
-          run_id.to_string(),
-          node_id,
-          invocation_id,
-          source,
-          fork_context.clone(),
-          options.script_timeout_ms,
-          options.max_context_bytes,
+          ParallelInvocationRequest {
+            run_id: run_id.to_string(),
+            node_id,
+            invocation_id,
+            source,
+            context: fork_context.clone(),
+            timeout_ms: options.script_timeout_ms,
+            max_context_bytes: options.max_context_bytes,
+          },
         )),
       });
     }
@@ -765,6 +863,97 @@ async fn execute_script_node<E: RuntimeDagEngine>(
       error.into_attempt_failure(),
     ),
   }
+}
+
+fn recorded_execution_order(events: &[RunEvent]) -> Vec<String> {
+  events
+    .iter()
+    .filter_map(|event| match &event.payload {
+      RunEventPayload::StepAttemptSucceeded(data) => Some(data.node_id.clone()),
+      _ => None,
+    })
+    .collect()
+}
+
+fn resumed_failure<E: RuntimeDagEngine>(
+  engine: &E,
+  run_id: &str,
+  projection: RunProjection,
+) -> Result<RuntimeExecutionError, RuntimeExecutionError> {
+  let events = engine.events(run_id)?;
+  let failure = projection.failure.ok_or_else(|| {
+    RuntimeExecutionError::Stalled("failed run has no folded failure".to_string())
+  })?;
+  Ok(match failure {
+    RunFailure::Attempt(failure) => RuntimeExecutionError::RunFailed(Box::new(FailedRunDetails {
+      code: failure.code.clone(),
+      message: failure.message.clone(),
+      failure,
+      events,
+    })),
+    RunFailure::Parallel {
+      parallel_id,
+      policy,
+      primary_node_id,
+      failed_node_ids,
+      cancelled_node_ids,
+      failure,
+    } => RuntimeExecutionError::ParallelFailed(Box::new(FailedParallelDetails {
+      code: failure.code.clone(),
+      message: failure.message.clone(),
+      parallel_id,
+      policy,
+      primary_node_id,
+      failed_node_ids,
+      cancelled_node_ids,
+      failure,
+      events,
+    })),
+    RunFailure::Branch(failure) => {
+      let (branch_id, arm_id, path) = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+          RunEventPayload::RunFailed(RunFailedData::V2(RunFailedDataV2::Branch {
+            branch_id,
+            arm_id,
+            path,
+            ..
+          })) => Some((branch_id.clone(), arm_id.clone(), path.clone())),
+          _ => None,
+        })
+        .ok_or_else(|| {
+          RuntimeExecutionError::Stalled(
+            "failed branch run has no durable branch identity".to_string(),
+          )
+        })?;
+      let site = match &failure {
+        BranchFailure::BranchTestNotBoolean { .. } => BranchFailureSite::Test,
+        BranchFailure::ReferenceNotAvailable { .. }
+          if projection.branch_selections.contains_key(&branch_id) =>
+        {
+          BranchFailureSite::Result
+        }
+        BranchFailure::ReferenceNotAvailable { .. } => BranchFailureSite::Test,
+        BranchFailure::BranchSelectionInvalid { .. } => BranchFailureSite::Selection,
+      };
+      let message = match &failure {
+        BranchFailure::BranchTestNotBoolean { message, .. }
+        | BranchFailure::ReferenceNotAvailable { message, .. }
+        | BranchFailure::BranchSelectionInvalid { message, .. } => message.clone(),
+      };
+      RuntimeExecutionError::BranchFailed(Box::new(FailedBranchDetails {
+        code: failure.code().to_string(),
+        message,
+        branch_id,
+        arm_id,
+        path,
+        site,
+        failure,
+        events,
+      }))
+    }
+  })
 }
 
 fn final_result<E: RuntimeDagEngine>(

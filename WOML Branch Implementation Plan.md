@@ -771,9 +771,10 @@ silently decide their contracts.
 
 Once B0–B6 are complete, product expansion continues in this order:
 
-1. **Parallel execution** — implement `<parallel>`, schedule ready children
-   concurrently through the already multiplexed Bun protocol, join them, and
-   add durable parallel-group events.
+1. **Complete: Parallel execution** — `<parallel>` now schedules bounded ready
+   children through the multiplexed Bun protocol, joins them, implements both
+   failure policies and targeted cancellation, and persists durable
+   parallel-group events.
 2. **Human approval** — implement `<approval>`, notifications, pause/resume,
    durable approval tokens, and `woml.resume(token, decision)`.
 3. **Retries and idempotency** — freeze idempotency-key derivation and duplicate
@@ -802,7 +803,8 @@ The branch milestone is complete only when:
 - `branch_selected` is durable, versioned, validated, and foldable;
 - old v1 sequential histories remain readable;
 - unselected routes produce no attempts, outputs, or side effects;
-- nested branches work while parallel and approval remain explicitly rejected;
+- nested branches continue to work alongside parallel groups, while approval
+  remains explicitly rejected;
 - errors carry stable codes and original WOML source locations;
 - in-memory and durable execution produce the same result;
 - the packaged public CLI passes the branch acceptance workflow; and

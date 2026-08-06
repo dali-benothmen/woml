@@ -1,6 +1,6 @@
 # WOML Parallel Implementation Plan
 
-Status: P0–P6 complete — P7 hardening and milestone closure are next
+Status: P0–P7 complete — parallel execution is supported and publishable
 
 ## 1. Product Outcome
 
@@ -681,7 +681,7 @@ Gate:
 The packaged command proves real overlap from event ordering, produces only the
 reviewed JSON on stdout, and explains failures at the correct source element.
 
-### P7 — Harden, package, and close the milestone
+### P7 — Harden, package, and close the milestone — complete
 
 Changes:
 
@@ -709,6 +709,33 @@ Gate:
 
 Every verification row below passes in one release build with no skipped
 native tests.
+
+Completed proof:
+
+- Frontend-to-Rust tests cover one, two, and four children; concurrency `1`,
+  the child count, and a smaller cap; and intentionally out-of-order
+  completions without exceeding the authored cap.
+- Parallel runs at the beginning and middle of root flow, inside the selected
+  branch route, remains absent from an unselected route, and feeds a downstream
+  branch.
+- Large fork contexts and child results succeed normally and retain the
+  existing configured context/result byte-limit failures.
+- Durable recovery resumes before/after group start, after partial success,
+  before/after group completion, and after run completion without replaying a
+  success. An ambiguous active script fails closed; safely derivable missing
+  group success/failure events are appended from the immutable history.
+- Fail-fast cancellation races, Worker crashes, and host loss retain one real
+  terminal outcome and never kill an unrelated invocation.
+- The clean installed package executes sequential, branch, and parallel WOML
+  using its included native Rust engine and Bun host.
+- A local cold-process timing sample on 2026-08-06 produced the reviewed
+  parallel JSON after 400.41 ms and exited after 409.56 ms. This is a regression
+  datapoint, not a performance guarantee.
+- Release verification passed 127 Bun/TypeScript tests and 63 Rust engine
+  tests with native integration enabled and no skipped native cases, plus both
+  TypeScript typechecks, the optimized package build, the full core build
+  check, Clippy with warnings denied for `woml-engine`, and whitespace
+  validation.
 
 ## 11. Verification Matrix
 

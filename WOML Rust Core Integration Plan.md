@@ -1,7 +1,7 @@
 # WOML Rust Core Integration Plan
 
-Status: R0–R6 complete; Rust is the only WOML workflow executor; the first
-post-cutover expansion, conditional branches, is also complete
+Status: R0–R6 complete; Rust is the only WOML workflow executor; conditional
+branches and bounded parallel execution are supported post-cutover expansions
 
 This document defines how WOML moves from the validated TypeScript execution
 slice to the intended production architecture: Bun and TypeScript own the WOML
@@ -44,7 +44,7 @@ parse → validate → compile
     │
     ▼
 Compiled Workflow Model JSON
-schemaVersion: 1
+schemaVersion: 1, 2, or 3
     │
     ▼ N-API
 Rust core
@@ -713,8 +713,10 @@ separate design-and-implementation phases in this order:
 1. **Complete:** `<branch>`, stable merged results, and durable
    `branch_selected` events. The executable milestone and its proof are in
    `WOML Branch Implementation Plan.md`.
-2. Implement `<parallel>` using the already-multiplexed protocol and explicit
-   parallel-group events.
+2. **Complete:** `<parallel>` with model v3, event v3, bounded scheduling,
+   `wait-all`, `fail-fast`, protocol-v2 Worker cancellation, durable recovery,
+   and packaged CLI diagnostics. The milestone proof is in
+   `WOML Parallel Implementation Plan.md`.
 3. Resolve approval token storage, then implement pause/resume and `<approval>`.
 4. Resolve idempotency keys, then enable retry values greater than one.
 5. Add the remaining triggers, lifecycle behavior, services, and engine-control
@@ -734,7 +736,8 @@ The Rust hello slice does not authorize defaults for:
 - Secret resolution or persistence.
 - Typed `contextReference` inputs.
 - Retry idempotency-key derivation and duplicate handling.
-- Cancellation and durable user state.
+- Workflow-level cancellation and durable user state. Internal fail-fast
+  Worker cancellation is implemented and remains a separate engine concern.
 - Service calls from scripts.
 - Approval token generation, storage, and hashing.
 - Default production timeout.
@@ -762,7 +765,7 @@ Kept:
 - TypeScript XML parsing.
 - Source locations and diagnostics.
 - WOML validation and DAG compilation.
-- Compiled Workflow Model v1.
+- Versioned Compiled Workflow Models v1–v3.
 - The CLI command surface.
 - The isolated Bun Worker implementation where compatible with protocol v1.
 - Existing fixtures and expected outputs.
@@ -787,7 +790,8 @@ The Rust integration is complete when:
 - Rust validates the model, owns run events, folds context, and selects nodes.
 - Rust owns and supervises the long-lived Bun script host.
 - Every script runs in a fresh Worker with a required timeout.
-- The v1 protocol is multiplexed and conformance-tested in both languages.
+- Protocol v1 remains conformance-tested and explicitly compatible; protocol
+  v2 preserves multiplexing and adds targeted fail-fast cancellation.
 - Failures keep their canonical identity across protocol, event log, and CLI.
 - SQLite recovery reconstructs state and fails ambiguous attempts closed.
 - `woml run hello.woml` uses no TypeScript production executor.

@@ -151,6 +151,97 @@ const largeBranchResultSource = `<workflow version="0.1" id="large-branch-result
   </steps>
 </workflow>`;
 
+const parallelAtBeginningSource = `<workflow version="0.1" id="parallel-first">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="load" concurrency="2" on-error="wait-all">
+      <step id="left"><script>return { value: 20 };</script></step>
+      <step id="right"><script>return { value: 22 };</script></step>
+    </parallel>
+    <step id="finish"><script>return { value: context.steps.left.value + context.steps.right.value };</script></step>
+  </steps>
+</workflow>`;
+
+const parallelBranchCompositionSource = `<workflow version="0.1" id="parallel-branch-composition">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="flags"><script>return { selected: true };</script></step>
+    <branch id="route">
+      <when test="{{context.steps.flags.selected}}">
+        <parallel id="selectedChecks" concurrency="2" on-error="wait-all">
+          <step id="selectedLeft"><script>return { value: "selected-left" };</script></step>
+          <step id="selectedRight"><script>return { value: "selected-right" };</script></step>
+        </parallel>
+        <result value="{{context.steps.selectedLeft}}" />
+      </when>
+      <otherwise>
+        <parallel id="unselectedChecks" concurrency="2" on-error="wait-all">
+          <step id="unselectedLeft"><script>return { value: "unselected-left" };</script></step>
+          <step id="unselectedRight"><script>return { value: "unselected-right" };</script></step>
+        </parallel>
+        <result value="{{context.steps.unselectedLeft}}" />
+      </otherwise>
+    </branch>
+    <step id="finish"><script>return { value: context.steps.route.value };</script></step>
+  </steps>
+</workflow>`;
+
+const parallelBeforeBranchSource = `<workflow version="0.1" id="parallel-before-branch">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="checks" concurrency="2" on-error="wait-all">
+      <step id="decision"><script>return { approved: true };</script></step>
+      <step id="audit"><script>return { recorded: true };</script></step>
+    </parallel>
+    <branch id="route">
+      <when test="{{context.steps.decision.approved}}">
+        <step id="approved"><script>return { status: "approved" };</script></step>
+        <result value="{{context.steps.approved}}" />
+      </when>
+      <otherwise>
+        <step id="rejected"><script>return { status: "rejected" };</script></step>
+        <result value="{{context.steps.rejected}}" />
+      </otherwise>
+    </branch>
+  </steps>
+</workflow>`;
+
+const manyParallelChildrenSource = `<workflow version="0.1" id="many-parallel-children">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="jobs" concurrency="2" on-error="wait-all">
+      <step id="slow"><script>await new Promise(resolve => setTimeout(resolve, 180)); return { order: "slow" };</script></step>
+      <step id="fast"><script>await new Promise(resolve => setTimeout(resolve, 10)); return { order: "fast" };</script></step>
+      <step id="middle"><script>await new Promise(resolve => setTimeout(resolve, 70)); return { order: "middle" };</script></step>
+      <step id="later"><script>await new Promise(resolve => setTimeout(resolve, 30)); return { order: "later" };</script></step>
+    </parallel>
+    <step id="finish"><script>return { count: 4 };</script></step>
+  </steps>
+</workflow>`;
+
+const largeParallelContextSource = `<workflow version="0.1" id="large-parallel-context">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="seed"><script>return { payload: "x".repeat(8192) };</script></step>
+    <parallel id="readers" concurrency="2" on-error="wait-all">
+      <step id="readLength"><script>return { length: context.steps.seed.payload.length };</script></step>
+      <step id="readAgain"><script>return { length: context.steps.seed.payload.length };</script></step>
+    </parallel>
+    <step id="finish"><script>return { length: context.steps.readLength.length };</script></step>
+  </steps>
+</workflow>`;
+
+const largeParallelResultSource = `<workflow version="0.1" id="large-parallel-result">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="builders" concurrency="2" on-error="wait-all">
+      <step id="largeResult"><script>return { payload: "x".repeat(8192) };</script></step>
+      <step id="smallResult"><script>return { ok: true };</script></step>
+    </parallel>
+    <step id="finish"><script>return { length: context.steps.largeResult.payload.length };</script></step>
+  </steps>
+</workflow>`;
+
 function replaceFirstScript(
   workflow: CompiledWorkflowDefinition,
   source: string
@@ -375,6 +466,130 @@ describe('Rust to Bun workflow execution', () => {
       expect(failFastError.primaryNodeId).toBe('loadWeather');
       expect(failFastError.failedNodeIds).toEqual(['loadWeather']);
       expect(failFastError.cancelledNodeIds).toEqual(['loadSoil']);
+    }
+  );
+
+  nativeTest(
+    'composes parallel at the beginning, inside branch routes, and before a branch',
+    async () => {
+      const beginning = await executeWorkflowWithRust(
+        compileSource(parallelAtBeginningSource, 'parallel-first.woml'),
+        { nativeCorePath, scriptHostPath }
+      );
+      expect(beginning.result).toEqual({ value: 42 });
+      expect(beginning.context.steps.load).toBeUndefined();
+
+      const insideBranch = await executeWorkflowWithRust(
+        compileSource(
+          parallelBranchCompositionSource,
+          'parallel-inside-branch.woml'
+        ),
+        { nativeCorePath, scriptHostPath }
+      );
+      expect(insideBranch.result).toEqual({ value: 'selected-left' });
+      expect(insideBranch.context.steps.selectedLeft).toEqual({
+        value: 'selected-left',
+      });
+      expect(insideBranch.context.steps.selectedRight).toEqual({
+        value: 'selected-right',
+      });
+      expect(insideBranch.context.steps.unselectedLeft).toBeUndefined();
+      expect(insideBranch.context.steps.unselectedRight).toBeUndefined();
+      expect(
+        insideBranch.events.some(
+          event =>
+            event.type === 'parallel_group_started' &&
+            (event.data as { parallelId?: string }).parallelId ===
+              'unselectedChecks'
+        )
+      ).toBe(false);
+
+      const beforeBranch = await executeWorkflowWithRust(
+        compileSource(parallelBeforeBranchSource, 'parallel-before-branch.woml'),
+        { nativeCorePath, scriptHostPath }
+      );
+      expect(beforeBranch.result).toEqual({ status: 'approved' });
+      expect(beforeBranch.context.steps.rejected).toBeUndefined();
+      expect(
+        beforeBranch.events.find(event => event.type === 'branch_selected')
+          ?.data
+      ).toEqual({ branchId: 'route', armId: 'route:when:0' });
+    }
+  );
+
+  nativeTest(
+    'bounds many out-of-order children by the authored concurrency',
+    async () => {
+      const execution = await executeWorkflowWithRust(
+        compileSource(manyParallelChildrenSource, 'many-parallel.woml'),
+        { nativeCorePath, scriptHostPath }
+      );
+      expect(execution.result).toEqual({ count: 4 });
+      expect(
+        execution.executionOrder.filter(nodeId =>
+          ['slow', 'fast', 'middle', 'later'].includes(nodeId)
+        )
+      ).toEqual(['fast', 'middle', 'later', 'slow']);
+
+      let active = 0;
+      let maximumActive = 0;
+      for (const event of execution.events) {
+        const nodeId = (event.data as { nodeId?: string }).nodeId;
+        if (!['slow', 'fast', 'middle', 'later'].includes(nodeId ?? '')) {
+          continue;
+        }
+        if (event.type === 'step_attempt_started') {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+        }
+        if (
+          event.type === 'step_attempt_succeeded' ||
+          event.type === 'step_attempt_failed'
+        ) {
+          active -= 1;
+        }
+      }
+      expect(maximumActive).toBe(2);
+      expect(active).toBe(0);
+    }
+  );
+
+  nativeTest(
+    'carries large parallel context and results while preserving byte limits',
+    async () => {
+      const contextWorkflow = compileSource(
+        largeParallelContextSource,
+        'large-parallel-context.woml'
+      );
+      const contextExecution = await executeWorkflowWithRust(contextWorkflow, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      expect(contextExecution.result).toEqual({ length: 8192 });
+      const contextError = await capturedRustExecutionError(
+        contextWorkflow,
+        {},
+        contextLimitedHostPath
+      );
+      expect(contextError.code).toBe('WOML_PARALLEL_CHILD_FAILED');
+      expect(contextError.failedNodeIds).toEqual(['readLength', 'readAgain']);
+
+      const resultWorkflow = compileSource(
+        largeParallelResultSource,
+        'large-parallel-result.woml'
+      );
+      const resultExecution = await executeWorkflowWithRust(resultWorkflow, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      expect(resultExecution.result).toEqual({ length: 8192 });
+      const resultError = await capturedRustExecutionError(
+        resultWorkflow,
+        {},
+        resultLimitedHostPath
+      );
+      expect(resultError.code).toBe('WOML_PARALLEL_CHILD_FAILED');
+      expect(resultError.failedNodeIds).toEqual(['largeResult']);
     }
   );
 

@@ -1,8 +1,8 @@
 # WOML v0.1 Fundamental Syntax
 
 Status: design catalog draft; sequential scripts, conditional branches, and
-successful parallel groups execute in Rust; parallel failure policies,
-cancellation, and public CLI exposure remain staged
+bounded parallel groups are executable and publishable through the Rust-backed
+CLI, including both failure policies and fail-fast Worker cancellation
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -49,7 +49,7 @@ WOML separates syntax design from executable availability:
 
 The CLI profile grows only through reviewed vertical milestones. The original
 walking skeleton proved sequential scripts; the current published profile also
-includes conditional branches:
+includes conditional branches and bounded parallel groups:
 
 | Feature | Design status | Current CLI profile |
 |---|---|---|
@@ -60,7 +60,7 @@ includes conditional branches:
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
-| Parallel | Frozen | Successful groups execute concurrently in Rust; failure policies/cancellation are P5 and public CLI exposure is P6 |
+| Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Designed | Unavailable |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 
@@ -1100,10 +1100,10 @@ require defined semantics for missing failed-step outputs.
 The compiler represents the children as independent model-v3 DAG nodes using
 the frozen `engine.parallel-start`, ordered child edges, ordered join edges,
 and `engine.parallel-join` identities. Rust validates this structure at its
-model boundary and executes successful groups with bounded concurrent
-scheduling. Child-failure policy handling and cancellation remain explicitly
-gated until P5; a runtime MUST NOT silently substitute guessed failure
-semantics.
+model boundary and executes groups with bounded concurrent scheduling. The
+versioned event log records group start/completion and policy-specific failure;
+protocol-v2 cancellation terminates only the addressed active Workers while
+leaving unrelated invocations alive.
 
 Multi-step concurrent lanes are deferred. A future design may add an explicit
 `<sequence>` child, but `<branch>` is not used for that purpose.

@@ -1,6 +1,6 @@
 # WOML Parallel Diagnostics v0.1
 
-Status: frozen for P0/P1
+Status: frozen and implemented in the publishable parallel CLI profile
 
 Frontend diagnostics keep the existing `{ code, phase, message, file,
 location, hint? }` shape. Runtime/N-API failures keep identity in structured

@@ -13,10 +13,11 @@ use crate::engine::{
   validate_payload_against_definition,
 };
 use crate::event::{
-  is_definition_hash, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunStartedData,
-  RunSucceededData, StepAttemptFailedData,
+  is_definition_hash, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  ParallelGroupOutcome, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
+  RunStartedData, RunSucceededData, StepAttemptFailedData,
 };
-use crate::projection::AttemptStatus;
+use crate::projection::{AttemptStatus, ParallelGroupStatus};
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
@@ -535,18 +536,6 @@ impl DurableEventStore {
           }),
         )?;
       }
-      if started.iter().any(|attempt| {
-        workflow
-          .parallel_group_for_child(&attempt.node_id)
-          .is_some()
-      }) {
-        validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
-          .map_err(DurableStoreError::Contract)?;
-        transaction.commit()?;
-        return Ok(RunRecovery::Recovered {
-          interrupted_attempts: started.len(),
-        });
-      }
       append_to_history(
         &transaction,
         &mut events,
@@ -562,9 +551,158 @@ impl DurableEventStore {
           failure,
         )),
       )?;
+      validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?;
       transaction.commit()?;
       return Ok(RunRecovery::Recovered {
         interrupted_attempts: started.len(),
+      });
+    }
+
+    for group_projection in projection.parallel_groups.values() {
+      if group_projection.status != ParallelGroupStatus::Started {
+        continue;
+      }
+      let group = workflow
+        .parallel_group(&group_projection.parallel_id)
+        .ok_or_else(|| {
+          DurableStoreError::Contract(format!(
+            "Stored run references unknown parallel group {:?}.",
+            group_projection.parallel_id
+          ))
+        })?;
+      let child_statuses = group
+        .child_node_ids
+        .iter()
+        .map(|node_id| {
+          (
+            node_id,
+            projection
+              .attempts
+              .iter()
+              .rev()
+              .find(|attempt| attempt.identity.node_id == *node_id)
+              .map(|attempt| &attempt.status),
+          )
+        })
+        .collect::<Vec<_>>();
+      let every_succeeded = child_statuses
+        .iter()
+        .all(|(_, status)| matches!(status, Some(AttemptStatus::Succeeded { .. })));
+      if every_succeeded {
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          Utc::now(),
+          event_schema_version,
+          RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+            parallel_id: group.parallel_id.clone(),
+            outcome: ParallelGroupOutcome::Succeeded,
+            failed_node_ids: Vec::new(),
+            cancelled_node_ids: Vec::new(),
+          }),
+        )?;
+        validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+          .map_err(DurableStoreError::Contract)?;
+        transaction.commit()?;
+        return Ok(RunRecovery::Recovered {
+          interrupted_attempts: 0,
+        });
+      }
+
+      let every_terminal = child_statuses.iter().all(|(_, status)| {
+        matches!(
+          status,
+          Some(AttemptStatus::Succeeded { .. } | AttemptStatus::Failed { .. })
+        )
+      });
+      let failed_node_ids = child_statuses
+        .iter()
+        .filter_map(|(node_id, status)| match status {
+          Some(AttemptStatus::Failed { failure })
+            if failure.kind != AttemptFailureKind::InvocationCancelled =>
+          {
+            Some((*node_id).clone())
+          }
+          _ => None,
+        })
+        .collect::<Vec<_>>();
+      if failed_node_ids.is_empty() || (group.on_error == "wait-all" && !every_terminal) {
+        continue;
+      }
+      let cancelled_node_ids = child_statuses
+        .iter()
+        .filter_map(|(node_id, status)| match status {
+          Some(AttemptStatus::Failed { failure })
+            if failure.kind == AttemptFailureKind::InvocationCancelled =>
+          {
+            Some((*node_id).clone())
+          }
+          _ => None,
+        })
+        .collect::<Vec<_>>();
+      let primary_node_id = events
+        .iter()
+        .find_map(|event| match &event.payload {
+          RunEventPayload::StepAttemptFailed(data) if failed_node_ids.contains(&data.node_id) => {
+            Some(data.node_id.clone())
+          }
+          _ => None,
+        })
+        .ok_or_else(|| {
+          DurableStoreError::Contract(format!(
+            "Parallel group {:?} has failed children without a failure event.",
+            group.parallel_id
+          ))
+        })?;
+      let policy = if group.on_error == "wait-all" {
+        ParallelFailurePolicy::WaitAll
+      } else {
+        ParallelFailurePolicy::FailFast
+      };
+      let message = parallel_failure_message(policy, failed_node_ids.len());
+      let failure = ParallelFailure {
+        kind: "parallel_child_failed".to_string(),
+        code: "WOML_PARALLEL_CHILD_FAILED".to_string(),
+        message,
+      };
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        Utc::now(),
+        event_schema_version,
+        RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+          parallel_id: group.parallel_id.clone(),
+          outcome: ParallelGroupOutcome::Failed,
+          failed_node_ids: failed_node_ids.clone(),
+          cancelled_node_ids: cancelled_node_ids.clone(),
+        }),
+      )?;
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        Utc::now(),
+        event_schema_version,
+        RunEventPayload::RunFailed(RunFailedData::V3(RunFailedDataV3::Parallel {
+          parallel_id: group.parallel_id.clone(),
+          policy,
+          primary_node_id,
+          failed_node_ids,
+          cancelled_node_ids,
+          failure,
+        })),
+      )?;
+      validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?;
+      transaction.commit()?;
+      return Ok(RunRecovery::Recovered {
+        interrupted_attempts: 0,
       });
     }
 
@@ -757,6 +895,16 @@ fn interrupted_failure() -> AttemptFailure {
     code: AttemptFailureKind::Interrupted.code().to_string(),
     message: "Recovery found a started attempt without a terminal event.".to_string(),
     details: None,
+  }
+}
+
+fn parallel_failure_message(policy: ParallelFailurePolicy, failed_count: usize) -> String {
+  match policy {
+    ParallelFailurePolicy::FailFast => {
+      "A parallel child failed; active siblings were cancelled.".to_string()
+    }
+    ParallelFailurePolicy::WaitAll if failed_count == 1 => "One parallel child failed.".to_string(),
+    ParallelFailurePolicy::WaitAll => format!("{failed_count} parallel children failed."),
   }
 }
 

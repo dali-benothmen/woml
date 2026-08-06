@@ -207,12 +207,21 @@ fn sqlite_reopen_preserves_safe_parallel_boundaries_exactly() {
     let after = reopened.projection(&fixture[0].run_id).unwrap();
     assert_eq!(after, before, "prefix length {length}");
     let report = reopened.recover_interrupted_runs().unwrap();
-    assert_eq!(report.recovered_runs, 0, "prefix length {length}");
-    assert_eq!(report.resumable_runs, 1, "prefix length {length}");
+    let derived_group_completion = length == 8;
+    assert_eq!(
+      report.recovered_runs,
+      usize::from(derived_group_completion),
+      "prefix length {length}"
+    );
+    assert_eq!(
+      report.resumable_runs,
+      usize::from(!derived_group_completion),
+      "prefix length {length}"
+    );
     assert_eq!(
       reopened.events(&fixture[0].run_id).unwrap().len(),
-      length,
-      "safe recovery must not synthesize events"
+      length + usize::from(derived_group_completion),
+      "recovery may derive only the missing successful group completion"
     );
   }
 }
@@ -248,7 +257,7 @@ fn recovery_fails_in_flight_parallel_attempt_without_replaying_successes() {
   assert_eq!(report.recovered_runs, 1);
   assert_eq!(report.interrupted_attempts, 1);
   let projection = reopened.projection("run_parallel_01").unwrap();
-  assert_eq!(projection.status, RunStatus::Running);
+  assert_eq!(projection.status, RunStatus::Failed);
   assert!(projection.context.steps.contains_key("loadWeather"));
   assert!(!projection.context.steps.contains_key("loadSoil"));
   assert!(projection.attempts.iter().any(|attempt| {
@@ -259,9 +268,13 @@ fn recovery_fails_in_flight_parallel_attempt_without_replaying_successes() {
           if failure.kind == AttemptFailureKind::Interrupted
       )
   }));
+  assert!(matches!(
+    projection.failure,
+    Some(RunFailure::Attempt(ref failure))
+      if failure.kind == AttemptFailureKind::Interrupted
+  ));
 
   let engine = DurableDagEngine::resume(reopened, "run_parallel_01").unwrap();
   let ready = engine.ready_node_ids("run_parallel_01").unwrap();
-  assert!(!ready.iter().any(|node_id| node_id == "loadWeather"));
-  assert!(!ready.iter().any(|node_id| node_id == "loadSoil"));
+  assert!(ready.is_empty());
 }
