@@ -7,6 +7,7 @@ import { createSecretStore } from './secrets';
 import { FakeSlackTransport } from './notification-provider/fake-slack';
 import { NotificationProviderHost } from './notification-provider/host';
 import { RealSlackTransport } from './notification-provider/real-slack';
+import type { SlackTransport } from './notification-provider/slack-transport';
 import {
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
   NOTIFICATION_PROVIDER_PROTOCOL,
@@ -55,6 +56,9 @@ async function writeStdout(frame: Uint8Array): Promise<void> {
 
 export interface RunNotificationProviderHostOptions {
   readonly adapter?: 'real' | 'fake';
+  readonly createTransport?: (
+    emit: (message: Parameters<SerializedFrameWriter['send']>[0]) => Promise<void>
+  ) => SlackTransport;
 }
 
 export async function runNotificationProviderHost(
@@ -67,7 +71,8 @@ export async function runNotificationProviderHost(
   const emit = (message: Parameters<typeof writer.send>[0]) =>
     writer.send(message);
   const transport =
-    options.adapter === 'fake'
+    options.createTransport?.(emit) ??
+    (options.adapter === 'fake'
       ? new FakeSlackTransport({
           emit,
           automaticDecision: automaticDecision(),
@@ -79,7 +84,7 @@ export async function runNotificationProviderHost(
       : new RealSlackTransport({
           emit,
           log: message => process.stderr.write(`[woml] ${message}\n`),
-        });
+        }));
   const host = new NotificationProviderHost({
     secretStore: createSecretStore(),
     transport,

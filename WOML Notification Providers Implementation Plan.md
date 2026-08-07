@@ -1,10 +1,10 @@
 # WOML Notification Providers Implementation Plan
 
-Status: N0–N6 complete. The real-workspace Slack acceptance gate and the N6
-publication-hardening gate both pass. The packaged CLI contains the real Slack
-Web API and Socket Mode transport, while Rust remains the durable decision and
-route authority. Discord, WhatsApp, and generic webhook notification remain
-separate later milestones.
+Status: N0–N6.1 complete. The real-workspace Slack acceptance gate, the N6
+publication-hardening gate, and actionable Slack diagnostics all pass. The
+packaged CLI contains the real Slack Web API and Socket Mode transport, while
+Rust remains the durable decision and route authority. Discord, WhatsApp, and
+generic webhook notification remain separate later milestones.
 
 ## 1. Product Outcome
 
@@ -688,7 +688,7 @@ Completed proof:
   secret names.
 - `bun run test:n6` is the repeatable release gate. It builds and stages the
   production native module, then passes 76 frontend tests, 95 Rust WOML-engine
-  tests, 127 process-isolated CLI/provider tests, both TypeScript type checks,
+  tests, 130 process-isolated CLI/provider tests, both TypeScript type checks,
   strict Clippy across every WOML-engine target, the production core-library
   check, clean-package installation, and public/durable artifact scanning.
 - CLI test files run in isolated Bun processes because their real loopback
@@ -698,6 +698,37 @@ Completed proof:
   this WOML gate: the production core library still builds and is exercised
   through the N-API journeys, while those obsolete tests target the chaining
   architecture scheduled for SDK retirement.
+
+### N6.1 — Actionable Slack diagnostics — complete
+
+Changes:
+
+- Preserve Slack's safe `missing_scope` metadata instead of collapsing it into
+  only the aggregate all-deliveries-failed message.
+- Carry failed delivery identity, provider, destination, attempt, finality, and
+  safe failure through a versioned Rust-to-CLI diagnostic envelope.
+- Print one concrete failure per destination for total delivery failure.
+- Print a warning for failed destinations when at least one other notification
+  succeeds and the approval remains usable.
+- Allow-list Slack operation/scope metadata and continue redacting credentials,
+  capabilities, raw responses, request payloads, and authorization headers.
+- Keep the provider protocol, compiled model, durable event schema, and stable
+  failure codes unchanged.
+
+Result:
+
+A user who is missing `channels:read` now sees the failing Slack operation,
+missing and granted scopes, affected destination, and reinstall action directly
+from `woml run`; the separate diagnostic script is no longer required for this
+class of setup failure.
+
+Proof:
+
+- Real-adapter tests cover `conversations.list`, multiple missing/granted
+  scopes, and malicious provider metadata filtering.
+- Native CLI journeys cover both total failure and partial delivery success.
+- Tests assert that bot/app tokens and decision capabilities are absent from
+  terminal diagnostics.
 
 ## 9. Verification Matrix
 
@@ -763,11 +794,11 @@ N0 must explicitly settle:
 
 No implementation phase may resolve these with an undocumented default.
 
-## 12. Approval-Notification Roadmap After Slack
+## 12. Additional Approval Providers
 
-Slack is the only provider authorized by N0–N6. After the Slack milestone is
-complete and reviewed, the remaining work in the Human Approval notification
-scope is:
+Slack is the only provider authorized by N0–N6.1. The remaining notification
+providers are valid future work, but they do not block the foundational WOML
+roadmap and should be scheduled when product demand justifies them:
 
 1. **Discord milestone** — freeze Discord secrets, installation, interaction
    transport, message identity, and signature behavior against the existing
@@ -791,17 +822,13 @@ notification side of Human Approval; it does not replace the larger engine and
 language roadmap below. Generic webhook notification may be scheduled later
 with services and capabilities and does not need to block unrelated WOML work.
 
-## 13. Global WOML Roadmap After Approval Notifications
+## 13. Global WOML Roadmap After N6.1
 
 The complete product direction, carried forward from Section 15 of
 `WOML Human Approval Implementation Plan.md`, is:
 
 ```text
-Human Approval (complete)
-        |
-        v
-Approval notifications
-  Slack -> Discord -> shared providers -> WhatsApp
+Human Approval + Slack notifications (complete)
         |
         v
 Retries and idempotency
@@ -817,6 +844,10 @@ Lifecycle and engine controls
         |
         v
 Production runtime and operations
+        |
+        v
+Additional notification providers by demand
+  Discord and WhatsApp
         |
         v
 JavaScript SDK migration and retirement
@@ -840,7 +871,10 @@ The stages after approval notifications are:
 5. **Production runtime and operations** — add long-lived hosting,
    multi-workflow registration, deployment configuration, observability,
    retention, and later distributed queue and worker ownership.
-6. **SDK migration and retirement** — publish migration tooling and remove the
+6. **Additional notification providers** — implement Discord and WhatsApp
+   against the provider-neutral approval contracts when real product demand
+   warrants their installation and operational cost.
+7. **SDK migration and retirement** — publish migration tooling and remove the
    old JavaScript chaining SDK only after WOML reaches the agreed feature parity
    and existing users have a supported migration path.
 

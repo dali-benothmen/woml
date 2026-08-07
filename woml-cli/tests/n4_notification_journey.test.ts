@@ -180,6 +180,10 @@ describe('N4/N5 Rust and Slack provider journey', () => {
         succeeded: 2,
         failed: 0,
       });
+      expect(journey.diagnostics).toEqual({
+        version: 1,
+        deliveryFailures: [],
+      });
       expect(journey.decision).toMatchObject({
         status: 'accepted',
         decision: 'approved',
@@ -330,6 +334,21 @@ describe('N4/N5 Rust and Slack provider journey', () => {
       ).rejects.toMatchObject({
         name: NotificationProviderError.name,
         code: 'WOML_NOTIFICATION_DELIVERY_FAILED',
+        diagnostics: {
+          version: 1,
+          deliveryFailures: [
+            {
+              provider: 'slack',
+              destination: '#approvals',
+              failure: { code: 'WOML_SECRET_NOT_FOUND' },
+            },
+            {
+              provider: 'slack',
+              destination: '#engineering',
+              failure: { code: 'WOML_SECRET_NOT_FOUND' },
+            },
+          ],
+        },
       });
       const bytes = Buffer.from(await Bun.file(database).arrayBuffer());
       expect(bytes.includes(Buffer.from('WOML_SECRET_SLACK'))).toBe(false);

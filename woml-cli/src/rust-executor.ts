@@ -253,10 +253,35 @@ export interface NotificationProviderJourneyResult {
   readonly resolution: 'approved' | 'rejected' | 'timeout_failed';
   readonly deliveries: NotificationDispatchReport;
   readonly updates: NotificationDispatchReport;
+  readonly diagnostics: NotificationJourneyDiagnostics;
+}
+
+export interface NotificationDeliveryFailureDiagnostic {
+  readonly deliveryId: string;
+  readonly provider: string;
+  readonly destination: string;
+  readonly attempt: number;
+  readonly final: boolean;
+  readonly failure: {
+    readonly kind: string;
+    readonly code: string;
+    readonly message: string;
+    readonly retryable: boolean;
+    readonly retryAfterMs?: number;
+  };
+}
+
+export interface NotificationJourneyDiagnostics {
+  readonly version: 1;
+  readonly deliveryFailures: readonly NotificationDeliveryFailureDiagnostic[];
 }
 
 export class NotificationProviderError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly diagnostics?: NotificationJourneyDiagnostics
+  ) {
     super(message);
     this.name = 'NotificationProviderError';
   }
@@ -840,6 +865,7 @@ function parseNotificationJourney(
       'resolution',
       'deliveries',
       'updates',
+      'diagnostics',
     ]) ||
     typeof value.runId !== 'string' ||
     (value.decision !== null && !record(value.decision)) ||
@@ -847,11 +873,85 @@ function parseNotificationJourney(
       value.resolution !== 'rejected' &&
       value.resolution !== 'timeout_failed') ||
     !record(value.deliveries) ||
-    !record(value.updates)
+    !record(value.updates) ||
+    !notificationJourneyDiagnostics(value.diagnostics)
   ) {
     throw new Error('The native core returned an invalid notification journey.');
   }
   return value as unknown as NotificationProviderJourneyResult;
+}
+
+function notificationJourneyDiagnostics(
+  value: unknown
+): value is NotificationJourneyDiagnostics {
+  const failureKinds = new Set([
+    'secret_not_found',
+    'provider_auth_failed',
+    'destination_invalid',
+    'rate_limited',
+    'provider_unavailable',
+    'delivery_ambiguous',
+    'request_invalid',
+    'host_crashed',
+    'size_limit_exceeded',
+    'update_failed',
+  ]);
+  if (
+    !record(value) ||
+    !exactKeys(value, ['version', 'deliveryFailures']) ||
+    value.version !== 1 ||
+    !Array.isArray(value.deliveryFailures)
+  ) {
+    return false;
+  }
+  return value.deliveryFailures.every(item => {
+    if (
+      !record(item) ||
+      !exactKeys(item, [
+        'deliveryId',
+        'provider',
+        'destination',
+        'attempt',
+        'final',
+        'failure',
+      ]) ||
+      typeof item.deliveryId !== 'string' ||
+      !/^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$/.test(
+        item.deliveryId
+      ) ||
+      item.provider !== 'slack' ||
+      typeof item.destination !== 'string' ||
+      !/^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/.test(
+        item.destination
+      ) ||
+      !Number.isSafeInteger(item.attempt) ||
+      Number(item.attempt) < 1 ||
+      Number(item.attempt) > 3 ||
+      typeof item.final !== 'boolean' ||
+      !record(item.failure) ||
+      !exactKeys(
+        item.failure,
+        ['kind', 'code', 'message', 'retryable'],
+        ['retryAfterMs']
+      ) ||
+      typeof item.failure.kind !== 'string' ||
+      !failureKinds.has(item.failure.kind) ||
+      typeof item.failure.code !== 'string' ||
+      !/^WOML_[A-Z0-9_]+$/.test(item.failure.code) ||
+      typeof item.failure.message !== 'string' ||
+      item.failure.message.length < 1 ||
+      item.failure.message.length > 1024 ||
+      typeof item.failure.retryable !== 'boolean'
+    ) {
+      return false;
+    }
+    return (
+      item.failure.retryAfterMs === undefined ||
+      (Number.isSafeInteger(item.failure.retryAfterMs) &&
+        Number(item.failure.retryAfterMs) >= 0 &&
+        Number(item.failure.retryAfterMs) <= 86_400_000)
+    );
+  });
 }
 
 function decodeNotificationError(error: unknown): never {
@@ -862,12 +962,18 @@ function decodeNotificationError(error: unknown): never {
       const value: unknown = JSON.parse(message.slice(jsonStart));
       if (
         record(value) &&
-        exactKeys(value, ['kind', 'code', 'message']) &&
+        exactKeys(value, ['kind', 'code', 'message'], ['diagnostics']) &&
         value.kind === 'woml_notification_error' &&
         typeof value.code === 'string' &&
-        typeof value.message === 'string'
+        typeof value.message === 'string' &&
+        (value.diagnostics === undefined ||
+          notificationJourneyDiagnostics(value.diagnostics))
       ) {
-        throw new NotificationProviderError(value.code, value.message);
+        throw new NotificationProviderError(
+          value.code,
+          value.message,
+          value.diagnostics
+        );
       }
     } catch (decoded) {
       if (decoded instanceof NotificationProviderError) throw decoded;

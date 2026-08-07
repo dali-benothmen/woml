@@ -19,6 +19,7 @@ import {
   executeApprovalWorkflowWithRust,
   executeWorkflowWithRust,
   NotificationProviderError,
+  type NotificationJourneyDiagnostics,
   resolveApprovalWithRust,
   resumeApprovalWorkflowWithRust,
   RustWorkflowExecutionError,
@@ -329,7 +330,8 @@ function formatError(
   }
 
   if (error instanceof NotificationProviderError) {
-    return `WOML notification error [${error.code}]: ${error.message}`;
+    const details = formatNotificationDeliveryFailures(error.diagnostics);
+    return `WOML notification error [${error.code}]: ${error.message}${details}`;
   }
 
   if (error instanceof RustWorkflowExecutionError) {
@@ -357,6 +359,32 @@ function formatError(
   return `WOML internal error${
     filePath === undefined ? '' : ` in "${filePath}"`
   }: ${message}`;
+}
+
+function formatNotificationDeliveryFailures(
+  diagnostics: NotificationJourneyDiagnostics | undefined
+): string {
+  if (diagnostics === undefined || diagnostics.deliveryFailures.length === 0) {
+    return '';
+  }
+  return diagnostics.deliveryFailures
+    .map(({ provider, destination, failure }) => {
+      const label = provider === 'slack' ? 'Slack' : provider;
+      return `\n${label} notification to ${destination} failed [${failure.code}]: ${failure.message}`;
+    })
+    .join('');
+}
+
+function printNotificationWarnings(
+  io: CliIo,
+  diagnostics: NotificationJourneyDiagnostics
+): void {
+  if (diagnostics.deliveryFailures.length === 0) return;
+  io.stderr(
+    `\nWOML notification warning: some approval notifications could not be delivered.${formatNotificationDeliveryFailures(
+      diagnostics
+    )}\n\n`
+  );
 }
 
 async function readWorkflow(filePath: string): Promise<string> {
@@ -543,7 +571,7 @@ async function runNotificationWorkflow(
   while (outcome.status === 'waiting') {
     const waiting = outcome;
     printSlackApproval(io, waiting, args.filePath, args.statePath);
-    await runNotificationProviderJourneyWithRust(
+    const journey = await runNotificationProviderJourneyWithRust(
       args.statePath,
       waiting.runId,
       {
@@ -552,6 +580,7 @@ async function runNotificationWorkflow(
         interactionTimeoutMs: providerWaitMilliseconds(waiting),
       }
     );
+    printNotificationWarnings(io, journey.diagnostics);
     outcome = await resumeApprovalWorkflowWithRust(
       workflow,
       args.statePath,

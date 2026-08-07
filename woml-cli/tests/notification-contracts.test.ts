@@ -19,6 +19,7 @@ async function validators(): Promise<{
   readonly model: ValidateFunction;
   readonly event: ValidateFunction;
   readonly provider: ValidateFunction;
+  readonly diagnostics: ValidateFunction;
 }> {
   const names = [
     'attempt-failure.v1.schema.json',
@@ -34,6 +35,7 @@ async function validators(): Promise<{
     'run-event.v4.schema.json',
     'run-event.v5.schema.json',
     'notification-provider-host.v1.schema.json',
+    'notification-journey-diagnostics.v1.schema.json',
   ];
   const schemas = await Promise.all(
     names.map(name => readJson(join(schemasDirectory, name)))
@@ -48,6 +50,9 @@ async function validators(): Promise<{
     event: ajv.getSchema('https://cronflow.dev/schemas/run-event/v5')!,
     provider: ajv.getSchema(
       'https://cronflow.dev/schemas/notification-provider-host/v1'
+    )!,
+    diagnostics: ajv.getSchema(
+      'https://cronflow.dev/schemas/notification-journey-diagnostics/v1'
     )!,
   };
 }
@@ -77,6 +82,36 @@ function errors(validator: ValidateFunction): string {
 }
 
 describe('Slack notification N0 contracts', () => {
+  test('pins the secret-safe N6.1 journey diagnostic envelope', async () => {
+    const { diagnostics } = await validators();
+    const value = {
+      version: 1,
+      deliveryFailures: [
+        {
+          deliveryId: 'releaseApproval:notify:0:channel:1',
+          provider: 'slack',
+          destination: '#engineering',
+          attempt: 1,
+          final: true,
+          failure: {
+            kind: 'provider_auth_failed',
+            code: 'WOML_SLACK_PERMISSION_DENIED',
+            message:
+              'Slack operation conversations.list needs additional app permissions. Missing scopes: channels:read.',
+            retryable: false,
+          },
+        },
+      ],
+    };
+    expect(diagnostics(value), errors(diagnostics)).toBe(true);
+
+    const leaked = structuredClone(value) as JsonObject;
+    (leaked.deliveryFailures as JsonObject[])[0]!.decisionCapability =
+      'ncap_forbidden';
+    expect(diagnostics(leaked)).toBe(false);
+    expect(JSON.stringify(value)).not.toMatch(/xox[baprs]-|ncap_|authorization/i);
+  });
+
   test('pins the reviewed model-v5 delivery expansion and canonical hash', async () => {
     const { model } = await validators();
     const compiled = await readJson(

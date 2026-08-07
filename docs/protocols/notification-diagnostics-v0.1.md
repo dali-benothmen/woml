@@ -1,7 +1,8 @@
 # WOML Notification and Secret Diagnostics v0.1
 
-Status: frozen and implemented through the completed N6 Slack publication
-milestone. Later providers must reuse or explicitly version these codes.
+Status: frozen and implemented through the completed N6.1 actionable Slack
+diagnostics milestone. Later providers must reuse or explicitly version these
+codes.
 
 Diagnostics never include resolved secret values, decision capabilities,
 provider payloads, or credential-store implementation errors.
@@ -75,3 +76,41 @@ structured safe kind and stable code, and the release gate verifies that
 diagnostics contain neither resolved secret values nor decision capabilities.
 Human-readable CLI presentation may improve without changing this frozen
 failure vocabulary.
+
+## N6.1 Actionable Runtime Presentation
+
+N6.1 does not change the provider protocol, compiled model, event schema, or
+failure vocabulary. It adds a versioned Rust-to-CLI journey diagnostic
+envelope. The exact shape is frozen in
+`docs/schemas/notification-journey-diagnostics.v1.schema.json`.
+
+```json
+{
+  "version": 1,
+  "deliveryFailures": [
+    {
+      "deliveryId": "review:notify:0:channel:0",
+      "provider": "slack",
+      "destination": "#approvals",
+      "attempt": 1,
+      "final": true,
+      "failure": {
+        "kind": "provider_auth_failed",
+        "code": "WOML_SLACK_PERMISSION_DENIED",
+        "message": "A safe, actionable explanation.",
+        "retryable": false
+      }
+    }
+  ]
+}
+```
+
+The envelope is derived from the folded durable projection. Total-delivery
+failure carries it on `NotificationProviderError`; a successful journey with
+one or more failed destinations returns it as a warning. Entries are ordered by
+stable delivery ID.
+
+For Slack `missing_scope`, the safe message may include the controlled API
+operation plus allow-listed `needed` and `provided` scope names. Unknown scope
+text is discarded. Resolved credentials, decision capabilities, raw Slack
+responses, request payloads, and authorization headers remain forbidden.

@@ -18,6 +18,19 @@ const APPROVE_ACTION = 'woml_approval_approved';
 const REJECT_ACTION = 'woml_approval_rejected';
 const ACTION_BLOCK = 'woml_approval_actions';
 const SOCKET_OPEN_TIMEOUT_MS = 10_000;
+const DIAGNOSTIC_SLACK_SCOPES = new Set([
+  'connections:write',
+  'chat:write',
+  'chat:write.public',
+  'channels:read',
+  'channels:history',
+  'groups:read',
+  'groups:history',
+  'im:read',
+  'im:history',
+  'mpim:read',
+  'mpim:history',
+]);
 
 type SlackEffect = 'none' | 'delivery' | 'update';
 
@@ -75,6 +88,15 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function safeText(value: string, maximum: number): string {
   return [...value].slice(0, maximum).join('');
+}
+
+function safeSlackScopes(value: unknown): readonly string[] {
+  if (typeof value !== 'string' || value.length > 1_024) return [];
+  const scopes = value
+    .split(',')
+    .map(scope => scope.trim())
+    .filter(scope => DIAGNOSTIC_SLACK_SCOPES.has(scope));
+  return [...new Set(scopes)].slice(0, 32);
 }
 
 function failure(
@@ -201,7 +223,12 @@ function parseActionValue(value: unknown): SlackActionValue | undefined {
 function slackError(
   error: string,
   effect: SlackEffect,
-  retryAfterMs?: number
+  retryAfterMs?: number,
+  diagnostic: {
+    readonly method?: string;
+    readonly needed?: unknown;
+    readonly provided?: unknown;
+  } = {}
 ): SlackTransportError {
   if (error === 'ratelimited' || error === 'rate_limited') {
     return failure(
@@ -224,13 +251,32 @@ function slackError(
       'no_permission',
     ].includes(error)
   ) {
+    const missingScopes = safeSlackScopes(diagnostic.needed);
+    const grantedScopes = safeSlackScopes(diagnostic.provided);
+    const operation =
+      diagnostic.method !== undefined &&
+      /^[a-z][a-zA-Z0-9.]{0,79}$/.test(diagnostic.method)
+        ? diagnostic.method
+        : undefined;
+    const permissionMessage = [
+      operation === undefined
+        ? 'The Slack app does not have a required permission.'
+        : `Slack operation ${operation} needs additional app permissions.`,
+      ...(missingScopes.length === 0
+        ? []
+        : [`Missing scopes: ${missingScopes.join(', ')}.`]),
+      ...(grantedScopes.length === 0
+        ? []
+        : [`Granted scopes: ${grantedScopes.join(', ')}.`]),
+      'Add the missing Bot Token Scopes and reinstall the Slack app to the workspace.',
+    ].join(' ');
     return failure(
       'provider_auth_failed',
       error === 'missing_scope' || error === 'no_permission'
         ? 'WOML_SLACK_PERMISSION_DENIED'
         : 'WOML_SLACK_AUTH_FAILED',
       error === 'missing_scope' || error === 'no_permission'
-        ? 'The Slack app does not have the required permission.'
+        ? permissionMessage
         : 'Slack rejected a configured credential.',
       false
     );
@@ -629,7 +675,12 @@ export class RealSlackTransport implements SlackTransport {
       throw slackError(
         typeof value.error === 'string' ? value.error : 'invalid_response',
         effect,
-        retryAfterMs
+        retryAfterMs,
+        {
+          method,
+          needed: value.needed,
+          provided: value.provided,
+        }
       );
     }
     return value;

@@ -301,7 +301,14 @@ describe('N5 real Slack transport', () => {
 
     const denied = make(call =>
       call.method === 'conversations.list'
-        ? { body: { ok: false, error: 'missing_scope' } }
+        ? {
+            body: {
+              ok: false,
+              error: 'missing_scope',
+              needed: 'channels:read,groups:read,mpim:read,im:read',
+              provided: 'channels:history,chat:write',
+            },
+          }
         : successfulApi(call)
     );
     await denied.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
@@ -309,9 +316,43 @@ describe('N5 real Slack transport', () => {
       failure: {
         kind: 'provider_auth_failed',
         code: 'WOML_SLACK_PERMISSION_DENIED',
+        message:
+          'Slack operation conversations.list needs additional app permissions. Missing scopes: channels:read, groups:read, mpim:read, im:read. Granted scopes: channels:history, chat:write. Add the missing Bot Token Scopes and reinstall the Slack app to the workspace.',
         retryable: false,
       },
     });
+
+    const maliciousScope = 'xoxb-must-not-appear';
+    const unsafeDenied = make(call =>
+      call.method === 'conversations.list'
+        ? {
+            body: {
+              ok: false,
+              error: 'missing_scope',
+              needed: maliciousScope,
+              provided: 'chat:write',
+            },
+          }
+        : successfulApi(call)
+    );
+    await unsafeDenied.ensureConnection(
+      'SLACK_APP_TOKEN',
+      credentials.appToken
+    );
+    try {
+      await unsafeDenied.deliver({ invocation, credentials });
+      throw new Error('Expected Slack permission failure.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(SlackTransportError);
+      expect(JSON.stringify(error)).not.toContain(maliciousScope);
+      expect(error).toMatchObject({
+        failure: {
+          code: 'WOML_SLACK_PERMISSION_DENIED',
+          message:
+            'Slack operation conversations.list needs additional app permissions. Granted scopes: chat:write. Add the missing Bot Token Scopes and reinstall the Slack app to the workspace.',
+        },
+      });
+    }
 
     const expired = make(call =>
       call.method === 'auth.test'

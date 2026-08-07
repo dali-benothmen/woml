@@ -76,7 +76,9 @@ updates all delivered messages, and continues only the selected WOML route.
 - `WOML_SLACK_AUTH_FAILED`: replace a revoked, expired, or wrong token.
 - `WOML_SLACK_PERMISSION_DENIED`: verify the scopes above under **Bot Token
   Scopes**, reinstall the app, refresh the stored `xoxb-...` token, and ensure
-  the app belongs to a private destination.
+  the app belongs to a private destination. When Slack returns safe scope
+  metadata, WOML prints the failed operation, missing scopes, granted scopes,
+  destination, and reinstall action directly in the terminal.
 - `WOML_SLACK_DESTINATION_INVALID`: verify the channel name/ID and app
   visibility.
 - `WOML_SLACK_RATE_LIMITED`: WOML follows Slack's `Retry-After` value through

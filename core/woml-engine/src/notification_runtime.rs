@@ -33,6 +33,28 @@ pub struct NotificationJourneyResult {
   pub resolution: NotificationResolution,
   pub deliveries: NotificationDispatchReport,
   pub updates: NotificationDispatchReport,
+  pub diagnostics: NotificationJourneyDiagnostics,
+}
+
+pub const NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationDeliveryDiagnostic {
+  pub delivery_id: String,
+  pub provider: String,
+  pub destination: String,
+  pub attempt: u32,
+  #[serde(rename = "final")]
+  pub final_: bool,
+  pub failure: NotificationSafeFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationJourneyDiagnostics {
+  pub version: u32,
+  pub delivery_failures: Vec<NotificationDeliveryDiagnostic>,
 }
 
 #[derive(Debug, Error)]
@@ -44,7 +66,7 @@ pub enum NotificationJourneyError {
   #[error("notification provider work is invalid: {0}")]
   Contract(String),
   #[error("every approval notification delivery failed")]
-  DeliveryFailed,
+  DeliveryFailed(NotificationJourneyDiagnostics),
 }
 
 pub async fn run_notification_provider_journey(
@@ -144,8 +166,9 @@ pub async fn run_notification_provider_journey(
     tokio::time::sleep(wait).await;
   }
   if delivery_report.run_failed {
+    let diagnostics = notification_diagnostics(&store.projection(run_id)?);
     shutdown_shared(client).await;
-    return Err(NotificationJourneyError::DeliveryFailed);
+    return Err(NotificationJourneyError::DeliveryFailed(diagnostics));
   }
   if !store
     .projection(run_id)?
@@ -258,7 +281,39 @@ pub async fn run_notification_provider_journey(
     resolution,
     deliveries: delivery_report,
     updates: update_report,
+    diagnostics: notification_diagnostics(&store.projection(run_id)?),
   })
+}
+
+fn notification_diagnostics(projection: &crate::RunProjection) -> NotificationJourneyDiagnostics {
+  let mut delivery_failures = projection
+    .notification_deliveries
+    .values()
+    .filter_map(|delivery| {
+      let NotificationDeliveryStatus::Failed {
+        attempt,
+        final_,
+        failure,
+        ..
+      } = &delivery.status
+      else {
+        return None;
+      };
+      Some(NotificationDeliveryDiagnostic {
+        delivery_id: delivery.delivery_id.clone(),
+        provider: delivery.provider.clone(),
+        destination: delivery.destination.clone(),
+        attempt: *attempt,
+        final_: *final_,
+        failure: failure.clone(),
+      })
+    })
+    .collect::<Vec<_>>();
+  delivery_failures.sort_by(|left, right| left.delivery_id.cmp(&right.delivery_id));
+  NotificationJourneyDiagnostics {
+    version: NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION,
+    delivery_failures,
+  }
 }
 
 fn delivery_retry_wait(

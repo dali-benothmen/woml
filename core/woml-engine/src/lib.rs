@@ -56,7 +56,9 @@ pub use notification_protocol::{
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
 pub use notification_runtime::{
-  run_notification_provider_journey, NotificationJourneyError, NotificationJourneyResult,
+  run_notification_provider_journey, NotificationDeliveryDiagnostic,
+  NotificationJourneyDiagnostics, NotificationJourneyError, NotificationJourneyResult,
+  NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION,
 };
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError,

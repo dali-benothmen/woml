@@ -11,6 +11,7 @@ use woml_engine::{
   run_notification_provider_journey, settle_approval_timeout_durable, ApprovalDecision,
   ApprovalDecisionOutcome, CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
   NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyError,
+  NotificationJourneyDiagnostics,
   ParallelFailurePolicy, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
   RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions, SystemEngineClock,
 };
@@ -201,44 +202,54 @@ struct NativeNotificationError {
   kind: &'static str,
   code: &'static str,
   message: &'static str,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  diagnostics: Option<NotificationJourneyDiagnostics>,
 }
 
 fn native_notification_error(error: NotificationJourneyError) -> napi::Error {
-  let (code, message) = match error {
-    NotificationJourneyError::DeliveryFailed => (
+  let (code, message, diagnostics) = match error {
+    NotificationJourneyError::DeliveryFailed(diagnostics) => (
       "WOML_NOTIFICATION_DELIVERY_FAILED",
       "Every configured approval notification delivery failed.",
+      Some(diagnostics),
     ),
     NotificationJourneyError::Host(NotificationHostClientError::InteractionTimedOut) => (
       "WOML_NOTIFICATION_INTERACTION_TIMEOUT",
       "No provider approval action arrived before the local wait deadline.",
+      None,
     ),
     NotificationJourneyError::Host(NotificationHostClientError::Protocol(_)) => (
       "WOML_NOTIFICATION_RESPONSE_INVALID",
       "The notification provider host violated its frozen protocol.",
+      None,
     ),
     NotificationJourneyError::Host(_) => (
       "WOML_NOTIFICATION_HOST_CRASHED",
       "The notification provider host stopped unexpectedly.",
+      None,
     ),
     NotificationJourneyError::Store(DurableStoreError::ApprovalDecisionConflict) => (
       "WOML_APPROVAL_DECISION_CONFLICT",
       "A different human decision is already durable.",
+      None,
     ),
     NotificationJourneyError::Store(DurableStoreError::ExpiredApprovalToken)
     | NotificationJourneyError::Store(DurableStoreError::ApprovalExpired) => (
       "WOML_APPROVAL_EXPIRED",
       "The approval request or provider capability expired.",
+      None,
     ),
     _ => (
       "WOML_NOTIFICATION_INTERNAL",
       "The notification provider journey could not be completed safely.",
+      None,
     ),
   };
   let envelope = NativeNotificationError {
     kind: "woml_notification_error",
     code,
     message,
+    diagnostics,
   };
   let reason = serde_json::to_string(&envelope).unwrap_or_else(|_| {
     "WOML notification provider journey failed and its error could not be encoded.".to_string()

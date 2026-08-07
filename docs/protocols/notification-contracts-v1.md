@@ -1,7 +1,9 @@
 # WOML Approval Notification Contracts v1
 
-Status: frozen in N0 and implemented and publication-hardened through N6. The
+Status: frozen in N0 and implemented and publication-hardened through N6.1. The
 real Slack Socket Mode acceptance journey and automated N6 release gate pass.
+N6.1 adds only the separately versioned Rust-to-CLI diagnostic envelope; this
+provider protocol is unchanged.
 
 This document pins the interfaces between WOML source, the TypeScript frontend,
 the Rust authority, the Bun provider host, the secret resolver, and Slack.
