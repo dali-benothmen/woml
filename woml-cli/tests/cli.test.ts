@@ -584,5 +584,27 @@ describe('woml run', () => {
         )
       ).exists()
     ).toBe(true);
+    expect(
+      await Bun.file(
+        join(
+          consumerDirectory,
+          'node_modules',
+          'woml-cli',
+          'dist',
+          'notification-provider-host.js'
+        )
+      ).exists()
+    ).toBe(true);
+    expect(
+      await Bun.file(
+        join(
+          consumerDirectory,
+          'node_modules',
+          'woml-cli',
+          'slack',
+          'manifest.json'
+        )
+      ).exists()
+    ).toBe(true);
   });
 });

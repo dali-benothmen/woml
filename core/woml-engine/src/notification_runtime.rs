@@ -8,9 +8,9 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use crate::durable::{
-  ApprovalDecisionOutcome, DurableEventStore, DurableStoreError, NotificationDeliveryWork,
-  NotificationDispatchReport, NotificationProviderDeliveryResult, NotificationProviderUpdateResult,
-  NotificationUpdateWork,
+  ApprovalDecisionOutcome, ApprovalTimeoutSettlementStatus, DurableEventStore, DurableStoreError,
+  NotificationDeliveryWork, NotificationDispatchReport, NotificationProviderDeliveryResult,
+  NotificationProviderUpdateResult, NotificationUpdateWork,
 };
 use crate::notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
@@ -20,13 +20,17 @@ use crate::notification_protocol::{
   NotificationHostOutcome, NotificationUpdateMessage, NOTIFICATION_PROVIDER_PROTOCOL,
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
-use crate::{NotificationSafeFailure, RunStatus};
+use crate::{
+  ApprovalResolution, NotificationDeliveryStatus, NotificationMessageUpdateStatus,
+  NotificationResolution, NotificationSafeFailure, RunStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationJourneyResult {
   pub run_id: String,
-  pub decision: ApprovalDecisionOutcome,
+  pub decision: Option<ApprovalDecisionOutcome>,
+  pub resolution: NotificationResolution,
   pub deliveries: NotificationDispatchReport,
   pub updates: NotificationDispatchReport,
 }
@@ -78,114 +82,235 @@ pub async fn run_notification_provider_journey(
 
   let client = Arc::new(NotificationHostClient::spawn(host_options).await?);
   let mut delivery_report = NotificationDispatchReport::default();
-  let mut delivery_tasks = JoinSet::new();
-  for definition in &approval.notifications {
-    let work = match store.begin_notification_delivery(run_id, &definition.delivery_id, Utc::now())
-    {
-      Ok(work) => work,
-      Err(DurableStoreError::Contract(_)) => continue,
-      Err(error) => return Err(error.into()),
-    };
-    let message = delivery_message(
-      &work,
-      &workflow.workflow_id,
-      approval.name.as_deref().unwrap_or(approval_id),
-      approval.description.as_deref(),
-      request.expires_at,
-    )?;
-    let task_client = Arc::clone(&client);
-    delivery_tasks.spawn(async move {
-      let result = task_client.invoke(&message.invocation_id, &message).await;
-      (work, result)
-    });
-  }
-  while let Some(joined) = delivery_tasks.join_next().await {
-    let (work, result) = joined.map_err(|error| {
-      NotificationJourneyError::Host(NotificationHostClientError::HostCrashed(error.to_string()))
-    })?;
-    let provider_result = match result {
-      Ok(completed) => delivery_result(completed.outcome),
-      Err(error) => NotificationProviderDeliveryResult::Failed(host_failure(&error, false)),
-    };
-    let succeeded = matches!(
-      provider_result,
-      NotificationProviderDeliveryResult::Succeeded(_)
-    );
-    let projection = store.complete_notification_delivery(&work, provider_result, Utc::now())?;
-    delivery_report.attempted += 1;
-    if succeeded {
-      delivery_report.succeeded += 1;
-    } else {
-      delivery_report.failed += 1;
+  loop {
+    let mut delivery_tasks = JoinSet::new();
+    for definition in &approval.notifications {
+      let work =
+        match store.begin_notification_delivery(run_id, &definition.delivery_id, Utc::now()) {
+          Ok(work) => work,
+          Err(DurableStoreError::Contract(_)) => continue,
+          Err(error) => return Err(error.into()),
+        };
+      let message = delivery_message(
+        &work,
+        &workflow.workflow_id,
+        approval.name.as_deref().unwrap_or(approval_id),
+        approval.description.as_deref(),
+        request.expires_at,
+      )?;
+      let task_client = Arc::clone(&client);
+      delivery_tasks.spawn(async move {
+        let result = task_client.invoke(&message.invocation_id, &message).await;
+        (work, result)
+      });
     }
-    delivery_report.run_failed = projection.status == RunStatus::Failed;
+    while let Some(joined) = delivery_tasks.join_next().await {
+      let (work, result) = joined.map_err(|error| {
+        NotificationJourneyError::Host(NotificationHostClientError::HostCrashed(error.to_string()))
+      })?;
+      let provider_result = match result {
+        Ok(completed) => delivery_result(completed.outcome),
+        Err(error) => NotificationProviderDeliveryResult::Failed(host_failure(&error, false)),
+      };
+      let succeeded = matches!(
+        provider_result,
+        NotificationProviderDeliveryResult::Succeeded(_)
+      );
+      let projection = store.complete_notification_delivery(&work, provider_result, Utc::now())?;
+      delivery_report.attempted += 1;
+      if succeeded {
+        delivery_report.succeeded += 1;
+      } else {
+        delivery_report.failed += 1;
+      }
+      delivery_report.run_failed = projection.status == RunStatus::Failed;
+    }
+    let projection = store.projection(run_id)?;
+    if projection.status == RunStatus::Failed {
+      delivery_report.run_failed = true;
+      break;
+    }
+    if projection.notification_deliveries.values().any(|delivery| {
+      matches!(
+        delivery.status,
+        NotificationDeliveryStatus::Succeeded { .. }
+      )
+    }) {
+      break;
+    }
+    let Some(wait) = delivery_retry_wait(&projection, Utc::now()) else {
+      break;
+    };
+    tokio::time::sleep(wait).await;
   }
   if delivery_report.run_failed {
     shutdown_shared(client).await;
     return Err(NotificationJourneyError::DeliveryFailed);
   }
-  if delivery_report.succeeded == 0 {
+  if !store
+    .projection(run_id)?
+    .notification_deliveries
+    .values()
+    .any(|delivery| {
+      matches!(
+        delivery.status,
+        NotificationDeliveryStatus::Succeeded { .. }
+      )
+    })
+  {
     shutdown_shared(client).await;
     return Err(NotificationJourneyError::Contract(
       "No notification delivery is currently available for a provider decision.".to_string(),
     ));
   }
 
-  let interaction = client.next_interaction(interaction_timeout).await?;
-  let decision = store.resolve_notification_approval_from_provider(
-    &interaction.decision_capability,
-    &interaction.delivery_id,
-    &interaction.provider,
-    &interaction.provider_actor_id,
-    interaction.decision,
-    Utc::now(),
-  )?;
-
-  let projection = store.projection(run_id)?;
-  let update_ids = projection
-    .notification_updates
-    .keys()
-    .cloned()
-    .collect::<Vec<_>>();
-  let mut update_tasks = JoinSet::new();
-  for delivery_id in update_ids {
-    let work = match store.begin_notification_update(run_id, &delivery_id, Utc::now()) {
-      Ok(work) => work,
-      Err(DurableStoreError::Contract(_)) => continue,
-      Err(error) => return Err(error.into()),
-    };
-    let message = update_message(&work)?;
-    let task_client = Arc::clone(&client);
-    update_tasks.spawn(async move {
-      let result = task_client.invoke(&message.invocation_id, &message).await;
-      (work, result)
-    });
-  }
-  let mut update_report = NotificationDispatchReport::default();
-  while let Some(joined) = update_tasks.join_next().await {
-    let (work, result) = joined.map_err(|error| {
-      NotificationJourneyError::Host(NotificationHostClientError::HostCrashed(error.to_string()))
-    })?;
-    let provider_result = match result {
-      Ok(completed) => update_result(completed.outcome),
-      Err(error) => NotificationProviderUpdateResult::Failed(host_failure(&error, true)),
-    };
-    let succeeded = matches!(provider_result, NotificationProviderUpdateResult::Succeeded);
-    store.complete_notification_update(&work, provider_result, Utc::now())?;
-    update_report.updates_attempted += 1;
-    if succeeded {
-      update_report.updates_succeeded += 1;
-    } else {
-      update_report.updates_failed += 1;
+  let (decision, resolution) = match client.next_interaction(interaction_timeout).await {
+    Ok(interaction) => {
+      let decision = store.resolve_notification_approval_from_provider(
+        &interaction.decision_capability,
+        &interaction.delivery_id,
+        &interaction.provider,
+        &interaction.provider_actor_id,
+        interaction.decision,
+        Utc::now(),
+      )?;
+      let resolution = match decision.decision {
+        crate::ApprovalDecision::Approved => NotificationResolution::Approved,
+        crate::ApprovalDecision::Rejected => NotificationResolution::Rejected,
+      };
+      (Some(decision), resolution)
     }
+    Err(NotificationHostClientError::InteractionTimedOut) => {
+      let settlement = store.settle_approval_timeout(run_id, approval_id, Utc::now())?;
+      if settlement.status == ApprovalTimeoutSettlementStatus::NotDue {
+        return Err(NotificationHostClientError::InteractionTimedOut.into());
+      }
+      let resolution = match settlement.resolution {
+        Some(ApprovalResolution::Decision {
+          decision: crate::ApprovalDecision::Approved,
+          ..
+        }) => NotificationResolution::Approved,
+        Some(ApprovalResolution::Decision {
+          decision: crate::ApprovalDecision::Rejected,
+          ..
+        }) => NotificationResolution::Rejected,
+        Some(ApprovalResolution::TimeoutFailure) => NotificationResolution::TimeoutFailed,
+        None => {
+          return Err(NotificationJourneyError::Contract(
+            "A settled approval timeout did not provide a resolution.".to_string(),
+          ));
+        }
+      };
+      (None, resolution)
+    }
+    Err(error) => return Err(error.into()),
+  };
+
+  let mut update_report = NotificationDispatchReport::default();
+  loop {
+    let projection = store.projection(run_id)?;
+    let update_ids = projection
+      .notification_updates
+      .keys()
+      .cloned()
+      .collect::<Vec<_>>();
+    let mut update_tasks = JoinSet::new();
+    for delivery_id in update_ids {
+      let work = match store.begin_notification_update(run_id, &delivery_id, Utc::now()) {
+        Ok(work) => work,
+        Err(DurableStoreError::Contract(_)) => continue,
+        Err(error) => return Err(error.into()),
+      };
+      let message = update_message(&work)?;
+      let task_client = Arc::clone(&client);
+      update_tasks.spawn(async move {
+        let result = task_client.invoke(&message.invocation_id, &message).await;
+        (work, result)
+      });
+    }
+    while let Some(joined) = update_tasks.join_next().await {
+      let (work, result) = joined.map_err(|error| {
+        NotificationJourneyError::Host(NotificationHostClientError::HostCrashed(error.to_string()))
+      })?;
+      let provider_result = match result {
+        Ok(completed) => update_result(completed.outcome),
+        Err(error) => NotificationProviderUpdateResult::Failed(host_failure(&error, true)),
+      };
+      let succeeded = matches!(provider_result, NotificationProviderUpdateResult::Succeeded);
+      store.complete_notification_update(&work, provider_result, Utc::now())?;
+      update_report.updates_attempted += 1;
+      if succeeded {
+        update_report.updates_succeeded += 1;
+      } else {
+        update_report.updates_failed += 1;
+      }
+    }
+    let projection = store.projection(run_id)?;
+    let Some(wait) = update_retry_wait(&projection, Utc::now()) else {
+      break;
+    };
+    tokio::time::sleep(wait).await;
   }
   shutdown_shared(client).await;
   Ok(NotificationJourneyResult {
     run_id: run_id.to_string(),
     decision,
+    resolution,
     deliveries: delivery_report,
     updates: update_report,
   })
+}
+
+fn delivery_retry_wait(
+  projection: &crate::RunProjection,
+  now: chrono::DateTime<Utc>,
+) -> Option<Duration> {
+  projection
+    .notification_deliveries
+    .values()
+    .filter_map(|delivery| match &delivery.status {
+      NotificationDeliveryStatus::Failed {
+        attempt,
+        final_: false,
+        failure,
+        failed_at,
+        ..
+      } if failure.retryable && *attempt < 3 => {
+        let scheduled = if *attempt == 1 { 1_000 } else { 5_000 };
+        let delay = scheduled.max(failure.retry_after_ms.unwrap_or(0));
+        let delay = i64::try_from(delay).unwrap_or(i64::MAX);
+        let due = *failed_at + chrono::Duration::milliseconds(delay);
+        Some((due - now).to_std().unwrap_or(Duration::ZERO))
+      }
+      _ => None,
+    })
+    .min()
+}
+
+fn update_retry_wait(
+  projection: &crate::RunProjection,
+  now: chrono::DateTime<Utc>,
+) -> Option<Duration> {
+  projection
+    .notification_updates
+    .values()
+    .filter_map(|update| match &update.status {
+      NotificationMessageUpdateStatus::Failed {
+        attempt,
+        final_: false,
+        failure,
+        failed_at,
+        ..
+      } if failure.retryable && *attempt < 3 => {
+        let scheduled = if *attempt == 1 { 1_000 } else { 5_000 };
+        let delay = scheduled.max(failure.retry_after_ms.unwrap_or(0));
+        let delay = i64::try_from(delay).unwrap_or(i64::MAX);
+        let due = *failed_at + chrono::Duration::milliseconds(delay);
+        Some((due - now).to_std().unwrap_or(Duration::ZERO))
+      }
+      _ => None,
+    })
+    .min()
 }
 
 fn delivery_message(

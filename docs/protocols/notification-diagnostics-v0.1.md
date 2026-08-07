@@ -1,7 +1,7 @@
 # WOML Notification and Secret Diagnostics v0.1
 
-Status: frozen and implemented through the N4 deterministic provider journey.
-N5–N6 must reuse or explicitly version the provider codes.
+Status: frozen and implemented through the N5 real Slack provider journey. N6
+must reuse or explicitly version the provider codes.
 
 Diagnostics never include resolved secret values, decision capabilities,
 provider payloads, or credential-store implementation errors.
@@ -41,7 +41,7 @@ provider payloads, or credential-store implementation errors.
 
 | Code | Meaning |
 | --- | --- |
-| `WOML_NOTIFICATION_RUNTIME_UNAVAILABLE` | Model v5 compiled, but the real Slack adapter is intentionally unavailable until N5. |
+| `WOML_NOTIFICATION_RUNTIME_UNAVAILABLE` | Reserved for installations that do not contain the Model v5 provider runtime. |
 | `WOML_NOTIFICATION_DELIVERY_AMBIGUOUS` | Recovery found a send whose external effect is uncertain and refused to replay it. |
 | `WOML_NOTIFICATION_DELIVERY_FAILED` | Every configured notification delivery reached a final failure. |
 | `WOML_NOTIFICATION_UPDATE_INTERRUPTED` | Recovery converted an interrupted message update into durable retryable work. |
@@ -57,9 +57,19 @@ provider payloads, or credential-store implementation errors.
 | `WOML_SLACK_RESPONSE_INVALID` | The Slack adapter returned an invalid provider message identity. |
 | `WOML_SLACK_UNAVAILABLE` | The adapter could not safely reach its Slack transport. |
 
-## Provider Codes Reserved for N5–N6
+## Additional Provider Codes Implemented in N5
+
+| Code | Meaning |
+| --- | --- |
+| `WOML_SLACK_AUTH_FAILED` | Slack rejected or expired the bot/app credential. |
+| `WOML_SLACK_PERMISSION_DENIED` | The installed app lacks a required scope or channel permission. |
+| `WOML_SLACK_DESTINATION_INVALID` | The channel is absent, archived, or invisible to the app. |
+| `WOML_SLACK_RATE_LIMITED` | Slack returned HTTP 429; the durable retry uses `Retry-After`. |
+| `WOML_SLACK_UPDATE_FAILED` | Slack could not safely update a delivered approval message. |
+| `WOML_NOTIFICATION_DELIVERY_AMBIGUOUS` | A send may have reached Slack but no definitive response arrived, so WOML refuses blind replay. |
+
+## Provider Codes Reserved for N6
 
 The provider returns a structured safe failure kind plus a stable code. Initial
-codes include `WOML_SLACK_AUTH_FAILED`, `WOML_SLACK_DESTINATION_INVALID`,
-`WOML_SLACK_RATE_LIMITED`, `WOML_NOTIFICATION_DELIVERY_AMBIGUOUS`, and
-`WOML_NOTIFICATION_DELIVERY_FAILED`.
+N6 may add hardening-specific diagnostics only by documenting them here or
+versioning this artifact.

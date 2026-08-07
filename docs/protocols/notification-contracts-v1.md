@@ -1,13 +1,14 @@
 # WOML Approval Notification Contracts v1
 
-Status: frozen in N0 and implemented through the N4 deterministic provider
-journey. Real Slack Socket Mode remains N5.
+Status: frozen in N0 and implemented through the N5 real Slack Socket Mode
+journey. N6 is the publication-hardening milestone.
 
 This document pins the interfaces between WOML source, the TypeScript frontend,
 the Rust authority, the Bun provider host, the secret resolver, and Slack.
 N2 implements the source-to-Model-v5 portion; N3 implements the durable Rust
 delivery, resolution, update, retry, and recovery authority; N4 implements the
-versioned Bun provider host and deterministic Slack conformance adapter.
+versioned Bun provider host and deterministic Slack conformance adapter; N5
+implements the real Slack Web API and Socket Mode transport.
 
 ## Source and identity
 

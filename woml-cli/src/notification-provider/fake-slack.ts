@@ -3,7 +3,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import type {
   ApprovalDecision,
   InteractionMessage,
-  NotificationProviderFailure,
   ProviderMessageIdentity,
   SlackDeliveryRequest,
   SlackUpdateRequest,
@@ -12,23 +11,9 @@ import {
   NOTIFICATION_PROVIDER_PROTOCOL,
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 } from './types';
+import { SlackTransportError, type SlackTransport } from './slack-transport';
 
-export class SlackTransportError extends Error {
-  constructor(readonly failure: NotificationProviderFailure) {
-    super(failure.message);
-    this.name = 'SlackTransportError';
-  }
-}
-
-export interface SlackTransport {
-  ensureConnection(
-    appTokenReference: string,
-    resolvedAppToken: string
-  ): Promise<void>;
-  deliver(request: SlackDeliveryRequest): Promise<ProviderMessageIdentity>;
-  update(request: SlackUpdateRequest): Promise<void>;
-  close(): Promise<void>;
-}
+export { SlackTransportError, type SlackTransport } from './slack-transport';
 
 export interface FakeSlackMessage {
   readonly deliveryId: string;
@@ -44,6 +29,7 @@ export interface FakeSlackOptions {
   readonly automaticDecision?: ApprovalDecision;
   readonly automaticActorId?: string;
   readonly automaticDelayMs?: number;
+  readonly deliveryFailuresBeforeSuccess?: number;
 }
 
 function stableSlackId(prefix: string, value: string): string {
@@ -55,10 +41,12 @@ export class FakeSlackTransport implements SlackTransport {
   readonly #automaticDecision: ApprovalDecision | undefined;
   readonly #automaticActorId: string;
   readonly #automaticDelayMs: number;
+  readonly #deliveryFailuresBeforeSuccess: number;
   readonly #connections = new Map<string, string>();
   readonly #messagesByDelivery = new Map<string, FakeSlackMessage>();
   readonly #messagesByIdempotency = new Map<string, FakeSlackMessage>();
   readonly #updates = new Set<string>();
+  readonly #deliveryAttempts = new Map<string, number>();
   #messageSequence = 0;
   #closed = false;
 
@@ -67,6 +55,8 @@ export class FakeSlackTransport implements SlackTransport {
     this.#automaticDecision = options.automaticDecision;
     this.#automaticActorId = options.automaticActorId ?? 'U12345678';
     this.#automaticDelayMs = options.automaticDelayMs ?? 0;
+    this.#deliveryFailuresBeforeSuccess =
+      options.deliveryFailuresBeforeSuccess ?? 0;
   }
 
   get connectionCount(): number {
@@ -96,6 +86,18 @@ export class FakeSlackTransport implements SlackTransport {
 
   async deliver(request: SlackDeliveryRequest): Promise<ProviderMessageIdentity> {
     if (this.#closed) throw this.#unavailable();
+    const attempts =
+      (this.#deliveryAttempts.get(request.invocation.deliveryId) ?? 0) + 1;
+    this.#deliveryAttempts.set(request.invocation.deliveryId, attempts);
+    if (attempts <= this.#deliveryFailuresBeforeSuccess) {
+      throw new SlackTransportError({
+        kind: 'rate_limited',
+        code: 'WOML_SLACK_RATE_LIMITED',
+        message: 'The fake Slack transport is temporarily rate-limited.',
+        retryable: true,
+        retryAfterMs: 1,
+      });
+    }
     const existing = this.#messagesByIdempotency.get(
       request.invocation.idempotencyKey
     );

@@ -162,7 +162,7 @@ describe('woml secrets CLI', () => {
     expect(capture.output().stderr).toContain('WOML_SECRET_PROVIDER_READ_ONLY');
   });
 
-  test('keeps real Slack guarded after compiling Slack markup', async () => {
+  test('preflights Slack secrets before creating a workflow run', async () => {
     const capture = capturedIo();
     let secretStoreCreated = false;
     const file = new URL(
@@ -179,11 +179,10 @@ describe('woml secrets CLI', () => {
         readSecret: async () => 'unused',
       })
     ).toBe(1);
-    expect(capture.output().stderr).toContain(
-      'WOML_NOTIFICATION_RUNTIME_UNAVAILABLE'
-    );
-    expect(capture.output().stderr).toContain('compiled successfully');
-    expect(secretStoreCreated).toBe(false);
+    expect(capture.output().stderr).toContain('WOML_SECRET_NOT_FOUND');
+    expect(capture.output().stderr).toContain('SLACK_BOT_TOKEN');
+    expect(capture.output().stderr).toContain('SLACK_APP_TOKEN');
+    expect(secretStoreCreated).toBe(true);
   });
 });
 

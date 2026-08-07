@@ -6,6 +6,7 @@ import { FrameDecoder, SerializedFrameWriter } from './script-host/framing';
 import { createSecretStore } from './secrets';
 import { FakeSlackTransport } from './notification-provider/fake-slack';
 import { NotificationProviderHost } from './notification-provider/host';
+import { RealSlackTransport } from './notification-provider/real-slack';
 import {
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
   NOTIFICATION_PROVIDER_PROTOCOL,
@@ -32,6 +33,17 @@ function automaticDelay(): number {
   return value;
 }
 
+function fakeDeliveryFailures(): number {
+  const raw = process.env.WOML_FAKE_SLACK_DELIVERY_FAILURES ?? '0';
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0 || value > 2) {
+    throw new Error(
+      'WOML_FAKE_SLACK_DELIVERY_FAILURES must be an integer from 0 through 2.'
+    );
+  }
+  return value;
+}
+
 async function writeStdout(frame: Uint8Array): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     process.stdout.write(frame, error => {
@@ -41,18 +53,33 @@ async function writeStdout(frame: Uint8Array): Promise<void> {
   });
 }
 
-export async function runNotificationProviderHost(): Promise<void> {
+export interface RunNotificationProviderHostOptions {
+  readonly adapter?: 'real' | 'fake';
+}
+
+export async function runNotificationProviderHost(
+  options: RunNotificationProviderHostOptions = {}
+): Promise<void> {
   const writer = new SerializedFrameWriter(writeStdout);
   const decoder = new FrameDecoder({
     maxFrameBytes: NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
   });
-  const transport = new FakeSlackTransport({
-    emit: message => writer.send(message),
-    automaticDecision: automaticDecision(),
-    automaticActorId:
-      process.env.WOML_FAKE_SLACK_ACTOR_ID ?? 'U12345678',
-    automaticDelayMs: automaticDelay(),
-  });
+  const emit = (message: Parameters<typeof writer.send>[0]) =>
+    writer.send(message);
+  const transport =
+    options.adapter === 'fake'
+      ? new FakeSlackTransport({
+          emit,
+          automaticDecision: automaticDecision(),
+          automaticActorId:
+            process.env.WOML_FAKE_SLACK_ACTOR_ID ?? 'U12345678',
+          automaticDelayMs: automaticDelay(),
+          deliveryFailuresBeforeSuccess: fakeDeliveryFailures(),
+        })
+      : new RealSlackTransport({
+          emit,
+          log: message => process.stderr.write(`[woml] ${message}\n`),
+        });
   const host = new NotificationProviderHost({
     secretStore: createSecretStore(),
     transport,
@@ -85,4 +112,4 @@ export async function runNotificationProviderHost(): Promise<void> {
   }
 }
 
-if (import.meta.main) await runNotificationProviderHost();
+if (import.meta.main) await runNotificationProviderHost({ adapter: 'real' });

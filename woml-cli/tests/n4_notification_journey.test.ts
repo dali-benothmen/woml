@@ -40,6 +40,10 @@ const crashingHostPath = resolve(
   packageRoot,
   'tests/fixtures/crashing-notification-provider-host.ts'
 );
+const rateLimitedHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/rate-limited-notification-provider-host.ts'
+);
 const sourcePath = resolve(
   packageRoot,
   '../woml/tests/fixtures/approval-slack.woml'
@@ -93,6 +97,23 @@ function routedWorkflow() {
   return compileWoml(parseWoml(source, { file: 'n4-routed-approval.woml' }));
 }
 
+function timeoutWorkflow() {
+  const source = `<workflow version="0.1" id="n5-timeout" name="N5 Timeout">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <approval id="review" name="Review" timeout="500ms" on-timeout="reject">
+      <notify>
+        <slack channels="#approvals #engineering" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />
+      </notify>
+      <when-approved />
+      <when-rejected />
+    </approval>
+    <step id="finalStatus"><script>return { decision: context.steps.review.decision };</script></step>
+  </steps>
+</workflow>`;
+  return compileWoml(parseWoml(source, { file: 'n5-timeout.woml' }));
+}
+
 function durableEventTypes(database: string): string[] {
   const sqlite = new Database(database, { readonly: true });
   try {
@@ -106,7 +127,7 @@ function durableEventTypes(database: string): string[] {
   }
 }
 
-describe('N4 Rust and fake Slack journey', () => {
+describe('N4/N5 Rust and Slack provider journey', () => {
   nativeTest('sends every message, accepts one action, resumes, and updates all messages', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'woml-n4-journey-'));
     const database = join(directory, 'state.sqlite');
@@ -273,6 +294,89 @@ describe('N4 Rust and fake Slack journey', () => {
         eventTypes.filter(type => type === 'notification_delivery_failed')
       ).toHaveLength(2);
       expect(eventTypes).not.toContain('notification_decision_accepted');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  nativeTest('uses the durable retry schedule for an explicit Slack rate limit', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-n5-rate-limit-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = await workflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+      const journey = await runNotificationProviderJourneyWithRust(
+        database,
+        waiting.runId,
+        {
+          nativeCorePath,
+          notificationHostPath: rateLimitedHostPath,
+          interactionTimeoutMs: 5_000,
+        }
+      );
+      expect(journey.deliveries).toMatchObject({
+        attempted: 4,
+        succeeded: 2,
+        failed: 2,
+        runFailed: false,
+      });
+      expect(journey.resolution).toBe('approved');
+      const eventTypes = durableEventTypes(database);
+      expect(
+        eventTypes.filter(type => type === 'notification_delivery_failed')
+      ).toHaveLength(2);
+      expect(
+        eventTypes.filter(type => type === 'notification_delivery_succeeded')
+      ).toHaveLength(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  nativeTest('settles a real deadline and updates every Slack message before continuing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-n5-timeout-update-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = timeoutWorkflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+      const journey = await runNotificationProviderJourneyWithRust(
+        database,
+        waiting.runId,
+        {
+          nativeCorePath,
+          notificationHostPath: noActionHostPath,
+          interactionTimeoutMs: 650,
+        }
+      );
+      expect(journey.decision).toBeNull();
+      expect(journey.resolution).toBe('rejected');
+      expect(journey.updates).toMatchObject({
+        updatesAttempted: 2,
+        updatesSucceeded: 2,
+        updatesFailed: 0,
+      });
+      const resumed = await resumeApprovalWorkflowWithRust(
+        compiled,
+        database,
+        waiting.runId,
+        { nativeCorePath, scriptHostPath }
+      );
+      expect(resumed.status).toBe('succeeded');
+      if (resumed.status !== 'succeeded') throw new Error('expected success');
+      expect(resumed.execution.result).toEqual({ decision: 'rejected' });
+      expect(
+        resumed.execution.events.filter(
+          event => event.type === 'notification_message_updated'
+        )
+      ).toHaveLength(2);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

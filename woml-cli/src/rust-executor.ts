@@ -249,7 +249,8 @@ export interface NotificationDispatchReport {
 
 export interface NotificationProviderJourneyResult {
   readonly runId: string;
-  readonly decision: Omit<ApprovalDecisionResult, 'contract' | 'version'>;
+  readonly decision: Omit<ApprovalDecisionResult, 'contract' | 'version'> | null;
+  readonly resolution: 'approved' | 'rejected' | 'timeout_failed';
   readonly deliveries: NotificationDispatchReport;
   readonly updates: NotificationDispatchReport;
 }
@@ -833,9 +834,18 @@ function parseNotificationJourney(
   const value: unknown = JSON.parse(json);
   if (
     !record(value) ||
-    !exactKeys(value, ['runId', 'decision', 'deliveries', 'updates']) ||
+    !exactKeys(value, [
+      'runId',
+      'decision',
+      'resolution',
+      'deliveries',
+      'updates',
+    ]) ||
     typeof value.runId !== 'string' ||
-    !record(value.decision) ||
+    (value.decision !== null && !record(value.decision)) ||
+    (value.resolution !== 'approved' &&
+      value.resolution !== 'rejected' &&
+      value.resolution !== 'timeout_failed') ||
     !record(value.deliveries) ||
     !record(value.updates)
   ) {

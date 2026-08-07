@@ -8,16 +8,21 @@ import {
   isWomlElement,
   parseWoml,
   WomlDiagnosticError,
+  type CompiledWorkflowDefinition,
+  type SecretReferenceExpression,
   type SourcePosition,
+  type ValueExpression,
   type WomlSourceDocument,
   type WomlSourceElement,
 } from 'woml';
 import {
   executeApprovalWorkflowWithRust,
   executeWorkflowWithRust,
+  NotificationProviderError,
   resolveApprovalWithRust,
   resumeApprovalWorkflowWithRust,
   RustWorkflowExecutionError,
+  runNotificationProviderJourneyWithRust,
   settleApprovalTimeoutWithRust,
   type RustApprovalRuntimeOutcome,
 } from './rust-executor';
@@ -28,6 +33,7 @@ import {
 } from './approval-server';
 import {
   createSecretStore,
+  preflightSecretReferences,
   requireValidSecretName,
   SecretStoreError,
   type SecretStore,
@@ -322,6 +328,10 @@ function formatError(
     return `WOML secrets error [${error.code}]: ${error.message}`;
   }
 
+  if (error instanceof NotificationProviderError) {
+    return `WOML notification error [${error.code}]: ${error.message}`;
+  }
+
   if (error instanceof RustWorkflowExecutionError) {
     const parallelSource = parallelRuntimeSource(document, error);
     const branchSource = branchRuntimeSource(document, error);
@@ -443,9 +453,120 @@ async function runApprovalWorkflow(
   io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
 }
 
+function collectSecretReferences(
+  value: ValueExpression,
+  references: SecretReferenceExpression[]
+): void {
+  if (value.kind === 'secretReference') {
+    references.push(value);
+    return;
+  }
+  if (value.kind === 'object') {
+    for (const child of Object.values(value.fields)) {
+      collectSecretReferences(child, references);
+    }
+    return;
+  }
+  if (value.kind === 'array') {
+    for (const child of value.items) collectSecretReferences(child, references);
+  }
+}
+
+function workflowSecretReferences(
+  workflow: CompiledWorkflowDefinition
+): readonly SecretReferenceExpression[] {
+  const references: SecretReferenceExpression[] = [];
+  for (const trigger of workflow.triggers) {
+    collectSecretReferences(trigger.config, references);
+  }
+  for (const node of workflow.graph.nodes) {
+    collectSecretReferences(node.inputs, references);
+  }
+  return references;
+}
+
+function printSlackApproval(
+  io: CliIo,
+  outcome: Extract<RustApprovalRuntimeOutcome, { status: 'waiting' }>,
+  filePath: string,
+  statePath: string
+): void {
+  const approval = outcome.approval;
+  io.stderr('\nWOML workflow is waiting for approval in Slack.\n');
+  io.stderr(`Approval: ${approval.name ?? approval.approvalId}\n`);
+  if (approval.description !== undefined) io.stderr(`${approval.description}\n`);
+  io.stderr(`Workflow: ${outcome.workflowId}\n`);
+  io.stderr(`Run ID: ${outcome.runId}\n`);
+  io.stderr(
+    `Deadline: ${approval.expiresAt ?? 'none'} (${approval.onTimeout} on timeout)\n`
+  );
+  io.stderr(
+    'Sending Slack notifications; approve or reject from any configured channel.\n'
+  );
+  io.stderr(
+    `Recovery: woml run ${JSON.stringify(filePath)} --state ${JSON.stringify(
+      statePath
+    )} --resume ${JSON.stringify(outcome.runId)}\n\n`
+  );
+}
+
+function providerWaitMilliseconds(
+  outcome: Extract<RustApprovalRuntimeOutcome, { status: 'waiting' }>
+): number {
+  if (outcome.approval.expiresAt === undefined) return 0xffff_ffff;
+  const remaining = Date.parse(outcome.approval.expiresAt) - Date.now();
+  return Math.max(1, Math.min(0xffff_ffff, remaining));
+}
+
+async function runNotificationWorkflow(
+  workflow: CompiledWorkflowDefinition,
+  args: RunArguments,
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<void> {
+  await preflightSecretReferences(
+    workflowSecretReferences(workflow),
+    dependencies.createSecretStore()
+  );
+  await mkdir(dirname(args.statePath), { recursive: true });
+  let outcome =
+    args.resumeRunId === undefined
+      ? await executeApprovalWorkflowWithRust(workflow, args.statePath, {
+          nativeCorePath: dependencies.nativeCorePath,
+        })
+      : await resumeApprovalWorkflowWithRust(
+          workflow,
+          args.statePath,
+          args.resumeRunId,
+          { nativeCorePath: dependencies.nativeCorePath }
+        );
+  while (outcome.status === 'waiting') {
+    const waiting = outcome;
+    printSlackApproval(io, waiting, args.filePath, args.statePath);
+    await runNotificationProviderJourneyWithRust(
+      args.statePath,
+      waiting.runId,
+      {
+        notificationHostPath: dependencies.notificationHostPath,
+        nativeCorePath: dependencies.nativeCorePath,
+        interactionTimeoutMs: providerWaitMilliseconds(waiting),
+      }
+    );
+    outcome = await resumeApprovalWorkflowWithRust(
+      workflow,
+      args.statePath,
+      waiting.runId,
+      { nativeCorePath: dependencies.nativeCorePath }
+    );
+  }
+  io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
+}
+
 export interface CliDependencies {
   readonly createSecretStore: () => SecretStore;
   readonly readSecret: (name: string) => Promise<string>;
+  readonly notificationHostPath?: string;
+  readonly nativeCorePath?: string;
 }
 
 const defaultDependencies: CliDependencies = {
@@ -546,20 +667,24 @@ export async function runCli(
     const source = await readWorkflow(filePath);
     document = parseWoml(source, { file: filePath });
     const workflow = compileWoml(document);
-    if (workflow.schemaVersion === 5) {
-      throw new CliInputError(
-        'WOML_NOTIFICATION_RUNTIME_UNAVAILABLE',
-        'This workflow compiled successfully and its durable notification core is available. N4 includes a deterministic conformance adapter, but real Slack execution is not enabled until N5.'
-      );
-    }
     if (
       runArguments.resumeRunId !== undefined &&
-      workflow.schemaVersion !== 4
+      workflow.schemaVersion !== 4 &&
+      workflow.schemaVersion !== 5
     ) {
       throw new CliInputError(
         'WOML_RESUME_REQUIRES_APPROVAL',
         '--resume currently supports Human Approval workflows only.'
       );
+    }
+    if (workflow.schemaVersion === 5) {
+      await runNotificationWorkflow(
+        workflow,
+        runArguments,
+        io,
+        dependencies
+      );
+      return 0;
     }
     if (workflow.schemaVersion === 4) {
       await runApprovalWorkflow(workflow, runArguments, io);

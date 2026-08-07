@@ -1,10 +1,10 @@
 # WOML Notification Providers Implementation Plan
 
-Status: N0–N4 complete; ready for N5 — the entire Slack lifecycle now passes
-through the versioned Bun provider host against a deterministic conformance
-adapter, while Rust remains the durable decision and route authority. Real
-Slack Socket Mode effects begin in N5; Discord, WhatsApp, and generic webhook
-notification remain separate later milestones.
+Status: N0–N4 complete; N5 implementation complete with its real-workspace
+acceptance gate pending. The packaged CLI now contains the real Slack Web API
+and Socket Mode transport, while Rust remains the durable decision and route
+authority. Discord, WhatsApp, and generic webhook notification remain separate
+later milestones.
 
 ## 1. Product Outcome
 
@@ -558,11 +558,11 @@ Completed proof:
   secrets, malicious error redaction, malformed adapter identities,
   out-of-order replies, duplicates, late actions, cancellation, interaction
   timeout, and host crash fail-closed behavior.
-- The fake adapter is a conformance/test implementation only. `woml run` keeps
-  real Slack workflows explicitly guarded until the N5 Socket Mode adapter is
-  implemented.
+- The fake adapter is a conformance/test implementation only. N5 now activates
+  the real Socket Mode adapter for Model v5 workflows in `woml run`.
 
-### N5 — Implement real Slack Socket Mode end to end
+### N5 — Implement real Slack Socket Mode end to end — implementation complete;
+real-workspace acceptance pending
 
 Changes:
 
@@ -593,6 +593,41 @@ Gate:
 The packaged product completes real send, click, Rust resolution,
 selected-route continuation, and all-message convergence without a public
 callback URL or exposed raw decision URL.
+
+Completed implementation proof:
+
+- The packaged Bun provider host now selects the real Slack transport by
+  default; the deterministic N4 transport remains available only through an
+  explicit test seam.
+- The adapter opens `apps.connections.open` with the app-level token, supervises
+  and refreshes one Socket Mode connection per symbolic app-token reference,
+  acknowledges every interactive envelope before processing it, and requires
+  no callback URL or `woml serve`.
+- Bot authentication is checked with `auth.test`; readable `#channel` aliases
+  are resolved through paginated `conversations.list`; stable `C...`/`G...`
+  IDs bypass lookup.
+- `chat.postMessage` sends accessible Block Kit approval messages with native
+  Approve and Reject buttons. Each button carries its delivery capability back
+  through the frozen host protocol, and only Rust may accept the decision.
+- `chat.update` removes the buttons and converges every delivered message to
+  approved, rejected, or deadline-expired state before the CLI resumes the
+  selected WOML route.
+- Slack 429 responses retain `Retry-After` and use the durable retry schedule.
+  Permission, invisible/archived channel, revoked/expired token, reconnect,
+  malformed response, and ambiguous-send cases have distinct secret-safe
+  behavior. Ambiguous sends fail closed without blind replay.
+- Model v5 is enabled in `woml run`. The CLI preflights symbolic secret names,
+  starts no local approval web server, waits on Socket Mode, and resumes only
+  after the Rust decision and provider-message updates complete.
+- A reviewed Slack app manifest and installation guide ship in the package.
+  Automated adapter tests and the complete fake-provider CLI journey pass.
+
+Remaining gate:
+
+- Run one acceptance workflow in a real Slack workspace and verify real send,
+  click, Rust resolution, selected route, and all-message update. No token is
+  to be shared in source control or chat; the user stores both through
+  `woml secrets set` locally.
 
 ### N6 — Harden, package, and close the Slack milestone
 

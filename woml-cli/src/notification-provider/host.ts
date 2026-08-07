@@ -11,7 +11,7 @@ import {
   type NotificationProviderOutbound,
   type ResolvedSlackCredentials,
 } from './types';
-import { SlackTransportError, type SlackTransport } from './fake-slack';
+import { SlackTransportError, type SlackTransport } from './slack-transport';
 
 export interface NotificationProviderHostOptions {
   readonly secretStore: SecretStore;
