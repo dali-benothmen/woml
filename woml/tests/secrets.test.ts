@@ -84,22 +84,15 @@ describe('WOML secret references', () => {
   });
 
   test('allows references only in reviewed Slack credential sinks', () => {
-    const validButStaged = workflow(`<approval id="review">
+    const valid = workflow(`<approval id="review">
       <notify>
         <slack channels="#approvals" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />
       </notify>
       <when-approved />
       <when-rejected />
     </approval>`);
-    try {
-      compileWoml(parseWoml(validButStaged, { file: 'workflow.woml' }));
-      throw new Error('Expected notify to remain staged until N2.');
-    } catch (error) {
-      expect(error).toBeInstanceOf(WomlValidationError);
-      expect((error as WomlValidationError).diagnostic.code).toBe(
-        'WOML_FEATURE_NOT_EXECUTABLE'
-      );
-    }
+    const compiled = compileWoml(parseWoml(valid, { file: 'workflow.woml' }));
+    expect(compiled.schemaVersion).toBe(5);
 
     const unsupported = workflow(
       '<step id="a" name="{{secrets.SECRET_NAME}}"><script>return true;</script></step>'
@@ -115,7 +108,7 @@ describe('WOML secret references', () => {
     }
   });
 
-  test('validates Slack credential values before the staged-feature error', () => {
+  test('validates Slack credential values without exposing them', () => {
     for (const [value, code] of [
       ['{{secrets.lowercase}}', 'WOML_SECRET_REFERENCE_INVALID'],
       ['xoxb-forbidden-literal', 'WOML_SECRET_LITERAL_FORBIDDEN'],

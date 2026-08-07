@@ -7,6 +7,7 @@ import {
   type CompiledWorkflowNode,
   type ContextReferenceExpression,
   type JsonValue,
+  type SecretReferenceExpression,
 } from './model';
 import {
   SourceFile,
@@ -72,8 +73,17 @@ interface ValidatedApproval {
   readonly metadata?: Readonly<Record<string, JsonValue>>;
   readonly timeoutMs?: number;
   readonly onTimeout: 'reject' | 'fail';
+  readonly notifications: readonly ValidatedNotificationDelivery[];
   readonly approvedItems: readonly ValidatedFlowItem[];
   readonly rejectedItems: readonly ValidatedFlowItem[];
+}
+
+interface ValidatedNotificationDelivery {
+  readonly deliveryId: string;
+  readonly provider: 'slack';
+  readonly destination: string;
+  readonly botToken: SecretReferenceExpression;
+  readonly appToken: SecretReferenceExpression;
 }
 
 type ValidatedFlowItem =
@@ -87,6 +97,7 @@ interface ValidatedFlow {
   readonly firstBranch?: WomlSourceElement;
   readonly firstParallel?: WomlSourceElement;
   readonly firstApproval?: WomlSourceElement;
+  readonly firstNotification?: WomlSourceElement;
 }
 
 interface ValidatedWorkflow {
@@ -116,6 +127,8 @@ const supportedElements = new Set([
   'otherwise',
   'result',
   'approval',
+  'notify',
+  'slack',
   'when-approved',
   'when-rejected',
 ]);
@@ -130,7 +143,6 @@ const stagedElements = new Set([
   'schedule',
   'interval',
   'event',
-  'notify',
 ]);
 
 const elementProfiles: Readonly<Record<string, ElementProfile>> = {
@@ -161,6 +173,10 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   result: { attributes: new Set(['value']) },
   approval: {
     attributes: new Set(['id', 'name', 'description', 'timeout', 'on-timeout']),
+  },
+  notify: { attributes: new Set() },
+  slack: {
+    attributes: new Set(['channels', 'bot-token', 'app-token']),
   },
   'when-approved': { attributes: new Set() },
   'when-rejected': { attributes: new Set() },
@@ -212,9 +228,18 @@ function failCompile(
 
 function visitProfile(
   document: WomlSourceDocument,
-  element: WomlSourceElement
+  element: WomlSourceElement,
+  parent?: WomlSourceElement
 ): void {
   if (!supportedElements.has(element.name)) {
+    if (parent?.name === 'notify') {
+      failValidation(
+        document,
+        'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
+        `<notify> supports <slack> only in this release; found <${element.name}>.`,
+        element.openTagSpan
+      );
+    }
     if (stagedElements.has(element.name)) {
       failValidation(
         document,
@@ -244,7 +269,9 @@ function visitProfile(
     if (!profile.attributes.has(attribute.name)) {
       failValidation(
         document,
-        'WOML_UNKNOWN_ATTRIBUTE',
+        element.name === 'slack'
+          ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
+          : 'WOML_UNKNOWN_ATTRIBUTE',
         `Unknown attribute "${attribute.name}" on <${element.name}>.`,
         attribute.nameSpan
       );
@@ -252,19 +279,17 @@ function visitProfile(
   }
 
   for (const child of element.children) {
-    if (child.kind === 'element') visitProfile(document, child);
+    if (child.kind === 'element') visitProfile(document, child, element);
   }
 }
 
 function validateSecretReferenceSinks(
   document: WomlSourceDocument,
-  element: WomlSourceElement,
-  parent?: WomlSourceElement
+  element: WomlSourceElement
 ): void {
   for (const attribute of Object.values(element.attributes)) {
     const isSlackCredential =
       element.name === 'slack' &&
-      parent?.name === 'notify' &&
       (attribute.name === 'bot-token' || attribute.name === 'app-token');
     if (isSlackCredential) {
       requireSecretReference(document, attribute);
@@ -286,7 +311,7 @@ function validateSecretReferenceSinks(
 
   for (const child of element.children) {
     if (child.kind === 'element') {
-      validateSecretReferenceSinks(document, child, element);
+      validateSecretReferenceSinks(document, child);
     }
   }
 }
@@ -657,6 +682,130 @@ function validateApprovalArm(
   );
 }
 
+const slackChannelAliasPattern = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
+const slackConversationIdPattern = /^[CG][A-Z0-9]{8,31}$/;
+
+interface SlackChannelToken {
+  readonly value: string;
+  readonly span: SourceSpan;
+}
+
+function requiredSlackAttribute(
+  document: WomlSourceDocument,
+  slack: WomlSourceElement,
+  name: 'channels' | 'bot-token' | 'app-token'
+): WomlSourceAttribute {
+  const attribute = slack.attributes[name];
+  if (attribute === undefined) {
+    failValidation(
+      document,
+      'WOML_SLACK_ATTRIBUTE_REQUIRED',
+      `<slack> requires the "${name}" attribute.`,
+      slack.openTagSpan
+    );
+  }
+  return attribute;
+}
+
+function slackChannelTokens(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute
+): readonly SlackChannelToken[] {
+  const sourceFile = new SourceFile(document.file, document.source);
+  const tokens = [...attribute.value.matchAll(/\S+/g)].map(match => {
+    const start = attribute.valueSpan.start.offset + (match.index ?? 0);
+    return {
+      value: match[0],
+      span: sourceFile.span(start, start + match[0].length),
+    };
+  });
+  if (tokens.length === 0) {
+    failValidation(
+      document,
+      'WOML_SLACK_CHANNELS_EMPTY',
+      '<slack> channels must contain at least one channel alias or conversation ID.',
+      attribute.valueSpan
+    );
+  }
+  for (const token of tokens) {
+    if (
+      !slackChannelAliasPattern.test(token.value) &&
+      !slackConversationIdPattern.test(token.value)
+    ) {
+      failValidation(
+        document,
+        'WOML_SLACK_CHANNEL_INVALID',
+        `Slack destination "${token.value}" must be a lowercase #channel alias or a Slack conversation ID.`,
+        token.span,
+        'Examples: #approvals or C0123456789'
+      );
+    }
+  }
+  return tokens;
+}
+
+function validateNotify(
+  document: WomlSourceDocument,
+  notify: WomlSourceElement,
+  approvalId: string
+): readonly ValidatedNotificationDelivery[] {
+  const providers = elementChildren(document, notify);
+  if (providers.length === 0) {
+    failValidation(
+      document,
+      'WOML_NOTIFY_EMPTY',
+      '<notify> must contain at least one <slack> provider.',
+      notify.openTagSpan
+    );
+  }
+
+  const seenDestinations = new Set<string>();
+  const deliveries: ValidatedNotificationDelivery[] = [];
+  providers.forEach((provider, providerIndex) => {
+    if (provider.name !== 'slack') {
+      failValidation(
+        document,
+        'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
+        `<notify> supports <slack> only in this release; found <${provider.name}>.`,
+        provider.openTagSpan
+      );
+    }
+    ensureEmptyElement(document, provider);
+    const channels = slackChannelTokens(
+      document,
+      requiredSlackAttribute(document, provider, 'channels')
+    );
+    const botToken = requireSecretReference(
+      document,
+      requiredSlackAttribute(document, provider, 'bot-token')
+    );
+    const appToken = requireSecretReference(
+      document,
+      requiredSlackAttribute(document, provider, 'app-token')
+    );
+    channels.forEach((channel, channelIndex) => {
+      const destinationKey = `${botToken.name}\u0000${appToken.name}\u0000${channel.value}`;
+      if (seenDestinations.has(destinationKey)) {
+        failValidation(
+          document,
+          'WOML_SLACK_CHANNEL_DUPLICATE',
+          `Slack destination "${channel.value}" is duplicated for the same credential set.`,
+          channel.span
+        );
+      }
+      seenDestinations.add(destinationKey);
+      deliveries.push({
+        deliveryId: `${approvalId}:notify:${providerIndex}:channel:${channelIndex}`,
+        provider: 'slack',
+        destination: channel.value,
+        botToken,
+        appToken,
+      });
+    });
+  });
+  return deliveries;
+}
+
 function validateApproval(
   document: WomlSourceDocument,
   approval: WomlSourceElement,
@@ -669,18 +818,30 @@ function validateApproval(
     'approval'
   );
   const children = elementChildren(document, approval);
+  const notify = children.filter(child => child.name === 'notify');
   const approved = children.filter(child => child.name === 'when-approved');
   const rejected = children.filter(child => child.name === 'when-rejected');
   const invalidChild = children.find(
-    child => child.name !== 'when-approved' && child.name !== 'when-rejected'
+    child =>
+      child.name !== 'notify' &&
+      child.name !== 'when-approved' &&
+      child.name !== 'when-rejected'
   );
 
   if (invalidChild !== undefined) {
     failValidation(
       document,
       'WOML_APPROVAL_STRUCTURE_INVALID',
-      `<approval id="${id}"> may contain <when-approved> followed by <when-rejected> only.`,
+      `<approval id="${id}"> may contain optional <notify>, then <when-approved> and <when-rejected> only.`,
       invalidChild.openTagSpan
+    );
+  }
+  if (notify.length > 1 || (notify.length === 1 && children[0] !== notify[0])) {
+    failValidation(
+      document,
+      'WOML_NOTIFY_INVALID_ORDER',
+      '<notify> may appear once and must be the first child of <approval>.',
+      notify[1]?.openTagSpan ?? notify[0]?.openTagSpan ?? approval.openTagSpan
     );
   }
   if (approved.length !== 1 || rejected.length !== 1) {
@@ -693,9 +854,9 @@ function validateApproval(
     );
   }
   if (
-    children.length !== 2 ||
-    children[0] !== approved[0] ||
-    children[1] !== rejected[0]
+    children.length !== 2 + notify.length ||
+    children[notify.length] !== approved[0] ||
+    children[notify.length + 1] !== rejected[0]
   ) {
     failValidation(
       document,
@@ -723,6 +884,8 @@ function validateApproval(
     metadata: flowItemMetadata(document, approval),
     timeoutMs: approvalTimeoutMs(document, approval),
     onTimeout,
+    notifications:
+      notify.length === 0 ? [] : validateNotify(document, notify[0], id),
     approvedItems: validateApprovalArm(document, approved[0], registry),
     rejectedItems: validateApprovalArm(document, rejected[0], registry),
   };
@@ -1013,6 +1176,16 @@ function validateFlowItem(
       element.openTagSpan
     );
   }
+  if (element.name === 'notify' || element.name === 'slack') {
+    failValidation(
+      document,
+      'WOML_NOTIFY_INVALID_ORDER',
+      element.name === 'notify'
+        ? '<notify> is valid only as the first direct child of <approval>.'
+        : '<slack> is valid only as a direct child of <notify>.',
+      element.openTagSpan
+    );
+  }
   failValidation(
     document,
     'WOML_INVALID_STRUCTURE',
@@ -1182,15 +1355,37 @@ function validateSteps(
     }
     return undefined;
   };
+  const findFirstNotification = (
+    flowItems: readonly ValidatedFlowItem[]
+  ): WomlSourceElement | undefined => {
+    for (const item of flowItems) {
+      if (item.kind === 'branch') {
+        for (const arm of item.arms) {
+          const nested = findFirstNotification(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+      if (item.kind === 'approval') {
+        if (item.notifications.length > 0) return item.element;
+        const approved = findFirstNotification(item.approvedItems);
+        if (approved !== undefined) return approved;
+        const rejected = findFirstNotification(item.rejectedItems);
+        if (rejected !== undefined) return rejected;
+      }
+    }
+    return undefined;
+  };
   const firstBranch = findFirstBranch(items);
   const firstParallel = findFirstParallel(items);
   const firstApproval = findFirstApproval(items);
+  const firstNotification = findFirstNotification(items);
 
   return {
     items,
     ...(firstBranch === undefined ? {} : { firstBranch }),
     ...(firstParallel === undefined ? {} : { firstParallel }),
     ...(firstApproval === undefined ? {} : { firstApproval }),
+    ...(firstNotification === undefined ? {} : { firstNotification }),
   };
 }
 
@@ -1382,6 +1577,37 @@ function lowerApproval(approval: ValidatedApproval): LoweredFlowFragment {
           },
         }),
     onTimeout: { kind: 'literal' as const, value: approval.onTimeout },
+    ...(approval.notifications.length === 0
+      ? {}
+      : {
+          notifications: {
+            kind: 'array' as const,
+            items: approval.notifications.map(notification => ({
+              kind: 'object' as const,
+              fields: {
+                deliveryId: {
+                  kind: 'literal' as const,
+                  value: notification.deliveryId,
+                },
+                provider: {
+                  kind: 'literal' as const,
+                  value: notification.provider,
+                },
+                destination: {
+                  kind: 'literal' as const,
+                  value: notification.destination,
+                },
+                credentials: {
+                  kind: 'object' as const,
+                  fields: {
+                    botToken: notification.botToken,
+                    appToken: notification.appToken,
+                  },
+                },
+              },
+            })),
+          },
+        }),
   };
   const wait: CompiledWorkflowNode = {
     id: approval.id,
@@ -1528,13 +1754,15 @@ export function compileWoml(
     } satisfies CompiledWorkflowGraph,
   };
   const compiled: CompiledWorkflowDefinition =
-    flow.firstApproval !== undefined
-      ? { schemaVersion: 4, ...definition }
-      : flow.firstParallel !== undefined
-        ? { schemaVersion: 3, ...definition }
-        : flow.firstBranch === undefined
-          ? { schemaVersion: 1, ...definition }
-          : { schemaVersion: 2, ...definition };
+    flow.firstNotification !== undefined
+      ? { schemaVersion: 5, ...definition }
+      : flow.firstApproval !== undefined
+        ? { schemaVersion: 4, ...definition }
+        : flow.firstParallel !== undefined
+          ? { schemaVersion: 3, ...definition }
+          : flow.firstBranch === undefined
+            ? { schemaVersion: 1, ...definition }
+            : { schemaVersion: 2, ...definition };
 
   const graphIssues = inspectCompiledWorkflowGraph(compiled.graph, {
     requireSingleTerminal: true,

@@ -161,6 +161,30 @@ describe('woml secrets CLI', () => {
     expect(prompted).toBe(false);
     expect(capture.output().stderr).toContain('WOML_SECRET_PROVIDER_READ_ONLY');
   });
+
+  test('reports the N2 runtime boundary after compiling Slack markup', async () => {
+    const capture = capturedIo();
+    let secretStoreCreated = false;
+    const file = new URL(
+      '../../woml/tests/fixtures/approval-slack.woml',
+      import.meta.url
+    ).pathname;
+
+    expect(
+      await runCli(['run', file], capture.io, {
+        createSecretStore: () => {
+          secretStoreCreated = true;
+          return new MemorySecretStore();
+        },
+        readSecret: async () => 'unused',
+      })
+    ).toBe(1);
+    expect(capture.output().stderr).toContain(
+      'WOML_NOTIFICATION_RUNTIME_UNAVAILABLE'
+    );
+    expect(capture.output().stderr).toContain('compiled successfully');
+    expect(secretStoreCreated).toBe(false);
+  });
 });
 
 describe('secret store providers', () => {

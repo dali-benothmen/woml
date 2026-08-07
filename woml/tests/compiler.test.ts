@@ -310,7 +310,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('keeps notify explicitly staged at its source location', () => {
+  test('rejects executable scripts as notification providers', () => {
     const source = validWorkflow(`
     <approval id="review">
       <notify><script>return { sent: true };</script></notify>
@@ -319,9 +319,9 @@ describe('compileWoml', () => {
     </approval>`);
     const error = validationError(source);
 
-    expect(error.diagnostic.code).toBe('WOML_FEATURE_NOT_EXECUTABLE');
+    expect(error.diagnostic.code).toBe('WOML_NOTIFY_UNSUPPORTED_PROVIDER');
     expect(error.diagnostic.location.start.offset).toBe(
-      source.indexOf('<notify')
+      source.indexOf('<script')
     );
   });
 

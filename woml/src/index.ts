@@ -11,6 +11,7 @@ export {
   type CompiledWorkflowDefinitionV2,
   type CompiledWorkflowDefinitionV3,
   type CompiledWorkflowDefinitionV4,
+  type CompiledWorkflowDefinitionV5,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,

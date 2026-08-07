@@ -43,6 +43,7 @@ export interface TemplateExpression {
 export type ValueExpression =
   | LiteralExpression
   | ContextReferenceExpression
+  | SecretReferenceExpression
   | ObjectExpression
   | ArrayExpression
   | TemplateExpression;
@@ -164,11 +165,17 @@ export interface CompiledWorkflowDefinitionV4
   readonly schemaVersion: 4;
 }
 
+export interface CompiledWorkflowDefinitionV5
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 5;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
   | CompiledWorkflowDefinitionV3
-  | CompiledWorkflowDefinitionV4;
+  | CompiledWorkflowDefinitionV4
+  | CompiledWorkflowDefinitionV5;
 
 export interface CompiledGraphIssue {
   readonly code:
@@ -184,7 +191,8 @@ export interface CompiledGraphIssue {
     | 'INVALID_BRANCH_GROUP'
     | 'INVALID_BRANCH_RESULT'
     | 'INVALID_PARALLEL_GROUP'
-    | 'INVALID_APPROVAL_GROUP';
+    | 'INVALID_APPROVAL_GROUP'
+    | 'INVALID_NOTIFICATION_GROUP';
   readonly message: string;
 }
 
@@ -342,6 +350,94 @@ function isApprovalDecisionCondition(
   );
 }
 
+const compiledSlackAliasPattern = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
+const compiledSlackConversationIdPattern = /^[CG][A-Z0-9]{8,31}$/;
+const compiledSecretNamePattern = /^[A-Z][A-Z0-9_]*$/;
+
+function hasExactlyKeys(
+  fields: Readonly<Record<string, ValueExpression>>,
+  expected: readonly string[]
+): boolean {
+  const keys = Object.keys(fields);
+  return (
+    keys.length === expected.length && expected.every(key => key in fields)
+  );
+}
+
+function validApprovalNotifications(
+  expression: ValueExpression | undefined,
+  approvalId: string
+): boolean {
+  if (expression === undefined) return true;
+  if (expression.kind !== 'array' || expression.items.length === 0)
+    return false;
+
+  let previousProviderIndex = -1;
+  let previousChannelIndex = -1;
+  const deliveryIds = new Set<string>();
+  const destinationKeys = new Set<string>();
+  for (const item of expression.items) {
+    if (
+      item.kind !== 'object' ||
+      !hasExactlyKeys(item.fields, [
+        'deliveryId',
+        'provider',
+        'destination',
+        'credentials',
+      ])
+    ) {
+      return false;
+    }
+    const { deliveryId, provider, destination, credentials } = item.fields;
+    if (
+      deliveryId?.kind !== 'literal' ||
+      typeof deliveryId.value !== 'string' ||
+      provider?.kind !== 'literal' ||
+      provider.value !== 'slack' ||
+      destination?.kind !== 'literal' ||
+      typeof destination.value !== 'string' ||
+      (!compiledSlackAliasPattern.test(destination.value) &&
+        !compiledSlackConversationIdPattern.test(destination.value)) ||
+      credentials?.kind !== 'object' ||
+      !hasExactlyKeys(credentials.fields, ['botToken', 'appToken'])
+    ) {
+      return false;
+    }
+    const match = new RegExp(
+      `^${approvalId}:notify:([0-9]+):channel:([0-9]+)$`
+    ).exec(deliveryId.value);
+    const botToken = credentials.fields.botToken;
+    const appToken = credentials.fields.appToken;
+    if (
+      match === null ||
+      deliveryIds.has(deliveryId.value) ||
+      botToken?.kind !== 'secretReference' ||
+      appToken?.kind !== 'secretReference' ||
+      !compiledSecretNamePattern.test(botToken.name) ||
+      !compiledSecretNamePattern.test(appToken.name)
+    ) {
+      return false;
+    }
+
+    const providerIndex = Number(match[1]);
+    const channelIndex = Number(match[2]);
+    const followsPrevious =
+      previousProviderIndex === -1
+        ? providerIndex === 0 && channelIndex === 0
+        : providerIndex === previousProviderIndex
+          ? channelIndex === previousChannelIndex + 1
+          : providerIndex === previousProviderIndex + 1 && channelIndex === 0;
+    const destinationKey = `${botToken.name}\u0000${appToken.name}\u0000${destination.value}`;
+    if (!followsPrevious || destinationKeys.has(destinationKey)) return false;
+
+    deliveryIds.add(deliveryId.value);
+    destinationKeys.add(destinationKey);
+    previousProviderIndex = providerIndex;
+    previousChannelIndex = channelIndex;
+  }
+  return true;
+}
+
 function inspectApprovalGroups(
   graph: CompiledWorkflowGraph,
   issues: CompiledGraphIssue[]
@@ -376,6 +472,11 @@ function inspectApprovalGroups(
     const waitFields = wait?.inputs.kind === 'object' ? wait.inputs.fields : {};
     const timeout = waitFields.timeoutMs;
     const onTimeout = waitFields.onTimeout;
+    const notifications = waitFields.notifications;
+    const notificationsAreValid = validApprovalNotifications(
+      notifications,
+      approvalId
+    );
     const waitMetadata = wait?.metadata;
     const validWaitMetadata =
       waitMetadata === undefined ||
@@ -392,9 +493,12 @@ function inspectApprovalGroups(
       wait.retryPolicy === undefined &&
       wait.inputs.kind === 'object' &&
       Object.keys(waitFields).every(key =>
-        ['timeoutMs', 'onTimeout'].includes(key)
+        ['timeoutMs', 'onTimeout', 'notifications'].includes(key)
       ) &&
-      Object.keys(waitFields).length === (timeout === undefined ? 1 : 2) &&
+      Object.keys(waitFields).length ===
+        1 +
+          Number(timeout !== undefined) +
+          Number(notifications !== undefined) &&
       onTimeout?.kind === 'literal' &&
       (onTimeout.value === 'reject' || onTimeout.value === 'fail') &&
       (timeout === undefined ||
@@ -402,6 +506,7 @@ function inspectApprovalGroups(
           typeof timeout.value === 'number' &&
           Number.isSafeInteger(timeout.value) &&
           timeout.value >= 1)) &&
+      notificationsAreValid &&
       validWaitMetadata;
     const validJoin =
       join?.handler === 'engine.approval-join' &&
@@ -476,6 +581,12 @@ function inspectApprovalGroups(
       issues.push({
         code: 'INVALID_APPROVAL_GROUP',
         message: `Approval group "${approvalId}" does not match the frozen wait, decision-route, empty-arm, and join contract.`,
+      });
+    }
+    if (!notificationsAreValid) {
+      issues.push({
+        code: 'INVALID_NOTIFICATION_GROUP',
+        message: `Approval group "${approvalId}" has invalid compiled notification deliveries.`,
       });
     }
   }

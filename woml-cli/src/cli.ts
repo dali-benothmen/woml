@@ -546,6 +546,12 @@ export async function runCli(
     const source = await readWorkflow(filePath);
     document = parseWoml(source, { file: filePath });
     const workflow = compileWoml(document);
+    if (workflow.schemaVersion === 5) {
+      throw new CliInputError(
+        'WOML_NOTIFICATION_RUNTIME_UNAVAILABLE',
+        'This workflow compiled successfully with Slack notifications, but notification delivery is not executable until N3.'
+      );
+    }
     if (
       runArguments.resumeRunId !== undefined &&
       workflow.schemaVersion !== 4

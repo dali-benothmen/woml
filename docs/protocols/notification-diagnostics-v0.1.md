@@ -1,6 +1,7 @@
 # WOML Notification and Secret Diagnostics v0.1
 
-Status: frozen for N0/N1. N2–N6 must reuse or explicitly version these codes.
+Status: frozen and implemented through the N2 frontend. N3–N6 must reuse or
+explicitly version the runtime codes.
 
 Diagnostics never include resolved secret values, decision capabilities,
 provider payloads, or credential-store implementation errors.
@@ -22,7 +23,7 @@ provider payloads, or credential-store implementation errors.
 | `WOML_SECRET_PROMPT_REQUIRES_TTY` | CLI | Hidden input was requested without an interactive terminal. |
 | `WOML_SECRET_PROMPT_CANCELLED` | CLI | The user cancelled hidden input. |
 
-## Notification Source Validation Reserved for N2
+## Notification Source Validation Implemented in N2
 
 | Code | Meaning |
 | --- | --- |

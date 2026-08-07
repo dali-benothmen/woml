@@ -62,8 +62,8 @@ includes conditional branches and bounded parallel groups:
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
-| `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references and secure local/CI secret management are available; no workflow sink consumes them until N2 |
-| `<notify><slack>` approval delivery | Model/event/provider contracts frozen in N0 | Source remains unavailable until N2 validation and lowering |
+| `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
+| `<notify><slack>` approval delivery | N0 contracts and N2 frontend implemented | Source validates and lowers to Model v5; runtime delivery remains unavailable until N3 |
 | Database, HTTP, RAK, and other capabilities | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
@@ -994,8 +994,9 @@ not WOML source text and is not a compiled constant.
 N0 freezes the Slack-first syntax, compiled model v5, event vocabulary v5,
 provider-host v1, delivery identity, failure behavior, and secret boundary in
 `docs/protocols/notification-contracts-v1.md`. N1 implements secure secret
-management. `<notify>` remains rejected with `WOML_FEATURE_NOT_EXECUTABLE` until
-N2 adds source validation and model-v5 lowering; it is never silently ignored.
+management. N2 implements source validation and Model v5 lowering. Until N3,
+`woml run` stops after successful compilation with
+`WOML_NOTIFICATION_RUNTIME_UNAVAILABLE`; it never silently ignores delivery.
 
 One `<slack>` tag targets one credential set and one or more destinations:
 
@@ -1007,7 +1008,8 @@ secret          := {{secrets.[A-Z][A-Z0-9_]*}}
 ```
 
 Destination order is preserved. A duplicate destination within the same Slack
-tag is invalid. Every destination becomes a separate durable delivery and
+credential set is invalid, including duplicates repeated across tags. Every
+destination becomes a separate durable delivery and
 message, but all of them resolve the same approval. The first valid decision
 wins. Literal credentials, interpolation, context/service references, and
 `secrets.NAME` inside `<script>` are invalid.
@@ -1592,11 +1594,12 @@ diagnostic contracts in `WOML Human Approval Implementation Plan.md` and
 
 N0 freezes Slack notification and secret contracts in
 `docs/protocols/notification-contracts-v1.md`; N1 implements the secret
-reference primitive and secure secret-management CLI. The remaining
+reference primitive and secure secret-management CLI; N2 implements source
+validation and Model v5 lowering. The remaining
 approval-adjacent work does not block the local terminal-URL profile:
 
-- N2–N6 add Slack lowering, durable outbox delivery, the provider host, real
-  Socket Mode integration, and production hardening.
+- N3–N6 add durable outbox delivery, the provider host, real Socket Mode
+  integration, and production hardening.
 - Discord, shared-provider delivery, WhatsApp, and generic signed webhook
   notifications follow the Slack milestone.
 - Remote hosting waits for TLS, reviewer authentication/authorization, and

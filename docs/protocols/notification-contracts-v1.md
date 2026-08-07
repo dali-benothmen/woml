@@ -1,10 +1,11 @@
 # WOML Approval Notification Contracts v1
 
-Status: frozen for the Slack-first N0 profile.
+Status: frozen in N0 and implemented through N2 frontend lowering.
 
 This document pins the interfaces between WOML source, the TypeScript frontend,
 the Rust authority, the Bun provider host, the secret resolver, and Slack. It
-does not make notification syntax executable; N2 performs that lowering.
+N2 implements the source-to-Model-v5 portion; durable runtime delivery starts
+in N3.
 
 ## Source and identity
 

@@ -1,9 +1,9 @@
 # WOML Notification Providers Implementation Plan
 
-Status: N0 and N1 complete; ready for N2 — Slack, secret, delivery, event, and
-provider-host contracts are frozen, and secure secret references plus
-`woml secrets` are implemented; Discord, WhatsApp, and generic webhook
-notification remain separate later milestones
+Status: N0–N2 complete; ready for N3 — Slack markup now validates and lowers to
+the frozen provider-neutral Model v5, while delivery effects remain explicitly
+unavailable until the durable N3 infrastructure; Discord, WhatsApp, and generic
+webhook notification remain separate later milestones
 
 ## 1. Product Outcome
 
@@ -386,11 +386,11 @@ Completed proof:
 - Frontend, store, CLI, CI-provider, rotation, deletion, absence, redaction,
   typecheck, existing workflow regression, local approval HTTP, and clean
   packaged CLI tests pass.
-- `<notify>` deliberately remains `WOML_FEATURE_NOT_EXECUTABLE`; N1 validates
-  its secret-bearing attributes but N2 alone may validate and lower the Slack
-  structure into Model v5.
+- N1 deliberately left `<notify>` non-executable after validating its
+  secret-bearing attributes; N2 now owns and implements its source validation
+  and Model v5 lowering.
 
-### N2 — Validate and lower `<notify><slack>`
+### N2 — Validate and lower `<notify><slack>` — complete
 
 Changes:
 
@@ -416,6 +416,32 @@ Gate:
 
 Exact fixtures and source diagnostics pass for one channel, many channels,
 multiple Slack workspaces, nested approvals, duplicates, and invalid secrets.
+
+Completed proof:
+
+- `<notify>` is accepted only once as the first direct approval child, with one
+  or more direct `<slack>` children and no executable scripts or future
+  providers.
+- Slack validates the exact `channels`, `bot-token`, and `app-token`
+  attributes. Bad placement, missing or unknown attributes, empty/invalid
+  channels, and duplicates are reported at their original source locations.
+- Channels expand in authored order to stable
+  `<approvalId>:notify:<tagIndex>:channel:<channelIndex>` delivery identities.
+  Repeated destinations are rejected across tags sharing one credential set;
+  separate workspaces may target the same destination.
+- The frontend emits provider-neutral approval-wait inputs with typed symbolic
+  secret references and selects Compiled Workflow Model v5 even when a
+  notification approval is nested in another control-flow route.
+- The public model type and graph inspector understand Model v5 and reject
+  malformed delivery ordering, identity, destination, credentials, or
+  duplicates without learning WOML syntax or Slack API behavior.
+- The reviewed WOML fixture deep-equals the frozen Model v5 fixture and retains
+  its N0 canonical definition hash.
+- `woml run` currently stops after successful compilation with
+  `WOML_NOTIFICATION_RUNTIME_UNAVAILABLE`. It performs no notification or
+  secret lookup; durable effects begin in N3.
+- Frontend, CLI, contract, typecheck, existing workflow regression, local
+  approval HTTP, and clean packaged CLI tests pass.
 
 ### N3 — Add durable delivery and recovery infrastructure
 
