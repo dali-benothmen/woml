@@ -5,6 +5,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use rusqlite::Connection;
 use serde_json::{json, Map};
 use uuid::Uuid;
+use woml_engine::event::{StepAttemptStartedData, StepAttemptSucceededData};
 use woml_engine::{
   resolve_human_approval_durable, resume_workflow_durable_outcome, settle_approval_timeout_durable,
   ApprovalDecision, ApprovalDecisionOutcomeStatus, ApprovalDecisionSource, ApprovalResolution,
@@ -269,6 +270,24 @@ async fn approve_and_reject_are_idempotent_and_execute_only_the_selected_route()
         .count(),
       1
     );
+
+    let event_count = execution.events.len();
+    let completed_again = resume_workflow_durable_outcome(
+      database.path().to_path_buf(),
+      &run_id,
+      unavailable_options(decided_at + Duration::seconds(4)),
+    )
+    .await
+    .unwrap();
+    let WorkflowRuntimeOutcome::Succeeded {
+      execution: repeated,
+      ..
+    } = completed_again
+    else {
+      panic!("a completed approval run must stay complete");
+    };
+    assert_eq!(repeated.events.len(), event_count);
+    assert_eq!(repeated.result["published"], expected_published);
   }
 }
 
@@ -568,4 +587,206 @@ async fn human_decision_and_timeout_races_have_one_durable_winner() {
       .iter()
       .any(|event| matches!(event.payload, RunEventPayload::StepAttemptStarted(_))));
   }
+}
+
+#[tokio::test]
+async fn a_human_decision_waits_for_transient_sqlite_contention_without_being_lost() {
+  let database = TemporaryDatabase::new("contention");
+  let started_at = base_time();
+  let (run_id, approval) = waiting_parts(
+    woml_engine::execute_workflow_durable_outcome(
+      approval_first(model(APPROVAL_MODEL)),
+      TEST_HASH.to_string(),
+      Map::new(),
+      unavailable_options(started_at),
+      database.path().to_path_buf(),
+    )
+    .await
+    .unwrap(),
+  );
+
+  let connection = Connection::open(database.path()).unwrap();
+  connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+  let decision_path = database.path().to_path_buf();
+  let token = approval.token;
+  let decision_thread = std::thread::spawn(move || {
+    resolve_human_approval_durable(
+      decision_path,
+      &token,
+      ApprovalDecision::Approved,
+      &FixedEngineClock::new(started_at + Duration::minutes(1)),
+    )
+  });
+  std::thread::sleep(std::time::Duration::from_millis(100));
+  connection.execute_batch("COMMIT").unwrap();
+
+  let outcome = decision_thread.join().unwrap().unwrap();
+  assert_eq!(outcome.status, ApprovalDecisionOutcomeStatus::Accepted);
+  let store = DurableEventStore::open(database.path()).unwrap();
+  let events = store.events(&run_id).unwrap();
+  assert_eq!(
+    events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::ApprovalResolved(_)))
+      .count(),
+    1
+  );
+  assert_eq!(
+    store.projection(&run_id).unwrap().status,
+    RunStatus::Running
+  );
+}
+
+#[tokio::test]
+async fn recovery_during_a_selected_approval_arm_fails_closed_without_replaying_it() {
+  let database = TemporaryDatabase::new("selected-arm-interrupted");
+  let started_at = base_time();
+  let (run_id, approval) = waiting_parts(
+    woml_engine::execute_workflow_durable_outcome(
+      approval_first(model(APPROVAL_MODEL)),
+      TEST_HASH.to_string(),
+      Map::new(),
+      unavailable_options(started_at),
+      database.path().to_path_buf(),
+    )
+    .await
+    .unwrap(),
+  );
+  resolve_human_approval_durable(
+    database.path().to_path_buf(),
+    &approval.token,
+    ApprovalDecision::Approved,
+    &FixedEngineClock::new(started_at + Duration::minutes(1)),
+  )
+  .unwrap();
+
+  {
+    let store = DurableEventStore::open(database.path()).unwrap();
+    let mut engine = woml_engine::DurableDagEngine::resume(store, &run_id).unwrap();
+    assert_eq!(engine.ready_node_ids(&run_id).unwrap(), vec!["publish"]);
+    engine
+      .append_payload(
+        "evt_a7_selected_arm_started",
+        &run_id,
+        started_at + Duration::minutes(2),
+        RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+          node_id: "publish".to_string(),
+          attempt: 1,
+          invocation_id: "inv_a7_selected_arm".to_string(),
+          handler: "runtime.script".to_string(),
+        }),
+      )
+      .unwrap();
+  }
+
+  assert!(matches!(
+    resume_workflow_durable_outcome(
+      database.path().to_path_buf(),
+      &run_id,
+      unavailable_options(started_at + Duration::minutes(3)),
+    )
+    .await,
+    Err(RuntimeExecutionError::RunFailed(_))
+  ));
+  let store = DurableEventStore::open(database.path()).unwrap();
+  let events = store.events(&run_id).unwrap();
+  assert_eq!(
+    events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::ApprovalResolved(_)))
+      .count(),
+    1
+  );
+  assert_eq!(
+    events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::StepAttemptStarted(_)))
+      .count(),
+    1
+  );
+  assert!(events
+    .iter()
+    .any(|event| matches!(event.payload, RunEventPayload::StepAttemptFailed(_))));
+  assert_eq!(store.projection(&run_id).unwrap().status, RunStatus::Failed);
+}
+
+#[tokio::test]
+async fn recovery_after_the_selected_arm_and_before_the_join_continues_downstream_once() {
+  let Some(options) = real_options(base_time()) else {
+    return;
+  };
+  let database = TemporaryDatabase::new("selected-arm-before-join");
+  let started_at = base_time();
+  let (run_id, approval) = waiting_parts(
+    woml_engine::execute_workflow_durable_outcome(
+      approval_first(model(APPROVAL_MODEL)),
+      TEST_HASH.to_string(),
+      Map::new(),
+      unavailable_options(started_at),
+      database.path().to_path_buf(),
+    )
+    .await
+    .unwrap(),
+  );
+  resolve_human_approval_durable(
+    database.path().to_path_buf(),
+    &approval.token,
+    ApprovalDecision::Approved,
+    &FixedEngineClock::new(started_at + Duration::minutes(1)),
+  )
+  .unwrap();
+
+  {
+    let store = DurableEventStore::open(database.path()).unwrap();
+    let mut engine = woml_engine::DurableDagEngine::resume(store, &run_id).unwrap();
+    engine
+      .append_payload(
+        "evt_a7_selected_arm_complete_start",
+        &run_id,
+        started_at + Duration::minutes(2),
+        RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+          node_id: "publish".to_string(),
+          attempt: 1,
+          invocation_id: "inv_a7_selected_arm_complete".to_string(),
+          handler: "runtime.script".to_string(),
+        }),
+      )
+      .unwrap();
+    engine
+      .append_payload(
+        "evt_a7_selected_arm_complete_success",
+        &run_id,
+        started_at + Duration::minutes(2) + Duration::milliseconds(1),
+        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+          node_id: "publish".to_string(),
+          attempt: 1,
+          invocation_id: "inv_a7_selected_arm_complete".to_string(),
+          output: json!({ "published": true }),
+        }),
+      )
+      .unwrap();
+  }
+
+  let resumed = resume_workflow_durable_outcome(
+    database.path().to_path_buf(),
+    &run_id,
+    options.with_clock(Arc::new(FixedEngineClock::new(
+      started_at + Duration::minutes(3),
+    ))),
+  )
+  .await
+  .unwrap();
+  let WorkflowRuntimeOutcome::Succeeded { execution, .. } = resumed else {
+    panic!("the completed selected arm must continue through the join");
+  };
+  assert_eq!(execution.result["decision"], "approved");
+  assert_eq!(execution.execution_order, vec!["publish", "finalStatus"]);
+  assert_eq!(
+    execution
+      .events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::StepAttemptStarted(_)))
+      .count(),
+    2
+  );
 }

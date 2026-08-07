@@ -11,7 +11,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::engine::{
-  resolve_context_reference, selected_branch_arm, BranchEvaluationError, BranchEvaluationErrorKind,
+  node_is_complete, resolve_context_reference, selected_branch_arm, BranchEvaluationError,
+  BranchEvaluationErrorKind,
 };
 use crate::event::{
   ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
@@ -507,6 +508,22 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           execution_order.clone(),
         )?));
       }
+      if let Some(result) =
+        completed_terminal_approval_result(engine.workflow(), &terminal_node_id, &projection)
+      {
+        engine.append_payload(
+          run_id,
+          RunEventPayload::RunSucceeded(RunSucceededData {
+            terminal_node_id: terminal_node_id.clone(),
+            result,
+          }),
+        )?;
+        return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+          engine,
+          run_id,
+          execution_order.clone(),
+        )?));
+      }
       return Err(RuntimeExecutionError::Stalled(
         "no node is ready before the run reached a terminal state".to_string(),
       ));
@@ -742,6 +759,22 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
       }
     }
   }
+}
+
+fn completed_terminal_approval_result(
+  workflow: &CompiledWorkflowDefinition,
+  terminal_node_id: &str,
+  projection: &RunProjection,
+) -> Option<Value> {
+  let terminal = workflow.node(terminal_node_id)?;
+  if terminal.handler != "engine.approval-join" || !node_is_complete(workflow, terminal, projection)
+  {
+    return None;
+  }
+  let approval_id = terminal_node_id
+    .strip_prefix("__woml_approval__")?
+    .strip_suffix("__join")?;
+  projection.context.steps.get(approval_id).cloned()
 }
 
 fn waiting_outcome(

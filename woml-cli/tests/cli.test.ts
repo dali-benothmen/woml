@@ -18,21 +18,28 @@ const helloFixturePath = join(
   'woml',
   'tests',
   'fixtures',
-  'hello.woml',
+  'hello.woml'
 );
 const branchFixturePath = join(
   projectRoot,
   'woml',
   'tests',
   'fixtures',
-  'branch.woml',
+  'branch.woml'
 );
 const parallelFixturePath = join(
   projectRoot,
   'woml',
   'tests',
   'fixtures',
-  'parallel.woml',
+  'parallel.woml'
+);
+const approvalFixturePath = join(
+  projectRoot,
+  'woml',
+  'tests',
+  'fixtures',
+  'approval.woml'
 );
 let temporaryDirectory: string;
 
@@ -58,6 +65,68 @@ async function runCli(...args: string[]): Promise<CommandResult> {
   return { stdout, stderr, exitCode };
 }
 
+async function availablePort(): Promise<number> {
+  const probe = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(),
+  });
+  const port = probe.port;
+  probe.stop(true);
+  if (port === undefined) throw new Error('Bun did not assign a test port.');
+  return port;
+}
+
+function spawnPackagedApproval(
+  executable: string,
+  args: readonly string[],
+  cwd: string
+) {
+  const child = Bun.spawn([executable, ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const stdout = new Response(child.stdout).text();
+  let resolveUrl!: (url: string) => void;
+  let rejectUrl!: (error: Error) => void;
+  let announced = false;
+  const url = new Promise<string>((resolve, reject) => {
+    resolveUrl = resolve;
+    rejectUrl = reject;
+  });
+  const stderr = (async () => {
+    const reader = child.stderr.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+      const match = text.match(
+        /Approval URL: (http:\/\/127\.0\.0\.1:\d+\/approvals\/\S+)/
+      );
+      if (!announced && match !== null) {
+        announced = true;
+        resolveUrl(match[1]);
+      }
+    }
+    text += decoder.decode();
+    if (!announced) {
+      rejectUrl(new Error(`Packaged CLI did not announce approval:\n${text}`));
+    }
+    return text;
+  })();
+  return { child, stdout, stderr, url };
+}
+
+function decisionEndpoint(url: string): string {
+  const page = new URL(url);
+  return `${page.origin}/api/v1/approvals/${page.pathname.slice(
+    '/approvals/'.length
+  )}/decision`;
+}
+
 beforeAll(async () => {
   const build = Bun.spawnSync([Bun.which('bun')!, 'run', 'build'], {
     cwd: packageRoot,
@@ -66,7 +135,7 @@ beforeAll(async () => {
   });
   if (build.exitCode !== 0) {
     throw new Error(
-      `Could not build the CLI:\n${build.stdout.toString()}${build.stderr.toString()}`,
+      `Could not build the CLI:\n${build.stdout.toString()}${build.stderr.toString()}`
     );
   }
   await chmod(cliPath, 0o755);
@@ -87,8 +156,8 @@ describe('woml run', () => {
   test('runs hello.woml through the public executable', async () => {
     const expected = JSON.parse(
       await Bun.file(
-        join(packageRoot, 'tests', 'fixtures', 'hello.cli.v0.1.json'),
-      ).text(),
+        join(packageRoot, 'tests', 'fixtures', 'hello.cli.v0.1.json')
+      ).text()
     );
 
     const result = await runCli('run', helloFixturePath);
@@ -114,7 +183,7 @@ describe('woml run', () => {
     const workflowPath = join(temporaryDirectory, 'branch-otherwise.woml');
     const source = (await Bun.file(branchFixturePath).text()).replace(
       'needsReview: true',
-      'needsReview: false',
+      'needsReview: false'
     );
     await writeFile(workflowPath, source);
 
@@ -130,8 +199,8 @@ describe('woml run', () => {
   test('runs parallel.woml through the public executable', async () => {
     const expected = JSON.parse(
       await Bun.file(
-        join(packageRoot, 'tests', 'fixtures', 'parallel.cli.v0.1.json'),
-      ).text(),
+        join(packageRoot, 'tests', 'fixtures', 'parallel.cli.v0.1.json')
+      ).text()
     );
 
     const result = await runCli('run', parallelFixturePath);
@@ -155,7 +224,7 @@ describe('woml run', () => {
     </parallel>
     <step id="finish"><script>return { value: context.steps.onlyCheck.value };</script></step>
   </steps>
-</workflow>`,
+</workflow>`
     );
 
     expect(await runCli('run', workflowPath)).toEqual({
@@ -178,7 +247,7 @@ describe('woml run', () => {
     </parallel>
     <step id="finish"><script>return { sawSibling: context.steps.probe.sawSibling };</script></step>
   </steps>
-</workflow>`,
+</workflow>`
     );
 
     expect(await runCli('run', workflowPath)).toEqual({
@@ -192,13 +261,13 @@ describe('woml run', () => {
     test(`maps a ${policy} child failure to its original script`, async () => {
       const workflowPath = join(
         temporaryDirectory,
-        `parallel-${policy}-failure.woml`,
+        `parallel-${policy}-failure.woml`
       );
       const source = (await Bun.file(parallelFixturePath).text())
         .replace('on-error="wait-all"', `on-error="${policy}"`)
         .replace(
           'await new Promise(resolve => setTimeout(resolve, 80));\n          return {\n            fieldId: context.steps.loadField.fieldId,\n            temperature: 22\n          };',
-          'throw new Error("weather unavailable");',
+          'throw new Error("weather unavailable");'
         );
       await writeFile(workflowPath, source);
 
@@ -206,11 +275,11 @@ describe('woml run', () => {
 
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain(
-        'WOML runtime error [WOML_PARALLEL_CHILD_FAILED]',
+        'WOML runtime error [WOML_PARALLEL_CHILD_FAILED]'
       );
       expect(result.stderr).toContain(`${workflowPath}:15:`);
       expect(result.stderr).toContain(
-        'step "loadWeather" in parallel "fieldData"',
+        'step "loadWeather" in parallel "fieldData"'
       );
       expect(result.exitCode).toBe(1);
     });
@@ -219,11 +288,11 @@ describe('woml run', () => {
   test('rejects invalid parallel concurrency through woml run', async () => {
     const workflowPath = join(
       temporaryDirectory,
-      'parallel-invalid-concurrency.woml',
+      'parallel-invalid-concurrency.woml'
     );
     const source = (await Bun.file(parallelFixturePath).text()).replace(
       'concurrency="2"',
-      'concurrency="3"',
+      'concurrency="3"'
     );
     await writeFile(workflowPath, source);
 
@@ -231,17 +300,14 @@ describe('woml run', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain(
-      'WOML validation error [WOML_PARALLEL_INVALID_CONCURRENCY]',
+      'WOML validation error [WOML_PARALLEL_INVALID_CONCURRENCY]'
     );
     expect(result.stderr).toContain(`${workflowPath}:13:`);
     expect(result.exitCode).toBe(1);
   });
 
   test('rejects a terminal parallel group through woml run', async () => {
-    const workflowPath = join(
-      temporaryDirectory,
-      'parallel-terminal.woml',
-    );
+    const workflowPath = join(temporaryDirectory, 'parallel-terminal.woml');
     await writeFile(
       workflowPath,
       `<workflow version="0.1" id="terminal-parallel">
@@ -251,14 +317,14 @@ describe('woml run', () => {
       <step id="check"><script>return { ok: true };</script></step>
     </parallel>
   </steps>
-</workflow>`,
+</workflow>`
     );
 
     const result = await runCli('run', workflowPath);
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain(
-      'WOML validation error [WOML_PARALLEL_TERMINAL_UNSUPPORTED]',
+      'WOML validation error [WOML_PARALLEL_TERMINAL_UNSUPPORTED]'
     );
     expect(result.stderr).toContain(`${workflowPath}:4:`);
     expect(result.exitCode).toBe(1);
@@ -269,7 +335,7 @@ describe('woml run', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe(
-      'Usage: woml run <workflow.woml> [--state <path>] [--resume <runId>] [--approval-port <port>]\n',
+      'Usage: woml run <workflow.woml> [--state <path>] [--resume <runId>] [--approval-port <port>]\n'
     );
     expect(result.exitCode).toBe(2);
   });
@@ -302,7 +368,7 @@ describe('woml run', () => {
       `<workflow version="1.0.0" id="failure">
   <triggers><manual id="start" /></triggers>
   <steps><step id="broken"><script>throw new Error("boom");</script></step></steps>
-</workflow>`,
+</workflow>`
     );
 
     const result = await runCli('run', workflowPath);
@@ -319,7 +385,7 @@ describe('woml run', () => {
     const workflowPath = join(temporaryDirectory, 'branch-non-boolean.woml');
     const source = (await Bun.file(branchFixturePath).text()).replace(
       'needsReview: true',
-      'needsReview: "yes"',
+      'needsReview: "yes"'
     );
     await writeFile(workflowPath, source);
 
@@ -327,7 +393,7 @@ describe('woml run', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain(
-      'WOML runtime error [WOML_BRANCH_TEST_NOT_BOOLEAN]',
+      'WOML runtime error [WOML_BRANCH_TEST_NOT_BOOLEAN]'
     );
     expect(result.stderr).toContain(`${workflowPath}:19:`);
     expect(result.stderr).toContain('<when test> in branch "decision"');
@@ -339,7 +405,7 @@ describe('woml run', () => {
     const workflowPath = join(temporaryDirectory, 'branch-missing-test.woml');
     const source = (await Bun.file(branchFixturePath).text()).replace(
       'needsReview: true',
-      'otherProperty: true',
+      'otherProperty: true'
     );
     await writeFile(workflowPath, source);
 
@@ -347,13 +413,11 @@ describe('woml run', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain(
-      'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]',
+      'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]'
     );
     expect(result.stderr).toContain(`${workflowPath}:19:`);
     expect(result.stderr).toContain('<when test> in branch "decision"');
-    expect(result.stderr).toContain(
-      'context.steps.checkContent.needsReview',
-    );
+    expect(result.stderr).toContain('context.steps.checkContent.needsReview');
     expect(result.exitCode).toBe(1);
   });
 
@@ -361,7 +425,7 @@ describe('woml run', () => {
     const workflowPath = join(temporaryDirectory, 'branch-missing-result.woml');
     const source = (await Bun.file(branchFixturePath).text()).replace(
       '{{context.steps.reviewContent}}',
-      '{{context.steps.reviewContent.missing}}',
+      '{{context.steps.reviewContent.missing}}'
     );
     await writeFile(workflowPath, source);
 
@@ -369,13 +433,11 @@ describe('woml run', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain(
-      'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]',
+      'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]'
     );
     expect(result.stderr).toContain(`${workflowPath}:29:`);
     expect(result.stderr).toContain('<result value> in branch "decision"');
-    expect(result.stderr).toContain(
-      'context.steps.reviewContent.missing',
-    );
+    expect(result.stderr).toContain('context.steps.reviewContent.missing');
     expect(result.exitCode).toBe(1);
   });
 
@@ -390,19 +452,23 @@ describe('woml run', () => {
     await mkdir(bunCacheDirectory, { recursive: true });
     await Bun.write(
       join(consumerDirectory, 'package.json'),
-      JSON.stringify({ name: 'woml-clean-install-test', private: true }),
+      JSON.stringify({ name: 'woml-clean-install-test', private: true })
     );
     await Bun.write(
       join(consumerDirectory, 'hello.woml'),
-      await Bun.file(helloFixturePath).text(),
+      await Bun.file(helloFixturePath).text()
     );
     await Bun.write(
       join(consumerDirectory, 'branch.woml'),
-      await Bun.file(branchFixturePath).text(),
+      await Bun.file(branchFixturePath).text()
     );
     await Bun.write(
       join(consumerDirectory, 'parallel.woml'),
-      await Bun.file(parallelFixturePath).text(),
+      await Bun.file(parallelFixturePath).text()
+    );
+    await Bun.write(
+      join(consumerDirectory, 'approval.woml'),
+      await Bun.file(approvalFixturePath).text()
     );
 
     const packed = Bun.spawnSync(
@@ -414,12 +480,12 @@ describe('woml run', () => {
         '--destination',
         packageDirectory,
       ],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' },
+      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
     );
     expect(packed.exitCode).toBe(0);
     const archive = (await readdir(packageDirectory))
-      .filter((name) => name.endsWith('.tgz'))
-      .map((name) => join(packageDirectory, name))[0];
+      .filter(name => name.endsWith('.tgz'))
+      .map(name => join(packageDirectory, name))[0];
     expect(archive).toBeDefined();
 
     const installed = Bun.spawnSync(
@@ -433,11 +499,11 @@ describe('woml run', () => {
         },
         stdout: 'pipe',
         stderr: 'pipe',
-      },
+      }
     );
     if (installed.exitCode !== 0) {
       throw new Error(
-        `Could not install packed WOML CLI:\n${installed.stdout.toString()}${installed.stderr.toString()}`,
+        `Could not install packed WOML CLI:\n${installed.stdout.toString()}${installed.stderr.toString()}`
       );
     }
     const entriesBeforeRun = (await readdir(consumerDirectory)).sort();
@@ -452,28 +518,60 @@ describe('woml run', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const parallelResult = Bun.spawnSync(
-      [executable, 'run', 'parallel.woml'],
-      {
-        cwd: consumerDirectory,
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
+    const parallelResult = Bun.spawnSync([executable, 'run', 'parallel.woml'], {
+      cwd: consumerDirectory,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const approval = spawnPackagedApproval(
+      executable,
+      [
+        'run',
+        'approval.woml',
+        '--state',
+        join(temporaryDirectory, 'packaged-approval.sqlite'),
+        '--approval-port',
+        String(await availablePort()),
+      ],
+      consumerDirectory
     );
+    const approvalUrl = await approval.url;
+    const approvalPage = await fetch(approvalUrl);
+    const approvalResponse = await fetch(decisionEndpoint(approvalUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'approved' }),
+    });
+    const [approvalStdout, approvalStderr, approvalExitCode] =
+      await Promise.all([
+        approval.stdout,
+        approval.stderr,
+        approval.child.exited,
+      ]);
 
     expect(helloResult.stdout.toString()).toBe('{"message":"Hello World"}\n');
     expect(helloResult.stderr.toString()).toBe('');
     expect(helloResult.exitCode).toBe(0);
     expect(branchResult.stdout.toString()).toBe(
-      '{"message":"Final status: reviewed"}\n',
+      '{"message":"Final status: reviewed"}\n'
     );
     expect(branchResult.stderr.toString()).toBe('');
     expect(branchResult.exitCode).toBe(0);
     expect(parallelResult.stdout.toString()).toBe(
-      '{"summary":"Weather 22°C, soil 41%"}\n',
+      '{"summary":"Weather 22°C, soil 41%"}\n'
     );
     expect(parallelResult.stderr.toString()).toBe('');
     expect(parallelResult.exitCode).toBe(0);
+    expect(approvalPage.status).toBe(200);
+    expect(await approvalPage.text()).toContain('Editorial approval');
+    expect(approvalResponse.status).toBe(200);
+    expect(JSON.parse(approvalStdout)).toEqual({
+      decision: 'approved',
+      source: 'human',
+      published: true,
+    });
+    expect(approvalStderr).toContain('waiting for human approval');
+    expect(approvalExitCode).toBe(0);
     expect((await readdir(consumerDirectory)).sort()).toEqual(entriesBeforeRun);
     expect(
       await Bun.file(
@@ -482,9 +580,9 @@ describe('woml run', () => {
           'node_modules',
           'woml-cli',
           'dist',
-          `woml-core.${process.platform}-${process.arch}.node`,
-        ),
-      ).exists(),
+          `woml-core.${process.platform}-${process.arch}.node`
+        )
+      ).exists()
     ).toBe(true);
   });
 });

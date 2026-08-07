@@ -775,11 +775,11 @@ Once B0–B6 are complete, product expansion continues in this order:
    children through the multiplexed Bun protocol, joins them, implements both
    failure policies and targeted cancellation, and persists durable
    parallel-group events.
-2. **Human approval — A0–A6 complete** — versioned contracts, frontend
+2. **Complete: Human approval — A0–A7** — versioned contracts, frontend
    lowering, Rust validation, event folding, durable projections, and hashed
    credentials, durable waiting, resolution, timeout, route continuation, and
-   the local HTTP/CLI experience are complete; A7 adds final hardening,
-   and the HTTP-only product flow in
+   the local HTTP/CLI experience, final hardening, and clean-package proof are
+   complete in the HTTP-only product flow in
    `WOML Human Approval Implementation Plan.md`.
 3. **Retries and idempotency** — freeze idempotency-key derivation and duplicate
    behavior, then enable retry values greater than one with durable attempt
@@ -807,8 +807,8 @@ The branch milestone is complete only when:
 - `branch_selected` is durable, versioned, validated, and foldable;
 - old v1 sequential histories remain readable;
 - unselected routes produce no attempts, outputs, or side effects;
-- nested branches continue to work alongside parallel groups, while approval
-  remains explicitly rejected;
+- nested branches continue to work alongside parallel groups and approvals in
+  selected branch arms;
 - errors carry stable codes and original WOML source locations;
 - in-memory and durable execution produce the same result;
 - the packaged public CLI passes the branch acceptance workflow; and

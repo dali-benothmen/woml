@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -12,8 +13,15 @@ import {
   RustWorkflowExecutionError,
 } from '../src/rust-executor';
 
-const nativeCorePath = process.env.WOML_RUST_CORE_PATH;
 const packageRoot = resolve(import.meta.dir, '..');
+const stagedNativeCorePath = resolve(
+  packageRoot,
+  'dist',
+  `woml-core.${process.platform}-${process.arch}.node`
+);
+const nativeCorePath =
+  process.env.WOML_RUST_CORE_PATH ??
+  (existsSync(stagedNativeCorePath) ? stagedNativeCorePath : undefined);
 const scriptHostPath = resolve(packageRoot, 'src/script-host.ts');
 const crashingHostPath = resolve(
   packageRoot,
@@ -505,7 +513,10 @@ describe('Rust to Bun workflow execution', () => {
       ).toBe(false);
 
       const beforeBranch = await executeWorkflowWithRust(
-        compileSource(parallelBeforeBranchSource, 'parallel-before-branch.woml'),
+        compileSource(
+          parallelBeforeBranchSource,
+          'parallel-before-branch.woml'
+        ),
         { nativeCorePath, scriptHostPath }
       );
       expect(beforeBranch.result).toEqual({ status: 'approved' });

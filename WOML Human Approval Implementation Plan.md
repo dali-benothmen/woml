@@ -1,8 +1,7 @@
 # WOML Human Approval Implementation Plan
 
-Status: A0–A6 complete — approval contracts, frontend compilation, durable
-waiting, atomic decision/timeout settlement, selected-route continuation, and
-the local terminal/HTTP experience are implemented; A7 is next
+Status: A0–A7 complete — Human Approval is implemented, hardened, verified
+through the clean packaged CLI, and publishable in the local WOML profile
 
 ## 1. Product Outcome
 
@@ -167,7 +166,7 @@ Bun CLI/HTTP server <----+
 | A4 — complete | Make Rust stop at an approval and return a structured waiting outcome.                     | A workflow can durably pause without blocking a Worker or pretending to finish.              |
 | A5 — complete | Add atomic approve, reject, timeout, and DAG continuation behavior.                        | Exactly one resolution wins and only its route executes.                                     |
 | A6 — complete | Add the local HTTP approval page, terminal URL, and N-API/CLI lifecycle.                   | A person can approve or reject a real `woml run` workflow.                                   |
-| A7            | Harden recovery, races, composition, security, packaging, and documentation.               | Human approval becomes a supported and publishable WOML feature.                             |
+| A7 — complete | Harden recovery, races, composition, security, packaging, and documentation.               | Human approval is a supported and publishable WOML feature.                                  |
 
 ## 4. Source-Language Contract
 
@@ -829,7 +828,7 @@ Completed proof:
   approve/reject, restart and token reissue, timeout rejection, and port
   conflicts.
 
-### A7 — Harden, package, and close the milestone
+### A7 — Harden, package, and close the milestone — complete
 
 Changes:
 
@@ -861,6 +860,32 @@ Gate:
 
 All verification rows below pass in one release build with no skipped native
 approval tests.
+
+Completed proof:
+
+- Black-box CLI journeys cover approval at the beginning, middle, and terminal
+  positions; selected branch arms; skipped unselected arms; placement between
+  parallel groups; empty, one-item, multi-item, and nested decision arms; and
+  two waiting cycles in one durable run.
+- A7 found and fixed a terminal-approval engine defect: a completed structural
+  approval join now publishes the approval decision as the terminal result and
+  appends `run_succeeded` instead of stalling.
+- Restart is tested before URL delivery, while waiting, after a durable
+  decision, and after completion. Reissued URLs retain the same request while
+  completed effects and decisions are not repeated.
+- Decision/timeout races, simultaneous duplicate decisions, exact deadline
+  boundaries, transient SQLite write contention, malformed and expired tokens,
+  refresh/prefetch-safe GET behavior, and credential rotation all pass.
+- Generated token plaintext and secret bytes are absent from live SQLite/WAL
+  files, events, context, outputs, and safe error responses.
+- The release suite builds and stages the native addon before testing, so all
+  native executor and approval tests run rather than being conditionally
+  skipped.
+- A clean package install runs sequential, branch, parallel, and the complete
+  approval page/HTTP decision journey using the packaged Rust engine.
+- The final release matrix passes 63 frontend tests, 87 Rust engine tests, and
+  95 CLI/protocol/packaging tests, plus TypeScript typechecking and Clippy for
+  the WOML engine.
 
 ## 12. Verification Matrix
 
@@ -928,6 +953,10 @@ review rather than selecting an invisible default.
 ## 15. Roadmap After Human Approval
 
 After A0–A7, product expansion continues in this order:
+
+The built-in Slack, Discord, and WhatsApp notification-provider milestone is
+specified separately in `WOML Notification Providers Implementation Plan.md`.
+Generic webhook notification remains deferred beyond that milestone.
 
 1. **Retries and idempotency** — freeze idempotency-key derivation, duplicate
    effect behavior, retryable failures, durable scheduling, and backoff before

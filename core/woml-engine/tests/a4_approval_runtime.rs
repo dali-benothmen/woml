@@ -5,10 +5,10 @@ use rusqlite::Connection;
 use serde_json::{json, Map};
 use uuid::Uuid;
 use woml_engine::{
-  execute_workflow_durable, execute_workflow_durable_outcome, resume_workflow_durable_outcome,
-  ApprovalRequestedData, ApprovalTimeoutPolicy, CompiledWorkflowDefinition, DurableDagEngine,
-  DurableEventStore, RunEventPayload, RunStatus, RuntimeExecutionOptions, ScriptHostProcessOptions,
-  WorkflowRuntimeOutcome,
+  execute_workflow_durable, execute_workflow_durable_outcome, resolve_human_approval_durable,
+  resume_workflow_durable_outcome, ApprovalDecision, ApprovalRequestedData, ApprovalTimeoutPolicy,
+  CompiledWorkflowDefinition, DurableDagEngine, DurableEventStore, RunEventPayload, RunStatus,
+  RuntimeExecutionOptions, ScriptHostProcessOptions, SystemEngineClock, WorkflowRuntimeOutcome,
 };
 
 const APPROVAL_MODEL: &str = include_str!("../../../woml/tests/fixtures/approval.compiled.v4.json");
@@ -189,7 +189,7 @@ async fn terminal_approval_with_empty_arms_is_a_valid_waiting_boundary() {
   );
 
   let outcome = execute_workflow_durable_outcome(
-    workflow,
+    workflow.clone(),
     TEST_MODEL_HASH.to_string(),
     Map::new(),
     unavailable_host_options(),
@@ -197,7 +197,36 @@ async fn terminal_approval_with_empty_arms_is_a_valid_waiting_boundary() {
   )
   .await
   .unwrap();
-  assert!(matches!(outcome, WorkflowRuntimeOutcome::Waiting { .. }));
+  let WorkflowRuntimeOutcome::Waiting {
+    run_id, approval, ..
+  } = outcome
+  else {
+    panic!("terminal approval must wait before its decision");
+  };
+
+  resolve_human_approval_durable(
+    database.path().to_path_buf(),
+    &approval.token,
+    ApprovalDecision::Approved,
+    &SystemEngineClock,
+  )
+  .unwrap();
+  let resumed = resume_workflow_durable_outcome(
+    database.path().to_path_buf(),
+    &run_id,
+    unavailable_host_options(),
+  )
+  .await
+  .unwrap();
+  let WorkflowRuntimeOutcome::Succeeded { execution, .. } = resumed else {
+    panic!("resolved terminal approval must complete the run");
+  };
+  assert_eq!(
+    execution.terminal_node_id,
+    "__woml_approval__editorApproval__join"
+  );
+  assert_eq!(execution.result["decision"], "approved");
+  assert_eq!(execution.result["source"], "human");
 }
 
 #[tokio::test]

@@ -941,13 +941,13 @@ fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
         ModelIssueCode::InvalidApprovalGroup,
         format!("Approval wait {:?} has no matching edge group.", node.id),
       ));
-    } else if node.handler == "engine.approval-join" {
-      if approval_join_id(&node.id).is_none_or(|approval_id| !groups.contains_key(approval_id)) {
-        issues.push(issue(
-          ModelIssueCode::InvalidApprovalGroup,
-          format!("Approval join {:?} has no matching edge group.", node.id),
-        ));
-      }
+    } else if node.handler == "engine.approval-join"
+      && approval_join_id(&node.id).is_none_or(|approval_id| !groups.contains_key(approval_id))
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidApprovalGroup,
+        format!("Approval join {:?} has no matching edge group.", node.id),
+      ));
     }
   }
 }

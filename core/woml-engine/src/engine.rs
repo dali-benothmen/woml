@@ -275,7 +275,7 @@ fn edge_is_active(edge: &crate::model::CompiledWorkflowEdge, projection: &RunPro
   }
 }
 
-fn node_is_complete(
+pub(crate) fn node_is_complete(
   workflow: &CompiledWorkflowDefinition,
   node: &crate::model::CompiledWorkflowNode,
   projection: &RunProjection,

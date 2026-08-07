@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -34,13 +35,35 @@ function spawnApproval(args: readonly string[], cwd = projectRoot) {
     stderr: 'pipe',
   });
   const stdout = new Response(child.stdout).text();
-  let resolveUrl!: (url: string) => void;
-  let rejectUrl!: (error: Error) => void;
-  let announced = false;
-  const url = new Promise<string>((resolve, reject) => {
-    resolveUrl = resolve;
-    rejectUrl = reject;
-  });
+  const queuedUrls: string[] = [];
+  const seenUrls = new Set<string>();
+  const waiters: Array<{
+    resolve: (url: string) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  let ended = false;
+  let finalStderr = '';
+  const nextUrl = (): Promise<string> => {
+    const queued = queuedUrls.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    if (ended) {
+      return Promise.reject(
+        new Error(
+          `CLI ended before announcing another approval:\n${finalStderr}`
+        )
+      );
+    }
+    return new Promise<string>((resolve, reject) => {
+      waiters.push({ resolve, reject });
+    });
+  };
+  const announce = (url: string) => {
+    if (seenUrls.has(url)) return;
+    seenUrls.add(url);
+    const waiter = waiters.shift();
+    if (waiter === undefined) queuedUrls.push(url);
+    else waiter.resolve(url);
+  };
   const stderr = (async () => {
     const reader = child.stderr.getReader();
     const decoder = new TextDecoder();
@@ -49,21 +72,23 @@ function spawnApproval(args: readonly string[], cwd = projectRoot) {
       const { value, done } = await reader.read();
       if (done) break;
       text += decoder.decode(value, { stream: true });
-      const match = text.match(
-        /Approval URL: (http:\/\/127\.0\.0\.1:\d+\/approvals\/\S+)/
-      );
-      if (!announced && match !== null) {
-        announced = true;
-        resolveUrl(match[1]);
+      for (const match of text.matchAll(
+        /Approval URL: (http:\/\/127\.0\.0\.1:\d+\/approvals\/\S+)/g
+      )) {
+        announce(match[1]);
       }
     }
     text += decoder.decode();
-    if (!announced) {
-      rejectUrl(new Error(`CLI ended before announcing approval:\n${text}`));
+    ended = true;
+    finalStderr = text;
+    for (const waiter of waiters.splice(0)) {
+      waiter.reject(
+        new Error(`CLI ended before announcing another approval:\n${text}`)
+      );
     }
     return text;
   })();
-  return { child, stdout, stderr, url };
+  return { child, stdout, stderr, url: nextUrl(), nextUrl };
 }
 
 function decisionEndpoint(url: string): string {
@@ -106,6 +131,10 @@ describe('woml run Human Approval', () => {
       const defaultDirectory = join(temporaryDirectory, 'default-product-path');
       const explicitPort = await availablePort();
       if (decision === 'approved') await mkdir(defaultDirectory);
+      const statePath =
+        decision === 'approved'
+          ? join(defaultDirectory, '.woml', 'state.sqlite')
+          : join(temporaryDirectory, `${decision}.sqlite`);
       const running =
         decision === 'approved'
           ? spawnApproval(['run', approvalFixturePath], defaultDirectory)
@@ -113,7 +142,7 @@ describe('woml run Human Approval', () => {
               'run',
               approvalFixturePath,
               '--state',
-              join(temporaryDirectory, `${decision}.sqlite`),
+              statePath,
               '--approval-port',
               String(explicitPort),
             ]);
@@ -124,6 +153,15 @@ describe('woml run Human Approval', () => {
       const page = await fetch(url);
       expect(page.status).toBe(200);
       expect(await page.text()).toContain('Editorial approval');
+
+      const token = new URL(url).pathname.slice('/approvals/'.length);
+      const secret = token.slice(token.indexOf('.') + 1);
+      for (const databaseFile of [statePath, `${statePath}-wal`]) {
+        if (!(await Bun.file(databaseFile).exists())) continue;
+        const bytes = Buffer.from(await Bun.file(databaseFile).arrayBuffer());
+        expect(bytes.includes(Buffer.from(token))).toBe(false);
+        expect(bytes.includes(Buffer.from(secret))).toBe(false);
+      }
 
       const response = await postDecision(url, decision);
       expect(response.status).toBe(200);
@@ -227,6 +265,165 @@ describe('woml run Human Approval', () => {
     await resumed.stderr;
   });
 
+  test('supports approval at the beginning and as the terminal workflow action', async () => {
+    const cases = [
+      {
+        name: 'beginning',
+        source: `<workflow version="0.1" id="approval-beginning">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <approval id="review"><when-approved /><when-rejected /></approval>
+    <step id="finish"><script>return { decision: context.steps.review.decision, position: "beginning" };</script></step>
+  </steps>
+</workflow>`,
+        expected: { decision: 'approved', position: 'beginning' },
+      },
+      {
+        name: 'terminal',
+        source: `<workflow version="0.1" id="approval-terminal">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="prepare"><script>return { ready: true };</script></step>
+    <approval id="review"><when-approved /><when-rejected /></approval>
+  </steps>
+</workflow>`,
+        expected: { decision: 'approved', source: 'human' },
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const workflowPath = join(temporaryDirectory, `${item.name}.woml`);
+      await writeFile(workflowPath, item.source);
+      const running = spawnApproval([
+        'run',
+        workflowPath,
+        '--state',
+        join(temporaryDirectory, `${item.name}.sqlite`),
+        '--approval-port',
+        String(await availablePort()),
+      ]);
+      expect((await postDecision(await running.url, 'approved')).status).toBe(
+        200
+      );
+      const [stdout, stderr, exitCode] = await Promise.all([
+        running.stdout,
+        running.stderr,
+        running.child.exited,
+      ]);
+      if (exitCode !== 0) {
+        throw new Error(`${item.name} approval failed:\n${stderr}`);
+      }
+      expect(JSON.parse(stdout)).toMatchObject(item.expected);
+    }
+  });
+
+  test('composes a selected approval with branch and parallel while skipping the unselected approval', async () => {
+    const workflowPath = join(temporaryDirectory, 'approval-composition.woml');
+    await writeFile(
+      workflowPath,
+      `<workflow version="0.1" id="approval-composition">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <parallel id="prepare" concurrency="2" on-error="wait-all">
+      <step id="routeFlag"><script>return { review: true };</script></step>
+      <step id="preparedValue"><script>return { value: 40 };</script></step>
+    </parallel>
+    <branch id="route">
+      <when test="{{context.steps.routeFlag.review}}">
+        <approval id="selectedApproval" name="Selected approval">
+          <when-approved><step id="selectedResult"><script>return { selected: true };</script></step></when-approved>
+          <when-rejected><step id="selectedRejected"><script>return { selected: false };</script></step></when-rejected>
+        </approval>
+        <result value="{{context.steps.selectedApproval}}" />
+      </when>
+      <otherwise>
+        <approval id="unselectedApproval" name="Must never wait">
+          <when-approved /><when-rejected />
+        </approval>
+        <result value="{{context.steps.unselectedApproval}}" />
+      </otherwise>
+    </branch>
+    <parallel id="afterApproval" concurrency="2" on-error="wait-all">
+      <step id="addOne"><script>return { value: context.steps.preparedValue.value + 1 };</script></step>
+      <step id="addTwo"><script>return { value: context.steps.preparedValue.value + 2 };</script></step>
+    </parallel>
+    <step id="finish"><script>return { decision: context.steps.route.decision, total: context.steps.addOne.value + context.steps.addTwo.value };</script></step>
+  </steps>
+</workflow>`
+    );
+    const running = spawnApproval([
+      'run',
+      workflowPath,
+      '--state',
+      join(temporaryDirectory, 'approval-composition.sqlite'),
+      '--approval-port',
+      String(await availablePort()),
+    ]);
+    const url = await running.url;
+    const page = await (await fetch(url)).text();
+    expect(page).toContain('Selected approval');
+    expect(page).not.toContain('Must never wait');
+    expect((await postDecision(url, 'approved')).status).toBe(200);
+    expect(JSON.parse(await running.stdout)).toEqual({
+      decision: 'approved',
+      total: 83,
+    });
+    expect(await running.child.exited).toBe(0);
+    const stderr = await running.stderr;
+    expect(stderr.match(/Approval URL:/g)).toHaveLength(1);
+  });
+
+  test('handles nested approvals and two durable waiting cycles in one run', async () => {
+    const workflowPath = join(temporaryDirectory, 'nested-approvals.woml');
+    await writeFile(
+      workflowPath,
+      `<workflow version="0.1" id="nested-approvals">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <approval id="editorial" name="Editorial approval">
+      <when-approved>
+        <step id="editorialRecorded"><script>return { recorded: true };</script></step>
+        <approval id="legal" name="Legal approval">
+          <when-approved>
+            <step id="legalCheck"><script>return { passed: true };</script></step>
+            <step id="legalRecorded"><script>return { count: 2 };</script></step>
+          </when-approved>
+          <when-rejected />
+        </approval>
+      </when-approved>
+      <when-rejected />
+    </approval>
+    <step id="finish"><script>return { editorial: context.steps.editorial.decision, legal: context.steps.legal.decision, actions: context.steps.legalRecorded.count };</script></step>
+  </steps>
+</workflow>`
+    );
+    const running = spawnApproval([
+      'run',
+      workflowPath,
+      '--state',
+      join(temporaryDirectory, 'nested-approvals.sqlite'),
+      '--approval-port',
+      String(await availablePort()),
+    ]);
+    const editorialUrl = await running.url;
+    expect(await (await fetch(editorialUrl)).text()).toContain(
+      'Editorial approval'
+    );
+    expect((await postDecision(editorialUrl, 'approved')).status).toBe(200);
+    const legalUrl = await running.nextUrl();
+    expect(legalUrl).not.toBe(editorialUrl);
+    expect(await (await fetch(legalUrl)).text()).toContain('Legal approval');
+    expect((await postDecision(legalUrl, 'approved')).status).toBe(200);
+
+    expect(JSON.parse(await running.stdout)).toEqual({
+      editorial: 'approved',
+      legal: 'approved',
+      actions: 2,
+    });
+    expect(await running.child.exited).toBe(0);
+    expect((await running.stderr).match(/Approval URL:/g)).toHaveLength(2);
+  });
+
   test('settles a deadline and continues the rejected route automatically', async () => {
     const workflowPath = join(temporaryDirectory, 'timeout-reject.woml');
     await writeFile(
@@ -265,6 +462,7 @@ describe('woml run Human Approval', () => {
 
   test('reports a deterministic error when the configured port is busy', async () => {
     const port = await availablePort();
+    const statePath = join(temporaryDirectory, 'port-conflict.sqlite');
     const occupied = Bun.serve({
       hostname: '127.0.0.1',
       port,
@@ -277,7 +475,7 @@ describe('woml run Human Approval', () => {
           'run',
           approvalFixturePath,
           '--state',
-          join(temporaryDirectory, 'port-conflict.sqlite'),
+          statePath,
           '--approval-port',
           String(port),
         ],
@@ -295,5 +493,34 @@ describe('woml run Human Approval', () => {
     } finally {
       occupied.stop(true);
     }
+
+    const database = new Database(statePath, { readonly: true });
+    const row = database
+      .query<
+        { run_id: string },
+        []
+      >('SELECT run_id FROM woml_runs ORDER BY created_at DESC LIMIT 1')
+      .get();
+    database.close();
+    expect(row?.run_id).toStartWith('run_');
+
+    const resumed = spawnApproval([
+      'run',
+      approvalFixturePath,
+      '--state',
+      statePath,
+      '--resume',
+      row!.run_id,
+      '--approval-port',
+      String(await availablePort()),
+    ]);
+    const recoveredUrl = await resumed.url;
+    expect((await postDecision(recoveredUrl, 'approved')).status).toBe(200);
+    expect(JSON.parse(await resumed.stdout)).toMatchObject({
+      decision: 'approved',
+      published: true,
+    });
+    expect(await resumed.child.exited).toBe(0);
+    await resumed.stderr;
   });
 });

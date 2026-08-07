@@ -452,11 +452,16 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
       }
       RunEventPayload::RunSucceeded(data) => {
         require_running(&projection)?;
-        if !projection
+        let terminal_output_exists = projection
           .context
           .steps
           .contains_key(&data.terminal_node_id)
-        {
+          || data
+            .terminal_node_id
+            .strip_prefix("__woml_approval__")
+            .and_then(|value| value.strip_suffix("__join"))
+            .is_some_and(|approval_id| projection.context.steps.contains_key(approval_id));
+        if !terminal_output_exists {
           return Err(FoldError::InvalidHistory(format!(
             "Terminal node {:?} has not published a successful output.",
             data.terminal_node_id
