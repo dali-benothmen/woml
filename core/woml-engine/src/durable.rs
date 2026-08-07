@@ -13,8 +13,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::engine::{
-  ready_node_ids_for_projection, validate_event_history_against_definition,
-  validate_payload_against_definition,
+  ready_node_ids_for_projection, ready_node_ids_for_projection_at, step_effect_idempotency_key,
+  validate_event_history_against_definition, validate_payload_against_definition,
 };
 use crate::event::{
   is_definition_hash, ApprovalDecision, ApprovalDecisionSource, ApprovalFailure,
@@ -25,7 +25,7 @@ use crate::event::{
   NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure, ParallelFailure,
   ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome, ProviderMessageIdentity,
   RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4,
-  RunFailedDataV5, RunStartedData, RunSucceededData, StepAttemptFailedData,
+  RunFailedDataV5, RunStartedData, RunSucceededData, StepAttemptFailedData, StepRetryScheduledData,
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, NotificationDeliveryStatus,
@@ -36,6 +36,7 @@ use crate::{
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
   RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
+  RUN_EVENT_SCHEMA_VERSION_V6,
 };
 
 pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 3;
@@ -2762,7 +2763,8 @@ fn attempt_run_failed_data(
     RUN_EVENT_SCHEMA_VERSION_V2
     | RUN_EVENT_SCHEMA_VERSION_V3
     | RUN_EVENT_SCHEMA_VERSION_V4
-    | RUN_EVENT_SCHEMA_VERSION_V5 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | RUN_EVENT_SCHEMA_VERSION_V5
+    | RUN_EVENT_SCHEMA_VERSION_V6 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -2784,6 +2786,21 @@ pub enum DurableEngineError {
   InvalidModel(#[from] ModelValidationError),
   #[error("{0}")]
   Contract(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepFailureDisposition {
+  RetryScheduled {
+    next_attempt: u32,
+    scheduled_at: DateTime<Utc>,
+  },
+  RunFailed,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepFailureCommit {
+  pub disposition: StepFailureDisposition,
+  pub projection: RunProjection,
 }
 
 #[derive(Debug)]
@@ -2883,10 +2900,152 @@ impl DurableDagEngine {
         )));
       }
     }
+    if self.workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V6
+      && matches!(
+        payload,
+        RunEventPayload::StepAttemptFailed(_) | RunEventPayload::StepRetryScheduled(_)
+      )
+    {
+      return Err(DurableEngineError::Contract(
+        "Model v6 step failures and retry schedules must use the atomic failure API.".to_string(),
+      ));
+    }
     let (_, projection) = self
       .store
       .append_payload(run_id, event_id, occurred_at, payload)?;
     Ok(projection)
+  }
+
+  pub fn record_step_attempt_failure(
+    &mut self,
+    run_id: &str,
+    failed_at: DateTime<Utc>,
+    failure: StepAttemptFailedData,
+  ) -> Result<StepFailureCommit, DurableEngineError> {
+    if self.workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
+      return Err(DurableEngineError::Contract(
+        "The atomic retry failure API requires compiled model v6.".to_string(),
+      ));
+    }
+    let node = self.workflow.node(&failure.node_id).ok_or_else(|| {
+      DurableEngineError::Contract(format!(
+        "Attempt failure references unknown node {:?}.",
+        failure.node_id
+      ))
+    })?;
+    if self
+      .workflow
+      .parallel_group_for_child(&failure.node_id)
+      .is_some()
+    {
+      return Err(DurableEngineError::Contract(
+        "Parallel-child retry settlement is introduced in RI5.".to_string(),
+      ));
+    }
+    let projection = self.projection(run_id)?;
+    if !matches!(
+      projection.latest_attempt(&failure.node_id),
+      Some(attempt)
+        if attempt.identity.attempt == failure.attempt
+          && attempt.identity.invocation_id == failure.invocation_id
+          && attempt.status == AttemptStatus::Started
+    ) {
+      return Err(DurableEngineError::Contract(
+        "Attempt failure does not close the active compiled step attempt.".to_string(),
+      ));
+    }
+
+    let retry = node.retry_policy.as_ref().filter(|policy| {
+      failure.failure.kind == AttemptFailureKind::ScriptThrew
+        && failure.attempt < policy.max_attempts
+    });
+    let (payloads, disposition) = if let Some(policy) = retry {
+      let next_attempt = failure.attempt + 1;
+      let delay_ms = policy.delay_before_attempt(next_attempt).ok_or_else(|| {
+        DurableEngineError::Contract("Compiled retry delay is invalid.".to_string())
+      })?;
+      let delay = chrono::Duration::milliseconds(i64::try_from(delay_ms).map_err(|_| {
+        DurableEngineError::Contract("Retry delay exceeds the clock range.".to_string())
+      })?);
+      let scheduled_at = failed_at + delay;
+      (
+        vec![
+          (
+            generated_event_id(),
+            failed_at,
+            RunEventPayload::StepAttemptFailed(failure.clone()),
+          ),
+          (
+            generated_event_id(),
+            failed_at,
+            RunEventPayload::StepRetryScheduled(StepRetryScheduledData {
+              node_id: failure.node_id.clone(),
+              failed_attempt: failure.attempt,
+              next_attempt,
+              scheduled_at,
+            }),
+          ),
+        ],
+        StepFailureDisposition::RetryScheduled {
+          next_attempt,
+          scheduled_at,
+        },
+      )
+    } else {
+      (
+        vec![
+          (
+            generated_event_id(),
+            failed_at,
+            RunEventPayload::StepAttemptFailed(failure.clone()),
+          ),
+          (
+            generated_event_id(),
+            failed_at,
+            RunEventPayload::RunFailed(attempt_run_failed_data(
+              RUN_EVENT_SCHEMA_VERSION_V6,
+              failure.node_id.clone(),
+              failure.attempt,
+              failure.invocation_id.clone(),
+              failure.failure.clone(),
+            )),
+          ),
+        ],
+        StepFailureDisposition::RunFailed,
+      )
+    };
+    let projection = self.store.append_payloads_atomically(run_id, payloads)?;
+    Ok(StepFailureCommit {
+      disposition,
+      projection,
+    })
+  }
+
+  pub fn start_step_attempt(
+    &mut self,
+    run_id: &str,
+    node_id: &str,
+    attempt: u32,
+    invocation_id: impl Into<String>,
+    occurred_at: DateTime<Utc>,
+  ) -> Result<RunProjection, DurableEngineError> {
+    let node = self
+      .workflow
+      .node(node_id)
+      .ok_or_else(|| DurableEngineError::Contract(format!("Unknown step node {node_id:?}.")))?;
+    let idempotency_key = step_effect_idempotency_key(run_id, &self.definition_hash, node_id);
+    self.append_payload(
+      generated_event_id(),
+      run_id,
+      occurred_at,
+      RunEventPayload::StepAttemptStarted(crate::event::StepAttemptStartedData {
+        node_id: node_id.to_string(),
+        attempt,
+        invocation_id: invocation_id.into(),
+        handler: node.handler.clone(),
+        idempotency_key: Some(idempotency_key),
+      }),
+    )
   }
 
   pub fn request_approval(
@@ -2955,6 +3114,11 @@ impl DurableDagEngine {
             attempt: 1,
             invocation_id: invocation_id.to_string(),
             handler: node.handler.clone(),
+            idempotency_key: (self.workflow.schema_version
+              == crate::COMPILED_MODEL_SCHEMA_VERSION_V6)
+              .then(|| {
+                step_effect_idempotency_key(run_id, &self.definition_hash, node_id)
+              }),
           }),
         ),
         (
@@ -2982,6 +3146,16 @@ impl DurableDagEngine {
   pub fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, DurableEngineError> {
     let projection = self.projection(run_id)?;
     ready_node_ids_for_projection(&self.workflow, &self.definition_hash, &projection)
+      .map_err(DurableEngineError::Contract)
+  }
+
+  pub fn ready_node_ids_at(
+    &self,
+    run_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<Vec<String>, DurableEngineError> {
+    let projection = self.projection(run_id)?;
+    ready_node_ids_for_projection_at(&self.workflow, &self.definition_hash, &projection, now)
       .map_err(DurableEngineError::Contract)
   }
 

@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2,
   COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
-  COMPILED_MODEL_SCHEMA_VERSION_V5,
+  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,6 +173,34 @@ pub enum BackoffPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     maximum_delay_ms: Option<u64>,
   },
+}
+
+impl RetryPolicy {
+  pub const MAX_ATTEMPTS: u32 = 10;
+  pub const MAX_DELAY_MS: u64 = 86_400_000;
+
+  pub fn delay_before_attempt(&self, next_attempt: u32) -> Option<u64> {
+    if next_attempt < 2 || next_attempt > self.max_attempts {
+      return None;
+    }
+    match self.backoff {
+      BackoffPolicy::None => None,
+      BackoffPolicy::Fixed { delay_ms } => Some(delay_ms),
+      BackoffPolicy::Exponential {
+        initial_delay_ms,
+        multiplier,
+        maximum_delay_ms,
+      } => {
+        let exponent = i32::try_from(next_attempt - 2).ok()?;
+        let calculated = (initial_delay_ms as f64) * multiplier.powi(exponent);
+        let capped = calculated.min(maximum_delay_ms? as f64);
+        if !capped.is_finite() || capped < 1.0 || capped > u64::MAX as f64 {
+          return None;
+        }
+        Some(capped as u64)
+      }
+    }
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1229,7 +1257,7 @@ impl CompiledWorkflowDefinition {
 
   pub fn validate_for_execution(&self) -> Result<(), ModelValidationError> {
     let mut issues = self.inspect_structure();
-    self.inspect_executable_profile(&mut issues, false);
+    self.inspect_executable_profile(&mut issues, false, false);
     if issues.is_empty() {
       Ok(())
     } else {
@@ -1239,7 +1267,7 @@ impl CompiledWorkflowDefinition {
 
   pub fn validate_for_durable_execution(&self) -> Result<(), ModelValidationError> {
     let mut issues = self.inspect_structure();
-    self.inspect_executable_profile(&mut issues, true);
+    self.inspect_executable_profile(&mut issues, true, true);
     if issues.is_empty() {
       Ok(())
     } else {
@@ -1265,6 +1293,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V3
         | COMPILED_MODEL_SCHEMA_VERSION_V4
         | COMPILED_MODEL_SCHEMA_VERSION_V5
+        | COMPILED_MODEL_SCHEMA_VERSION_V6
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1355,21 +1384,38 @@ impl CompiledWorkflowDefinition {
         ));
       }
       if let Some(retry) = &node.retry_policy {
-        if retry.max_attempts == 0 {
+        if self.schema_version < COMPILED_MODEL_SCHEMA_VERSION_V6 {
           issues.push(issue(
             ModelIssueCode::UnsupportedRetry,
             format!(
-              "Node {:?} has an invalid zero-attempt retry policy.",
+              "Node {:?} cannot carry retryPolicy before compiled model v6.",
               node.id
             ),
           ));
-        }
-        if let BackoffPolicy::Exponential { multiplier, .. } = retry.backoff {
-          if !multiplier.is_finite() || multiplier <= 1.0 {
+        } else {
+          let valid_handler = node.handler == "runtime.script";
+          let valid_attempts = (2..=RetryPolicy::MAX_ATTEMPTS).contains(&retry.max_attempts);
+          let valid_backoff = match retry.backoff {
+            BackoffPolicy::None => false,
+            BackoffPolicy::Fixed { delay_ms } => {
+              (1..=RetryPolicy::MAX_DELAY_MS).contains(&delay_ms)
+            }
+            BackoffPolicy::Exponential {
+              initial_delay_ms,
+              multiplier,
+              maximum_delay_ms,
+            } => {
+              let maximum_delay_ms = maximum_delay_ms.unwrap_or(0);
+              multiplier == 2.0
+                && (1..=RetryPolicy::MAX_DELAY_MS).contains(&initial_delay_ms)
+                && (initial_delay_ms..=RetryPolicy::MAX_DELAY_MS).contains(&maximum_delay_ms)
+            }
+          };
+          if !valid_handler || !valid_attempts || !valid_backoff {
             issues.push(issue(
               ModelIssueCode::UnsupportedRetry,
               format!(
-                "Node {:?} has an invalid exponential retry multiplier.",
+                "Node {:?} does not match the frozen Model v6 runtime.script retry contract.",
                 node.id
               ),
             ));
@@ -1517,7 +1563,12 @@ impl CompiledWorkflowDefinition {
     issues
   }
 
-  fn inspect_executable_profile(&self, issues: &mut Vec<ModelIssue>, allow_approval: bool) {
+  fn inspect_executable_profile(
+    &self,
+    issues: &mut Vec<ModelIssue>,
+    allow_approval: bool,
+    allow_retry: bool,
+  ) {
     for trigger in &self.triggers {
       let is_empty_object = matches!(
           &trigger.config,
@@ -1584,7 +1635,11 @@ impl CompiledWorkflowDefinition {
           ),
         ));
       }
-      if node.retry_policy.is_some() {
+      if node.retry_policy.is_some()
+        && !(allow_retry
+          && self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V6
+          && node.handler == "runtime.script")
+      {
         issues.push(issue(
           ModelIssueCode::UnsupportedRetry,
           format!(

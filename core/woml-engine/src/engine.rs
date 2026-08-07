@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::event::{
@@ -171,6 +172,15 @@ pub(crate) fn ready_node_ids_for_projection(
   definition_hash: &str,
   projection: &RunProjection,
 ) -> Result<Vec<String>, String> {
+  ready_node_ids_for_projection_at(workflow, definition_hash, projection, Utc::now())
+}
+
+pub(crate) fn ready_node_ids_for_projection_at(
+  workflow: &CompiledWorkflowDefinition,
+  definition_hash: &str,
+  projection: &RunProjection,
+  now: DateTime<Utc>,
+) -> Result<Vec<String>, String> {
   if projection.status != RunStatus::Running {
     return Ok(Vec::new());
   }
@@ -181,7 +191,6 @@ pub(crate) fn ready_node_ids_for_projection(
   }
 
   let active = active_node_ids(workflow, projection);
-  let attempted = projection.attempted_node_ids();
   let mut incoming: HashMap<&str, Vec<&crate::model::CompiledWorkflowEdge>> = workflow
     .graph
     .nodes
@@ -202,7 +211,26 @@ pub(crate) fn ready_node_ids_for_projection(
       .filter(|node| {
         active.contains(node.id.as_str())
           && !node_is_complete(workflow, node, projection)
-          && !attempted.contains(node.id.as_str())
+          && match projection.latest_attempt(&node.id) {
+            None => true,
+            Some(attempt)
+              if matches!(attempt.status, crate::projection::AttemptStatus::Started) =>
+            {
+              false
+            }
+            Some(attempt)
+              if matches!(
+                attempt.status,
+                crate::projection::AttemptStatus::Succeeded { .. }
+              ) =>
+            {
+              false
+            }
+            Some(_) => projection
+              .pending_retries
+              .get(&node.id)
+              .is_some_and(|schedule| schedule.scheduled_at <= now),
+          }
           && incoming
             .get(node.id.as_str())
             .into_iter()
@@ -462,12 +490,22 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::StepAttemptStarted(data) => {
-      if data.attempt != 1 {
-        return Err("The current executable profile requires attempt 1.".to_string());
-      }
       let node = workflow
         .node(&data.node_id)
         .ok_or_else(|| format!("Attempt references unknown node {:?}.", data.node_id))?;
+      let maximum_attempts = node
+        .retry_policy
+        .as_ref()
+        .map_or(1, |policy| policy.max_attempts);
+      if data.attempt == 0
+        || data.attempt > maximum_attempts
+        || (workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V6 && data.attempt != 1)
+      {
+        return Err(format!(
+          "Node {:?} attempt {} exceeds its compiled maximum of {maximum_attempts}.",
+          data.node_id, data.attempt
+        ));
+      }
       if data.handler != node.handler {
         return Err(format!(
           "Attempt handler {:?} does not match node {:?} handler {:?}.",
@@ -487,6 +525,29 @@ pub(crate) fn validate_payload_against_definition(
       if workflow.node(&data.node_id).is_none() {
         return Err(format!(
           "Attempt references unknown node {:?}.",
+          data.node_id
+        ));
+      }
+    }
+    RunEventPayload::StepRetryScheduled(data) => {
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
+        return Err("step_retry_scheduled requires compiled model v6.".to_string());
+      }
+      let node = workflow
+        .node(&data.node_id)
+        .ok_or_else(|| format!("Retry schedule references unknown node {:?}.", data.node_id))?;
+      let policy = node.retry_policy.as_ref().ok_or_else(|| {
+        format!(
+          "Retry schedule references node {:?} without a compiled retry policy.",
+          data.node_id
+        )
+      })?;
+      if node.handler != "runtime.script"
+        || data.next_attempt != data.failed_attempt + 1
+        || data.next_attempt > policy.max_attempts
+      {
+        return Err(format!(
+          "Retry schedule for node {:?} exceeds its compiled policy.",
           data.node_id
         ));
       }
@@ -821,6 +882,17 @@ pub(crate) fn validate_payload_against_definition(
   Ok(())
 }
 
+pub fn step_effect_idempotency_key(run_id: &str, definition_hash: &str, node_id: &str) -> String {
+  let run_id = serde_json::to_string(run_id).expect("serializing a string cannot fail");
+  let definition_hash =
+    serde_json::to_string(definition_hash).expect("serializing a string cannot fail");
+  let node_id = serde_json::to_string(node_id).expect("serializing a string cannot fail");
+  let canonical = format!(
+    "{{\"contract\":\"woml.step-effect\",\"definitionHash\":{definition_hash},\"nodeId\":{node_id},\"runId\":{run_id},\"version\":1}}"
+  );
+  format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParallelChildState {
   Active,
@@ -854,12 +926,23 @@ pub(crate) fn validate_event_history_against_definition(
       }
       RunEventPayload::StepAttemptStarted(data) => {
         let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
-        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        let ready =
+          ready_node_ids_for_projection_at(workflow, definition_hash, &prefix, event.occurred_at)?;
         if !ready.iter().any(|node_id| node_id == &data.node_id) {
           return Err(format!(
             "Node {:?} started before it was ready.",
             data.node_id
           ));
+        }
+        if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
+          let expected_key =
+            step_effect_idempotency_key(&event.run_id, definition_hash, &data.node_id);
+          if data.idempotency_key.as_deref() != Some(expected_key.as_str()) {
+            return Err(format!(
+              "Node {:?} attempt does not carry its derived stable idempotency key.",
+              data.node_id
+            ));
+          }
         }
         let Some(group) = workflow.parallel_group_for_child(&data.node_id) else {
           continue;
@@ -900,6 +983,58 @@ pub(crate) fn validate_event_history_against_definition(
             data.node_id.clone(),
             ParallelChildState::Failed(data.failure.kind),
           );
+        }
+        if let Some(policy) = workflow
+          .node(&data.node_id)
+          .and_then(|node| node.retry_policy.as_ref())
+        {
+          let should_retry = data.failure.kind == AttemptFailureKind::ScriptThrew
+            && data.attempt < policy.max_attempts;
+          if should_retry
+            && !matches!(
+              events.get(index + 1).map(|event| &event.payload),
+              Some(RunEventPayload::StepRetryScheduled(schedule))
+                if schedule.node_id == data.node_id
+                  && schedule.failed_attempt == data.attempt
+                  && schedule.next_attempt == data.attempt + 1
+            )
+          {
+            return Err(format!(
+              "Retryable failure for node {:?} must be atomically followed by step_retry_scheduled.",
+              data.node_id
+            ));
+          }
+        }
+      }
+      RunEventPayload::StepRetryScheduled(data) => {
+        let previous = events
+          .get(index.wrapping_sub(1))
+          .ok_or_else(|| "step_retry_scheduled cannot be the first run event.".to_string())?;
+        let RunEventPayload::StepAttemptFailed(failed) = &previous.payload else {
+          return Err(
+            "step_retry_scheduled must immediately follow step_attempt_failed.".to_string(),
+          );
+        };
+        let policy = workflow
+          .node(&data.node_id)
+          .and_then(|node| node.retry_policy.as_ref())
+          .ok_or_else(|| format!("Node {:?} has no retry policy.", data.node_id))?;
+        let delay_ms = policy
+          .delay_before_attempt(data.next_attempt)
+          .ok_or_else(|| "Compiled retry delay is invalid.".to_string())?;
+        let delay = chrono::Duration::milliseconds(
+          i64::try_from(delay_ms)
+            .map_err(|_| "Retry delay exceeds the clock range.".to_string())?,
+        );
+        if failed.node_id != data.node_id
+          || failed.attempt != data.failed_attempt
+          || failed.failure.kind != AttemptFailureKind::ScriptThrew
+          || data.scheduled_at != previous.occurred_at + delay
+        {
+          return Err(format!(
+            "Retry schedule for node {:?} does not match its failed attempt and compiled backoff.",
+            data.node_id
+          ));
         }
       }
       RunEventPayload::ParallelGroupCompleted(data) => {

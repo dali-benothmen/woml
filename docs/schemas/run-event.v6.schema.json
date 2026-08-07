@@ -77,7 +77,7 @@
         "nodeId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
         "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
         "invocationId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
-        "handler": { "const": "runtime.script" },
+        "handler": { "type": "string", "minLength": 1, "maxLength": 256 },
         "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }
       }
     },

@@ -1035,6 +1035,7 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
           attempt: 1,
           invocation_id: invocation_id.clone(),
           handler: "runtime.script".to_string(),
+          idempotency_key: None,
         }),
       )?;
       active.push(ActiveParallelInvocation {
@@ -1197,6 +1198,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
       attempt: 1,
       invocation_id: invocation_id.clone(),
       handler: "runtime.script".to_string(),
+      idempotency_key: None,
     }),
   )?;
 
@@ -1578,6 +1580,7 @@ trait RuntimeDagEngine {
         attempt: 1,
         invocation_id: invocation_id.clone(),
         handler: "engine.branch-result".to_string(),
+        idempotency_key: None,
       }),
     )?;
     self.append_payload(

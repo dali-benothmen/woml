@@ -1,7 +1,7 @@
 # WOML Retry and Idempotency Implementation Plan
 
-Status: RI0 and RI1 completed on 2026-08-07. Runtime execution remains planned
-for RI2 onward.
+Status: RI0, RI1, and RI2 completed on 2026-08-07. JavaScript attempt binding
+and end-to-end retry execution remain planned for RI3 onward.
 
 ## 1. Product Outcome
 
@@ -573,6 +573,8 @@ The reviewed `.woml` fixture deep-equals the Model v6 fixture, invalid source
 points to the exact attribute, and retry-free workflows compile unchanged.
 
 ### RI2 — Implement Rust event folding and durable retry scheduling
+
+Status: completed.
 
 Changes:
 

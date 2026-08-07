@@ -23,9 +23,9 @@ pub use durable::{
   DurableEventStore, DurableStoreError, IssuedApprovalToken, NotificationDeliveryWork,
   NotificationDispatchReport, NotificationProviderAdapter, NotificationProviderDeliveryResult,
   NotificationProviderUpdateResult, NotificationUpdateWork, RecoveryReport, RunDefinitionBinding,
-  DURABLE_STORE_SCHEMA_VERSION,
+  StepFailureCommit, StepFailureDisposition, DURABLE_STORE_SCHEMA_VERSION,
 };
-pub use engine::{EngineError, InMemoryDagEngine};
+pub use engine::{step_effect_idempotency_key, EngineError, InMemoryDagEngine};
 pub use event::{
   ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalRequestedData,
   ApprovalResolution, ApprovalResolvedData, ApprovalTimeoutPolicy, AttemptFailure,
@@ -38,7 +38,7 @@ pub use event::{
   NotificationSafeFailure, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
   ParallelGroupOutcome, ParallelGroupStartedData, ProviderMessageIdentity, RunEvent,
   RunEventPayload, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
-  RunFailedDataV4, RunFailedDataV5,
+  RunFailedDataV4, RunFailedDataV5, StepRetryScheduledData,
 };
 pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions};
 pub use model::{
@@ -63,8 +63,8 @@ pub use notification_runtime::{
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError,
   NotificationDeliveryProjection, NotificationDeliveryStatus, NotificationMessageUpdateProjection,
-  NotificationMessageUpdateStatus, ParallelGroupProjection, ParallelGroupStatus, RunFailure,
-  RunProjection, RunStatus, WorkflowContext,
+  NotificationMessageUpdateStatus, ParallelGroupProjection, ParallelGroupStatus,
+  RetryScheduleProjection, RunFailure, RunProjection, RunStatus, WorkflowContext,
 };
 pub use runtime::{
   execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
@@ -82,16 +82,20 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V2: u32 = 2;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V3: u32 = 3;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V4: u32 = 4;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V5: u32 = 5;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V5;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V6: u32 = 6;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V6;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
 pub const RUN_EVENT_SCHEMA_VERSION_V4: u32 = 4;
 pub const RUN_EVENT_SCHEMA_VERSION_V5: u32 = 5;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V5;
+pub const RUN_EVENT_SCHEMA_VERSION_V6: u32 = 6;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V6;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V5 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V6 {
+    RUN_EVENT_SCHEMA_VERSION_V6
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V5 {
     RUN_EVENT_SCHEMA_VERSION_V5
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V4 {
     RUN_EVENT_SCHEMA_VERSION_V4

@@ -126,6 +126,7 @@ fn recovery_atomically_fails_an_uncertain_attempt_without_replaying_it() {
           attempt: 1,
           invocation_id: "inv_uncertain_a".to_string(),
           handler: "runtime.script".to_string(),
+          idempotency_key: None,
         }),
       )
       .unwrap();
@@ -217,6 +218,7 @@ fn invalid_append_rolls_back_without_consuming_a_sequence_number() {
         attempt: 1,
         invocation_id: "inv_atomic_a".to_string(),
         handler: "runtime.script".to_string(),
+        idempotency_key: None,
       }),
     )
     .unwrap();
@@ -365,6 +367,7 @@ fn recovery_finishes_a_known_failure_without_reclassifying_it_as_interrupted() {
         attempt: 1,
         invocation_id: "inv_known_failure".to_string(),
         handler: "runtime.script".to_string(),
+        idempotency_key: None,
       }),
     )
     .unwrap();

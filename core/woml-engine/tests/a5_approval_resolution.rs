@@ -674,6 +674,7 @@ async fn recovery_during_a_selected_approval_arm_fails_closed_without_replaying_
           attempt: 1,
           invocation_id: "inv_a7_selected_arm".to_string(),
           handler: "runtime.script".to_string(),
+          idempotency_key: None,
         }),
       )
       .unwrap();
@@ -749,6 +750,7 @@ async fn recovery_after_the_selected_arm_and_before_the_join_continues_downstrea
           attempt: 1,
           invocation_id: "inv_a7_selected_arm_complete".to_string(),
           handler: "runtime.script".to_string(),
+          idempotency_key: None,
         }),
       )
       .unwrap();
