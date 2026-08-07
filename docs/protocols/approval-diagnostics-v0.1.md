@@ -1,6 +1,6 @@
 # WOML Human Approval Diagnostics v0.1
 
-Status: frozen through A3
+Status: frozen through A4
 
 Frontend diagnostics carry code, phase, message, file, and exact source span.
 Runtime/N-API diagnostics carry structured approval identity but never a token.

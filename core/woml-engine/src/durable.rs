@@ -16,9 +16,9 @@ use crate::engine::{
   validate_payload_against_definition,
 };
 use crate::event::{
-  is_definition_hash, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
-  ParallelGroupOutcome, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
-  RunStartedData, RunSucceededData, StepAttemptFailedData,
+  is_definition_hash, ApprovalRequestedData, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupCompletedData, ParallelGroupOutcome, RunFailedData, RunFailedDataV1,
+  RunFailedDataV2, RunFailedDataV3, RunStartedData, RunSucceededData, StepAttemptFailedData,
 };
 use crate::projection::{ApprovalRequestStatus, AttemptStatus, ParallelGroupStatus};
 use crate::{
@@ -590,23 +590,7 @@ impl DurableEventStore {
         "Approval credentials may be issued only for the matching unresolved request.".to_string(),
       ));
     }
-    let default_expiry = issued_at
-      .checked_add_signed(chrono::Duration::hours(
-        DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS,
-      ))
-      .ok_or_else(|| {
-        DurableStoreError::Contract(
-          "Approval credential expiry exceeds the clock range.".to_string(),
-        )
-      })?;
-    let credential_expires_at = request
-      .expires_at
-      .map_or(default_expiry, |deadline| deadline.min(default_expiry));
-    if credential_expires_at <= issued_at {
-      return Err(DurableStoreError::Contract(
-        "Cannot issue an approval credential at or after the request deadline.".to_string(),
-      ));
-    }
+    let credential_expires_at = approval_credential_expiry(issued_at, request.expires_at)?;
 
     let token_id = random_hex(16)?;
     let secret = random_hex(32)?;
@@ -635,6 +619,96 @@ impl DurableEventStore {
       issued_at,
       credential_expires_at,
     })
+  }
+
+  pub fn request_approval_atomically(
+    &mut self,
+    run_id: &str,
+    event_id: impl Into<String>,
+    occurred_at: DateTime<Utc>,
+    request: ApprovalRequestedData,
+  ) -> Result<(RunProjection, IssuedApprovalToken), DurableStoreError> {
+    let token_id = random_hex(16)?;
+    let secret = random_hex(32)?;
+    let secret_hash = Sha256::digest(secret.as_bytes());
+    let credential_expires_at = approval_credential_expiry(occurred_at, request.expires_at)?;
+
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, run_id)?;
+    let mut events = load_events(&transaction, run_id)?;
+    let event_schema_version = events
+      .first()
+      .map(|event| event.event_schema_version)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "An approval cannot be requested before run_started.".to_string(),
+        )
+      })?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    let payload = RunEventPayload::ApprovalRequested(request.clone());
+    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      event_id.into(),
+      occurred_at,
+      event_schema_version,
+      payload,
+    )?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    let folded_request = projection
+      .approval_requests
+      .get(&request.approval_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "The approval request did not enter the durable waiting projection.".to_string(),
+        )
+      })?;
+    if folded_request.request_id != request.request_id
+      || !matches!(folded_request.status, ApprovalRequestStatus::Waiting)
+      || projection.status != RunStatus::Waiting
+    {
+      return Err(DurableStoreError::Contract(
+        "The approval request did not produce the matching waiting state.".to_string(),
+      ));
+    }
+
+    transaction.execute(
+      "INSERT INTO woml_approval_tokens(
+         token_id, secret_hash, request_id, run_id, approval_id,
+         issued_at, credential_expires_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      params![
+        token_id,
+        secret_hash.as_slice(),
+        request.request_id,
+        run_id,
+        request.approval_id,
+        occurred_at.to_rfc3339(),
+        credential_expires_at.to_rfc3339(),
+      ],
+    )?;
+    transaction.commit()?;
+
+    Ok((
+      projection,
+      IssuedApprovalToken {
+        token: format!("apr_{token_id}.{secret}"),
+        token_id,
+        request_id: request.request_id,
+        run_id: run_id.to_string(),
+        approval_id: request.approval_id,
+        issued_at: occurred_at,
+        credential_expires_at,
+      },
+    ))
   }
 
   pub fn verify_approval_token(
@@ -1029,6 +1103,27 @@ fn random_hex(byte_count: usize) -> Result<String, DurableStoreError> {
   Ok(hex::encode(bytes))
 }
 
+fn approval_credential_expiry(
+  issued_at: DateTime<Utc>,
+  approval_deadline: Option<DateTime<Utc>>,
+) -> Result<DateTime<Utc>, DurableStoreError> {
+  let default_expiry = issued_at
+    .checked_add_signed(chrono::Duration::hours(
+      DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS,
+    ))
+    .ok_or_else(|| {
+      DurableStoreError::Contract("Approval credential expiry exceeds the clock range.".to_string())
+    })?;
+  let credential_expires_at =
+    approval_deadline.map_or(default_expiry, |deadline| deadline.min(default_expiry));
+  if credential_expires_at <= issued_at {
+    return Err(DurableStoreError::Contract(
+      "Cannot issue an approval credential at or after the request deadline.".to_string(),
+    ));
+  }
+  Ok(credential_expires_at)
+}
+
 fn parse_approval_token(token: &str) -> Result<(&str, &str), DurableStoreError> {
   let Some(body) = token.strip_prefix("apr_") else {
     return Err(DurableStoreError::InvalidApprovalToken);
@@ -1250,7 +1345,7 @@ impl DurableDagEngine {
     definition_hash: impl Into<String>,
     mut store: DurableEventStore,
   ) -> Result<Self, DurableEngineError> {
-    workflow.validate_for_execution()?;
+    workflow.validate_for_durable_execution()?;
     let definition_hash = definition_hash.into();
     store.register_definition(&workflow, &definition_hash)?;
     Ok(Self {
@@ -1338,6 +1433,40 @@ impl DurableDagEngine {
       .store
       .append_payload(run_id, event_id, occurred_at, payload)?;
     Ok(projection)
+  }
+
+  pub fn request_approval(
+    &mut self,
+    run_id: &str,
+    occurred_at: DateTime<Utc>,
+    request: ApprovalRequestedData,
+  ) -> Result<IssuedApprovalToken, DurableEngineError> {
+    let ready = self.ready_node_ids(run_id)?;
+    if !ready.iter().any(|node_id| node_id == &request.approval_id) {
+      return Err(DurableEngineError::Contract(format!(
+        "Approval {:?} is not ready to enter waiting state.",
+        request.approval_id
+      )));
+    }
+    let (_, token) =
+      self
+        .store
+        .request_approval_atomically(run_id, generated_event_id(), occurred_at, request)?;
+    Ok(token)
+  }
+
+  pub fn reissue_waiting_approval_token(
+    &mut self,
+    run_id: &str,
+    approval_id: &str,
+    request_id: &str,
+    issued_at: DateTime<Utc>,
+  ) -> Result<IssuedApprovalToken, DurableEngineError> {
+    Ok(
+      self
+        .store
+        .reissue_approval_token(run_id, approval_id, request_id, issued_at)?,
+    )
   }
 
   pub fn publish_pure_result(

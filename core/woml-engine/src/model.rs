@@ -139,6 +139,8 @@ pub(crate) struct ParallelGroupDefinition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ApprovalDefinition {
   pub approval_id: String,
+  pub name: Option<String>,
+  pub description: Option<String>,
   pub timeout_ms: Option<u64>,
   pub on_timeout: String,
 }
@@ -981,6 +983,18 @@ impl CompiledWorkflowDefinition {
       })?;
     Some(ApprovalDefinition {
       approval_id: approval_id.to_string(),
+      name: wait
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string),
+      description: wait
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("description"))
+        .and_then(Value::as_str)
+        .map(str::to_string),
       timeout_ms,
       on_timeout,
     })
@@ -1063,7 +1077,17 @@ impl CompiledWorkflowDefinition {
 
   pub fn validate_for_execution(&self) -> Result<(), ModelValidationError> {
     let mut issues = self.inspect_structure();
-    self.inspect_executable_profile(&mut issues);
+    self.inspect_executable_profile(&mut issues, false);
+    if issues.is_empty() {
+      Ok(())
+    } else {
+      Err(ModelValidationError::new(issues))
+    }
+  }
+
+  pub fn validate_for_durable_execution(&self) -> Result<(), ModelValidationError> {
+    let mut issues = self.inspect_structure();
+    self.inspect_executable_profile(&mut issues, true);
     if issues.is_empty() {
       Ok(())
     } else {
@@ -1340,7 +1364,7 @@ impl CompiledWorkflowDefinition {
     issues
   }
 
-  fn inspect_executable_profile(&self, issues: &mut Vec<ModelIssue>) {
+  fn inspect_executable_profile(&self, issues: &mut Vec<ModelIssue>, allow_approval: bool) {
     for trigger in &self.triggers {
       let is_empty_object = matches!(
           &trigger.config,
@@ -1373,6 +1397,12 @@ impl CompiledWorkflowDefinition {
           parallel_start_inputs(Some(node), usize::MAX)
         }
         ("engine.parallel-join", ValueExpression::Object { fields }) => fields.is_empty(),
+        ("engine.approval-wait", ValueExpression::Object { .. }) if allow_approval => {
+          approval_wait_inputs(Some(node))
+        }
+        ("engine.approval-join", ValueExpression::Object { fields }) if allow_approval => {
+          fields.is_empty()
+        }
         (
           "runtime.script"
           | "engine.branch-select"
@@ -1423,7 +1453,10 @@ impl CompiledWorkflowDefinition {
 
     for edge in &self.graph.edges {
       let executable_condition = matches!(edge.condition, EdgeCondition::Always)
-        || matches!(edge.condition, EdgeCondition::Boolean { .. }) && edge.branch_id.is_some();
+        || matches!(edge.condition, EdgeCondition::Boolean { .. }) && edge.branch_id.is_some()
+        || allow_approval
+          && matches!(edge.condition, EdgeCondition::Equals { .. })
+          && edge.approval_id.is_some();
       if !executable_condition {
         issues.push(issue(
           ModelIssueCode::UnsupportedEdgeCondition,
@@ -1456,10 +1489,12 @@ impl CompiledWorkflowDefinition {
         let outgoing_count = outgoing.get(node.id.as_str()).copied().unwrap_or(0);
         (incoming_count <= 1
           || node.handler == "engine.branch-result"
-          || node.handler == "engine.parallel-join")
+          || node.handler == "engine.parallel-join"
+          || allow_approval && node.handler == "engine.approval-join")
           && (outgoing_count <= 1
             || node.handler == "engine.branch-select"
-            || node.handler == "engine.parallel-start")
+            || node.handler == "engine.parallel-start"
+            || allow_approval && node.handler == "engine.approval-wait")
       });
     if !topology_is_sequential_or_branching {
       issues.push(issue(

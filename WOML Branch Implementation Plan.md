@@ -775,9 +775,9 @@ Once B0–B6 are complete, product expansion continues in this order:
    children through the multiplexed Bun protocol, joins them, implements both
    failure policies and targeted cancellation, and persists durable
    parallel-group events.
-2. **Human approval — A0–A3 complete** — versioned contracts, frontend
+2. **Human approval — A0–A4 complete** — versioned contracts, frontend
    lowering, Rust validation, event folding, durable projections, and hashed
-   credentials are complete; A4–A7 add automatic pause/resolution, recovery,
+   credentials and the durable Rust waiting boundary are complete; A5–A7 add resolution, recovery,
    and the HTTP-only product flow in
    `WOML Human Approval Implementation Plan.md`.
 3. **Retries and idempotency** — freeze idempotency-key derivation and duplicate

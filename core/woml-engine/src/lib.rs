@@ -35,9 +35,11 @@ pub use projection::{
   WorkflowContext,
 };
 pub use runtime::{
-  execute_workflow, execute_workflow_durable, recover_durable_runs, resume_workflow_durable,
+  execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
+  recover_durable_runs, resume_workflow_durable, resume_workflow_durable_outcome,
   BranchFailureSite, FailedApprovalDetails, FailedParallelDetails, RuntimeExecutionError,
-  RuntimeExecutionOptions, WorkflowExecutionResult,
+  RuntimeExecutionOptions, WaitingWorkflowApproval, WorkflowExecutionResult,
+  WorkflowRuntimeOutcome, RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
 };
 pub use store::{EventStoreError, InMemoryEventStore};
 

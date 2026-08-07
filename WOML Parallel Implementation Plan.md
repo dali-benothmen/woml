@@ -801,9 +801,9 @@ contract review rather than selecting a default.
 
 After P0–P7, product expansion continues in the existing order:
 
-1. **Human approval — A0–A3 complete** — versioned contracts, frontend
+1. **Human approval — A0–A4 complete** — versioned contracts, frontend
    lowering, Rust validation, event folding, durable projections, and hashed
-   credentials are complete; A4–A7 add automatic pause/resolution, recovery,
+   credentials and the durable Rust waiting boundary are complete; A5–A7 add resolution, recovery,
    and the HTTP-only product flow defined in
    `WOML Human Approval Implementation Plan.md`.
 2. **Retries and idempotency** — idempotency-key derivation, duplicate

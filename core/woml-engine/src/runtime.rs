@@ -13,19 +13,19 @@ use crate::engine::{
   resolve_context_reference, selected_branch_arm, BranchEvaluationError, BranchEvaluationErrorKind,
 };
 use crate::event::{
-  ApprovalFailure, BranchSelectedData, ParallelFailure, ParallelFailurePolicy,
-  ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData,
-  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunSucceededData, StepAttemptFailedData,
-  StepAttemptStartedData, StepAttemptSucceededData,
+  ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
+  ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome,
+  ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
+  RunSucceededData, StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
 };
-use crate::model::{ParallelGroupDefinition, ValueExpression};
-use crate::projection::AttemptStatus;
+use crate::model::{ApprovalDefinition, ParallelGroupDefinition, ValueExpression};
+use crate::projection::{ApprovalRequestStatus, AttemptStatus};
 use crate::protocol::{ExecuteMessage, HostOutcome};
 use crate::{
   run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind, BranchFailure,
   CompiledWorkflowDefinition, DurableDagEngine, DurableEngineError, DurableEventStore,
-  DurableStoreError, EngineError, InMemoryDagEngine, RecoveryReport, RunEvent, RunEventPayload,
-  RunFailure, RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError,
+  DurableStoreError, EngineError, InMemoryDagEngine, IssuedApprovalToken, RecoveryReport, RunEvent,
+  RunEventPayload, RunFailure, RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError,
   ScriptHostProcessOptions, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
   RUN_EVENT_SCHEMA_VERSION_V2,
 };
@@ -57,6 +57,54 @@ pub struct WorkflowExecutionResult {
   pub context: WorkflowContext,
   pub execution_order: Vec<String>,
   pub events: Vec<RunEvent>,
+}
+
+pub const RUNTIME_OUTCOME_CONTRACT: &str = "woml.runtime-outcome";
+pub const RUNTIME_OUTCOME_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum WorkflowRuntimeOutcome {
+  Succeeded {
+    contract: &'static str,
+    version: u32,
+    execution: WorkflowExecutionResult,
+  },
+  Waiting {
+    contract: &'static str,
+    version: u32,
+    #[serde(rename = "workflowId")]
+    workflow_id: String,
+    #[serde(rename = "runId")]
+    run_id: String,
+    approval: WaitingWorkflowApproval,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitingWorkflowApproval {
+  pub approval_id: String,
+  pub request_id: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub name: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub description: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+  pub on_timeout: ApprovalTimeoutPolicy,
+  pub token: String,
+  pub credential_expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl WorkflowRuntimeOutcome {
+  fn succeeded(execution: WorkflowExecutionResult) -> Self {
+    Self::Succeeded {
+      contract: RUNTIME_OUTCOME_CONTRACT,
+      version: RUNTIME_OUTCOME_VERSION,
+      execution,
+    }
+  }
 }
 
 #[derive(Debug, Error)]
@@ -154,7 +202,7 @@ pub async fn execute_workflow(
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
   let engine = InMemoryDagEngine::new(workflow, definition_hash)?;
-  execute_with_engine(engine, trigger, options).await
+  succeeded_execution(execute_with_engine(engine, trigger, options).await?)
 }
 
 pub async fn execute_workflow_durable(
@@ -164,6 +212,40 @@ pub async fn execute_workflow_durable(
   options: RuntimeExecutionOptions,
   database_path: PathBuf,
 ) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+  if workflow_has_approval(&workflow) {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "durable approval workflows require execute_workflow_durable_outcome".to_string(),
+    ));
+  }
+  succeeded_execution(
+    execute_workflow_durable_internal(workflow, definition_hash, trigger, options, database_path)
+      .await?,
+  )
+}
+
+pub async fn execute_workflow_durable_outcome(
+  workflow: CompiledWorkflowDefinition,
+  definition_hash: String,
+  trigger: Map<String, Value>,
+  options: RuntimeExecutionOptions,
+  database_path: PathBuf,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  if !workflow_has_approval(&workflow) {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "the approval runtime outcome API requires a model-v4 approval workflow".to_string(),
+    ));
+  }
+  execute_workflow_durable_internal(workflow, definition_hash, trigger, options, database_path)
+    .await
+}
+
+async fn execute_workflow_durable_internal(
+  workflow: CompiledWorkflowDefinition,
+  definition_hash: String,
+  trigger: Map<String, Value>,
+  options: RuntimeExecutionOptions,
+  database_path: PathBuf,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
   let engine = DurableDagEngine::new(workflow, definition_hash, store)?;
@@ -175,10 +257,60 @@ pub async fn resume_workflow_durable(
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+  succeeded_execution(
+    resume_workflow_durable_internal(database_path, run_id, options, false).await?,
+  )
+}
+
+pub async fn resume_workflow_durable_outcome(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  resume_workflow_durable_internal(database_path, run_id, options, true).await
+}
+
+async fn resume_workflow_durable_internal(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+  approval_outcome_api: bool,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
   let engine = DurableDagEngine::resume(store, run_id)?;
+  let has_approval = workflow_has_approval(engine.workflow());
+  if approval_outcome_api && !has_approval {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "the approval runtime outcome API requires a model-v4 approval workflow".to_string(),
+    ));
+  }
+  if !approval_outcome_api && has_approval {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "durable approval workflows require resume_workflow_durable_outcome".to_string(),
+    ));
+  }
   resume_with_engine(engine, run_id, options).await
+}
+
+fn workflow_has_approval(workflow: &CompiledWorkflowDefinition) -> bool {
+  workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V4
+    && workflow
+      .graph
+      .nodes
+      .iter()
+      .any(|node| node.handler == "engine.approval-wait")
+}
+
+fn succeeded_execution(
+  outcome: WorkflowRuntimeOutcome,
+) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+  match outcome {
+    WorkflowRuntimeOutcome::Succeeded { execution, .. } => Ok(execution),
+    WorkflowRuntimeOutcome::Waiting { .. } => Err(RuntimeExecutionError::Stalled(
+      "workflow is durably waiting for approval; use the runtime outcome API".to_string(),
+    )),
+  }
 }
 
 pub fn recover_durable_runs(
@@ -192,24 +324,21 @@ async fn execute_with_engine<E: RuntimeDagEngine>(
   mut engine: E,
   trigger: Map<String, Value>,
   options: RuntimeExecutionOptions,
-) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   if options.script_timeout_ms == 0 {
     return Err(RuntimeExecutionError::InvalidConfiguration(
       "script_timeout_ms must be greater than zero".to_string(),
     ));
   }
 
-  let host = ScriptHostClient::spawn(options.script_host.clone()).await?;
-  let execution = execute_with_host(&mut engine, trigger, &options, &host).await;
-  host.shutdown().await;
-  execution
+  execute_runtime(&mut engine, trigger, &options).await
 }
 
 async fn resume_with_engine<E: RuntimeDagEngine>(
   mut engine: E,
   run_id: &str,
   options: RuntimeExecutionOptions,
-) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   if options.script_timeout_ms == 0 {
     return Err(RuntimeExecutionError::InvalidConfiguration(
       "script_timeout_ms must be greater than zero".to_string(),
@@ -218,13 +347,17 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
   let projection = engine.projection(run_id)?;
   let execution_order = recorded_execution_order(&engine.events(run_id)?);
   match projection.status {
-    RunStatus::Succeeded => return final_result(&engine, run_id, execution_order),
+    RunStatus::Succeeded => {
+      return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+        &engine,
+        run_id,
+        execution_order,
+      )?));
+    }
     RunStatus::Failed => return Err(resumed_failure(&engine, run_id, projection)?),
     RunStatus::Running => {}
     RunStatus::Waiting => {
-      return Err(RuntimeExecutionError::Stalled(
-        "stored run is waiting for approval; runtime continuation begins in A4".to_string(),
-      ));
+      return engine.reissue_waiting_outcome(run_id);
     }
     RunStatus::NotStarted => {
       return Err(RuntimeExecutionError::Stalled(
@@ -237,26 +370,21 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
     .terminal_node_id()
     .ok_or_else(|| RuntimeExecutionError::Stalled("no terminal node exists".to_string()))?
     .to_string();
-  let host = ScriptHostClient::spawn(options.script_host.clone()).await?;
-  let execution = continue_with_host(
+  continue_runtime(
     &mut engine,
     run_id,
     terminal_node_id,
     execution_order,
     &options,
-    &host,
   )
-  .await;
-  host.shutdown().await;
-  execution
+  .await
 }
 
-async fn execute_with_host<E: RuntimeDagEngine>(
+async fn execute_runtime<E: RuntimeDagEngine>(
   engine: &mut E,
   trigger: Map<String, Value>,
   options: &RuntimeExecutionOptions,
-  host: &ScriptHostClient,
-) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let terminal_node_id = engine
     .workflow()
     .terminal_node_id()
@@ -264,23 +392,50 @@ async fn execute_with_host<E: RuntimeDagEngine>(
     .to_string();
   let run_id = generated_id("run");
   engine.start_run(&run_id, trigger)?;
-  continue_with_host(engine, &run_id, terminal_node_id, Vec::new(), options, host).await
+  continue_runtime(engine, &run_id, terminal_node_id, Vec::new(), options).await
 }
 
-async fn continue_with_host<E: RuntimeDagEngine>(
+async fn continue_runtime<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
   terminal_node_id: String,
   mut execution_order: Vec<String>,
   options: &RuntimeExecutionOptions,
-  host: &ScriptHostClient,
-) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let mut host = None;
+  let execution = continue_runtime_loop(
+    engine,
+    run_id,
+    terminal_node_id,
+    &mut execution_order,
+    options,
+    &mut host,
+  )
+  .await;
+  if let Some(host) = host {
+    host.shutdown().await;
+  }
+  execution
+}
+
+async fn continue_runtime_loop<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  terminal_node_id: String,
+  execution_order: &mut Vec<String>,
+  options: &RuntimeExecutionOptions,
+  host: &mut Option<ScriptHostClient>,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   loop {
     let ready = engine.ready_node_ids(run_id)?;
     let Some(node_id) = ready.first() else {
       let projection = engine.projection(run_id)?;
       if projection.status == RunStatus::Succeeded {
-        return final_result(engine, run_id, execution_order);
+        return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+          engine,
+          run_id,
+          execution_order.clone(),
+        )?));
       }
       return Err(RuntimeExecutionError::Stalled(
         "no node is ready before the run reached a terminal state".to_string(),
@@ -298,7 +453,17 @@ async fn continue_with_host<E: RuntimeDagEngine>(
           group.parallel_id
         )));
       }
-      let completed = execute_parallel_group(engine, run_id, group, options, host).await?;
+      if host.is_none() {
+        *host = Some(ScriptHostClient::spawn(options.script_host.clone()).await?);
+      }
+      let completed = execute_parallel_group(
+        engine,
+        run_id,
+        group,
+        options,
+        host.as_ref().expect("script host was initialized"),
+      )
+      .await?;
       execution_order.extend(completed);
       continue;
     }
@@ -409,14 +574,81 @@ async fn continue_with_host<E: RuntimeDagEngine>(
               result: output,
             }),
           )?;
-          return final_result(engine, run_id, execution_order);
+          return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+            engine,
+            run_id,
+            execution_order.clone(),
+          )?));
         }
+      }
+      "engine.approval-wait" => {
+        let approval = engine.workflow().approval(node_id).ok_or_else(|| {
+          RuntimeExecutionError::Stalled(format!(
+            "approval node {node_id:?} has invalid compiled inputs"
+          ))
+        })?;
+        let occurred_at = chrono::Utc::now();
+        let expires_at = approval
+          .timeout_ms
+          .map(|milliseconds| {
+            i64::try_from(milliseconds)
+              .map(chrono::Duration::milliseconds)
+              .map(|duration| occurred_at + duration)
+          })
+          .transpose()
+          .map_err(|_| {
+            RuntimeExecutionError::Stalled(format!(
+              "approval {:?} timeout exceeds the clock range",
+              approval.approval_id
+            ))
+          })?;
+        let on_timeout = match approval.on_timeout.as_str() {
+          "reject" => ApprovalTimeoutPolicy::Reject,
+          "fail" => ApprovalTimeoutPolicy::Fail,
+          _ => {
+            return Err(RuntimeExecutionError::Stalled(format!(
+              "approval {:?} has an unknown timeout policy",
+              approval.approval_id
+            )));
+          }
+        };
+        let request_id = generated_id("aprreq");
+        let token = engine.request_approval(
+          run_id,
+          occurred_at,
+          ApprovalRequestedData {
+            approval_id: approval.approval_id.clone(),
+            request_id: request_id.clone(),
+            expires_at,
+            on_timeout,
+          },
+        )?;
+        return Ok(waiting_outcome(
+          engine.workflow().workflow_id.clone(),
+          run_id.to_string(),
+          approval,
+          request_id,
+          expires_at,
+          on_timeout,
+          token,
+        ));
       }
       "runtime.script" => {
         let source = source.ok_or_else(|| {
           RuntimeExecutionError::Stalled(format!("node {node_id:?} has no script source"))
         })?;
-        let output = execute_script_node(engine, run_id, node_id, &source, options, host).await?;
+        if host.is_none() {
+          *host = Some(ScriptHostClient::spawn(options.script_host.clone()).await?);
+        }
+        let output = execute_script_node(
+          engine,
+          run_id,
+          node_id,
+          &source,
+          options,
+          host.as_ref().expect("script host was initialized"),
+        )
+        .await?;
         execution_order.push(node_id.clone());
         if node_id == &terminal_node_id {
           engine.append_payload(
@@ -426,7 +658,11 @@ async fn continue_with_host<E: RuntimeDagEngine>(
               result: output,
             }),
           )?;
-          return final_result(engine, run_id, execution_order);
+          return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+            engine,
+            run_id,
+            execution_order.clone(),
+          )?));
         }
       }
       _ => {
@@ -435,6 +671,33 @@ async fn continue_with_host<E: RuntimeDagEngine>(
         )));
       }
     }
+  }
+}
+
+fn waiting_outcome(
+  workflow_id: String,
+  run_id: String,
+  approval: ApprovalDefinition,
+  request_id: String,
+  expires_at: Option<chrono::DateTime<chrono::Utc>>,
+  on_timeout: ApprovalTimeoutPolicy,
+  token: IssuedApprovalToken,
+) -> WorkflowRuntimeOutcome {
+  WorkflowRuntimeOutcome::Waiting {
+    contract: RUNTIME_OUTCOME_CONTRACT,
+    version: RUNTIME_OUTCOME_VERSION,
+    workflow_id,
+    run_id,
+    approval: WaitingWorkflowApproval {
+      approval_id: approval.approval_id,
+      request_id,
+      name: approval.name,
+      description: approval.description,
+      expires_at,
+      on_timeout,
+      token: token.token,
+      credential_expires_at: token.credential_expires_at,
+    },
   }
 }
 
@@ -1138,6 +1401,24 @@ trait RuntimeDagEngine {
   fn projection(&self, run_id: &str) -> Result<RunProjection, RuntimeExecutionError>;
   fn events(&self, run_id: &str) -> Result<Vec<RunEvent>, RuntimeExecutionError>;
   fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, RuntimeExecutionError>;
+  fn request_approval(
+    &mut self,
+    _run_id: &str,
+    _occurred_at: chrono::DateTime<chrono::Utc>,
+    _request: ApprovalRequestedData,
+  ) -> Result<IssuedApprovalToken, RuntimeExecutionError> {
+    Err(RuntimeExecutionError::Stalled(
+      "human approval requires the durable runtime".to_string(),
+    ))
+  }
+  fn reissue_waiting_outcome(
+    &mut self,
+    _run_id: &str,
+  ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+    Err(RuntimeExecutionError::Stalled(
+      "human approval requires the durable runtime".to_string(),
+    ))
+  }
   fn append_payloads(
     &mut self,
     run_id: &str,
@@ -1257,6 +1538,60 @@ impl RuntimeDagEngine for DurableDagEngine {
 
   fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, RuntimeExecutionError> {
     Ok(self.ready_node_ids(run_id)?)
+  }
+
+  fn request_approval(
+    &mut self,
+    run_id: &str,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+    request: ApprovalRequestedData,
+  ) -> Result<IssuedApprovalToken, RuntimeExecutionError> {
+    Ok(DurableDagEngine::request_approval(
+      self,
+      run_id,
+      occurred_at,
+      request,
+    )?)
+  }
+
+  fn reissue_waiting_outcome(
+    &mut self,
+    run_id: &str,
+  ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+    let projection = self.projection(run_id)?;
+    let request = projection
+      .approval_requests
+      .values()
+      .find(|request| matches!(request.status, ApprovalRequestStatus::Waiting))
+      .cloned()
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled("waiting run has no unresolved approval request".to_string())
+      })?;
+    let approval = self
+      .workflow()
+      .approval(&request.approval_id)
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(
+          "waiting run references an unknown approval definition".to_string(),
+        )
+      })?;
+    let issued_at = chrono::Utc::now();
+    let token = DurableDagEngine::reissue_waiting_approval_token(
+      self,
+      run_id,
+      &request.approval_id,
+      &request.request_id,
+      issued_at,
+    )?;
+    Ok(waiting_outcome(
+      self.workflow().workflow_id.clone(),
+      run_id.to_string(),
+      approval,
+      request.request_id,
+      request.expires_at,
+      request.on_timeout,
+      token,
+    ))
   }
 
   fn append_payloads(

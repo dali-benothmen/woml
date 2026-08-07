@@ -1,8 +1,8 @@
 # WOML Human Approval Implementation Plan
 
-Status: A0–A3 complete — approval contracts, frontend compilation, event-v4
-folding, durable waiting state, secure credentials, and store-v2 migration are
-implemented; A4 is next
+Status: A0–A4 complete — approval contracts, frontend compilation, event-v4
+folding, secure durable credentials, and the Rust waiting boundary are
+implemented; A5 is next
 
 ## 1. Product Outcome
 
@@ -164,7 +164,7 @@ Bun CLI/HTTP server <----+
 | A1 — complete | Teach the WOML frontend to validate approval markup and placement.                         | Valid approvals pass frontend validation and invalid approvals receive useful source errors. |
 | A2 — complete | Lower approvals into a deterministic model-v4 DAG.                                         | Approval markup becomes an engine-ready wait/route/join graph.                               |
 | A3 — complete | Add durable approval events, folded waiting state, token records, and SQLite migration.    | Waiting approvals and access credentials survive restarts safely.                            |
-| A4            | Make Rust stop at an approval and return a structured waiting outcome.                     | A workflow can durably pause without blocking a Worker or pretending to finish.              |
+| A4 — complete | Make Rust stop at an approval and return a structured waiting outcome.                     | A workflow can durably pause without blocking a Worker or pretending to finish.              |
 | A5            | Add atomic approve, reject, timeout, and DAG continuation behavior.                        | Exactly one resolution wins and only its route executes.                                     |
 | A6            | Add the local HTTP approval page, terminal URL, and N-API/CLI lifecycle.                   | A person can approve or reject a real `woml run` workflow.                                   |
 | A7            | Harden recovery, races, composition, security, packaging, and documentation.               | Human approval becomes a supported and publishable WOML feature.                             |
@@ -691,7 +691,7 @@ Completed proof:
   `on-timeout="fail"` compiled fixture; all four histories match their immutable
   definitions.
 
-### A4 — Pause execution at the durable approval boundary
+### A4 — Pause execution at the durable approval boundary — complete
 
 Changes:
 
@@ -712,6 +712,24 @@ Gate:
 
 Tests prove no arm/downstream attempt exists before resolution, no Worker stays
 alive solely for waiting, and restart yields the same request identity.
+
+Completed proof:
+
+- The durable executable profile accepts the frozen approval wait/route/join
+  shape while the non-durable runtime continues to reject it explicitly.
+- A ready approval atomically appends `approval_requested` and inserts the
+  first hashed credential; forced token-insert failure rolls both operations
+  back.
+- Rust returns the frozen `woml.runtime-outcome` v1 `waiting` shape with request
+  identity, reviewer metadata, timeout data, and the one-delivery token.
+- Neither decision arm nor downstream work starts before resolution, including
+  when the approval has empty arms or is the workflow's terminal item.
+- Bun starts lazily only when JavaScript work exists and is shut down before a
+  waiting outcome is returned; an approval-first workflow succeeds even when
+  the configured Bun executable does not exist.
+- Restart preserves the same run and request identity, reissues a fresh
+  append-only delivery token, leaves the event history unchanged, and never
+  replays scripts that completed before the wait.
 
 ### A5 — Resolve, time out, and continue exactly one route
 
