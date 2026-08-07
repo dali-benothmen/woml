@@ -1,6 +1,6 @@
 # WOML Run Events v4
 
-Status: frozen and implemented in Rust through A5
+Status: frozen and implemented through the A6 local approval runtime
 
 The normative schema is `docs/schemas/run-event.v4.schema.json`. Event schemas
 v1 through v3 remain immutable, and one run never mixes schema versions.

@@ -268,7 +268,9 @@ describe('woml run', () => {
     const result = await runCli('hello.woml');
 
     expect(result.stdout).toBe('');
-    expect(result.stderr).toBe('Usage: woml run <workflow.woml>\n');
+    expect(result.stderr).toBe(
+      'Usage: woml run <workflow.woml> [--state <path>] [--resume <runId>] [--approval-port <port>]\n',
+    );
     expect(result.exitCode).toBe(2);
   });
 

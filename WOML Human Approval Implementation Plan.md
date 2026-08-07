@@ -1,8 +1,8 @@
 # WOML Human Approval Implementation Plan
 
-Status: A0–A5 complete — approval contracts, frontend compilation, durable
-waiting, atomic decision/timeout settlement, and selected-route continuation
-are implemented; A6 is next
+Status: A0–A6 complete — approval contracts, frontend compilation, durable
+waiting, atomic decision/timeout settlement, selected-route continuation, and
+the local terminal/HTTP experience are implemented; A7 is next
 
 ## 1. Product Outcome
 
@@ -166,7 +166,7 @@ Bun CLI/HTTP server <----+
 | A3 — complete | Add durable approval events, folded waiting state, token records, and SQLite migration.    | Waiting approvals and access credentials survive restarts safely.                            |
 | A4 — complete | Make Rust stop at an approval and return a structured waiting outcome.                     | A workflow can durably pause without blocking a Worker or pretending to finish.              |
 | A5 — complete | Add atomic approve, reject, timeout, and DAG continuation behavior.                        | Exactly one resolution wins and only its route executes.                                     |
-| A6            | Add the local HTTP approval page, terminal URL, and N-API/CLI lifecycle.                   | A person can approve or reject a real `woml run` workflow.                                   |
+| A6 — complete | Add the local HTTP approval page, terminal URL, and N-API/CLI lifecycle.                   | A person can approve or reject a real `woml run` workflow.                                   |
 | A7            | Harden recovery, races, composition, security, packaging, and documentation.               | Human approval becomes a supported and publishable WOML feature.                             |
 
 ## 4. Source-Language Contract
@@ -775,7 +775,7 @@ Completed proof:
 - Repeated decision-versus-timeout races always contain exactly one resolution
   event and no route attempt before continuation.
 
-### A6 — Deliver the terminal URL and HTTP approval experience
+### A6 — Deliver the terminal URL and HTTP approval experience — complete
 
 Changes:
 
@@ -804,6 +804,30 @@ Gate:
 
 The packaged CLI completes the exact browser/HTTP user journey with Rust as the
 only decision authority and no npm runtime package required by the caller.
+
+Completed proof:
+
+- The native bridge exposes durable start/wait, decision, timeout, and
+  definition-bound resume operations while Rust remains the only decision
+  authority.
+- TypeScript validates every native approval outcome, decision, timeout, and
+  structured error before the CLI uses it.
+- `woml run approval.woml` uses `.woml/state.sqlite`, binds only to
+  `127.0.0.1:7331`, prints approval and recovery information to stderr, and
+  prints only the final workflow result to stdout.
+- `--state`, `--resume`, and `--approval-port` support explicit persistence,
+  recovery, and loopback port selection. Resume verifies that the supplied WOML
+  definition matches the durable run.
+- The safe GET page uses no external resources and carries no-store,
+  no-referrer, frame-denial, content-type, and nonce-based CSP protections.
+- The JSON POST endpoint enforces the frozen request shape, content type,
+  loopback origin policy, response envelopes, and error status mappings.
+- Accepted decisions and durable timeouts shut down the server, resume through
+  Rust, and either expose the next approval or emit final JSON.
+- HTTP tests cover safe GET, malformed requests, origin rejection, duplicates,
+  conflicts, expiry, and token redaction. Packaged tests cover real Rust
+  approve/reject, restart and token reissue, timeout rejection, and port
+  conflicts.
 
 ### A7 — Harden, package, and close the milestone
 

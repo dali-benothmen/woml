@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import { stat } from 'node:fs/promises';
-import { extname } from 'node:path';
+import { mkdir, stat } from 'node:fs/promises';
+import { dirname, extname, resolve } from 'node:path';
 
 import {
   compileWoml,
@@ -13,9 +13,19 @@ import {
   type WomlSourceElement,
 } from 'woml';
 import {
+  executeApprovalWorkflowWithRust,
   executeWorkflowWithRust,
+  resolveApprovalWithRust,
+  resumeApprovalWorkflowWithRust,
   RustWorkflowExecutionError,
+  settleApprovalTimeoutWithRust,
+  type RustApprovalRuntimeOutcome,
 } from './rust-executor';
+import {
+  ApprovalServerBindError,
+  DEFAULT_APPROVAL_PORT,
+  serveApprovalAndWait,
+} from './approval-server';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -38,7 +48,70 @@ class CliInputError extends Error {
 }
 
 function usage(): string {
-  return 'Usage: woml run <workflow.woml>';
+  return 'Usage: woml run <workflow.woml> [--state <path>] [--resume <runId>] [--approval-port <port>]';
+}
+
+interface RunArguments {
+  readonly filePath: string;
+  readonly statePath: string;
+  readonly resumeRunId?: string;
+  readonly approvalPort: number;
+}
+
+function parseRunArguments(args: readonly string[]): RunArguments {
+  const [command, filePath, ...options] = args;
+  if (
+    command !== 'run' ||
+    filePath === undefined ||
+    filePath.startsWith('--')
+  ) {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', usage());
+  }
+  let statePath = resolve('.woml/state.sqlite');
+  let resumeRunId: string | undefined;
+  let approvalPort = DEFAULT_APPROVAL_PORT;
+  const seen = new Set<string>();
+  for (let index = 0; index < options.length; index += 2) {
+    const option = options[index];
+    const value = options[index + 1];
+    if (
+      value === undefined ||
+      seen.has(option) ||
+      (option !== '--state' &&
+        option !== '--resume' &&
+        option !== '--approval-port')
+    ) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', usage());
+    }
+    seen.add(option);
+    if (option === '--state') {
+      if (value.length === 0) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--state requires a non-empty path.',
+        );
+      }
+      statePath = resolve(value);
+    } else if (option === '--resume') {
+      if (value.length === 0) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--resume requires a run ID.',
+        );
+      }
+      resumeRunId = value;
+    } else {
+      const port = Number(value);
+      if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--approval-port must be an integer from 1 through 65535.',
+        );
+      }
+      approvalPort = port;
+    }
+  }
+  return { filePath, statePath, resumeRunId, approvalPort };
 }
 
 function runtimeCode(code: string): string {
@@ -214,6 +287,10 @@ function formatError(
     return `WOML ${diagnostic.phase} error [${diagnostic.code}] at ${location}: ${diagnostic.message}${hint}`;
   }
 
+  if (error instanceof ApprovalServerBindError) {
+    return `WOML CLI error [${error.code}]: ${error.message}`;
+  }
+
   if (error instanceof RustWorkflowExecutionError) {
     const parallelSource = parallelRuntimeSource(document, error);
     const branchSource = branchRuntimeSource(document, error);
@@ -276,22 +353,103 @@ async function readWorkflow(filePath: string): Promise<string> {
   return await Bun.file(filePath).text();
 }
 
+function printWaitingApproval(
+  io: CliIo,
+  outcome: Extract<RustApprovalRuntimeOutcome, { status: 'waiting' }>,
+  url: string,
+  filePath: string,
+  statePath: string,
+): void {
+  const approval = outcome.approval;
+  io.stderr('\nWOML workflow is waiting for human approval.\n');
+  io.stderr(`Approval: ${approval.name ?? approval.approvalId}\n`);
+  if (approval.description !== undefined) {
+    io.stderr(`${approval.description}\n`);
+  }
+  io.stderr(`Workflow: ${outcome.workflowId}\n`);
+  io.stderr(`Run ID: ${outcome.runId}\n`);
+  io.stderr(
+    `Deadline: ${approval.expiresAt ?? 'none'} (${approval.onTimeout} on timeout)\n`,
+  );
+  io.stderr(`Current URL expires: ${approval.credentialExpiresAt}\n`);
+  io.stderr(`Approval URL: ${url}\n`);
+  io.stderr(
+    `Recovery: woml run ${JSON.stringify(filePath)} --state ${JSON.stringify(
+      statePath,
+    )} --resume ${JSON.stringify(outcome.runId)}\n\n`,
+  );
+}
+
+async function runApprovalWorkflow(
+  workflow: ReturnType<typeof compileWoml>,
+  args: RunArguments,
+  io: CliIo,
+): Promise<void> {
+  await mkdir(dirname(args.statePath), { recursive: true });
+  let outcome =
+    args.resumeRunId === undefined
+      ? await executeApprovalWorkflowWithRust(workflow, args.statePath)
+      : await resumeApprovalWorkflowWithRust(
+          workflow,
+          args.statePath,
+          args.resumeRunId,
+        );
+
+  while (outcome.status === 'waiting') {
+    const waiting = outcome;
+    await serveApprovalAndWait({
+      outcome: waiting,
+      port: args.approvalPort,
+      onDecision: (token, decision) =>
+        resolveApprovalWithRust(args.statePath, token, decision),
+      onTimeout: (runId, approvalId) =>
+        settleApprovalTimeoutWithRust(args.statePath, runId, approvalId),
+      onListening: url =>
+        printWaitingApproval(io, waiting, url, args.filePath, args.statePath),
+    });
+    outcome = await resumeApprovalWorkflowWithRust(
+      workflow,
+      args.statePath,
+      waiting.runId,
+    );
+  }
+  io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
+}
+
 export async function runCli(
   args: readonly string[],
   io: CliIo = processIo,
 ): Promise<number> {
-  const [command, filePath, ...extra] = args;
-
-  if (command !== 'run' || filePath === undefined || extra.length > 0) {
+  let runArguments: RunArguments;
+  try {
+    runArguments = parseRunArguments(args);
+  } catch (error) {
+    if (error instanceof CliInputError && error.message !== usage()) {
+      io.stderr(`${error.message}\n`);
+    }
     io.stderr(`${usage()}\n`);
     return 2;
   }
+  const { filePath } = runArguments;
 
   let document: WomlSourceDocument | undefined;
   try {
     const source = await readWorkflow(filePath);
     document = parseWoml(source, { file: filePath });
     const workflow = compileWoml(document);
+    if (
+      runArguments.resumeRunId !== undefined &&
+      workflow.schemaVersion !== 4
+    ) {
+      throw new CliInputError(
+        'WOML_RESUME_REQUIRES_APPROVAL',
+        '--resume currently supports Human Approval workflows only.',
+      );
+    }
+    if (workflow.schemaVersion === 4) {
+      await runApprovalWorkflow(workflow, runArguments, io);
+      return 0;
+    }
     const execution = await executeWorkflowWithRust(workflow);
     io.stdout(`${JSON.stringify(execution.result)}\n`);
     return 0;

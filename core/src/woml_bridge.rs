@@ -6,9 +6,12 @@ use napi_derive::napi;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use woml_engine::{
-  execute_workflow, execute_workflow_durable, recover_durable_runs, CompiledWorkflowDefinition,
-  ParallelFailurePolicy, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
-  RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
+  execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
+  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable_outcome,
+  settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome,
+  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError, ParallelFailurePolicy,
+  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RuntimeExecutionError,
+  RuntimeExecutionOptions, ScriptHostProcessOptions, SystemEngineClock,
 };
 
 #[derive(Serialize)]
@@ -37,6 +40,10 @@ struct NativeExecutionError {
   reference_path: Option<Vec<String>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   branch_site: Option<&'static str>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  approval_id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  request_id: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   details: Option<NativeParallelExecutionErrorDetails>,
 }
@@ -68,6 +75,8 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
         arm_id: None,
         reference_path: None,
         branch_site: None,
+        approval_id: None,
+        request_id: None,
         details: None,
       }
     }
@@ -80,6 +89,8 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       arm_id: details.arm_id.clone(),
       reference_path: details.path.clone(),
       branch_site: Some(details.site.as_str()),
+      approval_id: None,
+      request_id: None,
       details: None,
     },
     RuntimeExecutionError::ParallelFailed(details) => NativeExecutionError {
@@ -91,6 +102,8 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       arm_id: None,
       reference_path: None,
       branch_site: None,
+      approval_id: None,
+      request_id: None,
       details: Some(NativeParallelExecutionErrorDetails {
         parallel_id: details.parallel_id.clone(),
         policy: details.policy,
@@ -98,6 +111,19 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
         failed_node_ids: details.failed_node_ids.clone(),
         cancelled_node_ids: details.cancelled_node_ids.clone(),
       }),
+    },
+    RuntimeExecutionError::ApprovalFailed(details) => NativeExecutionError {
+      kind: "woml_execution_error",
+      code: details.code.clone(),
+      message: details.message.clone(),
+      node_id: None,
+      branch_id: None,
+      arm_id: None,
+      reference_path: None,
+      branch_site: None,
+      approval_id: Some(details.approval_id.clone()),
+      request_id: Some(details.request_id.clone()),
+      details: None,
     },
     error => NativeExecutionError {
       kind: "woml_execution_error",
@@ -108,6 +134,8 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       arm_id: None,
       reference_path: None,
       branch_site: None,
+      approval_id: None,
+      request_id: None,
       details: None,
     },
   };
@@ -115,6 +143,68 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
     "WOML Rust execution failed and its error could not be encoded.".to_string()
   });
   napi::Error::from_reason(reason)
+}
+
+#[derive(Serialize)]
+struct NativeApprovalDecisionOutcome {
+  contract: &'static str,
+  version: u32,
+  #[serde(flatten)]
+  outcome: ApprovalDecisionOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeApprovalError {
+  kind: &'static str,
+  code: &'static str,
+  message: &'static str,
+}
+
+fn native_approval_error(error: RuntimeExecutionError) -> napi::Error {
+  let (code, message) = match error {
+    RuntimeExecutionError::DurableStore(DurableStoreError::InvalidApprovalToken) => (
+      "WOML_APPROVAL_TOKEN_INVALID",
+      "The approval capability is invalid.",
+    ),
+    RuntimeExecutionError::DurableStore(DurableStoreError::ExpiredApprovalToken) => (
+      "WOML_APPROVAL_TOKEN_EXPIRED",
+      "The approval capability expired.",
+    ),
+    RuntimeExecutionError::DurableStore(DurableStoreError::ApprovalExpired) => {
+      ("WOML_APPROVAL_EXPIRED", "The approval request expired.")
+    }
+    RuntimeExecutionError::DurableStore(DurableStoreError::ApprovalDecisionConflict) => (
+      "WOML_APPROVAL_DECISION_CONFLICT",
+      "A different human decision is already durable.",
+    ),
+    _ => (
+      "WOML_APPROVAL_INTERNAL",
+      "The approval decision could not be safely confirmed.",
+    ),
+  };
+  let envelope = NativeApprovalError {
+    kind: "woml_approval_error",
+    code,
+    message,
+  };
+  let reason = serde_json::to_string(&envelope)
+    .unwrap_or_else(|_| "WOML approval failed and its error could not be encoded.".to_string());
+  napi::Error::from_reason(reason)
+}
+
+fn runtime_options(
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+) -> RuntimeExecutionOptions {
+  RuntimeExecutionOptions::new(
+    ScriptHostProcessOptions::new(
+      PathBuf::from(bun_executable),
+      PathBuf::from(script_host_path),
+    ),
+    u64::from(script_timeout_ms),
+  )
 }
 
 #[napi(ts_return_type = "Promise<string>")]
@@ -176,6 +266,125 @@ pub async fn execute_woml_workflow_durable(
   .map_err(native_execution_error)?;
   serde_json::to_string(&result)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub async fn execute_woml_workflow_durable_outcome(
+  compiled_model_json: String,
+  definition_hash: String,
+  trigger_json: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  event_store_path: String,
+) -> napi::Result<String> {
+  let workflow: CompiledWorkflowDefinition =
+    serde_json::from_str(&compiled_model_json).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
+    })?;
+  let trigger: Map<String, Value> = serde_json::from_str(&trigger_json)
+    .map_err(|error| napi::Error::from_reason(format!("Invalid trigger JSON: {error}")))?;
+  let outcome = execute_workflow_durable_outcome(
+    workflow,
+    definition_hash,
+    trigger,
+    runtime_options(bun_executable, script_host_path, script_timeout_ms),
+    PathBuf::from(event_store_path),
+  )
+  .await
+  .map_err(native_execution_error)?;
+  serde_json::to_string(&outcome).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode WOML runtime outcome: {error}"))
+  })
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub async fn resume_woml_workflow_durable_outcome(
+  compiled_model_json: String,
+  definition_hash: String,
+  run_id: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  event_store_path: String,
+) -> napi::Result<String> {
+  let workflow: CompiledWorkflowDefinition =
+    serde_json::from_str(&compiled_model_json).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
+    })?;
+  let store = DurableEventStore::open(PathBuf::from(&event_store_path))
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  let binding = store
+    .run_binding(&run_id)
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  let stored_workflow = store
+    .definition(&binding.definition_hash)
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  if binding.definition_hash != definition_hash || stored_workflow != workflow {
+    return Err(native_execution_error(
+      RuntimeExecutionError::InvalidConfiguration(
+        "the supplied WOML definition does not match the durable run definition".to_string(),
+      ),
+    ));
+  }
+  let outcome = resume_workflow_durable_outcome(
+    PathBuf::from(event_store_path),
+    &run_id,
+    runtime_options(bun_executable, script_host_path, script_timeout_ms),
+  )
+  .await
+  .map_err(native_execution_error)?;
+  serde_json::to_string(&outcome).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode WOML runtime outcome: {error}"))
+  })
+}
+
+#[napi]
+pub fn resolve_woml_approval(
+  event_store_path: String,
+  token: String,
+  decision: String,
+) -> napi::Result<String> {
+  let decision = match decision.as_str() {
+    "approved" => ApprovalDecision::Approved,
+    "rejected" => ApprovalDecision::Rejected,
+    _ => {
+      return Err(napi::Error::from_reason(
+        "Approval decision must be approved or rejected.".to_string(),
+      ))
+    }
+  };
+  let outcome = resolve_human_approval_durable(
+    PathBuf::from(event_store_path),
+    &token,
+    decision,
+    &SystemEngineClock,
+  )
+  .map_err(native_approval_error)?;
+  serde_json::to_string(&NativeApprovalDecisionOutcome {
+    contract: "woml.approval-http",
+    version: 1,
+    outcome,
+  })
+  .map_err(|error| napi::Error::from_reason(format!("Could not encode approval decision: {error}")))
+}
+
+#[napi]
+pub fn settle_woml_approval_timeout(
+  event_store_path: String,
+  run_id: String,
+  approval_id: String,
+) -> napi::Result<String> {
+  let outcome = settle_approval_timeout_durable(
+    PathBuf::from(event_store_path),
+    &run_id,
+    &approval_id,
+    &SystemEngineClock,
+  )
+  .map_err(native_approval_error)?;
+  serde_json::to_string(&outcome).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode approval timeout: {error}"))
+  })
 }
 
 #[napi]

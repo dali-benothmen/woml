@@ -182,14 +182,16 @@ pub struct ApprovalDecisionOutcome {
   pub decided_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApprovalTimeoutSettlementStatus {
   Settled,
   AlreadyResolved,
   NotDue,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApprovalTimeoutSettlement {
   pub status: ApprovalTimeoutSettlementStatus,
   pub run_id: String,

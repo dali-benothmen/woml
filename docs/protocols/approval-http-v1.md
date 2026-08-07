@@ -1,6 +1,6 @@
 # WOML Approval HTTP v1
 
-Status: frozen for the local Human Approval profile
+Status: frozen and implemented for the local Human Approval profile in A6
 
 The normative JSON schema is `docs/schemas/approval-http.v1.schema.json`.
 HTTP is the only public decision mechanism. WOML exposes no package-level

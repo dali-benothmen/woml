@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
 
 export interface RustRunEvent {
-  readonly eventSchemaVersion: 1 | 2 | 3;
+  readonly eventSchemaVersion: 1 | 2 | 3 | 4;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
@@ -50,6 +50,8 @@ interface NativeExecutionErrorEnvelope {
   readonly armId?: string;
   readonly referencePath?: readonly string[];
   readonly branchSite?: 'test' | 'result' | 'selection';
+  readonly approvalId?: string;
+  readonly requestId?: string;
   readonly details?: NativeParallelExecutionErrorDetails;
 }
 
@@ -73,6 +75,8 @@ export class RustWorkflowExecutionError extends Error {
   readonly primaryNodeId?: string;
   readonly failedNodeIds?: readonly string[];
   readonly cancelledNodeIds?: readonly string[];
+  readonly approvalId?: string;
+  readonly requestId?: string;
 
   constructor(
     code: string,
@@ -83,6 +87,8 @@ export class RustWorkflowExecutionError extends Error {
       readonly armId?: string;
       readonly referencePath?: readonly string[];
       readonly branchSite?: 'test' | 'result' | 'selection';
+      readonly approvalId?: string;
+      readonly requestId?: string;
       readonly parallel?: NativeParallelExecutionErrorDetails;
     } = {}
   ) {
@@ -96,6 +102,8 @@ export class RustWorkflowExecutionError extends Error {
       this.referencePath = details.referencePath;
     }
     if (details.branchSite !== undefined) this.branchSite = details.branchSite;
+    if (details.approvalId !== undefined) this.approvalId = details.approvalId;
+    if (details.requestId !== undefined) this.requestId = details.requestId;
     if (details.parallel !== undefined) {
       this.parallelId = details.parallel.parallelId;
       this.parallelPolicy = details.parallel.policy;
@@ -125,6 +133,101 @@ interface NativeCore {
     eventStorePath: string
   ) => Promise<string>;
   readonly recoverWomlRuns: (eventStorePath: string) => string;
+  readonly executeWomlWorkflowDurableOutcome: (
+    compiledModelJson: string,
+    definitionHash: string,
+    triggerJson: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    eventStorePath: string
+  ) => Promise<string>;
+  readonly resumeWomlWorkflowDurableOutcome: (
+    compiledModelJson: string,
+    definitionHash: string,
+    runId: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    eventStorePath: string
+  ) => Promise<string>;
+  readonly resolveWomlApproval: (
+    eventStorePath: string,
+    token: string,
+    decision: ApprovalDecision
+  ) => string;
+  readonly settleWomlApprovalTimeout: (
+    eventStorePath: string,
+    runId: string,
+    approvalId: string
+  ) => string;
+}
+
+export type ApprovalDecision = 'approved' | 'rejected';
+
+export interface WaitingApproval {
+  readonly approvalId: string;
+  readonly requestId: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly expiresAt?: string;
+  readonly onTimeout: 'reject' | 'fail';
+  readonly token: string;
+  readonly credentialExpiresAt: string;
+}
+
+export type RustApprovalRuntimeOutcome =
+  | {
+      readonly contract: 'woml.runtime-outcome';
+      readonly version: 1;
+      readonly status: 'succeeded';
+      readonly execution: RustWorkflowExecutionResult;
+    }
+  | {
+      readonly contract: 'woml.runtime-outcome';
+      readonly version: 1;
+      readonly status: 'waiting';
+      readonly workflowId: string;
+      readonly runId: string;
+      readonly approval: WaitingApproval;
+    };
+
+export interface ApprovalDecisionResult {
+  readonly contract: 'woml.approval-http';
+  readonly version: 1;
+  readonly status: 'accepted' | 'already_resolved';
+  readonly runId: string;
+  readonly approvalId: string;
+  readonly requestId: string;
+  readonly decision: ApprovalDecision;
+  readonly source: 'human';
+  readonly decidedAt: string;
+}
+
+export type ApprovalErrorCode =
+  | 'WOML_APPROVAL_TOKEN_INVALID'
+  | 'WOML_APPROVAL_TOKEN_EXPIRED'
+  | 'WOML_APPROVAL_EXPIRED'
+  | 'WOML_APPROVAL_DECISION_CONFLICT'
+  | 'WOML_APPROVAL_INTERNAL';
+
+export class ApprovalDecisionError extends Error {
+  constructor(
+    readonly code: ApprovalErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = 'ApprovalDecisionError';
+  }
+}
+
+export interface ApprovalTimeoutResult {
+  readonly status: 'settled' | 'already_resolved' | 'not_due';
+  readonly runId: string;
+  readonly approvalId: string;
+  readonly requestId: string;
+  readonly resolution: unknown | null;
+  readonly settledAt: string | null;
 }
 
 function canonicalizeJson(value: unknown): string {
@@ -193,6 +296,181 @@ function loadNativeCore(path: string): NativeCore {
   return loaded as NativeCore;
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = []
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return (
+    required.every(key => Object.hasOwn(value, key)) &&
+    Object.keys(value).every(key => allowed.has(key))
+  );
+}
+
+function dateTime(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T/.test(value) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function executionResult(value: unknown): value is RustWorkflowExecutionResult {
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      'workflowId',
+      'runId',
+      'terminalNodeId',
+      'result',
+      'context',
+      'executionOrder',
+      'events',
+    ]) ||
+    typeof value.workflowId !== 'string' ||
+    typeof value.runId !== 'string' ||
+    typeof value.terminalNodeId !== 'string' ||
+    !record(value.context) ||
+    !exactKeys(value.context, ['trigger', 'steps']) ||
+    !record(value.context.trigger) ||
+    !record(value.context.steps) ||
+    !Array.isArray(value.executionOrder) ||
+    !value.executionOrder.every(nodeId => typeof nodeId === 'string') ||
+    !Array.isArray(value.events)
+  ) {
+    return false;
+  }
+  return value.events.every(event => {
+    if (!record(event)) return false;
+    return (
+      exactKeys(event, [
+        'eventSchemaVersion',
+        'eventId',
+        'runId',
+        'sequence',
+        'occurredAt',
+        'type',
+        'data',
+      ]) &&
+      event.eventSchemaVersion === 4 &&
+      typeof event.eventId === 'string' &&
+      typeof event.runId === 'string' &&
+      Number.isSafeInteger(event.sequence) &&
+      dateTime(event.occurredAt) &&
+      typeof event.type === 'string'
+    );
+  });
+}
+
+function waitingApproval(value: unknown): value is WaitingApproval {
+  if (!record(value)) return false;
+  return (
+    exactKeys(
+      value,
+      ['approvalId', 'requestId', 'onTimeout', 'token', 'credentialExpiresAt'],
+      ['name', 'description', 'expiresAt']
+    ) &&
+    /^[a-z][A-Za-z0-9]*$/.test(String(value.approvalId)) &&
+    /^aprreq_[A-Za-z0-9_-]+$/.test(String(value.requestId)) &&
+    (value.name === undefined ||
+      (typeof value.name === 'string' && value.name.length > 0)) &&
+    (value.description === undefined ||
+      (typeof value.description === 'string' &&
+        value.description.length > 0)) &&
+    (value.expiresAt === undefined || dateTime(value.expiresAt)) &&
+    (value.onTimeout === 'reject' || value.onTimeout === 'fail') &&
+    /^apr_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value.token)) &&
+    dateTime(value.credentialExpiresAt)
+  );
+}
+
+function parseApprovalRuntimeOutcome(json: string): RustApprovalRuntimeOutcome {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    value.contract !== 'woml.runtime-outcome' ||
+    value.version !== 1
+  ) {
+    throw new Error('The native core returned an invalid approval outcome.');
+  }
+  if (
+    value.status === 'succeeded' &&
+    exactKeys(value, ['contract', 'version', 'status', 'execution']) &&
+    executionResult(value.execution)
+  ) {
+    return value as unknown as RustApprovalRuntimeOutcome;
+  }
+  if (
+    value.status === 'waiting' &&
+    exactKeys(value, [
+      'contract',
+      'version',
+      'status',
+      'workflowId',
+      'runId',
+      'approval',
+    ]) &&
+    typeof value.workflowId === 'string' &&
+    value.workflowId.length > 0 &&
+    typeof value.runId === 'string' &&
+    value.runId.length > 0 &&
+    waitingApproval(value.approval)
+  ) {
+    return value as unknown as RustApprovalRuntimeOutcome;
+  }
+  throw new Error('The native core returned an invalid approval outcome.');
+}
+
+function parseApprovalDecisionResult(json: string): ApprovalDecisionResult {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      'contract',
+      'version',
+      'status',
+      'runId',
+      'approvalId',
+      'requestId',
+      'decision',
+      'source',
+      'decidedAt',
+    ]) ||
+    value.contract !== 'woml.approval-http' ||
+    value.version !== 1 ||
+    (value.status !== 'accepted' && value.status !== 'already_resolved') ||
+    typeof value.runId !== 'string' ||
+    typeof value.approvalId !== 'string' ||
+    typeof value.requestId !== 'string' ||
+    (value.decision !== 'approved' && value.decision !== 'rejected') ||
+    value.source !== 'human' ||
+    !dateTime(value.decidedAt)
+  ) {
+    throw new Error('The native core returned an invalid approval decision.');
+  }
+  return value as unknown as ApprovalDecisionResult;
+}
+
+function requireApprovalMethods(native: NativeCore, path: string): void {
+  for (const method of [
+    'executeWomlWorkflowDurableOutcome',
+    'resumeWomlWorkflowDurableOutcome',
+    'resolveWomlApproval',
+    'settleWomlApprovalTimeout',
+  ] as const) {
+    if (typeof native[method] !== 'function') {
+      throw new Error(
+        `Native core at "${path}" does not expose ${method}; rebuild the Rust addon.`
+      );
+    }
+  }
+}
+
 function decodeNativeExecutionError(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   const jsonStart = message.indexOf('{');
@@ -233,6 +511,10 @@ function decodeNativeExecutionError(error: unknown): never {
           decoded.branchSite === 'test' ||
           decoded.branchSite === 'result' ||
           decoded.branchSite === 'selection') &&
+        (decoded.approvalId === undefined ||
+          typeof decoded.approvalId === 'string') &&
+        (decoded.requestId === undefined ||
+          typeof decoded.requestId === 'string') &&
         validParallelDetails
       ) {
         throw new RustWorkflowExecutionError(decoded.code, decoded.message, {
@@ -241,6 +523,8 @@ function decodeNativeExecutionError(error: unknown): never {
           armId: decoded.armId,
           referencePath: decoded.referencePath,
           branchSite: decoded.branchSite,
+          approvalId: decoded.approvalId,
+          requestId: decoded.requestId,
           parallel: parallelDetails,
         });
       }
@@ -250,6 +534,35 @@ function decodeNativeExecutionError(error: unknown): never {
     }
   }
   throw error;
+}
+
+function decodeNativeApprovalError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  const jsonStart = message.indexOf('{');
+  if (jsonStart !== -1) {
+    try {
+      const decoded: unknown = JSON.parse(message.slice(jsonStart));
+      if (
+        record(decoded) &&
+        exactKeys(decoded, ['kind', 'code', 'message']) &&
+        decoded.kind === 'woml_approval_error' &&
+        typeof decoded.message === 'string' &&
+        (decoded.code === 'WOML_APPROVAL_TOKEN_INVALID' ||
+          decoded.code === 'WOML_APPROVAL_TOKEN_EXPIRED' ||
+          decoded.code === 'WOML_APPROVAL_EXPIRED' ||
+          decoded.code === 'WOML_APPROVAL_DECISION_CONFLICT' ||
+          decoded.code === 'WOML_APPROVAL_INTERNAL')
+      ) {
+        throw new ApprovalDecisionError(decoded.code, decoded.message);
+      }
+    } catch (decodedError) {
+      if (decodedError instanceof ApprovalDecisionError) throw decodedError;
+    }
+  }
+  throw new ApprovalDecisionError(
+    'WOML_APPROVAL_INTERNAL',
+    'The approval decision could not be safely confirmed.'
+  );
 }
 
 export async function executeWorkflowWithRust(
@@ -321,6 +634,139 @@ export async function executeWorkflowWithRustDurable(
     )
     .catch(decodeNativeExecutionError);
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
+}
+
+function approvalNative(options: RustExecutorOptions): {
+  readonly native: NativeCore;
+  readonly path: string;
+} {
+  const path = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(path);
+  requireApprovalMethods(native, path);
+  return { native, path };
+}
+
+function approvalRuntimeArguments(options: RustExecutorOptions): {
+  readonly bunExecutable: string;
+  readonly scriptHostPath: string;
+  readonly timeoutMs: number;
+} {
+  const timeoutMs = options.scriptTimeoutMs ?? 5_000;
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 0xffff_ffff
+  ) {
+    throw new Error('scriptTimeoutMs must be a positive 32-bit integer.');
+  }
+  return {
+    bunExecutable: options.bunExecutable ?? process.execPath,
+    scriptHostPath: options.scriptHostPath ?? defaultScriptHostPath(),
+    timeoutMs,
+  };
+}
+
+export async function executeApprovalWorkflowWithRust(
+  workflow: CompiledWorkflowDefinition,
+  eventStorePath: string,
+  options: RustExecutorOptions = {}
+): Promise<RustApprovalRuntimeOutcome> {
+  if (eventStorePath.length === 0) {
+    throw new Error('eventStorePath must not be empty.');
+  }
+  const { native } = approvalNative(options);
+  const runtime = approvalRuntimeArguments(options);
+  const resultJson = await native
+    .executeWomlWorkflowDurableOutcome(
+      JSON.stringify(workflow),
+      compiledDefinitionHash(workflow),
+      JSON.stringify(options.trigger ?? {}),
+      runtime.bunExecutable,
+      runtime.scriptHostPath,
+      runtime.timeoutMs,
+      eventStorePath
+    )
+    .catch(decodeNativeExecutionError);
+  return parseApprovalRuntimeOutcome(resultJson);
+}
+
+export async function resumeApprovalWorkflowWithRust(
+  workflow: CompiledWorkflowDefinition,
+  eventStorePath: string,
+  runId: string,
+  options: RustExecutorOptions = {}
+): Promise<RustApprovalRuntimeOutcome> {
+  if (eventStorePath.length === 0 || runId.length === 0) {
+    throw new Error('eventStorePath and runId must not be empty.');
+  }
+  const { native } = approvalNative(options);
+  const runtime = approvalRuntimeArguments(options);
+  const resultJson = await native
+    .resumeWomlWorkflowDurableOutcome(
+      JSON.stringify(workflow),
+      compiledDefinitionHash(workflow),
+      runId,
+      runtime.bunExecutable,
+      runtime.scriptHostPath,
+      runtime.timeoutMs,
+      eventStorePath
+    )
+    .catch(decodeNativeExecutionError);
+  return parseApprovalRuntimeOutcome(resultJson);
+}
+
+export function resolveApprovalWithRust(
+  eventStorePath: string,
+  token: string,
+  decision: ApprovalDecision,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): ApprovalDecisionResult {
+  const { native } = approvalNative(options);
+  try {
+    return parseApprovalDecisionResult(
+      native.resolveWomlApproval(eventStorePath, token, decision)
+    );
+  } catch (error) {
+    if (error instanceof ApprovalDecisionError) throw error;
+    decodeNativeApprovalError(error);
+  }
+}
+
+export function settleApprovalTimeoutWithRust(
+  eventStorePath: string,
+  runId: string,
+  approvalId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): ApprovalTimeoutResult {
+  const { native } = approvalNative(options);
+  let json: string;
+  try {
+    json = native.settleWomlApprovalTimeout(eventStorePath, runId, approvalId);
+  } catch (error) {
+    decodeNativeApprovalError(error);
+  }
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      'status',
+      'runId',
+      'approvalId',
+      'requestId',
+      'resolution',
+      'settledAt',
+    ]) ||
+    (value.status !== 'settled' &&
+      value.status !== 'already_resolved' &&
+      value.status !== 'not_due') ||
+    typeof value.runId !== 'string' ||
+    typeof value.approvalId !== 'string' ||
+    typeof value.requestId !== 'string' ||
+    (value.settledAt !== null && !dateTime(value.settledAt))
+  ) {
+    throw new Error('The native core returned an invalid approval timeout.');
+  }
+  return value as unknown as ApprovalTimeoutResult;
 }
 
 export function recoverDurableRuns(
