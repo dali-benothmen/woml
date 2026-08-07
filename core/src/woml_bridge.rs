@@ -8,10 +8,11 @@ use serde_json::{Map, Value};
 use woml_engine::{
   execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
   recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable_outcome,
-  settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome,
-  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError, ParallelFailurePolicy,
-  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RuntimeExecutionError,
-  RuntimeExecutionOptions, ScriptHostProcessOptions, SystemEngineClock,
+  run_notification_provider_journey, settle_approval_timeout_durable, ApprovalDecision,
+  ApprovalDecisionOutcome, CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
+  NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyError,
+  ParallelFailurePolicy, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
+  RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions, SystemEngineClock,
 };
 
 #[derive(Serialize)]
@@ -191,6 +192,57 @@ fn native_approval_error(error: RuntimeExecutionError) -> napi::Error {
   };
   let reason = serde_json::to_string(&envelope)
     .unwrap_or_else(|_| "WOML approval failed and its error could not be encoded.".to_string());
+  napi::Error::from_reason(reason)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeNotificationError {
+  kind: &'static str,
+  code: &'static str,
+  message: &'static str,
+}
+
+fn native_notification_error(error: NotificationJourneyError) -> napi::Error {
+  let (code, message) = match error {
+    NotificationJourneyError::DeliveryFailed => (
+      "WOML_NOTIFICATION_DELIVERY_FAILED",
+      "Every configured approval notification delivery failed.",
+    ),
+    NotificationJourneyError::Host(NotificationHostClientError::InteractionTimedOut) => (
+      "WOML_NOTIFICATION_INTERACTION_TIMEOUT",
+      "No provider approval action arrived before the local wait deadline.",
+    ),
+    NotificationJourneyError::Host(NotificationHostClientError::Protocol(_)) => (
+      "WOML_NOTIFICATION_RESPONSE_INVALID",
+      "The notification provider host violated its frozen protocol.",
+    ),
+    NotificationJourneyError::Host(_) => (
+      "WOML_NOTIFICATION_HOST_CRASHED",
+      "The notification provider host stopped unexpectedly.",
+    ),
+    NotificationJourneyError::Store(DurableStoreError::ApprovalDecisionConflict) => (
+      "WOML_APPROVAL_DECISION_CONFLICT",
+      "A different human decision is already durable.",
+    ),
+    NotificationJourneyError::Store(DurableStoreError::ExpiredApprovalToken)
+    | NotificationJourneyError::Store(DurableStoreError::ApprovalExpired) => (
+      "WOML_APPROVAL_EXPIRED",
+      "The approval request or provider capability expired.",
+    ),
+    _ => (
+      "WOML_NOTIFICATION_INTERNAL",
+      "The notification provider journey could not be completed safely.",
+    ),
+  };
+  let envelope = NativeNotificationError {
+    kind: "woml_notification_error",
+    code,
+    message,
+  };
+  let reason = serde_json::to_string(&envelope).unwrap_or_else(|_| {
+    "WOML notification provider journey failed and its error could not be encoded.".to_string()
+  });
   napi::Error::from_reason(reason)
 }
 
@@ -394,4 +446,35 @@ pub fn recover_woml_runs(event_store_path: String) -> napi::Result<String> {
     .map_err(|error| napi::Error::from_reason(error.to_string()))?;
   serde_json::to_string(&report)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode recovery report: {error}")))
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub async fn run_woml_notification_provider_journey(
+  event_store_path: String,
+  run_id: String,
+  bun_executable: String,
+  notification_host_path: String,
+  interaction_timeout_ms: u32,
+) -> napi::Result<String> {
+  if interaction_timeout_ms == 0 {
+    return Err(napi::Error::from_reason(
+      "Notification interaction timeout must be positive.".to_string(),
+    ));
+  }
+  let result = run_notification_provider_journey(
+    PathBuf::from(event_store_path),
+    &run_id,
+    NotificationHostProcessOptions::new(
+      PathBuf::from(bun_executable),
+      PathBuf::from(notification_host_path),
+    ),
+    std::time::Duration::from_millis(u64::from(interaction_timeout_ms)),
+  )
+  .await
+  .map_err(native_notification_error)?;
+  serde_json::to_string(&result).map_err(|error| {
+    napi::Error::from_reason(format!(
+      "Could not encode notification provider journey: {error}"
+    ))
+  })
 }

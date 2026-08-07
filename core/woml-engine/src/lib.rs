@@ -9,6 +9,9 @@ pub mod engine;
 pub mod event;
 pub mod host;
 pub mod model;
+pub mod notification_host;
+pub mod notification_protocol;
+pub mod notification_runtime;
 pub mod projection;
 pub mod protocol;
 pub mod runtime;
@@ -41,6 +44,19 @@ pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions
 pub use model::{
   CompiledWorkflowDefinition, ModelIssue, ModelIssueCode, ModelValidationError,
   NotificationDefinition,
+};
+pub use notification_host::{
+  NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
+};
+pub use notification_protocol::{
+  NotificationApprovalMessage, NotificationCompletedMessage, NotificationCredentials,
+  NotificationDeliverMessage, NotificationHostOutcome, NotificationInteractionMessage,
+  NotificationReadyMessage, NotificationSecretReference, NotificationUpdateMessage,
+  NOTIFICATION_PROVIDER_MAX_FRAME_BYTES, NOTIFICATION_PROVIDER_PROTOCOL,
+  NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+};
+pub use notification_runtime::{
+  run_notification_provider_journey, NotificationJourneyError, NotificationJourneyResult,
 };
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError,

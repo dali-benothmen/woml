@@ -162,7 +162,7 @@ describe('woml secrets CLI', () => {
     expect(capture.output().stderr).toContain('WOML_SECRET_PROVIDER_READ_ONLY');
   });
 
-  test('reports the N4 provider-host boundary after compiling Slack markup', async () => {
+  test('keeps real Slack guarded after compiling Slack markup', async () => {
     const capture = capturedIo();
     let secretStoreCreated = false;
     const file = new URL(

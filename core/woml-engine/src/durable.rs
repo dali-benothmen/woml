@@ -250,7 +250,8 @@ pub trait NotificationProviderAdapter {
   fn update(&mut self, work: &NotificationUpdateWork) -> NotificationProviderUpdateResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NotificationDispatchReport {
   pub attempted: usize,
   pub succeeded: usize,
@@ -1022,6 +1023,35 @@ impl DurableEventStore {
     decision: ApprovalDecision,
     now: DateTime<Utc>,
   ) -> Result<ApprovalDecisionOutcome, DurableStoreError> {
+    self.resolve_notification_approval_internal(capability, None, provider_actor_id, decision, now)
+  }
+
+  pub fn resolve_notification_approval_from_provider(
+    &mut self,
+    capability: &str,
+    delivery_id: &str,
+    provider: &str,
+    provider_actor_id: &str,
+    decision: ApprovalDecision,
+    now: DateTime<Utc>,
+  ) -> Result<ApprovalDecisionOutcome, DurableStoreError> {
+    self.resolve_notification_approval_internal(
+      capability,
+      Some((delivery_id, provider)),
+      provider_actor_id,
+      decision,
+      now,
+    )
+  }
+
+  fn resolve_notification_approval_internal(
+    &mut self,
+    capability: &str,
+    provider_identity: Option<(&str, &str)>,
+    provider_actor_id: &str,
+    decision: ApprovalDecision,
+    now: DateTime<Utc>,
+  ) -> Result<ApprovalDecisionOutcome, DurableStoreError> {
     let (capability_id, secret) = parse_notification_capability(capability)?;
     let candidate_hash = Sha256::digest(secret.as_bytes());
     let transaction = self
@@ -1103,6 +1133,11 @@ impl DurableEventStore {
           "Notification capability references an unknown delivery.".to_string(),
         )
       })?;
+    if provider_identity.is_some_and(|(expected_delivery_id, expected_provider)| {
+      expected_delivery_id != delivery_id || expected_provider != delivery.provider
+    }) {
+      return Err(DurableStoreError::InvalidApprovalToken);
+    }
     if !matches!(
       delivery.status,
       NotificationDeliveryStatus::Succeeded { .. }

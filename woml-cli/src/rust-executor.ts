@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
 
 export interface RustRunEvent {
-  readonly eventSchemaVersion: 1 | 2 | 3 | 4;
+  readonly eventSchemaVersion: 1 | 2 | 3 | 4 | 5;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
@@ -161,6 +161,13 @@ interface NativeCore {
     runId: string,
     approvalId: string
   ) => string;
+  readonly runWomlNotificationProviderJourney: (
+    eventStorePath: string,
+    runId: string,
+    bunExecutable: string,
+    notificationHostPath: string,
+    interactionTimeoutMs: number
+  ) => Promise<string>;
 }
 
 export type ApprovalDecision = 'approved' | 'rejected';
@@ -230,6 +237,30 @@ export interface ApprovalTimeoutResult {
   readonly settledAt: string | null;
 }
 
+export interface NotificationDispatchReport {
+  readonly attempted: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  readonly runFailed: boolean;
+  readonly updatesAttempted: number;
+  readonly updatesSucceeded: number;
+  readonly updatesFailed: number;
+}
+
+export interface NotificationProviderJourneyResult {
+  readonly runId: string;
+  readonly decision: Omit<ApprovalDecisionResult, 'contract' | 'version'>;
+  readonly deliveries: NotificationDispatchReport;
+  readonly updates: NotificationDispatchReport;
+}
+
+export class NotificationProviderError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'NotificationProviderError';
+  }
+}
+
 function canonicalizeJson(value: unknown): string {
   if (
     value === null ||
@@ -282,6 +313,15 @@ function defaultScriptHostPath(): string {
   return resolve(
     import.meta.dir,
     import.meta.url.endsWith('.ts') ? 'script-host.ts' : 'script-host.js'
+  );
+}
+
+function defaultNotificationHostPath(): string {
+  return resolve(
+    import.meta.dir,
+    import.meta.url.endsWith('.ts')
+      ? 'notification-provider-host.ts'
+      : 'notification-provider-host.js'
   );
 }
 
@@ -357,7 +397,9 @@ function executionResult(value: unknown): value is RustWorkflowExecutionResult {
         'type',
         'data',
       ]) &&
-      event.eventSchemaVersion === 4 &&
+      Number.isSafeInteger(event.eventSchemaVersion) &&
+      Number(event.eventSchemaVersion) >= 1 &&
+      Number(event.eventSchemaVersion) <= 5 &&
       typeof event.eventId === 'string' &&
       typeof event.runId === 'string' &&
       Number.isSafeInteger(event.sequence) &&
@@ -783,4 +825,77 @@ export function recoverDurableRuns(
   return JSON.parse(
     native.recoverWomlRuns(eventStorePath)
   ) as RustRecoveryReport;
+}
+
+function parseNotificationJourney(
+  json: string
+): NotificationProviderJourneyResult {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    !exactKeys(value, ['runId', 'decision', 'deliveries', 'updates']) ||
+    typeof value.runId !== 'string' ||
+    !record(value.decision) ||
+    !record(value.deliveries) ||
+    !record(value.updates)
+  ) {
+    throw new Error('The native core returned an invalid notification journey.');
+  }
+  return value as unknown as NotificationProviderJourneyResult;
+}
+
+function decodeNotificationError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  const jsonStart = message.indexOf('{');
+  if (jsonStart !== -1) {
+    try {
+      const value: unknown = JSON.parse(message.slice(jsonStart));
+      if (
+        record(value) &&
+        exactKeys(value, ['kind', 'code', 'message']) &&
+        value.kind === 'woml_notification_error' &&
+        typeof value.code === 'string' &&
+        typeof value.message === 'string'
+      ) {
+        throw new NotificationProviderError(value.code, value.message);
+      }
+    } catch (decoded) {
+      if (decoded instanceof NotificationProviderError) throw decoded;
+    }
+  }
+  throw new NotificationProviderError(
+    'WOML_NOTIFICATION_INTERNAL',
+    'The notification provider journey could not be completed safely.'
+  );
+}
+
+export async function runNotificationProviderJourneyWithRust(
+  eventStorePath: string,
+  runId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath' | 'bunExecutable'> & {
+    readonly notificationHostPath?: string;
+    readonly interactionTimeoutMs?: number;
+  } = {}
+): Promise<NotificationProviderJourneyResult> {
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.runWomlNotificationProviderJourney !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose runWomlNotificationProviderJourney; rebuild the Rust addon.`
+    );
+  }
+  const timeoutMs = options.interactionTimeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 0xffff_ffff) {
+    throw new Error('interactionTimeoutMs must be a positive 32-bit integer.');
+  }
+  const json = await native
+    .runWomlNotificationProviderJourney(
+      eventStorePath,
+      runId,
+      options.bunExecutable ?? process.execPath,
+      options.notificationHostPath ?? defaultNotificationHostPath(),
+      timeoutMs
+    )
+    .catch(decodeNotificationError);
+  return parseNotificationJourney(json);
 }

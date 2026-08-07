@@ -1,10 +1,10 @@
 # WOML Notification Providers Implementation Plan
 
-Status: N0–N3 complete; ready for N4 — Slack markup lowers to Model v5 and the
-Rust core now durably owns notification delivery, shared decisions, retries,
-message updates, and crash recovery. The Bun provider host and actual Slack API
-effects begin in N4; Discord, WhatsApp, and generic webhook notification remain
-separate later milestones
+Status: N0–N4 complete; ready for N5 — the entire Slack lifecycle now passes
+through the versioned Bun provider host against a deterministic conformance
+adapter, while Rust remains the durable decision and route authority. Real
+Slack Socket Mode effects begin in N5; Discord, WhatsApp, and generic webhook
+notification remain separate later milestones.
 
 ## 1. Product Outcome
 
@@ -506,7 +506,7 @@ Completed proof:
   intentionally guarded until N4 supplies the provider host; N3 performs no
   real Slack or secret-store call.
 
-### N4 — Build the Slack provider host and conformance adapter
+### N4 — Build the Slack provider host and conformance adapter — complete
 
 Changes:
 
@@ -532,6 +532,35 @@ Gate:
 Fake-Slack journeys complete send, click, Rust resolution, selected-route
 continuation, and all-message update with no secret value crossing the frozen
 boundary.
+
+Completed proof:
+
+- A long-lived Bun provider host implements the frozen Notification Provider
+  Host v1 framing, strict request/result validation, asynchronous invocation
+  correlation, and independent interaction messages without adding Slack code
+  to Rust.
+- Rust sends only symbolic credential names across that boundary. The adapter
+  resolves bot and app tokens at invocation time, redacts resolved values from
+  failures, and never returns them in results, events, SQLite, or diagnostics.
+- Deliveries sharing an app-token reference reuse one host-owned connection,
+  while every channel retains its distinct durable delivery identity,
+  capability, idempotency key, and provider message identity.
+- The deterministic Slack transport models message delivery, native button
+  actions, duplicate actions, resolution updates, and disabled late actions.
+  Provider actions return to Rust's existing capability-bound, atomic
+  first-decision-wins authority and cannot execute a route directly.
+- Rust dispatches all pending deliveries concurrently, records each outcome,
+  waits for an authenticated provider interaction, durably resolves the shared
+  approval, and dispatches updates for every successful message before the
+  workflow resumes.
+- End-to-end tests prove two-channel send, one shared click, approved-route-only
+  continuation, and two-message convergence. Contract tests cover missing
+  secrets, malicious error redaction, malformed adapter identities,
+  out-of-order replies, duplicates, late actions, cancellation, interaction
+  timeout, and host crash fail-closed behavior.
+- The fake adapter is a conformance/test implementation only. `woml run` keeps
+  real Slack workflows explicitly guarded until the N5 Socket Mode adapter is
+  implemented.
 
 ### N5 — Implement real Slack Socket Mode end to end
 

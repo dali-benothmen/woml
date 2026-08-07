@@ -1,0 +1,280 @@
+import { afterEach, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+import { compileWoml, parseWoml } from 'woml';
+import {
+  executeApprovalWorkflowWithRust,
+  NotificationProviderError,
+  resumeApprovalWorkflowWithRust,
+  runNotificationProviderJourneyWithRust,
+} from '../src/rust-executor';
+
+const packageRoot = resolve(import.meta.dir, '..');
+const stagedNativeCorePath = resolve(
+  packageRoot,
+  'dist',
+  `woml-core.${process.platform}-${process.arch}.node`
+);
+const nativeCorePath =
+  process.env.WOML_RUST_CORE_PATH ??
+  (existsSync(stagedNativeCorePath) ? stagedNativeCorePath : undefined);
+const nativeTest = nativeCorePath === undefined ? test.skip : test;
+const scriptHostPath = resolve(packageRoot, 'src/script-host.ts');
+const notificationHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/fake-notification-provider-host.ts'
+);
+const missingSecretHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/missing-secret-notification-provider-host.ts'
+);
+const noActionHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/no-action-notification-provider-host.ts'
+);
+const crashingHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/crashing-notification-provider-host.ts'
+);
+const sourcePath = resolve(
+  packageRoot,
+  '../woml/tests/fixtures/approval-slack.woml'
+);
+
+const environmentNames = [
+  'WOML_SECRETS_PROVIDER',
+  'WOML_SECRET_SLACK_BOT_TOKEN',
+  'WOML_SECRET_SLACK_APP_TOKEN',
+  'WOML_FAKE_SLACK_DECISION',
+  'WOML_FAKE_SLACK_ACTOR_ID',
+] as const;
+const originalEnvironment = Object.fromEntries(
+  environmentNames.map(name => [name, process.env[name]])
+);
+
+afterEach(() => {
+  for (const name of environmentNames) {
+    const value = originalEnvironment[name];
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
+async function workflow() {
+  return compileWoml(
+    parseWoml(await Bun.file(sourcePath).text(), { file: sourcePath })
+  );
+}
+
+function routedWorkflow() {
+  const source = `<workflow version="0.1" id="n4-routed-approval" name="N4 Routed Approval">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <approval id="review" name="Review" timeout="24h" on-timeout="reject">
+      <notify>
+        <slack channels="#approvals #engineering" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />
+      </notify>
+      <when-approved>
+        <step id="approvedRoute"><script>return { route: 'approved' };</script></step>
+      </when-approved>
+      <when-rejected>
+        <step id="rejectedRoute"><script>return { route: 'rejected' };</script></step>
+      </when-rejected>
+    </approval>
+    <step id="finalStatus">
+      <script>return { decision: context.steps.review.decision };</script>
+    </step>
+  </steps>
+</workflow>`;
+  return compileWoml(parseWoml(source, { file: 'n4-routed-approval.woml' }));
+}
+
+function durableEventTypes(database: string): string[] {
+  const sqlite = new Database(database, { readonly: true });
+  try {
+    return sqlite
+      .query('SELECT event_json FROM woml_run_events ORDER BY sequence')
+      .all()
+      .map(row => JSON.parse((row as { event_json: string }).event_json))
+      .map(event => (event as { type: string }).type);
+  } finally {
+    sqlite.close();
+  }
+}
+
+describe('N4 Rust and fake Slack journey', () => {
+  nativeTest('sends every message, accepts one action, resumes, and updates all messages', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-n4-journey-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = routedWorkflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      expect(waiting.status).toBe('waiting');
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+
+      const journey = await runNotificationProviderJourneyWithRust(
+        database,
+        waiting.runId,
+        {
+          nativeCorePath,
+          notificationHostPath,
+          interactionTimeoutMs: 5_000,
+        }
+      );
+      expect(journey.deliveries).toMatchObject({
+        attempted: 2,
+        succeeded: 2,
+        failed: 0,
+      });
+      expect(journey.decision).toMatchObject({
+        status: 'accepted',
+        decision: 'approved',
+      });
+      expect(journey.updates).toMatchObject({
+        updatesAttempted: 2,
+        updatesSucceeded: 2,
+        updatesFailed: 0,
+      });
+
+      const resumed = await resumeApprovalWorkflowWithRust(
+        compiled,
+        database,
+        waiting.runId,
+        { nativeCorePath, scriptHostPath }
+      );
+      expect(resumed.status).toBe('succeeded');
+      if (resumed.status !== 'succeeded') throw new Error('expected success');
+      expect(resumed.execution.result).toEqual({ decision: 'approved' });
+      expect(resumed.execution.executionOrder).toContain('approvedRoute');
+      expect(resumed.execution.executionOrder).not.toContain('rejectedRoute');
+      expect(
+        resumed.execution.events.filter(
+          event => event.type === 'notification_delivery_succeeded'
+        )
+      ).toHaveLength(2);
+      expect(
+        resumed.execution.events.filter(
+          event => event.type === 'notification_decision_accepted'
+        )
+      ).toHaveLength(1);
+      expect(
+        resumed.execution.events.filter(
+          event => event.type === 'notification_message_updated'
+        )
+      ).toHaveLength(2);
+
+      const serialized = JSON.stringify(resumed);
+      expect(serialized).not.toContain('xoxb-n4-secret-bot-value');
+      expect(serialized).not.toContain('xapp-n4-secret-app-value');
+      expect(serialized).not.toContain('ncap_');
+      const databaseBytes = Buffer.from(await Bun.file(database).arrayBuffer());
+      expect(databaseBytes.includes(Buffer.from('xoxb-n4-secret-bot-value'))).toBe(
+        false
+      );
+      expect(databaseBytes.includes(Buffer.from('xapp-n4-secret-app-value'))).toBe(
+        false
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  nativeTest('fails explicitly when the provider host cannot resolve credentials', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-n4-missing-secret-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = await workflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+      await expect(
+        runNotificationProviderJourneyWithRust(database, waiting.runId, {
+          nativeCorePath,
+          notificationHostPath: missingSecretHostPath,
+          interactionTimeoutMs: 1_000,
+        })
+      ).rejects.toMatchObject({
+        name: NotificationProviderError.name,
+        code: 'WOML_NOTIFICATION_DELIVERY_FAILED',
+      });
+      const bytes = Buffer.from(await Bun.file(database).arrayBuffer());
+      expect(bytes.includes(Buffer.from('WOML_SECRET_SLACK'))).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  nativeTest('keeps the approval waiting when no provider action arrives before the deadline', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-n4-timeout-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = await workflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+      await expect(
+        runNotificationProviderJourneyWithRust(database, waiting.runId, {
+          nativeCorePath,
+          notificationHostPath: noActionHostPath,
+          interactionTimeoutMs: 25,
+        })
+      ).rejects.toMatchObject({
+        name: NotificationProviderError.name,
+        code: 'WOML_NOTIFICATION_INTERACTION_TIMEOUT',
+      });
+      const resumed = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      expect(resumed.status).toBe('waiting');
+      const eventTypes = durableEventTypes(database);
+      expect(
+        eventTypes.filter(type => type === 'notification_delivery_succeeded')
+      ).toHaveLength(2);
+      expect(eventTypes).not.toContain('notification_decision_accepted');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  nativeTest('fails closed when the provider host crashes during delivery', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-n4-host-crash-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = await workflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+      await expect(
+        runNotificationProviderJourneyWithRust(database, waiting.runId, {
+          nativeCorePath,
+          notificationHostPath: crashingHostPath,
+          interactionTimeoutMs: 1_000,
+        })
+      ).rejects.toMatchObject({
+        name: NotificationProviderError.name,
+        code: 'WOML_NOTIFICATION_DELIVERY_FAILED',
+      });
+      const eventTypes = durableEventTypes(database);
+      expect(
+        eventTypes.filter(type => type === 'notification_delivery_failed')
+      ).toHaveLength(2);
+      expect(eventTypes).not.toContain('notification_decision_accepted');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

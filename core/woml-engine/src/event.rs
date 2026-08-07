@@ -604,7 +604,7 @@ fn valid_sha256(value: &str) -> bool {
   })
 }
 
-fn valid_provider_message(message: &ProviderMessageIdentity) -> bool {
+pub(crate) fn valid_provider_message(message: &ProviderMessageIdentity) -> bool {
   valid_prefixed_id(&message.workspace_id, "T", 9)
     && matches!(
       message.channel_id.as_bytes().first(),
@@ -637,6 +637,7 @@ impl NotificationSafeFailure {
       "delivery_ambiguous",
       "host_crashed",
       "size_limit_exceeded",
+      "request_invalid",
       "update_failed",
     ];
     if !KINDS.contains(&self.kind.as_str())
