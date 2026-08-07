@@ -1,0 +1,6 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 3,
+  "messageType": "ready",
+  "hostInstanceId": "host_retry_01"
+}

@@ -1,0 +1,15 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 3,
+  "messageType": "completed",
+  "invocationId": "inv_retry_greet_01",
+  "outcome": {
+    "kind": "failure",
+    "error": {
+      "kind": "script_threw",
+      "code": "WOML_SCRIPT_THROWN",
+      "message": "Temporary greeting failure"
+    }
+  },
+  "durationMs": 0.75
+}

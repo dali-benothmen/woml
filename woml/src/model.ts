@@ -170,12 +170,18 @@ export interface CompiledWorkflowDefinitionV5
   readonly schemaVersion: 5;
 }
 
+export interface CompiledWorkflowDefinitionV6
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 6;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
   | CompiledWorkflowDefinitionV3
   | CompiledWorkflowDefinitionV4
-  | CompiledWorkflowDefinitionV5;
+  | CompiledWorkflowDefinitionV5
+  | CompiledWorkflowDefinitionV6;
 
 export interface CompiledGraphIssue {
   readonly code:

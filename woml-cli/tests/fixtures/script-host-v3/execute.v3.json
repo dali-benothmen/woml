@@ -1,0 +1,24 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 3,
+  "messageType": "execute",
+  "invocationId": "inv_retry_greet_02",
+  "runId": "run_retry_success",
+  "nodeId": "greet",
+  "attempt": {
+    "number": 2,
+    "maxAttempts": 3,
+    "idempotencyKey": "sha256:35278a8c79c5843d1fc3015aac65ea3ee7579559463214234e16624b5bbf609c"
+  },
+  "handler": "runtime.script",
+  "timeoutMs": 30000,
+  "source": "return { message: `Héllo ${context.steps.prepare.name}\r\nagain` };",
+  "context": {
+    "trigger": {},
+    "steps": {
+      "prepare": {
+        "name": "世界"
+      }
+    }
+  }
+}

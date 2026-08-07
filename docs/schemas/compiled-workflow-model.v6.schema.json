@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v6",
+  "title": "WOML Compiled Workflow Model v6",
+  "description": "Language-neutral DAG contract activating bounded retry policies for runtime.script step nodes.",
+  "x-status": "retry-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v5",
+  "x-frozenProfile": {
+    "name": "woml-cli-retry",
+    "sourceFixture": "woml/tests/fixtures/retry.woml",
+    "compiledFixture": "woml/tests/fixtures/retry.compiled.v6.json"
+  },
+  "x-invariants": [
+    "The model remains a directed acyclic graph.",
+    "retryPolicy is executable only on runtime.script nodes authored as step elements.",
+    "maxAttempts is the total number of attempts including the first attempt.",
+    "A policy is omitted when the authored retry value is 1.",
+    "Fixed and exponential delays are positive and no greater than 24 hours.",
+    "The first exponential profile has a multiplier of exactly 2 and no jitter."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 6 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "#/$defs/workflowGraph" }
+  },
+  "$defs": {
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges"],
+      "properties": {
+        "entryNodeIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" }
+        },
+        "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/workflowNode" } },
+        "edges": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/workflowEdge" } }
+      }
+    },
+    "workflowNode": {
+      "oneOf": [
+        { "$ref": "#/$defs/nonRetryNode" },
+        { "$ref": "#/$defs/retryingScriptNode" }
+      ]
+    },
+    "nonRetryNode": {
+      "allOf": [
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v5#/$defs/workflowNode" },
+        { "not": { "required": ["retryPolicy"] } }
+      ]
+    },
+    "retryingScriptNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs", "retryPolicy"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "runtime.script" },
+        "inputs": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/valueExpression" },
+        "retryPolicy": { "$ref": "#/$defs/retryPolicy" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Language-neutral descriptive metadata only."
+        }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxAttempts", "backoff"],
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 2, "maximum": 10 },
+        "backoff": { "$ref": "#/$defs/backoffPolicy" }
+      }
+    },
+    "backoffPolicy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "delayMs"],
+          "properties": {
+            "kind": { "const": "fixed" },
+            "delayMs": { "type": "integer", "minimum": 1, "maximum": 86400000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "initialDelayMs", "multiplier", "maximumDelayMs"],
+          "properties": {
+            "kind": { "const": "exponential" },
+            "initialDelayMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+            "multiplier": { "const": 2 },
+            "maximumDelayMs": { "type": "integer", "minimum": 1, "maximum": 86400000 }
+          }
+        }
+      ]
+    }
+  }
+}

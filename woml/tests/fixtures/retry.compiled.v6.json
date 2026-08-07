@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 6,
+  "workflowId": "retry-demo",
+  "metadata": {
+    "name": "Retry Demo",
+    "version": "0.1"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": {
+        "kind": "object",
+        "fields": {}
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": [
+      "prepare"
+    ],
+    "nodes": [
+      {
+        "id": "prepare",
+        "handler": "runtime.script",
+        "metadata": {
+          "name": "Prepare greeting"
+        },
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return { name: context.trigger.name ?? \"World\" };\n      "
+            }
+          }
+        }
+      },
+      {
+        "id": "greet",
+        "handler": "runtime.script",
+        "metadata": {
+          "name": "Build greeting"
+        },
+        "retryPolicy": {
+          "maxAttempts": 3,
+          "backoff": {
+            "kind": "exponential",
+            "initialDelayMs": 1000,
+            "multiplier": 2,
+            "maximumDelayMs": 30000
+          }
+        },
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        if (attempt.number < 3) {\n          throw new Error(\"Temporary greeting failure\");\n        }\n\n        return { message: `Hello ${context.steps.prepare.name}` };\n      "
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "prepare-to-greet",
+        "from": "prepare",
+        "to": "greet",
+        "condition": {
+          "kind": "always"
+        }
+      }
+    ]
+  }
+}

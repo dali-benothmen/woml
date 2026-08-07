@@ -1,0 +1,10 @@
+{
+  "contract": "woml.execution-progress",
+  "version": 1,
+  "type": "step_attempt_failed",
+  "runId": "run_retry_success",
+  "nodeId": "greet",
+  "attempt": 1,
+  "maxAttempts": 3,
+  "failureCode": "WOML_SCRIPT_THROWN"
+}

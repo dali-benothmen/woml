@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/execution-progress/v1",
+  "title": "WOML Execution Progress v1",
+  "description": "Secret-safe Rust-to-CLI progress messages for step retries.",
+  "x-status": "retry-profile-frozen",
+  "x-forbiddenFields": ["context", "source", "output", "secrets", "capabilities", "providerPayload"],
+  "oneOf": [
+    { "$ref": "#/$defs/attemptFailed" },
+    { "$ref": "#/$defs/retryScheduled" },
+    { "$ref": "#/$defs/attemptSucceeded" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "attemptFields": {
+      "type": "object",
+      "required": ["contract", "version", "runId", "nodeId", "attempt", "maxAttempts"]
+    },
+    "attemptFailed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "version", "type", "runId", "nodeId", "attempt", "maxAttempts", "failureCode"],
+      "properties": {
+        "contract": { "const": "woml.execution-progress" }, "version": { "const": 1 },
+        "type": { "const": "step_attempt_failed" }, "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 10 }, "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "failureCode": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }
+      }
+    },
+    "retryScheduled": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "version", "type", "runId", "nodeId", "nextAttempt", "maxAttempts", "scheduledAt"],
+      "properties": {
+        "contract": { "const": "woml.execution-progress" }, "version": { "const": 1 },
+        "type": { "const": "step_retry_scheduled" }, "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" },
+        "nextAttempt": { "type": "integer", "minimum": 2, "maximum": 10 }, "maxAttempts": { "type": "integer", "minimum": 2, "maximum": 10 },
+        "scheduledAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "attemptSucceeded": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "version", "type", "runId", "nodeId", "attempt", "maxAttempts"],
+      "properties": {
+        "contract": { "const": "woml.execution-progress" }, "version": { "const": 1 },
+        "type": { "const": "step_attempt_succeeded" }, "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 10 }, "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    }
+  }
+}

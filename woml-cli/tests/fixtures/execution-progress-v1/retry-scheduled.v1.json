@@ -1,0 +1,10 @@
+{
+  "contract": "woml.execution-progress",
+  "version": 1,
+  "type": "step_retry_scheduled",
+  "runId": "run_retry_success",
+  "nodeId": "greet",
+  "nextAttempt": 2,
+  "maxAttempts": 3,
+  "scheduledAt": "2026-08-07T12:00:01.002Z"
+}

@@ -634,15 +634,183 @@ describe('compileWoml', () => {
     expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
   });
 
-  test('rejects staged attributes instead of silently ignoring them', () => {
+  test('rejects the remaining staged timeout attribute instead of silently ignoring it', () => {
     const source = validWorkflow(
-      '<step id="a" retry="1"><script>return 1;</script></step>'
+      '<step id="a" timeout="1s"><script>return 1;</script></step>'
     );
     const error = validationError(source);
 
     expect(error.diagnostic.code).toBe('WOML_FEATURE_NOT_EXECUTABLE');
     expect(error.diagnostic.location.start.offset).toBe(
-      source.indexOf('retry')
+      source.indexOf('timeout')
+    );
+  });
+
+  test('RI1 lowers the reviewed retry fixture exactly to model v6', () => {
+    const source = readFileSync(
+      new URL('./fixtures/retry.woml', import.meta.url),
+      'utf8'
+    );
+    const expected = JSON.parse(
+      readFileSync(
+        new URL('./fixtures/retry.compiled.v6.json', import.meta.url),
+        'utf8'
+      )
+    );
+    const compiled = compile(source);
+
+    expect(compiled).toEqual(expected);
+    expect(compiled.schemaVersion).toBe(6);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+    expect(compile(source)).toEqual(compiled);
+  });
+
+  test('treats omitted retry and retry="1" as the same older-model behavior', () => {
+    const omitted = compile(
+      validWorkflow('<step id="a"><script>return 1;</script></step>')
+    );
+    const one = compile(
+      validWorkflow('<step id="a" retry="1"><script>return 1;</script></step>')
+    );
+
+    expect(one).toEqual(omitted);
+    expect(one.schemaVersion).toBe(1);
+    expect(one.graph.nodes[0].retryPolicy).toBeUndefined();
+  });
+
+  test('applies frozen retry defaults and fixed-backoff lowering', () => {
+    const exponential = compile(
+      validWorkflow('<step id="a" retry="3"><script>return 1;</script></step>')
+    );
+    expect(exponential.schemaVersion).toBe(6);
+    expect(exponential.graph.nodes[0].retryPolicy).toEqual({
+      maxAttempts: 3,
+      backoff: {
+        kind: 'exponential',
+        initialDelayMs: 1000,
+        multiplier: 2,
+        maximumDelayMs: 30000,
+      },
+    });
+
+    const fixed = compile(
+      validWorkflow(
+        '<step id="a" retry="2" retry-backoff="fixed" retry-delay="250ms"><script>return 1;</script></step>'
+      )
+    );
+    expect(fixed.graph.nodes[0].retryPolicy).toEqual({
+      maxAttempts: 2,
+      backoff: { kind: 'fixed', delayMs: 250 },
+    });
+  });
+
+  test('accepts retry on normal steps nested in branch, parallel, and approval routes', () => {
+    const branch = compile(
+      validWorkflow(`
+      <step id="ready"><script>return true;</script></step>
+      <branch id="route">
+        <when test="{{context.steps.ready}}">
+          <step id="selected" retry="2"><script>return 1;</script></step>
+          <result value="{{context.steps.selected}}" />
+        </when>
+        <otherwise>
+          <step id="fallback"><script>return 0;</script></step>
+          <result value="{{context.steps.fallback}}" />
+        </otherwise>
+      </branch>`)
+    );
+    expect(branch.schemaVersion).toBe(6);
+
+    const parallel = compile(
+      validWorkflow(`
+      <parallel id="group">
+        <step id="child" retry="2"><script>return 1;</script></step>
+      </parallel>
+      <step id="finish"><script>return context.steps.child;</script></step>`)
+    );
+    expect(parallel.schemaVersion).toBe(6);
+
+    const approval = compile(
+      validWorkflow(`
+      <approval id="review">
+        <when-approved>
+          <step id="publish" retry="2"><script>return 1;</script></step>
+        </when-approved>
+        <when-rejected />
+      </approval>`)
+    );
+    expect(approval.schemaVersion).toBe(6);
+  });
+
+  test('reports frozen retry diagnostics at the responsible attribute', () => {
+    const cases = [
+      {
+        markup: '<step id="a" retry="0"><script>return 1;</script></step>',
+        code: 'WOML_RETRY_INVALID',
+        token: '0',
+      },
+      {
+        markup: '<step id="a" retry="11"><script>return 1;</script></step>',
+        code: 'WOML_RETRY_INVALID',
+        token: '11',
+      },
+      {
+        markup:
+          '<step id="a" retry-backoff="fixed"><script>return 1;</script></step>',
+        code: 'WOML_RETRY_BACKOFF_REQUIRES_RETRY',
+        token: 'retry-backoff',
+      },
+      {
+        markup:
+          '<step id="a" retry="2" retry-backoff="random"><script>return 1;</script></step>',
+        code: 'WOML_RETRY_BACKOFF_INVALID',
+        token: 'random',
+      },
+      {
+        markup:
+          '<step id="a" retry="2" retry-delay="0s"><script>return 1;</script></step>',
+        code: 'WOML_RETRY_DELAY_INVALID',
+        token: '0s',
+      },
+      {
+        markup:
+          '<step id="a" retry="2" retry-delay="2s" retry-max-delay="1s"><script>return 1;</script></step>',
+        code: 'WOML_RETRY_MAX_DELAY_INVALID',
+        token: '1s',
+      },
+      {
+        markup:
+          '<step id="a" retry="2" retry-backoff="fixed" retry-max-delay="1s"><script>return 1;</script></step>',
+        code: 'WOML_RETRY_MAX_DELAY_NOT_ALLOWED',
+        token: 'retry-max-delay',
+      },
+    ];
+
+    for (const entry of cases) {
+      const source = validWorkflow(entry.markup);
+      const error = validationError(source);
+      expect(error.diagnostic.code).toBe(entry.code);
+      expect(error.diagnostic.location.start.offset).toBe(
+        source.indexOf(entry.token, source.indexOf('<step'))
+      );
+    }
+  });
+
+  test('keeps retry attributes step-only and rejects a retry element', () => {
+    const structural = validWorkflow(`
+    <parallel id="group" retry="2">
+      <step id="child"><script>return 1;</script></step>
+    </parallel>
+    <step id="finish"><script>return 1;</script></step>`);
+    expect(validationError(structural).diagnostic.code).toBe(
+      'WOML_RETRY_HANDLER_UNSUPPORTED'
+    );
+
+    const element = validWorkflow(
+      '<step id="a"><retry /><script>return 1;</script></step>'
+    );
+    expect(validationError(element).diagnostic.code).toBe(
+      'WOML_UNKNOWN_ELEMENT'
     );
   });
 

@@ -7,6 +7,7 @@ import {
   type CompiledWorkflowNode,
   type ContextReferenceExpression,
   type JsonValue,
+  type RetryPolicy,
   type SecretReferenceExpression,
 } from './model';
 import {
@@ -31,6 +32,7 @@ interface ValidatedStep {
   readonly kind: 'step';
   readonly id: string;
   readonly source: string;
+  readonly retryPolicy?: RetryPolicy;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -154,8 +156,16 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   manual: { attributes: new Set(['id']) },
   steps: { attributes: new Set() },
   step: {
-    attributes: new Set(['id', 'name', 'description']),
-    stagedAttributes: new Set(['retry', 'timeout']),
+    attributes: new Set([
+      'id',
+      'name',
+      'description',
+      'retry',
+      'retry-backoff',
+      'retry-delay',
+      'retry-max-delay',
+    ]),
+    stagedAttributes: new Set(['timeout']),
   },
   script: { attributes: new Set() },
   branch: { attributes: new Set(['id', 'name', 'description']) },
@@ -269,11 +279,18 @@ function visitProfile(
     if (!profile.attributes.has(attribute.name)) {
       failValidation(
         document,
-        element.name === 'slack'
-          ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
-          : 'WOML_UNKNOWN_ATTRIBUTE',
-        `Unknown attribute "${attribute.name}" on <${element.name}>.`,
-        attribute.nameSpan
+        attribute.name === 'retry' || attribute.name.startsWith('retry-')
+          ? 'WOML_RETRY_HANDLER_UNSUPPORTED'
+          : element.name === 'slack'
+            ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
+            : 'WOML_UNKNOWN_ATTRIBUTE',
+        attribute.name === 'retry' || attribute.name.startsWith('retry-')
+          ? `Retry attributes are valid only on <step>; found "${attribute.name}" on <${element.name}>.`
+          : `Unknown attribute "${attribute.name}" on <${element.name}>.`,
+        attribute.nameSpan,
+        attribute.name === 'retry' || attribute.name.startsWith('retry-')
+          ? 'Move the retry policy to a script-bearing <step>.'
+          : undefined
       );
     }
   }
@@ -626,6 +643,149 @@ const durationUnitsMs = {
   d: 86_400_000,
 } as const;
 
+const maximumRetryDelayMs = durationUnitsMs.h * 24;
+
+function retryDurationMs(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute,
+  code: 'WOML_RETRY_DELAY_INVALID' | 'WOML_RETRY_MAX_DELAY_INVALID'
+): number {
+  const match =
+    /^(?:(?:[1-9][0-9]*)(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)(ms|s|m|h|d)$/.exec(
+      attribute.value
+    );
+  if (match === null) {
+    failValidation(
+      document,
+      code,
+      `Retry duration "${attribute.value}" must be a positive duration using ms, s, m, h, or d.`,
+      attribute.valueSpan,
+      'Examples: 500ms, 1s, 30m, 24h'
+    );
+  }
+
+  const numeric = Number(attribute.value.slice(0, -match[1].length));
+  const milliseconds =
+    numeric * durationUnitsMs[match[1] as keyof typeof durationUnitsMs];
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    milliseconds < 1 ||
+    milliseconds > maximumRetryDelayMs
+  ) {
+    failValidation(
+      document,
+      code,
+      `Retry duration "${attribute.value}" must resolve to a whole number of milliseconds from 1ms through 24h.`,
+      attribute.valueSpan
+    );
+  }
+  return milliseconds;
+}
+
+function stepRetryPolicy(
+  document: WomlSourceDocument,
+  step: WomlSourceElement
+): RetryPolicy | undefined {
+  const retry = step.attributes.retry;
+  const backoff = step.attributes['retry-backoff'];
+  const delay = step.attributes['retry-delay'];
+  const maximumDelay = step.attributes['retry-max-delay'];
+  const firstBackoffAttribute = backoff ?? delay ?? maximumDelay;
+
+  if (retry === undefined) {
+    if (firstBackoffAttribute !== undefined) {
+      failValidation(
+        document,
+        'WOML_RETRY_BACKOFF_REQUIRES_RETRY',
+        `Attribute "${firstBackoffAttribute.name}" requires retry greater than 1 on the same <step>.`,
+        firstBackoffAttribute.nameSpan
+      );
+    }
+    return undefined;
+  }
+
+  if (!/^[1-9][0-9]*$/.test(retry.value)) {
+    failValidation(
+      document,
+      'WOML_RETRY_INVALID',
+      `Retry "${retry.value}" must be an integer from 1 through 10.`,
+      retry.valueSpan
+    );
+  }
+  const maxAttempts = Number(retry.value);
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts > 10) {
+    failValidation(
+      document,
+      'WOML_RETRY_INVALID',
+      `Retry "${retry.value}" must be an integer from 1 through 10.`,
+      retry.valueSpan
+    );
+  }
+  if (maxAttempts === 1) {
+    if (firstBackoffAttribute !== undefined) {
+      failValidation(
+        document,
+        'WOML_RETRY_BACKOFF_REQUIRES_RETRY',
+        `Attribute "${firstBackoffAttribute.name}" requires retry greater than 1 on the same <step>.`,
+        firstBackoffAttribute.nameSpan
+      );
+    }
+    return undefined;
+  }
+
+  const strategy = backoff?.value ?? 'exponential';
+  if (strategy !== 'fixed' && strategy !== 'exponential') {
+    failValidation(
+      document,
+      'WOML_RETRY_BACKOFF_INVALID',
+      `Retry backoff must be "fixed" or "exponential", found "${strategy}".`,
+      backoff!.valueSpan
+    );
+  }
+
+  const delayMs =
+    delay === undefined
+      ? 1_000
+      : retryDurationMs(document, delay, 'WOML_RETRY_DELAY_INVALID');
+
+  if (strategy === 'fixed') {
+    if (maximumDelay !== undefined) {
+      failValidation(
+        document,
+        'WOML_RETRY_MAX_DELAY_NOT_ALLOWED',
+        'Attribute "retry-max-delay" is available only with exponential retry backoff.',
+        maximumDelay.nameSpan
+      );
+    }
+    return {
+      maxAttempts,
+      backoff: { kind: 'fixed', delayMs },
+    };
+  }
+
+  const maximumDelayMs =
+    maximumDelay === undefined
+      ? Math.max(30_000, delayMs)
+      : retryDurationMs(document, maximumDelay, 'WOML_RETRY_MAX_DELAY_INVALID');
+  if (maximumDelayMs < delayMs) {
+    failValidation(
+      document,
+      'WOML_RETRY_MAX_DELAY_INVALID',
+      'Attribute "retry-max-delay" must be greater than or equal to "retry-delay".',
+      maximumDelay!.valueSpan
+    );
+  }
+  return {
+    maxAttempts,
+    backoff: {
+      kind: 'exponential',
+      initialDelayMs: delayMs,
+      multiplier: 2,
+      maximumDelayMs,
+    },
+  };
+}
+
 function approvalTimeoutMs(
   document: WomlSourceDocument,
   approval: WomlSourceElement
@@ -919,6 +1079,7 @@ function validateStep(
     kind: 'step',
     id,
     source: scriptSource(document, operations[0]),
+    retryPolicy: stepRetryPolicy(document, step),
     metadata: flowItemMetadata(document, step),
   };
 }
@@ -1394,6 +1555,9 @@ function lowerStep(step: ValidatedStep): LoweredFlowFragment {
     id: step.id,
     handler: 'runtime.script',
     ...(step.metadata === undefined ? {} : { metadata: step.metadata }),
+    ...(step.retryPolicy === undefined
+      ? {}
+      : { retryPolicy: step.retryPolicy }),
     inputs: {
       kind: 'object',
       fields: {
@@ -1753,8 +1917,11 @@ export function compileWoml(
       edges: lowered.edges,
     } satisfies CompiledWorkflowGraph,
   };
-  const compiled: CompiledWorkflowDefinition =
-    flow.firstNotification !== undefined
+  const compiled: CompiledWorkflowDefinition = lowered.nodes.some(
+    node => node.retryPolicy !== undefined
+  )
+    ? { schemaVersion: 6, ...definition }
+    : flow.firstNotification !== undefined
       ? { schemaVersion: 5, ...definition }
       : flow.firstApproval !== undefined
         ? { schemaVersion: 4, ...definition }

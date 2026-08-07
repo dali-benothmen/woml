@@ -56,7 +56,9 @@ includes conditional branches and bounded parallel groups:
 | Workflow `id`/`name`/`description`, manual trigger, sequential steps | Frozen | Executable and publishable |
 | `<script>` with `context.trigger` and `context.steps` | Frozen | Executable and publishable |
 | `{{context...}}` attribute-reference grammar | Frozen | Executable for branch `test` and `result` |
-| Workflow `tags`/`version` and step `retry`/`timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
+| Workflow `version` | Frozen | Executable as user-defined workflow metadata |
+| Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
+| Step `retry` and backoff attributes | Frozen; RI0 contracts and RI1 lowering implemented | The frontend compiles multi-attempt policies to Model v6; Rust execution remains unavailable until RI2–RI4 |
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
@@ -803,8 +805,10 @@ wrapped in `<step>`.
   id="greetUser"
   name="Greet user"
   description="Build the greeting returned to downstream steps"
-  retry="1"
-  timeout="5s">
+  retry="3"
+  retry-backoff="exponential"
+  retry-delay="1s"
+  retry-max-delay="30s">
   <script>
     return {
       message: `Hello ${context.trigger.name}`
@@ -820,22 +824,23 @@ wrapped in `<step>`.
 | `id` | Yes | Step ID | Stable DAG-node and output identity. |
 | `name` | No | String | Human-readable display name. |
 | `description` | No | String | Human-readable description. |
-| `retry` | No | Integer `1` | Reserved retry policy; omission and `1` both mean one attempt in v0.1. |
-| `timeout` | No | Duration | Maximum duration of each attempt. |
+| `retry` | No | Integer `1`–`10` | Maximum total attempts, including the first attempt. |
+| `retry-backoff` | No | `fixed` or `exponential` | Backoff strategy; defaults to `exponential` when `retry > 1`. |
+| `retry-delay` | No | Positive duration up to `24h` | Fixed delay or initial exponential delay; defaults to `1s`. |
+| `retry-max-delay` | No | Positive duration up to `24h` | Exponential cap; invalid with fixed backoff. |
+| `timeout` | No | Duration | Reserved maximum duration of each attempt; not executable yet. |
 
 Human-readable name and description are attributes, as defined in Section 5.1.
 They lower to `metadata.name` and `metadata.description` on the compiled node.
 
-The frozen design grammar reserves `retry="1"` as the only v0.1 value, but the
-first CLI executable profile rejects the `retry` attribute entirely with
-`WOML_FEATURE_NOT_EXECUTABLE`. It never silently ignores the attribute. Any
-value greater than one is also outside the v0.1 grammar. Multi-attempt retry
-cannot become executable until retryable-error, backoff, interruption, and
-idempotency contracts are approved together.
+Retry is always a `<step>` attribute. WOML has no `<retry>` element. Omission
+and `retry="1"` both mean one attempt, omit `retryPolicy`, and preserve the
+older compiled-model version. A value greater than one compiles to Model v6.
+RI1 implements parsing, validation, diagnostics, and deterministic lowering;
+the Rust runtime deliberately rejects Model v6 until durable retry execution is
+implemented in RI2–RI4.
 
-The fundamental syntax intentionally keeps retry as an attribute. When backoff
-is added, it should remain attribute-based rather than introducing a second
-retry representation. Candidate future attributes are:
+The complete attribute form is:
 
 ```xml
 <step
@@ -848,8 +853,15 @@ retry representation. Candidate future attributes are:
 </step>
 ```
 
-These backoff attributes and `retry` values greater than one are reserved, not
-part of the executable v0.1 grammar.
+Backoff attributes require `retry > 1`. Exponential backoff uses multiplier 2
+and no jitter. Its default maximum is the greater of `30s` and
+`retry-delay`. Fixed backoff rejects `retry-max-delay`. Every duration must
+resolve to a whole number of milliseconds from `1ms` through `24h`.
+
+The frozen failure policy retries only a definitive `script_threw` outcome.
+Timeouts, invalid results, size failures, process crashes, interruptions, and
+cancellation fail closed. The stable effect key and recovery rules are defined
+in `docs/protocols/retry-idempotency-v1.md`.
 
 ### 11.2 Script semantics
 
@@ -857,10 +869,21 @@ part of the executable v0.1 grammar.
 write ordinary statements and may use `await`, loops, conditions, exceptions,
 and returned objects without adding a function wrapper.
 
-The first CLI executable profile injects exactly one binding:
+The currently published CLI profile injects exactly one binding:
 
 - `context` is the fixed read-only, JSON-compatible data projection for the
   current workflow run.
+
+Model v6 freezes a second read-only binding for the retry runtime:
+
+- `attempt.number` is the current one-based attempt number.
+- `attempt.maxAttempts` is the compiled maximum total attempt count.
+- `attempt.idempotencyKey` is stable across every attempt of the same logical
+  step in one run.
+
+The frontend may compile scripts that reference `attempt`, but the binding does
+not become runnable until Script Host v3 is implemented in RI3. It is separate
+from context and does not define `context.run`.
 
 `services` is unavailable in this profile. A script that references it receives
 the normal JavaScript missing-binding failure. A later capability profile may
@@ -1444,7 +1467,13 @@ conditions hold.
 - A duration has no unit or uses an unsupported unit.
 - `concurrency` or a rate count is not a positive integer.
 - Parallel `concurrency` exceeds its direct child count.
-- `retry` is present with any value other than the integer `1`.
+- `retry` is not an integer from `1` through `10`.
+- A retry backoff attribute appears without `retry > 1`.
+- `retry-backoff` is not `fixed` or `exponential`.
+- A retry delay is zero, malformed, exceeds `24h`, or does not resolve to a
+  whole number of milliseconds.
+- `retry-max-delay` is smaller than `retry-delay` or is used with fixed
+  backoff.
 - An enum attribute contains an unsupported value.
 - Inline webhook JSON Schema is malformed or invalid.
 - Approval `timeout` is invalid or `on-timeout` is not `reject` or `fail`.

@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v6",
+  "title": "WOML Run Event v6",
+  "description": "Append-only workflow events adding stable step-effect identity and durable retry scheduling.",
+  "x-status": "retry-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v5",
+  "x-currentEventTypes": [
+    "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled",
+    "branch_selected", "parallel_group_started", "parallel_group_completed",
+    "approval_requested", "notification_delivery_requested", "notification_delivery_attempt_started",
+    "notification_delivery_succeeded", "notification_delivery_failed", "notification_decision_accepted",
+    "notification_message_update_requested", "notification_message_update_attempt_started",
+    "notification_message_updated", "notification_message_update_failed", "approval_resolved",
+    "run_succeeded", "run_failed"
+  ],
+  "x-invariants": [
+    "One run never mixes event schema versions.",
+    "Every v6 step_attempt_started carries the stable step-effect idempotency key.",
+    "step_attempt_failed and its step_retry_scheduled decision are committed atomically.",
+    "Attempt numbers are contiguous and nextAttempt equals failedAttempt plus one.",
+    "Only a definitive script_threw failure may schedule a retry in the first profile.",
+    "An active attempt recovered without a terminal event becomes interrupted and is never replayed automatically."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 6 },
+    "eventId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "runId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled",
+        "branch_selected", "parallel_group_started", "parallel_group_completed",
+        "approval_requested", "notification_delivery_requested", "notification_delivery_attempt_started",
+        "notification_delivery_succeeded", "notification_delivery_failed", "notification_decision_accepted",
+        "notification_message_update_requested", "notification_message_update_attempt_started",
+        "notification_message_updated", "notification_message_update_failed", "approval_resolved",
+        "run_succeeded", "run_failed"
+      ]
+    },
+    "data": {}
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "run_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptSucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_retry_scheduled" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/stepRetryScheduledData" } } } },
+    { "if": { "properties": { "type": { "const": "branch_selected" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v2#/$defs/branchSelectedData" } } } },
+    { "if": { "properties": { "type": { "const": "parallel_group_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "parallel_group_completed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupCompletedData" } } } },
+    { "if": { "properties": { "type": { "const": "approval_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v4#/$defs/approvalRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliveryRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliveryAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliverySucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliveryFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_decision_accepted" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/notificationDecisionAcceptedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdateRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdateAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_updated" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdatedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdateFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "approval_resolved" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v4#/$defs/approvalResolvedData" } } } },
+    { "if": { "properties": { "type": { "const": "run_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runSucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "run_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/runFailedData" } } } }
+  ],
+  "$defs": {
+    "idempotencyKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "stepAttemptStartedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "handler", "idempotencyKey"],
+      "properties": {
+        "nodeId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "invocationId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "runtime.script" },
+        "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }
+      }
+    },
+    "stepAttemptSucceededData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "output"],
+      "properties": {
+        "nodeId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "invocationId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "output": {}
+      }
+    },
+    "stepAttemptFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "failure"],
+      "properties": {
+        "nodeId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "invocationId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "failure": { "$ref": "https://cronflow.dev/schemas/attempt-failure/v2#/$defs/attemptFailure" }
+      }
+    },
+    "stepRetryScheduledData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "failedAttempt", "nextAttempt", "scheduledAt"],
+      "properties": {
+        "nodeId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "failedAttempt": { "type": "integer", "minimum": 1, "maximum": 9 },
+        "nextAttempt": { "type": "integer", "minimum": 2, "maximum": 10 },
+        "scheduledAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "runFailedData": {
+      "allOf": [
+        { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/runFailedData" },
+        {
+          "if": {
+            "properties": { "failureScope": { "const": "attempt" } },
+            "required": ["failureScope"]
+          },
+          "then": {
+            "properties": {
+              "attempt": { "type": "integer", "minimum": 1, "maximum": 10 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
