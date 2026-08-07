@@ -1,7 +1,7 @@
 # WOML Retry and Idempotency Implementation Plan
 
-Status: RI0 through RI3 completed on 2026-08-07. End-to-end retry execution
-remains planned for RI4 onward.
+Status: RI0 through RI4 completed on 2026-08-07. Retry composition with branch,
+parallel, and Human Approval remains planned for RI5 onward.
 
 ## 1. Product Outcome
 
@@ -619,6 +619,8 @@ Protocol tests prove fresh worker isolation, stable keys across attempts and
 restart, different keys across run/node boundaries, and no secret/context leak.
 
 ### RI4 — Execute sequential retries end to end
+
+Status: completed.
 
 Changes:
 

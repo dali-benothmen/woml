@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readdir,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -40,6 +41,13 @@ const approvalFixturePath = join(
   'tests',
   'fixtures',
   'approval.woml'
+);
+const retryFixturePath = join(
+  projectRoot,
+  'woml',
+  'tests',
+  'fixtures',
+  'retry.woml'
 );
 let temporaryDirectory: string;
 
@@ -168,6 +176,27 @@ describe('woml run', () => {
       exitCode: expected.exitCode,
     });
   });
+
+  test(
+    'runs retry.woml durably through attempts 1, 2, and 3',
+    async () => {
+      const statePath = join(temporaryDirectory, 'retry-state.sqlite');
+      const result = await runCli(
+        'run',
+        retryFixturePath,
+        '--state',
+        statePath
+      );
+
+      expect(result).toEqual({
+        stdout: '{"message":"Hello World"}\n',
+        stderr: '',
+        exitCode: 0,
+      });
+      expect((await stat(statePath)).isFile()).toBe(true);
+    },
+    10_000
+  );
 
   test('runs the selected when route through the public executable', async () => {
     const result = await runCli('run', branchFixturePath);

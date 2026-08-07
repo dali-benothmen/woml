@@ -28,8 +28,9 @@ use crate::{
   AttemptFailure, AttemptFailureKind, BranchFailure, CompiledWorkflowDefinition, DurableDagEngine,
   DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
   IssuedApprovalToken, RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection,
-  RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions, WorkflowContext,
-  RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
+  RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions,
+  StepFailureDisposition, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
+  RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
 pub trait EngineClock: Send + Sync {
@@ -311,10 +312,36 @@ async fn execute_workflow_durable_internal(
   options: RuntimeExecutionOptions,
   database_path: PathBuf,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  validate_retry_runtime_scope(&workflow)?;
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
   let engine = DurableDagEngine::new(workflow, definition_hash, store)?;
   execute_with_engine(engine, trigger, options).await
+}
+
+fn validate_retry_runtime_scope(
+  workflow: &CompiledWorkflowDefinition,
+) -> Result<(), RuntimeExecutionError> {
+  let has_retry = workflow
+    .graph
+    .nodes
+    .iter()
+    .any(|node| node.retry_policy.is_some());
+  let has_control_flow = workflow.graph.nodes.iter().any(|node| {
+    matches!(
+      node.handler.as_str(),
+      "engine.branch-select" | "engine.parallel-start" | "engine.approval-wait"
+    )
+  });
+
+  if has_retry && has_control_flow {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "RI4 supports retry only in sequential workflows; retry composition with branch, parallel, or approval is introduced in RI5"
+        .to_string(),
+    ));
+  }
+
+  Ok(())
 }
 
 pub async fn resume_workflow_durable(
@@ -538,6 +565,24 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           execution_order.clone(),
         )?));
       }
+      if projection.status == RunStatus::Running && !projection.pending_retries.is_empty() {
+        let scheduled_at = projection
+          .pending_retries
+          .values()
+          .map(|retry| retry.scheduled_at)
+          .min()
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled("pending retry state has no next schedule".to_string())
+          })?;
+        let now = chrono::Utc::now();
+        if scheduled_at > now {
+          let wait = (scheduled_at - now).to_std().map_err(|_| {
+            RuntimeExecutionError::Stalled("retry schedule exceeds the runtime clock".to_string())
+          })?;
+          tokio::time::sleep(wait).await;
+          continue;
+        }
+      }
       return Err(RuntimeExecutionError::Stalled(
         "no node is ready before the run reached a terminal state".to_string(),
       ));
@@ -741,7 +786,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         if host.is_none() {
           *host = Some(ScriptHostClient::spawn(options.script_host.clone()).await?);
         }
-        let output = execute_script_node(
+        let outcome = execute_script_node(
           engine,
           run_id,
           node_id,
@@ -750,6 +795,9 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           host.as_ref().expect("script host was initialized"),
         )
         .await?;
+        let ScriptNodeOutcome::Succeeded(output) = outcome else {
+          continue;
+        };
         execution_order.push(node_id.clone());
         if node_id == &terminal_node_id {
           engine.append_payload(
@@ -1187,9 +1235,21 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   source: &str,
   options: &RuntimeExecutionOptions,
   host: &ScriptHostClient,
-) -> Result<Value, RuntimeExecutionError> {
+) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
   let invocation_id = generated_id("inv");
-  let attempt_number = 1;
+  let projection = engine.projection(run_id)?;
+  let attempt_number = match projection.latest_attempt(node_id) {
+    None => 1,
+    Some(_) => projection
+      .pending_retries
+      .get(node_id)
+      .map(|retry| retry.next_attempt)
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "node {node_id:?} has prior attempts but no pending retry"
+        ))
+      })?,
+  };
   let max_attempts = engine
     .workflow()
     .node(node_id)
@@ -1223,7 +1283,14 @@ async fn execute_script_node<E: RuntimeDagEngine>(
           limit_bytes: Some(limit as u64),
         }),
       };
-      return fail_attempt(engine, run_id, node_id, &invocation_id, failure);
+      return settle_script_attempt_failure(
+        engine,
+        run_id,
+        node_id,
+        attempt_number,
+        &invocation_id,
+        failure,
+      );
     }
   }
 
@@ -1246,7 +1313,14 @@ async fn execute_script_node<E: RuntimeDagEngine>(
         message: error.to_string(),
         details: None,
       };
-      return fail_attempt(engine, run_id, node_id, &invocation_id, failure);
+      return settle_script_attempt_failure(
+        engine,
+        run_id,
+        node_id,
+        attempt_number,
+        &invocation_id,
+        failure,
+      );
     }
   };
 
@@ -1261,16 +1335,22 @@ async fn execute_script_node<E: RuntimeDagEngine>(
           output: value.clone(),
         }),
       )?;
-      Ok(value)
+      Ok(ScriptNodeOutcome::Succeeded(value))
     }
-    HostOutcome::Failure { error } => fail_attempt(
+    HostOutcome::Failure { error } => settle_script_attempt_failure(
       engine,
       run_id,
       node_id,
+      attempt_number,
       &invocation_id,
       error.into_attempt_failure(),
     ),
   }
+}
+
+enum ScriptNodeOutcome {
+  Succeeded(Value),
+  RetryScheduled,
 }
 
 fn recorded_execution_order(events: &[RunEvent]) -> Vec<String> {
@@ -1413,42 +1493,27 @@ fn final_result<E: RuntimeDagEngine>(
   })
 }
 
-fn fail_attempt<T, E: RuntimeDagEngine>(
+fn settle_script_attempt_failure<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
   node_id: &str,
+  attempt: u32,
   invocation_id: &str,
   failure: AttemptFailure,
-) -> Result<T, RuntimeExecutionError> {
-  engine.append_payload(
+) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
+  let disposition = engine.record_step_attempt_failure(
     run_id,
-    RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+    chrono::Utc::now(),
+    StepAttemptFailedData {
       node_id: node_id.to_string(),
-      attempt: 1,
+      attempt,
       invocation_id: invocation_id.to_string(),
       failure: failure.clone(),
-    }),
+    },
   )?;
-  engine.append_payload(
-    run_id,
-    RunEventPayload::RunFailed(match engine.event_schema_version() {
-      RUN_EVENT_SCHEMA_VERSION_V1 => RunFailedData::V1(RunFailedDataV1 {
-        node_id: Some(node_id.to_string()),
-        attempt: Some(1),
-        invocation_id: Some(invocation_id.to_string()),
-        failure: failure.clone(),
-      }),
-      RUN_EVENT_SCHEMA_VERSION_V2 | crate::RUN_EVENT_SCHEMA_VERSION_V3 => {
-        RunFailedData::V2(RunFailedDataV2::Attempt {
-          node_id: node_id.to_string(),
-          attempt: 1,
-          invocation_id: invocation_id.to_string(),
-          failure: failure.clone(),
-        })
-      }
-      _ => unreachable!("compiled models select a supported run-event version"),
-    }),
-  )?;
+  if matches!(disposition, StepFailureDisposition::RetryScheduled { .. }) {
+    return Ok(ScriptNodeOutcome::RetryScheduled);
+  }
   Err(RuntimeExecutionError::RunFailed(Box::new(
     FailedRunDetails {
       code: failure.code.clone(),
@@ -1527,6 +1592,31 @@ fn fail_branch<T, E: RuntimeDagEngine>(
   )))
 }
 
+fn attempt_run_failed_data(
+  event_schema_version: u32,
+  failure: &StepAttemptFailedData,
+) -> RunFailedData {
+  match event_schema_version {
+    RUN_EVENT_SCHEMA_VERSION_V1 => RunFailedData::V1(RunFailedDataV1 {
+      node_id: Some(failure.node_id.clone()),
+      attempt: Some(failure.attempt),
+      invocation_id: Some(failure.invocation_id.clone()),
+      failure: failure.failure.clone(),
+    }),
+    RUN_EVENT_SCHEMA_VERSION_V2
+    | crate::RUN_EVENT_SCHEMA_VERSION_V3
+    | crate::RUN_EVENT_SCHEMA_VERSION_V4
+    | crate::RUN_EVENT_SCHEMA_VERSION_V5
+    | crate::RUN_EVENT_SCHEMA_VERSION_V6 => RunFailedData::V2(RunFailedDataV2::Attempt {
+      node_id: failure.node_id.clone(),
+      attempt: failure.attempt,
+      invocation_id: failure.invocation_id.clone(),
+      failure: failure.failure.clone(),
+    }),
+    _ => unreachable!("compiled models select a supported run-event version"),
+  }
+}
+
 trait RuntimeDagEngine {
   fn workflow(&self) -> &CompiledWorkflowDefinition;
   fn definition_hash(&self) -> &str;
@@ -1540,6 +1630,27 @@ trait RuntimeDagEngine {
     run_id: &str,
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError>;
+  fn record_step_attempt_failure(
+    &mut self,
+    run_id: &str,
+    _failed_at: chrono::DateTime<chrono::Utc>,
+    failure: StepAttemptFailedData,
+  ) -> Result<StepFailureDisposition, RuntimeExecutionError> {
+    if self.event_schema_version() == crate::RUN_EVENT_SCHEMA_VERSION_V6 {
+      return Err(RuntimeExecutionError::Stalled(
+        "Model v6 retry failures require the durable runtime".to_string(),
+      ));
+    }
+    let run_failed = attempt_run_failed_data(self.event_schema_version(), &failure);
+    self.append_payloads(
+      run_id,
+      vec![
+        RunEventPayload::StepAttemptFailed(failure),
+        RunEventPayload::RunFailed(run_failed),
+      ],
+    )?;
+    Ok(StepFailureDisposition::RunFailed)
+  }
   fn projection(&self, run_id: &str) -> Result<RunProjection, RuntimeExecutionError>;
   fn events(&self, run_id: &str) -> Result<Vec<RunEvent>, RuntimeExecutionError>;
   fn ready_node_ids(&self, run_id: &str) -> Result<Vec<String>, RuntimeExecutionError>;
@@ -1678,6 +1789,29 @@ impl RuntimeDagEngine for DurableDagEngine {
   ) -> Result<(), RuntimeExecutionError> {
     self.append_payload(generated_id("evt"), run_id, chrono::Utc::now(), payload)?;
     Ok(())
+  }
+
+  fn record_step_attempt_failure(
+    &mut self,
+    run_id: &str,
+    failed_at: chrono::DateTime<chrono::Utc>,
+    failure: StepAttemptFailedData,
+  ) -> Result<StepFailureDisposition, RuntimeExecutionError> {
+    if self.event_schema_version() == crate::RUN_EVENT_SCHEMA_VERSION_V6 {
+      return Ok(
+        DurableDagEngine::record_step_attempt_failure(self, run_id, failed_at, failure)?
+          .disposition,
+      );
+    }
+    let run_failed = attempt_run_failed_data(self.event_schema_version(), &failure);
+    self.append_payloads(
+      run_id,
+      vec![
+        RunEventPayload::StepAttemptFailed(failure),
+        RunEventPayload::RunFailed(run_failed),
+      ],
+    )?;
+    Ok(StepFailureDisposition::RunFailed)
   }
 
   fn projection(&self, run_id: &str) -> Result<RunProjection, RuntimeExecutionError> {

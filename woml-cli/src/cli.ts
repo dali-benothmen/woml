@@ -18,6 +18,7 @@ import {
 import {
   executeApprovalWorkflowWithRust,
   executeWorkflowWithRust,
+  executeWorkflowWithRustDurable,
   NotificationProviderError,
   type NotificationJourneyDiagnostics,
   resolveApprovalWithRust,
@@ -717,6 +718,16 @@ export async function runCli(
     }
     if (workflow.schemaVersion === 4) {
       await runApprovalWorkflow(workflow, runArguments, io);
+      return 0;
+    }
+    if (workflow.schemaVersion === 6) {
+      await mkdir(dirname(runArguments.statePath), { recursive: true });
+      const execution = await executeWorkflowWithRustDurable(
+        workflow,
+        runArguments.statePath,
+        { nativeCorePath: dependencies.nativeCorePath }
+      );
+      io.stdout(`${JSON.stringify(execution.result)}\n`);
       return 0;
     }
     const execution = await executeWorkflowWithRust(workflow);
