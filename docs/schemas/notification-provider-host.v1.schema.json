@@ -72,13 +72,15 @@
     },
     "updateMessage": {
       "type": "object", "additionalProperties": false,
-      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "runId", "approvalId", "requestId", "deliveryId", "provider", "credentials", "providerMessage", "resolution"],
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "runId", "approvalId", "requestId", "deliveryId", "updateId", "idempotencyKey", "provider", "credentials", "providerMessage", "resolution"],
       "properties": {
         "protocol": { "const": "woml.notification-provider-host" }, "protocolVersion": { "const": 1 },
         "messageType": { "const": "update" }, "invocationId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" },
         "approvalId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
         "requestId": { "type": "string", "pattern": "^aprreq_[A-Za-z0-9_-]+$" },
         "deliveryId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$" },
+        "updateId": { "type": "string", "pattern": "^nupdate_[A-Za-z0-9_-]+$", "minLength": 11, "maxLength": 256 },
+        "idempotencyKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "provider": { "const": "slack" }, "credentials": { "$ref": "#/$defs/credentials" },
         "providerMessage": { "$ref": "#/$defs/providerMessage" }, "resolution": { "enum": ["approved", "rejected", "timeout_failed"] }
       }

@@ -176,6 +176,8 @@ pub enum RuntimeExecutionError {
   ParallelFailed(Box<FailedParallelDetails>),
   #[error(transparent)]
   ApprovalFailed(Box<FailedApprovalDetails>),
+  #[error(transparent)]
+  NotificationFailed(Box<FailedNotificationDetails>),
   #[error("workflow execution stalled: {0}")]
   Stalled(String),
   #[error("runtime configuration is invalid: {0}")]
@@ -226,6 +228,18 @@ pub struct FailedApprovalDetails {
   pub approval_id: String,
   pub request_id: String,
   pub failure: ApprovalFailure,
+  pub events: Vec<RunEvent>,
+}
+
+#[derive(Debug, Error)]
+#[error("workflow notification failed [{code}]: {message}")]
+pub struct FailedNotificationDetails {
+  pub code: String,
+  pub message: String,
+  pub approval_id: String,
+  pub request_id: String,
+  pub failed_delivery_ids: Vec<String>,
+  pub failure: crate::event::NotificationRunFailure,
   pub events: Vec<RunEvent>,
 }
 
@@ -345,7 +359,7 @@ async fn resume_workflow_durable_internal(
 }
 
 fn workflow_has_approval(workflow: &CompiledWorkflowDefinition) -> bool {
-  workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V4
+  workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V4
     && workflow
       .graph
       .nodes
@@ -1346,6 +1360,20 @@ fn resumed_failure<E: RuntimeDagEngine>(
       message: failure.message.clone(),
       approval_id,
       request_id,
+      failure,
+      events,
+    })),
+    RunFailure::Notification {
+      approval_id,
+      request_id,
+      failed_delivery_ids,
+      failure,
+    } => RuntimeExecutionError::NotificationFailed(Box::new(FailedNotificationDetails {
+      code: failure.code.clone(),
+      message: failure.message.clone(),
+      approval_id,
+      request_id,
+      failed_delivery_ids,
       failure,
       events,
     })),

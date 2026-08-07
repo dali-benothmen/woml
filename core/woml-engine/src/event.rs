@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3,
-  RUN_EVENT_SCHEMA_VERSION_V4,
+  RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,6 +32,15 @@ pub enum RunEventPayload {
   ParallelGroupCompleted(ParallelGroupCompletedData),
   ApprovalRequested(ApprovalRequestedData),
   ApprovalResolved(ApprovalResolvedData),
+  NotificationDeliveryRequested(NotificationDeliveryRequestedData),
+  NotificationDeliveryAttemptStarted(NotificationDeliveryAttemptStartedData),
+  NotificationDeliverySucceeded(NotificationDeliverySucceededData),
+  NotificationDeliveryFailed(NotificationDeliveryFailedData),
+  NotificationDecisionAccepted(NotificationDecisionAcceptedData),
+  NotificationMessageUpdateRequested(NotificationMessageUpdateRequestedData),
+  NotificationMessageUpdateAttemptStarted(NotificationMessageUpdateAttemptStartedData),
+  NotificationMessageUpdated(NotificationMessageUpdatedData),
+  NotificationMessageUpdateFailed(NotificationMessageUpdateFailedData),
   RunSucceeded(RunSucceededData),
   RunFailed(RunFailedData),
 }
@@ -147,6 +156,126 @@ pub struct ApprovalResolvedData {
   pub approval_id: String,
   pub request_id: String,
   pub resolution: ApprovalResolution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationDeliveryRequestedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub provider: String,
+  pub destination: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationDeliveryAttemptStartedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub attempt: u32,
+  pub attempt_id: String,
+  pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderMessageIdentity {
+  pub workspace_id: String,
+  pub channel_id: String,
+  pub message_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationDeliverySucceededData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub attempt: u32,
+  pub attempt_id: String,
+  pub provider_message: ProviderMessageIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationSafeFailure {
+  pub kind: String,
+  pub code: String,
+  pub message: String,
+  pub retryable: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub retry_after_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationDeliveryFailedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub attempt: u32,
+  pub attempt_id: String,
+  #[serde(rename = "final")]
+  pub final_: bool,
+  pub failure: NotificationSafeFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationDecisionAcceptedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub provider: String,
+  pub provider_actor_id: String,
+  pub decision: ApprovalDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationResolution {
+  Approved,
+  Rejected,
+  TimeoutFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationMessageUpdateRequestedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub update_id: String,
+  pub resolution: NotificationResolution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationMessageUpdateAttemptStartedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub update_id: String,
+  pub attempt: u32,
+  pub attempt_id: String,
+}
+
+pub type NotificationMessageUpdatedData = NotificationMessageUpdateAttemptStartedData;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationMessageUpdateFailedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub update_id: String,
+  pub attempt: u32,
+  pub attempt_id: String,
+  #[serde(rename = "final")]
+  pub final_: bool,
+  pub failure: NotificationSafeFailure,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -277,9 +406,32 @@ pub enum RunFailedDataV4 {
   },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationRunFailure {
+  pub kind: String,
+  pub code: String,
+  pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "failureScope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RunFailedDataV5 {
+  Notification {
+    #[serde(rename = "approvalId")]
+    approval_id: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    #[serde(rename = "failedDeliveryIds")]
+    failed_delivery_ids: Vec<String>,
+    failure: NotificationRunFailure,
+  },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RunFailedData {
+  V5(RunFailedDataV5),
   V4(RunFailedDataV4),
   V3(RunFailedDataV3),
   V2(RunFailedDataV2),
@@ -418,6 +570,93 @@ fn valid_public_structural_id(value: &str) -> bool {
     && value.chars().count() <= 256
 }
 
+fn valid_prefixed_id(value: &str, prefix: &str, minimum: usize) -> bool {
+  value.len() >= minimum
+    && value.len() <= 256
+    && value.strip_prefix(prefix).is_some_and(|suffix| {
+      !suffix.is_empty()
+        && suffix
+          .bytes()
+          .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    })
+}
+
+pub fn is_notification_delivery_id(value: &str, approval_id: &str) -> bool {
+  let Some(suffix) = value.strip_prefix(&format!("{approval_id}:notify:")) else {
+    return false;
+  };
+  let Some((tag, channel)) = suffix.split_once(":channel:") else {
+    return false;
+  };
+  [tag, channel].iter().all(|part| {
+    !part.is_empty()
+      && part.bytes().all(|byte| byte.is_ascii_digit())
+      && (*part == "0" || !part.starts_with('0'))
+  })
+}
+
+fn valid_sha256(value: &str) -> bool {
+  value.strip_prefix("sha256:").is_some_and(|digest| {
+    digest.len() == 64
+      && digest
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+  })
+}
+
+fn valid_provider_message(message: &ProviderMessageIdentity) -> bool {
+  valid_prefixed_id(&message.workspace_id, "T", 9)
+    && matches!(
+      message.channel_id.as_bytes().first(),
+      Some(b'C' | b'G' | b'D')
+    )
+    && message.channel_id.len() >= 9
+    && message.channel_id.len() <= 32
+    && message.channel_id[1..]
+      .bytes()
+      .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+    && message
+      .message_id
+      .split_once('.')
+      .is_some_and(|(seconds, micros)| {
+        seconds.len() >= 10
+          && seconds.bytes().all(|byte| byte.is_ascii_digit())
+          && micros.len() == 6
+          && micros.bytes().all(|byte| byte.is_ascii_digit())
+      })
+}
+
+impl NotificationSafeFailure {
+  pub fn validate(&self) -> Result<(), EventValidationError> {
+    const KINDS: &[&str] = &[
+      "secret_not_found",
+      "provider_auth_failed",
+      "destination_invalid",
+      "rate_limited",
+      "provider_unavailable",
+      "delivery_ambiguous",
+      "host_crashed",
+      "size_limit_exceeded",
+      "update_failed",
+    ];
+    if !KINDS.contains(&self.kind.as_str())
+      || !self.code.starts_with("WOML_")
+      || !self
+        .code
+        .bytes()
+        .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+      || self.message.is_empty()
+      || self.message.len() > 1024
+      || self.retry_after_ms.is_some_and(|value| value > 86_400_000)
+    {
+      return Err(EventValidationError::Invalid(
+        "Notification failure contains an invalid safe failure contract.".to_string(),
+      ));
+    }
+    Ok(())
+  }
+}
+
 pub fn is_approval_request_id(value: &str) -> bool {
   let Some(suffix) = value.strip_prefix("aprreq_") else {
     return false;
@@ -484,6 +723,22 @@ fn validate_identity(
   Ok(())
 }
 
+fn validate_notification_identity(
+  approval_id: &str,
+  request_id: &str,
+  delivery_id: &str,
+) -> Result<(), EventValidationError> {
+  if !valid_public_structural_id(approval_id)
+    || !is_approval_request_id(request_id)
+    || !is_notification_delivery_id(delivery_id, approval_id)
+  {
+    return Err(EventValidationError::Invalid(
+      "Notification event contains invalid approval, request, or delivery identity.".to_string(),
+    ));
+  }
+  Ok(())
+}
+
 impl AttemptFailure {
   pub fn validate(&self) -> Result<(), EventValidationError> {
     if self.code != self.kind.code() {
@@ -521,6 +776,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V2
         | RUN_EVENT_SCHEMA_VERSION_V3
         | RUN_EVENT_SCHEMA_VERSION_V4
+        | RUN_EVENT_SCHEMA_VERSION_V5
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -556,7 +812,7 @@ impl RunEvent {
         if data.failure.kind == AttemptFailureKind::InvocationCancelled
           && !matches!(
             self.event_schema_version,
-            RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
+            RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4 | RUN_EVENT_SCHEMA_VERSION_V5
           )
         {
           return Err(EventValidationError::Invalid(
@@ -567,7 +823,10 @@ impl RunEvent {
       RunEventPayload::BranchSelected(data) => {
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
+          RUN_EVENT_SCHEMA_VERSION_V2
+            | RUN_EVENT_SCHEMA_VERSION_V3
+            | RUN_EVENT_SCHEMA_VERSION_V4
+            | RUN_EVENT_SCHEMA_VERSION_V5
         ) {
           return Err(EventValidationError::Invalid(
             "branch_selected is available only in run-event schema v2 or v3.".to_string(),
@@ -584,7 +843,7 @@ impl RunEvent {
       RunEventPayload::ParallelGroupStarted(data) => {
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
+          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4 | RUN_EVENT_SCHEMA_VERSION_V5
         ) || !valid_public_structural_id(&data.parallel_id)
         {
           return Err(EventValidationError::Invalid(
@@ -595,7 +854,7 @@ impl RunEvent {
       RunEventPayload::ParallelGroupCompleted(data) => {
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
+          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4 | RUN_EVENT_SCHEMA_VERSION_V5
         ) || !valid_public_structural_id(&data.parallel_id)
           || !valid_ordered_id_lists(&data.failed_node_ids, &data.cancelled_node_ids)
           || (data.outcome == ParallelGroupOutcome::Succeeded
@@ -610,8 +869,10 @@ impl RunEvent {
         }
       }
       RunEventPayload::ApprovalRequested(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V4
-          || !valid_public_structural_id(&data.approval_id)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V4 | RUN_EVENT_SCHEMA_VERSION_V5
+        ) || !valid_public_structural_id(&data.approval_id)
           || !is_approval_request_id(&data.request_id)
           || data
             .expires_at
@@ -624,8 +885,10 @@ impl RunEvent {
         }
       }
       RunEventPayload::ApprovalResolved(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V4
-          || !valid_public_structural_id(&data.approval_id)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V4 | RUN_EVENT_SCHEMA_VERSION_V5
+        ) || !valid_public_structural_id(&data.approval_id)
           || !is_approval_request_id(&data.request_id)
         {
           return Err(EventValidationError::Invalid(
@@ -634,6 +897,108 @@ impl RunEvent {
           ));
         }
         data.resolution.validate()?;
+      }
+      RunEventPayload::NotificationDeliveryRequested(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || data.provider != "slack"
+          || data.destination.is_empty()
+        {
+          return Err(EventValidationError::Invalid(
+            "notification_delivery_requested requires event schema v5 and a provider destination."
+              .to_string(),
+          ));
+        }
+      }
+      RunEventPayload::NotificationDeliveryAttemptStarted(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || !(1..=3).contains(&data.attempt)
+          || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
+          || !valid_sha256(&data.idempotency_key)
+        {
+          return Err(EventValidationError::Invalid(
+            "notification_delivery_attempt_started has an invalid attempt contract.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::NotificationDeliverySucceeded(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || !(1..=3).contains(&data.attempt)
+          || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
+          || !valid_provider_message(&data.provider_message)
+        {
+          return Err(EventValidationError::Invalid(
+            "notification_delivery_succeeded has an invalid result contract.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::NotificationDeliveryFailed(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        data.failure.validate()?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || !(1..=3).contains(&data.attempt)
+          || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
+          || (!data.final_ && (!data.failure.retryable || data.attempt == 3))
+          || matches!(
+            data.failure.kind.as_str(),
+            "delivery_ambiguous" | "host_crashed"
+          ) && !data.final_
+        {
+          return Err(EventValidationError::Invalid(
+            "notification_delivery_failed has an invalid retry/finality contract.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::NotificationDecisionAccepted(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || data.provider != "slack"
+          || !valid_prefixed_id(&data.provider_actor_id, "U", 9)
+        {
+          return Err(EventValidationError::Invalid(
+            "notification_decision_accepted has an invalid provider audit identity.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::NotificationMessageUpdateRequested(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
+        {
+          return Err(EventValidationError::Invalid(
+            "notification_message_update_requested has an invalid update identity.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::NotificationMessageUpdateAttemptStarted(data)
+      | RunEventPayload::NotificationMessageUpdated(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
+          || !(1..=3).contains(&data.attempt)
+          || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
+        {
+          return Err(EventValidationError::Invalid(
+            "Notification message-update attempt has an invalid identity.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::NotificationMessageUpdateFailed(data) => {
+        validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
+        data.failure.validate()?;
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V5
+          || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
+          || !(1..=3).contains(&data.attempt)
+          || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
+          || (!data.final_ && (!data.failure.retryable || data.attempt == 3))
+        {
+          return Err(EventValidationError::Invalid(
+            "notification_message_update_failed has an invalid retry/finality contract."
+              .to_string(),
+          ));
+        }
       }
       RunEventPayload::RunSucceeded(data) => {
         if !valid_id(&data.terminal_node_id) {
@@ -665,7 +1030,10 @@ impl RunEvent {
           data.failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4,
+          RUN_EVENT_SCHEMA_VERSION_V2
+          | RUN_EVENT_SCHEMA_VERSION_V3
+          | RUN_EVENT_SCHEMA_VERSION_V4
+          | RUN_EVENT_SCHEMA_VERSION_V5,
           RunFailedData::V2(RunFailedDataV2::Attempt {
             node_id,
             attempt,
@@ -677,7 +1045,10 @@ impl RunEvent {
           failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4,
+          RUN_EVENT_SCHEMA_VERSION_V2
+          | RUN_EVENT_SCHEMA_VERSION_V3
+          | RUN_EVENT_SCHEMA_VERSION_V4
+          | RUN_EVENT_SCHEMA_VERSION_V5,
           RunFailedData::V2(RunFailedDataV2::Branch {
             branch_id,
             arm_id,
@@ -713,7 +1084,7 @@ impl RunEvent {
           failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4,
+          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4 | RUN_EVENT_SCHEMA_VERSION_V5,
           RunFailedData::V3(RunFailedDataV3::Parallel {
             parallel_id,
             primary_node_id,
@@ -739,7 +1110,7 @@ impl RunEvent {
           failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V4,
+          RUN_EVENT_SCHEMA_VERSION_V4 | RUN_EVENT_SCHEMA_VERSION_V5,
           RunFailedData::V4(RunFailedDataV4::Approval {
             approval_id,
             request_id,
@@ -752,6 +1123,36 @@ impl RunEvent {
             ));
           }
           failure.validate()?;
+        }
+        (
+          RUN_EVENT_SCHEMA_VERSION_V5,
+          RunFailedData::V5(RunFailedDataV5::Notification {
+            approval_id,
+            request_id,
+            failed_delivery_ids,
+            failure,
+          }),
+        ) => {
+          if !valid_public_structural_id(approval_id)
+            || !is_approval_request_id(request_id)
+            || failed_delivery_ids.is_empty()
+            || !failed_delivery_ids
+              .iter()
+              .all(|delivery_id| is_notification_delivery_id(delivery_id, approval_id))
+            || failed_delivery_ids
+              .iter()
+              .collect::<std::collections::HashSet<_>>()
+              .len()
+              != failed_delivery_ids.len()
+            || failure.kind != "all_deliveries_failed"
+            || failure.code != "WOML_NOTIFICATION_DELIVERY_FAILED"
+            || failure.message.is_empty()
+          {
+            return Err(EventValidationError::Invalid(
+              "Notification-scoped run_failed has an invalid delivery failure contract."
+                .to_string(),
+            ));
+          }
         }
         _ => {
           return Err(EventValidationError::Invalid(format!(

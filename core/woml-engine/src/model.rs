@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2,
   COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
+  COMPILED_MODEL_SCHEMA_VERSION_V5,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,6 +86,8 @@ pub enum ValueExpression {
   Literal { value: Value },
   #[serde(rename = "contextReference")]
   ContextReference { path: Vec<String> },
+  #[serde(rename = "secretReference")]
+  SecretReference { name: String },
   #[serde(rename = "object")]
   Object {
     fields: BTreeMap<String, ValueExpression>,
@@ -143,6 +146,15 @@ pub(crate) struct ApprovalDefinition {
   pub description: Option<String>,
   pub timeout_ms: Option<u64>,
   pub on_timeout: String,
+  pub notifications: Vec<NotificationDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationDefinition {
+  pub delivery_id: String,
+  pub provider: String,
+  pub destination: String,
+  pub credentials: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -196,6 +208,7 @@ pub enum ModelIssueCode {
   InvalidParallelGroup,
   UnsupportedParallelExecution,
   InvalidApprovalGroup,
+  InvalidNotificationGroup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -241,6 +254,32 @@ fn valid_public_structural_id(value: &str) -> bool {
   matches!(characters.next(), Some(first) if first.is_ascii_lowercase())
     && characters.all(|character| character.is_ascii_alphanumeric())
     && value.chars().count() <= 256
+}
+
+fn valid_secret_name(value: &str) -> bool {
+  let mut characters = value.chars();
+  matches!(characters.next(), Some(first) if first.is_ascii_uppercase())
+    && characters.all(|character| {
+      character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+    })
+}
+
+fn valid_slack_destination(value: &str) -> bool {
+  if let Some(alias) = value.strip_prefix('#') {
+    return !alias.is_empty()
+      && alias.len() <= 80
+      && alias.bytes().enumerate().all(|(index, byte)| {
+        byte.is_ascii_lowercase()
+          || byte.is_ascii_digit()
+          || (index > 0 && matches!(byte, b'_' | b'-'))
+      });
+  }
+  let bytes = value.as_bytes();
+  (9..=32).contains(&bytes.len())
+    && matches!(bytes.first(), Some(b'C' | b'G'))
+    && bytes[1..]
+      .iter()
+      .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
 }
 
 fn selector_branch_id(value: &str) -> Option<&str> {
@@ -318,6 +357,14 @@ fn inspect_expression(expression: &ValueExpression, at: &str, issues: &mut Vec<M
         ));
       }
     }
+    ValueExpression::SecretReference { name } => {
+      if !valid_secret_name(name) {
+        issues.push(issue(
+          ModelIssueCode::InvalidValueExpression,
+          format!("Secret reference at {at} has an invalid symbolic name."),
+        ));
+      }
+    }
     ValueExpression::Object { fields } => {
       for (name, value) in fields {
         inspect_expression(value, &format!("{at}.{name}"), issues);
@@ -373,7 +420,7 @@ fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut V
   }
 
   for edge in &workflow.graph.edges {
-    let is_v4_approval_equals = workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V4
+    let is_v4_approval_equals = workflow.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V4
       && edge.approval_id.is_some()
       && matches!(edge.condition, EdgeCondition::Equals { .. });
     if workflow.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V2
@@ -734,6 +781,99 @@ fn approval_join_id(value: &str) -> Option<&str> {
     .filter(|approval_id| valid_public_structural_id(approval_id))
 }
 
+fn approval_notifications(
+  approval_id: &str,
+  fields: &BTreeMap<String, ValueExpression>,
+) -> Option<Vec<NotificationDefinition>> {
+  let Some(expression) = fields.get("notifications") else {
+    return Some(Vec::new());
+  };
+  let ValueExpression::Array { items } = expression else {
+    return None;
+  };
+  if items.is_empty() {
+    return None;
+  }
+  let mut notifications = Vec::with_capacity(items.len());
+  let mut previous_tag = None;
+  let mut previous_channel = None;
+  let mut duplicate_keys = HashSet::new();
+  for item in items {
+    let ValueExpression::Object { fields } = item else {
+      return None;
+    };
+    if fields.len() != 4
+      || !["deliveryId", "provider", "destination", "credentials"]
+        .iter()
+        .all(|key| fields.contains_key(*key))
+    {
+      return None;
+    }
+    let ValueExpression::Literal { value: delivery } = fields.get("deliveryId")? else {
+      return None;
+    };
+    let ValueExpression::Literal { value: provider } = fields.get("provider")? else {
+      return None;
+    };
+    let ValueExpression::Literal { value: destination } = fields.get("destination")? else {
+      return None;
+    };
+    let ValueExpression::Object {
+      fields: credentials,
+    } = fields.get("credentials")?
+    else {
+      return None;
+    };
+    let delivery_id = delivery.as_str()?;
+    let provider = provider.as_str()?;
+    let destination = destination.as_str()?;
+    if provider != "slack" || !valid_slack_destination(destination) || credentials.len() != 2 {
+      return None;
+    }
+    let prefix = format!("{approval_id}:notify:");
+    let (tag, channel) = delivery_id.strip_prefix(&prefix)?.split_once(":channel:")?;
+    let tag = tag.parse::<usize>().ok()?;
+    let channel = channel.parse::<usize>().ok()?;
+    let ordered = match (previous_tag, previous_channel) {
+      (None, None) => tag == 0 && channel == 0,
+      (Some(previous_tag), Some(previous_channel)) if tag == previous_tag => {
+        channel == previous_channel + 1
+      }
+      (Some(previous_tag), Some(_)) => tag == previous_tag + 1 && channel == 0,
+      _ => false,
+    };
+    if !ordered {
+      return None;
+    }
+    let mut names = BTreeMap::new();
+    for key in ["botToken", "appToken"] {
+      let ValueExpression::SecretReference { name } = credentials.get(key)? else {
+        return None;
+      };
+      if !valid_secret_name(name) {
+        return None;
+      }
+      names.insert(key.to_string(), name.clone());
+    }
+    let duplicate_key = format!(
+      "{}\0{}\0{}",
+      names["botToken"], names["appToken"], destination
+    );
+    if !duplicate_keys.insert(duplicate_key) {
+      return None;
+    }
+    notifications.push(NotificationDefinition {
+      delivery_id: delivery_id.to_string(),
+      provider: provider.to_string(),
+      destination: destination.to_string(),
+      credentials: names,
+    });
+    previous_tag = Some(tag);
+    previous_channel = Some(channel);
+  }
+  Some(notifications)
+}
+
 fn approval_wait_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
   let Some(node) = node else {
     return false;
@@ -747,12 +887,12 @@ fn approval_wait_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
   let ValueExpression::Object { fields } = &node.inputs else {
     return false;
   };
-  if fields.len() != 1 && fields.len() != 2 {
+  if !(1..=3).contains(&fields.len()) {
     return false;
   }
   if fields
     .keys()
-    .any(|key| key != "timeoutMs" && key != "onTimeout")
+    .any(|key| key != "timeoutMs" && key != "onTimeout" && key != "notifications")
   {
     return false;
   }
@@ -778,7 +918,8 @@ fn approval_wait_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
         .values()
         .all(|value| value.as_str().is_some_and(|text| !text.is_empty()))
   });
-  valid_timeout && valid_policy && valid_metadata
+  let valid_notifications = approval_notifications(&node.id, fields).is_some();
+  valid_timeout && valid_policy && valid_metadata && valid_notifications
 }
 
 fn approval_join_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
@@ -918,6 +1059,15 @@ fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
       && join_incoming
         .iter()
         .all(|edge| edge.approval_id.as_deref() == Some(*approval_id));
+    let has_notifications = wait.is_some_and(|node| {
+      matches!(&node.inputs, ValueExpression::Object { fields } if fields.contains_key("notifications"))
+    });
+    if has_notifications && workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V5 {
+      issues.push(issue(
+        ModelIssueCode::InvalidNotificationGroup,
+        format!("Approval {approval_id:?} notifications require compiled model v5."),
+      ));
+    }
 
     if !valid_public_structural_id(approval_id)
       || !approval_wait_inputs(wait)
@@ -981,6 +1131,7 @@ impl CompiledWorkflowDefinition {
         ValueExpression::Literal { value } => value.as_str().map(str::to_string),
         _ => None,
       })?;
+    let notifications = approval_notifications(approval_id, fields)?;
     Some(ApprovalDefinition {
       approval_id: approval_id.to_string(),
       name: wait
@@ -997,6 +1148,7 @@ impl CompiledWorkflowDefinition {
         .map(str::to_string),
       timeout_ms,
       on_timeout,
+      notifications,
     })
   }
 
@@ -1112,6 +1264,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V2
         | COMPILED_MODEL_SCHEMA_VERSION_V3
         | COMPILED_MODEL_SCHEMA_VERSION_V4
+        | COMPILED_MODEL_SCHEMA_VERSION_V5
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,

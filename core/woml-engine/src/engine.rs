@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::event::{
   is_definition_hash, ApprovalTimeoutPolicy, AttemptFailureKind, ParallelFailurePolicy,
   ParallelGroupOutcome, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
-  RunFailedDataV4, RunStartedData,
+  RunFailedDataV4, RunFailedDataV5, RunStartedData,
 };
 use crate::{
   model::{EdgeCondition, ValueExpression},
@@ -578,6 +578,116 @@ pub(crate) fn validate_payload_against_definition(
         ));
       }
     }
+    RunEventPayload::NotificationDeliveryRequested(data) => {
+      let approval = workflow.approval(&data.approval_id).ok_or_else(|| {
+        format!(
+          "Notification references unknown approval {:?}.",
+          data.approval_id
+        )
+      })?;
+      let delivery = approval
+        .notifications
+        .iter()
+        .find(|delivery| delivery.delivery_id == data.delivery_id)
+        .ok_or_else(|| {
+          format!(
+            "Notification references unknown delivery {:?}.",
+            data.delivery_id
+          )
+        })?;
+      if data.provider != delivery.provider || data.destination != delivery.destination {
+        return Err(
+          "Notification delivery intent does not match the compiled definition.".to_string(),
+        );
+      }
+    }
+    RunEventPayload::NotificationDeliveryAttemptStarted(data) => {
+      let approval = workflow
+        .approval(&data.approval_id)
+        .ok_or_else(|| "Notification attempt references an unknown approval.".to_string())?;
+      if !approval
+        .notifications
+        .iter()
+        .any(|delivery| delivery.delivery_id == data.delivery_id)
+      {
+        return Err("Notification attempt references an unknown compiled delivery.".to_string());
+      }
+    }
+    RunEventPayload::NotificationDeliverySucceeded(data) => {
+      let approval = workflow
+        .approval(&data.approval_id)
+        .ok_or_else(|| "Notification success references an unknown approval.".to_string())?;
+      if !approval
+        .notifications
+        .iter()
+        .any(|delivery| delivery.delivery_id == data.delivery_id)
+      {
+        return Err("Notification success references an unknown compiled delivery.".to_string());
+      }
+    }
+    RunEventPayload::NotificationDeliveryFailed(data) => {
+      let approval = workflow
+        .approval(&data.approval_id)
+        .ok_or_else(|| "Notification failure references an unknown approval.".to_string())?;
+      if !approval
+        .notifications
+        .iter()
+        .any(|delivery| delivery.delivery_id == data.delivery_id)
+      {
+        return Err("Notification failure references an unknown compiled delivery.".to_string());
+      }
+    }
+    RunEventPayload::NotificationDecisionAccepted(data) => {
+      let approval = workflow
+        .approval(&data.approval_id)
+        .ok_or_else(|| "Notification decision references an unknown approval.".to_string())?;
+      if !approval.notifications.iter().any(|delivery| {
+        delivery.delivery_id == data.delivery_id && delivery.provider == data.provider
+      }) {
+        return Err("Notification decision references an unknown compiled delivery.".to_string());
+      }
+    }
+    RunEventPayload::NotificationMessageUpdateRequested(data) => {
+      let approval = workflow
+        .approval(&data.approval_id)
+        .ok_or_else(|| "Notification update references an unknown approval.".to_string())?;
+      if !approval
+        .notifications
+        .iter()
+        .any(|delivery| delivery.delivery_id == data.delivery_id)
+      {
+        return Err("Notification update references an unknown compiled delivery.".to_string());
+      }
+    }
+    RunEventPayload::NotificationMessageUpdateAttemptStarted(data)
+    | RunEventPayload::NotificationMessageUpdated(data) => {
+      let approval = workflow
+        .approval(&data.approval_id)
+        .ok_or_else(|| "Notification update attempt references an unknown approval.".to_string())?;
+      if !approval
+        .notifications
+        .iter()
+        .any(|delivery| delivery.delivery_id == data.delivery_id)
+      {
+        return Err(
+          "Notification update attempt references an unknown compiled delivery.".to_string(),
+        );
+      }
+    }
+    RunEventPayload::NotificationMessageUpdateFailed(data) => {
+      let approval = workflow
+        .approval(&data.approval_id)
+        .ok_or_else(|| "Notification update failure references an unknown approval.".to_string())?;
+      if !approval
+        .notifications
+        .iter()
+        .any(|delivery| delivery.delivery_id == data.delivery_id)
+      {
+        return Err(
+          "Notification update failure references an unknown compiled delivery.".to_string(),
+        );
+      }
+    }
     RunEventPayload::RunSucceeded(data) => {
       if workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
         return Err(format!(
@@ -587,7 +697,28 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunFailed(data) => {
+      if let RunFailedData::V5(RunFailedDataV5::Notification {
+        approval_id,
+        failed_delivery_ids,
+        ..
+      }) = data
+      {
+        let approval = workflow
+          .approval(approval_id)
+          .ok_or_else(|| format!("run_failed references unknown approval {approval_id:?}."))?;
+        if failed_delivery_ids.iter().any(|id| {
+          !approval
+            .notifications
+            .iter()
+            .any(|delivery| delivery.delivery_id == *id)
+        }) {
+          return Err(
+            "run_failed references a delivery outside its compiled approval.".to_string(),
+          );
+        }
+      }
       let (node_id, branch_identity, parallel_identity, approval_identity) = match data {
+        RunFailedData::V5(_) => (None, None, None, None),
         RunFailedData::V1(data) => (data.node_id.as_deref(), None, None, None),
         RunFailedData::V2(RunFailedDataV2::Attempt { node_id, .. }) => {
           (Some(node_id.as_str()), None, None, None)
@@ -881,6 +1012,15 @@ pub(crate) fn validate_event_history_against_definition(
       }
       RunEventPayload::RunStarted(_)
       | RunEventPayload::BranchSelected(_)
+      | RunEventPayload::NotificationDeliveryRequested(_)
+      | RunEventPayload::NotificationDeliveryAttemptStarted(_)
+      | RunEventPayload::NotificationDeliverySucceeded(_)
+      | RunEventPayload::NotificationDeliveryFailed(_)
+      | RunEventPayload::NotificationDecisionAccepted(_)
+      | RunEventPayload::NotificationMessageUpdateRequested(_)
+      | RunEventPayload::NotificationMessageUpdateAttemptStarted(_)
+      | RunEventPayload::NotificationMessageUpdated(_)
+      | RunEventPayload::NotificationMessageUpdateFailed(_)
       | RunEventPayload::RunFailed(_) => {}
     }
   }

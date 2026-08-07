@@ -135,6 +135,7 @@ async fn reviewed_branch_executes_only_the_true_route_and_publishes_one_result()
         woml_engine::RunEventPayload::ApprovalResolved(_) => "approval_resolved",
         woml_engine::RunEventPayload::RunSucceeded(_) => "run_succeeded",
         woml_engine::RunEventPayload::RunFailed(_) => "run_failed",
+        _ => "notification_event",
       })
       .collect::<Vec<_>>(),
     [

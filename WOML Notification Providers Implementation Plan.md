@@ -1,9 +1,10 @@
 # WOML Notification Providers Implementation Plan
 
-Status: N0–N2 complete; ready for N3 — Slack markup now validates and lowers to
-the frozen provider-neutral Model v5, while delivery effects remain explicitly
-unavailable until the durable N3 infrastructure; Discord, WhatsApp, and generic
-webhook notification remain separate later milestones
+Status: N0–N3 complete; ready for N4 — Slack markup lowers to Model v5 and the
+Rust core now durably owns notification delivery, shared decisions, retries,
+message updates, and crash recovery. The Bun provider host and actual Slack API
+effects begin in N4; Discord, WhatsApp, and generic webhook notification remain
+separate later milestones
 
 ## 1. Product Outcome
 
@@ -439,11 +440,12 @@ Completed proof:
   its N0 canonical definition hash.
 - `woml run` currently stops after successful compilation with
   `WOML_NOTIFICATION_RUNTIME_UNAVAILABLE`. It performs no notification or
-  secret lookup; durable effects begin in N3.
+  secret lookup; the durable core begins in N3 and the provider host begins in
+  N4.
 - Frontend, CLI, contract, typecheck, existing workflow regression, local
   approval HTTP, and clean packaged CLI tests pass.
 
-### N3 — Add durable delivery and recovery infrastructure
+### N3 — Add durable delivery and recovery infrastructure — complete
 
 Changes:
 
@@ -469,6 +471,40 @@ Gate:
 Deterministic fake-Slack tests prove no lost delivery intent, no unreviewed
 duplicate send, one shared resolution, deterministic partial failure, and safe
 recovery.
+
+Completed proof:
+
+- Model v5 notification definitions and every Run Event v5 notification event
+  are native, definition-validated Rust contracts and fold into one discardable
+  run projection.
+- Entering approval waiting atomically records the approval request and one
+  durable delivery intent per expanded channel before any provider call.
+- The event log is the outbox authority: requested work survives restart,
+  successful messages retain only their minimal provider identity, and no
+  second mutable delivery-state table exists.
+- Each delivery attempt receives a one-time opaque decision capability whose
+  hash alone is stored. Attempts share the frozen delivery idempotency key;
+  safe retries use the frozen 0/1/5-second policy with three total attempts.
+- Partial delivery failure leaves the shared approval waiting when another
+  channel succeeded. Exhausting every channel fails explicitly with
+  `WOML_NOTIFICATION_DELIVERY_FAILED` and does not invent a human decision.
+- The first valid provider action atomically records one reviewer audit event,
+  resolves the existing approval, and queues an update for every successful
+  provider message. Identical later actions are idempotent and conflicting
+  later actions are rejected.
+- A decision through the existing local HTTP fallback joins the same authority
+  and also queues updates for every successful provider message.
+- Message updates have their own stable v1 idempotency key and retry lifecycle;
+  they cannot reopen or reverse the durable decision.
+- Recovery preserves unsent intents, fails an uncertain send closed without
+  replay, keeps provider successes durable, preserves the shared decision, and
+  safely retries interrupted message updates even after a terminal run state.
+- Deterministic fake-Slack tests prove delivery never executes a workflow step,
+  provider failure never creates an approval decision, capabilities never enter
+  events, and intent/capability hashes survive SQLite restart correctly.
+- All `woml-engine` tests and strict Clippy checks pass. The CLI remains
+  intentionally guarded until N4 supplies the provider host; N3 performs no
+  real Slack or secret-store call.
 
 ### N4 — Build the Slack provider host and conformance adapter
 

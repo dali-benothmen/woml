@@ -204,6 +204,7 @@ async fn runtime_appends_canonical_failure_events_for_script_errors() {
         woml_engine::RunEventPayload::ApprovalResolved(_) => "approval_resolved",
         woml_engine::RunEventPayload::RunSucceeded(_) => "run_succeeded",
         woml_engine::RunEventPayload::RunFailed(_) => "run_failed",
+        _ => "notification_event",
       })
       .collect::<Vec<_>>(),
     [

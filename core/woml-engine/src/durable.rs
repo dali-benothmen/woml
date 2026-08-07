@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,21 +19,29 @@ use crate::engine::{
 use crate::event::{
   is_definition_hash, ApprovalDecision, ApprovalDecisionSource, ApprovalFailure,
   ApprovalRequestedData, ApprovalResolution, ApprovalResolvedData, ApprovalTimeoutPolicy,
-  ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome,
+  NotificationDeliveryAttemptStartedData, NotificationDeliveryFailedData,
+  NotificationDeliveryRequestedData, NotificationDeliverySucceededData,
+  NotificationMessageUpdateAttemptStartedData, NotificationMessageUpdateFailedData,
+  NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure, ParallelFailure,
+  ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome, ProviderMessageIdentity,
   RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4,
-  RunStartedData, RunSucceededData, StepAttemptFailedData,
+  RunFailedDataV5, RunStartedData, RunSucceededData, StepAttemptFailedData,
 };
-use crate::projection::{ApprovalRequestStatus, AttemptStatus, ParallelGroupStatus};
+use crate::projection::{
+  ApprovalRequestStatus, AttemptStatus, NotificationDeliveryStatus,
+  NotificationMessageUpdateStatus, ParallelGroupStatus,
+};
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
-  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
+  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 2;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 3;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
+const STORE_SCHEMA_VERSION_V3: &str = "3";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
@@ -135,6 +144,36 @@ BEGIN
 END;
 "#;
 
+const CREATE_NOTIFICATION_SCHEMA_V3: &str = r#"
+CREATE TABLE woml_notification_capabilities (
+  capability_id TEXT PRIMARY KEY,
+  secret_hash BLOB NOT NULL CHECK (length(secret_hash) = 32),
+  attempt_id TEXT NOT NULL UNIQUE,
+  request_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  approval_id TEXT NOT NULL,
+  delivery_id TEXT NOT NULL,
+  issued_at TEXT NOT NULL,
+  credential_expires_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_notification_capabilities_delivery
+  ON woml_notification_capabilities(run_id, approval_id, request_id, delivery_id);
+
+CREATE TRIGGER woml_notification_capabilities_no_update
+BEFORE UPDATE ON woml_notification_capabilities
+BEGIN
+  SELECT RAISE(ABORT, 'WOML notification capabilities are append-only');
+END;
+
+CREATE TRIGGER woml_notification_capabilities_no_delete
+BEFORE DELETE ON woml_notification_capabilities
+BEGIN
+  SELECT RAISE(ABORT, 'WOML notification capabilities are append-only');
+END;
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDefinitionBinding {
   pub run_id: String,
@@ -161,6 +200,65 @@ pub struct ApprovalTokenBinding {
   pub approval_id: String,
   pub issued_at: DateTime<Utc>,
   pub credential_expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationDeliveryWork {
+  pub run_id: String,
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub provider: String,
+  pub destination: String,
+  pub credentials: BTreeMap<String, String>,
+  pub attempt: u32,
+  pub attempt_id: String,
+  pub idempotency_key: String,
+  pub decision_capability: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationProviderDeliveryResult {
+  Succeeded(ProviderMessageIdentity),
+  Failed(NotificationSafeFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationUpdateWork {
+  pub run_id: String,
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub provider: String,
+  pub credentials: BTreeMap<String, String>,
+  pub provider_message: ProviderMessageIdentity,
+  pub resolution: crate::event::NotificationResolution,
+  pub update_id: String,
+  pub idempotency_key: String,
+  pub attempt: u32,
+  pub attempt_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationProviderUpdateResult {
+  Succeeded,
+  Failed(NotificationSafeFailure),
+}
+
+pub trait NotificationProviderAdapter {
+  fn deliver(&mut self, work: &NotificationDeliveryWork) -> NotificationProviderDeliveryResult;
+  fn update(&mut self, work: &NotificationUpdateWork) -> NotificationProviderUpdateResult;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NotificationDispatchReport {
+  pub attempted: usize,
+  pub succeeded: usize,
+  pub failed: usize,
+  pub run_failed: bool,
+  pub updates_attempted: usize,
+  pub updates_succeeded: usize,
+  pub updates_failed: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -273,6 +371,22 @@ fn migrate_store_v1_to_v2(connection: &mut Connection) -> Result<(), DurableStor
   Ok(())
 }
 
+fn migrate_store_v2_to_v3(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_NOTIFICATION_SCHEMA_V3)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V3, STORE_SCHEMA_VERSION_V2],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v2-to-v3 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
 fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
   for (object_type, name) in [
     ("table", "woml_approval_tokens"),
@@ -290,6 +404,28 @@ fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreE
     if !exists {
       return Err(DurableStoreError::Contract(format!(
         "Store v2 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
+fn validate_store_v3_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v2_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_notification_capabilities"),
+    ("index", "woml_notification_capabilities_delivery"),
+    ("trigger", "woml_notification_capabilities_no_update"),
+    ("trigger", "woml_notification_capabilities_no_delete"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v3 is missing required {object_type} {name:?}."
       )));
     }
   }
@@ -319,8 +455,16 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
-      Some(STORE_SCHEMA_VERSION_V2) => validate_store_v2_schema(&connection)?,
-      Some(STORE_SCHEMA_VERSION_V1) => migrate_store_v1_to_v2(&mut connection)?,
+      Some(STORE_SCHEMA_VERSION_V3) => validate_store_v3_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V2) => {
+        validate_store_v2_schema(&connection)?;
+        migrate_store_v2_to_v3(&mut connection)?;
+      }
+      Some(STORE_SCHEMA_VERSION_V1) => {
+        migrate_store_v1_to_v2(&mut connection)?;
+        validate_store_v2_schema(&connection)?;
+        migrate_store_v2_to_v3(&mut connection)?;
+      }
       Some(version) => {
         return Err(DurableStoreError::UnsupportedStoreVersion(
           version.to_string(),
@@ -332,6 +476,8 @@ impl DurableEventStore {
           [STORE_SCHEMA_VERSION_V1],
         )?;
         migrate_store_v1_to_v2(&mut connection)?;
+        validate_store_v2_schema(&connection)?;
+        migrate_store_v2_to_v3(&mut connection)?;
       }
     }
     Ok(Self { connection })
@@ -577,7 +723,6 @@ impl DurableEventStore {
       })?;
     let workflow = definition_for_run(&transaction, run_id)?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
-
     for (event_id, occurred_at, payload) in payloads {
       validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
         .map_err(DurableStoreError::Contract)?;
@@ -610,6 +755,631 @@ impl DurableEventStore {
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     Ok(fold_events(&events)?)
+  }
+
+  pub fn begin_notification_delivery(
+    &mut self,
+    run_id: &str,
+    delivery_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<NotificationDeliveryWork, DurableStoreError> {
+    let capability_id = random_hex(16)?;
+    let capability_secret = random_hex(32)?;
+    let capability_hash = Sha256::digest(capability_secret.as_bytes());
+    let attempt_id = format!("nattempt_{}", Uuid::new_v4().simple());
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, run_id)?;
+    let mut events = load_events(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    let projection = fold_events(&events)?;
+    let delivery = projection
+      .notification_deliveries
+      .get(delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(format!("Unknown notification delivery {delivery_id:?}."))
+      })?;
+    let request = projection
+      .approval_requests
+      .get(&delivery.approval_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Notification delivery has no approval request.".to_string())
+      })?;
+    if projection.status != RunStatus::Waiting
+      || !matches!(request.status, ApprovalRequestStatus::Waiting)
+    {
+      return Err(DurableStoreError::Contract(
+        "Notification delivery may start only while its approval is waiting.".to_string(),
+      ));
+    }
+    let attempt = next_notification_attempt(&delivery.status, now)?.ok_or_else(|| {
+      DurableStoreError::Contract(
+        "Notification delivery is not ready for another attempt.".to_string(),
+      )
+    })?;
+    let approval = workflow.approval(&delivery.approval_id).ok_or_else(|| {
+      DurableStoreError::Contract(
+        "Notification delivery references an unknown compiled approval.".to_string(),
+      )
+    })?;
+    let definition = approval
+      .notifications
+      .iter()
+      .find(|item| item.delivery_id == delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Notification delivery is absent from its compiled approval.".to_string(),
+        )
+      })?;
+    let idempotency_key = notification_idempotency_key(run_id, &delivery.request_id, delivery_id);
+    let payload =
+      RunEventPayload::NotificationDeliveryAttemptStarted(NotificationDeliveryAttemptStartedData {
+        approval_id: delivery.approval_id.clone(),
+        request_id: delivery.request_id.clone(),
+        delivery_id: delivery_id.to_string(),
+        attempt,
+        attempt_id: attempt_id.clone(),
+        idempotency_key: idempotency_key.clone(),
+      });
+    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    let event_schema_version = projection.event_schema_version.ok_or_else(|| {
+      DurableStoreError::Contract("Notification delivery requires run_started.".to_string())
+    })?;
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      generated_event_id(),
+      now,
+      event_schema_version,
+      payload,
+    )?;
+    let credential_expires_at = approval_credential_expiry(now, request.expires_at)?;
+    transaction.execute(
+      "INSERT INTO woml_notification_capabilities(
+         capability_id, secret_hash, attempt_id, request_id, run_id, approval_id,
+         delivery_id, issued_at, credential_expires_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+      params![
+        capability_id,
+        capability_hash.as_slice(),
+        attempt_id,
+        delivery.request_id,
+        run_id,
+        delivery.approval_id,
+        delivery_id,
+        now.to_rfc3339(),
+        credential_expires_at.to_rfc3339(),
+      ],
+    )?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    transaction.commit()?;
+    Ok(NotificationDeliveryWork {
+      run_id: run_id.to_string(),
+      approval_id: delivery.approval_id.clone(),
+      request_id: delivery.request_id.clone(),
+      delivery_id: delivery_id.to_string(),
+      provider: definition.provider.clone(),
+      destination: definition.destination.clone(),
+      credentials: definition.credentials.clone(),
+      attempt,
+      attempt_id,
+      idempotency_key,
+      decision_capability: format!("ncap_{capability_id}.{capability_secret}"),
+    })
+  }
+
+  pub fn complete_notification_delivery(
+    &mut self,
+    work: &NotificationDeliveryWork,
+    result: NotificationProviderDeliveryResult,
+    now: DateTime<Utc>,
+  ) -> Result<RunProjection, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut events = load_events(&transaction, &work.run_id)?;
+    let workflow = definition_for_run(&transaction, &work.run_id)?;
+    let binding = run_binding_in_transaction(&transaction, &work.run_id)?;
+    let projection = fold_events(&events)?;
+    let delivery = projection
+      .notification_deliveries
+      .get(&work.delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Notification result references an unknown delivery.".to_string(),
+        )
+      })?;
+    if !matches!(&delivery.status, NotificationDeliveryStatus::AttemptStarted { attempt, attempt_id, idempotency_key } if *attempt == work.attempt && attempt_id == &work.attempt_id && idempotency_key == &work.idempotency_key)
+    {
+      return Err(DurableStoreError::Contract(
+        "Notification result does not match the active durable attempt.".to_string(),
+      ));
+    }
+    let payload = match result {
+      NotificationProviderDeliveryResult::Succeeded(provider_message) => {
+        RunEventPayload::NotificationDeliverySucceeded(NotificationDeliverySucceededData {
+          approval_id: work.approval_id.clone(),
+          request_id: work.request_id.clone(),
+          delivery_id: work.delivery_id.clone(),
+          attempt: work.attempt,
+          attempt_id: work.attempt_id.clone(),
+          provider_message,
+        })
+      }
+      NotificationProviderDeliveryResult::Failed(failure) => {
+        let final_ = !failure.retryable
+          || work.attempt >= 3
+          || matches!(failure.kind.as_str(), "delivery_ambiguous" | "host_crashed");
+        RunEventPayload::NotificationDeliveryFailed(NotificationDeliveryFailedData {
+          approval_id: work.approval_id.clone(),
+          request_id: work.request_id.clone(),
+          delivery_id: work.delivery_id.clone(),
+          attempt: work.attempt,
+          attempt_id: work.attempt_id.clone(),
+          final_,
+          failure,
+        })
+      }
+    };
+    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    let version = projection
+      .event_schema_version
+      .unwrap_or(RUN_EVENT_SCHEMA_VERSION_V5);
+    append_to_history(
+      &transaction,
+      &mut events,
+      &work.run_id,
+      generated_event_id(),
+      now,
+      version,
+      payload,
+    )?;
+    let mut projection = fold_events(&events)?;
+    if notification_request_all_failed(&workflow, &projection, &work.approval_id, &work.request_id)
+    {
+      let failed_delivery_ids = workflow
+        .approval(&work.approval_id)
+        .unwrap()
+        .notifications
+        .into_iter()
+        .map(|delivery| delivery.delivery_id)
+        .collect::<Vec<_>>();
+      let payload = RunEventPayload::RunFailed(RunFailedData::V5(RunFailedDataV5::Notification {
+        approval_id: work.approval_id.clone(),
+        request_id: work.request_id.clone(),
+        failed_delivery_ids,
+        failure: NotificationRunFailure {
+          kind: "all_deliveries_failed".to_string(),
+          code: "WOML_NOTIFICATION_DELIVERY_FAILED".to_string(),
+          message: "Every configured approval notification delivery failed.".to_string(),
+        },
+      }));
+      append_to_history(
+        &transaction,
+        &mut events,
+        &work.run_id,
+        generated_event_id(),
+        now,
+        version,
+        payload,
+      )?;
+      projection = fold_events(&events)?;
+    }
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    transaction.commit()?;
+    Ok(projection)
+  }
+
+  pub fn dispatch_ready_notifications(
+    &mut self,
+    run_id: &str,
+    now: DateTime<Utc>,
+    adapter: &mut dyn NotificationProviderAdapter,
+  ) -> Result<NotificationDispatchReport, DurableStoreError> {
+    let projection = self.projection(run_id)?;
+    let ready = projection
+      .notification_deliveries
+      .values()
+      .filter(|delivery| {
+        next_notification_attempt(&delivery.status, now)
+          .ok()
+          .flatten()
+          .is_some()
+      })
+      .map(|delivery| delivery.delivery_id.clone())
+      .collect::<Vec<_>>();
+    let mut report = NotificationDispatchReport::default();
+    for delivery_id in ready {
+      let work = self.begin_notification_delivery(run_id, &delivery_id, now)?;
+      let result = adapter.deliver(&work);
+      let succeeded = matches!(result, NotificationProviderDeliveryResult::Succeeded(_));
+      let projection = self.complete_notification_delivery(&work, result, now)?;
+      report.attempted += 1;
+      if succeeded {
+        report.succeeded += 1;
+      } else {
+        report.failed += 1;
+      }
+      report.run_failed = projection.status == RunStatus::Failed;
+      if report.run_failed {
+        break;
+      }
+    }
+    Ok(report)
+  }
+
+  pub fn resolve_notification_approval(
+    &mut self,
+    capability: &str,
+    provider_actor_id: &str,
+    decision: ApprovalDecision,
+    now: DateTime<Utc>,
+  ) -> Result<ApprovalDecisionOutcome, DurableStoreError> {
+    let (capability_id, secret) = parse_notification_capability(capability)?;
+    let candidate_hash = Sha256::digest(secret.as_bytes());
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let row: Option<(Vec<u8>, String, String, String, String, String)> = transaction
+      .query_row(
+        "SELECT secret_hash, request_id, run_id, approval_id, delivery_id, credential_expires_at
+       FROM woml_notification_capabilities WHERE capability_id = ?1",
+        [capability_id],
+        |row| {
+          Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+          ))
+        },
+      )
+      .optional()?;
+    let Some((stored_hash, request_id, run_id, approval_id, delivery_id, expires_at)) = row else {
+      return Err(DurableStoreError::InvalidApprovalToken);
+    };
+    if stored_hash.len() != 32 || candidate_hash.as_slice().ct_eq(&stored_hash).unwrap_u8() != 1 {
+      return Err(DurableStoreError::InvalidApprovalToken);
+    }
+    if now >= parse_stored_timestamp(&expires_at)? {
+      return Err(DurableStoreError::ExpiredApprovalToken);
+    }
+    let mut events = load_events(&transaction, &run_id)?;
+    let workflow = definition_for_run(&transaction, &run_id)?;
+    let binding = run_binding_in_transaction(&transaction, &run_id)?;
+    let projection = fold_events(&events)?;
+    let request = projection
+      .approval_requests
+      .get(&approval_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Notification capability references an unknown approval.".to_string(),
+        )
+      })?;
+    if request.request_id != request_id {
+      return Err(DurableStoreError::Contract(
+        "Notification capability does not match its request.".to_string(),
+      ));
+    }
+    if let ApprovalRequestStatus::Resolved {
+      resolution:
+        ApprovalResolution::Decision {
+          decision: existing,
+          source: ApprovalDecisionSource::Human,
+        },
+      resolved_at,
+    } = &request.status
+    {
+      if *existing == decision {
+        return Ok(ApprovalDecisionOutcome {
+          status: ApprovalDecisionOutcomeStatus::AlreadyResolved,
+          run_id,
+          approval_id,
+          request_id,
+          decision,
+          source: ApprovalDecisionSource::Human,
+          decided_at: *resolved_at,
+        });
+      }
+      return Err(DurableStoreError::ApprovalDecisionConflict);
+    }
+    if !matches!(request.status, ApprovalRequestStatus::Waiting) {
+      return Err(DurableStoreError::ApprovalExpired);
+    }
+    let delivery = projection
+      .notification_deliveries
+      .get(&delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Notification capability references an unknown delivery.".to_string(),
+        )
+      })?;
+    if !matches!(
+      delivery.status,
+      NotificationDeliveryStatus::Succeeded { .. }
+    ) {
+      return Err(DurableStoreError::Contract(
+        "Only a successfully delivered notification can resolve approval.".to_string(),
+      ));
+    }
+    let mut payloads = vec![
+      RunEventPayload::NotificationDecisionAccepted(
+        crate::event::NotificationDecisionAcceptedData {
+          approval_id: approval_id.clone(),
+          request_id: request_id.clone(),
+          delivery_id: delivery_id.clone(),
+          provider: delivery.provider.clone(),
+          provider_actor_id: provider_actor_id.to_string(),
+          decision,
+        },
+      ),
+      RunEventPayload::ApprovalResolved(ApprovalResolvedData {
+        approval_id: approval_id.clone(),
+        request_id: request_id.clone(),
+        resolution: ApprovalResolution::Decision {
+          decision,
+          source: ApprovalDecisionSource::Human,
+        },
+      }),
+    ];
+    let resolution = match decision {
+      ApprovalDecision::Approved => crate::event::NotificationResolution::Approved,
+      ApprovalDecision::Rejected => crate::event::NotificationResolution::Rejected,
+    };
+    for delivered in projection.notification_deliveries.values().filter(|item| {
+      item.approval_id == approval_id
+        && item.request_id == request_id
+        && matches!(item.status, NotificationDeliveryStatus::Succeeded { .. })
+    }) {
+      payloads.push(RunEventPayload::NotificationMessageUpdateRequested(
+        crate::event::NotificationMessageUpdateRequestedData {
+          approval_id: approval_id.clone(),
+          request_id: request_id.clone(),
+          delivery_id: delivered.delivery_id.clone(),
+          update_id: format!("nupdate_{}", Uuid::new_v4().simple()),
+          resolution,
+        },
+      ));
+    }
+    let version = projection
+      .event_schema_version
+      .unwrap_or(RUN_EVENT_SCHEMA_VERSION_V5);
+    for payload in payloads {
+      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+        .map_err(DurableStoreError::Contract)?;
+      append_to_history(
+        &transaction,
+        &mut events,
+        &run_id,
+        generated_event_id(),
+        now,
+        version,
+        payload,
+      )?;
+    }
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    transaction.commit()?;
+    Ok(ApprovalDecisionOutcome {
+      status: ApprovalDecisionOutcomeStatus::Accepted,
+      run_id,
+      approval_id,
+      request_id,
+      decision,
+      source: ApprovalDecisionSource::Human,
+      decided_at: now,
+    })
+  }
+
+  pub fn begin_notification_update(
+    &mut self,
+    run_id: &str,
+    delivery_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<NotificationUpdateWork, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut events = load_events(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    let projection = fold_events(&events)?;
+    let update = projection
+      .notification_updates
+      .get(delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Unknown notification message update.".to_string())
+      })?;
+    let attempt = next_notification_update_attempt(&update.status, now)?.ok_or_else(|| {
+      DurableStoreError::Contract("Notification message update is not ready.".to_string())
+    })?;
+    let delivery = projection
+      .notification_deliveries
+      .get(delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Notification update has no delivery.".to_string())
+      })?;
+    let NotificationDeliveryStatus::Succeeded {
+      provider_message, ..
+    } = &delivery.status
+    else {
+      return Err(DurableStoreError::Contract(
+        "Notification update requires a successful message.".to_string(),
+      ));
+    };
+    let approval = workflow.approval(&update.approval_id).ok_or_else(|| {
+      DurableStoreError::Contract("Notification update has no compiled approval.".to_string())
+    })?;
+    let definition = approval
+      .notifications
+      .iter()
+      .find(|item| item.delivery_id == delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Notification update has no compiled delivery.".to_string())
+      })?;
+    let attempt_id = format!("nattempt_{}", Uuid::new_v4().simple());
+    let idempotency_key = notification_update_idempotency_key(
+      run_id,
+      &update.request_id,
+      delivery_id,
+      &update.update_id,
+    );
+    let payload = RunEventPayload::NotificationMessageUpdateAttemptStarted(
+      NotificationMessageUpdateAttemptStartedData {
+        approval_id: update.approval_id.clone(),
+        request_id: update.request_id.clone(),
+        delivery_id: delivery_id.to_string(),
+        update_id: update.update_id.clone(),
+        attempt,
+        attempt_id: attempt_id.clone(),
+      },
+    );
+    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    let version = projection
+      .event_schema_version
+      .unwrap_or(RUN_EVENT_SCHEMA_VERSION_V5);
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      generated_event_id(),
+      now,
+      version,
+      payload,
+    )?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let work = NotificationUpdateWork {
+      run_id: run_id.to_string(),
+      approval_id: update.approval_id.clone(),
+      request_id: update.request_id.clone(),
+      delivery_id: delivery_id.to_string(),
+      provider: definition.provider.clone(),
+      credentials: definition.credentials.clone(),
+      provider_message: provider_message.clone(),
+      resolution: update.resolution,
+      update_id: update.update_id.clone(),
+      idempotency_key,
+      attempt,
+      attempt_id,
+    };
+    transaction.commit()?;
+    Ok(work)
+  }
+
+  pub fn complete_notification_update(
+    &mut self,
+    work: &NotificationUpdateWork,
+    result: NotificationProviderUpdateResult,
+    now: DateTime<Utc>,
+  ) -> Result<RunProjection, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut events = load_events(&transaction, &work.run_id)?;
+    let workflow = definition_for_run(&transaction, &work.run_id)?;
+    let binding = run_binding_in_transaction(&transaction, &work.run_id)?;
+    let projection = fold_events(&events)?;
+    let update = projection
+      .notification_updates
+      .get(&work.delivery_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Unknown active notification update.".to_string())
+      })?;
+    if !matches!(&update.status, NotificationMessageUpdateStatus::AttemptStarted { attempt, attempt_id } if *attempt == work.attempt && attempt_id == &work.attempt_id)
+    {
+      return Err(DurableStoreError::Contract(
+        "Notification update result does not match its active attempt.".to_string(),
+      ));
+    }
+    let payload = match result {
+      NotificationProviderUpdateResult::Succeeded => {
+        RunEventPayload::NotificationMessageUpdated(NotificationMessageUpdatedData {
+          approval_id: work.approval_id.clone(),
+          request_id: work.request_id.clone(),
+          delivery_id: work.delivery_id.clone(),
+          update_id: work.update_id.clone(),
+          attempt: work.attempt,
+          attempt_id: work.attempt_id.clone(),
+        })
+      }
+      NotificationProviderUpdateResult::Failed(failure) => {
+        let final_ = !failure.retryable || work.attempt >= 3;
+        RunEventPayload::NotificationMessageUpdateFailed(NotificationMessageUpdateFailedData {
+          approval_id: work.approval_id.clone(),
+          request_id: work.request_id.clone(),
+          delivery_id: work.delivery_id.clone(),
+          update_id: work.update_id.clone(),
+          attempt: work.attempt,
+          attempt_id: work.attempt_id.clone(),
+          final_,
+          failure,
+        })
+      }
+    };
+    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    let version = projection
+      .event_schema_version
+      .unwrap_or(RUN_EVENT_SCHEMA_VERSION_V5);
+    append_to_history(
+      &transaction,
+      &mut events,
+      &work.run_id,
+      generated_event_id(),
+      now,
+      version,
+      payload,
+    )?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    transaction.commit()?;
+    Ok(projection)
+  }
+
+  pub fn dispatch_ready_notification_updates(
+    &mut self,
+    run_id: &str,
+    now: DateTime<Utc>,
+    adapter: &mut dyn NotificationProviderAdapter,
+  ) -> Result<NotificationDispatchReport, DurableStoreError> {
+    let projection = self.projection(run_id)?;
+    let ready = projection
+      .notification_updates
+      .values()
+      .filter(|update| {
+        next_notification_update_attempt(&update.status, now)
+          .ok()
+          .flatten()
+          .is_some()
+      })
+      .map(|update| update.delivery_id.clone())
+      .collect::<Vec<_>>();
+    let mut report = NotificationDispatchReport::default();
+    for delivery_id in ready {
+      let work = self.begin_notification_update(run_id, &delivery_id, now)?;
+      let result = adapter.update(&work);
+      let succeeded = matches!(result, NotificationProviderUpdateResult::Succeeded);
+      self.complete_notification_update(&work, result, now)?;
+      report.updates_attempted += 1;
+      if succeeded {
+        report.updates_succeeded += 1;
+      } else {
+        report.updates_failed += 1;
+      }
+    }
+    Ok(report)
   }
 
   pub fn issue_approval_token(
@@ -694,6 +1464,10 @@ impl DurableEventStore {
       })?;
     let workflow = definition_for_run(&transaction, run_id)?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
+    let notification_definitions = workflow
+      .approval(&request.approval_id)
+      .map(|approval| approval.notifications)
+      .unwrap_or_default();
     let payload = RunEventPayload::ApprovalRequested(request.clone());
     validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
       .map_err(DurableStoreError::Contract)?;
@@ -706,6 +1480,27 @@ impl DurableEventStore {
       event_schema_version,
       payload,
     )?;
+    for notification in notification_definitions {
+      let payload =
+        RunEventPayload::NotificationDeliveryRequested(NotificationDeliveryRequestedData {
+          approval_id: request.approval_id.clone(),
+          request_id: request.request_id.clone(),
+          delivery_id: notification.delivery_id,
+          provider: notification.provider,
+          destination: notification.destination,
+        });
+      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+        .map_err(DurableStoreError::Contract)?;
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        occurred_at,
+        event_schema_version,
+        payload,
+      )?;
+    }
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
@@ -856,31 +1651,59 @@ impl DurableEventStore {
       return Err(DurableStoreError::ExpiredApprovalToken);
     }
 
-    let payload = RunEventPayload::ApprovalResolved(ApprovalResolvedData {
+    let mut payloads = vec![RunEventPayload::ApprovalResolved(ApprovalResolvedData {
       approval_id: approval_id.clone(),
       request_id: request_id.clone(),
       resolution: ApprovalResolution::Decision {
         decision,
         source: ApprovalDecisionSource::Human,
       },
-    });
-    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
-      .map_err(DurableStoreError::Contract)?;
+    })];
+    let notification_resolution = match decision {
+      ApprovalDecision::Approved => crate::event::NotificationResolution::Approved,
+      ApprovalDecision::Rejected => crate::event::NotificationResolution::Rejected,
+    };
+    for delivery in projection
+      .notification_deliveries
+      .values()
+      .filter(|delivery| {
+        delivery.approval_id == approval_id
+          && delivery.request_id == request_id
+          && matches!(
+            delivery.status,
+            NotificationDeliveryStatus::Succeeded { .. }
+          )
+      })
+    {
+      payloads.push(RunEventPayload::NotificationMessageUpdateRequested(
+        crate::event::NotificationMessageUpdateRequestedData {
+          approval_id: approval_id.clone(),
+          request_id: request_id.clone(),
+          delivery_id: delivery.delivery_id.clone(),
+          update_id: format!("nupdate_{}", Uuid::new_v4().simple()),
+          resolution: notification_resolution,
+        },
+      ));
+    }
     let event_schema_version = events
       .first()
       .map(|event| event.event_schema_version)
       .ok_or_else(|| {
         DurableStoreError::Contract("Approval resolution requires run_started.".to_string())
       })?;
-    append_to_history(
-      &transaction,
-      &mut events,
-      &run_id,
-      generated_event_id(),
-      now,
-      event_schema_version,
-      payload,
-    )?;
+    for payload in payloads {
+      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+        .map_err(DurableStoreError::Contract)?;
+      append_to_history(
+        &transaction,
+        &mut events,
+        &run_id,
+        generated_event_id(),
+        now,
+        event_schema_version,
+        payload,
+      )?;
+    }
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     transaction.commit()?;
@@ -958,6 +1781,39 @@ impl DurableEventStore {
       request_id: request.request_id.clone(),
       resolution: resolution.clone(),
     })];
+    let notification_resolution = match &resolution {
+      ApprovalResolution::Decision {
+        decision: ApprovalDecision::Rejected,
+        ..
+      } => crate::event::NotificationResolution::Rejected,
+      ApprovalResolution::TimeoutFailure => crate::event::NotificationResolution::TimeoutFailed,
+      ApprovalResolution::Decision {
+        decision: ApprovalDecision::Approved,
+        ..
+      } => crate::event::NotificationResolution::Approved,
+    };
+    for delivery in projection
+      .notification_deliveries
+      .values()
+      .filter(|delivery| {
+        delivery.approval_id == approval_id
+          && delivery.request_id == request.request_id
+          && matches!(
+            delivery.status,
+            NotificationDeliveryStatus::Succeeded { .. }
+          )
+      })
+    {
+      payloads.push(RunEventPayload::NotificationMessageUpdateRequested(
+        crate::event::NotificationMessageUpdateRequestedData {
+          approval_id: approval_id.to_string(),
+          request_id: request.request_id.clone(),
+          delivery_id: delivery.delivery_id.clone(),
+          update_id: format!("nupdate_{}", Uuid::new_v4().simple()),
+          resolution: notification_resolution,
+        },
+      ));
+    }
     if request.on_timeout == ApprovalTimeoutPolicy::Fail {
       payloads.push(RunEventPayload::RunFailed(RunFailedData::V4(
         RunFailedDataV4::Approval {
@@ -1128,6 +1984,151 @@ impl DurableEventStore {
     let event_schema_version = projection.event_schema_version.ok_or_else(|| {
       DurableStoreError::Contract("A stored run has no event schema version.".to_string())
     })?;
+    if projection.status == RunStatus::Waiting {
+      let started = projection
+        .notification_deliveries
+        .values()
+        .filter_map(|delivery| {
+          if let NotificationDeliveryStatus::AttemptStarted {
+            attempt,
+            attempt_id,
+            ..
+          } = &delivery.status
+          {
+            Some((delivery.clone(), *attempt, attempt_id.clone()))
+          } else {
+            None
+          }
+        })
+        .collect::<Vec<_>>();
+      if started.is_empty() {
+        return Ok(RunRecovery::Unchanged);
+      }
+      let now = Utc::now();
+      for (delivery, attempt, attempt_id) in &started {
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          now,
+          event_schema_version,
+          RunEventPayload::NotificationDeliveryFailed(NotificationDeliveryFailedData {
+            approval_id: delivery.approval_id.clone(),
+            request_id: delivery.request_id.clone(),
+            delivery_id: delivery.delivery_id.clone(),
+            attempt: *attempt,
+            attempt_id: attempt_id.clone(),
+            final_: true,
+            failure: NotificationSafeFailure {
+              kind: "delivery_ambiguous".to_string(),
+              code: "WOML_NOTIFICATION_DELIVERY_AMBIGUOUS".to_string(),
+              message: "Recovery found an uncertain notification send and will not replay it."
+                .to_string(),
+              retryable: false,
+              retry_after_ms: None,
+            },
+          }),
+        )?;
+      }
+      let mut recovered = fold_events(&events)?;
+      for (approval_id, request_id) in started
+        .iter()
+        .map(|(delivery, _, _)| (&delivery.approval_id, &delivery.request_id))
+      {
+        if recovered.status == RunStatus::Waiting
+          && notification_request_all_failed(&workflow, &recovered, approval_id, request_id)
+        {
+          let ids = workflow
+            .approval(approval_id)
+            .unwrap()
+            .notifications
+            .into_iter()
+            .map(|item| item.delivery_id)
+            .collect();
+          append_to_history(
+            &transaction,
+            &mut events,
+            run_id,
+            generated_event_id(),
+            now,
+            event_schema_version,
+            RunEventPayload::RunFailed(RunFailedData::V5(RunFailedDataV5::Notification {
+              approval_id: approval_id.clone(),
+              request_id: request_id.clone(),
+              failed_delivery_ids: ids,
+              failure: NotificationRunFailure {
+                kind: "all_deliveries_failed".to_string(),
+                code: "WOML_NOTIFICATION_DELIVERY_FAILED".to_string(),
+                message: "Every configured approval notification delivery failed.".to_string(),
+              },
+            })),
+          )?;
+          recovered = fold_events(&events)?;
+          break;
+        }
+      }
+      validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?;
+      transaction.commit()?;
+      let _ = recovered;
+      return Ok(RunRecovery::Recovered {
+        interrupted_attempts: 0,
+      });
+    }
+    let started_updates = projection
+      .notification_updates
+      .values()
+      .filter_map(|update| {
+        if let NotificationMessageUpdateStatus::AttemptStarted {
+          attempt,
+          attempt_id,
+        } = &update.status
+        {
+          Some((update.clone(), *attempt, attempt_id.clone()))
+        } else {
+          None
+        }
+      })
+      .collect::<Vec<_>>();
+    if !started_updates.is_empty() {
+      let now = Utc::now();
+      for (update, attempt, attempt_id) in &started_updates {
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          now,
+          event_schema_version,
+          RunEventPayload::NotificationMessageUpdateFailed(
+            NotificationMessageUpdateFailedData {
+              approval_id: update.approval_id.clone(),
+              request_id: update.request_id.clone(),
+              delivery_id: update.delivery_id.clone(),
+              update_id: update.update_id.clone(),
+              attempt: *attempt,
+              attempt_id: attempt_id.clone(),
+              final_: *attempt >= 3,
+              failure: NotificationSafeFailure {
+                kind: "update_failed".to_string(),
+                code: "WOML_NOTIFICATION_UPDATE_INTERRUPTED".to_string(),
+                message: "Recovery found an interrupted message update; the durable update remains retryable."
+                  .to_string(),
+                retryable: *attempt < 3,
+                retry_after_ms: None,
+              },
+            },
+          ),
+        )?;
+      }
+      validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?;
+      transaction.commit()?;
+      return Ok(RunRecovery::Recovered {
+        interrupted_attempts: 0,
+      });
+    }
     if projection.status != RunStatus::Running {
       return Ok(RunRecovery::Unchanged);
     }
@@ -1396,6 +2397,111 @@ fn random_hex(byte_count: usize) -> Result<String, DurableStoreError> {
   Ok(hex::encode(bytes))
 }
 
+fn notification_idempotency_key(run_id: &str, request_id: &str, delivery_id: &str) -> String {
+  let mut digest = Sha256::new();
+  digest.update(b"woml.notification.delivery.v1\0");
+  digest.update(run_id.as_bytes());
+  digest.update(b"\0");
+  digest.update(request_id.as_bytes());
+  digest.update(b"\0");
+  digest.update(delivery_id.as_bytes());
+  format!("sha256:{}", hex::encode(digest.finalize()))
+}
+
+fn notification_update_idempotency_key(
+  run_id: &str,
+  request_id: &str,
+  delivery_id: &str,
+  update_id: &str,
+) -> String {
+  let mut digest = Sha256::new();
+  digest.update(b"woml.notification.update.v1\0");
+  digest.update(run_id.as_bytes());
+  digest.update(b"\0");
+  digest.update(request_id.as_bytes());
+  digest.update(b"\0");
+  digest.update(delivery_id.as_bytes());
+  digest.update(b"\0");
+  digest.update(update_id.as_bytes());
+  format!("sha256:{}", hex::encode(digest.finalize()))
+}
+
+fn next_notification_attempt(
+  status: &NotificationDeliveryStatus,
+  now: DateTime<Utc>,
+) -> Result<Option<u32>, DurableStoreError> {
+  match status {
+    NotificationDeliveryStatus::Requested => Ok(Some(1)),
+    NotificationDeliveryStatus::Failed {
+      attempt,
+      final_: false,
+      failure,
+      failed_at,
+      ..
+    } if failure.retryable && *attempt < 3 => {
+      let scheduled_delay = if *attempt == 1 { 1_000 } else { 5_000 };
+      let delay_ms = scheduled_delay.max(failure.retry_after_ms.unwrap_or(0));
+      let delay = i64::try_from(delay_ms)
+        .map(chrono::Duration::milliseconds)
+        .map_err(|_| {
+          DurableStoreError::Contract("Notification retry delay is invalid.".to_string())
+        })?;
+      Ok((now >= *failed_at + delay).then_some(*attempt + 1))
+    }
+    _ => Ok(None),
+  }
+}
+
+fn notification_request_all_failed(
+  workflow: &CompiledWorkflowDefinition,
+  projection: &RunProjection,
+  approval_id: &str,
+  request_id: &str,
+) -> bool {
+  let Some(approval) = workflow.approval(approval_id) else {
+    return false;
+  };
+  !approval.notifications.is_empty()
+    && approval.notifications.iter().all(|definition| {
+      projection
+        .notification_deliveries
+        .get(&definition.delivery_id)
+        .is_some_and(|delivery| {
+          delivery.request_id == request_id
+            && matches!(
+              delivery.status,
+              NotificationDeliveryStatus::Failed { final_: true, .. }
+            )
+        })
+    })
+}
+
+fn next_notification_update_attempt(
+  status: &NotificationMessageUpdateStatus,
+  now: DateTime<Utc>,
+) -> Result<Option<u32>, DurableStoreError> {
+  match status {
+    NotificationMessageUpdateStatus::Requested => Ok(Some(1)),
+    NotificationMessageUpdateStatus::Failed {
+      attempt,
+      final_: false,
+      failure,
+      failed_at,
+      ..
+    } if failure.retryable && *attempt < 3 => {
+      let scheduled_delay = if *attempt == 1 { 1_000 } else { 5_000 };
+      let delay_ms = scheduled_delay.max(failure.retry_after_ms.unwrap_or(0));
+      let delay = i64::try_from(delay_ms)
+        .map(chrono::Duration::milliseconds)
+        .map_err(|_| {
+          DurableStoreError::Contract("Notification update retry delay is invalid.".to_string())
+        })?;
+      Ok((now >= *failed_at + delay).then_some(*attempt + 1))
+    }
+    _ => Ok(None),
+  }
+}
+
 fn approval_credential_expiry(
   issued_at: DateTime<Utc>,
   approval_deadline: Option<DateTime<Utc>>,
@@ -1434,6 +2540,25 @@ fn parse_approval_token(token: &str) -> Result<(&str, &str), DurableStoreError> 
     return Err(DurableStoreError::InvalidApprovalToken);
   }
   Ok((token_id, secret))
+}
+
+fn parse_notification_capability(token: &str) -> Result<(&str, &str), DurableStoreError> {
+  let Some(token) = token.strip_prefix("ncap_") else {
+    return Err(DurableStoreError::InvalidApprovalToken);
+  };
+  let Some((id, secret)) = token.split_once('.') else {
+    return Err(DurableStoreError::InvalidApprovalToken);
+  };
+  if id.len() != 32
+    || secret.len() != 64
+    || !id
+      .bytes()
+      .chain(secret.bytes())
+      .all(|byte| byte.is_ascii_hexdigit())
+  {
+    return Err(DurableStoreError::InvalidApprovalToken);
+  }
+  Ok((id, secret))
 }
 
 fn parse_stored_timestamp(value: &str) -> Result<DateTime<Utc>, DurableStoreError> {
@@ -1599,14 +2724,15 @@ fn attempt_run_failed_data(
       invocation_id: Some(invocation_id),
       failure,
     }),
-    RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4 => {
-      RunFailedData::V2(RunFailedDataV2::Attempt {
-        node_id,
-        attempt,
-        invocation_id,
-        failure,
-      })
-    }
+    RUN_EVENT_SCHEMA_VERSION_V2
+    | RUN_EVENT_SCHEMA_VERSION_V3
+    | RUN_EVENT_SCHEMA_VERSION_V4
+    | RUN_EVENT_SCHEMA_VERSION_V5 => RunFailedData::V2(RunFailedDataV2::Attempt {
+      node_id,
+      attempt,
+      invocation_id,
+      failure,
+    }),
     _ => unreachable!("event versions are validated before recovery"),
   }
 }

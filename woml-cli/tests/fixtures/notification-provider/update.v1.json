@@ -7,6 +7,8 @@
   "approvalId": "releaseApproval",
   "requestId": "aprreq_release_01",
   "deliveryId": "releaseApproval:notify:0:channel:0",
+  "updateId": "nupdate_release_001",
+  "idempotencyKey": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "provider": "slack",
   "credentials": {
     "botToken": { "kind": "secretReference", "name": "SLACK_BOT_TOKEN" },

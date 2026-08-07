@@ -159,6 +159,7 @@ fn recovery_atomically_fails_an_uncertain_attempt_without_replaying_it() {
         RunFailure::Branch(_) => None,
         RunFailure::Parallel { .. } => None,
         RunFailure::Approval { .. } => None,
+        RunFailure::Notification { .. } => None,
       }),
     Some(AttemptFailureKind::Interrupted)
   );

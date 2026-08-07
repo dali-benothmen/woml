@@ -1,7 +1,7 @@
 # WOML Notification and Secret Diagnostics v0.1
 
-Status: frozen and implemented through the N2 frontend. N3–N6 must reuse or
-explicitly version the runtime codes.
+Status: frozen and implemented through the N3 durable core. N4–N6 must reuse or
+explicitly version the provider codes.
 
 Diagnostics never include resolved secret values, decision capabilities,
 provider payloads, or credential-store implementation errors.
@@ -37,7 +37,16 @@ provider payloads, or credential-store implementation errors.
 | `WOML_SLACK_CHANNEL_DUPLICATE` | One Slack credential set repeats a normalized destination. |
 | `WOML_SECRET_SINK_UNSUPPORTED` | A secret reference appears outside a reviewed secret-bearing attribute. |
 
-## Runtime and Provider Codes Reserved for N3–N6
+## Durable Runtime Codes Implemented in N3
+
+| Code | Meaning |
+| --- | --- |
+| `WOML_NOTIFICATION_RUNTIME_UNAVAILABLE` | Model v5 compiled, but the N4 provider host is not installed in the executable path yet. |
+| `WOML_NOTIFICATION_DELIVERY_AMBIGUOUS` | Recovery found a send whose external effect is uncertain and refused to replay it. |
+| `WOML_NOTIFICATION_DELIVERY_FAILED` | Every configured notification delivery reached a final failure. |
+| `WOML_NOTIFICATION_UPDATE_INTERRUPTED` | Recovery converted an interrupted message update into durable retryable work. |
+
+## Provider Codes Reserved for N4–N6
 
 The provider returns a structured safe failure kind plus a stable code. Initial
 codes include `WOML_SLACK_AUTH_FAILED`, `WOML_SLACK_DESTINATION_INVALID`,

@@ -1,11 +1,11 @@
 # WOML Approval Notification Contracts v1
 
-Status: frozen in N0 and implemented through N2 frontend lowering.
+Status: frozen in N0 and implemented through N3 durable infrastructure.
 
 This document pins the interfaces between WOML source, the TypeScript frontend,
-the Rust authority, the Bun provider host, the secret resolver, and Slack. It
-N2 implements the source-to-Model-v5 portion; durable runtime delivery starts
-in N3.
+the Rust authority, the Bun provider host, the secret resolver, and Slack.
+N2 implements the source-to-Model-v5 portion; N3 implements the durable Rust
+delivery, resolution, update, retry, and recovery authority.
 
 ## Source and identity
 
@@ -78,7 +78,14 @@ seconds. An ambiguous transport failure is `delivery_ambiguous`; WOML fails
 closed and does not blindly resend until reconciliation exists.
 
 After resolution or timeout, Rust records durable update work for every
-successful message. Update failures retry but never reverse the decision.
+successful message. The stable update idempotency key is:
+
+```text
+sha256("woml.notification.update.v1\0" + runId + "\0" + requestId + "\0" + deliveryId + "\0" + updateId)
+```
+
+It remains unchanged across update attempts. Update failures retry but never
+reverse or reopen the decision.
 
 ## Provider host v1
 

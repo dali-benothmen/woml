@@ -7,9 +7,10 @@ use thiserror::Error;
 
 use crate::event::{
   ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalResolution,
-  ApprovalTimeoutPolicy, AttemptFailure, BranchFailure, EventValidationError, ParallelFailure,
-  ParallelFailurePolicy, ParallelGroupOutcome, RunEvent, RunEventPayload, RunFailedData,
-  RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, StepAttemptStartedData,
+  ApprovalTimeoutPolicy, AttemptFailure, BranchFailure, EventValidationError,
+  NotificationResolution, NotificationSafeFailure, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupOutcome, ProviderMessageIdentity, RunEvent, RunEventPayload, RunFailedData,
+  RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, StepAttemptStartedData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -87,6 +88,68 @@ pub struct ApprovalRequestProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationDeliveryStatus {
+  Requested,
+  AttemptStarted {
+    attempt: u32,
+    attempt_id: String,
+    idempotency_key: String,
+  },
+  Succeeded {
+    attempt: u32,
+    attempt_id: String,
+    provider_message: ProviderMessageIdentity,
+  },
+  Failed {
+    attempt: u32,
+    attempt_id: String,
+    final_: bool,
+    failure: NotificationSafeFailure,
+    failed_at: DateTime<Utc>,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationDeliveryProjection {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub provider: String,
+  pub destination: String,
+  pub status: NotificationDeliveryStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationMessageUpdateStatus {
+  Requested,
+  AttemptStarted {
+    attempt: u32,
+    attempt_id: String,
+  },
+  Updated {
+    attempt: u32,
+    attempt_id: String,
+  },
+  Failed {
+    attempt: u32,
+    attempt_id: String,
+    final_: bool,
+    failure: NotificationSafeFailure,
+    failed_at: DateTime<Utc>,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationMessageUpdateProjection {
+  pub approval_id: String,
+  pub request_id: String,
+  pub delivery_id: String,
+  pub update_id: String,
+  pub resolution: NotificationResolution,
+  pub status: NotificationMessageUpdateStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunFailure {
   Attempt(AttemptFailure),
   Branch(BranchFailure),
@@ -103,6 +166,12 @@ pub enum RunFailure {
     request_id: String,
     failure: ApprovalFailure,
   },
+  Notification {
+    approval_id: String,
+    request_id: String,
+    failed_delivery_ids: Vec<String>,
+    failure: crate::event::NotificationRunFailure,
+  },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -117,6 +186,9 @@ pub struct RunProjection {
   pub branch_selections: BTreeMap<String, String>,
   pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
   pub approval_requests: BTreeMap<String, ApprovalRequestProjection>,
+  pub notification_deliveries: BTreeMap<String, NotificationDeliveryProjection>,
+  pub notification_updates: BTreeMap<String, NotificationMessageUpdateProjection>,
+  pub notification_decisions: Vec<crate::event::NotificationDecisionAcceptedData>,
   pub terminal_node_id: Option<String>,
   pub result: Option<Value>,
   pub failure: Option<RunFailure>,
@@ -363,6 +435,151 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         );
         projection.status = RunStatus::Waiting;
       }
+      RunEventPayload::NotificationDeliveryRequested(data) => {
+        if projection.status != RunStatus::Waiting {
+          return Err(FoldError::InvalidHistory(
+            "notification_delivery_requested requires a waiting approval.".to_string(),
+          ));
+        }
+        let request = projection
+          .approval_requests
+          .get(&data.approval_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(
+              "Notification delivery references an unknown approval.".to_string(),
+            )
+          })?;
+        if request.request_id != data.request_id
+          || !matches!(request.status, ApprovalRequestStatus::Waiting)
+          || projection
+            .notification_deliveries
+            .contains_key(&data.delivery_id)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Notification delivery intent does not match the active approval request.".to_string(),
+          ));
+        }
+        projection.notification_deliveries.insert(
+          data.delivery_id.clone(),
+          NotificationDeliveryProjection {
+            approval_id: data.approval_id.clone(),
+            request_id: data.request_id.clone(),
+            delivery_id: data.delivery_id.clone(),
+            provider: data.provider.clone(),
+            destination: data.destination.clone(),
+            status: NotificationDeliveryStatus::Requested,
+          },
+        );
+      }
+      RunEventPayload::NotificationDeliveryAttemptStarted(data) => {
+        if projection.status != RunStatus::Waiting {
+          return Err(FoldError::InvalidHistory(
+            "Notification delivery attempts require a waiting approval.".to_string(),
+          ));
+        }
+        let delivery = projection
+          .notification_deliveries
+          .get_mut(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(
+              "Notification attempt started before its durable intent.".to_string(),
+            )
+          })?;
+        if delivery.approval_id != data.approval_id || delivery.request_id != data.request_id {
+          return Err(FoldError::InvalidHistory(
+            "Notification attempt identity does not match its intent.".to_string(),
+          ));
+        }
+        let expected_attempt = match &delivery.status {
+          NotificationDeliveryStatus::Requested => 1,
+          NotificationDeliveryStatus::Failed {
+            attempt,
+            final_: false,
+            failure,
+            ..
+          } if failure.retryable => attempt + 1,
+          _ => 0,
+        };
+        if data.attempt != expected_attempt {
+          return Err(FoldError::InvalidHistory(
+            "Notification attempt is duplicated or out of order.".to_string(),
+          ));
+        }
+        delivery.status = NotificationDeliveryStatus::AttemptStarted {
+          attempt: data.attempt,
+          attempt_id: data.attempt_id.clone(),
+          idempotency_key: data.idempotency_key.clone(),
+        };
+      }
+      RunEventPayload::NotificationDeliverySucceeded(data) => {
+        let delivery = projection
+          .notification_deliveries
+          .get_mut(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Notification success has no durable intent.".to_string())
+          })?;
+        if !matches!(&delivery.status, NotificationDeliveryStatus::AttemptStarted { attempt, attempt_id, .. } if *attempt == data.attempt && attempt_id == &data.attempt_id)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Notification success does not close its active attempt.".to_string(),
+          ));
+        }
+        delivery.status = NotificationDeliveryStatus::Succeeded {
+          attempt: data.attempt,
+          attempt_id: data.attempt_id.clone(),
+          provider_message: data.provider_message.clone(),
+        };
+      }
+      RunEventPayload::NotificationDeliveryFailed(data) => {
+        let delivery = projection
+          .notification_deliveries
+          .get_mut(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Notification failure has no durable intent.".to_string())
+          })?;
+        if !matches!(&delivery.status, NotificationDeliveryStatus::AttemptStarted { attempt, attempt_id, .. } if *attempt == data.attempt && attempt_id == &data.attempt_id)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Notification failure does not close its active attempt.".to_string(),
+          ));
+        }
+        delivery.status = NotificationDeliveryStatus::Failed {
+          attempt: data.attempt,
+          attempt_id: data.attempt_id.clone(),
+          final_: data.final_,
+          failure: data.failure.clone(),
+          failed_at: event.occurred_at,
+        };
+      }
+      RunEventPayload::NotificationDecisionAccepted(data) => {
+        if projection.status != RunStatus::Waiting || !projection.notification_decisions.is_empty()
+        {
+          return Err(FoldError::InvalidHistory(
+            "Only one notification decision may be accepted while waiting.".to_string(),
+          ));
+        }
+        let delivery = projection
+          .notification_deliveries
+          .get(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(
+              "Notification decision references an unknown delivery.".to_string(),
+            )
+          })?;
+        if delivery.approval_id != data.approval_id
+          || delivery.request_id != data.request_id
+          || !matches!(
+            delivery.status,
+            NotificationDeliveryStatus::Succeeded { .. }
+          )
+        {
+          return Err(FoldError::InvalidHistory(
+            "Notification decision requires a successful delivery for the active request."
+              .to_string(),
+          ));
+        }
+        projection.notification_decisions.push(data.clone());
+      }
       RunEventPayload::ApprovalResolved(data) => {
         if projection.status != RunStatus::Waiting {
           return Err(FoldError::InvalidHistory(
@@ -450,6 +667,112 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         };
         projection.status = RunStatus::Running;
       }
+      RunEventPayload::NotificationMessageUpdateRequested(data) => {
+        if projection.status != RunStatus::Running {
+          return Err(FoldError::InvalidHistory(
+            "Message update work requires a resolved approval.".to_string(),
+          ));
+        }
+        let delivery = projection
+          .notification_deliveries
+          .get(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Message update references an unknown delivery.".to_string())
+          })?;
+        if delivery.approval_id != data.approval_id
+          || delivery.request_id != data.request_id
+          || !matches!(
+            delivery.status,
+            NotificationDeliveryStatus::Succeeded { .. }
+          )
+          || projection
+            .notification_updates
+            .contains_key(&data.delivery_id)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Message update intent does not match a successful delivery.".to_string(),
+          ));
+        }
+        projection.notification_updates.insert(
+          data.delivery_id.clone(),
+          NotificationMessageUpdateProjection {
+            approval_id: data.approval_id.clone(),
+            request_id: data.request_id.clone(),
+            delivery_id: data.delivery_id.clone(),
+            update_id: data.update_id.clone(),
+            resolution: data.resolution,
+            status: NotificationMessageUpdateStatus::Requested,
+          },
+        );
+      }
+      RunEventPayload::NotificationMessageUpdateAttemptStarted(data) => {
+        let update = projection
+          .notification_updates
+          .get_mut(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(
+              "Message update attempt started before its intent.".to_string(),
+            )
+          })?;
+        let expected = match &update.status {
+          NotificationMessageUpdateStatus::Requested => 1,
+          NotificationMessageUpdateStatus::Failed {
+            attempt,
+            final_: false,
+            failure,
+            ..
+          } if failure.retryable => attempt + 1,
+          _ => 0,
+        };
+        if update.update_id != data.update_id || data.attempt != expected {
+          return Err(FoldError::InvalidHistory(
+            "Message update attempt is duplicated or out of order.".to_string(),
+          ));
+        }
+        update.status = NotificationMessageUpdateStatus::AttemptStarted {
+          attempt: data.attempt,
+          attempt_id: data.attempt_id.clone(),
+        };
+      }
+      RunEventPayload::NotificationMessageUpdated(data) => {
+        let update = projection
+          .notification_updates
+          .get_mut(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Message update success has no intent.".to_string())
+          })?;
+        if !matches!(&update.status, NotificationMessageUpdateStatus::AttemptStarted { attempt, attempt_id } if *attempt == data.attempt && attempt_id == &data.attempt_id)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Message update success does not close its attempt.".to_string(),
+          ));
+        }
+        update.status = NotificationMessageUpdateStatus::Updated {
+          attempt: data.attempt,
+          attempt_id: data.attempt_id.clone(),
+        };
+      }
+      RunEventPayload::NotificationMessageUpdateFailed(data) => {
+        let update = projection
+          .notification_updates
+          .get_mut(&data.delivery_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Message update failure has no intent.".to_string())
+          })?;
+        if !matches!(&update.status, NotificationMessageUpdateStatus::AttemptStarted { attempt, attempt_id } if *attempt == data.attempt && attempt_id == &data.attempt_id)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Message update failure does not close its attempt.".to_string(),
+          ));
+        }
+        update.status = NotificationMessageUpdateStatus::Failed {
+          attempt: data.attempt,
+          attempt_id: data.attempt_id.clone(),
+          final_: data.final_,
+          failure: data.failure.clone(),
+          failed_at: event.occurred_at,
+        };
+      }
       RunEventPayload::RunSucceeded(data) => {
         require_running(&projection)?;
         let terminal_output_exists = projection
@@ -472,8 +795,67 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         projection.result = Some(data.result.clone());
       }
       RunEventPayload::RunFailed(data) => {
-        require_running(&projection)?;
+        if matches!(data, RunFailedData::V5(_)) {
+          if projection.status != RunStatus::Waiting {
+            return Err(FoldError::InvalidHistory(
+              "Notification-scoped run_failed requires a waiting approval.".to_string(),
+            ));
+          }
+        } else {
+          require_running(&projection)?;
+        }
         let failure = match data {
+          RunFailedData::V5(RunFailedDataV5::Notification {
+            approval_id,
+            request_id,
+            failed_delivery_ids,
+            failure,
+          }) => {
+            let request = projection
+              .approval_requests
+              .get(approval_id)
+              .ok_or_else(|| {
+                FoldError::InvalidHistory(
+                  "Notification run failure references an unknown approval.".to_string(),
+                )
+              })?;
+            let actual_failed = projection
+              .notification_deliveries
+              .values()
+              .filter(|delivery| {
+                delivery.approval_id == *approval_id && delivery.request_id == *request_id
+              })
+              .filter_map(|delivery| {
+                matches!(
+                  delivery.status,
+                  NotificationDeliveryStatus::Failed { final_: true, .. }
+                )
+                .then_some(delivery.delivery_id.clone())
+              })
+              .collect::<Vec<_>>();
+            let any_succeeded = projection.notification_deliveries.values().any(|delivery| {
+              delivery.approval_id == *approval_id
+                && delivery.request_id == *request_id
+                && matches!(
+                  delivery.status,
+                  NotificationDeliveryStatus::Succeeded { .. }
+                )
+            });
+            if request.request_id != *request_id
+              || any_succeeded
+              || actual_failed != *failed_delivery_ids
+            {
+              return Err(FoldError::InvalidHistory(
+                "Notification run failure does not match final delivery outcomes.".to_string(),
+              ));
+            }
+            RunFailure::Notification {
+              approval_id: approval_id.clone(),
+              request_id: request_id.clone(),
+              failed_delivery_ids: failed_delivery_ids.clone(),
+              failure: failure.clone(),
+            }
+          }
           RunFailedData::V1(data) => {
             if let (Some(node_id), Some(attempt), Some(invocation_id)) =
               (&data.node_id, data.attempt, &data.invocation_id)

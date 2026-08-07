@@ -549,7 +549,7 @@ export async function runCli(
     if (workflow.schemaVersion === 5) {
       throw new CliInputError(
         'WOML_NOTIFICATION_RUNTIME_UNAVAILABLE',
-        'This workflow compiled successfully with Slack notifications, but notification delivery is not executable until N3.'
+        'This workflow compiled successfully and its durable notification core is available, but the Slack provider host is not executable until N4.'
       );
     }
     if (
