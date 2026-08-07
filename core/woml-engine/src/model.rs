@@ -1090,10 +1090,10 @@ fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
     let has_notifications = wait.is_some_and(|node| {
       matches!(&node.inputs, ValueExpression::Object { fields } if fields.contains_key("notifications"))
     });
-    if has_notifications && workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V5 {
+    if has_notifications && workflow.schema_version < COMPILED_MODEL_SCHEMA_VERSION_V5 {
       issues.push(issue(
         ModelIssueCode::InvalidNotificationGroup,
-        format!("Approval {approval_id:?} notifications require compiled model v5."),
+        format!("Approval {approval_id:?} notifications require compiled model v5 or later."),
       ));
     }
 

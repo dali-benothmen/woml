@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::future::{poll_fn, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -312,36 +312,10 @@ async fn execute_workflow_durable_internal(
   options: RuntimeExecutionOptions,
   database_path: PathBuf,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
-  validate_retry_runtime_scope(&workflow)?;
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
   let engine = DurableDagEngine::new(workflow, definition_hash, store)?;
   execute_with_engine(engine, trigger, options).await
-}
-
-fn validate_retry_runtime_scope(
-  workflow: &CompiledWorkflowDefinition,
-) -> Result<(), RuntimeExecutionError> {
-  let has_retry = workflow
-    .graph
-    .nodes
-    .iter()
-    .any(|node| node.retry_policy.is_some());
-  let has_control_flow = workflow.graph.nodes.iter().any(|node| {
-    matches!(
-      node.handler.as_str(),
-      "engine.branch-select" | "engine.parallel-start" | "engine.approval-wait"
-    )
-  });
-
-  if has_retry && has_control_flow {
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "RI4 supports retry only in sequential workflows; retry composition with branch, parallel, or approval is introduced in RI5"
-        .to_string(),
-    ));
-  }
-
-  Ok(())
 }
 
 pub async fn resume_workflow_durable(
@@ -870,6 +844,7 @@ fn waiting_outcome(
 struct ParallelInvocationCompletion {
   node_id: String,
   invocation_id: String,
+  attempt_number: u32,
   outcome: Result<Value, AttemptFailure>,
 }
 
@@ -942,6 +917,7 @@ async fn invoke_parallel_child(
   ParallelInvocationCompletion {
     node_id: request.node_id,
     invocation_id: request.invocation_id,
+    attempt_number: request.attempt_number,
     outcome,
   }
 }
@@ -1013,47 +989,30 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
     })?
     .fork_context
     .clone();
-  let attempted = projection.attempted_node_ids();
-  let child_ids = group
-    .child_node_ids
-    .iter()
-    .filter(|node_id| !attempted.contains(node_id.as_str()))
-    .cloned()
-    .collect::<Vec<_>>();
-  drop(attempted);
-
-  let mut next_child = 0;
-  let mut failed_nodes = HashSet::new();
-  let mut cancelled_nodes = HashSet::new();
-  for attempt in &projection.attempts {
-    if !group.child_node_ids.contains(&attempt.identity.node_id) {
-      continue;
-    }
-    if let AttemptStatus::Failed { failure } = &attempt.status {
-      if failure.kind == AttemptFailureKind::InvocationCancelled {
-        cancelled_nodes.insert(attempt.identity.node_id.clone());
-      } else {
-        failed_nodes.insert(attempt.identity.node_id.clone());
-      }
-    }
-  }
-  let mut primary_failure = engine.events(run_id)?.iter().find_map(|event| {
-    if let RunEventPayload::StepAttemptFailed(data) = &event.payload {
-      failed_nodes
-        .contains(&data.node_id)
-        .then(|| data.node_id.clone())
-    } else {
-      None
-    }
-  });
   let mut completion_order = Vec::new();
   let mut active: Vec<ActiveParallelInvocation<'_>> = Vec::new();
+  let mut fail_fast_closed = false;
 
   loop {
-    let may_schedule = policy == ParallelFailurePolicy::WaitAll || primary_failure.is_none();
-    while may_schedule && active.len() < group.concurrency && next_child < child_ids.len() {
-      let node_id = child_ids[next_child].clone();
-      next_child += 1;
+    while !fail_fast_closed && active.len() < group.concurrency {
+      let projection = engine.projection(run_id)?;
+      let now = chrono::Utc::now();
+      let Some((node_id, attempt_number)) = group.child_node_ids.iter().find_map(|node_id| {
+        if projection.context.steps.contains_key(node_id) {
+          return None;
+        }
+        match projection.latest_attempt(node_id) {
+          None => Some((node_id.clone(), 1)),
+          Some(attempt) if matches!(attempt.status, AttemptStatus::Failed { .. }) => projection
+            .pending_retries
+            .get(node_id)
+            .filter(|schedule| schedule.scheduled_at <= now)
+            .map(|schedule| (node_id.clone(), schedule.next_attempt)),
+          Some(_) => None,
+        }
+      }) else {
+        break;
+      };
       let source = engine
         .workflow()
         .node(&node_id)
@@ -1063,7 +1022,6 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         })?
         .to_string();
       let invocation_id = generated_id("inv");
-      let attempt_number = 1;
       let max_attempts = engine
         .workflow()
         .node(&node_id)
@@ -1104,36 +1062,36 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
     let Some(completion) = next_parallel_completion(&mut active).await else {
       break;
     };
-    completion_order.push(completion.node_id.clone());
     match completion.outcome {
-      Ok(output) => engine.append_payload(
-        run_id,
-        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
-          node_id: completion.node_id,
-          attempt: 1,
-          invocation_id: completion.invocation_id,
-          output,
-        }),
-      )?,
-      Err(failure) => {
-        let node_id = completion.node_id.clone();
-        let cancellation = failure.kind == AttemptFailureKind::InvocationCancelled;
+      Ok(output) => {
+        completion_order.push(completion.node_id.clone());
         engine.append_payload(
           run_id,
-          RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+          RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
             node_id: completion.node_id,
-            attempt: 1,
+            attempt: completion.attempt_number,
             invocation_id: completion.invocation_id,
-            failure,
+            output,
           }),
         )?;
-        if cancellation {
-          cancelled_nodes.insert(node_id);
-        } else {
-          failed_nodes.insert(node_id.clone());
-          if primary_failure.is_none() {
-            primary_failure = Some(node_id);
-            if policy == ParallelFailurePolicy::FailFast {
+      }
+      Err(failure) => {
+        let cancellation = failure.kind == AttemptFailureKind::InvocationCancelled;
+        let disposition = engine.record_step_attempt_failure(
+          run_id,
+          chrono::Utc::now(),
+          StepAttemptFailedData {
+            node_id: completion.node_id.clone(),
+            attempt: completion.attempt_number,
+            invocation_id: completion.invocation_id,
+            failure,
+          },
+        )?;
+        match disposition {
+          StepFailureDisposition::RetryScheduled { .. } => {}
+          StepFailureDisposition::StepFailed => {
+            if !cancellation && policy == ParallelFailurePolicy::FailFast {
+              fail_fast_closed = true;
               let active_invocation_ids = active
                 .iter()
                 .map(|invocation| invocation.invocation_id.clone())
@@ -1143,24 +1101,84 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
               }
             }
           }
+          StepFailureDisposition::RunFailed => {
+            return Err(RuntimeExecutionError::Stalled(
+              "a parallel child failure terminated the run before its group settled".to_string(),
+            ));
+          }
         }
       }
     }
   }
 
-  if let Some(primary_node_id) = primary_failure {
-    let failed_node_ids = group
-      .child_node_ids
+  let projection = engine.projection(run_id)?;
+  let mut failed_node_ids = Vec::new();
+  let mut cancelled_node_ids = Vec::new();
+  let mut final_attempts = HashMap::new();
+  let mut every_child_settled = true;
+  let mut every_child_succeeded = true;
+  for node_id in &group.child_node_ids {
+    if projection.context.steps.contains_key(node_id) {
+      continue;
+    }
+    every_child_succeeded = false;
+    let Some(attempt) = projection.latest_attempt(node_id) else {
+      every_child_settled = false;
+      continue;
+    };
+    let AttemptStatus::Failed { failure } = &attempt.status else {
+      every_child_settled = false;
+      continue;
+    };
+    if projection.pending_retries.contains_key(node_id) {
+      every_child_settled = false;
+      continue;
+    }
+    final_attempts.insert(node_id.clone(), attempt.identity.attempt);
+    if failure.kind == AttemptFailureKind::InvocationCancelled {
+      cancelled_node_ids.push(node_id.clone());
+    } else {
+      failed_node_ids.push(node_id.clone());
+    }
+  }
+
+  if every_child_succeeded {
+    engine.append_payload(
+      run_id,
+      RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+        parallel_id: group.parallel_id,
+        outcome: ParallelGroupOutcome::Succeeded,
+        failed_node_ids: Vec::new(),
+        cancelled_node_ids: Vec::new(),
+      }),
+    )?;
+    return Ok(completion_order);
+  }
+
+  let group_has_final_failure = !failed_node_ids.is_empty();
+  let group_must_fail = match policy {
+    ParallelFailurePolicy::FailFast => group_has_final_failure,
+    ParallelFailurePolicy::WaitAll => group_has_final_failure && every_child_settled,
+  };
+  if group_must_fail {
+    let primary_node_id = engine
+      .events(run_id)?
       .iter()
-      .filter(|node_id| failed_nodes.contains(*node_id))
-      .cloned()
-      .collect::<Vec<_>>();
-    let cancelled_node_ids = group
-      .child_node_ids
-      .iter()
-      .filter(|node_id| cancelled_nodes.contains(*node_id))
-      .cloned()
-      .collect::<Vec<_>>();
+      .find_map(|event| match &event.payload {
+        RunEventPayload::StepAttemptFailed(data)
+          if failed_node_ids.contains(&data.node_id)
+            && final_attempts.get(&data.node_id) == Some(&data.attempt) =>
+        {
+          Some(data.node_id.clone())
+        }
+        _ => None,
+      })
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "parallel group {:?} has no durable primary final failure",
+          group.parallel_id
+        ))
+      })?;
     let message = match policy {
       ParallelFailurePolicy::FailFast => {
         "A parallel child failed; active siblings were cancelled.".to_string()
@@ -1210,21 +1228,13 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
       },
     )));
   }
-  if next_child != child_ids.len() {
+
+  if projection.pending_retries.is_empty() {
     return Err(RuntimeExecutionError::Stalled(format!(
-      "parallel group {:?} stopped before every child was scheduled",
+      "parallel group {:?} has unfinished children without a retry schedule",
       group.parallel_id
     )));
   }
-  engine.append_payload(
-    run_id,
-    RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
-      parallel_id: group.parallel_id,
-      outcome: ParallelGroupOutcome::Succeeded,
-      failed_node_ids: Vec::new(),
-      cancelled_node_ids: Vec::new(),
-    }),
-  )?;
   Ok(completion_order)
 }
 
@@ -1511,8 +1521,16 @@ fn settle_script_attempt_failure<E: RuntimeDagEngine>(
       failure: failure.clone(),
     },
   )?;
-  if matches!(disposition, StepFailureDisposition::RetryScheduled { .. }) {
-    return Ok(ScriptNodeOutcome::RetryScheduled);
+  match disposition {
+    StepFailureDisposition::RetryScheduled { .. } => {
+      return Ok(ScriptNodeOutcome::RetryScheduled);
+    }
+    StepFailureDisposition::StepFailed => {
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "non-parallel node {node_id:?} returned a group-owned failure"
+      )));
+    }
+    StepFailureDisposition::RunFailed => {}
   }
   Err(RuntimeExecutionError::RunFailed(Box::new(
     FailedRunDetails {
@@ -1636,6 +1654,14 @@ trait RuntimeDagEngine {
     _failed_at: chrono::DateTime<chrono::Utc>,
     failure: StepAttemptFailedData,
   ) -> Result<StepFailureDisposition, RuntimeExecutionError> {
+    if self
+      .workflow()
+      .parallel_group_for_child(&failure.node_id)
+      .is_some()
+    {
+      self.append_payload(run_id, RunEventPayload::StepAttemptFailed(failure))?;
+      return Ok(StepFailureDisposition::StepFailed);
+    }
     if self.event_schema_version() == crate::RUN_EVENT_SCHEMA_VERSION_V6 {
       return Err(RuntimeExecutionError::Stalled(
         "Model v6 retry failures require the durable runtime".to_string(),
@@ -1802,6 +1828,20 @@ impl RuntimeDagEngine for DurableDagEngine {
         DurableDagEngine::record_step_attempt_failure(self, run_id, failed_at, failure)?
           .disposition,
       );
+    }
+    if self
+      .workflow()
+      .parallel_group_for_child(&failure.node_id)
+      .is_some()
+    {
+      DurableDagEngine::append_payload(
+        self,
+        generated_id("evt"),
+        run_id,
+        failed_at,
+        RunEventPayload::StepAttemptFailed(failure),
+      )?;
+      return Ok(StepFailureDisposition::StepFailed);
     }
     let run_failed = attempt_run_failed_data(self.event_schema_version(), &failure);
     self.append_payloads(

@@ -49,6 +49,15 @@ const retryFixturePath = join(
   'fixtures',
   'retry.woml'
 );
+const retryCompositionFixturePath = join(
+  import.meta.dir,
+  '..',
+  '..',
+  'woml',
+  'tests',
+  'fixtures',
+  'retry-composition.woml'
+);
 let temporaryDirectory: string;
 
 interface CommandResult {
@@ -193,6 +202,30 @@ describe('woml run', () => {
         stderr: '',
         exitCode: 0,
       });
+      expect((await stat(statePath)).isFile()).toBe(true);
+    },
+    10_000
+  );
+
+  test(
+    'runs retry inside parallel inside a selected branch',
+    async () => {
+      const statePath = join(
+        temporaryDirectory,
+        'retry-composition-state.sqlite'
+      );
+      const result = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        'run',
+        retryCompositionFixturePath,
+        '--state',
+        statePath,
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.toString()).toBe('');
+      expect(result.stdout.toString()).toBe('{"total":42}\n');
       expect((await stat(statePath)).isFile()).toBe(true);
     },
     10_000

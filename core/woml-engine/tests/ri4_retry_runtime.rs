@@ -10,7 +10,6 @@ use woml_engine::{
 };
 
 const RETRY_MODEL: &str = include_str!("../../../woml/tests/fixtures/retry.compiled.v6.json");
-const BRANCH_MODEL: &str = include_str!("../../../woml/tests/fixtures/branch.compiled.v2.json");
 const RETRY_HASH: &str = "sha256:27606cefeebc5b6d45c965969b621a2f74ae2ebebe2b94edec80d97bfeb8378c";
 const MODIFIED_HASH: &str =
   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -281,42 +280,4 @@ async fn non_retryable_timeout_fails_after_the_first_attempt() {
       .count(),
     2
   );
-}
-
-#[tokio::test]
-async fn retry_with_control_flow_fails_closed_until_ri5() {
-  let mut workflow: CompiledWorkflowDefinition = serde_json::from_str(BRANCH_MODEL).unwrap();
-  workflow.schema_version = 6;
-  workflow
-    .graph
-    .nodes
-    .iter_mut()
-    .find(|node| node.handler == "runtime.script")
-    .unwrap()
-    .retry_policy = Some(RetryPolicy {
-    max_attempts: 3,
-    backoff: BackoffPolicy::Fixed { delay_ms: 1 },
-  });
-  let database = TemporaryDatabase::new("control-flow-rejected");
-  let options = RuntimeExecutionOptions::new(
-    ScriptHostProcessOptions::new("bun", "unused-script-host.ts"),
-    2_000,
-  );
-
-  let error = execute_workflow_durable(
-    workflow,
-    MODIFIED_HASH.to_string(),
-    Map::new(),
-    options,
-    database.path().to_path_buf(),
-  )
-  .await
-  .unwrap_err();
-
-  assert!(matches!(
-    error,
-    RuntimeExecutionError::InvalidConfiguration(message)
-      if message.contains("retry only in sequential workflows") && message.contains("RI5")
-  ));
-  assert!(!database.path().exists());
 }

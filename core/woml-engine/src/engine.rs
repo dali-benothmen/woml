@@ -900,6 +900,7 @@ pub fn step_effect_idempotency_key(run_id: &str, definition_hash: &str, node_id:
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParallelChildState {
   Active,
+  RetryPending,
   Succeeded,
   Failed(AttemptFailureKind),
 }
@@ -1039,6 +1040,9 @@ pub(crate) fn validate_event_history_against_definition(
             "Retry schedule for node {:?} does not match its failed attempt and compiled backoff.",
             data.node_id
           ));
+        }
+        if workflow.parallel_group_for_child(&data.node_id).is_some() {
+          child_states.insert(data.node_id.clone(), ParallelChildState::RetryPending);
         }
       }
       RunEventPayload::ParallelGroupCompleted(data) => {

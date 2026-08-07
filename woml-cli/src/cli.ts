@@ -514,6 +514,25 @@ function workflowSecretReferences(
   return references;
 }
 
+function workflowHasApproval(
+  workflow: CompiledWorkflowDefinition
+): boolean {
+  return workflow.graph.nodes.some(
+    node => node.handler === 'engine.approval-wait'
+  );
+}
+
+function workflowHasNotifications(
+  workflow: CompiledWorkflowDefinition
+): boolean {
+  return workflow.graph.nodes.some(
+    node =>
+      node.handler === 'engine.approval-wait' &&
+      node.inputs.kind === 'object' &&
+      node.inputs.fields.notifications !== undefined
+  );
+}
+
 function printSlackApproval(
   io: CliIo,
   outcome: Extract<RustApprovalRuntimeOutcome, { status: 'waiting' }>,
@@ -697,17 +716,18 @@ export async function runCli(
     const source = await readWorkflow(filePath);
     document = parseWoml(source, { file: filePath });
     const workflow = compileWoml(document);
+    const hasApproval = workflowHasApproval(workflow);
+    const hasNotifications = workflowHasNotifications(workflow);
     if (
       runArguments.resumeRunId !== undefined &&
-      workflow.schemaVersion !== 4 &&
-      workflow.schemaVersion !== 5
+      !hasApproval
     ) {
       throw new CliInputError(
         'WOML_RESUME_REQUIRES_APPROVAL',
         '--resume currently supports Human Approval workflows only.'
       );
     }
-    if (workflow.schemaVersion === 5) {
+    if (hasNotifications) {
       await runNotificationWorkflow(
         workflow,
         runArguments,
@@ -716,7 +736,7 @@ export async function runCli(
       );
       return 0;
     }
-    if (workflow.schemaVersion === 4) {
+    if (hasApproval) {
       await runApprovalWorkflow(workflow, runArguments, io);
       return 0;
     }

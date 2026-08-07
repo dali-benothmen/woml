@@ -1,7 +1,7 @@
 # WOML Retry and Idempotency Implementation Plan
 
-Status: RI0 through RI4 completed on 2026-08-07. Retry composition with branch,
-parallel, and Human Approval remains planned for RI5 onward.
+Status: RI0 through RI5 completed on 2026-08-07. Recovery, CLI progress, and
+diagnostics remain planned for RI6 onward.
 
 ## 1. Product Outcome
 
@@ -642,6 +642,8 @@ An end-to-end fixture uses `attempt.number` to fail twice and succeed on attempt
 3; the final JSON and durable event order match reviewed fixtures.
 
 ### RI5 — Compose retries with branch, parallel, and approval
+
+Status: completed.
 
 Changes:
 

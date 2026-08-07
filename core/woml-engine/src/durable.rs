@@ -2268,17 +2268,18 @@ impl DurableEventStore {
         });
       }
 
-      let every_terminal = child_statuses.iter().all(|(_, status)| {
+      let every_terminal = child_statuses.iter().all(|(node_id, status)| {
         matches!(
           status,
           Some(AttemptStatus::Succeeded { .. } | AttemptStatus::Failed { .. })
-        )
+        ) && !projection.pending_retries.contains_key(*node_id)
       });
       let failed_node_ids = child_statuses
         .iter()
         .filter_map(|(node_id, status)| match status {
           Some(AttemptStatus::Failed { failure })
-            if failure.kind != AttemptFailureKind::InvocationCancelled =>
+            if failure.kind != AttemptFailureKind::InvocationCancelled
+              && !projection.pending_retries.contains_key(*node_id) =>
           {
             Some((*node_id).clone())
           }
@@ -2794,6 +2795,7 @@ pub enum StepFailureDisposition {
     next_attempt: u32,
     scheduled_at: DateTime<Utc>,
   },
+  StepFailed,
   RunFailed,
 }
 
@@ -2933,15 +2935,10 @@ impl DurableDagEngine {
         failure.node_id
       ))
     })?;
-    if self
+    let parallel_child = self
       .workflow
       .parallel_group_for_child(&failure.node_id)
-      .is_some()
-    {
-      return Err(DurableEngineError::Contract(
-        "Parallel-child retry settlement is introduced in RI5.".to_string(),
-      ));
-    }
+      .is_some();
     let projection = self.projection(run_id)?;
     if !matches!(
       projection.latest_attempt(&failure.node_id),
@@ -2990,6 +2987,15 @@ impl DurableDagEngine {
           next_attempt,
           scheduled_at,
         },
+      )
+    } else if parallel_child {
+      (
+        vec![(
+          generated_event_id(),
+          failed_at,
+          RunEventPayload::StepAttemptFailed(failure.clone()),
+        )],
+        StepFailureDisposition::StepFailed,
       )
     } else {
       (

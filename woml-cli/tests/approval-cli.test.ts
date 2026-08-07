@@ -190,6 +190,64 @@ describe('woml run Human Approval', () => {
     });
   }
 
+  test('routes a Model v6 approval workflow back through its selected retrying arm', async () => {
+    const workflowPath = join(
+      temporaryDirectory,
+      'approval-retry-model-v6.woml'
+    );
+    const statePath = join(temporaryDirectory, 'approval-retry-model-v6.sqlite');
+    await writeFile(
+      workflowPath,
+      `<workflow version="0.1" id="approval-retry-model-v6">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <approval id="review">
+      <when-approved>
+        <step id="publish" retry="2" retry-backoff="fixed" retry-delay="1ms">
+          <script>
+            if (attempt.number === 1) throw new Error("temporary publish failure");
+            return { published: true };
+          </script>
+        </step>
+      </when-approved>
+      <when-rejected />
+    </approval>
+    <step id="finish">
+      <script>
+        return {
+          decision: context.steps.review.decision,
+          published: context.steps.publish.published
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>`
+    );
+
+    const running = spawnApproval([
+      'run',
+      workflowPath,
+      '--state',
+      statePath,
+      '--approval-port',
+      String(await availablePort()),
+    ]);
+    const url = await running.url;
+    expect((await postDecision(url, 'approved')).status).toBe(200);
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      running.stdout,
+      running.stderr,
+      running.child.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({
+      decision: 'approved',
+      published: true,
+    });
+    expect(stderr.match(/waiting for human approval/g)).toHaveLength(1);
+  });
+
   test('recovers a stopped waiting run with a newly issued URL', async () => {
     const statePath = join(temporaryDirectory, 'resume.sqlite');
     const firstPort = await availablePort();

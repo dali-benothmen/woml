@@ -1090,6 +1090,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
             }
           }
         };
+        projection.pending_retries.clear();
         projection.status = RunStatus::Failed;
         projection.failure = Some(failure);
       }
