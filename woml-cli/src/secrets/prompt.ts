@@ -1,26 +1,56 @@
 import { SecretStoreError } from './types';
 
-export async function readSecretFromTerminal(name: string): Promise<string> {
-  const input = process.stdin;
-  if (!input.isTTY || typeof input.setRawMode !== 'function') {
+export interface SecretPromptInput {
+  readonly isTTY?: boolean;
+  readonly isRaw?: boolean;
+  readonly setRawMode?: (enabled: boolean) => unknown;
+  readonly resume: () => unknown;
+  readonly pause: () => unknown;
+  readonly on: (
+    event: 'data',
+    listener: (chunk: Buffer | string) => void
+  ) => unknown;
+  readonly off: (
+    event: 'data',
+    listener: (chunk: Buffer | string) => void
+  ) => unknown;
+}
+
+export interface SecretPromptTerminal {
+  readonly input: SecretPromptInput;
+  readonly write: (text: string) => unknown;
+}
+
+const processTerminal: SecretPromptTerminal = {
+  input: process.stdin,
+  write: text => process.stderr.write(text),
+};
+
+export async function readSecretFromTerminal(
+  name: string,
+  terminal: SecretPromptTerminal = processTerminal
+): Promise<string> {
+  const { input, write } = terminal;
+  const setRawMode = input.setRawMode;
+  if (!input.isTTY || typeof setRawMode !== 'function') {
     throw new SecretStoreError(
       'WOML_SECRET_PROMPT_REQUIRES_TTY',
       '`woml secrets set` requires an interactive terminal and never accepts a secret as a command argument.'
     );
   }
 
-  process.stderr.write(`Enter value for ${name}: `);
-  const wasRaw = input.isRaw;
-  input.setRawMode(true);
+  write(`Enter value for ${name}: `);
+  const wasRaw = input.isRaw ?? false;
+  setRawMode.call(input, true);
   input.resume();
 
   return await new Promise<string>((resolve, reject) => {
     let value = '';
     const finish = (error?: Error) => {
       input.off('data', onData);
-      input.setRawMode(wasRaw);
+      setRawMode.call(input, wasRaw);
       input.pause();
-      process.stderr.write('\n');
+      write('\n');
       if (error === undefined) resolve(value);
       else reject(error);
     };
@@ -41,9 +71,15 @@ export async function readSecretFromTerminal(name: string): Promise<string> {
           return;
         }
         if (character === '\u007f' || character === '\b') {
-          value = value.slice(0, -1);
+          const characters = Array.from(value);
+          if (characters.length > 0) {
+            characters.pop();
+            value = characters.join('');
+            write('\b \b');
+          }
         } else if (character >= ' ') {
           value += character;
+          write('*');
         }
       }
     };
