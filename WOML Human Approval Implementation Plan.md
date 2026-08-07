@@ -1,7 +1,8 @@
 # WOML Human Approval Implementation Plan
 
-Status: A0–A1 complete — approval contracts are frozen and frontend validation
-is implemented; A2 lowering is next
+Status: A0–A3 complete — approval contracts, frontend compilation, event-v4
+folding, durable waiting state, secure credentials, and store-v2 migration are
+implemented; A4 is next
 
 ## 1. Product Outcome
 
@@ -124,7 +125,7 @@ Opening the page never changes workflow state; a button submits an HTTP `POST`.
 After approval, stdout receives only the final workflow result:
 
 ```json
-{"decision":"approved","source":"human","published":true}
+{ "decision": "approved", "source": "human", "published": true }
 ```
 
 ### 2.3 Runtime ownership
@@ -157,16 +158,16 @@ Bun CLI/HTTP server <----+
 
 ## 3. Phase Summary
 
-| Phase | What changes | Product result |
-|---|---|---|
-| A0 — complete | Freeze approval syntax, model v4, event v4, token, HTTP v1, timeout, errors, and fixtures. | Every layer targets one reviewed approval contract. |
-| A1 — complete | Teach the WOML frontend to validate approval markup and placement. | Valid approvals pass frontend validation and invalid approvals receive useful source errors. |
-| A2 | Lower approvals into a deterministic model-v4 DAG. | Approval markup becomes an engine-ready wait/route/join graph. |
-| A3 | Add durable approval events, folded waiting state, token records, and SQLite migration. | Waiting approvals and access credentials survive restarts safely. |
-| A4 | Make Rust stop at an approval and return a structured waiting outcome. | A workflow can durably pause without blocking a Worker or pretending to finish. |
-| A5 | Add atomic approve, reject, timeout, and DAG continuation behavior. | Exactly one resolution wins and only its route executes. |
-| A6 | Add the local HTTP approval page, terminal URL, and N-API/CLI lifecycle. | A person can approve or reject a real `woml run` workflow. |
-| A7 | Harden recovery, races, composition, security, packaging, and documentation. | Human approval becomes a supported and publishable WOML feature. |
+| Phase         | What changes                                                                               | Product result                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| A0 — complete | Freeze approval syntax, model v4, event v4, token, HTTP v1, timeout, errors, and fixtures. | Every layer targets one reviewed approval contract.                                          |
+| A1 — complete | Teach the WOML frontend to validate approval markup and placement.                         | Valid approvals pass frontend validation and invalid approvals receive useful source errors. |
+| A2 — complete | Lower approvals into a deterministic model-v4 DAG.                                         | Approval markup becomes an engine-ready wait/route/join graph.                               |
+| A3 — complete | Add durable approval events, folded waiting state, token records, and SQLite migration.    | Waiting approvals and access credentials survive restarts safely.                            |
+| A4            | Make Rust stop at an approval and return a structured waiting outcome.                     | A workflow can durably pause without blocking a Worker or pretending to finish.              |
+| A5            | Add atomic approve, reject, timeout, and DAG continuation behavior.                        | Exactly one resolution wins and only its route executes.                                     |
+| A6            | Add the local HTTP approval page, terminal URL, and N-API/CLI lifecycle.                   | A person can approve or reject a real `woml run` workflow.                                   |
+| A7            | Harden recovery, races, composition, security, packaging, and documentation.               | Human approval becomes a supported and publishable WOML feature.                             |
 
 ## 4. Source-Language Contract
 
@@ -184,13 +185,13 @@ Bun CLI/HTTP server <----+
 </approval>
 ```
 
-| Attribute | Required | Meaning |
-|---|---:|---|
-| `id` | Yes | Stable structural identity and output key at `context.steps.<id>`. |
-| `name` | No | Human-readable label shown by the terminal and approval page. |
-| `description` | No | Human-readable explanation shown to the reviewer. |
-| `timeout` | No | Durable maximum wait; omission means no WOML deadline. |
-| `on-timeout` | No | `reject` or `fail`; defaults to `fail`. |
+| Attribute     | Required | Meaning                                                            |
+| ------------- | -------: | ------------------------------------------------------------------ |
+| `id`          |      Yes | Stable structural identity and output key at `context.steps.<id>`. |
+| `name`        |       No | Human-readable label shown by the terminal and approval page.      |
+| `description` |       No | Human-readable explanation shown to the reviewer.                  |
+| `timeout`     |       No | Durable maximum wait; omission means no WOML deadline.             |
+| `on-timeout`  |       No | `reject` or `fail`; defaults to `fail`.                            |
 
 Rules:
 
@@ -436,14 +437,14 @@ Content-Type: application/json
 
 Only `approved` and `rejected` are accepted.
 
-| Status | Meaning |
-|---:|---|
-| `200` | Decision recorded, or the identical human decision was already recorded. |
-| `400` | Invalid JSON, content type, or decision value. |
-| `404` | Token is unknown or malformed; the response does not reveal approval existence. |
-| `409` | The approval already has a different human decision. |
-| `410` | The credential expired, or the request was resolved by timeout. |
-| `500` | A safe internal failure occurred before a decision could be confirmed. |
+| Status | Meaning                                                                         |
+| -----: | ------------------------------------------------------------------------------- |
+|  `200` | Decision recorded, or the identical human decision was already recorded.        |
+|  `400` | Invalid JSON, content type, or decision value.                                  |
+|  `404` | Token is unknown or malformed; the response does not reveal approval existence. |
+|  `409` | The approval already has a different human decision.                            |
+|  `410` | The credential expired, or the request was resolved by timeout.                 |
+|  `500` | A safe internal failure occurred before a decision could be confirmed.          |
 
 The JSON response has a versioned success/error envelope frozen in A0. It may
 report the run and approval IDs after successful authorization but never echoes
@@ -504,21 +505,21 @@ retains structured approval identity without including the token.
 
 A0 freezes at least these error families:
 
-| Code | Surface | Meaning |
-|---|---|---|
-| `WOML_APPROVAL_STRUCTURE_INVALID` | validation | Required arms are missing, duplicated, or out of order. |
-| `WOML_APPROVAL_TIMEOUT_INVALID` | validation | Timeout or timeout policy is malformed or contradictory. |
-| `WOML_APPROVAL_PLACEMENT_INVALID` | validation | Approval appears in an unsupported container. |
-| `WOML_APPROVAL_LOWERING_UNAVAILABLE` | compile | A valid approval reaches the compiler before A2 lowering. |
-| `WOML_APPROVAL_STATE_INVALID` | runtime | Compiled/event request identity is inconsistent. |
-| `WOML_APPROVAL_REQUEST_INVALID` | HTTP | The decision request body or content type is invalid. |
-| `WOML_APPROVAL_TOKEN_INVALID` | HTTP/runtime | Capability token is malformed or unknown. |
-| `WOML_APPROVAL_TOKEN_EXPIRED` | HTTP/runtime | The credential expired while the approval may still be waiting. |
-| `WOML_APPROVAL_EXPIRED` | HTTP/runtime | The durable request deadline has passed. |
-| `WOML_APPROVAL_DECISION_CONFLICT` | HTTP/runtime | A different resolution already won. |
-| `WOML_APPROVAL_TIMEOUT` | runtime | `on-timeout="fail"` failed the workflow. |
-| `WOML_APPROVAL_SERVER_BIND_FAILED` | CLI | The local approval server could not bind safely. |
-| `WOML_APPROVAL_INTERNAL` | HTTP | A decision could not be safely confirmed. |
+| Code                                 | Surface      | Meaning                                                          |
+| ------------------------------------ | ------------ | ---------------------------------------------------------------- |
+| `WOML_APPROVAL_STRUCTURE_INVALID`    | validation   | Required arms are missing, duplicated, or out of order.          |
+| `WOML_APPROVAL_TIMEOUT_INVALID`      | validation   | Timeout or timeout policy is malformed or contradictory.         |
+| `WOML_APPROVAL_PLACEMENT_INVALID`    | validation   | Approval appears in an unsupported container.                    |
+| `WOML_APPROVAL_LOWERING_UNAVAILABLE` | compile      | Retired A1 gate, reserved for compatibility with pre-A2 tooling. |
+| `WOML_APPROVAL_STATE_INVALID`        | runtime      | Compiled/event request identity is inconsistent.                 |
+| `WOML_APPROVAL_REQUEST_INVALID`      | HTTP         | The decision request body or content type is invalid.            |
+| `WOML_APPROVAL_TOKEN_INVALID`        | HTTP/runtime | Capability token is malformed or unknown.                        |
+| `WOML_APPROVAL_TOKEN_EXPIRED`        | HTTP/runtime | The credential expired while the approval may still be waiting.  |
+| `WOML_APPROVAL_EXPIRED`              | HTTP/runtime | The durable request deadline has passed.                         |
+| `WOML_APPROVAL_DECISION_CONFLICT`    | HTTP/runtime | A different resolution already won.                              |
+| `WOML_APPROVAL_TIMEOUT`              | runtime      | `on-timeout="fail"` failed the workflow.                         |
+| `WOML_APPROVAL_SERVER_BIND_FAILED`   | CLI          | The local approval server could not bind safely.                 |
+| `WOML_APPROVAL_INTERNAL`             | HTTP         | A decision could not be safely confirmed.                        |
 
 Exact names and diagnostic locations are reviewed in A0 rather than scattered
 through implementation.
@@ -599,10 +600,10 @@ Completed proof:
 - Validation covers fixed arm order, empty and nested arms, shared IDs,
   metadata, duration units/bounds, timeout policy, branch composition, and
   unsupported parallel placement.
-- `compileWoml()` reports `WOML_APPROVAL_LOWERING_UNAVAILABLE` at the approval
-  tag until A2 implements the already-frozen model-v4 DAG.
+- `compileWoml()` kept approval lowering behind
+  `WOML_APPROVAL_LOWERING_UNAVAILABLE` until A2 implemented the frozen DAG.
 
-### A2 — Lower approvals into model-v4 DAGs
+### A2 — Lower approvals into model-v4 DAGs — complete
 
 Changes:
 
@@ -626,7 +627,25 @@ Gate:
 The checked-in compiled fixture is byte-for-byte stable, accepted by Rust, and
 cannot contain token, URL, clock, or random runtime data.
 
-### A3 — Add durable approval state and credentials
+Completed proof:
+
+- `compileWoml()` emits schema version 4 whenever an approval appears,
+  including approvals nested inside branch or approval arms.
+- Approval wait nodes keep the authored public ID; generated joins use
+  `__woml_approval__<id>__join`; both decision routes and optional join edges
+  use the frozen deterministic identities.
+- Empty arms connect directly from the typed decision route to the generated
+  join without inventing a script node or output.
+- The TypeScript graph inspector validates approval inputs, metadata,
+  ownership, decision expressions, boundaries, empty arms, and generated
+  identities.
+- Rust deserializes the reviewed model-v4 fixture without rewriting it and
+  applies matching structural validation while execution remains gated for
+  A3–A5.
+- Exact fixture, empty-arm, nested-composition, malformed-group, credential
+  leakage, compatibility, and Rust conformance tests pass.
+
+### A3 — Add durable approval state and credentials — complete
 
 Changes:
 
@@ -649,6 +668,28 @@ Gate:
 
 Deleting in-memory state and reopening SQLite reconstructs the same waiting or
 resolved projection; existing v1–v3 databases migrate without altered events.
+
+Completed proof:
+
+- Rust implements event schema v4 for `approval_requested`,
+  `approval_resolved`, and approval-scoped timeout failures while retaining
+  event-v1 through event-v3 compatibility.
+- Folding derives `RunStatus::Waiting`, immutable request identity, deadline,
+  timeout policy, resolution state, and decision output solely from events.
+- While waiting, ordinary attempts and terminal events fail closed. A valid
+  resolution returns the projection to running; timeout failure publishes no
+  approval output and must match the following approval-scoped failure.
+- Store v2 migrates an existing store-v1 database in one immediate transaction
+  without rewriting definitions, run bindings, or event JSON.
+- Rust generates a 256-bit credential secret, stores only its 32-byte SHA-256
+  digest, compares candidate digests in constant time, caps credential expiry
+  at the approval deadline, and supports append-only reissue after restart.
+- SQLite triggers prevent token update/delete, malformed or expired tokens use
+  non-secret errors, and tests prove plaintext tokens and secrets are absent
+  from events, context, and database bytes.
+- The timeout-failure scenario now carries the canonical hash of its separate
+  `on-timeout="fail"` compiled fixture; all four histories match their immutable
+  definitions.
 
 ### A4 — Pause execution at the durable approval boundary
 
@@ -762,23 +803,23 @@ approval tests.
 
 ## 12. Verification Matrix
 
-| Area | Required proof |
-|---|---|
-| Syntax | Valid approvals parse; invalid structure and attributes report original line/column. |
-| Lowering | Deterministic model-v4 wait/route/join identities and canonical hash. |
-| Waiting | Request is durable before the URL is exposed; no downstream work starts. |
-| Token | High entropy, bounded credential lifetime, hashed at rest, constant-time verification, no plaintext persistence. |
-| HTTP | GET is safe; POST accepts only reviewed decisions and returns frozen envelopes/statuses. |
-| Decision | Approve/reject publishes exactly one predictable output and selects exactly one arm. |
-| Timeout | Reject/fail policies work and race atomically with human decisions. |
-| Context | Decision appears only at `context.steps.<approvalId>`; token never appears. |
-| Events | Request/resolution validate, fold, persist, migrate, and reopen deterministically. |
-| Recovery | Waiting and resolved runs resume without repeating completed effects or decisions. |
-| Composition | Root, branch-arm, nested approval, and allowed parallel-adjacent placements behave correctly. |
-| Errors | Frontend, Rust, N-API, HTTP, and CLI retain stable codes and safe details. |
-| Compatibility | Model/event v1–v3 fixtures and existing workflows remain unchanged. |
-| CLI | Terminal asks clearly, prints the URL to stderr, waits, and prints final JSON to stdout. |
-| Package | A clean installation includes the native engine, HTTP page, and all required Bun components. |
+| Area          | Required proof                                                                                                   |
+| ------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Syntax        | Valid approvals parse; invalid structure and attributes report original line/column.                             |
+| Lowering      | Deterministic model-v4 wait/route/join identities and canonical hash.                                            |
+| Waiting       | Request is durable before the URL is exposed; no downstream work starts.                                         |
+| Token         | High entropy, bounded credential lifetime, hashed at rest, constant-time verification, no plaintext persistence. |
+| HTTP          | GET is safe; POST accepts only reviewed decisions and returns frozen envelopes/statuses.                         |
+| Decision      | Approve/reject publishes exactly one predictable output and selects exactly one arm.                             |
+| Timeout       | Reject/fail policies work and race atomically with human decisions.                                              |
+| Context       | Decision appears only at `context.steps.<approvalId>`; token never appears.                                      |
+| Events        | Request/resolution validate, fold, persist, migrate, and reopen deterministically.                               |
+| Recovery      | Waiting and resolved runs resume without repeating completed effects or decisions.                               |
+| Composition   | Root, branch-arm, nested approval, and allowed parallel-adjacent placements behave correctly.                    |
+| Errors        | Frontend, Rust, N-API, HTTP, and CLI retain stable codes and safe details.                                       |
+| Compatibility | Model/event v1–v3 fixtures and existing workflows remain unchanged.                                              |
+| CLI           | Terminal asks clearly, prints the URL to stderr, waits, and prints final JSON to stdout.                         |
+| Package       | A clean installation includes the native engine, HTTP page, and all required Bun components.                     |
 
 ## 13. Explicit Non-Goals
 

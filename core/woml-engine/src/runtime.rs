@@ -13,10 +13,10 @@ use crate::engine::{
   resolve_context_reference, selected_branch_arm, BranchEvaluationError, BranchEvaluationErrorKind,
 };
 use crate::event::{
-  BranchSelectedData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
-  ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
-  RunFailedDataV3, RunSucceededData, StepAttemptFailedData, StepAttemptStartedData,
-  StepAttemptSucceededData,
+  ApprovalFailure, BranchSelectedData, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData,
+  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunSucceededData, StepAttemptFailedData,
+  StepAttemptStartedData, StepAttemptSucceededData,
 };
 use crate::model::{ParallelGroupDefinition, ValueExpression};
 use crate::projection::AttemptStatus;
@@ -75,6 +75,8 @@ pub enum RuntimeExecutionError {
   BranchFailed(Box<FailedBranchDetails>),
   #[error(transparent)]
   ParallelFailed(Box<FailedParallelDetails>),
+  #[error(transparent)]
+  ApprovalFailed(Box<FailedApprovalDetails>),
   #[error("workflow execution stalled: {0}")]
   Stalled(String),
   #[error("runtime configuration is invalid: {0}")]
@@ -114,6 +116,17 @@ pub struct FailedParallelDetails {
   pub failed_node_ids: Vec<String>,
   pub cancelled_node_ids: Vec<String>,
   pub failure: ParallelFailure,
+  pub events: Vec<RunEvent>,
+}
+
+#[derive(Debug, Error)]
+#[error("workflow approval failed [{code}]: {message}")]
+pub struct FailedApprovalDetails {
+  pub code: String,
+  pub message: String,
+  pub approval_id: String,
+  pub request_id: String,
+  pub failure: ApprovalFailure,
   pub events: Vec<RunEvent>,
 }
 
@@ -208,6 +221,11 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
     RunStatus::Succeeded => return final_result(&engine, run_id, execution_order),
     RunStatus::Failed => return Err(resumed_failure(&engine, run_id, projection)?),
     RunStatus::Running => {}
+    RunStatus::Waiting => {
+      return Err(RuntimeExecutionError::Stalled(
+        "stored run is waiting for approval; runtime continuation begins in A4".to_string(),
+      ));
+    }
     RunStatus::NotStarted => {
       return Err(RuntimeExecutionError::Stalled(
         "stored run has no run_started event".to_string(),
@@ -953,6 +971,18 @@ fn resumed_failure<E: RuntimeDagEngine>(
         events,
       }))
     }
+    RunFailure::Approval {
+      approval_id,
+      request_id,
+      failure,
+    } => RuntimeExecutionError::ApprovalFailed(Box::new(FailedApprovalDetails {
+      code: failure.code.clone(),
+      message: failure.message.clone(),
+      approval_id,
+      request_id,
+      failure,
+      events,
+    })),
   })
 }
 

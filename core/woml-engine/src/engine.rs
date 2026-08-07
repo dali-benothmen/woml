@@ -5,8 +5,9 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::event::{
-  is_definition_hash, AttemptFailureKind, ParallelFailurePolicy, ParallelGroupOutcome,
-  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RunStartedData,
+  is_definition_hash, ApprovalTimeoutPolicy, AttemptFailureKind, ParallelFailurePolicy,
+  ParallelGroupOutcome, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
+  RunFailedDataV4, RunStartedData,
 };
 use crate::{
   model::{EdgeCondition, ValueExpression},
@@ -200,7 +201,7 @@ pub(crate) fn ready_node_ids_for_projection(
       .iter()
       .filter(|node| {
         active.contains(node.id.as_str())
-          && !node_is_complete(node, projection)
+          && !node_is_complete(workflow, node, projection)
           && !attempted.contains(node.id.as_str())
           && incoming
             .get(node.id.as_str())
@@ -209,7 +210,7 @@ pub(crate) fn ready_node_ids_for_projection(
             .all(|edge| {
               workflow
                 .node(&edge.from)
-                .is_some_and(|predecessor| node_is_complete(predecessor, projection))
+                .is_some_and(|predecessor| node_is_complete(workflow, predecessor, projection))
             })
       })
       .map(|node| node.id.clone())
@@ -245,6 +246,26 @@ fn active_node_ids<'a>(
 }
 
 fn edge_is_active(edge: &crate::model::CompiledWorkflowEdge, projection: &RunProjection) -> bool {
+  if let Some(approval_id) = edge.approval_id.as_deref() {
+    let decision = projection
+      .context
+      .steps
+      .get(approval_id)
+      .and_then(Value::as_object)
+      .and_then(|output| output.get("decision"))
+      .and_then(Value::as_str);
+    if edge.id == format!("{approval_id}:approved")
+      || edge.id == format!("{approval_id}:approved:join")
+    {
+      return decision == Some("approved");
+    }
+    if edge.id == format!("{approval_id}:rejected")
+      || edge.id == format!("{approval_id}:rejected:join")
+    {
+      return decision == Some("rejected");
+    }
+    return false;
+  }
   match edge.branch_id.as_deref() {
     Some(branch_id) => projection
       .branch_selections
@@ -254,7 +275,11 @@ fn edge_is_active(edge: &crate::model::CompiledWorkflowEdge, projection: &RunPro
   }
 }
 
-fn node_is_complete(node: &crate::model::CompiledWorkflowNode, projection: &RunProjection) -> bool {
+fn node_is_complete(
+  workflow: &CompiledWorkflowDefinition,
+  node: &crate::model::CompiledWorkflowNode,
+  projection: &RunProjection,
+) -> bool {
   if node.handler == "engine.branch-select" {
     return selector_branch_id(&node.id)
       .is_some_and(|branch_id| projection.branch_selections.contains_key(branch_id));
@@ -278,6 +303,21 @@ fn node_is_complete(node: &crate::model::CompiledWorkflowNode, projection: &RunP
             ..
           }
         )
+      });
+  }
+  if node.handler == "engine.approval-wait" {
+    return projection.context.steps.contains_key(&node.id);
+  }
+  if node.handler == "engine.approval-join" {
+    return workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.to == node.id && edge_is_active(edge, projection))
+      .any(|edge| {
+        workflow
+          .node(&edge.from)
+          .is_some_and(|predecessor| node_is_complete(workflow, predecessor, projection))
       });
   }
   projection.context.steps.contains_key(&node.id)
@@ -504,6 +544,40 @@ pub(crate) fn validate_payload_against_definition(
         ));
       }
     }
+    RunEventPayload::ApprovalRequested(data) => {
+      let approval = workflow.approval(&data.approval_id).ok_or_else(|| {
+        format!(
+          "approval_requested references unknown approval {:?}.",
+          data.approval_id
+        )
+      })?;
+      let expected_policy = match approval.on_timeout.as_str() {
+        "reject" => ApprovalTimeoutPolicy::Reject,
+        "fail" => ApprovalTimeoutPolicy::Fail,
+        _ => {
+          return Err(format!(
+            "Approval {:?} has an invalid policy.",
+            data.approval_id
+          ))
+        }
+      };
+      if data.on_timeout != expected_policy
+        || approval.timeout_ms.is_some() != data.expires_at.is_some()
+      {
+        return Err(format!(
+          "approval_requested does not match approval {:?} timeout inputs.",
+          data.approval_id
+        ));
+      }
+    }
+    RunEventPayload::ApprovalResolved(data) => {
+      if workflow.approval(&data.approval_id).is_none() {
+        return Err(format!(
+          "approval_resolved references unknown approval {:?}.",
+          data.approval_id
+        ));
+      }
+    }
     RunEventPayload::RunSucceeded(data) => {
       if workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
         return Err(format!(
@@ -513,14 +587,19 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunFailed(data) => {
-      let (node_id, branch_identity, parallel_identity) = match data {
-        RunFailedData::V1(data) => (data.node_id.as_deref(), None, None),
+      let (node_id, branch_identity, parallel_identity, approval_identity) = match data {
+        RunFailedData::V1(data) => (data.node_id.as_deref(), None, None, None),
         RunFailedData::V2(RunFailedDataV2::Attempt { node_id, .. }) => {
-          (Some(node_id.as_str()), None, None)
+          (Some(node_id.as_str()), None, None, None)
         }
         RunFailedData::V2(RunFailedDataV2::Branch {
           branch_id, arm_id, ..
-        }) => (None, Some((branch_id.as_str(), arm_id.as_deref())), None),
+        }) => (
+          None,
+          Some((branch_id.as_str(), arm_id.as_deref())),
+          None,
+          None,
+        ),
         RunFailedData::V3(RunFailedDataV3::Parallel {
           parallel_id,
           policy,
@@ -538,6 +617,17 @@ pub(crate) fn validate_payload_against_definition(
             failed_node_ids,
             cancelled_node_ids,
           )),
+          None,
+        ),
+        RunFailedData::V4(RunFailedDataV4::Approval {
+          approval_id,
+          request_id,
+          ..
+        }) => (
+          None,
+          None,
+          None,
+          Some((approval_id.as_str(), request_id.as_str())),
         ),
       };
       if node_id.is_some_and(|node_id| workflow.node(node_id).is_none()) {
@@ -584,6 +674,13 @@ pub(crate) fn validate_payload_against_definition(
         {
           return Err(format!(
             "run_failed does not match parallel group {parallel_id:?} and its compiled policy."
+          ));
+        }
+      }
+      if let Some((approval_id, _request_id)) = approval_identity {
+        if workflow.approval(approval_id).is_none() {
+          return Err(format!(
+            "run_failed references unknown approval {approval_id:?}."
           ));
         }
       }
@@ -730,6 +827,40 @@ pub(crate) fn validate_event_history_against_definition(
           ));
         }
       }
+      RunEventPayload::ApprovalRequested(data) => {
+        let approval = workflow
+          .approval(&data.approval_id)
+          .ok_or_else(|| format!("Unknown approval {:?}.", data.approval_id))?;
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        if !ready.iter().any(|node_id| node_id == &data.approval_id) {
+          return Err(format!(
+            "Approval {:?} was requested before its wait node was ready.",
+            data.approval_id
+          ));
+        }
+        let expected_expires_at = approval
+          .timeout_ms
+          .map(|milliseconds| {
+            i64::try_from(milliseconds)
+              .map(chrono::Duration::milliseconds)
+              .map(|duration| event.occurred_at + duration)
+          })
+          .transpose()
+          .map_err(|_| {
+            format!(
+              "Approval {:?} timeout exceeds the clock range.",
+              data.approval_id
+            )
+          })?;
+        if data.expires_at != expected_expires_at {
+          return Err(format!(
+            "Approval {:?} request deadline does not match its compiled timeout.",
+            data.approval_id
+          ));
+        }
+      }
+      RunEventPayload::ApprovalResolved(_) => {}
       RunEventPayload::RunSucceeded(_) => {
         let projection =
           crate::fold_events(&events[..=index]).map_err(|error| error.to_string())?;

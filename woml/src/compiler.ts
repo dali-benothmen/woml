@@ -1305,11 +1305,106 @@ function lowerParallel(parallel: ValidatedParallel): LoweredFlowFragment {
   };
 }
 
+function approvalRouteEdge(
+  approvalId: string,
+  decision: 'approved' | 'rejected',
+  to: string
+): CompiledWorkflowEdge {
+  return {
+    id: `${approvalId}:${decision}`,
+    from: approvalId,
+    to,
+    condition: {
+      kind: 'equals',
+      left: {
+        kind: 'contextReference',
+        path: ['steps', approvalId, 'decision'],
+      },
+      right: { kind: 'literal', value: decision },
+    },
+    approvalId,
+  };
+}
+
+function lowerApproval(approval: ValidatedApproval): LoweredFlowFragment {
+  const joinId = `__woml_approval__${approval.id}__join`;
+  const approved =
+    approval.approvedItems.length === 0
+      ? undefined
+      : lowerFlowItems(approval.approvedItems);
+  const rejected =
+    approval.rejectedItems.length === 0
+      ? undefined
+      : lowerFlowItems(approval.rejectedItems);
+  const waitFields = {
+    ...(approval.timeoutMs === undefined
+      ? {}
+      : {
+          timeoutMs: {
+            kind: 'literal' as const,
+            value: approval.timeoutMs,
+          },
+        }),
+    onTimeout: { kind: 'literal' as const, value: approval.onTimeout },
+  };
+  const wait: CompiledWorkflowNode = {
+    id: approval.id,
+    handler: 'engine.approval-wait',
+    inputs: { kind: 'object', fields: waitFields },
+    ...(approval.metadata === undefined ? {} : { metadata: approval.metadata }),
+  };
+  const join: CompiledWorkflowNode = {
+    id: joinId,
+    handler: 'engine.approval-join',
+    inputs: { kind: 'object', fields: {} },
+  };
+  const routeEdges = [
+    approvalRouteEdge(approval.id, 'approved', approved?.entryId ?? joinId),
+    approvalRouteEdge(approval.id, 'rejected', rejected?.entryId ?? joinId),
+  ];
+  const joinEdges: CompiledWorkflowEdge[] = [
+    ...(approved === undefined
+      ? []
+      : [
+          {
+            id: `${approval.id}:approved:join`,
+            from: approved.exitId,
+            to: joinId,
+            condition: { kind: 'always' as const },
+            approvalId: approval.id,
+          },
+        ]),
+    ...(rejected === undefined
+      ? []
+      : [
+          {
+            id: `${approval.id}:rejected:join`,
+            from: rejected.exitId,
+            to: joinId,
+            condition: { kind: 'always' as const },
+            approvalId: approval.id,
+          },
+        ]),
+  ];
+
+  return {
+    entryId: approval.id,
+    exitId: joinId,
+    nodes: [wait, ...(approved?.nodes ?? []), ...(rejected?.nodes ?? []), join],
+    edges: [
+      ...routeEdges,
+      ...(approved?.edges ?? []),
+      ...(rejected?.edges ?? []),
+      ...joinEdges,
+    ],
+  };
+}
+
 function lowerFlowItem(item: ValidatedFlowItem): LoweredFlowFragment {
   if (item.kind === 'step') return lowerStep(item);
   if (item.kind === 'branch') return lowerBranch(item);
   if (item.kind === 'parallel') return lowerParallel(item);
-  throw new Error('Approval lowering is implemented in A2.');
+  return lowerApproval(item);
 }
 
 function lowerFlowItems(
@@ -1378,14 +1473,6 @@ export function compileWoml(
 ): CompiledWorkflowDefinition {
   const workflow = document.root;
   const { workflowId, metadata, triggerId, flow } = validateDocument(document);
-  if (flow.firstApproval !== undefined) {
-    failCompile(
-      document,
-      'WOML_APPROVAL_LOWERING_UNAVAILABLE',
-      'Approval syntax is valid, but compiled model v4 lowering is implemented in A2.',
-      flow.firstApproval.openTagSpan
-    );
-  }
   const lowered = lowerFlowItems(flow.items);
   const definition = {
     workflowId,
@@ -1404,11 +1491,13 @@ export function compileWoml(
     } satisfies CompiledWorkflowGraph,
   };
   const compiled: CompiledWorkflowDefinition =
-    flow.firstParallel !== undefined
-      ? { schemaVersion: 3, ...definition }
-      : flow.firstBranch === undefined
-        ? { schemaVersion: 1, ...definition }
-        : { schemaVersion: 2, ...definition };
+    flow.firstApproval !== undefined
+      ? { schemaVersion: 4, ...definition }
+      : flow.firstParallel !== undefined
+        ? { schemaVersion: 3, ...definition }
+        : flow.firstBranch === undefined
+          ? { schemaVersion: 1, ...definition }
+          : { schemaVersion: 2, ...definition };
 
   const graphIssues = inspectCompiledWorkflowGraph(compiled.graph, {
     requireSingleTerminal: true,

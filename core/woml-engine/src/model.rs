@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2,
-  COMPILED_MODEL_SCHEMA_VERSION_V3,
+  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +74,8 @@ pub struct CompiledWorkflowEdge {
   pub branch_id: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub parallel_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub approval_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,6 +136,13 @@ pub(crate) struct ParallelGroupDefinition {
   pub on_error: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ApprovalDefinition {
+  pub approval_id: String,
+  pub timeout_ms: Option<u64>,
+  pub on_timeout: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum BackoffPolicy {
@@ -184,6 +193,7 @@ pub enum ModelIssueCode {
   InvalidBranchResult,
   InvalidParallelGroup,
   UnsupportedParallelExecution,
+  InvalidApprovalGroup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -361,11 +371,12 @@ fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut V
   }
 
   for edge in &workflow.graph.edges {
+    let is_v4_approval_equals = workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V4
+      && edge.approval_id.is_some()
+      && matches!(edge.condition, EdgeCondition::Equals { .. });
     if workflow.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V2
-      && matches!(
-        edge.condition,
-        EdgeCondition::Truthy { .. } | EdgeCondition::Equals { .. }
-      )
+      && (matches!(edge.condition, EdgeCondition::Truthy { .. })
+        || matches!(edge.condition, EdgeCondition::Equals { .. }) && !is_v4_approval_equals)
     {
       issues.push(issue(
         ModelIssueCode::UnsupportedEdgeCondition,
@@ -569,7 +580,10 @@ fn inspect_parallel_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
   for edge in &workflow.graph.edges {
     if let Some(parallel_id) = edge.parallel_id.as_deref() {
       groups.entry(parallel_id).or_default().push(edge);
-      if edge.branch_id.is_some() || !matches!(edge.condition, EdgeCondition::Always) {
+      if edge.branch_id.is_some()
+        || edge.approval_id.is_some()
+        || !matches!(edge.condition, EdgeCondition::Always)
+      {
         issues.push(issue(
           ModelIssueCode::InvalidParallelGroup,
           format!(
@@ -711,6 +725,231 @@ fn inspect_parallel_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
   }
 }
 
+fn approval_join_id(value: &str) -> Option<&str> {
+  value
+    .strip_prefix("__woml_approval__")?
+    .strip_suffix("__join")
+    .filter(|approval_id| valid_public_structural_id(approval_id))
+}
+
+fn approval_wait_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
+  let Some(node) = node else {
+    return false;
+  };
+  if node.handler != "engine.approval-wait"
+    || node.timeout_ms.is_some()
+    || node.retry_policy.is_some()
+  {
+    return false;
+  }
+  let ValueExpression::Object { fields } = &node.inputs else {
+    return false;
+  };
+  if fields.len() != 1 && fields.len() != 2 {
+    return false;
+  }
+  if fields
+    .keys()
+    .any(|key| key != "timeoutMs" && key != "onTimeout")
+  {
+    return false;
+  }
+  let valid_timeout = fields.get("timeoutMs").is_none_or(|value| {
+    matches!(
+      value,
+      ValueExpression::Literal { value }
+        if value.as_u64().is_some_and(|milliseconds| {
+          (1..=9_007_199_254_740_991).contains(&milliseconds)
+        })
+    )
+  });
+  let valid_policy = matches!(
+    fields.get("onTimeout"),
+    Some(ValueExpression::Literal { value })
+      if matches!(value.as_str(), Some("reject" | "fail"))
+  );
+  let valid_metadata = node.metadata.as_ref().is_none_or(|metadata| {
+    metadata
+      .keys()
+      .all(|key| key == "name" || key == "description")
+      && metadata
+        .values()
+        .all(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+  });
+  valid_timeout && valid_policy && valid_metadata
+}
+
+fn approval_join_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
+  matches!(
+    node,
+    Some(CompiledWorkflowNode {
+      handler,
+      inputs: ValueExpression::Object { fields },
+      timeout_ms: None,
+      retry_policy: None,
+      metadata: None,
+      ..
+    }) if handler == "engine.approval-join" && fields.is_empty()
+  )
+}
+
+fn is_approval_decision_condition(
+  condition: &EdgeCondition,
+  approval_id: &str,
+  decision: &str,
+) -> bool {
+  matches!(
+    condition,
+    EdgeCondition::Equals {
+      left: ValueExpression::ContextReference { path },
+      right: ValueExpression::Literal { value },
+    } if path == &["steps", approval_id, "decision"] && value.as_str() == Some(decision)
+  )
+}
+
+fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec<ModelIssue>) {
+  let nodes: HashMap<&str, &CompiledWorkflowNode> = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| (node.id.as_str(), node))
+    .collect();
+  let mut groups: BTreeMap<&str, Vec<&CompiledWorkflowEdge>> = BTreeMap::new();
+
+  for edge in &workflow.graph.edges {
+    if let Some(approval_id) = edge.approval_id.as_deref() {
+      groups.entry(approval_id).or_default().push(edge);
+      if edge.branch_id.is_some() || edge.parallel_id.is_some() {
+        issues.push(issue(
+          ModelIssueCode::InvalidApprovalGroup,
+          format!(
+            "Approval edge {:?} cannot also belong to a branch or parallel group.",
+            edge.id
+          ),
+        ));
+      }
+    } else if matches!(edge.condition, EdgeCondition::Equals { .. }) {
+      issues.push(issue(
+        ModelIssueCode::InvalidApprovalGroup,
+        format!("Equals edge {:?} must carry an approvalId.", edge.id),
+      ));
+    }
+  }
+
+  if workflow.schema_version < COMPILED_MODEL_SCHEMA_VERSION_V4 && !groups.is_empty() {
+    issues.push(issue(
+      ModelIssueCode::InvalidApprovalGroup,
+      "Compiled model v1-v3 cannot contain model-v4 approval groups.",
+    ));
+  }
+
+  for (approval_id, edges) in &groups {
+    let join_id = format!("__woml_approval__{approval_id}__join");
+    let wait = nodes.get(*approval_id).copied();
+    let join = nodes.get(join_id.as_str()).copied();
+    let approved_route_id = format!("{approval_id}:approved");
+    let rejected_route_id = format!("{approval_id}:rejected");
+    let approved_join_id = format!("{approval_id}:approved:join");
+    let rejected_join_id = format!("{approval_id}:rejected:join");
+    let approved_route = edges
+      .iter()
+      .copied()
+      .find(|edge| edge.id == approved_route_id);
+    let rejected_route = edges
+      .iter()
+      .copied()
+      .find(|edge| edge.id == rejected_route_id);
+    let approved_join = edges
+      .iter()
+      .copied()
+      .find(|edge| edge.id == approved_join_id);
+    let rejected_join = edges
+      .iter()
+      .copied()
+      .find(|edge| edge.id == rejected_join_id);
+
+    let route_is_valid = |route: Option<&CompiledWorkflowEdge>,
+                          join: Option<&CompiledWorkflowEdge>,
+                          decision: &str| {
+      let Some(route) = route else {
+        return false;
+      };
+      if route.from != **approval_id
+        || route.approval_id.as_deref() != Some(*approval_id)
+        || !is_approval_decision_condition(&route.condition, approval_id, decision)
+      {
+        return false;
+      }
+      if route.to == join_id {
+        return join.is_none();
+      }
+      matches!(
+        join,
+        Some(join_edge)
+          if join_edge.from != **approval_id
+            && join_edge.to == join_id
+            && join_edge.approval_id.as_deref() == Some(*approval_id)
+            && matches!(join_edge.condition, EdgeCondition::Always)
+      )
+    };
+    let routes_are_valid = route_is_valid(approved_route, approved_join, "approved")
+      && route_is_valid(rejected_route, rejected_join, "rejected");
+    let expected_edges = 2
+      + usize::from(approved_route.is_some_and(|edge| edge.to != join_id))
+      + usize::from(rejected_route.is_some_and(|edge| edge.to != join_id));
+    let wait_outgoing: Vec<_> = workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.from.as_str() == *approval_id)
+      .collect();
+    let join_incoming: Vec<_> = workflow
+      .graph
+      .edges
+      .iter()
+      .filter(|edge| edge.to == join_id)
+      .collect();
+    let boundaries_are_closed = wait_outgoing.len() == 2
+      && wait_outgoing
+        .iter()
+        .all(|edge| edge.approval_id.as_deref() == Some(*approval_id))
+      && join_incoming
+        .iter()
+        .all(|edge| edge.approval_id.as_deref() == Some(*approval_id));
+
+    if !valid_public_structural_id(approval_id)
+      || !approval_wait_inputs(wait)
+      || !approval_join_inputs(join)
+      || !routes_are_valid
+      || edges.len() != expected_edges
+      || !boundaries_are_closed
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidApprovalGroup,
+        format!(
+          "Approval group {approval_id:?} does not match the frozen wait, decision-route, empty-arm, and join contract."
+        ),
+      ));
+    }
+  }
+
+  for node in &workflow.graph.nodes {
+    if node.handler == "engine.approval-wait" && !groups.contains_key(node.id.as_str()) {
+      issues.push(issue(
+        ModelIssueCode::InvalidApprovalGroup,
+        format!("Approval wait {:?} has no matching edge group.", node.id),
+      ));
+    } else if node.handler == "engine.approval-join" {
+      if approval_join_id(&node.id).is_none_or(|approval_id| !groups.contains_key(approval_id)) {
+        issues.push(issue(
+          ModelIssueCode::InvalidApprovalGroup,
+          format!("Approval join {:?} has no matching edge group.", node.id),
+        ));
+      }
+    }
+  }
+}
+
 impl CompiledWorkflowDefinition {
   pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
     serde_json::from_str(json)
@@ -718,6 +957,33 @@ impl CompiledWorkflowDefinition {
 
   pub fn node(&self, node_id: &str) -> Option<&CompiledWorkflowNode> {
     self.graph.nodes.iter().find(|node| node.id == node_id)
+  }
+
+  pub(crate) fn approval(&self, approval_id: &str) -> Option<ApprovalDefinition> {
+    let wait = self.node(approval_id)?;
+    if wait.handler != "engine.approval-wait" {
+      return None;
+    }
+    let ValueExpression::Object { fields } = &wait.inputs else {
+      return None;
+    };
+    let timeout_ms = fields
+      .get("timeoutMs")
+      .and_then(|expression| match expression {
+        ValueExpression::Literal { value } => value.as_u64(),
+        _ => None,
+      });
+    let on_timeout = fields
+      .get("onTimeout")
+      .and_then(|expression| match expression {
+        ValueExpression::Literal { value } => value.as_str().map(str::to_string),
+        _ => None,
+      })?;
+    Some(ApprovalDefinition {
+      approval_id: approval_id.to_string(),
+      timeout_ms,
+      on_timeout,
+    })
   }
 
   pub(crate) fn parallel_group(&self, parallel_id: &str) -> Option<ParallelGroupDefinition> {
@@ -821,6 +1087,7 @@ impl CompiledWorkflowDefinition {
       COMPILED_MODEL_SCHEMA_VERSION_V1
         | COMPILED_MODEL_SCHEMA_VERSION_V2
         | COMPILED_MODEL_SCHEMA_VERSION_V3
+        | COMPILED_MODEL_SCHEMA_VERSION_V4
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1069,6 +1336,7 @@ impl CompiledWorkflowDefinition {
     }
     inspect_branch_contract(self, &mut issues);
     inspect_parallel_contract(self, &mut issues);
+    inspect_approval_contract(self, &mut issues);
     issues
   }
 

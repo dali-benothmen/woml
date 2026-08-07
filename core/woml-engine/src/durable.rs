@@ -2,9 +2,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use getrandom::getrandom;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -17,15 +20,18 @@ use crate::event::{
   ParallelGroupOutcome, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
   RunStartedData, RunSucceededData, StepAttemptFailedData,
 };
-use crate::projection::{AttemptStatus, ParallelGroupStatus};
+use crate::projection::{ApprovalRequestStatus, AttemptStatus, ParallelGroupStatus};
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
-  RUN_EVENT_SCHEMA_VERSION_V3,
+  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
 };
 
-const STORE_SCHEMA_VERSION: &str = "1";
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 2;
+const STORE_SCHEMA_VERSION_V1: &str = "1";
+const STORE_SCHEMA_VERSION_V2: &str = "2";
+const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS woml_store_metadata (
@@ -99,11 +105,60 @@ BEGIN
 END;
 "#;
 
+const CREATE_APPROVAL_SCHEMA_V2: &str = r#"
+CREATE TABLE woml_approval_tokens (
+  token_id TEXT PRIMARY KEY,
+  secret_hash BLOB NOT NULL CHECK (length(secret_hash) = 32),
+  request_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  approval_id TEXT NOT NULL,
+  issued_at TEXT NOT NULL,
+  credential_expires_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_approval_tokens_request
+  ON woml_approval_tokens(run_id, approval_id, request_id);
+
+CREATE TRIGGER woml_approval_tokens_no_update
+BEFORE UPDATE ON woml_approval_tokens
+BEGIN
+  SELECT RAISE(ABORT, 'WOML approval credentials are append-only');
+END;
+
+CREATE TRIGGER woml_approval_tokens_no_delete
+BEFORE DELETE ON woml_approval_tokens
+BEGIN
+  SELECT RAISE(ABORT, 'WOML approval credentials are append-only');
+END;
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDefinitionBinding {
   pub run_id: String,
   pub workflow_id: String,
   pub definition_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuedApprovalToken {
+  pub token: String,
+  pub token_id: String,
+  pub request_id: String,
+  pub run_id: String,
+  pub approval_id: String,
+  pub issued_at: DateTime<Utc>,
+  pub credential_expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalTokenBinding {
+  pub token_id: String,
+  pub request_id: String,
+  pub run_id: String,
+  pub approval_id: String,
+  pub issued_at: DateTime<Utc>,
+  pub credential_expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
@@ -137,6 +192,10 @@ pub enum DurableStoreError {
   RunAlreadyExists(String),
   #[error("stored event is invalid: {0}")]
   InvalidStoredEvent(String),
+  #[error("approval token is invalid")]
+  InvalidApprovalToken,
+  #[error("approval token has expired")]
+  ExpiredApprovalToken,
   #[error("{0}")]
   Contract(String),
 }
@@ -152,6 +211,45 @@ enum RunRecovery {
   Recovered { interrupted_attempts: usize },
 }
 
+fn migrate_store_v1_to_v2(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_APPROVAL_SCHEMA_V2)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V2, STORE_SCHEMA_VERSION_V1],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v1-to-v2 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
+fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  for (object_type, name) in [
+    ("table", "woml_approval_tokens"),
+    ("index", "woml_approval_tokens_request"),
+    ("trigger", "woml_approval_tokens_no_update"),
+    ("trigger", "woml_approval_tokens_no_delete"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(
+         SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2
+       )",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v2 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -163,7 +261,7 @@ impl DurableEventStore {
     Self::initialize(connection)
   }
 
-  fn initialize(connection: Connection) -> Result<Self, DurableStoreError> {
+  fn initialize(mut connection: Connection) -> Result<Self, DurableStoreError> {
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
     connection.execute_batch(CREATE_SCHEMA)?;
@@ -174,16 +272,20 @@ impl DurableEventStore {
         |row| row.get(0),
       )
       .optional()?;
-    match version {
-      Some(version) if version != STORE_SCHEMA_VERSION => {
-        return Err(DurableStoreError::UnsupportedStoreVersion(version));
+    match version.as_deref() {
+      Some(STORE_SCHEMA_VERSION_V2) => validate_store_v2_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V1) => migrate_store_v1_to_v2(&mut connection)?,
+      Some(version) => {
+        return Err(DurableStoreError::UnsupportedStoreVersion(
+          version.to_string(),
+        ));
       }
-      Some(_) => {}
       None => {
         connection.execute(
           "INSERT INTO woml_store_metadata(key, value) VALUES ('schema_version', ?1)",
-          [STORE_SCHEMA_VERSION],
+          [STORE_SCHEMA_VERSION_V1],
         )?;
+        migrate_store_v1_to_v2(&mut connection)?;
       }
     }
     Ok(Self { connection })
@@ -462,6 +564,156 @@ impl DurableEventStore {
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     Ok(fold_events(&events)?)
+  }
+
+  pub fn issue_approval_token(
+    &mut self,
+    run_id: &str,
+    approval_id: &str,
+    request_id: &str,
+    issued_at: DateTime<Utc>,
+  ) -> Result<IssuedApprovalToken, DurableStoreError> {
+    let projection = self.projection(run_id)?;
+    let request = projection
+      .approval_requests
+      .get(approval_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Cannot issue a credential for an unknown approval request.".to_string(),
+        )
+      })?;
+    if request.request_id != request_id
+      || !matches!(request.status, ApprovalRequestStatus::Waiting)
+      || projection.status != RunStatus::Waiting
+    {
+      return Err(DurableStoreError::Contract(
+        "Approval credentials may be issued only for the matching unresolved request.".to_string(),
+      ));
+    }
+    let default_expiry = issued_at
+      .checked_add_signed(chrono::Duration::hours(
+        DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS,
+      ))
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Approval credential expiry exceeds the clock range.".to_string(),
+        )
+      })?;
+    let credential_expires_at = request
+      .expires_at
+      .map_or(default_expiry, |deadline| deadline.min(default_expiry));
+    if credential_expires_at <= issued_at {
+      return Err(DurableStoreError::Contract(
+        "Cannot issue an approval credential at or after the request deadline.".to_string(),
+      ));
+    }
+
+    let token_id = random_hex(16)?;
+    let secret = random_hex(32)?;
+    let secret_hash = Sha256::digest(secret.as_bytes());
+    self.connection.execute(
+      "INSERT INTO woml_approval_tokens(
+         token_id, secret_hash, request_id, run_id, approval_id,
+         issued_at, credential_expires_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      params![
+        token_id,
+        secret_hash.as_slice(),
+        request_id,
+        run_id,
+        approval_id,
+        issued_at.to_rfc3339(),
+        credential_expires_at.to_rfc3339(),
+      ],
+    )?;
+    Ok(IssuedApprovalToken {
+      token: format!("apr_{token_id}.{secret}"),
+      token_id,
+      request_id: request_id.to_string(),
+      run_id: run_id.to_string(),
+      approval_id: approval_id.to_string(),
+      issued_at,
+      credential_expires_at,
+    })
+  }
+
+  pub fn verify_approval_token(
+    &self,
+    token: &str,
+    now: DateTime<Utc>,
+  ) -> Result<ApprovalTokenBinding, DurableStoreError> {
+    let (token_id, secret) = parse_approval_token(token)?;
+    let row: Option<(Vec<u8>, String, String, String, String, String)> = self
+      .connection
+      .query_row(
+        "SELECT secret_hash, request_id, run_id, approval_id,
+                issued_at, credential_expires_at
+         FROM woml_approval_tokens WHERE token_id = ?1",
+        [token_id],
+        |row| {
+          Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+          ))
+        },
+      )
+      .optional()?;
+    let Some((stored_hash, request_id, run_id, approval_id, issued_at, expires_at)) = row else {
+      return Err(DurableStoreError::InvalidApprovalToken);
+    };
+    let candidate_hash = Sha256::digest(secret.as_bytes());
+    if stored_hash.len() != 32
+      || candidate_hash
+        .as_slice()
+        .ct_eq(stored_hash.as_slice())
+        .unwrap_u8()
+        != 1
+    {
+      return Err(DurableStoreError::InvalidApprovalToken);
+    }
+    let issued_at = parse_stored_timestamp(&issued_at)?;
+    let credential_expires_at = parse_stored_timestamp(&expires_at)?;
+    if now >= credential_expires_at {
+      return Err(DurableStoreError::ExpiredApprovalToken);
+    }
+    Ok(ApprovalTokenBinding {
+      token_id: token_id.to_string(),
+      request_id,
+      run_id,
+      approval_id,
+      issued_at,
+      credential_expires_at,
+    })
+  }
+
+  pub fn reissue_approval_token(
+    &mut self,
+    run_id: &str,
+    approval_id: &str,
+    request_id: &str,
+    issued_at: DateTime<Utc>,
+  ) -> Result<IssuedApprovalToken, DurableStoreError> {
+    self.issue_approval_token(run_id, approval_id, request_id, issued_at)
+  }
+
+  pub fn approval_token_count_for_request(
+    &self,
+    run_id: &str,
+    approval_id: &str,
+    request_id: &str,
+  ) -> Result<usize, DurableStoreError> {
+    let count: i64 = self.connection.query_row(
+      "SELECT COUNT(*) FROM woml_approval_tokens
+       WHERE run_id = ?1 AND approval_id = ?2 AND request_id = ?3",
+      params![run_id, approval_id, request_id],
+      |row| row.get(0),
+    )?;
+    usize::try_from(count)
+      .map_err(|_| DurableStoreError::Contract("Approval credential count is invalid.".to_string()))
   }
 
   pub fn recover_interrupted_runs(&mut self) -> Result<RecoveryReport, DurableStoreError> {
@@ -767,6 +1019,43 @@ impl DurableEventStore {
   }
 }
 
+fn random_hex(byte_count: usize) -> Result<String, DurableStoreError> {
+  let mut bytes = vec![0_u8; byte_count];
+  getrandom(&mut bytes).map_err(|_| {
+    DurableStoreError::Contract(
+      "The operating system could not generate a secure approval credential.".to_string(),
+    )
+  })?;
+  Ok(hex::encode(bytes))
+}
+
+fn parse_approval_token(token: &str) -> Result<(&str, &str), DurableStoreError> {
+  let Some(body) = token.strip_prefix("apr_") else {
+    return Err(DurableStoreError::InvalidApprovalToken);
+  };
+  let Some((token_id, secret)) = body.split_once('.') else {
+    return Err(DurableStoreError::InvalidApprovalToken);
+  };
+  if token_id.len() != 32
+    || secret.len() != 64
+    || token_id.contains('.')
+    || secret.contains('.')
+    || !token_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    || !secret.bytes().all(|byte| byte.is_ascii_hexdigit())
+  {
+    return Err(DurableStoreError::InvalidApprovalToken);
+  }
+  Ok((token_id, secret))
+}
+
+fn parse_stored_timestamp(value: &str) -> Result<DateTime<Utc>, DurableStoreError> {
+  DateTime::parse_from_rfc3339(value)
+    .map(|timestamp| timestamp.with_timezone(&Utc))
+    .map_err(|_| {
+      DurableStoreError::Contract("Stored approval credential timestamp is invalid.".to_string())
+    })
+}
+
 fn ensure_run_exists(connection: &Connection, run_id: &str) -> Result<(), DurableStoreError> {
   let exists: bool = connection.query_row(
     "SELECT EXISTS(SELECT 1 FROM woml_runs WHERE run_id = ?1)",
@@ -922,7 +1211,7 @@ fn attempt_run_failed_data(
       invocation_id: Some(invocation_id),
       failure,
     }),
-    RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 => {
+    RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4 => {
       RunFailedData::V2(RunFailedDataV2::Attempt {
         node_id,
         attempt,

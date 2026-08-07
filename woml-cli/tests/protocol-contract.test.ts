@@ -5,9 +5,11 @@ import { resolve } from 'node:path';
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import {
+  compileWoml,
   isWomlElement,
   isWomlRawText,
   parseWoml,
+  type CompiledWorkflowDefinition,
   type WomlSourceElement,
 } from 'woml';
 
@@ -986,6 +988,10 @@ describe('Human Approval A0 contracts', () => {
 
   test('pins the reviewed model-v4 approval DAG and canonical hash', async () => {
     const { compiledModelV4 } = await validators();
+    const sourcePath = resolve(
+      projectRoot,
+      'woml/tests/fixtures/approval.woml'
+    );
     const compiled = (await readJson(
       resolve(projectRoot, 'woml/tests/fixtures/approval.compiled.v4.json')
     )) as {
@@ -999,6 +1005,12 @@ describe('Human Approval A0 contracts', () => {
         }>;
       };
     };
+
+    expect(
+      compileWoml(
+        parseWoml(await Bun.file(sourcePath).text(), { file: sourcePath })
+      )
+    ).toEqual(compiled as unknown as CompiledWorkflowDefinition);
 
     expect(compiledModelV4(compiled), validationMessage(compiledModelV4)).toBe(
       true
@@ -1046,6 +1058,28 @@ describe('Human Approval A0 contracts', () => {
       },
     ]);
     expect(JSON.stringify(compiled)).not.toMatch(/token|https?:\/\//i);
+
+    const failPolicyCompiled = compileWoml(
+      parseWoml(
+        (await Bun.file(sourcePath).text()).replace(
+          'on-timeout="reject"',
+          'on-timeout="fail"'
+        ),
+        { file: 'approval-timeout-fail.woml' }
+      )
+    );
+    const failPolicyFixture = await readJson(
+      resolve(
+        projectRoot,
+        'woml/tests/fixtures/approval-timeout-fail.compiled.v4.json'
+      )
+    );
+    expect(failPolicyCompiled).toEqual(
+      failPolicyFixture as CompiledWorkflowDefinition
+    );
+    expect(definitionHash(failPolicyCompiled)).toBe(
+      'sha256:56c90146b60cddfc6df253d0276e4306936ed1a63ac2c5e355286b96500a07b0'
+    );
   });
 
   test('pins approval script bodies without rewriting JavaScript', async () => {
@@ -1136,6 +1170,10 @@ describe('Human Approval A0 contracts', () => {
       'approval-timeout-failed.events.v4.json',
       'approval-timeout-rejected.events.v4.json',
     ]);
+    const expectedDefinitionHash = (fixtureName: string) =>
+      fixtureName === 'approval-timeout-failed.events.v4.json'
+        ? 'sha256:56c90146b60cddfc6df253d0276e4306936ed1a63ac2c5e355286b96500a07b0'
+        : 'sha256:c85377270773c4abb178ba2811109843be53df66c91fedea04bb37d586901aa9';
     for (const fixtureName of fixtureNames) {
       const events = (await readJson(
         resolve(runEventFixtureDirectory, fixtureName)
@@ -1146,6 +1184,9 @@ describe('Human Approval A0 contracts', () => {
           `${fixtureName}: ${validationMessage(eventV4)}`
         ).toBe(true);
       }
+      expect((events[0].data as JsonObject).definitionHash).toBe(
+        expectedDefinitionHash(fixtureName)
+      );
       expect(JSON.stringify(events)).not.toMatch(
         /"(?:token|tokenId|secretHash|url|port)"/i
       );

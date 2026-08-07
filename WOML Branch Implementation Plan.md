@@ -96,22 +96,22 @@ For this fixture, WOML executes `checkContent`, `reviewContent`, and
 The selected `<result>` publishes the complete `reviewContent` value at:
 
 ```js
-context.steps.decision
+context.steps.decision;
 ```
 
 This makes downstream code independent of which route produced the value.
 
 ### 2.1 Phase summary
 
-| Phase | What changes | Product result |
-|---|---|---|
-| B0 | Freeze syntax, compiled-model v2, event v2, errors, and fixtures. | Everyone builds against one reviewed branch contract. |
-| B1 | Add the four tags, typed reference parsing, and validation to the WOML frontend. | WOML understands correct branches and clearly rejects incorrect ones. |
-| B2 | Compile branches into a deterministic DAG that Rust can validate. | Markup becomes a complete engine-ready branch model. |
-| B3 | Add `branch_selected`, folding, persistence, and recovery. | The selected route survives restarts and cannot silently change. |
-| B4 | Add conditional scheduling and merged-result publication in Rust. | Exactly one route executes and later steps receive `context.steps.<branchId>`. |
-| B5 | Connect errors and behavior through the packaged CLI. | `woml run branch.woml` works as a user-facing command. |
-| B6 | Test nesting, crashes, packaging, compatibility, and regressions. | Branching becomes a supported WOML feature ready for the next milestone. |
+| Phase | What changes                                                                     | Product result                                                                 |
+| ----- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| B0    | Freeze syntax, compiled-model v2, event v2, errors, and fixtures.                | Everyone builds against one reviewed branch contract.                          |
+| B1    | Add the four tags, typed reference parsing, and validation to the WOML frontend. | WOML understands correct branches and clearly rejects incorrect ones.          |
+| B2    | Compile branches into a deterministic DAG that Rust can validate.                | Markup becomes a complete engine-ready branch model.                           |
+| B3    | Add `branch_selected`, folding, persistence, and recovery.                       | The selected route survives restarts and cannot silently change.               |
+| B4    | Add conditional scheduling and merged-result publication in Rust.                | Exactly one route executes and later steps receive `context.steps.<branchId>`. |
+| B5    | Connect errors and behavior through the packaged CLI.                            | `woml run branch.woml` works as a user-facing command.                         |
+| B6    | Test nesting, crashes, packaging, compatibility, and regressions.                | Branching becomes a supported WOML feature ready for the next milestone.       |
 
 ## 3. Language Contract
 
@@ -126,11 +126,11 @@ This makes downstream code independent of which route produced the value.
 </branch>
 ```
 
-| Attribute | Required | Meaning |
-|---|---:|---|
-| `id` | Yes | Stable structural ID and the key used for the merged result in `context.steps`. |
-| `name` | No | Human-readable display name. |
-| `description` | No | Human-readable description. |
+| Attribute     | Required | Meaning                                                                         |
+| ------------- | -------: | ------------------------------------------------------------------------------- |
+| `id`          |      Yes | Stable structural ID and the key used for the merged result in `context.steps`. |
+| `name`        |       No | Human-readable display name.                                                    |
+| `description` |       No | Human-readable description.                                                     |
 
 Rules:
 
@@ -291,7 +291,7 @@ branch ID. Publication uses the existing successful-output contract so folding
 the run produces:
 
 ```js
-context.steps.decision
+context.steps.decision;
 ```
 
 The `engine.branch-result` node uses the normal `step_attempt_started` and
@@ -735,19 +735,19 @@ Completed proof:
 
 ## 8. Verification Matrix
 
-| Area | Required proof |
-|---|---|
-| Syntax | Valid branch parses; illegal placement and attributes report original line/column. |
+| Area       | Required proof                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------ |
+| Syntax     | Valid branch parses; illegal placement and attributes report original line/column.               |
 | References | Exact typed references compile; malformed, unknown, forward, and non-dominating references fail. |
-| Selection | First true `<when>` wins; `<otherwise>` runs only when all tests are false. |
-| Isolation | Only selected scripts reach the Bun host. |
-| Context | Selected route outputs exist; unselected outputs do not; merged output exists at the branch ID. |
-| DAG | Nested and downstream nodes remain reachable and the graph remains acyclic. |
-| Events | `branch_selected` validates, folds, persists, and reopens deterministically. |
-| Recovery | A recorded selection is never recomputed into a different route. |
-| Errors | Non-boolean and missing-reference failures carry stable codes and useful source locations. |
-| CLI | `woml run branch.woml` returns the reviewed JSON and correct exit code. |
-| Package | A clean installation includes the Rust addon, Bun host, compiler, and branch support. |
+| Selection  | First true `<when>` wins; `<otherwise>` runs only when all tests are false.                      |
+| Isolation  | Only selected scripts reach the Bun host.                                                        |
+| Context    | Selected route outputs exist; unselected outputs do not; merged output exists at the branch ID.  |
+| DAG        | Nested and downstream nodes remain reachable and the graph remains acyclic.                      |
+| Events     | `branch_selected` validates, folds, persists, and reopens deterministically.                     |
+| Recovery   | A recorded selection is never recomputed into a different route.                                 |
+| Errors     | Non-boolean and missing-reference failures carry stable codes and useful source locations.       |
+| CLI        | `woml run branch.woml` returns the reviewed JSON and correct exit code.                          |
+| Package    | A clean installation includes the Rust addon, Bun host, compiler, and branch support.            |
 
 ## 9. Explicit Non-Goals
 
@@ -775,9 +775,10 @@ Once B0–B6 are complete, product expansion continues in this order:
    children through the multiplexed Bun protocol, joins them, implements both
    failure policies and targeted cancellation, and persists durable
    parallel-group events.
-2. **Human approval — A0/A1 complete** — versioned model/event/HTTP/token
-   contracts and frontend validation are complete; A2–A7 add lowering, Rust
-   waiting/resolution, recovery, and the HTTP-only product flow in
+2. **Human approval — A0–A3 complete** — versioned contracts, frontend
+   lowering, Rust validation, event folding, durable projections, and hashed
+   credentials are complete; A4–A7 add automatic pause/resolution, recovery,
+   and the HTTP-only product flow in
    `WOML Human Approval Implementation Plan.md`.
 3. **Retries and idempotency** — freeze idempotency-key derivation and duplicate
    behavior, then enable retry values greater than one with durable attempt

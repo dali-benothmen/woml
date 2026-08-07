@@ -178,7 +178,8 @@ export interface CompiledGraphIssue {
     | 'INVALID_BRANCH_SELECTOR'
     | 'INVALID_BRANCH_GROUP'
     | 'INVALID_BRANCH_RESULT'
-    | 'INVALID_PARALLEL_GROUP';
+    | 'INVALID_PARALLEL_GROUP'
+    | 'INVALID_APPROVAL_GROUP';
   readonly message: string;
 }
 
@@ -310,8 +311,189 @@ export function inspectCompiledWorkflowGraph(
 
   inspectBranchGroups(graph, issues);
   inspectParallelGroups(graph, issues);
+  inspectApprovalGroups(graph, issues);
 
   return issues;
+}
+
+function approvalJoinId(approvalId: string): string {
+  return `__woml_approval__${approvalId}__join`;
+}
+
+function isApprovalDecisionCondition(
+  condition: EdgeCondition,
+  approvalId: string,
+  decision: 'approved' | 'rejected'
+): boolean {
+  return (
+    condition.kind === 'equals' &&
+    condition.left.kind === 'contextReference' &&
+    condition.left.path.length === 3 &&
+    condition.left.path[0] === 'steps' &&
+    condition.left.path[1] === approvalId &&
+    condition.left.path[2] === 'decision' &&
+    condition.right.kind === 'literal' &&
+    condition.right.value === decision
+  );
+}
+
+function inspectApprovalGroups(
+  graph: CompiledWorkflowGraph,
+  issues: CompiledGraphIssue[]
+): void {
+  const nodes = new Map(graph.nodes.map(node => [node.id, node]));
+  const groups = new Map<string, CompiledWorkflowEdge[]>();
+  for (const edge of graph.edges) {
+    if (edge.approvalId === undefined) {
+      if (edge.condition.kind === 'equals') {
+        issues.push({
+          code: 'INVALID_APPROVAL_GROUP',
+          message: `Equals edge "${edge.id}" must carry an approvalId.`,
+        });
+      }
+      continue;
+    }
+    const group = groups.get(edge.approvalId) ?? [];
+    group.push(edge);
+    groups.set(edge.approvalId, group);
+    if (edge.branchId !== undefined || edge.parallelId !== undefined) {
+      issues.push({
+        code: 'INVALID_APPROVAL_GROUP',
+        message: `Approval edge "${edge.id}" cannot also belong to a branch or parallel group.`,
+      });
+    }
+  }
+
+  for (const [approvalId, edges] of groups) {
+    const wait = nodes.get(approvalId);
+    const joinId = approvalJoinId(approvalId);
+    const join = nodes.get(joinId);
+    const waitFields = wait?.inputs.kind === 'object' ? wait.inputs.fields : {};
+    const timeout = waitFields.timeoutMs;
+    const onTimeout = waitFields.onTimeout;
+    const waitMetadata = wait?.metadata;
+    const validWaitMetadata =
+      waitMetadata === undefined ||
+      (Object.keys(waitMetadata).every(key =>
+        ['name', 'description'].includes(key)
+      ) &&
+        Object.values(waitMetadata).every(
+          value => typeof value === 'string' && value.length > 0
+        ));
+    const validWait =
+      publicStructuralIdPattern.test(approvalId) &&
+      wait?.handler === 'engine.approval-wait' &&
+      wait.timeoutMs === undefined &&
+      wait.retryPolicy === undefined &&
+      wait.inputs.kind === 'object' &&
+      Object.keys(waitFields).every(key =>
+        ['timeoutMs', 'onTimeout'].includes(key)
+      ) &&
+      Object.keys(waitFields).length === (timeout === undefined ? 1 : 2) &&
+      onTimeout?.kind === 'literal' &&
+      (onTimeout.value === 'reject' || onTimeout.value === 'fail') &&
+      (timeout === undefined ||
+        (timeout.kind === 'literal' &&
+          typeof timeout.value === 'number' &&
+          Number.isSafeInteger(timeout.value) &&
+          timeout.value >= 1)) &&
+      validWaitMetadata;
+    const validJoin =
+      join?.handler === 'engine.approval-join' &&
+      join.timeoutMs === undefined &&
+      join.retryPolicy === undefined &&
+      join.metadata === undefined &&
+      join.inputs.kind === 'object' &&
+      Object.keys(join.inputs.fields).length === 0;
+
+    const approvedRoute = edges.find(
+      edge => edge.id === `${approvalId}:approved`
+    );
+    const rejectedRoute = edges.find(
+      edge => edge.id === `${approvalId}:rejected`
+    );
+    const approvedJoin = edges.find(
+      edge => edge.id === `${approvalId}:approved:join`
+    );
+    const rejectedJoin = edges.find(
+      edge => edge.id === `${approvalId}:rejected:join`
+    );
+    const routes = [
+      {
+        decision: 'approved' as const,
+        route: approvedRoute,
+        join: approvedJoin,
+      },
+      {
+        decision: 'rejected' as const,
+        route: rejectedRoute,
+        join: rejectedJoin,
+      },
+    ];
+    const validRoutes = routes.every(({ decision, route, join: joinEdge }) => {
+      if (
+        route === undefined ||
+        route.from !== approvalId ||
+        route.approvalId !== approvalId ||
+        !isApprovalDecisionCondition(route.condition, approvalId, decision)
+      ) {
+        return false;
+      }
+      const empty = route.to === joinId;
+      if (empty) return joinEdge === undefined;
+      return (
+        joinEdge?.from !== approvalId &&
+        joinEdge?.to === joinId &&
+        joinEdge?.approvalId === approvalId &&
+        joinEdge.condition.kind === 'always'
+      );
+    });
+    const expectedEdgeCount =
+      2 +
+      Number(approvedRoute?.to !== joinId) +
+      Number(rejectedRoute?.to !== joinId);
+    const boundariesAreClosed =
+      graph.edges.filter(edge => edge.from === approvalId).length === 2 &&
+      graph.edges
+        .filter(edge => edge.from === approvalId)
+        .every(edge => edge.approvalId === approvalId) &&
+      graph.edges
+        .filter(edge => edge.to === joinId)
+        .every(edge => edge.approvalId === approvalId);
+
+    if (
+      !validWait ||
+      !validJoin ||
+      !validRoutes ||
+      edges.length !== expectedEdgeCount ||
+      !boundariesAreClosed
+    ) {
+      issues.push({
+        code: 'INVALID_APPROVAL_GROUP',
+        message: `Approval group "${approvalId}" does not match the frozen wait, decision-route, empty-arm, and join contract.`,
+      });
+    }
+  }
+
+  for (const node of graph.nodes) {
+    if (node.handler === 'engine.approval-wait' && !groups.has(node.id)) {
+      issues.push({
+        code: 'INVALID_APPROVAL_GROUP',
+        message: `Approval wait "${node.id}" has no matching edge group.`,
+      });
+    }
+    if (node.handler === 'engine.approval-join') {
+      const match = /^__woml_approval__([a-z][A-Za-z0-9]*)__join$/.exec(
+        node.id
+      );
+      if (match === null || !groups.has(match[1])) {
+        issues.push({
+          code: 'INVALID_APPROVAL_GROUP',
+          message: `Approval join "${node.id}" has no matching edge group.`,
+        });
+      }
+    }
+  }
 }
 
 function parallelStartId(parallelId: string): string {

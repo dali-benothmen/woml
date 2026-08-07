@@ -1,6 +1,6 @@
 # WOML Durable Store v2 — Approval Credentials
 
-Status: frozen for the Human Approval profile
+Status: frozen and implemented in Rust through A3
 
 Store v2 preserves the immutable v1 definition, run-binding, and event tables
 and adds this append-only credential index:

@@ -45,26 +45,106 @@ function validWorkflow(
 }
 
 describe('compileWoml', () => {
-  test('A1 validates the reviewed approval syntax before A2 lowering', () => {
+  test('A2 lowers the reviewed approval fixture exactly to model v4', () => {
     const source = readFileSync(
       new URL('./fixtures/approval.woml', import.meta.url),
       'utf8'
     );
+    const expected = JSON.parse(
+      readFileSync(
+        new URL('./fixtures/approval.compiled.v4.json', import.meta.url),
+        'utf8'
+      )
+    );
     const document = parseWoml(source, { file: 'approval.woml' });
 
     expect(() => validateWoml(document)).not.toThrow();
-    try {
-      compileWoml(document);
-      throw new Error('Expected approval lowering to remain gated on A2.');
-    } catch (error) {
-      expect(error).toBeInstanceOf(WomlCompileError);
-      expect((error as WomlCompileError).diagnostic.code).toBe(
-        'WOML_APPROVAL_LOWERING_UNAVAILABLE'
-      );
-      expect((error as WomlCompileError).diagnostic.location.start.offset).toBe(
-        source.indexOf('<approval')
-      );
-    }
+    const compiled = compileWoml(document);
+
+    expect(compiled).toEqual(expected);
+    expect(compiled.schemaVersion).toBe(4);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+  });
+
+  test('lowers empty approval arms directly to the deterministic join', () => {
+    const compiled = compile(
+      validWorkflow(`
+      <approval id="review">
+        <when-approved />
+        <when-rejected />
+      </approval>`)
+    );
+
+    expect(compiled.schemaVersion).toBe(4);
+    expect(compiled.graph.nodes.map(node => node.id)).toEqual([
+      'review',
+      '__woml_approval__review__join',
+    ]);
+    expect(compiled.graph.edges).toEqual([
+      {
+        id: 'review:approved',
+        from: 'review',
+        to: '__woml_approval__review__join',
+        condition: {
+          kind: 'equals',
+          left: {
+            kind: 'contextReference',
+            path: ['steps', 'review', 'decision'],
+          },
+          right: { kind: 'literal', value: 'approved' },
+        },
+        approvalId: 'review',
+      },
+      {
+        id: 'review:rejected',
+        from: 'review',
+        to: '__woml_approval__review__join',
+        condition: {
+          kind: 'equals',
+          left: {
+            kind: 'contextReference',
+            path: ['steps', 'review', 'decision'],
+          },
+          right: { kind: 'literal', value: 'rejected' },
+        },
+        approvalId: 'review',
+      },
+    ]);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+  });
+
+  test('lowers nested approvals and branch composition as one valid v4 DAG', () => {
+    const compiled = compile(
+      validWorkflow(`
+      <step id="ready"><script>return { ok: true };</script></step>
+      <branch id="route">
+        <when test="{{context.steps.ready.ok}}">
+          <approval id="outer">
+            <when-approved>
+              <approval id="inner">
+                <when-approved />
+                <when-rejected />
+              </approval>
+            </when-approved>
+            <when-rejected />
+          </approval>
+          <result value="{{context.steps.outer}}" />
+        </when>
+        <otherwise>
+          <step id="fallback"><script>return false;</script></step>
+          <result value="{{context.steps.fallback}}" />
+        </otherwise>
+      </branch>
+      <step id="finish"><script>return context.steps.route;</script></step>`)
+    );
+
+    expect(compiled.schemaVersion).toBe(4);
+    expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+    expect(
+      compiled.graph.nodes.filter(node =>
+        node.handler.startsWith('engine.approval-')
+      )
+    ).toHaveLength(4);
   });
 
   test('accepts empty arms, nested approvals, and approval output references inside decision arms', () => {
@@ -1196,5 +1276,79 @@ describe('inspectCompiledWorkflowGraph', () => {
     expect(
       inspectCompiledWorkflowGraph(terminalJoin).map(issue => issue.code)
     ).toContain('INVALID_PARALLEL_GROUP');
+  });
+
+  test('rejects malformed approval wait, ownership, decision, and join contracts', () => {
+    const source = readFileSync(
+      new URL('./fixtures/approval.woml', import.meta.url),
+      'utf8'
+    );
+    const compiled = compile(source);
+
+    const badWait = {
+      ...compiled.graph,
+      nodes: compiled.graph.nodes.map(node =>
+        node.handler === 'engine.approval-wait'
+          ? {
+              ...node,
+              inputs: {
+                kind: 'object' as const,
+                fields: {
+                  onTimeout: { kind: 'literal' as const, value: 'approve' },
+                },
+              },
+            }
+          : node
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(badWait).map(issue => issue.code)
+    ).toContain('INVALID_APPROVAL_GROUP');
+
+    const missingOwner = {
+      ...compiled.graph,
+      edges: compiled.graph.edges.map(edge =>
+        edge.id === 'editorApproval:approved'
+          ? { ...edge, approvalId: undefined }
+          : edge
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(missingOwner).map(issue => issue.code)
+    ).toContain('INVALID_APPROVAL_GROUP');
+
+    const wrongDecision = {
+      ...compiled.graph,
+      edges: compiled.graph.edges.map(edge =>
+        edge.id === 'editorApproval:approved'
+          ? {
+              ...edge,
+              condition: {
+                kind: 'equals' as const,
+                left: {
+                  kind: 'contextReference' as const,
+                  path: ['steps', 'editorApproval', 'decision'],
+                },
+                right: { kind: 'literal' as const, value: 'rejected' },
+              },
+            }
+          : edge
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(wrongDecision).map(issue => issue.code)
+    ).toContain('INVALID_APPROVAL_GROUP');
+
+    const badJoin = {
+      ...compiled.graph,
+      nodes: compiled.graph.nodes.map(node =>
+        node.handler === 'engine.approval-join'
+          ? { ...node, id: '__woml_approval__wrong__join' }
+          : node
+      ),
+    };
+    expect(
+      inspectCompiledWorkflowGraph(badJoin).map(issue => issue.code)
+    ).toContain('INVALID_APPROVAL_GROUP');
   });
 });

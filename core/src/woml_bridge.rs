@@ -53,6 +53,7 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
             RunFailedData::V3(RunFailedDataV3::Parallel {
               primary_node_id, ..
             }) => Some(primary_node_id.clone()),
+            RunFailedData::V4(_) => None,
           }
         } else {
           None

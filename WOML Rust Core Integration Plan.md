@@ -26,7 +26,7 @@ executor to the authoritative Rust workflow engine.
 The first Rust milestone must still print exactly:
 
 ```json
-{"message":"Hello World"}
+{ "message": "Hello World" }
 ```
 
 The migration is successful only when the same reviewed `hello.woml`, compiled
@@ -62,18 +62,18 @@ Rust appends terminal attempt event and continues the DAG
 
 ### 2.1 Ownership
 
-| Concern | Owner |
-|---|---|
-| Read `.woml` source | Bun CLI |
-| Parse XML and preserve raw script bodies | WOML TypeScript frontend |
-| Validate WOML tags and attributes | WOML TypeScript frontend |
-| Lower WOML into the compiled DAG | WOML TypeScript compiler |
-| Validate the compiled-model boundary | Rust core |
-| Select ready nodes and control workflow progression | Rust core |
-| Own the run event log and fold derived context | Rust core |
-| Supervise the script-host process | Rust core |
-| Execute JavaScript | Isolated Bun Worker |
-| Format terminal output and diagnostics | Bun CLI |
+| Concern                                             | Owner                    |
+| --------------------------------------------------- | ------------------------ |
+| Read `.woml` source                                 | Bun CLI                  |
+| Parse XML and preserve raw script bodies            | WOML TypeScript frontend |
+| Validate WOML tags and attributes                   | WOML TypeScript frontend |
+| Lower WOML into the compiled DAG                    | WOML TypeScript compiler |
+| Validate the compiled-model boundary                | Rust core                |
+| Select ready nodes and control workflow progression | Rust core                |
+| Own the run event log and fold derived context      | Rust core                |
+| Supervise the script-host process                   | Rust core                |
+| Execute JavaScript                                  | Isolated Bun Worker      |
+| Format terminal output and diagnostics              | Bun CLI                  |
 
 The Rust core never understands XML, WOML tags, `{{ }}` syntax, editor
 concerns, or raw WOML source. It consumes only the compiled workflow model.
@@ -261,16 +261,16 @@ decoding. Bun validates and measures a result before sending it to Rust.
 The script-host protocol and run-event schema share one canonical taxonomy.
 They do not define overlapping error systems.
 
-| Failure kind | Stable code | Producer |
-|---|---|---|
-| `script_threw` | `WOML_SCRIPT_THROWN` | Bun Worker/host |
-| `script_timed_out` | `WOML_SCRIPT_TIMEOUT` | Bun host |
-| `invalid_script_result` | `WOML_SCRIPT_NON_JSON_RESULT` | Bun host |
-| `context_too_large` | `WOML_SCRIPT_CONTEXT_TOO_LARGE` | Rust or Bun host |
-| `result_too_large` | `WOML_SCRIPT_RESULT_TOO_LARGE` | Bun host |
-| `worker_crashed` | `WOML_SCRIPT_WORKER_CRASHED` | Bun host |
-| `host_crashed` | `WOML_SCRIPT_HOST_CRASHED` | Rust supervisor |
-| `interrupted` | `WOML_STEP_INTERRUPTED` | Rust recovery |
+| Failure kind            | Stable code                     | Producer         |
+| ----------------------- | ------------------------------- | ---------------- |
+| `script_threw`          | `WOML_SCRIPT_THROWN`            | Bun Worker/host  |
+| `script_timed_out`      | `WOML_SCRIPT_TIMEOUT`           | Bun host         |
+| `invalid_script_result` | `WOML_SCRIPT_NON_JSON_RESULT`   | Bun host         |
+| `context_too_large`     | `WOML_SCRIPT_CONTEXT_TOO_LARGE` | Rust or Bun host |
+| `result_too_large`      | `WOML_SCRIPT_RESULT_TOO_LARGE`  | Bun host         |
+| `worker_crashed`        | `WOML_SCRIPT_WORKER_CRASHED`    | Bun host         |
+| `host_crashed`          | `WOML_SCRIPT_HOST_CRASHED`      | Rust supervisor  |
+| `interrupted`           | `WOML_STEP_INTERRUPTED`         | Rust recovery    |
 
 The protocol response schema permits the failures a living host can report.
 The event schema permits the complete taxonomy.
@@ -717,11 +717,13 @@ separate design-and-implementation phases in this order:
    `wait-all`, `fail-fast`, protocol-v2 Worker cancellation, durable recovery,
    and packaged CLI diagnostics. The milestone proof is in
    `WOML Parallel Implementation Plan.md`.
-3. **In progress — A0/A1 complete:** approval model v4, event v4, store v2,
+3. **In progress — A0–A3 complete:** approval model v4, event v4, store v2,
    HTTP v1, native-outcome v1, token, timeout, diagnostic, and fixture contracts
-   are frozen, and frontend validation is implemented. A2 begins deterministic
-   lowering; later phases add Rust waiting/resolution and the HTTP-only decision
-   flow defined in `WOML Human Approval Implementation Plan.md`.
+   are frozen; frontend lowering, Rust structural validation, event folding,
+   durable waiting projections, store migration, and hashed credentials are
+   complete. A4 begins automatic pause behavior; later phases add Rust
+   resolution and the HTTP-only decision flow defined in
+   `WOML Human Approval Implementation Plan.md`.
 4. Resolve idempotency keys, then enable retry values greater than one.
 5. Add the remaining triggers, lifecycle behavior, services, and engine-control
    operations required for product parity.
@@ -754,8 +756,8 @@ For the first slice:
 - `context` contains only `trigger` and successful `steps` outputs.
 - Retry has one attempt.
 - Approval, lifecycle, and services are rejected before Rust execution. Branch
-  and parallel are executable; approval syntax passes frontend validation but
-  lowering remains explicitly gated until A2.
+  and parallel are executable; approval syntax lowers to model v4 and its
+  state survives durably, but automatic runtime pausing remains gated until A4.
 - Secrets never appear in compiled inputs, context, protocol messages, or
   events.
 
@@ -771,8 +773,9 @@ Kept:
 - TypeScript XML parsing.
 - Source locations and diagnostics.
 - WOML validation and DAG compilation.
-- Executable Compiled Workflow Models v1–v3 and the frozen model-v4 approval
-  contract, which becomes executable through A2–A7.
+- Executable Compiled Workflow Models v1–v3 and structurally accepted model-v4
+  approval DAGs with event/store foundations, which gain automatic runtime
+  behavior through A4–A7.
 - The CLI command surface.
 - The isolated Bun Worker implementation where compatible with protocol v1.
 - Existing fixtures and expected outputs.

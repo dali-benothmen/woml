@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use thiserror::Error;
 
 use crate::event::{
-  AttemptFailure, BranchFailure, EventValidationError, ParallelFailure, ParallelFailurePolicy,
-  ParallelGroupOutcome, RunEvent, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
-  StepAttemptStartedData,
+  ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalResolution,
+  ApprovalTimeoutPolicy, AttemptFailure, BranchFailure, EventValidationError, ParallelFailure,
+  ParallelFailurePolicy, ParallelGroupOutcome, RunEvent, RunEventPayload, RunFailedData,
+  RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, StepAttemptStartedData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -16,6 +18,7 @@ pub enum RunStatus {
   #[default]
   NotStarted,
   Running,
+  Waiting,
   Succeeded,
   Failed,
 }
@@ -65,6 +68,25 @@ pub struct ParallelGroupProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalRequestStatus {
+  Waiting,
+  Resolved {
+    resolution: ApprovalResolution,
+    resolved_at: DateTime<Utc>,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalRequestProjection {
+  pub approval_id: String,
+  pub request_id: String,
+  pub requested_at: DateTime<Utc>,
+  pub expires_at: Option<DateTime<Utc>>,
+  pub on_timeout: ApprovalTimeoutPolicy,
+  pub status: ApprovalRequestStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunFailure {
   Attempt(AttemptFailure),
   Branch(BranchFailure),
@@ -75,6 +97,11 @@ pub enum RunFailure {
     failed_node_ids: Vec<String>,
     cancelled_node_ids: Vec<String>,
     failure: ParallelFailure,
+  },
+  Approval {
+    approval_id: String,
+    request_id: String,
+    failure: ApprovalFailure,
   },
 }
 
@@ -89,6 +116,7 @@ pub struct RunProjection {
   pub attempts: Vec<AttemptProjection>,
   pub branch_selections: BTreeMap<String, String>,
   pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
+  pub approval_requests: BTreeMap<String, ApprovalRequestProjection>,
   pub terminal_node_id: Option<String>,
   pub result: Option<Value>,
   pub failure: Option<RunFailure>,
@@ -304,6 +332,124 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           cancelled_node_ids: data.cancelled_node_ids.clone(),
         };
       }
+      RunEventPayload::ApprovalRequested(data) => {
+        require_running(&projection)?;
+        if projection.approval_requests.contains_key(&data.approval_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Approval {:?} was requested more than once.",
+            data.approval_id
+          )));
+        }
+        if projection
+          .approval_requests
+          .values()
+          .any(|request| request.request_id == data.request_id)
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "Approval request ID {:?} appears more than once.",
+            data.request_id
+          )));
+        }
+        projection.approval_requests.insert(
+          data.approval_id.clone(),
+          ApprovalRequestProjection {
+            approval_id: data.approval_id.clone(),
+            request_id: data.request_id.clone(),
+            requested_at: event.occurred_at,
+            expires_at: data.expires_at,
+            on_timeout: data.on_timeout,
+            status: ApprovalRequestStatus::Waiting,
+          },
+        );
+        projection.status = RunStatus::Waiting;
+      }
+      RunEventPayload::ApprovalResolved(data) => {
+        if projection.status != RunStatus::Waiting {
+          return Err(FoldError::InvalidHistory(
+            "approval_resolved requires a waiting run.".to_string(),
+          ));
+        }
+        let request = projection
+          .approval_requests
+          .get_mut(&data.approval_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(format!(
+              "Approval {:?} resolved before it was requested.",
+              data.approval_id
+            ))
+          })?;
+        if request.request_id != data.request_id {
+          return Err(FoldError::InvalidHistory(format!(
+            "Approval {:?} resolved with a mismatched request ID.",
+            data.approval_id
+          )));
+        }
+        if !matches!(request.status, ApprovalRequestStatus::Waiting) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Approval {:?} was resolved more than once.",
+            data.approval_id
+          )));
+        }
+        match &data.resolution {
+          ApprovalResolution::Decision {
+            source: ApprovalDecisionSource::Human,
+            ..
+          } if request
+            .expires_at
+            .is_some_and(|deadline| event.occurred_at >= deadline) =>
+          {
+            return Err(FoldError::InvalidHistory(format!(
+              "Human decision for approval {:?} occurred at or after its deadline.",
+              data.approval_id
+            )));
+          }
+          ApprovalResolution::Decision {
+            decision: ApprovalDecision::Rejected,
+            source: ApprovalDecisionSource::Timeout,
+          } if request.on_timeout == ApprovalTimeoutPolicy::Reject
+            && request
+              .expires_at
+              .is_some_and(|deadline| event.occurred_at >= deadline) => {}
+          ApprovalResolution::TimeoutFailure
+            if request.on_timeout == ApprovalTimeoutPolicy::Fail
+              && request
+                .expires_at
+                .is_some_and(|deadline| event.occurred_at >= deadline) => {}
+          ApprovalResolution::Decision {
+            source: ApprovalDecisionSource::Human,
+            ..
+          } => {}
+          _ => {
+            return Err(FoldError::InvalidHistory(format!(
+              "Approval {:?} resolution does not match its deadline and timeout policy.",
+              data.approval_id
+            )));
+          }
+        }
+        if let ApprovalResolution::Decision { decision, source } = data.resolution {
+          projection.context.steps.insert(
+            data.approval_id.clone(),
+            json!({
+              "decision": match decision {
+                ApprovalDecision::Approved => "approved",
+                ApprovalDecision::Rejected => "rejected",
+              },
+              "source": match source {
+                ApprovalDecisionSource::Human => "human",
+                ApprovalDecisionSource::Timeout => "timeout",
+              },
+              "decidedAt": event
+                .occurred_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+            }),
+          );
+        }
+        request.status = ApprovalRequestStatus::Resolved {
+          resolution: data.resolution.clone(),
+          resolved_at: event.occurred_at,
+        };
+        projection.status = RunStatus::Running;
+      }
       RunEventPayload::RunSucceeded(data) => {
         require_running(&projection)?;
         if !projection
@@ -387,6 +533,38 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
               primary_node_id: primary_node_id.clone(),
               failed_node_ids: failed_node_ids.clone(),
               cancelled_node_ids: cancelled_node_ids.clone(),
+              failure: failure.clone(),
+            }
+          }
+          RunFailedData::V4(RunFailedDataV4::Approval {
+            approval_id,
+            request_id,
+            failure,
+          }) => {
+            let request = projection
+              .approval_requests
+              .get(approval_id)
+              .ok_or_else(|| {
+                FoldError::InvalidHistory(format!(
+                  "run_failed references unknown approval {approval_id:?}."
+                ))
+              })?;
+            if request.request_id != *request_id
+              || !matches!(
+                request.status,
+                ApprovalRequestStatus::Resolved {
+                  resolution: ApprovalResolution::TimeoutFailure,
+                  ..
+                }
+              )
+            {
+              return Err(FoldError::InvalidHistory(format!(
+                "run_failed does not match the timeout failure of approval {approval_id:?}."
+              )));
+            }
+            RunFailure::Approval {
+              approval_id: approval_id.clone(),
+              request_id: request_id.clone(),
               failure: failure.clone(),
             }
           }

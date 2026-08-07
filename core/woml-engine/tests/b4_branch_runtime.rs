@@ -131,6 +131,8 @@ async fn reviewed_branch_executes_only_the_true_route_and_publishes_one_result()
         woml_engine::RunEventPayload::BranchSelected(_) => "branch_selected",
         woml_engine::RunEventPayload::ParallelGroupStarted(_) => "parallel_group_started",
         woml_engine::RunEventPayload::ParallelGroupCompleted(_) => "parallel_group_completed",
+        woml_engine::RunEventPayload::ApprovalRequested(_) => "approval_requested",
+        woml_engine::RunEventPayload::ApprovalResolved(_) => "approval_resolved",
         woml_engine::RunEventPayload::RunSucceeded(_) => "run_succeeded",
         woml_engine::RunEventPayload::RunFailed(_) => "run_failed",
       })
@@ -221,6 +223,7 @@ async fn first_true_when_wins_even_when_a_later_condition_is_also_true() {
       },
       branch_id: Some("decision".to_string()),
       parallel_id: None,
+      approval_id: None,
     },
   );
   workflow.graph.edges.insert(
@@ -232,6 +235,7 @@ async fn first_true_when_wins_even_when_a_later_condition_is_also_true() {
       condition: EdgeCondition::Always,
       branch_id: None,
       parallel_id: None,
+      approval_id: None,
     },
   );
   let decision = workflow
@@ -328,6 +332,7 @@ fn edge(id: &str, from: &str, to: &str) -> CompiledWorkflowEdge {
     condition: EdgeCondition::Always,
     branch_id: None,
     parallel_id: None,
+    approval_id: None,
   }
 }
 
@@ -381,6 +386,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
         },
         branch_id: Some("outer".to_string()),
         parallel_id: None,
+        approval_id: None,
       },
       CompiledWorkflowEdge {
         id: "outer:otherwise".to_string(),
@@ -389,6 +395,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
         condition: EdgeCondition::Always,
         branch_id: Some("outer".to_string()),
         parallel_id: None,
+        approval_id: None,
       },
       CompiledWorkflowEdge {
         id: "inner:when:0".to_string(),
@@ -399,6 +406,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
         },
         branch_id: Some("inner".to_string()),
         parallel_id: None,
+        approval_id: None,
       },
       CompiledWorkflowEdge {
         id: "inner:otherwise".to_string(),
@@ -407,6 +415,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
         condition: EdgeCondition::Always,
         branch_id: Some("inner".to_string()),
         parallel_id: None,
+        approval_id: None,
       },
       edge("inside-to-inner", "inside", "inner"),
       edge("innerFallback-to-inner", "innerFallback", "inner"),

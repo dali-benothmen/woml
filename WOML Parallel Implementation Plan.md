@@ -100,16 +100,16 @@ alone is not the correctness proof.
 
 ### 2.1 Phase summary
 
-| Phase | What changes | Product result |
-|---|---|---|
-| P0 | Freeze syntax, model v3, event v3, protocol v2, failures, and fixtures. | Every layer targets one reviewed parallel contract. |
-| P1 | Teach the WOML frontend to validate `<parallel>`. | Correct groups are understood and invalid groups receive useful source errors. |
-| P2 | Lower parallel groups into deterministic model-v3 DAGs. | Markup becomes an engine-ready fork/join graph. |
-| P3 | Add durable group events, folding, and recovery. | Group progress survives restarts without mutable authoritative scheduler state. |
-| P4 | Add bounded concurrent scheduling and a stable fork-context snapshot. | Independent children genuinely run concurrently and join successfully. |
-| P5 | Implement `wait-all`, real `fail-fast`, and Worker cancellation. | Child failures obey the authored policy without pretending cancellation is transactional. |
-| P6 | Expose behavior and diagnostics through the packaged CLI. | `woml run parallel.woml` works as a complete user-facing journey. |
-| P7 | Harden compatibility, crashes, limits, packaging, and documentation. | Parallel execution becomes a supported WOML feature. |
+| Phase | What changes                                                            | Product result                                                                            |
+| ----- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| P0    | Freeze syntax, model v3, event v3, protocol v2, failures, and fixtures. | Every layer targets one reviewed parallel contract.                                       |
+| P1    | Teach the WOML frontend to validate `<parallel>`.                       | Correct groups are understood and invalid groups receive useful source errors.            |
+| P2    | Lower parallel groups into deterministic model-v3 DAGs.                 | Markup becomes an engine-ready fork/join graph.                                           |
+| P3    | Add durable group events, folding, and recovery.                        | Group progress survives restarts without mutable authoritative scheduler state.           |
+| P4    | Add bounded concurrent scheduling and a stable fork-context snapshot.   | Independent children genuinely run concurrently and join successfully.                    |
+| P5    | Implement `wait-all`, real `fail-fast`, and Worker cancellation.        | Child failures obey the authored policy without pretending cancellation is transactional. |
+| P6    | Expose behavior and diagnostics through the packaged CLI.               | `woml run parallel.woml` works as a complete user-facing journey.                         |
+| P7    | Harden compatibility, crashes, limits, packaging, and documentation.    | Parallel execution becomes a supported WOML feature.                                      |
 
 ## 3. Source-Language Contract
 
@@ -126,13 +126,13 @@ alone is not the correctness proof.
 </parallel>
 ```
 
-| Attribute | Required | Meaning |
-|---|---:|---|
-| `id` | Yes | Stable structural identity for diagnostics, compiled identities, and events. |
-| `name` | No | Human-readable display name. |
-| `description` | No | Human-readable description. |
-| `concurrency` | No | Positive integer maximum for simultaneously active children; defaults to the child count. |
-| `on-error` | No | `fail-fast` or `wait-all`; defaults to `fail-fast`. |
+| Attribute     | Required | Meaning                                                                                   |
+| ------------- | -------: | ----------------------------------------------------------------------------------------- |
+| `id`          |      Yes | Stable structural identity for diagnostics, compiled identities, and events.              |
+| `name`        |       No | Human-readable display name.                                                              |
+| `description` |       No | Human-readable description.                                                               |
+| `concurrency` |       No | Positive integer maximum for simultaneously active children; defaults to the child count. |
+| `on-error`    |       No | `fail-fast` or `wait-all`; defaults to `fail-fast`.                                       |
 
 Rules:
 
@@ -739,24 +739,24 @@ Completed proof:
 
 ## 11. Verification Matrix
 
-| Area | Required proof |
-|---|---|
-| Syntax | Valid groups parse; invalid placement and attributes report original line/column. |
-| Lowering | Deterministic model-v3 fork/join identities and canonical hash. |
-| Concurrency | Multiple starts precede completion and active count never exceeds the cap. |
-| Snapshot | Every child receives the same pre-fork context and never a sibling output. |
-| Join | Downstream work starts once and only after a successful group. |
-| Context | Child IDs publish outputs; the parallel ID never does. |
-| Wait-all | Every child reaches a terminal attempt and any failure fails the group. |
-| Fail-fast | Queued work does not start; active Workers are cancelled and drained. |
-| Cancellation | Exactly one terminal response; no rollback or automatic retry claim. |
-| Events | Started/completed events validate, fold, persist, and reopen deterministically. |
-| Recovery | Safe remaining work resumes; ambiguous in-flight effects fail closed. |
-| Branch composition | Selected-route groups run; unselected-route groups create no events or effects. |
-| Errors | Group and child failures carry stable codes, structured identities, and WOML locations. |
-| Compatibility | Model/event v1 and v2 fixtures plus sequential and branch workflows remain unchanged. |
-| CLI | `woml run parallel.woml` returns the reviewed JSON and correct exit code. |
-| Package | A clean installation contains and executes all required native and Bun components. |
+| Area               | Required proof                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| Syntax             | Valid groups parse; invalid placement and attributes report original line/column.       |
+| Lowering           | Deterministic model-v3 fork/join identities and canonical hash.                         |
+| Concurrency        | Multiple starts precede completion and active count never exceeds the cap.              |
+| Snapshot           | Every child receives the same pre-fork context and never a sibling output.              |
+| Join               | Downstream work starts once and only after a successful group.                          |
+| Context            | Child IDs publish outputs; the parallel ID never does.                                  |
+| Wait-all           | Every child reaches a terminal attempt and any failure fails the group.                 |
+| Fail-fast          | Queued work does not start; active Workers are cancelled and drained.                   |
+| Cancellation       | Exactly one terminal response; no rollback or automatic retry claim.                    |
+| Events             | Started/completed events validate, fold, persist, and reopen deterministically.         |
+| Recovery           | Safe remaining work resumes; ambiguous in-flight effects fail closed.                   |
+| Branch composition | Selected-route groups run; unselected-route groups create no events or effects.         |
+| Errors             | Group and child failures carry stable codes, structured identities, and WOML locations. |
+| Compatibility      | Model/event v1 and v2 fixtures plus sequential and branch workflows remain unchanged.   |
+| CLI                | `woml run parallel.woml` returns the reviewed JSON and correct exit code.               |
+| Package            | A clean installation contains and executes all required native and Bun components.      |
 
 ## 12. Explicit Non-Goals
 
@@ -801,9 +801,10 @@ contract review rather than selecting a default.
 
 After P0–P7, product expansion continues in the existing order:
 
-1. **Human approval — A0/A1 complete** — versioned model/event/HTTP/token
-   contracts and frontend validation are complete; A2–A7 add lowering, Rust
-   waiting/resolution, recovery, and the HTTP-only product flow defined in
+1. **Human approval — A0–A3 complete** — versioned contracts, frontend
+   lowering, Rust validation, event folding, durable projections, and hashed
+   credentials are complete; A4–A7 add automatic pause/resolution, recovery,
+   and the HTTP-only product flow defined in
    `WOML Human Approval Implementation Plan.md`.
 2. **Retries and idempotency** — idempotency-key derivation, duplicate
    handling, durable retry scheduling, and backoff.

@@ -171,6 +171,7 @@ fn accepts_model_v3_for_parallel_execution() {
       condition: EdgeCondition::Always,
       branch_id: None,
       parallel_id: None,
+      approval_id: None,
     });
   assert!(bypassed_join
     .validate_structure()
@@ -259,6 +260,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
       condition,
       branch_id: branch_id.map(str::to_string),
       parallel_id: None,
+      approval_id: None,
     }
   };
   model.graph.edges.splice(
@@ -321,7 +323,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
 #[test]
 fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
   let mut bad_version = hello_model();
-  bad_version.schema_version = 4;
+  bad_version.schema_version = 5;
   let codes: Vec<_> = bad_version
     .validate_for_execution()
     .unwrap_err()
@@ -353,6 +355,7 @@ fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
       condition: EdgeCondition::Always,
       branch_id: None,
       parallel_id: None,
+      approval_id: None,
     });
   let codes: Vec<_> = cyclic
     .validate_for_execution()
@@ -423,6 +426,7 @@ fn rejects_constructs_outside_the_current_executable_profile() {
       condition: EdgeCondition::Always,
       branch_id: None,
       parallel_id: None,
+      approval_id: None,
     });
   assert!(parallel
     .validate_for_execution()

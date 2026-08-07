@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use crate::{
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3,
+  RUN_EVENT_SCHEMA_VERSION_V4,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +30,8 @@ pub enum RunEventPayload {
   BranchSelected(BranchSelectedData),
   ParallelGroupStarted(ParallelGroupStartedData),
   ParallelGroupCompleted(ParallelGroupCompletedData),
+  ApprovalRequested(ApprovalRequestedData),
+  ApprovalResolved(ApprovalResolvedData),
   RunSucceeded(RunSucceededData),
   RunFailed(RunFailedData),
 }
@@ -95,6 +98,55 @@ pub struct ParallelGroupCompletedData {
   pub outcome: ParallelGroupOutcome,
   pub failed_node_ids: Vec<String>,
   pub cancelled_node_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalTimeoutPolicy {
+  Reject,
+  Fail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalRequestedData {
+  pub approval_id: String,
+  pub request_id: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub expires_at: Option<DateTime<Utc>>,
+  pub on_timeout: ApprovalTimeoutPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalDecision {
+  Approved,
+  Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalDecisionSource {
+  Human,
+  Timeout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ApprovalResolution {
+  Decision {
+    decision: ApprovalDecision,
+    source: ApprovalDecisionSource,
+  },
+  TimeoutFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalResolvedData {
+  pub approval_id: String,
+  pub request_id: String,
+  pub resolution: ApprovalResolution,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -188,9 +240,47 @@ pub enum RunFailedDataV3 {
   },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalFailure {
+  pub kind: String,
+  pub code: String,
+  pub message: String,
+}
+
+impl ApprovalFailure {
+  pub fn validate(&self) -> Result<(), EventValidationError> {
+    if self.kind != "approval_timeout" || self.code != "WOML_APPROVAL_TIMEOUT" {
+      return Err(EventValidationError::Invalid(
+        "Approval failure requires kind approval_timeout and code WOML_APPROVAL_TIMEOUT."
+          .to_string(),
+      ));
+    }
+    if self.message.is_empty() {
+      return Err(EventValidationError::Invalid(
+        "Approval failure message must not be empty.".to_string(),
+      ));
+    }
+    Ok(())
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "failureScope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RunFailedDataV4 {
+  Approval {
+    #[serde(rename = "approvalId")]
+    approval_id: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    failure: ApprovalFailure,
+  },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RunFailedData {
+  V4(RunFailedDataV4),
   V3(RunFailedDataV3),
   V2(RunFailedDataV2),
   V1(RunFailedDataV1),
@@ -328,6 +418,35 @@ fn valid_public_structural_id(value: &str) -> bool {
     && value.chars().count() <= 256
 }
 
+pub fn is_approval_request_id(value: &str) -> bool {
+  let Some(suffix) = value.strip_prefix("aprreq_") else {
+    return false;
+  };
+  value.len() >= 10
+    && value.len() <= 256
+    && !suffix.is_empty()
+    && suffix
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+impl ApprovalResolution {
+  pub fn validate(&self) -> Result<(), EventValidationError> {
+    if matches!(
+      self,
+      Self::Decision {
+        decision: ApprovalDecision::Approved,
+        source: ApprovalDecisionSource::Timeout,
+      }
+    ) {
+      return Err(EventValidationError::Invalid(
+        "A timeout approval resolution may reject only.".to_string(),
+      ));
+    }
+    Ok(())
+  }
+}
+
 fn valid_branch_arm_id(branch_id: &str, arm_id: &str) -> bool {
   let Some(suffix) = arm_id.strip_prefix(&format!("{branch_id}:")) else {
     return false;
@@ -398,7 +517,10 @@ impl RunEvent {
   pub fn validate(&self) -> Result<(), EventValidationError> {
     if !matches!(
       self.event_schema_version,
-      RUN_EVENT_SCHEMA_VERSION_V1 | RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3
+      RUN_EVENT_SCHEMA_VERSION_V1
+        | RUN_EVENT_SCHEMA_VERSION_V2
+        | RUN_EVENT_SCHEMA_VERSION_V3
+        | RUN_EVENT_SCHEMA_VERSION_V4
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -432,7 +554,10 @@ impl RunEvent {
         validate_identity(&data.node_id, data.attempt, &data.invocation_id)?;
         data.failure.validate()?;
         if data.failure.kind == AttemptFailureKind::InvocationCancelled
-          && self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V3
+          && !matches!(
+            self.event_schema_version,
+            RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
+          )
         {
           return Err(EventValidationError::Invalid(
             "invocation_cancelled is available only in run-event schema v3.".to_string(),
@@ -442,7 +567,7 @@ impl RunEvent {
       RunEventPayload::BranchSelected(data) => {
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3
+          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
         ) {
           return Err(EventValidationError::Invalid(
             "branch_selected is available only in run-event schema v2 or v3.".to_string(),
@@ -457,8 +582,10 @@ impl RunEvent {
         }
       }
       RunEventPayload::ParallelGroupStarted(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V3
-          || !valid_public_structural_id(&data.parallel_id)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
+        ) || !valid_public_structural_id(&data.parallel_id)
         {
           return Err(EventValidationError::Invalid(
             "parallel_group_started requires event schema v3 and a valid parallelId.".to_string(),
@@ -466,8 +593,10 @@ impl RunEvent {
         }
       }
       RunEventPayload::ParallelGroupCompleted(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V3
-          || !valid_public_structural_id(&data.parallel_id)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4
+        ) || !valid_public_structural_id(&data.parallel_id)
           || !valid_ordered_id_lists(&data.failed_node_ids, &data.cancelled_node_ids)
           || (data.outcome == ParallelGroupOutcome::Succeeded
             && (!data.failed_node_ids.is_empty() || !data.cancelled_node_ids.is_empty()))
@@ -479,6 +608,32 @@ impl RunEvent {
             "parallel_group_completed contains an invalid outcome or node list.".to_string(),
           ));
         }
+      }
+      RunEventPayload::ApprovalRequested(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V4
+          || !valid_public_structural_id(&data.approval_id)
+          || !is_approval_request_id(&data.request_id)
+          || data
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= self.occurred_at)
+        {
+          return Err(EventValidationError::Invalid(
+            "approval_requested requires event schema v4, valid identities, and a future expiresAt."
+              .to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ApprovalResolved(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V4
+          || !valid_public_structural_id(&data.approval_id)
+          || !is_approval_request_id(&data.request_id)
+        {
+          return Err(EventValidationError::Invalid(
+            "approval_resolved requires event schema v4 and valid approval/request identities."
+              .to_string(),
+          ));
+        }
+        data.resolution.validate()?;
       }
       RunEventPayload::RunSucceeded(data) => {
         if !valid_id(&data.terminal_node_id) {
@@ -510,7 +665,7 @@ impl RunEvent {
           data.failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3,
+          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4,
           RunFailedData::V2(RunFailedDataV2::Attempt {
             node_id,
             attempt,
@@ -522,7 +677,7 @@ impl RunEvent {
           failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3,
+          RUN_EVENT_SCHEMA_VERSION_V2 | RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4,
           RunFailedData::V2(RunFailedDataV2::Branch {
             branch_id,
             arm_id,
@@ -558,7 +713,7 @@ impl RunEvent {
           failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V3,
+          RUN_EVENT_SCHEMA_VERSION_V3 | RUN_EVENT_SCHEMA_VERSION_V4,
           RunFailedData::V3(RunFailedDataV3::Parallel {
             parallel_id,
             primary_node_id,
@@ -579,6 +734,21 @@ impl RunEvent {
             return Err(EventValidationError::Invalid(
               "Parallel-scoped run_failed contains an invalid group or child identity list."
                 .to_string(),
+            ));
+          }
+          failure.validate()?;
+        }
+        (
+          RUN_EVENT_SCHEMA_VERSION_V4,
+          RunFailedData::V4(RunFailedDataV4::Approval {
+            approval_id,
+            request_id,
+            failure,
+          }),
+        ) => {
+          if !valid_public_structural_id(approval_id) || !is_approval_request_id(request_id) {
+            return Err(EventValidationError::Invalid(
+              "Approval-scoped run_failed contains an invalid approvalId or requestId.".to_string(),
             ));
           }
           failure.validate()?;
