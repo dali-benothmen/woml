@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::future::{poll_fn, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 
 use serde::Serialize;
@@ -22,19 +23,62 @@ use crate::model::{ApprovalDefinition, ParallelGroupDefinition, ValueExpression}
 use crate::projection::{ApprovalRequestStatus, AttemptStatus};
 use crate::protocol::{ExecuteMessage, HostOutcome};
 use crate::{
-  run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind, BranchFailure,
-  CompiledWorkflowDefinition, DurableDagEngine, DurableEngineError, DurableEventStore,
-  DurableStoreError, EngineError, InMemoryDagEngine, IssuedApprovalToken, RecoveryReport, RunEvent,
-  RunEventPayload, RunFailure, RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError,
-  ScriptHostProcessOptions, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
-  RUN_EVENT_SCHEMA_VERSION_V2,
+  run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
+  AttemptFailure, AttemptFailureKind, BranchFailure, CompiledWorkflowDefinition, DurableDagEngine,
+  DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
+  IssuedApprovalToken, RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection,
+  RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions, WorkflowContext,
+  RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
+pub trait EngineClock: Send + Sync {
+  fn now(&self) -> chrono::DateTime<chrono::Utc>;
+}
+
+#[derive(Debug, Default)]
+pub struct SystemEngineClock;
+
+impl EngineClock for SystemEngineClock {
+  fn now(&self) -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+  }
+}
+
 #[derive(Debug, Clone)]
+pub struct FixedEngineClock {
+  now: chrono::DateTime<chrono::Utc>,
+}
+
+impl FixedEngineClock {
+  pub const fn new(now: chrono::DateTime<chrono::Utc>) -> Self {
+    Self { now }
+  }
+}
+
+impl EngineClock for FixedEngineClock {
+  fn now(&self) -> chrono::DateTime<chrono::Utc> {
+    self.now
+  }
+}
+
+#[derive(Clone)]
 pub struct RuntimeExecutionOptions {
   pub script_host: ScriptHostProcessOptions,
   pub script_timeout_ms: u64,
   pub max_context_bytes: Option<usize>,
+  pub clock: Arc<dyn EngineClock>,
+}
+
+impl std::fmt::Debug for RuntimeExecutionOptions {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter
+      .debug_struct("RuntimeExecutionOptions")
+      .field("script_host", &self.script_host)
+      .field("script_timeout_ms", &self.script_timeout_ms)
+      .field("max_context_bytes", &self.max_context_bytes)
+      .field("clock", &"dyn EngineClock")
+      .finish()
+  }
 }
 
 impl RuntimeExecutionOptions {
@@ -43,7 +87,13 @@ impl RuntimeExecutionOptions {
       script_host,
       script_timeout_ms,
       max_context_bytes: None,
+      clock: Arc::new(SystemEngineClock),
     }
+  }
+
+  pub fn with_clock(mut self, clock: Arc<dyn EngineClock>) -> Self {
+    self.clock = clock;
+    self
   }
 }
 
@@ -320,6 +370,26 @@ pub fn recover_durable_runs(
   Ok(store.recover_interrupted_runs()?)
 }
 
+pub fn resolve_human_approval_durable(
+  database_path: PathBuf,
+  token: &str,
+  decision: crate::ApprovalDecision,
+  clock: &dyn EngineClock,
+) -> Result<ApprovalDecisionOutcome, RuntimeExecutionError> {
+  let mut store = DurableEventStore::open(database_path)?;
+  Ok(store.resolve_human_approval(token, decision, clock.now())?)
+}
+
+pub fn settle_approval_timeout_durable(
+  database_path: PathBuf,
+  run_id: &str,
+  approval_id: &str,
+  clock: &dyn EngineClock,
+) -> Result<ApprovalTimeoutSettlement, RuntimeExecutionError> {
+  let mut store = DurableEventStore::open(database_path)?;
+  Ok(store.settle_approval_timeout(run_id, approval_id, clock.now())?)
+}
+
 async fn execute_with_engine<E: RuntimeDagEngine>(
   mut engine: E,
   trigger: Map<String, Value>,
@@ -357,7 +427,7 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
     RunStatus::Failed => return Err(resumed_failure(&engine, run_id, projection)?),
     RunStatus::Running => {}
     RunStatus::Waiting => {
-      return engine.reissue_waiting_outcome(run_id);
+      return engine.reissue_waiting_outcome(run_id, options.clock.now());
     }
     RunStatus::NotStarted => {
       return Err(RuntimeExecutionError::Stalled(
@@ -587,7 +657,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
             "approval node {node_id:?} has invalid compiled inputs"
           ))
         })?;
-        let occurred_at = chrono::Utc::now();
+        let occurred_at = options.clock.now();
         let expires_at = approval
           .timeout_ms
           .map(|milliseconds| {
@@ -1414,6 +1484,7 @@ trait RuntimeDagEngine {
   fn reissue_waiting_outcome(
     &mut self,
     _run_id: &str,
+    _now: chrono::DateTime<chrono::Utc>,
   ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
     Err(RuntimeExecutionError::Stalled(
       "human approval requires the durable runtime".to_string(),
@@ -1557,6 +1628,7 @@ impl RuntimeDagEngine for DurableDagEngine {
   fn reissue_waiting_outcome(
     &mut self,
     run_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
   ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
     let projection = self.projection(run_id)?;
     let request = projection
@@ -1575,13 +1647,12 @@ impl RuntimeDagEngine for DurableDagEngine {
           "waiting run references an unknown approval definition".to_string(),
         )
       })?;
-    let issued_at = chrono::Utc::now();
     let token = DurableDagEngine::reissue_waiting_approval_token(
       self,
       run_id,
       &request.approval_id,
       &request.request_id,
-      issued_at,
+      now,
     )?;
     Ok(waiting_outcome(
       self.workflow().workflow_id.clone(),

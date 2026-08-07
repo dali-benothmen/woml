@@ -1,6 +1,6 @@
 # WOML Native Runtime Outcome v1
 
-Status: frozen and implemented in the durable Rust runtime through A4; N-API
+Status: frozen and implemented in the durable Rust runtime through A5; N-API
 and CLI delivery remain staged for A6
 
 The normative schema is

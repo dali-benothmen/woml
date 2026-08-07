@@ -16,9 +16,11 @@ use crate::engine::{
   validate_payload_against_definition,
 };
 use crate::event::{
-  is_definition_hash, ApprovalRequestedData, ParallelFailure, ParallelFailurePolicy,
-  ParallelGroupCompletedData, ParallelGroupOutcome, RunFailedData, RunFailedDataV1,
-  RunFailedDataV2, RunFailedDataV3, RunStartedData, RunSucceededData, StepAttemptFailedData,
+  is_definition_hash, ApprovalDecision, ApprovalDecisionSource, ApprovalFailure,
+  ApprovalRequestedData, ApprovalResolution, ApprovalResolvedData, ApprovalTimeoutPolicy,
+  ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome,
+  RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4,
+  RunStartedData, RunSucceededData, StepAttemptFailedData,
 };
 use crate::projection::{ApprovalRequestStatus, AttemptStatus, ParallelGroupStatus};
 use crate::{
@@ -161,6 +163,42 @@ pub struct ApprovalTokenBinding {
   pub credential_expires_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalDecisionOutcomeStatus {
+  Accepted,
+  AlreadyResolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalDecisionOutcome {
+  pub status: ApprovalDecisionOutcomeStatus,
+  pub run_id: String,
+  pub approval_id: String,
+  pub request_id: String,
+  pub decision: ApprovalDecision,
+  pub source: ApprovalDecisionSource,
+  pub decided_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalTimeoutSettlementStatus {
+  Settled,
+  AlreadyResolved,
+  NotDue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalTimeoutSettlement {
+  pub status: ApprovalTimeoutSettlementStatus,
+  pub run_id: String,
+  pub approval_id: String,
+  pub request_id: String,
+  pub resolution: Option<ApprovalResolution>,
+  pub settled_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryReport {
@@ -196,6 +234,12 @@ pub enum DurableStoreError {
   InvalidApprovalToken,
   #[error("approval token has expired")]
   ExpiredApprovalToken,
+  #[error("approval deadline has already been reached")]
+  ApprovalExpired,
+  #[error("a different human approval decision is already durable")]
+  ApprovalDecisionConflict,
+  #[error("approval timeout settlement requires a request with a deadline")]
+  ApprovalHasNoDeadline,
   #[error("{0}")]
   Contract(String),
 }
@@ -709,6 +753,253 @@ impl DurableEventStore {
         credential_expires_at,
       },
     ))
+  }
+
+  pub fn resolve_human_approval(
+    &mut self,
+    token: &str,
+    decision: ApprovalDecision,
+    now: DateTime<Utc>,
+  ) -> Result<ApprovalDecisionOutcome, DurableStoreError> {
+    let (token_id, secret) = parse_approval_token(token)?;
+    let candidate_hash = Sha256::digest(secret.as_bytes());
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let row: Option<(Vec<u8>, String, String, String, String)> = transaction
+      .query_row(
+        "SELECT secret_hash, request_id, run_id, approval_id, credential_expires_at
+         FROM woml_approval_tokens WHERE token_id = ?1",
+        [token_id],
+        |row| {
+          Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+          ))
+        },
+      )
+      .optional()?;
+    let Some((stored_hash, request_id, run_id, approval_id, credential_expires_at)) = row else {
+      return Err(DurableStoreError::InvalidApprovalToken);
+    };
+    if stored_hash.len() != 32
+      || candidate_hash
+        .as_slice()
+        .ct_eq(stored_hash.as_slice())
+        .unwrap_u8()
+        != 1
+    {
+      return Err(DurableStoreError::InvalidApprovalToken);
+    }
+    let credential_expires_at = parse_stored_timestamp(&credential_expires_at)?;
+
+    let mut events = load_events(&transaction, &run_id)?;
+    let workflow = definition_for_run(&transaction, &run_id)?;
+    let binding = run_binding_in_transaction(&transaction, &run_id)?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    let request = projection
+      .approval_requests
+      .get(&approval_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Approval credential references an unknown durable request.".to_string(),
+        )
+      })?;
+    if request.request_id != request_id {
+      return Err(DurableStoreError::Contract(
+        "Approval credential does not match its durable request.".to_string(),
+      ));
+    }
+    match &request.status {
+      ApprovalRequestStatus::Resolved {
+        resolution:
+          ApprovalResolution::Decision {
+            decision: existing,
+            source: ApprovalDecisionSource::Human,
+          },
+        resolved_at,
+      } if *existing == decision => {
+        return Ok(ApprovalDecisionOutcome {
+          status: ApprovalDecisionOutcomeStatus::AlreadyResolved,
+          run_id,
+          approval_id,
+          request_id,
+          decision,
+          source: ApprovalDecisionSource::Human,
+          decided_at: *resolved_at,
+        });
+      }
+      ApprovalRequestStatus::Resolved {
+        resolution:
+          ApprovalResolution::Decision {
+            source: ApprovalDecisionSource::Human,
+            ..
+          },
+        ..
+      } => return Err(DurableStoreError::ApprovalDecisionConflict),
+      ApprovalRequestStatus::Resolved { .. } => {
+        return Err(DurableStoreError::ApprovalExpired);
+      }
+      ApprovalRequestStatus::Waiting => {}
+    }
+    if request.expires_at.is_some_and(|deadline| now >= deadline) {
+      return Err(DurableStoreError::ApprovalExpired);
+    }
+    if now >= credential_expires_at {
+      return Err(DurableStoreError::ExpiredApprovalToken);
+    }
+
+    let payload = RunEventPayload::ApprovalResolved(ApprovalResolvedData {
+      approval_id: approval_id.clone(),
+      request_id: request_id.clone(),
+      resolution: ApprovalResolution::Decision {
+        decision,
+        source: ApprovalDecisionSource::Human,
+      },
+    });
+    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    let event_schema_version = events
+      .first()
+      .map(|event| event.event_schema_version)
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Approval resolution requires run_started.".to_string())
+      })?;
+    append_to_history(
+      &transaction,
+      &mut events,
+      &run_id,
+      generated_event_id(),
+      now,
+      event_schema_version,
+      payload,
+    )?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    transaction.commit()?;
+    Ok(ApprovalDecisionOutcome {
+      status: ApprovalDecisionOutcomeStatus::Accepted,
+      run_id,
+      approval_id,
+      request_id,
+      decision,
+      source: ApprovalDecisionSource::Human,
+      decided_at: now,
+    })
+  }
+
+  pub fn settle_approval_timeout(
+    &mut self,
+    run_id: &str,
+    approval_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<ApprovalTimeoutSettlement, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, run_id)?;
+    let mut events = load_events(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    let request = projection
+      .approval_requests
+      .get(approval_id)
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Timeout settlement references an unknown approval request.".to_string(),
+        )
+      })?;
+    if let ApprovalRequestStatus::Resolved {
+      resolution,
+      resolved_at,
+    } = &request.status
+    {
+      return Ok(ApprovalTimeoutSettlement {
+        status: ApprovalTimeoutSettlementStatus::AlreadyResolved,
+        run_id: run_id.to_string(),
+        approval_id: approval_id.to_string(),
+        request_id: request.request_id.clone(),
+        resolution: Some(resolution.clone()),
+        settled_at: Some(*resolved_at),
+      });
+    }
+    let deadline = request
+      .expires_at
+      .ok_or(DurableStoreError::ApprovalHasNoDeadline)?;
+    if now < deadline {
+      return Ok(ApprovalTimeoutSettlement {
+        status: ApprovalTimeoutSettlementStatus::NotDue,
+        run_id: run_id.to_string(),
+        approval_id: approval_id.to_string(),
+        request_id: request.request_id.clone(),
+        resolution: None,
+        settled_at: None,
+      });
+    }
+    let resolution = match request.on_timeout {
+      ApprovalTimeoutPolicy::Reject => ApprovalResolution::Decision {
+        decision: ApprovalDecision::Rejected,
+        source: ApprovalDecisionSource::Timeout,
+      },
+      ApprovalTimeoutPolicy::Fail => ApprovalResolution::TimeoutFailure,
+    };
+    let mut payloads = vec![RunEventPayload::ApprovalResolved(ApprovalResolvedData {
+      approval_id: approval_id.to_string(),
+      request_id: request.request_id.clone(),
+      resolution: resolution.clone(),
+    })];
+    if request.on_timeout == ApprovalTimeoutPolicy::Fail {
+      payloads.push(RunEventPayload::RunFailed(RunFailedData::V4(
+        RunFailedDataV4::Approval {
+          approval_id: approval_id.to_string(),
+          request_id: request.request_id.clone(),
+          failure: ApprovalFailure {
+            kind: "approval_timeout".to_string(),
+            code: "WOML_APPROVAL_TIMEOUT".to_string(),
+            message: format!("Approval {approval_id:?} reached its deadline."),
+          },
+        },
+      )));
+    }
+    let event_schema_version = events
+      .first()
+      .map(|event| event.event_schema_version)
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Approval timeout requires run_started.".to_string())
+      })?;
+    for payload in payloads {
+      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+        .map_err(DurableStoreError::Contract)?;
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        now,
+        event_schema_version,
+        payload,
+      )?;
+    }
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    fold_events(&events)?;
+    transaction.commit()?;
+    Ok(ApprovalTimeoutSettlement {
+      status: ApprovalTimeoutSettlementStatus::Settled,
+      run_id: run_id.to_string(),
+      approval_id: approval_id.to_string(),
+      request_id: request.request_id.clone(),
+      resolution: Some(resolution),
+      settled_at: Some(now),
+    })
   }
 
   pub fn verify_approval_token(

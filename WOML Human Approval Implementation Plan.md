@@ -1,8 +1,8 @@
 # WOML Human Approval Implementation Plan
 
-Status: A0–A4 complete — approval contracts, frontend compilation, event-v4
-folding, secure durable credentials, and the Rust waiting boundary are
-implemented; A5 is next
+Status: A0–A5 complete — approval contracts, frontend compilation, durable
+waiting, atomic decision/timeout settlement, and selected-route continuation
+are implemented; A6 is next
 
 ## 1. Product Outcome
 
@@ -165,7 +165,7 @@ Bun CLI/HTTP server <----+
 | A2 — complete | Lower approvals into a deterministic model-v4 DAG.                                         | Approval markup becomes an engine-ready wait/route/join graph.                               |
 | A3 — complete | Add durable approval events, folded waiting state, token records, and SQLite migration.    | Waiting approvals and access credentials survive restarts safely.                            |
 | A4 — complete | Make Rust stop at an approval and return a structured waiting outcome.                     | A workflow can durably pause without blocking a Worker or pretending to finish.              |
-| A5            | Add atomic approve, reject, timeout, and DAG continuation behavior.                        | Exactly one resolution wins and only its route executes.                                     |
+| A5 — complete | Add atomic approve, reject, timeout, and DAG continuation behavior.                        | Exactly one resolution wins and only its route executes.                                     |
 | A6            | Add the local HTTP approval page, terminal URL, and N-API/CLI lifecycle.                   | A person can approve or reject a real `woml run` workflow.                                   |
 | A7            | Harden recovery, races, composition, security, packaging, and documentation.               | Human approval becomes a supported and publishable WOML feature.                             |
 
@@ -731,7 +731,7 @@ Completed proof:
   append-only delivery token, leaves the event history unchanged, and never
   replays scripts that completed before the wait.
 
-### A5 — Resolve, time out, and continue exactly one route
+### A5 — Resolve, time out, and continue exactly one route — complete
 
 Changes:
 
@@ -755,6 +755,25 @@ Gate:
 
 Race tests run decision and timeout concurrently many times and always observe
 one winner, one resolution event, and at most one selected route.
+
+Completed proof:
+
+- Human token verification, durable-history inspection, duplicate/conflict
+  handling, deadline checks, and `approval_resolved` append execute inside one
+  immediate SQLite transaction.
+- Repeating the same human decision returns the original durable decision;
+  changing it returns `WOML_APPROVAL_DECISION_CONFLICT` semantics without
+  appending another event.
+- Timeout rejection publishes `{ decision: "rejected", source: "timeout" }`
+  and executes only the rejected route.
+- Timeout failure appends `approval_resolved` and approval-scoped `run_failed`
+  atomically; a forced failure on the second append rolls both back.
+- The runtime clock is injectable, so request deadlines, decisions, reissued
+  credentials, and timeout races are deterministic in tests.
+- A selected route can reach another nested approval, return a second waiting
+  outcome for the same run, and finish after that distinct request resolves.
+- Repeated decision-versus-timeout races always contain exactly one resolution
+  event and no route attempt before continuation.
 
 ### A6 — Deliver the terminal URL and HTTP approval experience
 

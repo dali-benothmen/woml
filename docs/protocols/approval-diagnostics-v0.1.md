@@ -1,6 +1,6 @@
 # WOML Human Approval Diagnostics v0.1
 
-Status: frozen through A4
+Status: frozen and implemented in Rust through A5; HTTP/CLI mapping remains A6
 
 Frontend diagnostics carry code, phase, message, file, and exact source span.
 Runtime/N-API diagnostics carry structured approval identity but never a token.

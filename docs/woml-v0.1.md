@@ -61,7 +61,7 @@ includes conditional branches and bounded parallel groups:
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
-| Approval | Frozen; A1–A4 frontend, model, event-folding, durable-store, and Rust waiting boundary implemented | A durable Rust run can pause and return a structured waiting outcome; decision/resume and the CLI URL experience remain A5–A7 |
+| Approval | Frozen; A1–A5 frontend, durable waiting, atomic resolution, timeout, and selected-route continuation implemented | Rust can pause, resolve, time out, and continue approval workflows; the N-API/CLI URL experience remains A6–A7 |
 | Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a

@@ -15,8 +15,10 @@ pub mod runtime;
 pub mod store;
 
 pub use durable::{
-  ApprovalTokenBinding, DurableDagEngine, DurableEngineError, DurableEventStore, DurableStoreError,
-  IssuedApprovalToken, RecoveryReport, RunDefinitionBinding, DURABLE_STORE_SCHEMA_VERSION,
+  ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,
+  ApprovalTimeoutSettlementStatus, ApprovalTokenBinding, DurableDagEngine, DurableEngineError,
+  DurableEventStore, DurableStoreError, IssuedApprovalToken, RecoveryReport, RunDefinitionBinding,
+  DURABLE_STORE_SCHEMA_VERSION,
 };
 pub use engine::{EngineError, InMemoryDagEngine};
 pub use event::{
@@ -36,9 +38,10 @@ pub use projection::{
 };
 pub use runtime::{
   execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
-  recover_durable_runs, resume_workflow_durable, resume_workflow_durable_outcome,
-  BranchFailureSite, FailedApprovalDetails, FailedParallelDetails, RuntimeExecutionError,
-  RuntimeExecutionOptions, WaitingWorkflowApproval, WorkflowExecutionResult,
+  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
+  resume_workflow_durable_outcome, settle_approval_timeout_durable, BranchFailureSite, EngineClock,
+  FailedApprovalDetails, FailedParallelDetails, FixedEngineClock, RuntimeExecutionError,
+  RuntimeExecutionOptions, SystemEngineClock, WaitingWorkflowApproval, WorkflowExecutionResult,
   WorkflowRuntimeOutcome, RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
 };
 pub use store::{EventStoreError, InMemoryEventStore};

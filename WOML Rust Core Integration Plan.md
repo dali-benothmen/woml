@@ -717,12 +717,12 @@ separate design-and-implementation phases in this order:
    `wait-all`, `fail-fast`, protocol-v2 Worker cancellation, durable recovery,
    and packaged CLI diagnostics. The milestone proof is in
    `WOML Parallel Implementation Plan.md`.
-3. **In progress — A0–A4 complete:** approval model v4, event v4, store v2,
+3. **In progress — A0–A5 complete:** approval model v4, event v4, store v2,
    HTTP v1, native-outcome v1, token, timeout, diagnostic, and fixture contracts
    are frozen; frontend lowering, Rust structural validation, event folding,
    durable waiting projections, store migration, hashed credentials, atomic
-   request/token creation, and the non-blocking Rust waiting outcome are
-   complete. A5 begins resolution; later phases add the HTTP-only decision flow defined in
+   request/token creation, the non-blocking waiting outcome, atomic human and
+   timeout settlement, and selected-route continuation are complete. A6 adds the HTTP-only decision flow defined in
    `WOML Human Approval Implementation Plan.md`.
 4. Resolve idempotency keys, then enable retry values greater than one.
 5. Add the remaining triggers, lifecycle behavior, services, and engine-control
@@ -757,8 +757,8 @@ For the first slice:
 - Retry has one attempt.
 - Lifecycle and services are rejected before Rust execution. Branch and
   parallel are executable; approval syntax lowers to model v4 and durable Rust
-  execution can pause with a structured waiting outcome, while resolution and
-  CLI delivery remain staged for A5–A7.
+  execution can pause, resolve, time out, and continue selected routes, while
+  N-API and CLI delivery remain staged for A6–A7.
 - Secrets never appear in compiled inputs, context, protocol messages, or
   events.
 
