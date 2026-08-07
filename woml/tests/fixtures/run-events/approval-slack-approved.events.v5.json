@@ -1,0 +1,298 @@
+[
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_001",
+    "runId": "run_notify_ok",
+    "sequence": 1,
+    "occurredAt": "2026-08-07T12:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "release-article",
+      "definitionHash": "sha256:a02f094f7200f0e7e33bef7de2aba9b52638ac24adb9f017fd292764fbcb6988",
+      "trigger": {}
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_002",
+    "runId": "run_notify_ok",
+    "sequence": 2,
+    "occurredAt": "2026-08-07T12:00:00.001Z",
+    "type": "approval_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "expiresAt": "2026-08-08T12:00:00.001Z",
+      "onTimeout": "reject"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_003",
+    "runId": "run_notify_ok",
+    "sequence": 3,
+    "occurredAt": "2026-08-07T12:00:00.002Z",
+    "type": "notification_delivery_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "provider": "slack",
+      "destination": "#approvals"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_004",
+    "runId": "run_notify_ok",
+    "sequence": 4,
+    "occurredAt": "2026-08-07T12:00:00.003Z",
+    "type": "notification_delivery_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "provider": "slack",
+      "destination": "#engineering"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_005",
+    "runId": "run_notify_ok",
+    "sequence": 5,
+    "occurredAt": "2026-08-07T12:00:00.004Z",
+    "type": "notification_delivery_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "attempt": 1,
+      "attemptId": "nattempt_ok_001",
+      "idempotencyKey": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_006",
+    "runId": "run_notify_ok",
+    "sequence": 6,
+    "occurredAt": "2026-08-07T12:00:00.020Z",
+    "type": "notification_delivery_succeeded",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "attempt": 1,
+      "attemptId": "nattempt_ok_001",
+      "providerMessage": {
+        "workspaceId": "T12345678",
+        "channelId": "C12345678",
+        "messageId": "1723032000.000001"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_007",
+    "runId": "run_notify_ok",
+    "sequence": 7,
+    "occurredAt": "2026-08-07T12:00:00.021Z",
+    "type": "notification_delivery_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "attempt": 1,
+      "attemptId": "nattempt_ok_002",
+      "idempotencyKey": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_008",
+    "runId": "run_notify_ok",
+    "sequence": 8,
+    "occurredAt": "2026-08-07T12:00:00.030Z",
+    "type": "notification_delivery_succeeded",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "attempt": 1,
+      "attemptId": "nattempt_ok_002",
+      "providerMessage": {
+        "workspaceId": "T12345678",
+        "channelId": "C87654321",
+        "messageId": "1723032000.000002"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_009",
+    "runId": "run_notify_ok",
+    "sequence": 9,
+    "occurredAt": "2026-08-07T12:05:00.000Z",
+    "type": "notification_decision_accepted",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "provider": "slack",
+      "providerActorId": "U12345678",
+      "decision": "approved"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_010",
+    "runId": "run_notify_ok",
+    "sequence": 10,
+    "occurredAt": "2026-08-07T12:05:00.000Z",
+    "type": "approval_resolved",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "resolution": {
+        "kind": "decision",
+        "decision": "approved",
+        "source": "human"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_011",
+    "runId": "run_notify_ok",
+    "sequence": 11,
+    "occurredAt": "2026-08-07T12:05:00.001Z",
+    "type": "notification_message_update_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "updateId": "nupdate_release_001",
+      "resolution": "approved"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_012",
+    "runId": "run_notify_ok",
+    "sequence": 12,
+    "occurredAt": "2026-08-07T12:05:00.002Z",
+    "type": "notification_message_update_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "updateId": "nupdate_release_001",
+      "attempt": 1,
+      "attemptId": "nattempt_update_001"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_013",
+    "runId": "run_notify_ok",
+    "sequence": 13,
+    "occurredAt": "2026-08-07T12:05:00.010Z",
+    "type": "notification_message_updated",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "updateId": "nupdate_release_001",
+      "attempt": 1,
+      "attemptId": "nattempt_update_001"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_014",
+    "runId": "run_notify_ok",
+    "sequence": 14,
+    "occurredAt": "2026-08-07T12:05:00.011Z",
+    "type": "notification_message_update_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "updateId": "nupdate_release_002",
+      "resolution": "approved"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_015",
+    "runId": "run_notify_ok",
+    "sequence": 15,
+    "occurredAt": "2026-08-07T12:05:00.012Z",
+    "type": "notification_message_update_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "updateId": "nupdate_release_002",
+      "attempt": 1,
+      "attemptId": "nattempt_update_002"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_016",
+    "runId": "run_notify_ok",
+    "sequence": 16,
+    "occurredAt": "2026-08-07T12:05:00.020Z",
+    "type": "notification_message_updated",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_ok",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "updateId": "nupdate_release_002",
+      "attempt": 1,
+      "attemptId": "nattempt_update_002"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_017",
+    "runId": "run_notify_ok",
+    "sequence": 17,
+    "occurredAt": "2026-08-07T12:05:00.021Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "finalStatus",
+      "attempt": 1,
+      "invocationId": "inv_notify_final",
+      "handler": "runtime.script"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_018",
+    "runId": "run_notify_ok",
+    "sequence": 18,
+    "occurredAt": "2026-08-07T12:05:00.022Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "finalStatus",
+      "attempt": 1,
+      "invocationId": "inv_notify_final",
+      "output": { "decision": "approved" }
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_ok_019",
+    "runId": "run_notify_ok",
+    "sequence": 19,
+    "occurredAt": "2026-08-07T12:05:00.023Z",
+    "type": "run_succeeded",
+    "data": {
+      "terminalNodeId": "finalStatus",
+      "result": { "decision": "approved" }
+    }
+  }
+]

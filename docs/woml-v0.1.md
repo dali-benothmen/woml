@@ -62,7 +62,9 @@ includes conditional branches and bounded parallel groups:
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
-| Database, HTTP, Slack, RAK, and other capabilities | Deferred | Unavailable |
+| `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references and secure local/CI secret management are available; no workflow sink consumes them until N2 |
+| `<notify><slack>` approval delivery | Model/event/provider contracts frozen in N0 | Source remains unavailable until N2 validation and lowering |
+| Database, HTTP, RAK, and other capabilities | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
 claim that the first CLI profile can execute every element shown. The minimum
@@ -262,12 +264,11 @@ Outside raw-content elements:
           on-timeout="reject">
 
           <notify>
-            <script>
-              await services.slack.send(
-                "#approvals",
-                `Approve ${context.trigger.contentId}?`
-              );
-            </script>
+            <slack
+              channels="#approvals #moderators"
+              bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+              app-token="{{secrets.SLACK_APP_TOKEN}}"
+            />
           </notify>
 
           <when-approved>
@@ -394,7 +395,13 @@ approval       := <approval approval-attributes>
                     when-rejected
                   </approval>
 
-notify         := <notify> script </notify>
+notify         := <notify> slack+ </notify>
+
+slack          := <slack
+                    channels="slack-destination-list"
+                    bot-token="secret-reference"
+                    app-token="secret-reference"
+                  />
 
 when-approved  := <when-approved>
                     steps-item*
@@ -905,9 +912,9 @@ step policies and belong on `<step>`.
 ## 12. `<approval>`, `<notify>`, and Decision Arms
 
 `<approval>` is a first-class durable control-flow item. It records that a run
-is waiting for a decision, optionally executes notification code, suspends the
-run, and selects exactly one continuation after the decision arrives. It is not
-an attribute on `<step>` and is not wrapped by `<step>`.
+is waiting for a decision, optionally declares notification deliveries,
+suspends the run, and selects exactly one continuation after the decision
+arrives. It is not an attribute on `<step>` and is not wrapped by `<step>`.
 
 ```xml
 <approval
@@ -918,12 +925,11 @@ an attribute on `<step>` and is not wrapped by `<step>`.
   on-timeout="reject">
 
   <notify>
-    <script>
-      await services.slack.send(
-        "#approvals",
-        `Approve ${context.steps.calc.amount}?`
-      );
-    </script>
+    <slack
+      channels="#approvals #engineering"
+      bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+      app-token="{{secrets.SLACK_APP_TOKEN}}"
+    />
   </notify>
 
   <when-approved>
@@ -961,7 +967,7 @@ resolve to a positive safe integer number of milliseconds.
 
 The child order is fixed:
 
-1. Optional `<notify>` containing exactly one `<script>`.
+1. Optional `<notify>` containing one or more `<slack>` deliveries.
 2. Required `<when-approved>`.
 3. Required `<when-rejected>`.
 
@@ -985,11 +991,26 @@ A process restart leaves the approval waiting. An in-memory Promise, callback,
 or timer is never the authoritative state. The token is runtime identity; it is
 not WOML source text and is not a compiled constant.
 
-`<notify>` remains designed but is not executable in the first Human Approval
-profile. The local CLI itself prints the approval URL. Executable notification
-scripts wait for the services/capabilities milestone, notification idempotency,
-and a safe non-persisted URL binding. A runtime rejects `<notify>` with
-`WOML_FEATURE_NOT_EXECUTABLE`; it never silently ignores it.
+N0 freezes the Slack-first syntax, compiled model v5, event vocabulary v5,
+provider-host v1, delivery identity, failure behavior, and secret boundary in
+`docs/protocols/notification-contracts-v1.md`. N1 implements secure secret
+management. `<notify>` remains rejected with `WOML_FEATURE_NOT_EXECUTABLE` until
+N2 adds source validation and model-v5 lowering; it is never silently ignored.
+
+One `<slack>` tag targets one credential set and one or more destinations:
+
+```text
+alias           := #[a-z0-9][a-z0-9_-]{0,79}
+conversation-id := [CG][A-Z0-9]{8,31}
+channels        := destination (whitespace+ destination)*
+secret          := {{secrets.[A-Z][A-Z0-9_]*}}
+```
+
+Destination order is preserved. A duplicate destination within the same Slack
+tag is invalid. Every destination becomes a separate durable delivery and
+message, but all of them resolve the same approval. The first valid decision
+wins. Literal credentials, interpolation, context/service references, and
+`secrets.NAME` inside `<script>` are invalid.
 
 ### 12.2 Resolving an approval
 
@@ -1401,8 +1422,9 @@ conditions hold.
 - A step contains zero or multiple operations.
 - `<approval>` is missing `<when-approved>` or `<when-rejected>`, duplicates
   either arm, or declares them out of order.
-- `<approval>` contains more than one `<notify>`, or `<notify>` does not contain
-  exactly one `<script>`.
+- `<approval>` contains more than one `<notify>`, or `<notify>` is empty.
+- `<notify>` contains anything other than one or more `<slack>` tags in the
+  Slack-first profile.
 - A structural element contains `<name>` or `<description>` child elements
   instead of the corresponding attributes.
 
@@ -1568,11 +1590,15 @@ A0 froze the local HTTP, token, store, event, native-outcome, timeout, and
 diagnostic contracts in `WOML Human Approval Implementation Plan.md` and
 `docs/protocols/approval-*.md`. HTTP is the only public decision mechanism.
 
-The remaining approval-adjacent decisions do not block the local terminal-URL
-profile:
+N0 freezes Slack notification and secret contracts in
+`docs/protocols/notification-contracts-v1.md`; N1 implements the secret
+reference primitive and secure secret-management CLI. The remaining
+approval-adjacent work does not block the local terminal-URL profile:
 
-- Executable `<notify>` waits for services, safe non-persisted URL delivery,
-  secrets, and notification idempotency.
+- N2–N6 add Slack lowering, durable outbox delivery, the provider host, real
+  Socket Mode integration, and production hardening.
+- Discord, shared-provider delivery, WhatsApp, and generic signed webhook
+  notifications follow the Slack milestone.
 - Remote hosting waits for TLS, reviewer authentication/authorization, and
   deployment ownership.
 - Structured reviewer metadata, custom forms, and validated decision payloads
@@ -1595,10 +1621,12 @@ The following concepts are not part of the fundamental grammar in this draft:
 - Pause and cancellation syntax.
 - Explicit arbitrary DAG edges.
 - External schema files.
-- Resolved secrets or `context.env`.
+- Resolved secrets, direct script access through `secrets.NAME`, or
+  `context.env`.
 - RAK, packages, `<requires>`, and dynamic capability vocabularies.
 - Declarative capability operations.
-- Database, HTTP-client, Slack, email, and other integration operations.
+- Database, HTTP-client, non-approval Slack operations, email, and other
+  integration operations.
 
 These features require their own durable execution and context semantics. Their
 absence from this grammar does not prevent the compiled workflow model from

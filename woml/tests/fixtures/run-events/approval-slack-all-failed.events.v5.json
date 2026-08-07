@@ -1,0 +1,157 @@
+[
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_001",
+    "runId": "run_notify_failed",
+    "sequence": 1,
+    "occurredAt": "2026-08-07T11:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "release-article",
+      "definitionHash": "sha256:a02f094f7200f0e7e33bef7de2aba9b52638ac24adb9f017fd292764fbcb6988",
+      "trigger": {}
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_002",
+    "runId": "run_notify_failed",
+    "sequence": 2,
+    "occurredAt": "2026-08-07T11:00:00.001Z",
+    "type": "approval_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "expiresAt": "2026-08-08T11:00:00.001Z",
+      "onTimeout": "reject"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_003",
+    "runId": "run_notify_failed",
+    "sequence": 3,
+    "occurredAt": "2026-08-07T11:00:00.002Z",
+    "type": "notification_delivery_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "provider": "slack",
+      "destination": "#approvals"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_004",
+    "runId": "run_notify_failed",
+    "sequence": 4,
+    "occurredAt": "2026-08-07T11:00:00.003Z",
+    "type": "notification_delivery_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "provider": "slack",
+      "destination": "#engineering"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_005",
+    "runId": "run_notify_failed",
+    "sequence": 5,
+    "occurredAt": "2026-08-07T11:00:00.004Z",
+    "type": "notification_delivery_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "attempt": 1,
+      "attemptId": "nattempt_failed_001",
+      "idempotencyKey": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_006",
+    "runId": "run_notify_failed",
+    "sequence": 6,
+    "occurredAt": "2026-08-07T11:00:00.010Z",
+    "type": "notification_delivery_failed",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "attempt": 1,
+      "attemptId": "nattempt_failed_001",
+      "final": true,
+      "failure": {
+        "kind": "secret_not_found",
+        "code": "WOML_SECRET_NOT_FOUND",
+        "message": "A required Slack credential is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_007",
+    "runId": "run_notify_failed",
+    "sequence": 7,
+    "occurredAt": "2026-08-07T11:00:00.011Z",
+    "type": "notification_delivery_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "attempt": 1,
+      "attemptId": "nattempt_failed_002",
+      "idempotencyKey": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_008",
+    "runId": "run_notify_failed",
+    "sequence": 8,
+    "occurredAt": "2026-08-07T11:00:00.020Z",
+    "type": "notification_delivery_failed",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "attempt": 1,
+      "attemptId": "nattempt_failed_002",
+      "final": true,
+      "failure": {
+        "kind": "secret_not_found",
+        "code": "WOML_SECRET_NOT_FOUND",
+        "message": "A required Slack credential is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_failed_009",
+    "runId": "run_notify_failed",
+    "sequence": 9,
+    "occurredAt": "2026-08-07T11:00:00.021Z",
+    "type": "run_failed",
+    "data": {
+      "failureScope": "notification",
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_failed",
+      "failedDeliveryIds": [
+        "releaseApproval:notify:0:channel:0",
+        "releaseApproval:notify:0:channel:1"
+      ],
+      "failure": {
+        "kind": "all_deliveries_failed",
+        "code": "WOML_NOTIFICATION_DELIVERY_FAILED",
+        "message": "Every configured approval notification delivery failed."
+      }
+    }
+  }
+]

@@ -19,6 +19,7 @@ import {
   type WomlSourceElement,
   type WomlSourceRawText,
 } from './source';
+import { parseSecretReference, requireSecretReference } from './secrets';
 
 interface ElementProfile {
   readonly attributes: ReadonlySet<string>;
@@ -252,6 +253,41 @@ function visitProfile(
 
   for (const child of element.children) {
     if (child.kind === 'element') visitProfile(document, child);
+  }
+}
+
+function validateSecretReferenceSinks(
+  document: WomlSourceDocument,
+  element: WomlSourceElement,
+  parent?: WomlSourceElement
+): void {
+  for (const attribute of Object.values(element.attributes)) {
+    const isSlackCredential =
+      element.name === 'slack' &&
+      parent?.name === 'notify' &&
+      (attribute.name === 'bot-token' || attribute.name === 'app-token');
+    if (isSlackCredential) {
+      requireSecretReference(document, attribute);
+      continue;
+    }
+
+    if (
+      parseSecretReference(attribute.value) !== undefined ||
+      attribute.value.includes('{{secrets.')
+    ) {
+      failValidation(
+        document,
+        'WOML_SECRET_SINK_UNSUPPORTED',
+        'Secret references are allowed only in reviewed secret-bearing attributes. Direct script access and arbitrary attribute interpolation are unavailable.',
+        attribute.valueSpan
+      );
+    }
+  }
+
+  for (const child of element.children) {
+    if (child.kind === 'element') {
+      validateSecretReferenceSinks(document, child, element);
+    }
   }
 }
 
@@ -1442,6 +1478,7 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     );
   }
 
+  validateSecretReferenceSinks(document, workflow);
   visitProfile(document, workflow);
 
   const workflowId = validateWorkflowId(

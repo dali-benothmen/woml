@@ -1,0 +1,133 @@
+[
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_001",
+    "runId": "run_notify_partial",
+    "sequence": 1,
+    "occurredAt": "2026-08-07T10:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "release-article",
+      "definitionHash": "sha256:a02f094f7200f0e7e33bef7de2aba9b52638ac24adb9f017fd292764fbcb6988",
+      "trigger": {}
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_002",
+    "runId": "run_notify_partial",
+    "sequence": 2,
+    "occurredAt": "2026-08-07T10:00:00.001Z",
+    "type": "approval_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_partial",
+      "expiresAt": "2026-08-08T10:00:00.001Z",
+      "onTimeout": "reject"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_003",
+    "runId": "run_notify_partial",
+    "sequence": 3,
+    "occurredAt": "2026-08-07T10:00:00.002Z",
+    "type": "notification_delivery_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_partial",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "provider": "slack",
+      "destination": "#approvals"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_004",
+    "runId": "run_notify_partial",
+    "sequence": 4,
+    "occurredAt": "2026-08-07T10:00:00.003Z",
+    "type": "notification_delivery_requested",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_partial",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "provider": "slack",
+      "destination": "#engineering"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_005",
+    "runId": "run_notify_partial",
+    "sequence": 5,
+    "occurredAt": "2026-08-07T10:00:00.004Z",
+    "type": "notification_delivery_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_partial",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "attempt": 1,
+      "attemptId": "nattempt_partial_001",
+      "idempotencyKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_006",
+    "runId": "run_notify_partial",
+    "sequence": 6,
+    "occurredAt": "2026-08-07T10:00:00.020Z",
+    "type": "notification_delivery_succeeded",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_partial",
+      "deliveryId": "releaseApproval:notify:0:channel:0",
+      "attempt": 1,
+      "attemptId": "nattempt_partial_001",
+      "providerMessage": {
+        "workspaceId": "T12345678",
+        "channelId": "C12345678",
+        "messageId": "1723024800.000001"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_007",
+    "runId": "run_notify_partial",
+    "sequence": 7,
+    "occurredAt": "2026-08-07T10:00:00.021Z",
+    "type": "notification_delivery_attempt_started",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_partial",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "attempt": 1,
+      "attemptId": "nattempt_partial_002",
+      "idempotencyKey": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  {
+    "eventSchemaVersion": 5,
+    "eventId": "evt_notify_partial_008",
+    "runId": "run_notify_partial",
+    "sequence": 8,
+    "occurredAt": "2026-08-07T10:00:00.030Z",
+    "type": "notification_delivery_failed",
+    "data": {
+      "approvalId": "releaseApproval",
+      "requestId": "aprreq_release_partial",
+      "deliveryId": "releaseApproval:notify:0:channel:1",
+      "attempt": 1,
+      "attemptId": "nattempt_partial_002",
+      "final": true,
+      "failure": {
+        "kind": "destination_invalid",
+        "code": "WOML_SLACK_DESTINATION_INVALID",
+        "message": "Slack rejected the configured destination.",
+        "retryable": false
+      }
+    }
+  }
+]

@@ -1,0 +1,34 @@
+<workflow version="0.1" id="release-article" name="Release Article">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <approval
+      id="releaseApproval"
+      name="Release approval"
+      description="Approve the article before release"
+      timeout="24h"
+      on-timeout="reject"
+    >
+      <notify>
+        <slack
+          channels="#approvals #engineering"
+          bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+          app-token="{{secrets.SLACK_APP_TOKEN}}"
+        />
+      </notify>
+
+      <when-approved />
+      <when-rejected />
+    </approval>
+
+    <step id="finalStatus">
+      <script>
+        return {
+          decision: context.steps.releaseApproval.decision,
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>

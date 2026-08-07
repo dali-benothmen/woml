@@ -26,6 +26,13 @@ import {
   DEFAULT_APPROVAL_PORT,
   serveApprovalAndWait,
 } from './approval-server';
+import {
+  createSecretStore,
+  requireValidSecretName,
+  SecretStoreError,
+  type SecretStore,
+} from './secrets';
+import { readSecretFromTerminal } from './secrets/prompt';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -33,8 +40,8 @@ export interface CliIo {
 }
 
 const processIo: CliIo = {
-  stdout: (text) => process.stdout.write(text),
-  stderr: (text) => process.stderr.write(text),
+  stdout: text => process.stdout.write(text),
+  stderr: text => process.stderr.write(text),
 };
 
 class CliInputError extends Error {
@@ -47,8 +54,21 @@ class CliInputError extends Error {
   }
 }
 
-function usage(): string {
+function runUsage(): string {
   return 'Usage: woml run <workflow.woml> [--state <path>] [--resume <runId>] [--approval-port <port>]';
+}
+
+function secretsUsage(): string {
+  return [
+    'Usage:',
+    '  woml secrets set <NAME>',
+    '  woml secrets list',
+    '  woml secrets delete <NAME>',
+  ].join('\n');
+}
+
+function usage(): string {
+  return `${runUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -65,7 +85,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     filePath === undefined ||
     filePath.startsWith('--')
   ) {
-    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', usage());
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', runUsage());
   }
   let statePath = resolve('.woml/state.sqlite');
   let resumeRunId: string | undefined;
@@ -81,14 +101,14 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         option !== '--resume' &&
         option !== '--approval-port')
     ) {
-      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', usage());
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', runUsage());
     }
     seen.add(option);
     if (option === '--state') {
       if (value.length === 0) {
         throw new CliInputError(
           'WOML_CLI_ARGUMENTS_INVALID',
-          '--state requires a non-empty path.',
+          '--state requires a non-empty path.'
         );
       }
       statePath = resolve(value);
@@ -96,7 +116,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       if (value.length === 0) {
         throw new CliInputError(
           'WOML_CLI_ARGUMENTS_INVALID',
-          '--resume requires a run ID.',
+          '--resume requires a run ID.'
         );
       }
       resumeRunId = value;
@@ -105,7 +125,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
         throw new CliInputError(
           'WOML_CLI_ARGUMENTS_INVALID',
-          '--approval-port must be an integer from 1 through 65535.',
+          '--approval-port must be an integer from 1 through 65535.'
         );
       }
       approvalPort = port;
@@ -122,7 +142,7 @@ function runtimeCode(code: string): string {
 
 function stepSourcePosition(
   document: WomlSourceDocument | undefined,
-  nodeId: string | undefined,
+  nodeId: string | undefined
 ): SourcePosition | undefined {
   if (document === undefined || nodeId === undefined) return undefined;
   const pending = [document.root];
@@ -139,9 +159,7 @@ function stepSourcePosition(
 }
 
 function scriptSourcePosition(element: WomlSourceElement): SourcePosition {
-  const script = childElements(element).find(
-    (child) => child.name === 'script',
-  );
+  const script = childElements(element).find(child => child.name === 'script');
   return (
     script?.children[0]?.span.start ??
     script?.openTagSpan.start ??
@@ -149,18 +167,23 @@ function scriptSourcePosition(element: WomlSourceElement): SourcePosition {
   );
 }
 
-function childElements(element: WomlSourceElement): readonly WomlSourceElement[] {
+function childElements(
+  element: WomlSourceElement
+): readonly WomlSourceElement[] {
   return element.children.filter(isWomlElement);
 }
 
 function findBranch(
   document: WomlSourceDocument,
-  branchId: string,
+  branchId: string
 ): WomlSourceElement | undefined {
   const pending = [document.root];
   while (pending.length > 0) {
     const element = pending.shift()!;
-    if (element.name === 'branch' && element.attributes.id?.value === branchId) {
+    if (
+      element.name === 'branch' &&
+      element.attributes.id?.value === branchId
+    ) {
       return element;
     }
     pending.push(...childElements(element));
@@ -170,7 +193,7 @@ function findBranch(
 
 function findParallel(
   document: WomlSourceDocument,
-  parallelId: string,
+  parallelId: string
 ): WomlSourceElement | undefined {
   const pending = [document.root];
   while (pending.length > 0) {
@@ -193,9 +216,10 @@ interface RuntimeSource {
 
 function parallelRuntimeSource(
   document: WomlSourceDocument | undefined,
-  error: RustWorkflowExecutionError,
+  error: RustWorkflowExecutionError
 ): RuntimeSource | undefined {
-  if (document === undefined || error.parallelId === undefined) return undefined;
+  if (document === undefined || error.parallelId === undefined)
+    return undefined;
   const parallel = findParallel(document, error.parallelId);
   if (parallel === undefined) return undefined;
 
@@ -204,9 +228,9 @@ function parallelRuntimeSource(
     error.primaryNodeId !== undefined
   ) {
     const primary = childElements(parallel).find(
-      (child) =>
+      child =>
         child.name === 'step' &&
-        child.attributes.id?.value === error.primaryNodeId,
+        child.attributes.id?.value === error.primaryNodeId
     );
     if (primary !== undefined) {
       return {
@@ -225,7 +249,7 @@ function parallelRuntimeSource(
 
 function branchRuntimeSource(
   document: WomlSourceDocument | undefined,
-  error: RustWorkflowExecutionError,
+  error: RustWorkflowExecutionError
 ): RuntimeSource | undefined {
   if (document === undefined || error.branchId === undefined) return undefined;
   const branch = findBranch(document, error.branchId);
@@ -233,7 +257,8 @@ function branchRuntimeSource(
 
   if (error.branchSite === 'selection') {
     return {
-      position: branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
+      position:
+        branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
       subject: `branch "${error.branchId}"`,
     };
   }
@@ -247,7 +272,8 @@ function branchRuntimeSource(
   });
   if (arm === undefined) {
     return {
-      position: branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
+      position:
+        branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
       subject: `branch "${error.branchId}"`,
     };
   }
@@ -259,7 +285,7 @@ function branchRuntimeSource(
     };
   }
 
-  const result = childElements(arm).find((element) => element.name === 'result');
+  const result = childElements(arm).find(element => element.name === 'result');
   return {
     position:
       result?.attributes.value?.valueSpan.start ??
@@ -272,7 +298,7 @@ function branchRuntimeSource(
 function formatError(
   error: unknown,
   filePath?: string,
-  document?: WomlSourceDocument,
+  document?: WomlSourceDocument
 ): string {
   if (error instanceof CliInputError) {
     return `WOML input error [${error.code}]${
@@ -283,12 +309,17 @@ function formatError(
   if (error instanceof WomlDiagnosticError) {
     const { diagnostic } = error;
     const location = `${diagnostic.file}:${diagnostic.location.start.line}:${diagnostic.location.start.column}`;
-    const hint = diagnostic.hint === undefined ? '' : ` Hint: ${diagnostic.hint}`;
+    const hint =
+      diagnostic.hint === undefined ? '' : ` Hint: ${diagnostic.hint}`;
     return `WOML ${diagnostic.phase} error [${diagnostic.code}] at ${location}: ${diagnostic.message}${hint}`;
   }
 
   if (error instanceof ApprovalServerBindError) {
     return `WOML CLI error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof SecretStoreError) {
+    return `WOML secrets error [${error.code}]: ${error.message}`;
   }
 
   if (error instanceof RustWorkflowExecutionError) {
@@ -322,7 +353,7 @@ async function readWorkflow(filePath: string): Promise<string> {
   if (extname(filePath) !== '.woml') {
     throw new CliInputError(
       'WOML_INVALID_FILE_EXTENSION',
-      'workflow files must use the .woml extension.',
+      'workflow files must use the .woml extension.'
     );
   }
 
@@ -330,14 +361,10 @@ async function readWorkflow(filePath: string): Promise<string> {
   try {
     file = await stat(filePath);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      'code' in error &&
-      error.code === 'ENOENT'
-    ) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
       throw new CliInputError(
         'WOML_FILE_NOT_FOUND',
-        'workflow file does not exist.',
+        'workflow file does not exist.'
       );
     }
     throw error;
@@ -346,7 +373,7 @@ async function readWorkflow(filePath: string): Promise<string> {
   if (!file.isFile()) {
     throw new CliInputError(
       'WOML_NOT_A_FILE',
-      'workflow path must point to a file.',
+      'workflow path must point to a file.'
     );
   }
 
@@ -358,7 +385,7 @@ function printWaitingApproval(
   outcome: Extract<RustApprovalRuntimeOutcome, { status: 'waiting' }>,
   url: string,
   filePath: string,
-  statePath: string,
+  statePath: string
 ): void {
   const approval = outcome.approval;
   io.stderr('\nWOML workflow is waiting for human approval.\n');
@@ -369,21 +396,21 @@ function printWaitingApproval(
   io.stderr(`Workflow: ${outcome.workflowId}\n`);
   io.stderr(`Run ID: ${outcome.runId}\n`);
   io.stderr(
-    `Deadline: ${approval.expiresAt ?? 'none'} (${approval.onTimeout} on timeout)\n`,
+    `Deadline: ${approval.expiresAt ?? 'none'} (${approval.onTimeout} on timeout)\n`
   );
   io.stderr(`Current URL expires: ${approval.credentialExpiresAt}\n`);
   io.stderr(`Approval URL: ${url}\n`);
   io.stderr(
     `Recovery: woml run ${JSON.stringify(filePath)} --state ${JSON.stringify(
-      statePath,
-    )} --resume ${JSON.stringify(outcome.runId)}\n\n`,
+      statePath
+    )} --resume ${JSON.stringify(outcome.runId)}\n\n`
   );
 }
 
 async function runApprovalWorkflow(
   workflow: ReturnType<typeof compileWoml>,
   args: RunArguments,
-  io: CliIo,
+  io: CliIo
 ): Promise<void> {
   await mkdir(dirname(args.statePath), { recursive: true });
   let outcome =
@@ -392,7 +419,7 @@ async function runApprovalWorkflow(
       : await resumeApprovalWorkflowWithRust(
           workflow,
           args.statePath,
-          args.resumeRunId,
+          args.resumeRunId
         );
 
   while (outcome.status === 'waiting') {
@@ -410,24 +437,106 @@ async function runApprovalWorkflow(
     outcome = await resumeApprovalWorkflowWithRust(
       workflow,
       args.statePath,
-      waiting.runId,
+      waiting.runId
     );
   }
   io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
 }
 
+export interface CliDependencies {
+  readonly createSecretStore: () => SecretStore;
+  readonly readSecret: (name: string) => Promise<string>;
+}
+
+const defaultDependencies: CliDependencies = {
+  createSecretStore: () => createSecretStore(),
+  readSecret: readSecretFromTerminal,
+};
+
+async function runSecretsCommand(
+  args: readonly string[],
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<number> {
+  const [, operation, name, ...extra] = args;
+  const validShape =
+    (operation === 'list' && name === undefined && extra.length === 0) ||
+    ((operation === 'set' || operation === 'delete') &&
+      name !== undefined &&
+      extra.length === 0);
+  if (!validShape) {
+    io.stderr(`${secretsUsage()}\n`);
+    return 2;
+  }
+
+  try {
+    const store = dependencies.createSecretStore();
+    if (operation === 'list') {
+      const metadata = await store.list();
+      if (metadata.length === 0) {
+        io.stdout(`No secrets configured (${store.provider}).\n`);
+      } else {
+        for (const secret of metadata) {
+          io.stdout(
+            `${secret.name}\t${secret.provider}${
+              secret.updatedAt === undefined ? '' : `\t${secret.updatedAt}`
+            }\n`
+          );
+        }
+      }
+      return 0;
+    }
+
+    requireValidSecretName(name!);
+    if (store.provider === 'environment') {
+      throw new SecretStoreError(
+        'WOML_SECRET_PROVIDER_READ_ONLY',
+        'The environment secret provider is read-only. Configure WOML_SECRET_<NAME> in the CI secret manager.'
+      );
+    }
+    if (operation === 'delete') {
+      const deleted = await store.delete(name!);
+      if (!deleted) {
+        throw new SecretStoreError(
+          'WOML_SECRET_NOT_FOUND',
+          `Secret ${name} is not configured.`
+        );
+      }
+      io.stdout(`Deleted secret ${name}.\n`);
+      return 0;
+    }
+
+    let value = await dependencies.readSecret(name!);
+    try {
+      await store.set(name!, value);
+    } finally {
+      value = '';
+    }
+    io.stdout(`Stored secret ${name} in ${store.provider}.\n`);
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
+    return 1;
+  }
+}
+
 export async function runCli(
   args: readonly string[],
   io: CliIo = processIo,
+  dependencies: CliDependencies = defaultDependencies
 ): Promise<number> {
+  if (args[0] === 'secrets') {
+    return await runSecretsCommand(args, io, dependencies);
+  }
+
   let runArguments: RunArguments;
   try {
     runArguments = parseRunArguments(args);
   } catch (error) {
-    if (error instanceof CliInputError && error.message !== usage()) {
+    if (error instanceof CliInputError && error.message !== runUsage()) {
       io.stderr(`${error.message}\n`);
     }
-    io.stderr(`${usage()}\n`);
+    io.stderr(`${args.length === 0 ? usage() : runUsage()}\n`);
     return 2;
   }
   const { filePath } = runArguments;
@@ -443,7 +552,7 @@ export async function runCli(
     ) {
       throw new CliInputError(
         'WOML_RESUME_REQUIRES_APPROVAL',
-        '--resume currently supports Human Approval workflows only.',
+        '--resume currently supports Human Approval workflows only.'
       );
     }
     if (workflow.schemaVersion === 4) {

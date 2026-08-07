@@ -9,6 +9,9 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "bun": ">=1.3.14"
+  },
   "scripts": {
     "build": "bun run build:native && bun run build:js",
     "build:native": "cargo build --manifest-path ../core/Cargo.toml --lib --release && bun scripts/stage-native.ts",

@@ -1,0 +1,21 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "update",
+  "invocationId": "update-invocation-01",
+  "runId": "run_notification_01",
+  "approvalId": "releaseApproval",
+  "requestId": "aprreq_release_01",
+  "deliveryId": "releaseApproval:notify:0:channel:0",
+  "provider": "slack",
+  "credentials": {
+    "botToken": { "kind": "secretReference", "name": "SLACK_BOT_TOKEN" },
+    "appToken": { "kind": "secretReference", "name": "SLACK_APP_TOKEN" }
+  },
+  "providerMessage": {
+    "workspaceId": "T12345678",
+    "channelId": "C12345678",
+    "messageId": "1723024800.000001"
+  },
+  "resolution": "approved"
+}

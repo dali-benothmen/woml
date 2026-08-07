@@ -24,10 +24,17 @@ export {
   type LiteralExpression,
   type ObjectExpression,
   type RetryPolicy,
+  type SecretReferenceExpression,
   type TemplateExpression,
   type ValueExpression,
 } from './model';
 export { parseWoml, type ParseWomlOptions } from './parser';
+export {
+  isValidSecretName,
+  parseSecretReference,
+  requireSecretReference,
+  WOML_SECRET_NAME_PATTERN,
+} from './secrets';
 export {
   isWomlElement,
   isWomlRawText,

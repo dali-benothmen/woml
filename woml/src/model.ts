@@ -15,6 +15,11 @@ export interface ContextReferenceExpression {
   readonly path: readonly string[];
 }
 
+export interface SecretReferenceExpression {
+  readonly kind: 'secretReference';
+  readonly name: string;
+}
+
 export interface ObjectExpression {
   readonly kind: 'object';
   readonly fields: Readonly<Record<string, ValueExpression>>;
