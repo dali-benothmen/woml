@@ -1,6 +1,6 @@
 # WOML Run Events v6
 
-Status: frozen for the retry profile; runtime implementation begins in RI2.
+Status: frozen, implemented, and publishable as part of the RI7 retry profile.
 
 The normative schema is `docs/schemas/run-event.v6.schema.json`. Event schemas
 v1 through v5 remain immutable, and one run never mixes schema versions.

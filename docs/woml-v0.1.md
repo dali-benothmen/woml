@@ -1,8 +1,9 @@
 # WOML v0.1 Fundamental Syntax
 
-Status: design catalog draft; sequential scripts, conditional branches, and
-bounded parallel groups are executable and publishable through the Rust-backed
-CLI, including both failure policies and fail-fast Worker cancellation
+Status: design catalog draft; sequential scripts, retries, conditional branches,
+and bounded parallel groups are executable and publishable through the
+Rust-backed CLI, including durable retry recovery, both parallel failure
+policies, and fail-fast Worker cancellation
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -58,7 +59,7 @@ includes conditional branches and bounded parallel groups:
 | `{{context...}}` attribute-reference grammar | Frozen | Executable for branch `test` and `result` |
 | Workflow `version` | Frozen | Executable as user-defined workflow metadata |
 | Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
-| Step `retry` and backoff attributes | Frozen; RI0 contracts and RI1 lowering implemented | The frontend compiles multi-attempt policies to Model v6; Rust execution remains unavailable until RI2–RI4 |
+| Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
 | Webhook and inline payload schema | Designed | Unavailable |
 | Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
 | Branch | Frozen | Executable and publishable |
@@ -835,10 +836,11 @@ They lower to `metadata.name` and `metadata.description` on the compiled node.
 
 Retry is always a `<step>` attribute. WOML has no `<retry>` element. Omission
 and `retry="1"` both mean one attempt, omit `retryPolicy`, and preserve the
-older compiled-model version. A value greater than one compiles to Model v6.
-RI1 implements parsing, validation, diagnostics, and deterministic lowering;
-the Rust runtime deliberately rejects Model v6 until durable retry execution is
-implemented in RI2–RI4.
+older compiled-model version. A value greater than one compiles to Model v6 and
+executes through the durable Rust retry scheduler. Failed attempts, scheduled
+retries, and terminal outcomes are recorded before the engine advances. A
+safely scheduled retry can be continued with
+`woml run ... --state ... --resume <runId>` without replaying completed work.
 
 The complete attribute form is:
 
@@ -881,9 +883,8 @@ Model v6 freezes a second read-only binding for the retry runtime:
 - `attempt.idempotencyKey` is stable across every attempt of the same logical
   step in one run.
 
-The frontend may compile scripts that reference `attempt`, but the binding does
-not become runnable until Script Host v3 is implemented in RI3. It is separate
-from context and does not define `context.run`.
+The Bun Script Host v3 supplies this binding to every Model v6 invocation. It is
+separate from context and does not define `context.run`.
 
 `services` is unavailable in this profile. A script that references it receives
 the normal JavaScript missing-binding failure. A later capability profile may

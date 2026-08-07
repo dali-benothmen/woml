@@ -50,6 +50,7 @@ const retryFixturePath = join(
   'fixtures',
   'retry.woml'
 );
+const retryExamplePath = join(projectRoot, 'examples', 'retryWorkflow.woml');
 const retryCompositionFixturePath = join(
   import.meta.dir,
   '..',
@@ -651,6 +652,10 @@ describe('woml run', () => {
       join(consumerDirectory, 'approval.woml'),
       await Bun.file(approvalFixturePath).text()
     );
+    await Bun.write(
+      join(consumerDirectory, 'retry.woml'),
+      await Bun.file(retryExamplePath).text()
+    );
 
     const packed = Bun.spawnSync(
       [
@@ -704,6 +709,24 @@ describe('woml run', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+    const packagedRetryState = join(
+      temporaryDirectory,
+      'packaged-retry.sqlite'
+    );
+    const retryResult = Bun.spawnSync(
+      [
+        executable,
+        'run',
+        'retry.woml',
+        '--state',
+        packagedRetryState,
+      ],
+      {
+        cwd: consumerDirectory,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
     const approval = spawnPackagedApproval(
       executable,
       [
@@ -743,6 +766,16 @@ describe('woml run', () => {
     );
     expect(parallelResult.stderr.toString()).toBe('');
     expect(parallelResult.exitCode).toBe(0);
+    expect(retryResult.stdout.toString()).toBe(
+      '{"message":"Hello World"}\n'
+    );
+    expect(retryResult.stderr.toString()).toContain(
+      'Step greet failed (attempt 1/3): WOML_SCRIPT_THROWN'
+    );
+    expect(retryResult.stderr.toString()).toContain(
+      'Step greet succeeded on attempt 3/3.'
+    );
+    expect(retryResult.exitCode).toBe(0);
     expect(approvalPage.status).toBe(200);
     expect(await approvalPage.text()).toContain('Editorial approval');
     expect(approvalResponse.status).toBe(200);
@@ -787,5 +820,5 @@ describe('woml run', () => {
         )
       ).exists()
     ).toBe(true);
-  });
+  }, 20_000);
 });

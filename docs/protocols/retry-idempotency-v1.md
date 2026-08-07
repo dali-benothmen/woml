@@ -1,7 +1,7 @@
 # WOML Retry and Idempotency v1
 
-Status: frozen for RI0; frontend lowering implemented in RI1; runtime execution
-is intentionally unavailable until RI2–RI4.
+Status: frozen and implemented. RI0–RI7 completed the frontend, Rust runtime,
+Bun host, durable recovery, CLI diagnostics, hardening, and packaging gates.
 
 The normative compiled contract is
 `docs/schemas/compiled-workflow-model.v6.schema.json`.
@@ -99,3 +99,32 @@ again.
 
 The stable key is operational metadata. It is not a credential, capability, or
 workflow-context value. `context.run` remains undefined and unavailable.
+
+## CLI and recovery contract
+
+Retry progress is operational output and is written to stderr. The final
+workflow result remains the only JSON value written to stdout, so scripts may
+consume it safely.
+
+The CLI reports the failed attempt, the next attempt number, and the durable
+scheduled time. After the first retry is scheduled it also prints a complete
+recovery command containing the state path and run ID:
+
+```text
+woml run "workflow.woml" --state ".woml/state.sqlite" --resume "run_..."
+```
+
+Recovery uses the workflow definition already bound to that run. It resumes a
+durably scheduled attempt without replaying completed work. A recorded active
+attempt with no terminal outcome is ambiguous and becomes `interrupted`; it is
+never retried automatically. Exhaustion is reported as
+`WOML_STEP_RETRIES_EXHAUSTED` while preserving the safe underlying failure code
+and the authored script location.
+
+## Guarantee boundary
+
+WOML guarantees deterministic attempt identity, durable scheduling, safe
+recovery, and one published successful step result. WOML does not claim that an
+arbitrary external side effect happens exactly once. The receiving service must
+deduplicate `attempt.idempotencyKey`; otherwise authors must treat a retried
+script as potentially executing its external effect more than once.

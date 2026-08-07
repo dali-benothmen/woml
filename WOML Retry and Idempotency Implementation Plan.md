@@ -1,7 +1,7 @@
 # WOML Retry and Idempotency Implementation Plan
 
-Status: RI0 through RI6 completed on 2026-08-08. RI7 hardening, packaging, and
-publication remain planned.
+Status: RI0 through RI7 completed on 2026-08-08. Retry and idempotency are
+implemented, hardened, packaged, and publishable.
 
 ## 1. Product Outcome
 
@@ -712,6 +712,8 @@ Implemented result:
 
 ### RI7 — Harden, package, and publish retry
 
+Status: completed.
+
 Changes:
 
 - Add deterministic-clock tests for all backoff boundaries and caps.
@@ -732,6 +734,21 @@ Gate:
 A clean installation executes the reviewed retry workflow, survives every safe
 restart boundary, refuses ambiguous replay, and passes the complete release
 gate without changing older workflow behavior.
+
+Implemented result:
+
+- Deterministic-clock tests cover fixed and exponential backoff boundaries,
+  including the exponential cap.
+- A local idempotent service proves that retries reuse one stable logical-effect
+  key and applies the external effect once when that key is honored.
+- Hardening covers large context/results, host and Worker crashes, and
+  independent concurrent retry schedules.
+- Public language, CLI, architecture, recovery, and SDK migration documentation
+  describe the supported contract and its safety boundary.
+- The clean-package smoke suite installs the produced package and executes the
+  reviewed `examples/retryWorkflow.woml` workflow.
+- The RI7 release gate runs frontend, Rust, Bun host, CLI, typecheck, Clippy,
+  schema, packaging, compatibility, and secret-leak checks.
 
 ## 15. Expected File Areas
 
@@ -801,8 +818,8 @@ may add an undocumented retry event or reinterpret an older history.
 
 The global WOML roadmap is:
 
-1. **Retries and idempotency** — current planned milestone. Make the `<step
-   retry="...">` attribute genuinely executable, durable, and safe under the
+1. **Retries and idempotency** — completed in RI7. The `<step retry="...">`
+   attribute is executable, durable, recoverable, and publishable under the
    explicit effect boundary in this document.
 2. **Production triggers** — implement webhook first, followed by schedule,
    interval, and event triggers.
@@ -820,9 +837,9 @@ The global WOML roadmap is:
 After RI7, the next planning milestone is Production Triggers, beginning with
 webhook execution.
 
-## 19. Review Gate
+## 19. Review Gate (Completed)
 
-Implementation begins only after review of the following hard-to-reverse
+Implementation proceeded only after review of the following hard-to-reverse
 decisions:
 
 - `retry` means maximum total attempts, not additional retries;
@@ -834,4 +851,4 @@ decisions:
 - Model v6, Run Event v6, Script Host v3, and Progress v1 boundaries; and
 - parallel scheduled-retry cancellation behavior.
 
-Once these contracts are approved, RI0 is the first implementation phase.
+These contracts were approved in RI0 and remain frozen after RI7.

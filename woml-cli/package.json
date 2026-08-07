@@ -19,7 +19,8 @@
     "build:js": "bun build src/cli.ts --outfile dist/cli.js --target bun && bun build src/script-host.ts --outfile dist/script-host.js --target bun && bun build src/script-host-worker.ts --outfile dist/script-host-worker.js --target bun && bun build src/notification-provider-host.ts --outfile dist/notification-provider-host.js --target bun",
     "test": "bun test",
     "test:n6": "bun scripts/verify-n6.ts",
-    "test:release": "bun run build && bun test",
+    "test:ri7": "bun scripts/verify-ri7.ts",
+    "test:release": "bun scripts/verify-ri7.ts",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"
   },

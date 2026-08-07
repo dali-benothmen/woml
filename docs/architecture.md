@@ -1,4 +1,61 @@
-# Cronflow Final Architecture Design
+# WOML and Legacy Cronflow Architecture
+
+## Current WOML Architecture (Authoritative)
+
+WOML is the current product direction. Authors describe workflows in readable
+`.woml` markup, while execution remains split across three deliberately narrow
+layers:
+
+```text
+.woml source
+    -> TypeScript frontend: parse, validate, lower to a versioned DAG
+    -> Bun CLI / N-API boundary
+    -> Rust core: orchestrate, persist events, schedule and recover
+    -> long-lived Bun Script Host
+    -> isolated Worker: execute one JavaScript attempt
+    -> Rust event log and folded context
+    -> CLI result
+```
+
+The TypeScript frontend is the only layer that understands WOML markup,
+attributes, raw `<script>` bodies, and `{{context...}}` references. Its output is
+a versioned, language-neutral compiled workflow model whose nodes and edges form
+a DAG. It does not execute the workflow.
+
+The Rust core is the execution authority. It validates the compiled model,
+selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends
+versioned events to SQLite, and rebuilds run context by folding those events. It
+must not understand markup, interpolation syntax, or JavaScript source meaning.
+
+The long-lived Bun host executes JavaScript because JavaScript is part of the
+authoring experience. Each invocation runs in an isolated Worker with a real
+timeout boundary and receives only the versioned bindings approved for its
+model, currently `context` and, for Model v6, `attempt`. Bun reports outcomes;
+it never decides whether to retry or how the graph advances.
+
+### Durable retry boundary
+
+Rust commits a failed attempt and its next retry schedule atomically. All
+attempts of one logical step share `attempt.idempotencyKey`, allowing a capable
+external service to deduplicate effects. A durably scheduled but unstarted
+retry is safe to resume. A started attempt without a terminal event is
+ambiguous, becomes `interrupted`, and fails closed instead of being replayed.
+Only a successful attempt publishes `context.steps.<id>`.
+
+Progress and diagnostics cross a versioned native boundary and are printed to
+stderr; stdout stays reserved for the final JSON result. Secrets and executable
+capabilities never enter context, events, progress messages, or durable output.
+
+The contracts between these layers are versioned artifacts under
+`docs/schemas/` and `docs/protocols/`. Neither side may infer or silently add a
+field that is absent from the negotiated version.
+
+## Legacy Cronflow Architecture (Migration Context)
+
+The remainder of this document describes the original JavaScript-chaining SDK.
+It remains useful as migration context, but it is not the architecture used by
+`woml run`. The SDK will be retired only after WOML reaches sufficient feature
+parity and users have a documented migration path.
 
 ## Overview
 
