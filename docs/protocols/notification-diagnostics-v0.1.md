@@ -1,7 +1,7 @@
 # WOML Notification and Secret Diagnostics v0.1
 
-Status: frozen and implemented through the N5 real Slack provider journey. N6
-must reuse or explicitly version the provider codes.
+Status: frozen and implemented through the completed N6 Slack publication
+milestone. Later providers must reuse or explicitly version these codes.
 
 Diagnostics never include resolved secret values, decision capabilities,
 provider payloads, or credential-store implementation errors.
@@ -68,8 +68,10 @@ provider payloads, or credential-store implementation errors.
 | `WOML_SLACK_UPDATE_FAILED` | Slack could not safely update a delivered approval message. |
 | `WOML_NOTIFICATION_DELIVERY_AMBIGUOUS` | A send may have reached Slack but no definitive response arrived, so WOML refuses blind replay. |
 
-## Provider Codes Reserved for N6
+## N6 Hardening Result
 
-The provider returns a structured safe failure kind plus a stable code. Initial
-N6 may add hardening-specific diagnostics only by documenting them here or
-versioning this artifact.
+N6 required no new failure code or event shape. Provider failures retain one
+structured safe kind and stable code, and the release gate verifies that
+diagnostics contain neither resolved secret values nor decision capabilities.
+Human-readable CLI presentation may improve without changing this frozen
+failure vocabulary.

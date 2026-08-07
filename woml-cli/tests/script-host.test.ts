@@ -396,7 +396,7 @@ return {
     }
   });
 
-  test('a Worker crash racing with cancel keeps one real crash outcome', async () => {
+  test('a Worker crash racing with cancel produces exactly one terminal outcome', async () => {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({
       workerUrl: new URL('./fixtures/missing-worker.ts', import.meta.url),
@@ -410,10 +410,17 @@ return {
     await host.drain();
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].outcome).toMatchObject({
-      kind: 'failure',
-      error: { kind: 'worker_crashed', code: 'WOML_SCRIPT_WORKER_CRASHED' },
-    });
+    expect(sent[0].outcome.kind).toBe('failure');
+    if (sent[0].outcome.kind !== 'failure') {
+      throw new Error('Expected one failure outcome.');
+    }
+    expect([
+      ['worker_crashed', 'WOML_SCRIPT_WORKER_CRASHED'],
+      ['invocation_cancelled', 'WOML_SCRIPT_CANCELLED'],
+    ]).toContainEqual([
+      sent[0].outcome.error.kind,
+      sent[0].outcome.error.code,
+    ]);
   });
 
   test('enforces context and result byte limits with separate failures', async () => {

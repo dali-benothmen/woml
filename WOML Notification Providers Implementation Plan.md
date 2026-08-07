@@ -1,10 +1,10 @@
 # WOML Notification Providers Implementation Plan
 
-Status: N0–N4 complete; N5 implementation complete with its real-workspace
-acceptance gate pending. The packaged CLI now contains the real Slack Web API
-and Socket Mode transport, while Rust remains the durable decision and route
-authority. Discord, WhatsApp, and generic webhook notification remain separate
-later milestones.
+Status: N0–N6 complete. The real-workspace Slack acceptance gate and the N6
+publication-hardening gate both pass. The packaged CLI contains the real Slack
+Web API and Socket Mode transport, while Rust remains the durable decision and
+route authority. Discord, WhatsApp, and generic webhook notification remain
+separate later milestones.
 
 ## 1. Product Outcome
 
@@ -561,8 +561,7 @@ Completed proof:
 - The fake adapter is a conformance/test implementation only. N5 now activates
   the real Socket Mode adapter for Model v5 workflows in `woml run`.
 
-### N5 — Implement real Slack Socket Mode end to end — implementation complete;
-real-workspace acceptance pending
+### N5 — Implement real Slack Socket Mode end to end — complete
 
 Changes:
 
@@ -622,14 +621,23 @@ Completed implementation proof:
 - A reviewed Slack app manifest and installation guide ship in the package.
   Automated adapter tests and the complete fake-provider CLI journey pass.
 
-Remaining gate:
+Completed real-workspace acceptance:
 
-- Run one acceptance workflow in a real Slack workspace and verify real send,
-  click, Rust resolution, selected route, and all-message update. No token is
-  to be shared in source control or chat; the user stores both through
-  `woml secrets set` locally.
+- `examples/slackApprovalWorkflow.woml` ran against an installed WOML Slack
+  app and the real `#woml-testing` channel.
+- The app-level token opened Socket Mode, the bot resolved the channel and sent
+  the native approval message, and a Slack button action returned through the
+  provider host to Rust.
+- Rust committed the one human decision, executed only the selected WOML arm,
+  completed the downstream result, and the provider converged the Slack
+  message without a public callback URL.
+- Bot/app values remained local; no credential was placed in WOML source,
+  repository files, terminal output, or chat.
+- The acceptance run exposed an installed-token scope mismatch
+  (`channels:history` is not `channels:read`); correcting the Bot Token Scopes
+  and reinstalling the app completed the journey.
 
-### N6 — Harden, package, and close the Slack milestone
+### N6 — Harden, package, and close the Slack milestone — complete
 
 Changes:
 
@@ -660,6 +668,36 @@ Gate:
 `woml run` from a clean installation sends one real approval to all authored
 Slack channels, any one action resolves exactly once through Rust, every message
 reflects the final state, and no secret value leaks.
+
+Completed proof:
+
+- A frontend composition matrix validates notification approvals at the
+  workflow root, inside a branch arm, nested inside another approval route, and
+  adjacent to a bounded parallel group as valid Model v5 DAGs.
+- A native end-to-end test expands two Slack tags across two credential sets
+  into three concurrent deliveries. Simultaneous provider actions converge on
+  one `notification_decision_accepted`, one approved route execution, and three
+  durable message updates.
+- Existing durable tests cover partial and total delivery failure, bounded
+  retry with one stable effect identity, timeout resolution, repeated and
+  conflicting decisions, unsent-intent restart, uncertain-send fail-closed
+  recovery, committed delivery recovery, and interrupted message-update retry.
+- Generated bot/app sentinels are absent from compiled models, provider
+  outcomes, context/results, event projections, SQLite, WAL, and SHM files.
+  Provider protocol, diagnostics, and clean-package tests retain only symbolic
+  secret names.
+- `bun run test:n6` is the repeatable release gate. It builds and stages the
+  production native module, then passes 76 frontend tests, 95 Rust WOML-engine
+  tests, 127 process-isolated CLI/provider tests, both TypeScript type checks,
+  strict Clippy across every WOML-engine target, the production core-library
+  check, clean-package installation, and public/durable artifact scanning.
+- CLI test files run in isolated Bun processes because their real loopback
+  servers and intentional Worker crash races must not share global runtime
+  resources during a publication gate.
+- The old Cronflow execution modules' stale internal unit tests are not part of
+  this WOML gate: the production core library still builds and is exercised
+  through the N-API journeys, while those obsolete tests target the chaining
+  architecture scheduled for SDK retirement.
 
 ## 9. Verification Matrix
 

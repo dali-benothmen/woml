@@ -23,6 +23,24 @@ uses Socket Mode, so it does not need a public callback URL or `woml serve`.
    `.woml` file, shell argument, environment committed to source control, or
    chat message.
 
+After changing any Bot Token Scope, choose **Reinstall to Workspace** and copy
+the Bot User OAuth Token from that same Slack app again. The installed token,
+not merely the permissions displayed in the app editor, is what Slack checks.
+Its Bot Token Scopes must include:
+
+```text
+chat:write
+chat:write.public
+channels:read
+groups:read
+```
+
+`channels:history` does not replace `channels:read`. WOML uses
+`conversations.list` to resolve a readable `#channel` alias. Supplying a stable
+Slack conversation ID (`C...` or `G...`) bypasses that name lookup, but does not
+replace the permission required to post or the requirement to invite the app
+to a private channel.
+
 ## Choose channels
 
 Public channel aliases such as `#woml-testing` work with the manifest as-is.
@@ -56,8 +74,9 @@ updates all delivered messages, and continues only the selected WOML route.
 ## Common failures
 
 - `WOML_SLACK_AUTH_FAILED`: replace a revoked, expired, or wrong token.
-- `WOML_SLACK_PERMISSION_DENIED`: reinstall the app after applying the
-  manifest, or invite it to the private channel.
+- `WOML_SLACK_PERMISSION_DENIED`: verify the scopes above under **Bot Token
+  Scopes**, reinstall the app, refresh the stored `xoxb-...` token, and ensure
+  the app belongs to a private destination.
 - `WOML_SLACK_DESTINATION_INVALID`: verify the channel name/ID and app
   visibility.
 - `WOML_SLACK_RATE_LIMITED`: WOML follows Slack's `Retry-After` value through

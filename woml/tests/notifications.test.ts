@@ -165,6 +165,53 @@ describe('WOML Slack notification lowering', () => {
     expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
   });
 
+  test('composes notification approvals at root, branch-arm, nested, and parallel-adjacent placements', () => {
+    const notificationApproval = (id: string) =>
+      approval(`<notify>${slack()}</notify>`, id);
+    const cases = [
+      workflow(notificationApproval('rootReview')),
+      workflow(`<step id="chooseRoute"><script>return true;</script></step>
+        <branch id="route">
+          <when test="{{context.steps.chooseRoute}}">
+            ${notificationApproval('branchReview')}
+            <result value="{{context.steps.branchReview}}" />
+          </when>
+          <otherwise>
+            <step id="fallback"><script>return { decision: 'rejected' };</script></step>
+            <result value="{{context.steps.fallback}}" />
+          </otherwise>
+        </branch>`),
+      workflow(`<approval id="outerReview">
+          <when-approved>
+            ${notificationApproval('nestedReview')}
+          </when-approved>
+          <when-rejected />
+        </approval>`),
+      workflow(`<parallel id="checks" concurrency="2" on-error="wait-all">
+          <step id="left"><script>return 1;</script></step>
+          <step id="right"><script>return 2;</script></step>
+        </parallel>
+        ${notificationApproval('afterParallelReview')}
+        <step id="afterReview"><script>return context.steps.afterParallelReview;</script></step>`),
+    ];
+
+    for (const source of cases) {
+      const compiled = compileWoml(
+        parseWoml(source, { file: 'notification-composition.woml' })
+      );
+      expect(compiled.schemaVersion).toBe(5);
+      expect(inspectCompiledWorkflowGraph(compiled.graph)).toEqual([]);
+      expect(
+        compiled.graph.nodes.some(
+          node =>
+            node.handler === 'engine.approval-wait' &&
+            node.inputs.kind === 'object' &&
+            node.inputs.fields.notifications?.kind === 'array'
+        )
+      ).toBe(true);
+    }
+  });
+
   test('rejects invalid placement, provider structure, and Slack attributes', () => {
     const cases = [
       [workflow(`<notify>${slack()}</notify>`), 'WOML_NOTIFY_INVALID_ORDER'],

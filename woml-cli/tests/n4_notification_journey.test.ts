@@ -44,6 +44,10 @@ const rateLimitedHostPath = resolve(
   packageRoot,
   'tests/fixtures/rate-limited-notification-provider-host.ts'
 );
+const multiWorkspaceHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/multi-workspace-notification-provider-host.ts'
+);
 const sourcePath = resolve(
   packageRoot,
   '../woml/tests/fixtures/approval-slack.woml'
@@ -112,6 +116,28 @@ function timeoutWorkflow() {
   </steps>
 </workflow>`;
   return compileWoml(parseWoml(source, { file: 'n5-timeout.woml' }));
+}
+
+function multiWorkspaceWorkflow() {
+  const source = `<workflow version="0.1" id="n6-multi-workspace" name="N6 Multi Workspace">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <approval id="review" name="Review" timeout="24h" on-timeout="reject">
+      <notify>
+        <slack channels="#approvals #engineering" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />
+        <slack channels="#management" bot-token="{{secrets.SECOND_SLACK_BOT_TOKEN}}" app-token="{{secrets.SECOND_SLACK_APP_TOKEN}}" />
+      </notify>
+      <when-approved>
+        <step id="approvedRoute"><script>return { route: 'approved' };</script></step>
+      </when-approved>
+      <when-rejected>
+        <step id="rejectedRoute"><script>return { route: 'rejected' };</script></step>
+      </when-rejected>
+    </approval>
+    <step id="finalStatus"><script>return { decision: context.steps.review.decision };</script></step>
+  </steps>
+</workflow>`;
+  return compileWoml(parseWoml(source, { file: 'n6-multi-workspace.woml' }));
 }
 
 function durableEventTypes(database: string): string[] {
@@ -202,6 +228,84 @@ describe('N4/N5 Rust and Slack provider journey', () => {
       expect(databaseBytes.includes(Buffer.from('xapp-n4-secret-app-value'))).toBe(
         false
       );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  nativeTest('converges simultaneous actions from multiple tags and credential sets on one route', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-n6-multi-workspace-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = multiWorkspaceWorkflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+
+      const journey = await runNotificationProviderJourneyWithRust(
+        database,
+        waiting.runId,
+        {
+          nativeCorePath,
+          notificationHostPath: multiWorkspaceHostPath,
+          interactionTimeoutMs: 5_000,
+        }
+      );
+      expect(journey.deliveries).toMatchObject({
+        attempted: 3,
+        succeeded: 3,
+        failed: 0,
+      });
+      expect(journey.decision).toMatchObject({
+        status: 'accepted',
+        decision: 'approved',
+      });
+      expect(journey.updates).toMatchObject({
+        updatesAttempted: 3,
+        updatesSucceeded: 3,
+        updatesFailed: 0,
+      });
+
+      const resumed = await resumeApprovalWorkflowWithRust(
+        compiled,
+        database,
+        waiting.runId,
+        { nativeCorePath, scriptHostPath }
+      );
+      expect(resumed.status).toBe('succeeded');
+      if (resumed.status !== 'succeeded') throw new Error('expected success');
+      expect(resumed.execution.result).toEqual({ decision: 'approved' });
+      expect(
+        resumed.execution.events.filter(
+          event => event.type === 'notification_decision_accepted'
+        )
+      ).toHaveLength(1);
+      expect(
+        resumed.execution.events.filter(
+          event => event.type === 'notification_message_updated'
+        )
+      ).toHaveLength(3);
+      expect(
+        resumed.execution.executionOrder.filter(id => id === 'approvedRoute')
+      ).toHaveLength(1);
+      expect(resumed.execution.executionOrder).not.toContain('rejectedRoute');
+
+      const serialized = JSON.stringify({ compiled, journey, resumed });
+      for (const secret of [
+        'xoxb-n6-primary-bot-value',
+        'xapp-n6-primary-app-value',
+        'xoxb-n6-secondary-bot-value',
+        'xapp-n6-secondary-app-value',
+      ]) {
+        expect(serialized).not.toContain(secret);
+        for (const path of [database, `${database}-wal`, `${database}-shm`]) {
+          if (!existsSync(path)) continue;
+          const bytes = Buffer.from(await Bun.file(path).arrayBuffer());
+          expect(bytes.includes(Buffer.from(secret))).toBe(false);
+        }
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

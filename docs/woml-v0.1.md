@@ -63,7 +63,7 @@ includes conditional branches and bounded parallel groups:
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
-| `<notify><slack>` approval delivery | N0 contracts and N2 frontend implemented | Source validates and lowers to Model v5; runtime delivery remains unavailable until N3 |
+| `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
 | Database, HTTP, RAK, and other capabilities | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
@@ -1595,11 +1595,11 @@ diagnostic contracts in `WOML Human Approval Implementation Plan.md` and
 N0 freezes Slack notification and secret contracts in
 `docs/protocols/notification-contracts-v1.md`; N1 implements the secret
 reference primitive and secure secret-management CLI; N2 implements source
-validation and Model v5 lowering. The remaining
-approval-adjacent work does not block the local terminal-URL profile:
+validation and Model v5 lowering. N3–N6 complete the durable outbox, built-in
+provider host, real Socket Mode integration, recovery, packaging, and
+publication hardening. The remaining approval-adjacent work is later product
+expansion:
 
-- N3–N6 add durable outbox delivery, the provider host, real Socket Mode
-  integration, and production hardening.
 - Discord, shared-provider delivery, WhatsApp, and generic signed webhook
   notifications follow the Slack milestone.
 - Remote hosting waits for TLS, reviewer authentication/authorization, and
