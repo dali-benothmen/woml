@@ -1,10 +1,11 @@
 import { deepFreezeJson, findJsonViolation } from './json';
-import type { JsonValue, ScriptContext } from './types';
+import type { JsonValue, ScriptAttempt, ScriptContext } from './types';
 
 export interface ScriptWorkerRequest {
   readonly nodeId: string;
   readonly source: string;
   readonly context: ScriptContext;
+  readonly attempt?: ScriptAttempt;
 }
 
 export type ScriptWorkerResponse =
@@ -19,7 +20,10 @@ export type ScriptWorkerResponse =
       };
     };
 
-type AsyncFunction = (context: ScriptContext) => Promise<unknown>;
+type AsyncFunction = (
+  context: ScriptContext,
+  attempt: ScriptAttempt | undefined
+) => Promise<unknown>;
 type AsyncFunctionConstructor = new (
   ...parametersAndBody: string[]
 ) => AsyncFunction;
@@ -54,12 +58,17 @@ self.onmessage = async (event: MessageEvent<ScriptWorkerRequest>) => {
   const request = event.data;
   try {
     const context = deepFreezeJson(request.context);
+    const attempt =
+      request.attempt === undefined
+        ? undefined
+        : deepFreezeJson(request.attempt);
     const safeNodeId = request.nodeId.replace(/[^A-Za-z0-9_-]/g, '_');
     const script = new AsyncFunction(
       'context',
+      'attempt',
       `"use strict";\n${request.source}\n//# sourceURL=woml-step-${safeNodeId}.js`,
     );
-    const result = await script(context);
+    const result = await script(context, attempt);
     const violation = findJsonViolation(result);
     if (violation !== undefined) {
       self.postMessage({

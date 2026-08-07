@@ -1,14 +1,21 @@
 use std::path::PathBuf;
 
 use serde_json::{json, Map};
-use woml_engine::protocol::{ExecuteMessage, HostOutcome};
+use woml_engine::protocol::{ExecuteMessage, HostOutcome, ScriptAttempt};
 use woml_engine::{
-  execute_workflow, AttemptFailureKind, CompiledWorkflowDefinition, RuntimeExecutionError,
-  RuntimeExecutionOptions, ScriptHostClient, ScriptHostProcessOptions, WorkflowContext,
+  execute_workflow, step_effect_idempotency_key, AttemptFailureKind, CompiledWorkflowDefinition,
+  RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostClient, ScriptHostProcessOptions,
+  WorkflowContext,
 };
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
 const HELLO_HASH: &str = "sha256:97788d011d2306b254e9ab36ec9262887517a682357a955d770242774317939a";
+const TEST_EFFECT_KEY: &str =
+  "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn attempt() -> ScriptAttempt<'static> {
+  ScriptAttempt::new(1, 1, TEST_EFFECT_KEY).unwrap()
+}
 
 fn host_options() -> Option<ScriptHostProcessOptions> {
   let bun = std::process::Command::new("bun")
@@ -32,6 +39,86 @@ fn context() -> WorkflowContext {
 }
 
 #[tokio::test]
+async fn protocol_v3_attempt_identity_is_stable_across_host_restart() {
+  let Some(options) = host_options() else {
+    return;
+  };
+  let run_id = "run_retry_host_restart";
+  let node_id = "greet";
+  let key = step_effect_idempotency_key(run_id, HELLO_HASH, node_id);
+  let other_node_key = step_effect_idempotency_key(run_id, HELLO_HASH, "other");
+  let other_run_key = step_effect_idempotency_key("run_other", HELLO_HASH, node_id);
+  assert_ne!(key, other_node_key);
+  assert_ne!(key, other_run_key);
+
+  let context = context();
+  let source = "return { number: attempt.number, maxAttempts: attempt.maxAttempts, idempotencyKey: attempt.idempotencyKey, frozen: Object.isFrozen(attempt) };";
+  let first_invocation = "inv_retry_restart_01";
+  let first_attempt = ScriptAttempt::new(1, 3, &key).unwrap();
+  let first_request = ExecuteMessage::runtime_script(
+    first_invocation,
+    run_id,
+    node_id,
+    first_attempt,
+    1_000,
+    source,
+    &context,
+  );
+  let first_host = ScriptHostClient::spawn(options.clone()).await.unwrap();
+  let first = first_host.execute(&first_request).await.unwrap();
+  let first_host_id = first_host.host_instance_id.clone();
+  first_host.shutdown().await;
+
+  let second_invocation = "inv_retry_restart_02";
+  let second_attempt = ScriptAttempt::new(2, 3, &key).unwrap();
+  let second_request = ExecuteMessage::runtime_script(
+    second_invocation,
+    run_id,
+    node_id,
+    second_attempt,
+    1_000,
+    source,
+    &context,
+  );
+  let second_host = ScriptHostClient::spawn(options).await.unwrap();
+  assert_ne!(first_host_id, second_host.host_instance_id);
+  let second = second_host.execute(&second_request).await.unwrap();
+  second_host.shutdown().await;
+
+  assert_ne!(first_invocation, second_invocation);
+  assert_eq!(
+    first.outcome,
+    HostOutcome::Success {
+      value: json!({
+        "number": 1,
+        "maxAttempts": 3,
+        "idempotencyKey": key,
+        "frozen": true
+      })
+    }
+  );
+  assert_eq!(
+    second.outcome,
+    HostOutcome::Success {
+      value: json!({
+        "number": 2,
+        "maxAttempts": 3,
+        "idempotencyKey": key,
+        "frozen": true
+      })
+    }
+  );
+}
+
+#[test]
+fn protocol_v3_rejects_invalid_attempt_metadata_before_transport() {
+  assert!(ScriptAttempt::new(0, 3, TEST_EFFECT_KEY).is_err());
+  assert!(ScriptAttempt::new(4, 3, TEST_EFFECT_KEY).is_err());
+  assert!(ScriptAttempt::new(1, 11, TEST_EFFECT_KEY).is_err());
+  assert!(ScriptAttempt::new(1, 3, "secret-token").is_err());
+}
+
+#[tokio::test]
 async fn rust_client_multiplexes_and_correlates_out_of_order_utf8_frames() {
   let Some(options) = host_options() else {
     return;
@@ -45,6 +132,7 @@ async fn rust_client_multiplexes_and_correlates_out_of_order_utf8_frames() {
     "inv_rust_slow",
     "run_rust_multiplex",
     "slow",
+    attempt(),
     1_000,
     slow_source,
     &context,
@@ -53,6 +141,7 @@ async fn rust_client_multiplexes_and_correlates_out_of_order_utf8_frames() {
     "inv_rust_fast",
     "run_rust_multiplex",
     "fast",
+    attempt(),
     1_000,
     fast_source,
     &context,
@@ -84,6 +173,7 @@ async fn rust_client_cancels_only_the_target_invocation() {
     "inv_rust_cancelled",
     "run_rust_cancel",
     "cancelled",
+    attempt(),
     3_000,
     "await new Promise(resolve => setTimeout(resolve, 1500)); return { value: 'too late' };",
     &context,
@@ -92,6 +182,7 @@ async fn rust_client_cancels_only_the_target_invocation() {
     "inv_rust_survivor",
     "run_rust_cancel",
     "survivor",
+    attempt(),
     3_000,
     "await new Promise(resolve => setTimeout(resolve, 160)); return { value: 'survived' };",
     &context,
@@ -132,6 +223,7 @@ async fn host_loss_during_cancellation_stays_a_host_crash() {
     "inv_host_loss_first",
     "run_host_loss",
     "first",
+    attempt(),
     3_000,
     "await new Promise(resolve => setTimeout(resolve, 1000)); return {};",
     &context,
@@ -140,6 +232,7 @@ async fn host_loss_during_cancellation_stays_a_host_crash() {
     "inv_host_loss_second",
     "run_host_loss",
     "second",
+    attempt(),
     3_000,
     "await new Promise(resolve => setTimeout(resolve, 1000)); return {};",
     &context,

@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::{AttemptFailure, AttemptFailureKind, FailureSizeDetails, WorkflowContext};
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 2;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -23,7 +23,7 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v2 ready message.".to_string());
+      return Err("The child did not send a valid script-host v3 ready message.".to_string());
     }
     Ok(())
   }
@@ -60,11 +60,37 @@ pub struct ExecuteMessage<'a> {
   pub invocation_id: &'a str,
   pub run_id: &'a str,
   pub node_id: &'a str,
-  pub attempt: u32,
+  pub attempt: ScriptAttempt<'a>,
   pub handler: &'static str,
   pub timeout_ms: u64,
   pub source: &'a str,
   pub context: &'a WorkflowContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptAttempt<'a> {
+  pub number: u32,
+  pub max_attempts: u32,
+  pub idempotency_key: &'a str,
+}
+
+impl<'a> ScriptAttempt<'a> {
+  pub fn new(number: u32, max_attempts: u32, idempotency_key: &'a str) -> Result<Self, String> {
+    if number == 0 || max_attempts == 0 || max_attempts > 10 || number > max_attempts {
+      return Err(
+        "Script attempt numbers must satisfy 1 <= number <= maxAttempts <= 10.".to_string(),
+      );
+    }
+    if !crate::event::is_definition_hash(idempotency_key) {
+      return Err("Script attempts require a canonical sha256 idempotency key.".to_string());
+    }
+    Ok(Self {
+      number,
+      max_attempts,
+      idempotency_key,
+    })
+  }
 }
 
 impl<'a> ExecuteMessage<'a> {
@@ -72,6 +98,7 @@ impl<'a> ExecuteMessage<'a> {
     invocation_id: &'a str,
     run_id: &'a str,
     node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
     timeout_ms: u64,
     source: &'a str,
     context: &'a WorkflowContext,
@@ -83,7 +110,7 @@ impl<'a> ExecuteMessage<'a> {
       invocation_id,
       run_id,
       node_id,
-      attempt: 1,
+      attempt,
       handler: "runtime.script",
       timeout_ms,
       source,
@@ -113,7 +140,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v2 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v3 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;

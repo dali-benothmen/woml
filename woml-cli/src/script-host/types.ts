@@ -9,30 +9,48 @@ export interface ScriptContext extends JsonObject {
   readonly steps: Readonly<Record<string, JsonValue>>;
 }
 
+export type ScriptHostProtocolVersion = 1 | 2 | 3;
+
+export interface ScriptAttempt extends JsonObject {
+  readonly number: number;
+  readonly maxAttempts: number;
+  readonly idempotencyKey: string;
+}
+
 export interface ReadyMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1 | 2;
+  readonly protocolVersion: ScriptHostProtocolVersion;
   readonly messageType: 'ready';
   readonly hostInstanceId: string;
 }
 
-export interface ExecuteMessage {
+interface ExecuteMessageBase {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1 | 2;
   readonly messageType: 'execute';
   readonly invocationId: string;
   readonly runId: string;
   readonly nodeId: string;
-  readonly attempt: number;
   readonly handler: 'runtime.script';
   readonly timeoutMs: number;
   readonly source: string;
   readonly context: ScriptContext;
 }
 
+export interface LegacyExecuteMessage extends ExecuteMessageBase {
+  readonly protocolVersion: 1 | 2;
+  readonly attempt: number;
+}
+
+export interface ExecuteMessageV3 extends ExecuteMessageBase {
+  readonly protocolVersion: 3;
+  readonly attempt: ScriptAttempt;
+}
+
+export type ExecuteMessage = LegacyExecuteMessage | ExecuteMessageV3;
+
 export interface CancelMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 2;
+  readonly protocolVersion: 2 | 3;
   readonly messageType: 'cancel';
   readonly invocationId: string;
   readonly reason: 'parallel_fail_fast';
@@ -68,7 +86,7 @@ export interface HostReportedFailure {
 
 export interface SuccessMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1 | 2;
+  readonly protocolVersion: ScriptHostProtocolVersion;
   readonly messageType: 'completed';
   readonly invocationId: string;
   readonly outcome: {
@@ -80,7 +98,7 @@ export interface SuccessMessage {
 
 export interface FailureMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 1 | 2;
+  readonly protocolVersion: ScriptHostProtocolVersion;
   readonly messageType: 'completed';
   readonly invocationId: string;
   readonly outcome: {

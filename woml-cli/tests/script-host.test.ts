@@ -12,6 +12,7 @@ import type {
   CancelMessage,
   CompletedMessage,
   ExecuteMessage,
+  ScriptAttempt,
   ScriptHostMessage,
 } from '../src/script-host/types';
 
@@ -21,6 +22,8 @@ const hostEntry =
   process.env.WOML_SCRIPT_HOST_TEST_ENTRY ??
   resolve(packageRoot, 'src/script-host.ts');
 const bunExecutable = Bun.which('bun')!;
+const defaultEffectKey =
+  'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
 function execute(
   invocationId: string,
@@ -28,28 +31,42 @@ function execute(
   options: {
     readonly context?: ExecuteMessage['context'];
     readonly timeoutMs?: number;
-    readonly protocolVersion?: 1 | 2;
+    readonly protocolVersion?: 1 | 2 | 3;
+    readonly attempt?: ScriptAttempt;
   } = {}
 ): ExecuteMessage {
-  return {
+  const protocolVersion = options.protocolVersion ?? 3;
+  const base = {
     protocol: 'woml.script-host',
-    protocolVersion: options.protocolVersion ?? 2,
     messageType: 'execute',
     invocationId,
     runId: 'run_host_test_01',
     nodeId: invocationId.replace(/^inv_/, ''),
-    attempt: 1,
     handler: 'runtime.script',
     timeoutMs: options.timeoutMs ?? 1000,
     source,
     context: options.context ?? { trigger: {}, steps: {} },
-  };
+  } as const;
+  return protocolVersion === 3
+    ? {
+        ...base,
+        protocolVersion,
+        attempt: options.attempt ?? {
+          number: 1,
+          maxAttempts: 1,
+          idempotencyKey: defaultEffectKey,
+        },
+      }
+    : { ...base, protocolVersion, attempt: 1 };
 }
 
-function cancel(invocationId: string): CancelMessage {
+function cancel(
+  invocationId: string,
+  protocolVersion: 2 | 3 = 3
+): CancelMessage {
   return {
     protocol: 'woml.script-host',
-    protocolVersion: 2,
+    protocolVersion,
     messageType: 'cancel',
     invocationId,
     reason: 'parallel_fail_fast',
@@ -192,6 +209,26 @@ describe('long-lived Bun script host', () => {
     });
   });
 
+  test('preserves protocol v2 execution when explicitly requested', async () => {
+    const result = await runHost(
+      [
+        execute('inv_legacy_v2', 'return { legacy: 2 };', {
+          protocolVersion: 2,
+        }),
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '2' }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.messages[0]).toMatchObject({
+      messageType: 'ready',
+      protocolVersion: 2,
+    });
+    expect(byInvocation(result.messages).get('inv_legacy_v2')).toMatchObject({
+      protocolVersion: 2,
+      outcome: { kind: 'success', value: { legacy: 2 } },
+    });
+  });
+
   test('provides the frozen context contract with top-level await', async () => {
     const result = await runHost([
       execute(
@@ -223,6 +260,70 @@ return {
     expect(indexed.get('inv_frozen_context')?.outcome).toMatchObject({
       kind: 'failure',
       error: { kind: 'script_threw', code: 'WOML_SCRIPT_THROWN' },
+    });
+  });
+
+  test('provides only the deeply frozen Protocol v3 attempt binding', async () => {
+    const stableKey =
+      'sha256:35278a8c79c5843d1fc3015aac65ea3ee7579559463214234e16624b5bbf609c';
+    const source = `
+let mutation = 'not-blocked';
+try { attempt.number = 99; } catch { mutation = 'blocked'; }
+return {
+  number: attempt.number,
+  maxAttempts: attempt.maxAttempts,
+  idempotencyKey: attempt.idempotencyKey,
+  frozen: Object.isFrozen(attempt),
+  mutation,
+  contextContainsAttempt: 'attempt' in context,
+  hasRunId: 'runId' in attempt,
+  hasNodeId: 'nodeId' in attempt,
+  hasInvocationId: 'invocationId' in attempt,
+  env: process.env.WOML_TEST_SECRET ?? null
+};`;
+    const result = await runHost(
+      [
+        execute('inv_attempt_01', source, {
+          attempt: {
+            number: 1,
+            maxAttempts: 3,
+            idempotencyKey: stableKey,
+          },
+        }),
+        execute('inv_attempt_02', source, {
+          attempt: {
+            number: 2,
+            maxAttempts: 3,
+            idempotencyKey: stableKey,
+          },
+        }),
+      ],
+      { WOML_TEST_SECRET: 'must-not-enter-attempt' }
+    );
+    const indexed = byInvocation(result.messages);
+
+    expect(indexed.get('inv_attempt_01')?.outcome).toEqual({
+      kind: 'success',
+      value: {
+        number: 1,
+        maxAttempts: 3,
+        idempotencyKey: stableKey,
+        frozen: true,
+        mutation: 'blocked',
+        contextContainsAttempt: false,
+        hasRunId: false,
+        hasNodeId: false,
+        hasInvocationId: false,
+        env: null,
+      },
+    });
+    expect(indexed.get('inv_attempt_02')?.outcome).toMatchObject({
+      kind: 'success',
+      value: {
+        number: 2,
+        maxAttempts: 3,
+        idempotencyKey: stableKey,
+      },
     });
   });
 
@@ -295,7 +396,7 @@ return {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({
       workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
-      protocolVersion: 2,
+      protocolVersion: 3,
       send: async message => {
         sent.push(message);
       },
@@ -462,7 +563,11 @@ return {
   test('fails closed on a schema-invalid Rust message', async () => {
     const invalid = {
       ...execute('inv_invalid', 'return { ok: true };'),
-      protocolVersion: 3,
+      attempt: {
+        number: 2,
+        maxAttempts: 1,
+        idempotencyKey: defaultEffectKey,
+      },
     };
     const result = await runHost([invalid]);
 

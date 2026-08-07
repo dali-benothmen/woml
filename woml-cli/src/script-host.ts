@@ -4,7 +4,11 @@ import { randomUUID } from 'node:crypto';
 
 import { FrameDecoder, SerializedFrameWriter } from './script-host/framing';
 import { ScriptHost } from './script-host/host';
-import type { ReadyMessage, ScriptHostLimits } from './script-host/types';
+import type {
+  ReadyMessage,
+  ScriptHostLimits,
+  ScriptHostProtocolVersion,
+} from './script-host/types';
 
 function configuredLimit(name: string): number | undefined {
   const raw = process.env[name];
@@ -24,10 +28,12 @@ function limitsFromEnvironment(): ScriptHostLimits {
   };
 }
 
-function protocolVersionFromEnvironment(): 1 | 2 {
-  const raw = process.env.WOML_SCRIPT_HOST_PROTOCOL_VERSION ?? '2';
-  if (raw === '1' || raw === '2') return Number(raw) as 1 | 2;
-  throw new Error('WOML_SCRIPT_HOST_PROTOCOL_VERSION must be 1 or 2.');
+function protocolVersionFromEnvironment(): ScriptHostProtocolVersion {
+  const raw = process.env.WOML_SCRIPT_HOST_PROTOCOL_VERSION ?? '3';
+  if (raw === '1' || raw === '2' || raw === '3') {
+    return Number(raw) as ScriptHostProtocolVersion;
+  }
+  throw new Error('WOML_SCRIPT_HOST_PROTOCOL_VERSION must be 1, 2, or 3.');
 }
 
 async function writeStdout(frame: Uint8Array): Promise<void> {

@@ -1,6 +1,7 @@
 # WOML Script-Host Protocol v3
 
-Status: frozen for the retry profile; host implementation begins in RI3.
+Status: frozen and implemented in RI3; this is the production Rust/Bun
+protocol version.
 
 The normative schema is
 `docs/schemas/script-host-protocol.v3.schema.json`. Protocols v1 and v2 remain

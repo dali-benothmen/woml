@@ -1,7 +1,7 @@
 # WOML Retry and Idempotency Implementation Plan
 
-Status: RI0, RI1, and RI2 completed on 2026-08-07. JavaScript attempt binding
-and end-to-end retry execution remain planned for RI3 onward.
+Status: RI0 through RI3 completed on 2026-08-07. End-to-end retry execution
+remains planned for RI4 onward.
 
 ## 1. Product Outcome
 
@@ -596,6 +596,8 @@ Frozen histories fold identically in memory and SQLite across reopen, including
 future schedules, due schedules, exhaustion, and invalid duplicate attempts.
 
 ### RI3 — Add the Bun `attempt` binding and stable effect identity
+
+Status: completed.
 
 Changes:
 

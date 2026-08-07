@@ -7,7 +7,9 @@ import type {
   FailureMessage,
   HostReportedFailure,
   JsonValue,
+  ScriptAttempt,
   ScriptHostLimits,
+  ScriptHostProtocolVersion,
   SuccessMessage,
 } from './types';
 import type { ScriptWorkerRequest, ScriptWorkerResponse } from './worker';
@@ -16,7 +18,7 @@ export interface ScriptHostOptions {
   readonly workerUrl: URL;
   readonly limits?: ScriptHostLimits;
   readonly send: (message: CompletedMessage) => Promise<void>;
-  readonly protocolVersion?: 1 | 2;
+  readonly protocolVersion?: ScriptHostProtocolVersion;
 }
 
 type WorkerOutcome =
@@ -67,7 +69,7 @@ export class ScriptHost {
   readonly #workerUrl: URL;
   readonly #limits: ScriptHostLimits;
   readonly #send: (message: CompletedMessage) => Promise<void>;
-  readonly #protocolVersion: 1 | 2;
+  readonly #protocolVersion: ScriptHostProtocolVersion;
   readonly #tasks = new Map<string, Promise<void>>();
   readonly #workers = new Map<string, Worker>();
   readonly #cancellations = new Map<string, () => void>();
@@ -77,7 +79,7 @@ export class ScriptHost {
     this.#workerUrl = options.workerUrl;
     this.#limits = options.limits ?? {};
     this.#send = options.send;
-    this.#protocolVersion = options.protocolVersion ?? 2;
+    this.#protocolVersion = options.protocolVersion ?? 3;
   }
 
   accept(message: unknown): void {
@@ -286,10 +288,13 @@ export class ScriptHost {
       });
 
       try {
+        const attempt: ScriptAttempt | undefined =
+          request.protocolVersion === 3 ? request.attempt : undefined;
         worker.postMessage({
           nodeId: request.nodeId,
           source: request.source,
           context: request.context,
+          attempt,
         } satisfies ScriptWorkerRequest);
       } catch {
         finish({

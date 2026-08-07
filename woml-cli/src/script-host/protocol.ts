@@ -7,13 +7,19 @@ import attemptFailureV1Schema from '../../../docs/schemas/attempt-failure.v1.sch
 import attemptFailureV2Schema from '../../../docs/schemas/attempt-failure.v2.schema.json';
 import scriptHostProtocolV1Schema from '../../../docs/schemas/script-host-protocol.v1.schema.json';
 import scriptHostProtocolV2Schema from '../../../docs/schemas/script-host-protocol.v2.schema.json';
-import type { CancelMessage, ExecuteMessage } from './types';
+import scriptHostProtocolV3Schema from '../../../docs/schemas/script-host-protocol.v3.schema.json';
+import type {
+  CancelMessage,
+  ExecuteMessage,
+  ScriptHostProtocolVersion,
+} from './types';
 
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 ajv.addSchema(attemptFailureV1Schema);
 ajv.addSchema(attemptFailureV2Schema);
 const validateV1 = ajv.compile(scriptHostProtocolV1Schema) as ValidateFunction;
 const validateV2 = ajv.compile(scriptHostProtocolV2Schema) as ValidateFunction;
+const validateV3 = ajv.compile(scriptHostProtocolV3Schema) as ValidateFunction;
 
 export class MessageProtocolError extends Error {
   constructor(message: string) {
@@ -23,16 +29,26 @@ export class MessageProtocolError extends Error {
 }
 
 export function isScriptHostMessage(message: unknown): boolean {
-  return validateV1(message) || validateV2(message);
+  return validateV1(message) || validateV2(message) || validateV3(message);
 }
 
 function validatorFor(message: unknown): ValidateFunction {
-  return typeof message === 'object' &&
-    message !== null &&
-    'protocolVersion' in message &&
-    message.protocolVersion === 2
-    ? validateV2
-    : validateV1;
+  if (typeof message !== 'object' || message === null) return validateV1;
+  if (!('protocolVersion' in message)) return validateV1;
+  if (message.protocolVersion === 3) return validateV3;
+  if (message.protocolVersion === 2) return validateV2;
+  return validateV1;
+}
+
+function validateAttemptSemantics(message: ExecuteMessage): void {
+  if (
+    message.protocolVersion === 3 &&
+    message.attempt.number > message.attempt.maxAttempts
+  ) {
+    throw new MessageProtocolError(
+      'Script-host protocol v3 attempt.number must not exceed attempt.maxAttempts.'
+    );
+  }
 }
 
 function describeErrors(errors: ErrorObject[] | null | undefined): string {
@@ -66,13 +82,19 @@ export function assertExecuteMessage(
       'The Bun script host accepts execute messages from Rust only.'
     );
   }
+  validateAttemptSemantics(message as ExecuteMessage);
 }
 
 export function assertInboundMessage(
   message: unknown,
-  protocolVersion: 1 | 2
+  protocolVersion: ScriptHostProtocolVersion
 ): asserts message is ExecuteMessage | CancelMessage {
-  const validator = protocolVersion === 2 ? validateV2 : validateV1;
+  const validator =
+    protocolVersion === 3
+      ? validateV3
+      : protocolVersion === 2
+        ? validateV2
+        : validateV1;
   if (!validator(message)) {
     throw new MessageProtocolError(
       `Message does not match script-host protocol v${protocolVersion}: ${describeErrors(validator.errors)}.`
@@ -89,5 +111,8 @@ export function assertInboundMessage(
     throw new MessageProtocolError(
       `The Bun script host accepts protocol-v${protocolVersion} execute${protocolVersion === 2 ? ' and cancel' : ''} messages only.`
     );
+  }
+  if (message.messageType === 'execute') {
+    validateAttemptSemantics(message as ExecuteMessage);
   }
 }

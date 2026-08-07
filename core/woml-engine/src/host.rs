@@ -71,6 +71,10 @@ impl ScriptHostClient {
   pub async fn spawn(options: ScriptHostProcessOptions) -> Result<Self, ScriptHostClientError> {
     let mut child = Command::new(&options.bun_executable)
       .arg(&options.host_script_path)
+      .env(
+        "WOML_SCRIPT_HOST_PROTOCOL_VERSION",
+        crate::protocol::SCRIPT_HOST_PROTOCOL_VERSION.to_string(),
+      )
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::inherit())

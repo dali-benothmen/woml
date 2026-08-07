@@ -77,6 +77,10 @@ impl InMemoryDagEngine {
     &self.workflow
   }
 
+  pub fn definition_hash(&self) -> &str {
+    &self.definition_hash
+  }
+
   pub fn start_run(
     &mut self,
     event_id: impl Into<String>,

@@ -11,8 +11,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::engine::{
-  node_is_complete, resolve_context_reference, selected_branch_arm, BranchEvaluationError,
-  BranchEvaluationErrorKind,
+  node_is_complete, resolve_context_reference, selected_branch_arm, step_effect_idempotency_key,
+  BranchEvaluationError, BranchEvaluationErrorKind,
 };
 use crate::event::{
   ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
@@ -22,7 +22,7 @@ use crate::event::{
 };
 use crate::model::{ApprovalDefinition, ParallelGroupDefinition, ValueExpression};
 use crate::projection::{ApprovalRequestStatus, AttemptStatus};
-use crate::protocol::{ExecuteMessage, HostOutcome};
+use crate::protocol::{ExecuteMessage, HostOutcome, ScriptAttempt};
 use crate::{
   run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
   AttemptFailure, AttemptFailureKind, BranchFailure, CompiledWorkflowDefinition, DurableDagEngine,
@@ -841,6 +841,9 @@ struct ParallelInvocationRequest {
   context: WorkflowContext,
   timeout_ms: u64,
   max_context_bytes: Option<usize>,
+  attempt_number: u32,
+  max_attempts: u32,
+  idempotency_key: String,
 }
 
 async fn next_parallel_completion(
@@ -866,17 +869,8 @@ async fn invoke_parallel_child(
   host: &ScriptHostClient,
   request: ParallelInvocationRequest,
 ) -> ParallelInvocationCompletion {
-  let ParallelInvocationRequest {
-    run_id,
-    node_id,
-    invocation_id,
-    source,
-    context,
-    timeout_ms,
-    max_context_bytes,
-  } = request;
-  let outcome = if let Some(limit) = max_context_bytes {
-    match serde_json::to_vec(&context) {
+  let outcome = if let Some(limit) = request.max_context_bytes {
+    match serde_json::to_vec(&request.context) {
       Ok(encoded) if encoded.len() > limit => Err(AttemptFailure {
         kind: AttemptFailureKind::ContextTooLarge,
         code: AttemptFailureKind::ContextTooLarge.code().to_string(),
@@ -892,49 +886,42 @@ async fn invoke_parallel_child(
         message: format!("Invocation context could not be encoded: {error}"),
         details: None,
       }),
-      _ => {
-        execute_parallel_request(
-          host,
-          &run_id,
-          &node_id,
-          &invocation_id,
-          &source,
-          &context,
-          timeout_ms,
-        )
-        .await
-      }
+      _ => execute_parallel_request(host, &request).await,
     }
   } else {
-    execute_parallel_request(
-      host,
-      &run_id,
-      &node_id,
-      &invocation_id,
-      &source,
-      &context,
-      timeout_ms,
-    )
-    .await
+    execute_parallel_request(host, &request).await
   };
   ParallelInvocationCompletion {
-    node_id,
-    invocation_id,
+    node_id: request.node_id,
+    invocation_id: request.invocation_id,
     outcome,
   }
 }
 
 async fn execute_parallel_request(
   host: &ScriptHostClient,
-  run_id: &str,
-  node_id: &str,
-  invocation_id: &str,
-  source: &str,
-  context: &WorkflowContext,
-  timeout_ms: u64,
+  invocation: &ParallelInvocationRequest,
 ) -> Result<Value, AttemptFailure> {
-  let request =
-    ExecuteMessage::runtime_script(invocation_id, run_id, node_id, timeout_ms, source, context);
+  let attempt = ScriptAttempt::new(
+    invocation.attempt_number,
+    invocation.max_attempts,
+    &invocation.idempotency_key,
+  )
+  .map_err(|message| AttemptFailure {
+    kind: AttemptFailureKind::InvalidScriptResult,
+    code: AttemptFailureKind::InvalidScriptResult.code().to_string(),
+    message,
+    details: None,
+  })?;
+  let request = ExecuteMessage::runtime_script(
+    &invocation.invocation_id,
+    &invocation.run_id,
+    &invocation.node_id,
+    attempt,
+    invocation.timeout_ms,
+    &invocation.source,
+    &invocation.context,
+  );
   match host.execute(&request).await {
     Ok(completed) => match completed.outcome {
       HostOutcome::Success { value } => Ok(value),
@@ -1028,14 +1015,22 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         })?
         .to_string();
       let invocation_id = generated_id("inv");
+      let attempt_number = 1;
+      let max_attempts = engine
+        .workflow()
+        .node(&node_id)
+        .and_then(|node| node.retry_policy.as_ref())
+        .map_or(1, |policy| policy.max_attempts);
+      let idempotency_key = step_effect_idempotency_key(run_id, engine.definition_hash(), &node_id);
       engine.append_payload(
         run_id,
         RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
           node_id: node_id.clone(),
-          attempt: 1,
+          attempt: attempt_number,
           invocation_id: invocation_id.clone(),
           handler: "runtime.script".to_string(),
-          idempotency_key: None,
+          idempotency_key: (engine.event_schema_version() >= crate::RUN_EVENT_SCHEMA_VERSION_V6)
+            .then(|| idempotency_key.clone()),
         }),
       )?;
       active.push(ActiveParallelInvocation {
@@ -1050,6 +1045,9 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             context: fork_context.clone(),
             timeout_ms: options.script_timeout_ms,
             max_context_bytes: options.max_context_bytes,
+            attempt_number,
+            max_attempts,
+            idempotency_key,
           },
         )),
       });
@@ -1191,14 +1189,22 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   host: &ScriptHostClient,
 ) -> Result<Value, RuntimeExecutionError> {
   let invocation_id = generated_id("inv");
+  let attempt_number = 1;
+  let max_attempts = engine
+    .workflow()
+    .node(node_id)
+    .and_then(|node| node.retry_policy.as_ref())
+    .map_or(1, |policy| policy.max_attempts);
+  let idempotency_key = step_effect_idempotency_key(run_id, engine.definition_hash(), node_id);
   engine.append_payload(
     run_id,
     RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
       node_id: node_id.to_string(),
-      attempt: 1,
+      attempt: attempt_number,
       invocation_id: invocation_id.clone(),
       handler: "runtime.script".to_string(),
-      idempotency_key: None,
+      idempotency_key: (engine.event_schema_version() >= crate::RUN_EVENT_SCHEMA_VERSION_V6)
+        .then(|| idempotency_key.clone()),
     }),
   )?;
 
@@ -1225,6 +1231,8 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     &invocation_id,
     run_id,
     node_id,
+    ScriptAttempt::new(attempt_number, max_attempts, &idempotency_key)
+      .map_err(RuntimeExecutionError::Stalled)?,
     options.script_timeout_ms,
     source,
     &context,
@@ -1248,7 +1256,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
         run_id,
         RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
           node_id: node_id.to_string(),
-          attempt: 1,
+          attempt: attempt_number,
           invocation_id,
           output: value.clone(),
         }),
@@ -1521,6 +1529,7 @@ fn fail_branch<T, E: RuntimeDagEngine>(
 
 trait RuntimeDagEngine {
   fn workflow(&self) -> &CompiledWorkflowDefinition;
+  fn definition_hash(&self) -> &str;
   fn start_run(
     &mut self,
     run_id: &str,
@@ -1601,6 +1610,10 @@ impl RuntimeDagEngine for InMemoryDagEngine {
     self.workflow()
   }
 
+  fn definition_hash(&self) -> &str {
+    self.definition_hash()
+  }
+
   fn start_run(
     &mut self,
     run_id: &str,
@@ -1643,6 +1656,10 @@ impl RuntimeDagEngine for InMemoryDagEngine {
 impl RuntimeDagEngine for DurableDagEngine {
   fn workflow(&self) -> &CompiledWorkflowDefinition {
     self.workflow()
+  }
+
+  fn definition_hash(&self) -> &str {
+    self.definition_hash()
   }
 
   fn start_run(
