@@ -70,9 +70,10 @@ pub use runtime::{
   execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
   recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
   resume_workflow_durable_outcome, settle_approval_timeout_durable, BranchFailureSite, EngineClock,
-  FailedApprovalDetails, FailedNotificationDetails, FailedParallelDetails, FixedEngineClock,
-  RuntimeExecutionError, RuntimeExecutionOptions, SystemEngineClock, WaitingWorkflowApproval,
-  WorkflowExecutionResult, WorkflowRuntimeOutcome, RUNTIME_OUTCOME_CONTRACT,
+  ExecutionProgress, ExecutionProgressReporter, FailedApprovalDetails, FailedNotificationDetails,
+  FailedParallelDetails, FixedEngineClock, RuntimeExecutionError, RuntimeExecutionOptions,
+  SystemEngineClock, WaitingWorkflowApproval, WorkflowExecutionResult, WorkflowRuntimeOutcome,
+  EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION, RUNTIME_OUTCOME_CONTRACT,
   RUNTIME_OUTCOME_VERSION,
 };
 pub use store::{EventStoreError, InMemoryEventStore};

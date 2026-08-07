@@ -1,19 +1,22 @@
 //! Minimal native boundary for the WOML Rust execution path.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunctionCallMode};
+use napi::{Env, JsFunction, JsObject};
 use napi_derive::napi;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use woml_engine::{
   execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
-  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable_outcome,
-  run_notification_provider_journey, settle_approval_timeout_durable, ApprovalDecision,
-  ApprovalDecisionOutcome, CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
-  NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyError,
-  NotificationJourneyDiagnostics,
-  ParallelFailurePolicy, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
-  RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions, SystemEngineClock,
+  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
+  resume_workflow_durable_outcome, run_notification_provider_journey,
+  settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome,
+  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError, NotificationHostClientError,
+  NotificationHostProcessOptions, NotificationJourneyDiagnostics, NotificationJourneyError,
+  ParallelFailurePolicy, RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
+  SystemEngineClock,
 };
 
 #[derive(Serialize)]
@@ -47,42 +50,33 @@ struct NativeExecutionError {
   #[serde(skip_serializing_if = "Option::is_none")]
   request_id: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  attempt: Option<u32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  max_attempts: Option<u32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  failure_code: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   details: Option<NativeParallelExecutionErrorDetails>,
 }
 
 fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
   let envelope = match error {
-    RuntimeExecutionError::RunFailed(details) => {
-      let node_id = details.events.iter().rev().find_map(|event| {
-        if let RunEventPayload::RunFailed(data) = &event.payload {
-          match data {
-            RunFailedData::V1(data) => data.node_id.clone(),
-            RunFailedData::V2(RunFailedDataV2::Attempt { node_id, .. }) => Some(node_id.clone()),
-            RunFailedData::V2(RunFailedDataV2::Branch { .. }) => None,
-            RunFailedData::V3(RunFailedDataV3::Parallel {
-              primary_node_id, ..
-            }) => Some(primary_node_id.clone()),
-            RunFailedData::V4(_) => None,
-            RunFailedData::V5(_) => None,
-          }
-        } else {
-          None
-        }
-      });
-      NativeExecutionError {
-        kind: "woml_execution_error",
-        code: details.code.clone(),
-        message: details.message.clone(),
-        node_id,
-        branch_id: None,
-        arm_id: None,
-        reference_path: None,
-        branch_site: None,
-        approval_id: None,
-        request_id: None,
-        details: None,
-      }
-    }
+    RuntimeExecutionError::RunFailed(details) => NativeExecutionError {
+      kind: "woml_execution_error",
+      code: details.code.clone(),
+      message: details.message.clone(),
+      node_id: details.node_id.clone(),
+      branch_id: None,
+      arm_id: None,
+      reference_path: None,
+      branch_site: None,
+      approval_id: None,
+      request_id: None,
+      attempt: details.attempt,
+      max_attempts: details.max_attempts,
+      failure_code: Some(details.failure.code.clone()),
+      details: None,
+    },
     RuntimeExecutionError::BranchFailed(details) => NativeExecutionError {
       kind: "woml_execution_error",
       code: details.code.clone(),
@@ -94,6 +88,9 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       branch_site: Some(details.site.as_str()),
       approval_id: None,
       request_id: None,
+      attempt: None,
+      max_attempts: None,
+      failure_code: None,
       details: None,
     },
     RuntimeExecutionError::ParallelFailed(details) => NativeExecutionError {
@@ -107,6 +104,9 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       branch_site: None,
       approval_id: None,
       request_id: None,
+      attempt: None,
+      max_attempts: None,
+      failure_code: None,
       details: Some(NativeParallelExecutionErrorDetails {
         parallel_id: details.parallel_id.clone(),
         policy: details.policy,
@@ -126,6 +126,9 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       branch_site: None,
       approval_id: Some(details.approval_id.clone()),
       request_id: Some(details.request_id.clone()),
+      attempt: None,
+      max_attempts: None,
+      failure_code: None,
       details: None,
     },
     error => NativeExecutionError {
@@ -139,6 +142,9 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       branch_site: None,
       approval_id: None,
       request_id: None,
+      attempt: None,
+      max_attempts: None,
+      failure_code: None,
       details: None,
     },
   };
@@ -271,6 +277,29 @@ fn runtime_options(
   )
 }
 
+fn runtime_options_with_progress(
+  env: &Env,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  progress_callback: JsFunction,
+) -> napi::Result<RuntimeExecutionOptions> {
+  let mut progress = progress_callback
+    .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
+      Ok(vec![context.value])
+    })?;
+  progress.unref(env)?;
+  Ok(
+    runtime_options(bun_executable, script_host_path, script_timeout_ms).with_progress_reporter(
+      Arc::new(move |message| {
+        if let Ok(json) = serde_json::to_string(&message) {
+          let _ = progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+        }
+      }),
+    ),
+  )
+}
+
 #[napi(ts_return_type = "Promise<string>")]
 pub async fn execute_woml_workflow(
   compiled_model_json: String,
@@ -333,6 +362,103 @@ pub async fn execute_woml_workflow_durable(
 }
 
 #[napi(ts_return_type = "Promise<string>")]
+pub fn execute_woml_workflow_durable_with_progress(
+  env: Env,
+  compiled_model_json: String,
+  definition_hash: String,
+  trigger_json: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  event_store_path: String,
+  progress_callback: JsFunction,
+) -> napi::Result<JsObject> {
+  let workflow: CompiledWorkflowDefinition =
+    serde_json::from_str(&compiled_model_json).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
+    })?;
+  let trigger: Map<String, Value> = serde_json::from_str(&trigger_json)
+    .map_err(|error| napi::Error::from_reason(format!("Invalid trigger JSON: {error}")))?;
+  let options = runtime_options_with_progress(
+    &env,
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    progress_callback,
+  )?;
+  env.spawn_future(async move {
+    let result = execute_workflow_durable(
+      workflow,
+      definition_hash,
+      trigger,
+      options,
+      PathBuf::from(event_store_path),
+    )
+    .await
+    .map_err(native_execution_error)?;
+    serde_json::to_string(&result)
+      .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))
+  })
+}
+
+fn verify_durable_run_definition(
+  event_store_path: &str,
+  run_id: &str,
+  definition_hash: &str,
+  workflow: &CompiledWorkflowDefinition,
+) -> napi::Result<()> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  let binding = store
+    .run_binding(run_id)
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  let stored_workflow = store
+    .definition(&binding.definition_hash)
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  if binding.definition_hash != definition_hash || stored_workflow != *workflow {
+    return Err(native_execution_error(
+      RuntimeExecutionError::InvalidConfiguration(
+        "the supplied WOML definition does not match the durable run definition".to_string(),
+      ),
+    ));
+  }
+  Ok(())
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub fn resume_woml_workflow_durable_with_progress(
+  env: Env,
+  compiled_model_json: String,
+  definition_hash: String,
+  run_id: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  event_store_path: String,
+  progress_callback: JsFunction,
+) -> napi::Result<JsObject> {
+  let workflow: CompiledWorkflowDefinition =
+    serde_json::from_str(&compiled_model_json).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
+    })?;
+  verify_durable_run_definition(&event_store_path, &run_id, &definition_hash, &workflow)?;
+  let options = runtime_options_with_progress(
+    &env,
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    progress_callback,
+  )?;
+  env.spawn_future(async move {
+    let result = resume_workflow_durable(PathBuf::from(event_store_path), &run_id, options)
+      .await
+      .map_err(native_execution_error)?;
+    serde_json::to_string(&result)
+      .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))
+  })
+}
+
+#[napi(ts_return_type = "Promise<string>")]
 pub async fn execute_woml_workflow_durable_outcome(
   compiled_model_json: String,
   definition_hash: String,
@@ -359,6 +485,47 @@ pub async fn execute_woml_workflow_durable_outcome(
   .map_err(native_execution_error)?;
   serde_json::to_string(&outcome).map_err(|error| {
     napi::Error::from_reason(format!("Could not encode WOML runtime outcome: {error}"))
+  })
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub fn execute_woml_workflow_durable_outcome_with_progress(
+  env: Env,
+  compiled_model_json: String,
+  definition_hash: String,
+  trigger_json: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  event_store_path: String,
+  progress_callback: JsFunction,
+) -> napi::Result<JsObject> {
+  let workflow: CompiledWorkflowDefinition =
+    serde_json::from_str(&compiled_model_json).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
+    })?;
+  let trigger: Map<String, Value> = serde_json::from_str(&trigger_json)
+    .map_err(|error| napi::Error::from_reason(format!("Invalid trigger JSON: {error}")))?;
+  let options = runtime_options_with_progress(
+    &env,
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    progress_callback,
+  )?;
+  env.spawn_future(async move {
+    let outcome = execute_workflow_durable_outcome(
+      workflow,
+      definition_hash,
+      trigger,
+      options,
+      PathBuf::from(event_store_path),
+    )
+    .await
+    .map_err(native_execution_error)?;
+    serde_json::to_string(&outcome).map_err(|error| {
+      napi::Error::from_reason(format!("Could not encode WOML runtime outcome: {error}"))
+    })
   })
 }
 
@@ -400,6 +567,41 @@ pub async fn resume_woml_workflow_durable_outcome(
   .map_err(native_execution_error)?;
   serde_json::to_string(&outcome).map_err(|error| {
     napi::Error::from_reason(format!("Could not encode WOML runtime outcome: {error}"))
+  })
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub fn resume_woml_workflow_durable_outcome_with_progress(
+  env: Env,
+  compiled_model_json: String,
+  definition_hash: String,
+  run_id: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  event_store_path: String,
+  progress_callback: JsFunction,
+) -> napi::Result<JsObject> {
+  let workflow: CompiledWorkflowDefinition =
+    serde_json::from_str(&compiled_model_json).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
+    })?;
+  verify_durable_run_definition(&event_store_path, &run_id, &definition_hash, &workflow)?;
+  let options = runtime_options_with_progress(
+    &env,
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    progress_callback,
+  )?;
+  env.spawn_future(async move {
+    let outcome =
+      resume_workflow_durable_outcome(PathBuf::from(event_store_path), &run_id, options)
+        .await
+        .map_err(native_execution_error)?;
+    serde_json::to_string(&outcome).map_err(|error| {
+      napi::Error::from_reason(format!("Could not encode WOML runtime outcome: {error}"))
+    })
   })
 }
 

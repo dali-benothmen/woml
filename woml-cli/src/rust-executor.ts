@@ -32,7 +32,39 @@ export interface RustExecutorOptions {
   readonly bunExecutable?: string;
   readonly scriptTimeoutMs?: number;
   readonly trigger?: JsonObject;
+  readonly onProgress?: (progress: ExecutionProgressV1) => void;
 }
+
+export type ExecutionProgressV1 =
+  | {
+      readonly contract: 'woml.execution-progress';
+      readonly version: 1;
+      readonly type: 'step_attempt_failed';
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly attempt: number;
+      readonly maxAttempts: number;
+      readonly failureCode: string;
+    }
+  | {
+      readonly contract: 'woml.execution-progress';
+      readonly version: 1;
+      readonly type: 'step_retry_scheduled';
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly nextAttempt: number;
+      readonly maxAttempts: number;
+      readonly scheduledAt: string;
+    }
+  | {
+      readonly contract: 'woml.execution-progress';
+      readonly version: 1;
+      readonly type: 'step_attempt_succeeded';
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly attempt: number;
+      readonly maxAttempts: number;
+    };
 
 export interface RustRecoveryReport {
   readonly inspectedRuns: number;
@@ -52,6 +84,9 @@ interface NativeExecutionErrorEnvelope {
   readonly branchSite?: 'test' | 'result' | 'selection';
   readonly approvalId?: string;
   readonly requestId?: string;
+  readonly attempt?: number;
+  readonly maxAttempts?: number;
+  readonly failureCode?: string;
   readonly details?: NativeParallelExecutionErrorDetails;
 }
 
@@ -77,6 +112,9 @@ export class RustWorkflowExecutionError extends Error {
   readonly cancelledNodeIds?: readonly string[];
   readonly approvalId?: string;
   readonly requestId?: string;
+  readonly attempt?: number;
+  readonly maxAttempts?: number;
+  readonly failureCode?: string;
 
   constructor(
     code: string,
@@ -89,6 +127,9 @@ export class RustWorkflowExecutionError extends Error {
       readonly branchSite?: 'test' | 'result' | 'selection';
       readonly approvalId?: string;
       readonly requestId?: string;
+      readonly attempt?: number;
+      readonly maxAttempts?: number;
+      readonly failureCode?: string;
       readonly parallel?: NativeParallelExecutionErrorDetails;
     } = {}
   ) {
@@ -104,6 +145,11 @@ export class RustWorkflowExecutionError extends Error {
     if (details.branchSite !== undefined) this.branchSite = details.branchSite;
     if (details.approvalId !== undefined) this.approvalId = details.approvalId;
     if (details.requestId !== undefined) this.requestId = details.requestId;
+    if (details.attempt !== undefined) this.attempt = details.attempt;
+    if (details.maxAttempts !== undefined)
+      this.maxAttempts = details.maxAttempts;
+    if (details.failureCode !== undefined)
+      this.failureCode = details.failureCode;
     if (details.parallel !== undefined) {
       this.parallelId = details.parallel.parallelId;
       this.parallelPolicy = details.parallel.policy;
@@ -132,6 +178,26 @@ interface NativeCore {
     scriptTimeoutMs: number,
     eventStorePath: string
   ) => Promise<string>;
+  readonly executeWomlWorkflowDurableWithProgress: (
+    compiledModelJson: string,
+    definitionHash: string,
+    triggerJson: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    eventStorePath: string,
+    progressCallback: (message: string) => void
+  ) => Promise<string>;
+  readonly resumeWomlWorkflowDurableWithProgress: (
+    compiledModelJson: string,
+    definitionHash: string,
+    runId: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    eventStorePath: string,
+    progressCallback: (message: string) => void
+  ) => Promise<string>;
   readonly recoverWomlRuns: (eventStorePath: string) => string;
   readonly executeWomlWorkflowDurableOutcome: (
     compiledModelJson: string,
@@ -142,6 +208,16 @@ interface NativeCore {
     scriptTimeoutMs: number,
     eventStorePath: string
   ) => Promise<string>;
+  readonly executeWomlWorkflowDurableOutcomeWithProgress: (
+    compiledModelJson: string,
+    definitionHash: string,
+    triggerJson: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    eventStorePath: string,
+    progressCallback: (message: string) => void
+  ) => Promise<string>;
   readonly resumeWomlWorkflowDurableOutcome: (
     compiledModelJson: string,
     definitionHash: string,
@@ -150,6 +226,16 @@ interface NativeCore {
     scriptHostPath: string,
     scriptTimeoutMs: number,
     eventStorePath: string
+  ) => Promise<string>;
+  readonly resumeWomlWorkflowDurableOutcomeWithProgress: (
+    compiledModelJson: string,
+    definitionHash: string,
+    runId: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    eventStorePath: string,
+    progressCallback: (message: string) => void
   ) => Promise<string>;
   readonly resolveWomlApproval: (
     eventStorePath: string,
@@ -386,6 +472,81 @@ function dateTime(value: unknown): value is string {
   );
 }
 
+export function parseExecutionProgress(json: string): ExecutionProgressV1 {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    value.contract !== 'woml.execution-progress' ||
+    value.version !== 1 ||
+    typeof value.runId !== 'string' ||
+    value.runId.length === 0 ||
+    typeof value.nodeId !== 'string' ||
+    value.nodeId.length === 0 ||
+    !Number.isSafeInteger(value.maxAttempts) ||
+    Number(value.maxAttempts) < 1 ||
+    Number(value.maxAttempts) > 10
+  ) {
+    throw new Error('The native core returned invalid execution progress.');
+  }
+  if (
+    value.type === 'step_attempt_failed' &&
+    exactKeys(value, [
+      'contract',
+      'version',
+      'type',
+      'runId',
+      'nodeId',
+      'attempt',
+      'maxAttempts',
+      'failureCode',
+    ]) &&
+    Number.isSafeInteger(value.attempt) &&
+    Number(value.attempt) >= 1 &&
+    Number(value.attempt) <= Number(value.maxAttempts) &&
+    typeof value.failureCode === 'string' &&
+    /^WOML_[A-Z0-9_]+$/.test(value.failureCode)
+  ) {
+    return value as ExecutionProgressV1;
+  }
+  if (
+    value.type === 'step_retry_scheduled' &&
+    exactKeys(value, [
+      'contract',
+      'version',
+      'type',
+      'runId',
+      'nodeId',
+      'nextAttempt',
+      'maxAttempts',
+      'scheduledAt',
+    ]) &&
+    Number.isSafeInteger(value.nextAttempt) &&
+    Number(value.nextAttempt) >= 2 &&
+    Number(value.nextAttempt) <= Number(value.maxAttempts) &&
+    dateTime(value.scheduledAt)
+  ) {
+    return value as ExecutionProgressV1;
+  }
+  if (
+    value.type === 'step_attempt_succeeded' &&
+    exactKeys(value, [
+      'contract',
+      'version',
+      'type',
+      'runId',
+      'nodeId',
+      'attempt',
+      'maxAttempts',
+    ]) &&
+    Number.isSafeInteger(value.attempt) &&
+    Number(value.attempt) >= 1 &&
+    Number(value.attempt) <= Number(value.maxAttempts)
+  ) {
+    return value as ExecutionProgressV1;
+  }
+  throw new Error('The native core returned invalid execution progress.');
+}
+
 function executionResult(value: unknown): value is RustWorkflowExecutionResult {
   if (
     !record(value) ||
@@ -583,6 +744,14 @@ function decodeNativeExecutionError(error: unknown): never {
           typeof decoded.approvalId === 'string') &&
         (decoded.requestId === undefined ||
           typeof decoded.requestId === 'string') &&
+        (decoded.attempt === undefined ||
+          (Number.isSafeInteger(decoded.attempt) && Number(decoded.attempt) >= 1)) &&
+        (decoded.maxAttempts === undefined ||
+          (Number.isSafeInteger(decoded.maxAttempts) &&
+            Number(decoded.maxAttempts) >= 1)) &&
+        (decoded.failureCode === undefined ||
+          (typeof decoded.failureCode === 'string' &&
+            /^WOML_[A-Z0-9_]+$/.test(decoded.failureCode))) &&
         validParallelDetails
       ) {
         throw new RustWorkflowExecutionError(decoded.code, decoded.message, {
@@ -593,6 +762,9 @@ function decodeNativeExecutionError(error: unknown): never {
           branchSite: decoded.branchSite,
           approvalId: decoded.approvalId,
           requestId: decoded.requestId,
+          attempt: decoded.attempt,
+          maxAttempts: decoded.maxAttempts,
+          failureCode: decoded.failureCode,
           parallel: parallelDetails,
         });
       }
@@ -690,15 +862,63 @@ export async function executeWorkflowWithRustDurable(
       `Native core at "${nativePath}" does not expose executeWomlWorkflowDurable; rebuild the Rust addon.`
     );
   }
-  const resultJson = await native
-    .executeWomlWorkflowDurable(
+  const progressCallback = (message: string): void => {
+    options.onProgress?.(parseExecutionProgress(message));
+  };
+  const execute =
+    options.onProgress === undefined
+      ? native.executeWomlWorkflowDurable
+      : native.executeWomlWorkflowDurableWithProgress;
+  if (typeof execute !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose executeWomlWorkflowDurableWithProgress; rebuild the Rust addon.`
+    );
+  }
+  const arguments_ = [
       JSON.stringify(workflow),
       compiledDefinitionHash(workflow),
       JSON.stringify(options.trigger ?? {}),
       options.bunExecutable ?? process.execPath,
       options.scriptHostPath ?? defaultScriptHostPath(),
       timeoutMs,
-      eventStorePath
+      eventStorePath,
+  ] as const;
+  const resultJson = await (options.onProgress === undefined
+    ? native.executeWomlWorkflowDurable(...arguments_)
+    : native.executeWomlWorkflowDurableWithProgress(
+        ...arguments_,
+        progressCallback
+      )).catch(decodeNativeExecutionError);
+  return JSON.parse(resultJson) as RustWorkflowExecutionResult;
+}
+
+export async function resumeWorkflowWithRustDurable(
+  workflow: CompiledWorkflowDefinition,
+  eventStorePath: string,
+  runId: string,
+  options: RustExecutorOptions = {}
+): Promise<RustWorkflowExecutionResult> {
+  if (eventStorePath.length === 0 || runId.length === 0) {
+    throw new Error('eventStorePath and runId must not be empty.');
+  }
+  const runtime = approvalRuntimeArguments(options);
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.resumeWomlWorkflowDurableWithProgress !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose resumeWomlWorkflowDurableWithProgress; rebuild the Rust addon.`
+    );
+  }
+  const resultJson = await native
+    .resumeWomlWorkflowDurableWithProgress(
+      JSON.stringify(workflow),
+      compiledDefinitionHash(workflow),
+      runId,
+      runtime.bunExecutable,
+      runtime.scriptHostPath,
+      runtime.timeoutMs,
+      eventStorePath,
+      message => options.onProgress?.(parseExecutionProgress(message))
     )
     .catch(decodeNativeExecutionError);
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
@@ -744,17 +964,21 @@ export async function executeApprovalWorkflowWithRust(
   }
   const { native } = approvalNative(options);
   const runtime = approvalRuntimeArguments(options);
-  const resultJson = await native
-    .executeWomlWorkflowDurableOutcome(
-      JSON.stringify(workflow),
-      compiledDefinitionHash(workflow),
-      JSON.stringify(options.trigger ?? {}),
-      runtime.bunExecutable,
-      runtime.scriptHostPath,
-      runtime.timeoutMs,
-      eventStorePath
-    )
-    .catch(decodeNativeExecutionError);
+  const arguments_ = [
+    JSON.stringify(workflow),
+    compiledDefinitionHash(workflow),
+    JSON.stringify(options.trigger ?? {}),
+    runtime.bunExecutable,
+    runtime.scriptHostPath,
+    runtime.timeoutMs,
+    eventStorePath,
+  ] as const;
+  const resultJson = await (options.onProgress === undefined
+    ? native.executeWomlWorkflowDurableOutcome(...arguments_)
+    : native.executeWomlWorkflowDurableOutcomeWithProgress(
+        ...arguments_,
+        message => options.onProgress?.(parseExecutionProgress(message))
+      )).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
 }
 
@@ -769,17 +993,21 @@ export async function resumeApprovalWorkflowWithRust(
   }
   const { native } = approvalNative(options);
   const runtime = approvalRuntimeArguments(options);
-  const resultJson = await native
-    .resumeWomlWorkflowDurableOutcome(
-      JSON.stringify(workflow),
-      compiledDefinitionHash(workflow),
-      runId,
-      runtime.bunExecutable,
-      runtime.scriptHostPath,
-      runtime.timeoutMs,
-      eventStorePath
-    )
-    .catch(decodeNativeExecutionError);
+  const arguments_ = [
+    JSON.stringify(workflow),
+    compiledDefinitionHash(workflow),
+    runId,
+    runtime.bunExecutable,
+    runtime.scriptHostPath,
+    runtime.timeoutMs,
+    eventStorePath,
+  ] as const;
+  const resultJson = await (options.onProgress === undefined
+    ? native.resumeWomlWorkflowDurableOutcome(...arguments_)
+    : native.resumeWomlWorkflowDurableOutcomeWithProgress(
+        ...arguments_,
+        message => options.onProgress?.(parseExecutionProgress(message))
+      )).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
 }
 

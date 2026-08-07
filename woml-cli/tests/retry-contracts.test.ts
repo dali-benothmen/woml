@@ -5,6 +5,7 @@ import { basename, join, resolve } from 'node:path';
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import { compileWoml, parseWoml, type CompiledWorkflowDefinition } from 'woml';
+import { parseExecutionProgress } from '../src/rust-executor';
 
 type JsonObject = Record<string, unknown>;
 
@@ -203,6 +204,26 @@ function encodeFrame(message: unknown): Buffer {
 }
 
 describe('RI0 retry and idempotency contracts', () => {
+  test('the CLI strictly decodes every frozen progress message', async () => {
+    for (const name of readdirSync(progressFixtureDirectory).sort()) {
+      const json = await Bun.file(join(progressFixtureDirectory, name)).text();
+      expect(parseExecutionProgress(json).contract).toBe(
+        'woml.execution-progress'
+      );
+    }
+    const failed = (await readJson(
+      join(progressFixtureDirectory, 'attempt-failed.v1.json')
+    )) as JsonObject;
+    expect(() =>
+      parseExecutionProgress(
+        JSON.stringify({
+          ...failed,
+          output: { secret: true },
+        })
+      )
+    ).toThrow('invalid execution progress');
+  });
+
   test('the reviewed WOML source deep-equals the frozen Model v6 fixture', async () => {
     const source = await Bun.file(
       join(womlFixtureDirectory, 'retry.woml')

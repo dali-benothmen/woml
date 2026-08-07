@@ -19,10 +19,12 @@ import {
   executeApprovalWorkflowWithRust,
   executeWorkflowWithRust,
   executeWorkflowWithRustDurable,
+  type ExecutionProgressV1,
   NotificationProviderError,
   type NotificationJourneyDiagnostics,
   resolveApprovalWithRust,
   resumeApprovalWorkflowWithRust,
+  resumeWorkflowWithRustDurable,
   RustWorkflowExecutionError,
   runNotificationProviderJourneyWithRust,
   settleApprovalTimeoutWithRust,
@@ -146,6 +148,41 @@ function runtimeCode(code: string): string {
   if (code === 'WOML_SCRIPT_NON_JSON_RESULT') return 'WOML_NON_JSON_RESULT';
   if (code.startsWith('WOML_SCRIPT_')) return 'WOML_SCRIPT_FAILED';
   return code;
+}
+
+export function formatExecutionProgress(progress: ExecutionProgressV1): string {
+  if (progress.type === 'step_attempt_failed') {
+    return `Step ${progress.nodeId} failed (attempt ${progress.attempt}/${progress.maxAttempts}): ${progress.failureCode}`;
+  }
+  if (progress.type === 'step_attempt_succeeded') {
+    return `Step ${progress.nodeId} succeeded on attempt ${progress.attempt}/${progress.maxAttempts}.`;
+  }
+  const remainingMs = Math.max(0, Date.parse(progress.scheduledAt) - Date.now());
+  const delay =
+    remainingMs === 0
+      ? 'now'
+      : remainingMs < 500
+        ? `in ${Math.max(1, Math.ceil(remainingMs))}ms`
+        : `in ${Math.ceil(remainingMs / 1_000)}s`;
+  return `Retry ${progress.nextAttempt}/${progress.maxAttempts} scheduled ${delay}.`;
+}
+
+function durableRetryProgress(
+  io: CliIo,
+  args: RunArguments
+): (progress: ExecutionProgressV1) => void {
+  let recoveryPrinted = false;
+  return progress => {
+    io.stderr(`${formatExecutionProgress(progress)}\n`);
+    if (progress.type === 'step_retry_scheduled' && !recoveryPrinted) {
+      recoveryPrinted = true;
+      io.stderr(
+        `Recovery: woml run ${JSON.stringify(args.filePath)} --state ${JSON.stringify(
+          args.statePath
+        )} --resume ${JSON.stringify(progress.runId)}\n`
+      );
+    }
+  };
 }
 
 function stepSourcePosition(
@@ -449,16 +486,27 @@ function printWaitingApproval(
 async function runApprovalWorkflow(
   workflow: ReturnType<typeof compileWoml>,
   args: RunArguments,
-  io: CliIo
+  io: CliIo,
+  dependencies: CliDependencies
 ): Promise<void> {
   await mkdir(dirname(args.statePath), { recursive: true });
+  const runtimeOptions = {
+    nativeCorePath: dependencies.nativeCorePath,
+    onProgress: (progress: ExecutionProgressV1) =>
+      io.stderr(`${formatExecutionProgress(progress)}\n`),
+  };
   let outcome =
     args.resumeRunId === undefined
-      ? await executeApprovalWorkflowWithRust(workflow, args.statePath)
+      ? await executeApprovalWorkflowWithRust(
+          workflow,
+          args.statePath,
+          runtimeOptions
+        )
       : await resumeApprovalWorkflowWithRust(
           workflow,
           args.statePath,
-          args.resumeRunId
+          args.resumeRunId,
+          runtimeOptions
         );
 
   while (outcome.status === 'waiting') {
@@ -476,7 +524,8 @@ async function runApprovalWorkflow(
     outcome = await resumeApprovalWorkflowWithRust(
       workflow,
       args.statePath,
-      waiting.runId
+      waiting.runId,
+      runtimeOptions
     );
   }
   io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
@@ -577,16 +626,22 @@ async function runNotificationWorkflow(
     dependencies.createSecretStore()
   );
   await mkdir(dirname(args.statePath), { recursive: true });
+  const runtimeProgress = (progress: ExecutionProgressV1): void =>
+    io.stderr(`${formatExecutionProgress(progress)}\n`);
   let outcome =
     args.resumeRunId === undefined
       ? await executeApprovalWorkflowWithRust(workflow, args.statePath, {
           nativeCorePath: dependencies.nativeCorePath,
+          onProgress: runtimeProgress,
         })
       : await resumeApprovalWorkflowWithRust(
           workflow,
           args.statePath,
           args.resumeRunId,
-          { nativeCorePath: dependencies.nativeCorePath }
+          {
+            nativeCorePath: dependencies.nativeCorePath,
+            onProgress: runtimeProgress,
+          }
         );
   while (outcome.status === 'waiting') {
     const waiting = outcome;
@@ -605,7 +660,10 @@ async function runNotificationWorkflow(
       workflow,
       args.statePath,
       waiting.runId,
-      { nativeCorePath: dependencies.nativeCorePath }
+      {
+        nativeCorePath: dependencies.nativeCorePath,
+        onProgress: runtimeProgress,
+      }
     );
   }
   io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
@@ -720,11 +778,12 @@ export async function runCli(
     const hasNotifications = workflowHasNotifications(workflow);
     if (
       runArguments.resumeRunId !== undefined &&
-      !hasApproval
+      !hasApproval &&
+      workflow.schemaVersion !== 6
     ) {
       throw new CliInputError(
-        'WOML_RESUME_REQUIRES_APPROVAL',
-        '--resume currently supports Human Approval workflows only.'
+        'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
+        '--resume requires a durable workflow with Human Approval or retry support.'
       );
     }
     if (hasNotifications) {
@@ -737,16 +796,31 @@ export async function runCli(
       return 0;
     }
     if (hasApproval) {
-      await runApprovalWorkflow(workflow, runArguments, io);
+      await runApprovalWorkflow(workflow, runArguments, io, dependencies);
       return 0;
     }
     if (workflow.schemaVersion === 6) {
       await mkdir(dirname(runArguments.statePath), { recursive: true });
-      const execution = await executeWorkflowWithRustDurable(
-        workflow,
-        runArguments.statePath,
-        { nativeCorePath: dependencies.nativeCorePath }
-      );
+      const onProgress = durableRetryProgress(io, runArguments);
+      const execution =
+        runArguments.resumeRunId === undefined
+          ? await executeWorkflowWithRustDurable(
+              workflow,
+              runArguments.statePath,
+              {
+                nativeCorePath: dependencies.nativeCorePath,
+                onProgress,
+              }
+            )
+          : await resumeWorkflowWithRustDurable(
+              workflow,
+              runArguments.statePath,
+              runArguments.resumeRunId,
+              {
+                nativeCorePath: dependencies.nativeCorePath,
+                onProgress,
+              }
+            );
       io.stdout(`${JSON.stringify(execution.result)}\n`);
       return 0;
     }

@@ -218,7 +218,13 @@ fn durable_retry_schedule_is_atomic_due_aware_and_survives_reopen() {
     assert_eq!(end[0].sequence + 1, end[1].sequence);
   }
 
-  let store = DurableEventStore::open(database.path()).unwrap();
+  let mut store = DurableEventStore::open(database.path()).unwrap();
+  let recovery = store.recover_interrupted_runs().unwrap();
+  assert_eq!(recovery.recovered_runs, 0);
+  assert_eq!(recovery.resumable_runs, 1);
+  let projection = store.projection(run_id).unwrap();
+  assert_eq!(projection.status, RunStatus::Running);
+  assert_eq!(projection.pending_retries["greet"].next_attempt, 2);
   let mut reopened = DurableDagEngine::resume(store, run_id).unwrap();
   assert_eq!(
     reopened.projection(run_id).unwrap().pending_retries["greet"].scheduled_at,
@@ -347,6 +353,124 @@ fn recovery_fails_an_active_v6_attempt_closed_without_scheduling_it() {
   assert!(projection.pending_retries.is_empty());
   assert!(matches!(
     projection.attempts.last().unwrap().status,
+    AttemptStatus::Failed {
+      failure: AttemptFailure {
+        kind: AttemptFailureKind::Interrupted,
+        ..
+      }
+    }
+  ));
+}
+
+#[test]
+fn recovery_closes_a_successful_retry_instead_of_reviving_its_old_failure() {
+  let database = TemporaryDatabase::new("successful-retry-recovery");
+  let run_id = "run_ri6_successful_retry";
+  let started_at = Utc.with_ymd_and_hms(2026, 8, 7, 15, 0, 0).unwrap();
+  {
+    let store = DurableEventStore::open(database.path()).unwrap();
+    let mut engine = DurableDagEngine::new(retry_model(), RETRY_HASH, store).unwrap();
+    seed_retry_step(&mut engine, run_id, started_at);
+    let commit = engine
+      .record_step_attempt_failure(
+        run_id,
+        started_at + chrono::Duration::milliseconds(4),
+        StepAttemptFailedData {
+          node_id: "greet".to_string(),
+          attempt: 1,
+          invocation_id: format!("inv_{run_id}_greet_1"),
+          failure: script_failure("temporary"),
+        },
+      )
+      .unwrap();
+    let StepFailureDisposition::RetryScheduled { scheduled_at, .. } = commit.disposition else {
+      panic!("attempt 1 should schedule attempt 2")
+    };
+    let invocation_id = format!("inv_{run_id}_greet_2");
+    engine
+      .start_step_attempt(run_id, "greet", 2, &invocation_id, scheduled_at)
+      .unwrap();
+    engine
+      .append_payload(
+        format!("evt_{run_id}_greet_succeeded"),
+        run_id,
+        scheduled_at + chrono::Duration::milliseconds(1),
+        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+          node_id: "greet".to_string(),
+          attempt: 2,
+          invocation_id,
+          output: json!({ "message": "Hello World" }),
+        }),
+      )
+      .unwrap();
+  }
+
+  let mut store = DurableEventStore::open(database.path()).unwrap();
+  let recovery = store.recover_interrupted_runs().unwrap();
+  assert_eq!(recovery.recovered_runs, 1);
+  assert_eq!(recovery.interrupted_attempts, 0);
+  let projection = store.projection(run_id).unwrap();
+  assert_eq!(projection.status, RunStatus::Succeeded);
+  assert_eq!(
+    projection.context.steps["greet"],
+    json!({ "message": "Hello World" })
+  );
+  assert_eq!(
+    projection
+      .attempts
+      .iter()
+      .filter(|attempt| attempt.identity.node_id == "greet")
+      .count(),
+    2
+  );
+}
+
+#[test]
+fn recovery_fails_closed_when_the_retry_itself_was_interrupted() {
+  let database = TemporaryDatabase::new("interrupted-retry");
+  let run_id = "run_ri6_interrupted_retry";
+  let started_at = Utc.with_ymd_and_hms(2026, 8, 7, 16, 0, 0).unwrap();
+  {
+    let store = DurableEventStore::open(database.path()).unwrap();
+    let mut engine = DurableDagEngine::new(retry_model(), RETRY_HASH, store).unwrap();
+    seed_retry_step(&mut engine, run_id, started_at);
+    let commit = engine
+      .record_step_attempt_failure(
+        run_id,
+        started_at + chrono::Duration::milliseconds(4),
+        StepAttemptFailedData {
+          node_id: "greet".to_string(),
+          attempt: 1,
+          invocation_id: format!("inv_{run_id}_greet_1"),
+          failure: script_failure("temporary"),
+        },
+      )
+      .unwrap();
+    let StepFailureDisposition::RetryScheduled { scheduled_at, .. } = commit.disposition else {
+      panic!("attempt 1 should schedule attempt 2")
+    };
+    engine
+      .start_step_attempt(
+        run_id,
+        "greet",
+        2,
+        format!("inv_{run_id}_greet_2"),
+        scheduled_at,
+      )
+      .unwrap();
+  }
+
+  let mut store = DurableEventStore::open(database.path()).unwrap();
+  let recovery = store.recover_interrupted_runs().unwrap();
+  assert_eq!(recovery.recovered_runs, 1);
+  assert_eq!(recovery.interrupted_attempts, 1);
+  let projection = store.projection(run_id).unwrap();
+  assert_eq!(projection.status, RunStatus::Failed);
+  assert!(projection.pending_retries.is_empty());
+  let latest = projection.latest_attempt("greet").unwrap();
+  assert_eq!(latest.identity.attempt, 2);
+  assert!(matches!(
+    latest.status,
     AttemptStatus::Failed {
       failure: AttemptFailure {
         kind: AttemptFailureKind::Interrupted,

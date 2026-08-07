@@ -37,6 +37,54 @@ pub trait EngineClock: Send + Sync {
   fn now(&self) -> chrono::DateTime<chrono::Utc>;
 }
 
+pub const EXECUTION_PROGRESS_CONTRACT: &str = "woml.execution-progress";
+pub const EXECUTION_PROGRESS_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExecutionProgress {
+  StepAttemptFailed {
+    contract: &'static str,
+    version: u32,
+    #[serde(rename = "runId")]
+    run_id: String,
+    #[serde(rename = "nodeId")]
+    node_id: String,
+    attempt: u32,
+    #[serde(rename = "maxAttempts")]
+    max_attempts: u32,
+    #[serde(rename = "failureCode")]
+    failure_code: String,
+  },
+  StepRetryScheduled {
+    contract: &'static str,
+    version: u32,
+    #[serde(rename = "runId")]
+    run_id: String,
+    #[serde(rename = "nodeId")]
+    node_id: String,
+    #[serde(rename = "nextAttempt")]
+    next_attempt: u32,
+    #[serde(rename = "maxAttempts")]
+    max_attempts: u32,
+    #[serde(rename = "scheduledAt")]
+    scheduled_at: chrono::DateTime<chrono::Utc>,
+  },
+  StepAttemptSucceeded {
+    contract: &'static str,
+    version: u32,
+    #[serde(rename = "runId")]
+    run_id: String,
+    #[serde(rename = "nodeId")]
+    node_id: String,
+    attempt: u32,
+    #[serde(rename = "maxAttempts")]
+    max_attempts: u32,
+  },
+}
+
+pub type ExecutionProgressReporter = Arc<dyn Fn(ExecutionProgress) + Send + Sync>;
+
 #[derive(Debug, Default)]
 pub struct SystemEngineClock;
 
@@ -69,6 +117,7 @@ pub struct RuntimeExecutionOptions {
   pub script_timeout_ms: u64,
   pub max_context_bytes: Option<usize>,
   pub clock: Arc<dyn EngineClock>,
+  pub progress_reporter: Option<ExecutionProgressReporter>,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -79,6 +128,10 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
       .field("script_timeout_ms", &self.script_timeout_ms)
       .field("max_context_bytes", &self.max_context_bytes)
       .field("clock", &"dyn EngineClock")
+      .field(
+        "progress_reporter",
+        &self.progress_reporter.as_ref().map(|_| "configured"),
+      )
       .finish()
   }
 }
@@ -90,12 +143,93 @@ impl RuntimeExecutionOptions {
       script_timeout_ms,
       max_context_bytes: None,
       clock: Arc::new(SystemEngineClock),
+      progress_reporter: None,
     }
   }
 
   pub fn with_clock(mut self, clock: Arc<dyn EngineClock>) -> Self {
     self.clock = clock;
     self
+  }
+
+  pub fn with_progress_reporter(mut self, reporter: ExecutionProgressReporter) -> Self {
+    self.progress_reporter = Some(reporter);
+    self
+  }
+
+  fn report(&self, progress: ExecutionProgress) {
+    if let Some(reporter) = &self.progress_reporter {
+      reporter(progress);
+    }
+  }
+}
+
+fn retry_max_attempts<E: RuntimeDagEngine>(engine: &E, node_id: &str) -> u32 {
+  engine
+    .workflow()
+    .node(node_id)
+    .and_then(|node| node.retry_policy.as_ref())
+    .map_or(1, |policy| policy.max_attempts)
+}
+
+fn report_attempt_failed<E: RuntimeDagEngine>(
+  engine: &E,
+  options: &RuntimeExecutionOptions,
+  run_id: &str,
+  node_id: &str,
+  attempt: u32,
+  failure_code: String,
+) {
+  let max_attempts = retry_max_attempts(engine, node_id);
+  if max_attempts > 1 {
+    options.report(ExecutionProgress::StepAttemptFailed {
+      contract: EXECUTION_PROGRESS_CONTRACT,
+      version: EXECUTION_PROGRESS_VERSION,
+      run_id: run_id.to_string(),
+      node_id: node_id.to_string(),
+      attempt,
+      max_attempts,
+      failure_code,
+    });
+  }
+}
+
+fn report_retry_scheduled<E: RuntimeDagEngine>(
+  engine: &E,
+  options: &RuntimeExecutionOptions,
+  run_id: &str,
+  node_id: &str,
+  next_attempt: u32,
+  scheduled_at: chrono::DateTime<chrono::Utc>,
+) {
+  options.report(ExecutionProgress::StepRetryScheduled {
+    contract: EXECUTION_PROGRESS_CONTRACT,
+    version: EXECUTION_PROGRESS_VERSION,
+    run_id: run_id.to_string(),
+    node_id: node_id.to_string(),
+    next_attempt,
+    max_attempts: retry_max_attempts(engine, node_id),
+    scheduled_at,
+  });
+}
+
+fn report_attempt_succeeded<E: RuntimeDagEngine>(
+  engine: &E,
+  options: &RuntimeExecutionOptions,
+  run_id: &str,
+  node_id: &str,
+  attempt: u32,
+) {
+  let max_attempts = retry_max_attempts(engine, node_id);
+  if max_attempts > 1 && attempt > 1 {
+    options.report(ExecutionProgress::StepAttemptSucceeded {
+      contract: EXECUTION_PROGRESS_CONTRACT,
+      version: EXECUTION_PROGRESS_VERSION,
+      run_id: run_id.to_string(),
+      node_id: node_id.to_string(),
+      attempt,
+      max_attempts,
+    });
   }
 }
 
@@ -190,6 +324,9 @@ pub enum RuntimeExecutionError {
 pub struct FailedRunDetails {
   pub code: String,
   pub message: String,
+  pub node_id: Option<String>,
+  pub attempt: Option<u32>,
+  pub max_attempts: Option<u32>,
   pub failure: AttemptFailure,
   pub events: Vec<RunEvent>,
 }
@@ -1065,6 +1202,8 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
     match completion.outcome {
       Ok(output) => {
         completion_order.push(completion.node_id.clone());
+        let completed_node_id = completion.node_id.clone();
+        let completed_attempt = completion.attempt_number;
         engine.append_payload(
           run_id,
           RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
@@ -1074,12 +1213,20 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             output,
           }),
         )?;
+        report_attempt_succeeded(
+          engine,
+          options,
+          run_id,
+          &completed_node_id,
+          completed_attempt,
+        );
       }
       Err(failure) => {
         let cancellation = failure.kind == AttemptFailureKind::InvocationCancelled;
+        let failure_code = failure.code.clone();
         let disposition = engine.record_step_attempt_failure(
           run_id,
-          chrono::Utc::now(),
+          options.clock.now(),
           StepAttemptFailedData {
             node_id: completion.node_id.clone(),
             attempt: completion.attempt_number,
@@ -1087,8 +1234,26 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             failure,
           },
         )?;
+        report_attempt_failed(
+          engine,
+          options,
+          run_id,
+          &completion.node_id,
+          completion.attempt_number,
+          failure_code,
+        );
         match disposition {
-          StepFailureDisposition::RetryScheduled { .. } => {}
+          StepFailureDisposition::RetryScheduled {
+            next_attempt,
+            scheduled_at,
+          } => report_retry_scheduled(
+            engine,
+            options,
+            run_id,
+            &completion.node_id,
+            next_attempt,
+            scheduled_at,
+          ),
           StepFailureDisposition::StepFailed => {
             if !cancellation && policy == ParallelFailurePolicy::FailFast {
               fail_fast_closed = true;
@@ -1295,6 +1460,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
       };
       return settle_script_attempt_failure(
         engine,
+        options,
         run_id,
         node_id,
         attempt_number,
@@ -1325,6 +1491,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
       };
       return settle_script_attempt_failure(
         engine,
+        options,
         run_id,
         node_id,
         attempt_number,
@@ -1345,10 +1512,12 @@ async fn execute_script_node<E: RuntimeDagEngine>(
           output: value.clone(),
         }),
       )?;
+      report_attempt_succeeded(engine, options, run_id, node_id, attempt_number);
       Ok(ScriptNodeOutcome::Succeeded(value))
     }
     HostOutcome::Failure { error } => settle_script_attempt_failure(
       engine,
+      options,
       run_id,
       node_id,
       attempt_number,
@@ -1383,12 +1552,55 @@ fn resumed_failure<E: RuntimeDagEngine>(
     RuntimeExecutionError::Stalled("failed run has no folded failure".to_string())
   })?;
   Ok(match failure {
-    RunFailure::Attempt(failure) => RuntimeExecutionError::RunFailed(Box::new(FailedRunDetails {
-      code: failure.code.clone(),
-      message: failure.message.clone(),
-      failure,
-      events,
-    })),
+    RunFailure::Attempt(failure) => {
+      let identity = events.iter().rev().find_map(|event| match &event.payload {
+        RunEventPayload::RunFailed(RunFailedData::V1(data)) => data
+          .node_id
+          .as_ref()
+          .zip(data.attempt)
+          .map(|(node_id, attempt)| (node_id.clone(), attempt)),
+        RunEventPayload::RunFailed(RunFailedData::V2(RunFailedDataV2::Attempt {
+          node_id,
+          attempt,
+          ..
+        })) => Some((node_id.clone(), *attempt)),
+        _ => None,
+      });
+      let (node_id, attempt, max_attempts) = identity
+        .map(|(node_id, attempt)| {
+          let max_attempts = retry_max_attempts(engine, &node_id);
+          (Some(node_id), Some(attempt), Some(max_attempts))
+        })
+        .unwrap_or((None, None, None));
+      let exhausted = attempt
+        .zip(max_attempts)
+        .is_some_and(|(attempt, maximum)| maximum > 1 && attempt >= maximum)
+        && failure.kind == AttemptFailureKind::ScriptThrew;
+      let code = if exhausted {
+        "WOML_STEP_RETRIES_EXHAUSTED".to_string()
+      } else {
+        failure.code.clone()
+      };
+      let message = if exhausted {
+        format!(
+          "attempt {} of {} failed [{}].",
+          attempt.unwrap(),
+          max_attempts.unwrap(),
+          failure.code
+        )
+      } else {
+        failure.message.clone()
+      };
+      RuntimeExecutionError::RunFailed(Box::new(FailedRunDetails {
+        code,
+        message,
+        node_id,
+        attempt,
+        max_attempts,
+        failure,
+        events,
+      }))
+    }
     RunFailure::Parallel {
       parallel_id,
       policy,
@@ -1505,6 +1717,7 @@ fn final_result<E: RuntimeDagEngine>(
 
 fn settle_script_attempt_failure<E: RuntimeDagEngine>(
   engine: &mut E,
+  options: &RuntimeExecutionOptions,
   run_id: &str,
   node_id: &str,
   attempt: u32,
@@ -1513,7 +1726,7 @@ fn settle_script_attempt_failure<E: RuntimeDagEngine>(
 ) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
   let disposition = engine.record_step_attempt_failure(
     run_id,
-    chrono::Utc::now(),
+    options.clock.now(),
     StepAttemptFailedData {
       node_id: node_id.to_string(),
       attempt,
@@ -1521,8 +1734,20 @@ fn settle_script_attempt_failure<E: RuntimeDagEngine>(
       failure: failure.clone(),
     },
   )?;
+  report_attempt_failed(
+    engine,
+    options,
+    run_id,
+    node_id,
+    attempt,
+    failure.code.clone(),
+  );
   match disposition {
-    StepFailureDisposition::RetryScheduled { .. } => {
+    StepFailureDisposition::RetryScheduled {
+      next_attempt,
+      scheduled_at,
+    } => {
+      report_retry_scheduled(engine, options, run_id, node_id, next_attempt, scheduled_at);
       return Ok(ScriptNodeOutcome::RetryScheduled);
     }
     StepFailureDisposition::StepFailed => {
@@ -1534,8 +1759,30 @@ fn settle_script_attempt_failure<E: RuntimeDagEngine>(
   }
   Err(RuntimeExecutionError::RunFailed(Box::new(
     FailedRunDetails {
-      code: failure.code.clone(),
-      message: failure.message.clone(),
+      code: if retry_max_attempts(engine, node_id) > 1
+        && attempt >= retry_max_attempts(engine, node_id)
+        && failure.kind == AttemptFailureKind::ScriptThrew
+      {
+        "WOML_STEP_RETRIES_EXHAUSTED".to_string()
+      } else {
+        failure.code.clone()
+      },
+      message: if retry_max_attempts(engine, node_id) > 1
+        && attempt >= retry_max_attempts(engine, node_id)
+        && failure.kind == AttemptFailureKind::ScriptThrew
+      {
+        format!(
+          "attempt {} of {} failed [{}].",
+          attempt,
+          retry_max_attempts(engine, node_id),
+          failure.code
+        )
+      } else {
+        failure.message.clone()
+      },
+      node_id: Some(node_id.to_string()),
+      attempt: Some(attempt),
+      max_attempts: Some(retry_max_attempts(engine, node_id)),
       failure,
       events: engine.events(run_id)?,
     },

@@ -2363,12 +2363,28 @@ impl DurableEventStore {
       });
     }
 
+    // A failed attempt followed by a durable retry schedule is unfinished work,
+    // not a terminal failure. The schedule is the persistence boundary that
+    // makes starting the next attempt safe after a process restart.
+    if !projection.pending_retries.is_empty() {
+      return Ok(RunRecovery::Resumable);
+    }
+
+    // Only the latest attempt for a node can determine its current state. An
+    // older failure must never override a later successful retry.
     let failed_attempt = projection.attempts.iter().rev().find_map(|attempt| {
-      if let AttemptStatus::Failed { failure } = &attempt.status {
-        Some((attempt.identity.clone(), failure.clone()))
-      } else {
-        None
+      let is_latest_for_node = projection
+        .attempts
+        .iter()
+        .rev()
+        .find(|candidate| candidate.identity.node_id == attempt.identity.node_id)
+        .is_some_and(|latest| latest.identity == attempt.identity);
+      if is_latest_for_node {
+        if let AttemptStatus::Failed { failure } = &attempt.status {
+          return Some((attempt.identity.clone(), failure.clone()));
+        }
       }
+      None
     });
     if let Some((identity, failure)) = failed_attempt {
       if workflow

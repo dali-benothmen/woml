@@ -1,7 +1,7 @@
 # WOML Retry and Idempotency Implementation Plan
 
-Status: RI0 through RI5 completed on 2026-08-07. Recovery, CLI progress, and
-diagnostics remain planned for RI6 onward.
+Status: RI0 through RI6 completed on 2026-08-08. RI7 hardening, packaging, and
+publication remain planned.
 
 ## 1. Product Outcome
 
@@ -668,6 +668,8 @@ parallel failure policies, after Human Approval, and in nested combinations.
 
 ### RI6 — Complete recovery, CLI progress, and diagnostics
 
+Status: completed.
+
 Changes:
 
 - Recover a scheduled retry without replaying completed attempts.
@@ -686,6 +688,27 @@ Gate:
 
 Crash-boundary tests cover before schedule, after schedule, before retry start,
 during retry execution, after success, and before downstream dispatch.
+
+Implemented result:
+
+- Recovery treats a committed retry schedule as resumable work and never lets
+  an older failed attempt override a later successful attempt.
+- Recovery converts an active attempt, including an active retry attempt, to
+  `interrupted` and fails the run closed without scheduling or replaying it.
+- `woml run ... --state ... --resume <runId>` resumes ordinary durable retry
+  workflows in addition to Human Approval workflows. The CLI prints a complete
+  recovery command, including the durable run ID, after the first committed
+  retry schedule.
+- Rust emits the frozen `woml.execution-progress` v1 messages through the
+  native boundary. The CLI strictly decodes them and prints attempt failures,
+  schedules, and recovered success to stderr while result JSON remains alone
+  on stdout.
+- Final exhaustion uses `WOML_STEP_RETRIES_EXHAUSTED`, preserves the original
+  safe failure code, identifies the final attempt, and maps the error to the
+  authored step script location.
+- Recovery and CLI integration tests kill a run immediately after its durable
+  schedule, resume it, and prove attempt 1 is present exactly once. Additional
+  tests cover interruption during a retry and recovery after retry success.
 
 ### RI7 — Harden, package, and publish retry
 

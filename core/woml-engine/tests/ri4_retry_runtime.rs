@@ -1,12 +1,15 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
+use woml_engine::event::{StepAttemptFailedData, StepAttemptSucceededData};
 use woml_engine::model::{BackoffPolicy, RetryPolicy, ValueExpression};
-use woml_engine::projection::RunStatus;
 use woml_engine::{
-  execute_workflow_durable, AttemptFailureKind, CompiledWorkflowDefinition, DurableEventStore,
-  RunEventPayload, RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
+  execute_workflow_durable, resume_workflow_durable, AttemptFailure, AttemptFailureKind,
+  CompiledWorkflowDefinition, DurableDagEngine, DurableEventStore, ExecutionProgress,
+  RunEventPayload, RunStatus, RuntimeExecutionError, RuntimeExecutionOptions,
+  ScriptHostProcessOptions, StepFailureDisposition,
 };
 
 const RETRY_MODEL: &str = include_str!("../../../woml/tests/fixtures/retry.compiled.v6.json");
@@ -110,11 +113,15 @@ async fn sequential_retry_fails_twice_then_publishes_one_final_output() {
     return;
   };
   let database = TemporaryDatabase::new("success");
+  let progress = Arc::new(Mutex::new(Vec::new()));
+  let reported = Arc::clone(&progress);
   let result = execute_workflow_durable(
     retry_model(),
     RETRY_HASH.to_string(),
     Map::new(),
-    options(host, 2_000),
+    options(host, 2_000).with_progress_reporter(Arc::new(move |message| {
+      reported.lock().unwrap().push(message);
+    })),
     database.path().to_path_buf(),
   )
   .await
@@ -195,6 +202,26 @@ async fn sequential_retry_fails_twice_then_publishes_one_final_output() {
   let projection = store.projection(&result.run_id).unwrap();
   assert_eq!(projection.status, RunStatus::Succeeded);
   assert!(projection.pending_retries.is_empty());
+  let progress = progress.lock().unwrap();
+  assert_eq!(progress.len(), 5);
+  assert!(matches!(
+    &progress[0],
+    ExecutionProgress::StepAttemptFailed {
+      node_id,
+      attempt: 1,
+      max_attempts: 3,
+      ..
+    } if node_id == "greet"
+  ));
+  assert!(matches!(
+    &progress[4],
+    ExecutionProgress::StepAttemptSucceeded {
+      node_id,
+      attempt: 3,
+      max_attempts: 3,
+      ..
+    } if node_id == "greet"
+  ));
 }
 
 #[tokio::test]
@@ -218,6 +245,14 @@ async fn retry_exhaustion_never_starts_attempt_four() {
   let RuntimeExecutionError::RunFailed(details) = error else {
     panic!("retry exhaustion must fail the run");
   };
+  assert_eq!(details.code, "WOML_STEP_RETRIES_EXHAUSTED");
+  assert_eq!(details.node_id.as_deref(), Some("greet"));
+  assert_eq!(details.attempt, Some(3));
+  assert_eq!(details.max_attempts, Some(3));
+  assert_eq!(
+    details.message,
+    "attempt 3 of 3 failed [WOML_SCRIPT_THROWN]."
+  );
   assert_eq!(details.failure.kind, AttemptFailureKind::ScriptThrew);
   let attempts = details
     .events
@@ -277,6 +312,127 @@ async fn non_retryable_timeout_fails_after_the_first_attempt() {
       .events
       .iter()
       .filter(|event| matches!(event.payload, RunEventPayload::StepAttemptStarted(_)))
+      .count(),
+    2
+  );
+}
+
+#[tokio::test]
+async fn recovery_after_retry_success_dispatches_only_the_downstream_step() {
+  let Some(host) = host_options() else {
+    return;
+  };
+  let database = TemporaryDatabase::new("before-downstream");
+  let run_id = "run_ri6_before_downstream";
+  let now = chrono::Utc::now();
+  let mut workflow = retry_model();
+  use_fast_fixed_retry(&mut workflow);
+  let mut finish = workflow.graph.nodes[0].clone();
+  finish.id = "finish".to_string();
+  finish.retry_policy = None;
+  let ValueExpression::Object { fields } = &mut finish.inputs else {
+    unreachable!()
+  };
+  fields.insert(
+    "source".to_string(),
+    ValueExpression::Literal {
+      value: Value::String("return { final: context.steps.greet.message };".to_string()),
+    },
+  );
+  let mut edge = workflow.graph.edges[0].clone();
+  edge.id = "greet-to-finish".to_string();
+  edge.from = "greet".to_string();
+  edge.to = "finish".to_string();
+  workflow.graph.nodes.push(finish);
+  workflow.graph.edges.push(edge);
+  workflow.validate_for_durable_execution().unwrap();
+
+  {
+    let store = DurableEventStore::open(database.path()).unwrap();
+    let mut engine = DurableDagEngine::new(workflow, MODIFIED_HASH, store).unwrap();
+    engine
+      .start_run("evt_start", run_id, now, Map::new())
+      .unwrap();
+    engine
+      .start_step_attempt(run_id, "prepare", 1, "inv_prepare", now)
+      .unwrap();
+    engine
+      .append_payload(
+        "evt_prepare_success",
+        run_id,
+        now,
+        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+          node_id: "prepare".to_string(),
+          attempt: 1,
+          invocation_id: "inv_prepare".to_string(),
+          output: json!({ "name": "World" }),
+        }),
+      )
+      .unwrap();
+    engine
+      .start_step_attempt(run_id, "greet", 1, "inv_greet_1", now)
+      .unwrap();
+    let failed = engine
+      .record_step_attempt_failure(
+        run_id,
+        now,
+        StepAttemptFailedData {
+          node_id: "greet".to_string(),
+          attempt: 1,
+          invocation_id: "inv_greet_1".to_string(),
+          failure: AttemptFailure {
+            kind: AttemptFailureKind::ScriptThrew,
+            code: "WOML_SCRIPT_THROWN".to_string(),
+            message: "temporary".to_string(),
+            details: None,
+          },
+        },
+      )
+      .unwrap();
+    let StepFailureDisposition::RetryScheduled { scheduled_at, .. } = failed.disposition else {
+      unreachable!()
+    };
+    engine
+      .start_step_attempt(run_id, "greet", 2, "inv_greet_2", scheduled_at)
+      .unwrap();
+    engine
+      .append_payload(
+        "evt_greet_success",
+        run_id,
+        scheduled_at,
+        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+          node_id: "greet".to_string(),
+          attempt: 2,
+          invocation_id: "inv_greet_2".to_string(),
+          output: json!({ "message": "Hello World" }),
+        }),
+      )
+      .unwrap();
+  }
+
+  let mut store = DurableEventStore::open(database.path()).unwrap();
+  let recovery = store.recover_interrupted_runs().unwrap();
+  assert_eq!(recovery.resumable_runs, 1);
+  assert_eq!(store.projection(run_id).unwrap().status, RunStatus::Running);
+  drop(store);
+
+  let result = resume_workflow_durable(database.path().to_path_buf(), run_id, options(host, 2_000))
+    .await
+    .unwrap();
+  assert_eq!(result.execution_order, ["prepare", "greet", "finish"]);
+  assert_eq!(result.result, json!({ "final": "Hello World" }));
+  assert_eq!(
+    result.context.steps["greet"],
+    json!({ "message": "Hello World" })
+  );
+  assert_eq!(
+    result
+      .events
+      .iter()
+      .filter(|event| matches!(
+        &event.payload,
+        RunEventPayload::StepAttemptStarted(data) if data.node_id == "greet"
+      ))
       .count(),
     2
   );
