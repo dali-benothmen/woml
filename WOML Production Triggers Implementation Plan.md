@@ -708,10 +708,12 @@ The initial diagnostic catalog includes:
 | `WOML_WEBHOOK_METHOD_UNSUPPORTED` | Method is designed but not executable in v1. |
 | `WOML_WEBHOOK_AUTH_INVALID` | Authentication attributes are missing or contradictory. |
 | `WOML_WEBHOOK_SECRET_MISSING` | A symbolic secret cannot be resolved at registration. |
-| `WOML_SLACK_TRIGGER_INVALID` | Slack event/filter/credential attributes are malformed. |
+| `WOML_SLACK_TRIGGER_EVENT_INVALID` | Authored event filters or an incoming Slack event are unsupported or malformed. |
+| `WOML_SLACK_TRIGGER_EVENT_DUPLICATE` | The `events` list repeats an event name. |
+| `WOML_SLACK_TRIGGER_CHANNEL_INVALID` | A channel filter is not a lowercase name or Slack conversation ID. |
+| `WOML_SLACK_TRIGGER_CHANNEL_DUPLICATE` | The channel filter repeats a destination. |
 | `WOML_SLACK_TRIGGER_SCOPE_MISSING` | The installed Slack app lacks a required trigger scope or subscription. |
 | `WOML_SLACK_TRIGGER_UNAVAILABLE` | Socket Mode cannot establish or restore the configured workspace connection. |
-| `WOML_SLACK_TRIGGER_EVENT_INVALID` | Slack delivered an unsupported or malformed event envelope. |
 | `WOML_TRIGGER_SCHEMA_INVALID` | Inline schema or runtime payload validation failed. |
 | `WOML_SCHEDULE_CRON_INVALID` | Cron expression does not match the frozen dialect. |
 | `WOML_SCHEDULE_TIMEZONE_INVALID` | Timezone is not a known IANA identifier. |
@@ -917,6 +919,8 @@ Implementation notes:
 
 ### T6 — Compile Slack triggers and extract shared transport
 
+Status: completed.
+
 Changes:
 
 - Activate `<slack>` trigger placement, attributes, event filters, channel
@@ -940,6 +944,30 @@ Gate:
 The reviewed Slack source deep-equals Model v7, transport compatibility tests
 prove approval behavior is unchanged, and no new Socket connection is opened
 for matching credentials.
+
+Implementation notes:
+
+- `<slack>` now validates event and optional channel lists with source-located
+  errors, requires exact symbolic bot/app-token references, and deep-equals the
+  reviewed Model v7 fixture.
+- Notification destinations keep their existing space-separated `#channel`
+  syntax; trigger filters use the separately frozen comma-separated channel
+  syntax, so the two placements cannot silently borrow each other's attrs.
+- Credential resolution, bot identity and channel caches, Web API behavior,
+  Socket Mode lifecycle/reconnect, error classification, and safe scope
+  diagnostics now live in the shared transport foundation.
+- Socket envelopes are routed without global auto-acknowledgement. Approval
+  interactions acknowledge in the approval adapter; event envelopes remain
+  available for T7's durable-admission acknowledgement rule.
+- Matching resolved app credentials reuse one Socket connection even when two
+  symbolic references point to that credential. Compatibility journeys prove
+  approval delivery, actions, updates, retry diagnostics, and durable behavior
+  are unchanged.
+- The reviewed app manifest now subscribes to `app_mention` and `message.im`
+  and includes `app_mentions:read` and `im:history`. Scope failures continue to
+  tell the user to update permissions and reinstall the app.
+- `bun run test:t6` is the T6 gate, and `test:release` now points to it. Slack
+  event decoding, Rust admission, and actual run creation remain T7 work.
 
 ### T7 — Execute and publish Slack triggers
 

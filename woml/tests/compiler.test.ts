@@ -1347,9 +1347,115 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T1 keeps Slack, schedule, interval, and event runtime-staged', () => {
+  test('T6 lowers the reviewed Slack trigger fixture exactly to Model v7', () => {
+    const source = readFileSync(
+      new URL('./fixtures/triggers-slack.woml', import.meta.url),
+      'utf8'
+    );
+    const expected = JSON.parse(
+      readFileSync(
+        new URL('./fixtures/triggers-slack.compiled.v7.json', import.meta.url),
+        'utf8'
+      )
+    );
+
+    const compiled = compile(source);
+    expect(compiled).toEqual(expected);
+    expect(compiled.schemaVersion).toBe(7);
+  });
+
+  test('T6 accepts an omitted Slack channel filter as all visible channels', () => {
+    const source = `<workflow id="slack-all-channels">
+  <triggers>
+    <slack id="mention" events="app-mention" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />
+  </triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+    const compiled = compile(source);
+    expect(compiled.triggers[0]).toMatchObject({
+      id: 'mention',
+      handler: 'trigger.slack',
+      config: {
+        fields: {
+          events: {
+            items: [{ kind: 'literal', value: 'app-mention' }],
+          },
+          channels: { kind: 'array', items: [] },
+        },
+      },
+    });
+  });
+
+  test('T6 reports malformed Slack events and channel filters at their source', () => {
+    const slackWorkflow = (attributes: string) => `<workflow id="slack-errors">
+  <triggers><slack id="message" ${attributes} bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" /></triggers>
+  <steps><step id="capture"><script>return 1;</script></step></steps>
+</workflow>`;
+    const cases = [
+      {
+        attributes: 'events="channel-message"',
+        code: 'WOML_SLACK_TRIGGER_EVENT_INVALID',
+        token: 'channel-message',
+      },
+      {
+        attributes: 'events="app-mention,app-mention"',
+        code: 'WOML_SLACK_TRIGGER_EVENT_DUPLICATE',
+        token: 'app-mention',
+        last: true,
+      },
+      {
+        attributes: 'events="app-mention,"',
+        code: 'WOML_SLACK_TRIGGER_LIST_INVALID',
+        token: '"',
+        last: true,
+      },
+      {
+        attributes: 'events="app-mention" channels="#general"',
+        code: 'WOML_SLACK_TRIGGER_CHANNEL_INVALID',
+        token: '#general',
+      },
+      {
+        attributes:
+          'events="direct-message" channels="woml-testing,woml-testing"',
+        code: 'WOML_SLACK_TRIGGER_CHANNEL_DUPLICATE',
+        token: 'woml-testing',
+        last: true,
+      },
+    ];
+    for (const entry of cases) {
+      const source = slackWorkflow(entry.attributes);
+      const error = validationError(source);
+      expect(error.diagnostic.code).toBe(entry.code);
+      if (entry.code !== 'WOML_SLACK_TRIGGER_LIST_INVALID') {
+        expect(error.diagnostic.location.start.offset).toBe(
+          entry.last
+            ? source.lastIndexOf(entry.token)
+            : source.indexOf(entry.token)
+        );
+      }
+    }
+
+    const plainCredential = `<workflow id="slack-errors">
+  <triggers><slack id="message" events="app-mention" bot-token="plain-text" app-token="{{secrets.SLACK_APP_TOKEN}}" /></triggers>
+  <steps><step id="capture"><script>return 1;</script></step></steps>
+</workflow>`;
+    expect(validationError(plainCredential).diagnostic.code).toBe(
+      'WOML_SECRET_LITERAL_FORBIDDEN'
+    );
+  });
+
+  test('T6 keeps notification-only and trigger-only Slack attributes separate', () => {
+    const source = validWorkflow(`<approval id="review">
+      <notify><slack id="triggerOnly" events="app-mention" channels="#approvals" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" /></notify>
+      <when-approved></when-approved><when-rejected></when-rejected>
+    </approval>`);
+    expect(validationError(source).diagnostic.code).toBe(
+      'WOML_SLACK_UNKNOWN_ATTRIBUTE'
+    );
+  });
+
+  test('keeps schedule, interval, and event runtime-staged after T6', () => {
     const fixtureNames = [
-      'triggers-slack.woml',
       'triggers-schedule.woml',
       'triggers-interval.woml',
       'triggers-event.woml',

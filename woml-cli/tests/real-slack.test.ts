@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   RealSlackTransport,
+  SharedSlackTransport,
   SlackTransportError,
   type DeliverMessage,
   type InteractionMessage,
@@ -133,10 +134,15 @@ describe('N5 real Slack transport', () => {
     expect(manifest.oauth_config.scopes.bot).toEqual([
       'chat:write',
       'chat:write.public',
+      'app_mentions:read',
       'channels:read',
       'groups:read',
+      'im:history',
     ]);
     expect(manifest.settings).toMatchObject({
+      event_subscriptions: {
+        bot_events: ['app_mention', 'message.im'],
+      },
       interactivity: { is_enabled: true },
       socket_mode_enabled: true,
     });
@@ -259,6 +265,55 @@ describe('N5 real Slack transport', () => {
     expect(calls.filter(call => call.method === 'apps.connections.open')).toHaveLength(1);
     expect(calls.filter(call => call.method === 'chat.postMessage')).toHaveLength(1);
     await transport.close();
+  });
+
+  test('shares one Socket connection across approval and trigger listeners without stealing event acknowledgement', async () => {
+    const calls: ApiCall[] = [];
+    const sockets: MockSocket[] = [];
+    const shared = new SharedSlackTransport({
+      fetch: slackFetch(calls, successfulApi),
+      createWebSocket: () => {
+        const socket = new MockSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const approval = new RealSlackTransport({
+      emit: () => {},
+      sharedTransport: shared,
+    });
+    const triggerEnvelopes: string[] = [];
+    const unsubscribe = shared.subscribe(
+      'SECOND_APP_TOKEN_NAME',
+      'slack-trigger-adapter',
+      envelope => {
+        if (envelope.envelopeId !== undefined) {
+          triggerEnvelopes.push(envelope.envelopeId);
+        }
+      }
+    );
+
+    await Promise.all([
+      approval.ensureConnection('SLACK_APP_TOKEN', 'xapp-shared-token'),
+      shared.ensureConnection('SECOND_APP_TOKEN_NAME', 'xapp-shared-token'),
+    ]);
+    expect(sockets).toHaveLength(1);
+    expect(
+      calls.filter(call => call.method === 'apps.connections.open')
+    ).toHaveLength(1);
+
+    sockets[0]!.receive({
+      envelope_id: 'env_event_01',
+      type: 'events_api',
+      payload: { event: { type: 'app_mention' } },
+    });
+    await Bun.sleep(0);
+    expect(triggerEnvelopes).toEqual(['env_event_01']);
+    expect(sockets[0]!.sent).toEqual([]);
+
+    unsubscribe();
+    await approval.close();
+    await shared.close();
   });
 
   test('classifies rate limits, permissions, expired tokens, and ambiguous sends', async () => {

@@ -71,6 +71,17 @@ secret leakage, host failure, and composition with every already-published
 control-flow primitive. Bearer routes retain only a fixed-width credential
 digest after registration and compare candidate digests in constant time.
 
+Slack uses a shared Bun transport foundation for symbolic credential
+resolution, Web API calls, channel lookup/cache, Socket Mode connection and
+reconnect, and secret-safe error classification. The approval adapter and the
+Slack-trigger adapter remain separate protocol consumers. Matching app-token
+credentials share one Socket connection, while each consumer owns its own
+message semantics. The shared layer never acknowledges ordinary event
+envelopes automatically: approval interactions acknowledge in the approval
+adapter, and T7 trigger events will acknowledge only after durable Rust
+admission. T6 activates Slack trigger compilation to Model v7; event decoding
+and execution remain intentionally unavailable until T7.
+
 `woml run` is the long-lived activation lifecycle. The Bun CLI preflights the
 definitions and symbolic secrets, then starts the Rust listener through N-API
 and waits for SIGINT or SIGTERM. Rust runs Actix on a dedicated runtime thread,

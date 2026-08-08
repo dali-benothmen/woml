@@ -11,7 +11,11 @@ import {
   type NotificationProviderOutbound,
   type ResolvedSlackCredentials,
 } from './types';
-import { SlackTransportError, type SlackTransport } from './slack-transport';
+import {
+  resolveSlackCredentials,
+  SlackTransportError,
+  type SlackTransport,
+} from './slack-transport';
 
 export interface NotificationProviderHostOptions {
   readonly secretStore: SecretStore;
@@ -115,23 +119,13 @@ export class NotificationProviderHost {
     await this.#transport.close();
   }
 
-  async #resolve(name: string): Promise<string> {
-    const value = await this.#secretStore.get(name);
-    if (value === undefined) {
-      throw new SecretStoreError(
-        'WOML_SECRET_NOT_FOUND',
-        'A required provider credential is missing.'
-      );
-    }
-    return value;
-  }
-
   async #credentials(
     invocation: NotificationInvocation
   ): Promise<ResolvedSlackCredentials> {
-    const botToken = await this.#resolve(invocation.credentials.botToken.name);
-    const appToken = await this.#resolve(invocation.credentials.appToken.name);
-    return { botToken, appToken };
+    return await resolveSlackCredentials(
+      this.#secretStore,
+      invocation.credentials
+    );
   }
 
   async #invoke(invocation: NotificationInvocation): Promise<void> {

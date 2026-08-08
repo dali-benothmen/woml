@@ -1,14 +1,15 @@
-# WOML Slack Approval Setup
+# WOML Slack Setup
 
-This is the one-time workspace setup for WOML's Slack approval provider. WOML
-uses Socket Mode, so it does not need a public callback URL or `woml serve`.
+This is the one-time workspace setup for WOML Slack approvals and Slack
+triggers. WOML uses Socket Mode, so it does not need a public callback URL or
+`woml serve`.
 
 ## Install the app
 
 1. In Slack's app management page, choose **Create New App → From an app
    manifest** and paste `manifest.json` from this directory.
-2. Install the app to the workspace. The manifest requests only the scopes WOML
-   currently uses: message send/update plus public/private channel lookup.
+2. Install the app to the workspace. The manifest requests the scopes used for
+   approval messages, channel lookup, app mentions, and direct messages.
 3. Under **Basic Information → App-Level Tokens**, generate an app token with
    the `connections:write` scope.
 4. Copy the **Bot User OAuth Token** (`xoxb-...`) and the **App-Level Token**
@@ -31,8 +32,10 @@ Its Bot Token Scopes must include:
 ```text
 chat:write
 chat:write.public
+app_mentions:read
 channels:read
 groups:read
+im:history
 ```
 
 `channels:history` does not replace `channels:read`. WOML uses
@@ -70,6 +73,26 @@ it.
 The terminal remains attached while Socket Mode waits for a reviewer. Clicking
 Approve or Reject in any delivered channel resolves the one shared approval,
 updates all delivered messages, and continues only the selected WOML route.
+
+## Define a Slack trigger
+
+```xml
+<triggers>
+  <slack
+    id="agentMessage"
+    events="app-mention,direct-message"
+    channels="woml-testing,agent-support"
+    bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+    app-token="{{secrets.SLACK_APP_TOKEN}}"
+  />
+</triggers>
+```
+
+T6 validates and compiles this definition into Model v7. Receiving mentions
+and direct messages and starting durable runs is delivered in T7; until then,
+the runtime fails activation explicitly rather than claiming the trigger is
+active. After changing scopes or event subscriptions, reinstall the app to the
+workspace and refresh the stored bot token.
 
 ## Common failures
 

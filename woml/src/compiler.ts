@@ -132,7 +132,21 @@ interface ValidatedWebhookTrigger {
   readonly schema?: Readonly<Record<string, JsonValue>>;
 }
 
-type ValidatedTrigger = ValidatedManualTrigger | ValidatedWebhookTrigger;
+type SlackTriggerEvent = 'app-mention' | 'direct-message';
+
+interface ValidatedSlackTrigger {
+  readonly kind: 'slack';
+  readonly id: string;
+  readonly events: readonly SlackTriggerEvent[];
+  readonly channels: readonly string[];
+  readonly botToken: SecretReferenceExpression;
+  readonly appToken: SecretReferenceExpression;
+}
+
+type ValidatedTrigger =
+  | ValidatedManualTrigger
+  | ValidatedWebhookTrigger
+  | ValidatedSlackTrigger;
 
 interface LoweredFlowFragment {
   readonly entryId: string;
@@ -215,7 +229,13 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   notify: { attributes: new Set() },
   slack: {
-    attributes: new Set(['channels', 'bot-token', 'app-token']),
+    attributes: new Set([
+      'id',
+      'events',
+      'channels',
+      'bot-token',
+      'app-token',
+    ]),
   },
   'when-approved': { attributes: new Set() },
   'when-rejected': { attributes: new Set() },
@@ -271,14 +291,6 @@ function visitProfile(
   element: WomlSourceElement,
   parent?: WomlSourceElement
 ): void {
-  if (element.name === 'slack' && parent?.name === 'triggers') {
-    failValidation(
-      document,
-      'WOML_FEATURE_NOT_EXECUTABLE',
-      '<slack> triggers are frozen for Model v7 but become executable in T6–T7.',
-      element.openTagSpan
-    );
-  }
   if (!supportedElements.has(element.name)) {
     if (parent?.name === 'notify') {
       failValidation(
@@ -755,10 +767,13 @@ function validateTriggers(
     if (child.name === 'webhook') {
       return validateWebhookTrigger(document, child);
     }
+    if (child.name === 'slack') {
+      return validateSlackTrigger(document, child);
+    }
     failValidation(
       document,
       'WOML_TRIGGER_UNSUPPORTED',
-      `<${child.name}> is not an executable trigger in T1.`,
+      `<${child.name}> is not an executable trigger in this release.`,
       child.openTagSpan
     );
   });
@@ -1073,6 +1088,8 @@ function validateApprovalArm(
 
 const slackChannelAliasPattern = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
 const slackConversationIdPattern = /^[CG][A-Z0-9]{8,31}$/;
+const slackTriggerChannelAliasPattern = /^[a-z0-9][a-z0-9_-]{0,79}$/;
+const slackTriggerConversationIdPattern = /^[CGD][A-Z0-9]{8,31}$/;
 
 interface SlackChannelToken {
   readonly value: string;
@@ -1133,6 +1150,119 @@ function slackChannelTokens(
   return tokens;
 }
 
+function commaSeparatedSlackTokens(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute,
+  label: 'events' | 'channels'
+): readonly SlackChannelToken[] {
+  const sourceFile = new SourceFile(document.file, document.source);
+  const tokens: SlackChannelToken[] = [];
+  let offset = 0;
+  for (const part of attribute.value.split(',')) {
+    const leading = part.length - part.trimStart().length;
+    const value = part.trim();
+    const start = attribute.valueSpan.start.offset + offset + leading;
+    if (value.length === 0) {
+      failValidation(
+        document,
+        'WOML_SLACK_TRIGGER_LIST_INVALID',
+        `<slack> ${label} must be a comma-separated list without empty items.`,
+        sourceFile.span(start, start)
+      );
+    }
+    tokens.push({ value, span: sourceFile.span(start, start + value.length) });
+    offset += part.length + 1;
+  }
+  return tokens;
+}
+
+function validateSlackTrigger(
+  document: WomlSourceDocument,
+  slack: WomlSourceElement
+): ValidatedSlackTrigger {
+  ensureEmptyElement(document, slack);
+  const id = validateJavaScriptSafeId(
+    document,
+    requiredAttribute(document, slack, 'id'),
+    'trigger'
+  );
+  const eventTokens = commaSeparatedSlackTokens(
+    document,
+    requiredAttribute(document, slack, 'events'),
+    'events'
+  );
+  const events: SlackTriggerEvent[] = [];
+  const seenEvents = new Set<string>();
+  for (const token of eventTokens) {
+    if (token.value !== 'app-mention' && token.value !== 'direct-message') {
+      failValidation(
+        document,
+        'WOML_SLACK_TRIGGER_EVENT_INVALID',
+        `Unsupported Slack trigger event "${token.value}".`,
+        token.span,
+        'Use app-mention, direct-message, or both.'
+      );
+    }
+    if (seenEvents.has(token.value)) {
+      failValidation(
+        document,
+        'WOML_SLACK_TRIGGER_EVENT_DUPLICATE',
+        `Slack trigger event "${token.value}" is listed more than once.`,
+        token.span
+      );
+    }
+    seenEvents.add(token.value);
+    events.push(token.value);
+  }
+
+  const channelAttribute = slack.attributes.channels;
+  const channelTokens =
+    channelAttribute === undefined
+      ? []
+      : commaSeparatedSlackTokens(document, channelAttribute, 'channels');
+  const channels: string[] = [];
+  const seenChannels = new Set<string>();
+  for (const token of channelTokens) {
+    if (
+      !slackTriggerChannelAliasPattern.test(token.value) &&
+      !slackTriggerConversationIdPattern.test(token.value)
+    ) {
+      failValidation(
+        document,
+        'WOML_SLACK_TRIGGER_CHANNEL_INVALID',
+        `Slack trigger channel "${token.value}" must be a lowercase channel name or Slack conversation ID.`,
+        token.span,
+        'Examples: woml-testing or C0123456789'
+      );
+    }
+    if (seenChannels.has(token.value)) {
+      failValidation(
+        document,
+        'WOML_SLACK_TRIGGER_CHANNEL_DUPLICATE',
+        `Slack trigger channel "${token.value}" is listed more than once.`,
+        token.span
+      );
+    }
+    seenChannels.add(token.value);
+    channels.push(token.value);
+  }
+
+  return {
+    kind: 'slack',
+    id,
+    events,
+    channels,
+    botToken: requireSecretReference(
+      document,
+      requiredSlackAttribute(document, slack, 'bot-token')
+    ),
+    appToken: requireSecretReference(
+      document,
+      requiredSlackAttribute(document, slack, 'app-token')
+    ),
+  };
+}
+
 function validateNotify(
   document: WomlSourceDocument,
   notify: WomlSourceElement,
@@ -1160,6 +1290,17 @@ function validateNotify(
       );
     }
     ensureEmptyElement(document, provider);
+    for (const triggerOnlyAttribute of ['id', 'events'] as const) {
+      const attribute = provider.attributes[triggerOnlyAttribute];
+      if (attribute !== undefined) {
+        failValidation(
+          document,
+          'WOML_SLACK_UNKNOWN_ATTRIBUTE',
+          `Attribute "${triggerOnlyAttribute}" is valid on a Slack trigger, not a Slack notification provider.`,
+          attribute.nameSpan
+        );
+      }
+    }
     const channels = slackChannelTokens(
       document,
       requiredSlackAttribute(document, provider, 'channels')
@@ -2092,6 +2233,27 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
       id: trigger.id,
       handler: 'trigger.manual',
       config: { kind: 'object', fields: {} },
+    };
+  }
+  if (trigger.kind === 'slack') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.slack',
+      config: {
+        kind: 'object',
+        fields: {
+          events: {
+            kind: 'array',
+            items: trigger.events.map(value => ({ kind: 'literal', value })),
+          },
+          channels: {
+            kind: 'array',
+            items: trigger.channels.map(value => ({ kind: 'literal', value })),
+          },
+          botToken: trigger.botToken,
+          appToken: trigger.appToken,
+        },
+      },
     };
   }
   const authentication: ValueExpression =

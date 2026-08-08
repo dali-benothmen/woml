@@ -62,7 +62,7 @@ export interface UpdateMessage extends InvocationBase {
 
 export type NotificationInvocation = DeliverMessage | UpdateMessage;
 
-export interface NotificationProviderFailure {
+export interface SlackTransportFailure {
   readonly kind:
     | 'secret_not_found'
     | 'provider_auth_failed'
@@ -79,6 +79,8 @@ export interface NotificationProviderFailure {
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
 }
+
+export type NotificationProviderFailure = SlackTransportFailure;
 
 export type NotificationProviderOutcome =
   | {
