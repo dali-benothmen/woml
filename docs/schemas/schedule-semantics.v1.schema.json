@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/schedule-semantics/v1",
+  "title": "WOML Schedule Semantics v1",
+  "description": "Deterministic conformance table for WOML Cron v1, IANA timezone, DST, misfire, occurrence identity, and context behavior.",
+  "x-status": "frontend-active-runtime-staged",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract", "contractVersion", "dialect", "fieldOrder", "fieldBounds",
+    "dayOfWeek", "dayCombination", "dst", "misfire", "occurrenceIdentity",
+    "contextTrigger", "occurrenceCases", "invalidCron", "invalidTimezones"
+  ],
+  "properties": {
+    "contract": { "const": "woml.schedule-semantics" },
+    "contractVersion": { "const": 1 },
+    "dialect": { "const": "woml-cron-v1" },
+    "fieldOrder": {
+      "const": ["minute", "hour", "day-of-month", "month", "day-of-week"]
+    },
+    "fieldBounds": {
+      "const": [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]]
+    },
+    "dayOfWeek": { "const": "0 and 7 are Sunday" },
+    "dayCombination": { "type": "string", "minLength": 1 },
+    "dst": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nonexistentWallTime", "repeatedWallTime"],
+      "properties": {
+        "nonexistentWallTime": { "const": "skip" },
+        "repeatedWallTime": {
+          "const": "one occurrence for each distinct UTC instant"
+        }
+      }
+    },
+    "misfire": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skip", "runOnce"],
+      "properties": {
+        "skip": { "type": "string", "minLength": 1 },
+        "runOnce": { "type": "string", "minLength": 1 }
+      }
+    },
+    "occurrenceIdentity": {
+      "const": "workflowId + triggerId + planned UTC instant"
+    },
+    "contextTrigger": { "const": ["scheduledAt", "triggeredAt"] },
+    "occurrenceCases": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name", "cron", "timezone", "startInclusive", "endExclusive",
+          "expected"
+        ],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "cron": { "type": "string", "minLength": 1 },
+          "timezone": { "type": "string", "minLength": 1 },
+          "startInclusive": { "type": "string", "format": "date-time" },
+          "endExclusive": { "type": "string", "format": "date-time" },
+          "expected": {
+            "type": "array",
+            "items": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "invalidCron": {
+      "type": "array",
+      "minItems": 10,
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "invalidTimezones": {
+      "type": "array",
+      "minItems": 5,
+      "items": { "type": "string" },
+      "uniqueItems": true
+    }
+  }
+}

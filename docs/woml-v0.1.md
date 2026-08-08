@@ -757,8 +757,18 @@ the CLI must reject activation instead of pretending that the trigger is live.
 | `timezone` | No | IANA timezone | Evaluation timezone; defaults to `UTC`. |
 | `on-missed` | No | `skip` or `run-once` | Restart policy; defaults to `skip`. |
 
-The supported cron dialect must be named by the runtime specification before
-`<schedule>` is considered executable.
+T8 validates and lowers schedules through **WOML Cron v1**: five numeric fields
+(`minute hour day-of-month month day-of-week`) separated by single spaces.
+Wildcards, lists, inclusive ranges, and `/step` are supported. Seconds, names,
+macros, wrapping ranges, and Quartz-only tokens are rejected. Day-of-week uses
+`0` or `7` for Sunday; restricted day-of-month and day-of-week fields use POSIX
+OR semantics.
+
+`timezone` must be a canonical IANA identifier and defaults to `UTC`.
+Nonexistent DST wall times are skipped and repeated wall times create one
+occurrence for each UTC instant. T8 freezes this compile-time contract; the
+durable Rust clock and actual schedule execution arrive in T9, so the CLI
+rejects activation instead of pretending a timer is running.
 
 ### 9.5 `<interval>`
 

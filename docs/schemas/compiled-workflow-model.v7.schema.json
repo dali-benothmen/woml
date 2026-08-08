@@ -11,7 +11,7 @@
     "Every trigger starts the same graph entry nodes.",
     "Resolved secret values never appear in the compiled model.",
     "Webhook v1 executes POST only and uses an exact static path.",
-    "Slack, schedule, interval, and event shapes are frozen but remain frontend-staged until their activation phases."
+    "Slack and schedule shapes are frontend-active; schedule clock execution remains staged, while interval and event remain frontend-staged until their activation phases."
   ],
   "type": "object",
   "additionalProperties": false,

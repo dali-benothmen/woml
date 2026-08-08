@@ -1186,6 +1186,18 @@ async function activateWorkflows(
     );
   }
 
+  const stagedSchedule = sources
+    .flatMap(source =>
+      source.workflow.triggers.map(trigger => ({ source, trigger }))
+    )
+    .find(item => item.trigger.handler === 'trigger.schedule');
+  if (stagedSchedule !== undefined) {
+    throw new CliInputError(
+      'WOML_TRIGGER_UNSUPPORTED',
+      `Schedule trigger "${stagedSchedule.trigger.id}" is valid WOML, but durable clock execution is not active until the scheduler runtime milestone.`
+    );
+  }
+
   const productionSources = sources.filter(source =>
     source.workflow.triggers.some(
       trigger =>

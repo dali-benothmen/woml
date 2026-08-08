@@ -25,6 +25,11 @@ import {
   type WomlSourceElement,
   type WomlSourceRawText,
 } from './source';
+import {
+  isSupportedScheduleTimeZone,
+  parseScheduleCron,
+  ScheduleCronSyntaxError,
+} from './schedule';
 import { parseSecretReference, requireSecretReference } from './secrets';
 
 interface ElementProfile {
@@ -143,10 +148,19 @@ interface ValidatedSlackTrigger {
   readonly appToken: SecretReferenceExpression;
 }
 
+interface ValidatedScheduleTrigger {
+  readonly kind: 'schedule';
+  readonly id: string;
+  readonly cron: string;
+  readonly timezone: string;
+  readonly onMissed: 'skip' | 'run-once';
+}
+
 type ValidatedTrigger =
   | ValidatedManualTrigger
   | ValidatedWebhookTrigger
-  | ValidatedSlackTrigger;
+  | ValidatedSlackTrigger
+  | ValidatedScheduleTrigger;
 
 interface LoweredFlowFragment {
   readonly entryId: string;
@@ -172,6 +186,7 @@ const supportedElements = new Set([
   'approval',
   'notify',
   'slack',
+  'schedule',
   'when-approved',
   'when-rejected',
 ]);
@@ -181,7 +196,6 @@ const stagedElements = new Set([
   'lifecycle',
   'on-success',
   'on-failure',
-  'schedule',
   'interval',
   'event',
 ]);
@@ -236,6 +250,9 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
       'bot-token',
       'app-token',
     ]),
+  },
+  schedule: {
+    attributes: new Set(['id', 'cron', 'timezone', 'on-missed']),
   },
   'when-approved': { attributes: new Set() },
   'when-rejected': { attributes: new Set() },
@@ -739,6 +756,54 @@ function validateWebhookTrigger(
   };
 }
 
+function validateScheduleTrigger(
+  document: WomlSourceDocument,
+  schedule: WomlSourceElement
+): ValidatedScheduleTrigger {
+  ensureEmptyElement(document, schedule);
+  const id = validateJavaScriptSafeId(
+    document,
+    requiredAttribute(document, schedule, 'id'),
+    'trigger'
+  );
+  const cron = requiredAttribute(document, schedule, 'cron');
+  try {
+    parseScheduleCron(cron.value);
+  } catch (error) {
+    const reason =
+      error instanceof ScheduleCronSyntaxError
+        ? error.reason
+        : 'cron does not match WOML Cron v1';
+    failValidation(
+      document,
+      'WOML_SCHEDULE_CRON_INVALID',
+      `Schedule cron is invalid: ${reason}.`,
+      cron.valueSpan,
+      'Use five numeric fields: minute hour day-of-month month day-of-week. Lists, ranges, and /steps are supported.'
+    );
+  }
+  const timezone = schedule.attributes.timezone?.value ?? 'UTC';
+  if (!isSupportedScheduleTimeZone(timezone)) {
+    failValidation(
+      document,
+      'WOML_SCHEDULE_TIMEZONE_INVALID',
+      `Schedule timezone "${timezone}" is not a canonical IANA timezone identifier.`,
+      schedule.attributes.timezone?.valueSpan ?? schedule.openTagSpan,
+      'Examples: UTC, Europe/Berlin, America/New_York'
+    );
+  }
+  const onMissed = schedule.attributes['on-missed']?.value ?? 'skip';
+  if (onMissed !== 'skip' && onMissed !== 'run-once') {
+    failValidation(
+      document,
+      'WOML_TRIGGER_MISFIRE_INVALID',
+      `Schedule on-missed must be "skip" or "run-once", found "${onMissed}".`,
+      schedule.attributes['on-missed']!.valueSpan
+    );
+  }
+  return { kind: 'schedule', id, cron: cron.value, timezone, onMissed };
+}
+
 function validateTriggers(
   document: WomlSourceDocument,
   triggers: WomlSourceElement
@@ -769,6 +834,9 @@ function validateTriggers(
     }
     if (child.name === 'slack') {
       return validateSlackTrigger(document, child);
+    }
+    if (child.name === 'schedule') {
+      return validateScheduleTrigger(document, child);
     }
     failValidation(
       document,
@@ -2252,6 +2320,20 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
           },
           botToken: trigger.botToken,
           appToken: trigger.appToken,
+        },
+      },
+    };
+  }
+  if (trigger.kind === 'schedule') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.schedule',
+      config: {
+        kind: 'object',
+        fields: {
+          cron: { kind: 'literal', value: trigger.cron },
+          timezone: { kind: 'literal', value: trigger.timezone },
+          onMissed: { kind: 'literal', value: trigger.onMissed },
         },
       },
     };

@@ -1454,9 +1454,87 @@ describe('compileWoml', () => {
     );
   });
 
-  test('keeps schedule, interval, and event runtime-staged after T6', () => {
+  test('T8 lowers the reviewed schedule fixture exactly to Model v7', () => {
+    const source = readFileSync(
+      new URL('./fixtures/triggers-schedule.woml', import.meta.url),
+      'utf8'
+    );
+    const expected = JSON.parse(
+      readFileSync(
+        new URL(
+          './fixtures/triggers-schedule.compiled.v7.json',
+          import.meta.url
+        ),
+        'utf8'
+      )
+    );
+
+    expect(compile(source)).toEqual(expected);
+  });
+
+  test('T8 applies UTC, skip, and cron-step defaults deterministically', () => {
+    const source = `<workflow id="schedule-defaults">
+  <triggers><schedule id="everySixHours" cron="0 */6 * * *" /></triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+
+    expect(compile(source).triggers[0]).toEqual({
+      id: 'everySixHours',
+      handler: 'trigger.schedule',
+      config: {
+        kind: 'object',
+        fields: {
+          cron: { kind: 'literal', value: '0 */6 * * *' },
+          timezone: { kind: 'literal', value: 'UTC' },
+          onMissed: { kind: 'literal', value: 'skip' },
+        },
+      },
+    });
+  });
+
+  test('T8 reports cron, timezone, misfire, and structure errors at their source', () => {
+    const scheduleWorkflow = (attributes: string, body = '') =>
+      `<workflow id="schedule-errors">
+  <triggers><schedule id="daily" ${attributes}>${body}</schedule></triggers>
+  <steps><step id="capture"><script>return 1;</script></step></steps>
+</workflow>`;
+    const cases = [
+      {
+        attributes: 'cron="0 9 * *"',
+        code: 'WOML_SCHEDULE_CRON_INVALID',
+        token: '0 9 * *',
+      },
+      {
+        attributes: 'cron="0 9 * * *" timezone="Local"',
+        code: 'WOML_SCHEDULE_TIMEZONE_INVALID',
+        token: 'Local',
+      },
+      {
+        attributes: 'cron="0 9 * * *" on-missed="catch-up"',
+        code: 'WOML_TRIGGER_MISFIRE_INVALID',
+        token: 'catch-up',
+      },
+    ];
+    for (const entry of cases) {
+      const source = scheduleWorkflow(entry.attributes);
+      const error = validationError(source);
+      expect(error.diagnostic.code).toBe(entry.code);
+      expect(error.diagnostic.location.start.offset).toBe(
+        source.indexOf(entry.token)
+      );
+    }
+
+    const nested = scheduleWorkflow(
+      'cron="0 9 * * *"',
+      '<manual id="nested" />'
+    );
+    expect(validationError(nested).diagnostic.code).toBe(
+      'WOML_INVALID_STRUCTURE'
+    );
+  });
+
+  test('keeps interval and event runtime-staged after T8', () => {
     const fixtureNames = [
-      'triggers-schedule.woml',
       'triggers-interval.woml',
       'triggers-event.woml',
     ];

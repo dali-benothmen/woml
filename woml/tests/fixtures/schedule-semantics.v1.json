@@ -1,0 +1,107 @@
+{
+  "contract": "woml.schedule-semantics",
+  "contractVersion": 1,
+  "dialect": "woml-cron-v1",
+  "fieldOrder": ["minute", "hour", "day-of-month", "month", "day-of-week"],
+  "fieldBounds": [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]],
+  "dayOfWeek": "0 and 7 are Sunday",
+  "dayCombination": "When both day-of-month and day-of-week are restricted, either field may match. Otherwise the restricted field must match.",
+  "dst": {
+    "nonexistentWallTime": "skip",
+    "repeatedWallTime": "one occurrence for each distinct UTC instant"
+  },
+  "misfire": {
+    "skip": "Advance to the next future planned instant without creating a run for elapsed instants.",
+    "runOnce": "Create at most one recovery occurrence using the latest elapsed planned instant."
+  },
+  "occurrenceIdentity": "workflowId + triggerId + planned UTC instant",
+  "contextTrigger": ["scheduledAt", "triggeredAt"],
+  "occurrenceCases": [
+    {
+      "name": "ordinary Berlin morning",
+      "cron": "0 9 * * *",
+      "timezone": "Europe/Berlin",
+      "startInclusive": "2026-08-08T06:58:00.000Z",
+      "endExclusive": "2026-08-08T07:02:00.000Z",
+      "expected": ["2026-08-08T07:00:00.000Z"]
+    },
+    {
+      "name": "month and year boundary",
+      "cron": "0 0 1 1 *",
+      "timezone": "UTC",
+      "startInclusive": "2025-12-31T23:58:00.000Z",
+      "endExclusive": "2026-01-01T00:02:00.000Z",
+      "expected": ["2026-01-01T00:00:00.000Z"]
+    },
+    {
+      "name": "leap day",
+      "cron": "0 12 29 2 *",
+      "timezone": "UTC",
+      "startInclusive": "2024-02-29T11:58:00.000Z",
+      "endExclusive": "2024-02-29T12:02:00.000Z",
+      "expected": ["2024-02-29T12:00:00.000Z"]
+    },
+    {
+      "name": "nonexistent Berlin spring wall time",
+      "cron": "30 2 29 3 *",
+      "timezone": "Europe/Berlin",
+      "startInclusive": "2026-03-29T00:00:00.000Z",
+      "endExclusive": "2026-03-29T04:00:00.000Z",
+      "expected": []
+    },
+    {
+      "name": "repeated Berlin autumn wall time",
+      "cron": "30 2 25 10 *",
+      "timezone": "Europe/Berlin",
+      "startInclusive": "2026-10-24T23:00:00.000Z",
+      "endExclusive": "2026-10-25T03:00:00.000Z",
+      "expected": [
+        "2026-10-25T00:30:00.000Z",
+        "2026-10-25T01:30:00.000Z"
+      ]
+    },
+    {
+      "name": "non-hour timezone offset",
+      "cron": "0 9 * * *",
+      "timezone": "Asia/Kathmandu",
+      "startInclusive": "2026-08-08T03:13:00.000Z",
+      "endExclusive": "2026-08-08T03:17:00.000Z",
+      "expected": ["2026-08-08T03:15:00.000Z"]
+    },
+    {
+      "name": "POSIX day-of-month or day-of-week",
+      "cron": "0 9 13 * 1",
+      "timezone": "UTC",
+      "startInclusive": "2026-05-10T00:00:00.000Z",
+      "endExclusive": "2026-05-14T00:00:00.000Z",
+      "expected": [
+        "2026-05-11T09:00:00.000Z",
+        "2026-05-13T09:00:00.000Z"
+      ]
+    },
+    {
+      "name": "seven aliases Sunday",
+      "cron": "0 0 * * 7",
+      "timezone": "UTC",
+      "startInclusive": "2026-08-08T23:58:00.000Z",
+      "endExclusive": "2026-08-09T00:02:00.000Z",
+      "expected": ["2026-08-09T00:00:00.000Z"]
+    }
+  ],
+  "invalidCron": [
+    "0 9 * *",
+    "0 9 * * * *",
+    "60 * * * *",
+    "0 24 * * *",
+    "0 0 0 * *",
+    "0 0 * 13 *",
+    "0 0 * * 8",
+    "*/0 * * * *",
+    "0 0 * JAN *",
+    "0 0 ? * *",
+    "@daily",
+    "0  9 * * *",
+    "0\t9 * * *"
+  ],
+  "invalidTimezones": ["", "Local", "GMT", "UTC+02:00", "+02:00", "Mars/Olympus", "US/Eastern"]
+}

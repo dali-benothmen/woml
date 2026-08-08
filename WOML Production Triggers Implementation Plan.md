@@ -1025,6 +1025,8 @@ Implementation notes:
 
 ### T8 — Compile schedules and freeze time semantics
 
+Status: completed.
+
 Changes:
 
 - Activate `<schedule>` in the frontend and Model v7 profile.
@@ -1040,6 +1042,28 @@ Gate:
 
 Deterministic fixture tables cover ordinary dates, month/year boundaries,
 leap day, nonexistent times, repeated times, and invalid expressions.
+
+Implementation notes:
+
+- `<schedule>` is now an active frontend element with exact `id`, `cron`,
+  optional `timezone`, and optional `on-missed` attributes. Omitted values
+  lower deterministically to `UTC` and `skip`.
+- WOML Cron v1 freezes five numeric fields, single-space separation, lists,
+  inclusive non-wrapping ranges, steps, field bounds, Sunday as `0` or `7`,
+  and POSIX day-of-month/day-of-week OR behavior. Seconds, names, macros, and
+  Quartz tokens fail with source-located diagnostics.
+- Canonical IANA timezone identifiers are required. The versioned schedule
+  semantics artifact pins ordinary dates, year/month boundaries, leap day,
+  non-hour offsets, nonexistent DST times, and both UTC instants of a repeated
+  wall time.
+- Misfire behavior, occurrence identity, and the exact two-field
+  `context.trigger` contract are recorded now even though Rust does not execute
+  the clock until T9.
+- `woml run` identifies a valid schedule and fails explicitly with
+  `WOML_TRIGGER_UNSUPPORTED`; it never claims automation readiness before the
+  durable scheduler exists.
+- `examples/scheduleWorkflow.woml` is the reviewed Model v7 product fixture.
+  `bun run test:t8` is the T8 gate and `test:release` points to it.
 
 ### T9 — Execute and publish durable schedules
 

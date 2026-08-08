@@ -207,6 +207,38 @@ Slack fields never enter `context.trigger`. Slack approval actions and trigger
 events are routed as separate protocol messages, even when their adapters
 share one Socket connection.
 
+## Schedule frontend boundary
+
+T8 activates schedule validation and Model v7 lowering without activating a
+clock. The versioned `woml.schedule-semantics` v1 artifact is the conformance
+boundary that the T9 Rust scheduler must satisfy.
+
+WOML Cron v1 contains exactly five numeric fields separated by single ASCII
+spaces, in this order: minute, hour, day-of-month, month, and day-of-week. It
+accepts `*`, comma-separated lists, inclusive non-wrapping ranges, and `/step`
+on wildcards, ranges, or a starting value. Bounds are `0-59`, `0-23`, `1-31`,
+`1-12`, and `0-7`; both `0` and `7` mean Sunday. Names, seconds, macros,
+wrapping ranges, and Quartz-style `?`, `L`, `W`, and `#` constructs are not in
+the dialect.
+
+When both day-of-month and day-of-week are restricted, either field matching
+selects the wall-clock minute, following POSIX cron behavior. Otherwise the
+restricted field must match. `timezone` is a canonical IANA identifier and
+defaults to `UTC`; fixed offsets, local-machine aliases, and legacy aliases are
+rejected so a definition cannot change meaning between hosts.
+
+Occurrence fixtures are evaluated as UTC instants. A nonexistent DST wall
+time produces no occurrence. A repeated wall time produces two occurrences,
+one for each distinct UTC instant. `skip` advances beyond elapsed instants;
+`run-once` creates at most one recovery occurrence for the latest elapsed
+planned instant. A schedule occurrence is identified by workflow, trigger,
+and planned UTC instant, and its public trigger context is exactly
+`{ scheduledAt, triggeredAt }` with RFC 3339 UTC timestamps.
+
+`woml run` rejects schedule activation explicitly during T8. Rust owns the
+durable cursor, clock, occurrence claim, and execution beginning in T9; the Bun
+frontend never decides that a schedule is due.
+
 ## Progress boundary
 
 Trigger Progress v1 is operational output for long-lived CLI processes. It
