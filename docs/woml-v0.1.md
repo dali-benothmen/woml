@@ -60,8 +60,9 @@ includes conditional branches and bounded parallel groups:
 | Workflow `version` | Frozen | Executable as user-defined workflow metadata |
 | Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
 | Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
-| Webhook and inline payload schema | Designed | Unavailable |
-| Config, lifecycle, schedule, interval, and event triggers | Designed | Unavailable |
+| Multiple triggers, webhook, and inline payload schema | Frozen in Production Triggers T0; TypeScript lowering implemented in T1 | Compiles to Model v7; runtime admission/execution remains unavailable until T2–T5 |
+| Slack trigger | Frozen in Production Triggers T0 | Frontend- and runtime-staged until T6–T7 |
+| Config, lifecycle, schedule, interval, and event triggers | Schedule, interval, and event shapes frozen in Production Triggers T0; config/lifecycle remain designed | Unavailable until their activation phases |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
@@ -160,7 +161,9 @@ Outside raw-content elements:
     <webhook
       id="moderateContent"
       path="/webhooks/moderate-content"
-      method="POST">
+      method="POST"
+      auth="bearer"
+      secret="{{secrets.MODERATION_WEBHOOK_TOKEN}}">
 
       <schema>
         {
@@ -354,6 +357,7 @@ triggers       := <triggers> trigger+ </triggers>
 
 trigger        := manual
                 | webhook
+                | slack
                 | schedule
                 | interval
                 | event
@@ -641,7 +645,12 @@ Manual CLI input becomes `context.trigger`.
 ### 9.2 `<webhook>`
 
 ```xml
-<webhook id="newOrder" path="/webhooks/orders" method="POST">
+<webhook
+  id="newOrder"
+  path="/webhooks/orders"
+  method="POST"
+  auth="bearer"
+  secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
   <schema>
     {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -659,8 +668,10 @@ Manual CLI input becomes `context.trigger`.
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
 | `id` | Yes | Trigger ID | Stable trigger identity. |
-| `path` | Yes | Absolute route path | Route registered by the runtime. |
-| `method` | No | HTTP method | `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`; defaults to `POST`. |
+| `path` | Yes | Exact absolute route path | Static route registered by the runtime; parameters, wildcards, repeated slashes, and `/_woml` are forbidden. |
+| `method` | No | HTTP method | Defaults to `POST`; Production Trigger HTTP v1 executes POST only. |
+| `auth` | Yes | `bearer` or `none` | Makes protected or deliberately public exposure explicit. |
+| `secret` | For bearer | Exact secret reference | Required as `{{secrets.NAME}}` with bearer auth and forbidden with `auth="none"`. |
 
 `<webhook>` may contain at most one `<schema>`. An inline schema is standard JSON
 Schema Draft 2020-12. The compiler MUST parse and validate the schema before the
@@ -702,13 +713,39 @@ callbacks from the TypeScript SDK are not part of the fundamental WOML grammar.
 External schema files, such as `<schema src="..." />`, are deferred until file
 resolution and portability rules are designed.
 
-### 9.3 `<schedule>`
+### 9.3 `<slack>`
+
+```xml
+<slack
+  id="agentMessage"
+  events="app-mention,direct-message"
+  channels="woml-testing,agent-support"
+  bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+  app-token="{{secrets.SLACK_APP_TOKEN}}"
+/>
+```
+
+| Attribute | Required | Type | Meaning |
+|---|---:|---|---|
+| `id` | Yes | Trigger ID | Stable trigger identity. |
+| `events` | Yes | Comma-separated event set | One or both of `app-mention` and `direct-message`. |
+| `channels` | No | Comma-separated channel set | Limits app mentions to named channels; omission accepts every visible channel. |
+| `bot-token` | Yes | Exact secret reference | Symbolic Slack bot token. |
+| `app-token` | Yes | Exact secret reference | Symbolic Slack Socket Mode app token. |
+
+The normalized trigger value contains safe message, user, channel, thread, and
+workspace identifiers. Bot/self messages, edits, deletes, provider envelopes,
+and credentials never enter `context.trigger`. This shape is frozen in Model v7
+but remains rejected until Production Trigger phases T6–T7.
+
+### 9.4 `<schedule>`
 
 ```xml
 <schedule
   id="everySixHours"
   cron="0 */6 * * *"
   timezone="UTC"
+  on-missed="skip"
 />
 ```
 
@@ -717,34 +754,43 @@ resolution and portability rules are designed.
 | `id` | Yes | Trigger ID | Stable trigger identity. |
 | `cron` | Yes | Cron expression | Schedule expression. |
 | `timezone` | No | IANA timezone | Evaluation timezone; defaults to `UTC`. |
+| `on-missed` | No | `skip` or `run-once` | Restart policy; defaults to `skip`. |
 
 The supported cron dialect must be named by the runtime specification before
 `<schedule>` is considered executable.
 
-### 9.4 `<interval>`
+### 9.5 `<interval>`
 
 ```xml
-<interval id="everyFiveMinutes" every="5m" />
+<interval id="everyFiveMinutes" every="5m" on-missed="skip" />
 ```
 
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
 | `id` | Yes | Trigger ID | Stable trigger identity. |
 | `every` | Yes | Duration | Interval between run starts. |
+| `on-missed` | No | `skip` or `run-once` | Restart policy; defaults to `skip`. |
 
 An interval is a first-class trigger. The compiler MUST NOT translate it into a
 cron expression if doing so would change its semantics.
 
-### 9.5 `<event>`
+### 9.6 `<event>`
 
 ```xml
-<event id="orderCreated" name="order.created" />
+<event id="orderCreated" name="order.created">
+  <schema>
+    { "type": "object", "required": ["orderId"] }
+  </schema>
+</event>
 ```
 
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
 | `id` | Yes | Trigger ID | Stable trigger identity. |
 | `name` | Yes | Non-empty string | Event name consumed by the workflow. |
+
+`<event>` may contain at most one inline Draft 2020-12 `<schema>` using the
+same source rules as webhook schemas.
 
 Transport, subscription, acknowledgement, and event-delivery guarantees are
 outside the fundamental syntax and require a runtime contract.

@@ -1,0 +1,11 @@
+{
+  "contract": "woml.trigger-progress",
+  "contractVersion": 1,
+  "type": "occurrence_rejected",
+  "workflowId": "webhook-trigger-contract",
+  "triggerId": "newOrder",
+  "triggerHandler": "trigger.webhook",
+  "code": "WOML_TRIGGER_SCHEMA_INVALID",
+  "message": "Webhook payload was rejected by its schema.",
+  "occurredAt": "2026-08-08T12:00:00.000Z"
+}

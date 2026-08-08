@@ -1,0 +1,12 @@
+{
+  "occurrenceSchemaVersion": 1,
+  "occurrenceId": "occ_webhook_001",
+  "workflowId": "webhook-trigger-contract",
+  "triggerId": "newOrder",
+  "triggerHandler": "trigger.webhook",
+  "definitionHash": "sha256:4b4899d13cefc7ed88033d24c898549a4eb8862bebf4a73ed1c26f0af99bd082",
+  "sourceIdentityHash": "sha256:f58c4282a8670ec0528685b21d21f8e426a15629d7b91ba850a9c60782c30b09",
+  "payloadHash": "sha256:c5fbc3b263e2a89956ed3f7fe3cc81d3e7d0925adc8fc14af3ef374850bdd976",
+  "receivedAt": "2026-08-08T12:00:00.000Z",
+  "runId": "run_webhook_001"
+}

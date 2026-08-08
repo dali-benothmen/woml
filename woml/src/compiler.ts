@@ -1,5 +1,8 @@
+import Ajv2020 from 'ajv/dist/2020';
+
 import {
   inspectCompiledWorkflowGraph,
+  type CompiledTrigger,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
@@ -9,6 +12,7 @@ import {
   type JsonValue,
   type RetryPolicy,
   type SecretReferenceExpression,
+  type ValueExpression,
 } from './model';
 import {
   SourceFile,
@@ -105,9 +109,30 @@ interface ValidatedFlow {
 interface ValidatedWorkflow {
   readonly workflowId: string;
   readonly metadata?: CompiledWorkflowMetadata;
-  readonly triggerId: string;
+  readonly triggers: readonly ValidatedTrigger[];
   readonly flow: ValidatedFlow;
 }
+
+interface ValidatedManualTrigger {
+  readonly kind: 'manual';
+  readonly id: string;
+}
+
+interface ValidatedWebhookTrigger {
+  readonly kind: 'webhook';
+  readonly id: string;
+  readonly path: string;
+  readonly method: 'POST';
+  readonly authentication:
+    | { readonly kind: 'none' }
+    | {
+        readonly kind: 'bearer';
+        readonly secret: SecretReferenceExpression;
+      };
+  readonly schema?: Readonly<Record<string, JsonValue>>;
+}
+
+type ValidatedTrigger = ValidatedManualTrigger | ValidatedWebhookTrigger;
 
 interface LoweredFlowFragment {
   readonly entryId: string;
@@ -120,6 +145,8 @@ const supportedElements = new Set([
   'workflow',
   'triggers',
   'manual',
+  'webhook',
+  'schema',
   'steps',
   'step',
   'script',
@@ -140,8 +167,6 @@ const stagedElements = new Set([
   'lifecycle',
   'on-success',
   'on-failure',
-  'webhook',
-  'schema',
   'schedule',
   'interval',
   'event',
@@ -154,6 +179,10 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   triggers: { attributes: new Set() },
   manual: { attributes: new Set(['id']) },
+  webhook: {
+    attributes: new Set(['id', 'path', 'method', 'auth', 'secret']),
+  },
+  schema: { attributes: new Set() },
   steps: { attributes: new Set() },
   step: {
     attributes: new Set([
@@ -194,6 +223,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
 
 const workflowIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const javascriptSafeIdPattern = /^[a-z][A-Za-z0-9]*$/;
+const webhookPathPattern = /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?$/;
 
 function diagnostic(
   document: WomlSourceDocument,
@@ -241,6 +271,14 @@ function visitProfile(
   element: WomlSourceElement,
   parent?: WomlSourceElement
 ): void {
+  if (element.name === 'slack' && parent?.name === 'triggers') {
+    failValidation(
+      document,
+      'WOML_FEATURE_NOT_EXECUTABLE',
+      '<slack> triggers are frozen for Model v7 but become executable in T6–T7.',
+      element.openTagSpan
+    );
+  }
   if (!supportedElements.has(element.name)) {
     if (parent?.name === 'notify') {
       failValidation(
@@ -308,7 +346,9 @@ function validateSecretReferenceSinks(
     const isSlackCredential =
       element.name === 'slack' &&
       (attribute.name === 'bot-token' || attribute.name === 'app-token');
-    if (isSlackCredential) {
+    const isWebhookCredential =
+      element.name === 'webhook' && attribute.name === 'secret';
+    if (isSlackCredential || isWebhookCredential) {
       requireSecretReference(document, attribute);
       continue;
     }
@@ -520,33 +560,222 @@ function validateWorkflowChildren(
   return [triggerContainers[0], stepsContainers[0]];
 }
 
-function validateManualTrigger(
+function schemaBody(
   document: WomlSourceDocument,
-  triggers: WomlSourceElement
-): string {
-  const children = elementChildren(document, triggers);
-  if (children.length !== 1 || children[0].name !== 'manual') {
-    const found =
-      children.length === 0
-        ? 'none'
-        : children.map(child => `<${child.name}>`).join(', ');
+  schema: WomlSourceElement
+): Readonly<Record<string, JsonValue>> {
+  if (Object.keys(schema.attributes).length > 0) {
+    const attribute = Object.values(schema.attributes)[0];
     failValidation(
       document,
-      'WOML_MANUAL_TRIGGER_COUNT',
-      `The first WOML CLI profile requires exactly one <manual> trigger; found ${found}.`,
-      children[1]?.openTagSpan ??
-        children[0]?.openTagSpan ??
-        triggers.openTagSpan
+      'WOML_UNKNOWN_ATTRIBUTE',
+      `Unknown attribute "${attribute.name}" on <schema>.`,
+      attribute.nameSpan
+    );
+  }
+  const invalidChild = schema.children.find(child => child.kind !== 'text');
+  if (invalidChild !== undefined) {
+    failValidation(
+      document,
+      'WOML_WEBHOOK_SCHEMA_STRUCTURE_INVALID',
+      '<schema> must contain inline JSON only.',
+      invalidChild.span
+    );
+  }
+  const textNodes = schema.children.filter(child => child.kind === 'text');
+  const text = textNodes.map(child => child.value).join('');
+  const span = schema.children[0]?.span ?? schema.openTagSpan;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    const position =
+      error instanceof SyntaxError
+        ? /position\s+(\d+)/i.exec(error.message)?.[1]
+        : undefined;
+    const relative = position === undefined ? 0 : Number(position);
+    const source = new SourceFile(document.file, document.source);
+    const start = Math.min(span.start.offset + relative, span.end.offset);
+    failValidation(
+      document,
+      'WOML_WEBHOOK_SCHEMA_JSON_INVALID',
+      '<schema> must contain valid JSON.',
+      source.span(start, Math.min(start + 1, span.end.offset))
+    );
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed)
+  ) {
+    failValidation(
+      document,
+      'WOML_WEBHOOK_SCHEMA_INVALID',
+      '<schema> must contain a JSON Schema object.',
+      span
+    );
+  }
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  let validSchema = false;
+  let schemaError: string | undefined;
+  try {
+    validSchema = validator.validateSchema(parsed) === true;
+    if (validSchema) validator.compile(parsed);
+  } catch (error) {
+    validSchema = false;
+    schemaError = error instanceof Error ? error.message : undefined;
+  }
+  if (!validSchema) {
+    const issue = validator.errors?.[0];
+    const reason = issue?.message ?? schemaError;
+    failValidation(
+      document,
+      'WOML_WEBHOOK_SCHEMA_INVALID',
+      `Inline webhook JSON Schema is invalid${reason === undefined ? '.' : `: ${reason}.`}`,
+      span
+    );
+  }
+  return parsed as Readonly<Record<string, JsonValue>>;
+}
+
+function validateWebhookTrigger(
+  document: WomlSourceDocument,
+  webhook: WomlSourceElement
+): ValidatedWebhookTrigger {
+  const id = validateJavaScriptSafeId(
+    document,
+    requiredAttribute(document, webhook, 'id'),
+    'trigger'
+  );
+  const pathAttribute = requiredAttribute(document, webhook, 'path');
+  if (
+    pathAttribute.value.length > 2048 ||
+    !webhookPathPattern.test(pathAttribute.value) ||
+    pathAttribute.value === '/_woml' ||
+    pathAttribute.value.startsWith('/_woml/')
+  ) {
+    failValidation(
+      document,
+      'WOML_WEBHOOK_PATH_INVALID',
+      `Webhook path "${pathAttribute.value}" must be an exact absolute route without parameters, wildcards, repeated slashes, or the reserved /_woml prefix.`,
+      pathAttribute.valueSpan
+    );
+  }
+  const methodAttribute = webhook.attributes.method;
+  if (methodAttribute !== undefined && methodAttribute.value !== 'POST') {
+    failValidation(
+      document,
+      'WOML_WEBHOOK_METHOD_UNSUPPORTED',
+      `Webhook method "${methodAttribute.value}" is not executable in Webhook HTTP v1; use POST.`,
+      methodAttribute.valueSpan
+    );
+  }
+  const authAttribute = requiredAttribute(document, webhook, 'auth');
+  let authentication: ValidatedWebhookTrigger['authentication'];
+  if (authAttribute.value === 'none') {
+    const secret = webhook.attributes.secret;
+    if (secret !== undefined) {
+      failValidation(
+        document,
+        'WOML_WEBHOOK_AUTH_INVALID',
+        'A webhook with auth="none" must not declare a secret.',
+        secret.nameSpan
+      );
+    }
+    authentication = { kind: 'none' };
+  } else if (authAttribute.value === 'bearer') {
+    authentication = {
+      kind: 'bearer',
+      secret: requireSecretReference(
+        document,
+        requiredAttribute(document, webhook, 'secret')
+      ),
+    };
+  } else {
+    failValidation(
+      document,
+      'WOML_WEBHOOK_AUTH_INVALID',
+      `Webhook auth "${authAttribute.value}" must be "bearer" or "none".`,
+      authAttribute.valueSpan
     );
   }
 
-  const manual = children[0];
-  ensureEmptyElement(document, manual);
-  return validateJavaScriptSafeId(
-    document,
-    requiredAttribute(document, manual, 'id'),
-    'trigger'
-  );
+  const children = elementChildren(document, webhook);
+  if (
+    children.length > 1 ||
+    (children.length === 1 && children[0].name !== 'schema')
+  ) {
+    const offender =
+      children.find(child => child.name !== 'schema') ?? children[1];
+    failValidation(
+      document,
+      'WOML_WEBHOOK_STRUCTURE_INVALID',
+      '<webhook> may contain at most one inline <schema>.',
+      offender?.openTagSpan ?? webhook.openTagSpan
+    );
+  }
+  const schema = children[0] === undefined
+    ? undefined
+    : schemaBody(document, children[0]);
+  return {
+    kind: 'webhook',
+    id,
+    path: pathAttribute.value,
+    method: 'POST',
+    authentication,
+    ...(schema === undefined ? {} : { schema }),
+  };
+}
+
+function validateTriggers(
+  document: WomlSourceDocument,
+  triggers: WomlSourceElement
+): readonly ValidatedTrigger[] {
+  const children = elementChildren(document, triggers);
+  if (children.length === 0) {
+    failValidation(
+      document,
+      'WOML_TRIGGER_REQUIRED',
+      '<triggers> requires at least one executable trigger.',
+      triggers.openTagSpan
+    );
+  }
+  const validated = children.map((child): ValidatedTrigger => {
+    if (child.name === 'manual') {
+      ensureEmptyElement(document, child);
+      return {
+        kind: 'manual',
+        id: validateJavaScriptSafeId(
+          document,
+          requiredAttribute(document, child, 'id'),
+          'trigger'
+        ),
+      };
+    }
+    if (child.name === 'webhook') {
+      return validateWebhookTrigger(document, child);
+    }
+    failValidation(
+      document,
+      'WOML_TRIGGER_UNSUPPORTED',
+      `<${child.name}> is not an executable trigger in T1.`,
+      child.openTagSpan
+    );
+  });
+  const ids = new Set<string>();
+  for (let index = 0; index < validated.length; index += 1) {
+    const trigger = validated[index];
+    if (ids.has(trigger.id)) {
+      failValidation(
+        document,
+        'WOML_TRIGGER_ID_DUPLICATE',
+        `Trigger ID "${trigger.id}" is already used in this workflow.`,
+        requiredAttribute(document, children[index], 'id').valueSpan
+      );
+    }
+    ids.add(trigger.id);
+  }
+  return validated;
 }
 
 function scriptSource(
@@ -1857,6 +2086,46 @@ function lowerFlowItems(
   };
 }
 
+function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
+  if (trigger.kind === 'manual') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.manual',
+      config: { kind: 'object', fields: {} },
+    };
+  }
+  const authentication: ValueExpression =
+    trigger.authentication.kind === 'none'
+      ? {
+          kind: 'object' as const,
+          fields: {
+            kind: { kind: 'literal' as const, value: 'none' },
+          },
+        }
+      : {
+          kind: 'object' as const,
+          fields: {
+            kind: { kind: 'literal' as const, value: 'bearer' },
+            secret: trigger.authentication.secret,
+          },
+        };
+  return {
+    id: trigger.id,
+    handler: 'trigger.webhook',
+    config: {
+      kind: 'object',
+      fields: {
+        path: { kind: 'literal', value: trigger.path },
+        method: { kind: 'literal', value: trigger.method },
+        authentication,
+        ...(trigger.schema === undefined
+          ? {}
+          : { schema: { kind: 'literal' as const, value: trigger.schema } }),
+      },
+    },
+  };
+}
+
 function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
   const workflow = document.root;
   if (workflow.name !== 'workflow') {
@@ -1880,13 +2149,13 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     document,
     workflow
   );
-  const triggerId = validateManualTrigger(document, triggersElement);
+  const triggers = validateTriggers(document, triggersElement);
   const flow = validateSteps(document, stepsElement);
 
   return {
     workflowId,
     ...(metadata === undefined ? {} : { metadata }),
-    triggerId,
+    triggers,
     flow,
   };
 }
@@ -1899,37 +2168,32 @@ export function compileWoml(
   document: WomlSourceDocument
 ): CompiledWorkflowDefinition {
   const workflow = document.root;
-  const { workflowId, metadata, triggerId, flow } = validateDocument(document);
+  const { workflowId, metadata, triggers, flow } = validateDocument(document);
   const lowered = lowerFlowItems(flow.items);
   const definition = {
     workflowId,
     ...(metadata === undefined ? {} : { metadata }),
-    triggers: [
-      {
-        id: triggerId,
-        handler: 'trigger.manual',
-        config: { kind: 'object' as const, fields: {} },
-      },
-    ],
+    triggers: triggers.map(lowerTrigger),
     graph: {
       entryNodeIds: [lowered.entryId],
       nodes: lowered.nodes,
       edges: lowered.edges,
     } satisfies CompiledWorkflowGraph,
   };
-  const compiled: CompiledWorkflowDefinition = lowered.nodes.some(
-    node => node.retryPolicy !== undefined
-  )
-    ? { schemaVersion: 6, ...definition }
-    : flow.firstNotification !== undefined
-      ? { schemaVersion: 5, ...definition }
-      : flow.firstApproval !== undefined
-        ? { schemaVersion: 4, ...definition }
-        : flow.firstParallel !== undefined
-          ? { schemaVersion: 3, ...definition }
-          : flow.firstBranch === undefined
-            ? { schemaVersion: 1, ...definition }
-            : { schemaVersion: 2, ...definition };
+  const compiled: CompiledWorkflowDefinition =
+    triggers.length > 1 || triggers.some(trigger => trigger.kind !== 'manual')
+      ? { schemaVersion: 7, ...definition }
+      : lowered.nodes.some(node => node.retryPolicy !== undefined)
+        ? { schemaVersion: 6, ...definition }
+        : flow.firstNotification !== undefined
+          ? { schemaVersion: 5, ...definition }
+          : flow.firstApproval !== undefined
+            ? { schemaVersion: 4, ...definition }
+            : flow.firstParallel !== undefined
+              ? { schemaVersion: 3, ...definition }
+              : flow.firstBranch === undefined
+                ? { schemaVersion: 1, ...definition }
+                : { schemaVersion: 2, ...definition };
 
   const graphIssues = inspectCompiledWorkflowGraph(compiled.graph, {
     requireSingleTerminal: true,

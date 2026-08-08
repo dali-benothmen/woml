@@ -1,0 +1,8 @@
+{
+  "protocol": "woml.slack-trigger",
+  "protocolVersion": 1,
+  "messageType": "connection",
+  "workspaceId": "T123",
+  "state": "ready",
+  "occurredAt": "2026-08-08T12:00:00.000Z"
+}

@@ -83,7 +83,7 @@ describe('WOML secret references', () => {
     }
   });
 
-  test('allows references only in reviewed Slack credential sinks', () => {
+  test('allows references only in reviewed Slack and webhook credential sinks', () => {
     const valid = workflow(`<approval id="review">
       <notify>
         <slack channels="#approvals" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />

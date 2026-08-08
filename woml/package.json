@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "ajv": "8.17.1",
     "fast-xml-parser": "5.10.1"
   },
   "devDependencies": {

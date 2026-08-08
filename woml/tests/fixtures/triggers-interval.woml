@@ -1,0 +1,12 @@
+<workflow id="interval-trigger-contract">
+  <triggers>
+    <interval id="refreshCache" every="5m" on-missed="run-once" />
+  </triggers>
+  <steps>
+    <step id="capture">
+      <script>
+        return context.trigger;
+      </script>
+    </step>
+  </steps>
+</workflow>

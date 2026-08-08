@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/slack-trigger-protocol/v1",
+  "title": "WOML Slack Trigger Protocol v1",
+  "description": "Secret-safe protocol between the shared Slack transport host and Rust trigger ingress.",
+  "x-status": "production-trigger-shape-frozen-runtime-staged",
+  "x-invariants": [
+    "The protocol carries symbolic credential names but never resolved token values.",
+    "Only human app mentions and direct messages are normalized as trigger events.",
+    "Slack acknowledgement follows a durable Rust admission result.",
+    "Provider event ID and workspace ID form the external deduplication identity."
+  ],
+  "oneOf": [
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/connection" },
+    { "$ref": "#/$defs/event" },
+    { "$ref": "#/$defs/acknowledge" },
+    { "$ref": "#/$defs/failure" }
+  ],
+  "$defs": {
+    "common": {
+      "properties": {
+        "protocol": { "const": "woml.slack-trigger" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "enum": ["ready", "connection", "event", "acknowledge", "failure"] }
+      }
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType"],
+      "properties": {
+        "protocol": { "const": "woml.slack-trigger" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "ready" }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "workspaceId", "state", "occurredAt"],
+      "properties": {
+        "protocol": { "const": "woml.slack-trigger" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "connection" },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "state": { "enum": ["connecting", "ready", "reconnecting", "stopped"] },
+        "retryAt": { "type": "string", "format": "date-time" },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol", "protocolVersion", "messageType", "envelopeId", "eventId",
+        "workspaceId", "workflowId", "definitionHash", "triggerId",
+        "credentialNames", "payload", "occurredAt"
+      ],
+      "properties": {
+        "protocol": { "const": "woml.slack-trigger" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "event" },
+        "envelopeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "eventId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workflowId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "definitionHash": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/definitionHash" },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "credentialNames": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["botToken", "appToken"],
+          "properties": {
+            "botToken": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+            "appToken": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
+          }
+        },
+        "payload": { "$ref": "#/$defs/payload" },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text", "userId", "channelId", "messageTs", "threadTs", "teamId"],
+      "properties": {
+        "type": { "enum": ["app-mention", "direct-message"] },
+        "text": { "type": "string", "maxLength": 40000 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "channelId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "messageTs": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "threadTs": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "teamId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "acknowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "envelopeId", "runId", "duplicate"],
+      "properties": {
+        "protocol": { "const": "woml.slack-trigger" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "acknowledge" },
+        "envelopeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "duplicate": { "type": "boolean" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "code", "message", "retryable"],
+      "properties": {
+        "protocol": { "const": "woml.slack-trigger" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "failure" },
+        "envelopeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "code": {
+          "enum": [
+            "WOML_SLACK_TRIGGER_SCOPE_MISSING",
+            "WOML_SLACK_TRIGGER_UNAVAILABLE",
+            "WOML_SLACK_TRIGGER_EVENT_INVALID",
+            "WOML_SLACK_TRIGGER_EVENT_TOO_LARGE",
+            "WOML_TRIGGER_UNAVAILABLE"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retryable": { "type": "boolean" }
+      }
+    }
+  }
+}

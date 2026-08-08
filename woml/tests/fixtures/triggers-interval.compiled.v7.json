@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 7,
+  "workflowId": "interval-trigger-contract",
+  "triggers": [
+    {
+      "id": "refreshCache",
+      "handler": "trigger.interval",
+      "config": {
+        "kind": "object",
+        "fields": {
+          "everyMs": { "kind": "literal", "value": 300000 },
+          "onMissed": { "kind": "literal", "value": "run-once" }
+        }
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["capture"],
+    "nodes": [
+      {
+        "id": "capture",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": { "kind": "literal", "value": "\n        return context.trigger;\n      " }
+          }
+        }
+      }
+    ],
+    "edges": []
+  }
+}

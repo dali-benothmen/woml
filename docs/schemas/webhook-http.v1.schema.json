@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/webhook-http/v1",
+  "title": "WOML Webhook HTTP Response v1",
+  "description": "Public JSON response body for asynchronous WOML webhook admission.",
+  "x-status": "production-trigger-contract-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/accepted" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "accepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "status", "duplicate"],
+      "properties": {
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "const": "accepted" },
+        "duplicate": { "type": "boolean" }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "message"],
+      "properties": {
+        "path": { "type": "string", "maxLength": 2048 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "WOML_TRIGGER_PAYLOAD_INVALID",
+                "WOML_TRIGGER_SCHEMA_INVALID",
+                "WOML_TRIGGER_UNAUTHORIZED",
+                "WOML_TRIGGER_METHOD_NOT_ALLOWED",
+                "WOML_TRIGGER_PAYLOAD_TOO_LARGE",
+                "WOML_TRIGGER_NOT_FOUND",
+                "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+                "WOML_TRIGGER_UNAVAILABLE"
+              ]
+            },
+            "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "issues": {
+              "type": "array",
+              "maxItems": 100,
+              "items": { "$ref": "#/$defs/issue" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "contract": "woml.trigger-progress",
+  "contractVersion": 1,
+  "type": "occurrence_accepted",
+  "workflowId": "webhook-trigger-contract",
+  "triggerId": "newOrder",
+  "triggerHandler": "trigger.webhook",
+  "occurrenceId": "occ_webhook_001",
+  "runId": "run_webhook_001",
+  "duplicate": false,
+  "occurredAt": "2026-08-08T12:00:00.000Z"
+}

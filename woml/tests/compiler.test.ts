@@ -1180,14 +1180,17 @@ describe('compileWoml', () => {
     );
   });
 
-  test('requires one manual trigger and the canonical container order', () => {
+  test('T1 accepts multiple manual triggers and keeps canonical container order', () => {
     const multipleManual = `<workflow version="1.0.0" id="test-workflow">
   <triggers><manual id="first" /><manual id="second" /></triggers>
   <steps><step id="a"><script>return 1;</script></step></steps>
 </workflow>`;
-    expect(validationError(multipleManual).diagnostic.code).toBe(
-      'WOML_MANUAL_TRIGGER_COUNT'
-    );
+    const compiled = compile(multipleManual);
+    expect(compiled.schemaVersion).toBe(7);
+    expect(compiled.triggers.map(trigger => trigger.id)).toEqual([
+      'first',
+      'second',
+    ]);
 
     const wrongOrder = `<workflow version="1.0.0" id="test-workflow">
   <steps><step id="a"><script>return 1;</script></step></steps>
@@ -1196,6 +1199,170 @@ describe('compileWoml', () => {
     expect(validationError(wrongOrder).diagnostic.code).toBe(
       'WOML_INVALID_STRUCTURE'
     );
+  });
+
+  test('T1 lowers the reviewed manual and webhook fixture exactly to Model v7', () => {
+    const source = readFileSync(
+      new URL('./fixtures/triggers-webhook.woml', import.meta.url),
+      'utf8'
+    );
+    const expected = JSON.parse(
+      readFileSync(
+        new URL(
+          './fixtures/triggers-webhook.compiled.v7.json',
+          import.meta.url
+        ),
+        'utf8'
+      )
+    );
+    const compiled = compile(source);
+
+    expect(compiled).toEqual(expected);
+    expect(compiled.schemaVersion).toBe(7);
+    expect(compiled.triggers[1]).toMatchObject({
+      id: 'newOrder',
+      handler: 'trigger.webhook',
+    });
+  });
+
+  test('T1 applies webhook defaults and explicit unauthenticated intent', () => {
+    const source = `<workflow id="public-hook">
+  <triggers>
+    <webhook id="incoming" path="/incoming" auth="none" />
+  </triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+    const compiled = compile(source);
+    expect(compiled.schemaVersion).toBe(7);
+    expect(compiled.triggers).toEqual([
+      {
+        id: 'incoming',
+        handler: 'trigger.webhook',
+        config: {
+          kind: 'object',
+          fields: {
+            path: { kind: 'literal', value: '/incoming' },
+            method: { kind: 'literal', value: 'POST' },
+            authentication: {
+              kind: 'object',
+              fields: { kind: { kind: 'literal', value: 'none' } },
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  test('T1 reports webhook path, method, auth, and duplicate IDs at their source', () => {
+    const webhookWorkflow = (markup: string) => `<workflow id="hook-errors">
+  <triggers>${markup}</triggers>
+  <steps><step id="capture"><script>return 1;</script></step></steps>
+</workflow>`;
+    const cases = [
+      {
+        markup: '<webhook id="hook" path="relative" auth="none" />',
+        code: 'WOML_WEBHOOK_PATH_INVALID',
+        token: 'relative',
+      },
+      {
+        markup:
+          '<webhook id="hook" path="/orders" method="GET" auth="none" />',
+        code: 'WOML_WEBHOOK_METHOD_UNSUPPORTED',
+        token: 'GET',
+      },
+      {
+        markup: '<webhook id="hook" path="/orders" auth="basic" />',
+        code: 'WOML_WEBHOOK_AUTH_INVALID',
+        token: 'basic',
+      },
+      {
+        markup:
+          '<webhook id="hook" path="/orders" auth="none" secret="{{secrets.HOOK_TOKEN}}" />',
+        code: 'WOML_WEBHOOK_AUTH_INVALID',
+        token: 'secret',
+      },
+    ];
+    for (const entry of cases) {
+      const source = webhookWorkflow(entry.markup);
+      const error = validationError(source);
+      expect(error.diagnostic.code).toBe(entry.code);
+      expect(error.diagnostic.location.start.offset).toBe(
+        source.indexOf(entry.token)
+      );
+    }
+
+    const duplicate = webhookWorkflow(
+      '<manual id="same" /><webhook id="same" path="/orders" auth="none" />'
+    );
+    const duplicateError = validationError(duplicate);
+    expect(duplicateError.diagnostic.code).toBe(
+      'WOML_TRIGGER_ID_DUPLICATE'
+    );
+    expect(duplicateError.diagnostic.location.start.offset).toBe(
+      duplicate.lastIndexOf('same')
+    );
+  });
+
+  test('T1 validates inline webhook JSON Schema without guessing bad input', () => {
+    const withSchema = (schema: string) => `<workflow id="schema-hook">
+  <triggers>
+    <webhook id="hook" path="/orders" auth="none"><schema>${schema}</schema></webhook>
+  </triggers>
+  <steps><step id="capture"><script>return 1;</script></step></steps>
+</workflow>`;
+
+    const malformed = withSchema('{ "type": "object", }');
+    expect(validationError(malformed).diagnostic.code).toBe(
+      'WOML_WEBHOOK_SCHEMA_JSON_INVALID'
+    );
+
+    const nonObject = withSchema('["object"]');
+    expect(validationError(nonObject).diagnostic.code).toBe(
+      'WOML_WEBHOOK_SCHEMA_INVALID'
+    );
+
+    const invalidKeyword = withSchema('{ "type": 42 }');
+    expect(validationError(invalidKeyword).diagnostic.code).toBe(
+      'WOML_WEBHOOK_SCHEMA_INVALID'
+    );
+
+    const invalidPattern = withSchema(
+      '{ "type": "string", "pattern": "[" }'
+    );
+    expect(validationError(invalidPattern).diagnostic.code).toBe(
+      'WOML_WEBHOOK_SCHEMA_INVALID'
+    );
+
+    const duplicateSchema = `<workflow id="schema-hook">
+  <triggers>
+    <webhook id="hook" path="/orders" auth="none">
+      <schema>{"type":"object"}</schema>
+      <schema>{"type":"object"}</schema>
+    </webhook>
+  </triggers>
+  <steps><step id="capture"><script>return 1;</script></step></steps>
+</workflow>`;
+    expect(validationError(duplicateSchema).diagnostic.code).toBe(
+      'WOML_WEBHOOK_STRUCTURE_INVALID'
+    );
+  });
+
+  test('T1 keeps Slack, schedule, interval, and event runtime-staged', () => {
+    const fixtureNames = [
+      'triggers-slack.woml',
+      'triggers-schedule.woml',
+      'triggers-interval.woml',
+      'triggers-event.woml',
+    ];
+    for (const name of fixtureNames) {
+      const source = readFileSync(
+        new URL(`./fixtures/${name}`, import.meta.url),
+        'utf8'
+      );
+      expect(validationError(source).diagnostic.code).toBe(
+        'WOML_FEATURE_NOT_EXECUTABLE'
+      );
+    }
   });
 
   test('requires the workflow root and validates trigger IDs', () => {
