@@ -1,8 +1,9 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 and T1 completed on 2026-08-08. The production-trigger contracts are
-frozen and the TypeScript frontend compiles multiple manual/webhook triggers to
-Model v7. Durable Rust admission and execution begin in T2.
+Status: T0, T1, and T2 completed on 2026-08-08. The contracts are frozen, the
+TypeScript frontend compiles multiple manual/webhook triggers to Model v7, and
+Rust owns atomic occurrence admission and run creation. HTTP execution begins
+in T3.
 
 ## 1. Product Outcome
 
@@ -743,6 +744,8 @@ schemas, attributes, placement, and duplicate IDs point to the exact source.
 
 ### T2 — Build the Rust occurrence authority
 
+Status: completed.
+
 Changes:
 
 - Validate Model v7 trigger unions in Rust.
@@ -1143,4 +1146,6 @@ implementation began:
   Progress v1 are frozen before executable code.
 
 The corresponding schemas, protocol document, reviewed fixtures, and
-conformance tests now form the versioned gate for T2 and later phases.
+conformance tests form the versioned gate for later phases. T1 compiles the
+reviewed webhook source to Model v7, and T2 now supplies the Rust-owned atomic
+occurrence/run/`run_started` boundary that T3 ingress will call.

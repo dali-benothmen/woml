@@ -1872,7 +1872,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V3
     | crate::RUN_EVENT_SCHEMA_VERSION_V4
     | crate::RUN_EVENT_SCHEMA_VERSION_V5
-    | crate::RUN_EVENT_SCHEMA_VERSION_V6 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V6
+    | crate::RUN_EVENT_SCHEMA_VERSION_V7 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -1909,7 +1910,7 @@ trait RuntimeDagEngine {
       self.append_payload(run_id, RunEventPayload::StepAttemptFailed(failure))?;
       return Ok(StepFailureDisposition::StepFailed);
     }
-    if self.event_schema_version() == crate::RUN_EVENT_SCHEMA_VERSION_V6 {
+    if self.event_schema_version() >= crate::RUN_EVENT_SCHEMA_VERSION_V6 {
       return Err(RuntimeExecutionError::Stalled(
         "Model v6 retry failures require the durable runtime".to_string(),
       ));
@@ -2070,7 +2071,7 @@ impl RuntimeDagEngine for DurableDagEngine {
     failed_at: chrono::DateTime<chrono::Utc>,
     failure: StepAttemptFailedData,
   ) -> Result<StepFailureDisposition, RuntimeExecutionError> {
-    if self.event_schema_version() == crate::RUN_EVENT_SCHEMA_VERSION_V6 {
+    if self.event_schema_version() >= crate::RUN_EVENT_SCHEMA_VERSION_V6 {
       return Ok(
         DurableDagEngine::record_step_attempt_failure(self, run_id, failed_at, failure)?
           .disposition,

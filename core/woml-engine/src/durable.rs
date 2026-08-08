@@ -7,6 +7,7 @@ use getrandom::getrandom;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use serde_json_canonicalizer::to_vec as canonical_json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -36,13 +37,14 @@ use crate::{
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
   RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
-  RUN_EVENT_SCHEMA_VERSION_V6,
+  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 3;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 4;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
+const STORE_SCHEMA_VERSION_V4: &str = "4";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
@@ -175,11 +177,84 @@ BEGIN
 END;
 "#;
 
+const CREATE_TRIGGER_SCHEMA_V4: &str = r#"
+CREATE TABLE woml_trigger_occurrences (
+  occurrence_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  trigger_id TEXT NOT NULL,
+  trigger_handler TEXT NOT NULL,
+  definition_hash TEXT NOT NULL,
+  source_identity_hash TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  run_id TEXT NOT NULL UNIQUE,
+  UNIQUE (workflow_id, trigger_id, source_identity_hash),
+  FOREIGN KEY (definition_hash) REFERENCES woml_definitions(definition_hash),
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_trigger_occurrences_run
+  ON woml_trigger_occurrences(run_id);
+
+CREATE TRIGGER woml_trigger_occurrences_no_update
+BEFORE UPDATE ON woml_trigger_occurrences
+BEGIN
+  SELECT RAISE(ABORT, 'WOML trigger occurrences are immutable');
+END;
+
+CREATE TRIGGER woml_trigger_occurrences_no_delete
+BEFORE DELETE ON woml_trigger_occurrences
+BEGIN
+  SELECT RAISE(ABORT, 'WOML trigger occurrences are immutable');
+END;
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDefinitionBinding {
   pub run_id: String,
   pub workflow_id: String,
   pub definition_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriggerAdmissionRequest {
+  pub workflow_id: String,
+  pub definition_hash: String,
+  pub trigger_id: String,
+  pub trigger_handler: String,
+  pub source_identity: String,
+  pub payload: Map<String, Value>,
+  pub received_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerOccurrence {
+  pub occurrence_schema_version: u32,
+  pub occurrence_id: String,
+  pub workflow_id: String,
+  pub trigger_id: String,
+  pub trigger_handler: String,
+  pub definition_hash: String,
+  pub source_identity_hash: String,
+  pub payload_hash: String,
+  pub received_at: DateTime<Utc>,
+  pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerAdmissionOutcome {
+  pub occurrence_id: String,
+  pub run_id: String,
+  pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerRecoveryWork {
+  pub occurrence: TriggerOccurrence,
+  pub trigger: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,6 +405,19 @@ pub enum DurableStoreError {
   RunNotFound(String),
   #[error("run {0:?} already exists and cannot be rebound")]
   RunAlreadyExists(String),
+  #[error("trigger {trigger_id:?} is not registered for workflow {workflow_id:?}")]
+  TriggerNotFound {
+    workflow_id: String,
+    trigger_id: String,
+  },
+  #[error("trigger admission does not match its registered workflow definition")]
+  TriggerDefinitionMismatch,
+  #[error("trigger admission handler does not match the compiled trigger")]
+  TriggerHandlerMismatch,
+  #[error("the trigger source identity is already bound to a different payload")]
+  TriggerIdempotencyConflict,
+  #[error("stored trigger occurrence history is contradictory: {0}")]
+  TriggerHistoryInvalid(String),
   #[error("stored event is invalid: {0}")]
   InvalidStoredEvent(String),
   #[error("approval token is invalid")]
@@ -389,6 +477,22 @@ fn migrate_store_v2_to_v3(connection: &mut Connection) -> Result<(), DurableStor
   Ok(())
 }
 
+fn migrate_store_v3_to_v4(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_TRIGGER_SCHEMA_V4)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V4, STORE_SCHEMA_VERSION_V3],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v3-to-v4 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
 fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
   for (object_type, name) in [
     ("table", "woml_approval_tokens"),
@@ -434,6 +538,28 @@ fn validate_store_v3_schema(connection: &Connection) -> Result<(), DurableStoreE
   Ok(())
 }
 
+fn validate_store_v4_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v3_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_trigger_occurrences"),
+    ("index", "woml_trigger_occurrences_run"),
+    ("trigger", "woml_trigger_occurrences_no_update"),
+    ("trigger", "woml_trigger_occurrences_no_delete"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v4 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -457,15 +583,21 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
-      Some(STORE_SCHEMA_VERSION_V3) => validate_store_v3_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V4) => validate_store_v4_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V3) => {
+        validate_store_v3_schema(&connection)?;
+        migrate_store_v3_to_v4(&mut connection)?;
+      }
       Some(STORE_SCHEMA_VERSION_V2) => {
         validate_store_v2_schema(&connection)?;
         migrate_store_v2_to_v3(&mut connection)?;
+        migrate_store_v3_to_v4(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V1) => {
         migrate_store_v1_to_v2(&mut connection)?;
         validate_store_v2_schema(&connection)?;
         migrate_store_v2_to_v3(&mut connection)?;
+        migrate_store_v3_to_v4(&mut connection)?;
       }
       Some(version) => {
         return Err(DurableStoreError::UnsupportedStoreVersion(
@@ -480,6 +612,7 @@ impl DurableEventStore {
         migrate_store_v1_to_v2(&mut connection)?;
         validate_store_v2_schema(&connection)?;
         migrate_store_v2_to_v3(&mut connection)?;
+        migrate_store_v3_to_v4(&mut connection)?;
       }
     }
     Ok(Self { connection })
@@ -569,6 +702,177 @@ impl DurableEventStore {
       .ok_or_else(|| DurableStoreError::RunNotFound(run_id.to_string()))
   }
 
+  pub fn trigger_occurrence(
+    &self,
+    occurrence_id: &str,
+  ) -> Result<TriggerOccurrence, DurableStoreError> {
+    load_trigger_occurrence_by_id(&self.connection, occurrence_id)?.ok_or_else(|| {
+      DurableStoreError::TriggerHistoryInvalid(format!(
+        "trigger occurrence {occurrence_id:?} does not exist"
+      ))
+    })
+  }
+
+  pub fn admit_trigger_occurrence(
+    &mut self,
+    request: TriggerAdmissionRequest,
+  ) -> Result<TriggerAdmissionOutcome, DurableStoreError> {
+    if request.source_identity.is_empty() || request.source_identity.len() > 512 {
+      return Err(DurableStoreError::Contract(
+        "Trigger sourceIdentity must contain between 1 and 512 UTF-8 bytes.".to_string(),
+      ));
+    }
+    if !is_definition_hash(&request.definition_hash) {
+      return Err(DurableStoreError::TriggerDefinitionMismatch);
+    }
+
+    let source_identity_hash = sha256_prefixed(request.source_identity.as_bytes());
+    let payload_hash = canonical_payload_hash(&request.payload)?;
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+    let model_json: String = transaction
+      .query_row(
+        "SELECT model_json FROM woml_definitions WHERE definition_hash = ?1",
+        [&request.definition_hash],
+        |row| row.get(0),
+      )
+      .optional()?
+      .ok_or_else(|| DurableStoreError::DefinitionNotFound(request.definition_hash.clone()))?;
+    let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
+    workflow.validate_structure()?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V7
+      || workflow.workflow_id != request.workflow_id
+    {
+      return Err(DurableStoreError::TriggerDefinitionMismatch);
+    }
+    let trigger =
+      workflow
+        .trigger(&request.trigger_id)
+        .ok_or_else(|| DurableStoreError::TriggerNotFound {
+          workflow_id: request.workflow_id.clone(),
+          trigger_id: request.trigger_id.clone(),
+        })?;
+    if trigger.handler != request.trigger_handler {
+      return Err(DurableStoreError::TriggerHandlerMismatch);
+    }
+
+    if let Some(existing) = load_trigger_occurrence_by_identity(
+      &transaction,
+      &request.workflow_id,
+      &request.trigger_id,
+      &source_identity_hash,
+    )? {
+      if existing.payload_hash != payload_hash {
+        return Err(DurableStoreError::TriggerIdempotencyConflict);
+      }
+      validate_trigger_occurrence_history(&transaction, &existing)?;
+      transaction.commit()?;
+      return Ok(TriggerAdmissionOutcome {
+        occurrence_id: existing.occurrence_id,
+        run_id: existing.run_id,
+        duplicate: true,
+      });
+    }
+
+    let occurrence_id = format!("occ_{}", Uuid::new_v4().simple());
+    let run_id = format!("run_{}", Uuid::new_v4().simple());
+    transaction.execute(
+      "INSERT INTO woml_runs(run_id, workflow_id, definition_hash, created_at)
+       VALUES (?1, ?2, ?3, ?4)",
+      params![
+        run_id,
+        request.workflow_id,
+        request.definition_hash,
+        request.received_at.to_rfc3339(),
+      ],
+    )?;
+
+    let payload = RunEventPayload::RunStarted(RunStartedData {
+      workflow_id: request.workflow_id.clone(),
+      definition_hash: request.definition_hash.clone(),
+      trigger_id: Some(request.trigger_id.clone()),
+      trigger_handler: Some(request.trigger_handler.clone()),
+      trigger_occurrence_id: Some(occurrence_id.clone()),
+      trigger: request.payload,
+    });
+    validate_payload_against_definition(&workflow, &request.definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    let mut events = Vec::new();
+    append_to_history(
+      &transaction,
+      &mut events,
+      &run_id,
+      generated_event_id(),
+      request.received_at,
+      RUN_EVENT_SCHEMA_VERSION_V7,
+      payload,
+    )?;
+    validate_event_history_against_definition(&workflow, &request.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+
+    transaction.execute(
+      "INSERT INTO woml_trigger_occurrences(
+         occurrence_id, workflow_id, trigger_id, trigger_handler,
+         definition_hash, source_identity_hash, payload_hash, received_at, run_id
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+      params![
+        occurrence_id,
+        request.workflow_id,
+        request.trigger_id,
+        request.trigger_handler,
+        request.definition_hash,
+        source_identity_hash,
+        payload_hash,
+        request.received_at.to_rfc3339(),
+        run_id,
+      ],
+    )?;
+    transaction.commit()?;
+    Ok(TriggerAdmissionOutcome {
+      occurrence_id,
+      run_id,
+      duplicate: false,
+    })
+  }
+
+  pub fn recover_undispatched_trigger_runs(
+    &self,
+  ) -> Result<Vec<TriggerRecoveryWork>, DurableStoreError> {
+    let mut statement = self.connection.prepare(
+      "SELECT occurrences.occurrence_id
+       FROM woml_trigger_occurrences AS occurrences
+       JOIN woml_runs AS runs ON runs.run_id = occurrences.run_id
+       WHERE (
+         SELECT COUNT(*) FROM woml_run_events AS events
+         WHERE events.run_id = occurrences.run_id
+       ) = 1
+       ORDER BY occurrences.received_at, occurrences.occurrence_id",
+    )?;
+    let occurrence_ids = statement
+      .query_map([], |row| row.get::<_, String>(0))?
+      .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    occurrence_ids
+      .into_iter()
+      .map(|occurrence_id| {
+        let occurrence = load_trigger_occurrence_by_id(&self.connection, &occurrence_id)?
+          .ok_or_else(|| {
+            DurableStoreError::TriggerHistoryInvalid(format!(
+              "trigger occurrence {occurrence_id:?} disappeared during recovery"
+            ))
+          })?;
+        let trigger = validate_trigger_occurrence_history(&self.connection, &occurrence)?;
+        Ok(TriggerRecoveryWork {
+          occurrence,
+          trigger,
+        })
+      })
+      .collect()
+  }
+
   pub fn start_run(
     &mut self,
     event_id: impl Into<String>,
@@ -587,6 +891,9 @@ impl DurableEventStore {
       RunEventPayload::RunStarted(RunStartedData {
         workflow_id,
         definition_hash,
+        trigger_id: None,
+        trigger_handler: None,
+        trigger_occurrence_id: None,
         trigger,
       }),
     )
@@ -2634,6 +2941,176 @@ fn ensure_run_exists(connection: &Connection, run_id: &str) -> Result<(), Durabl
   Ok(())
 }
 
+type StoredTriggerOccurrence = (
+  String,
+  String,
+  String,
+  String,
+  String,
+  String,
+  String,
+  String,
+  String,
+);
+
+fn trigger_occurrence_from_stored(
+  stored: StoredTriggerOccurrence,
+) -> Result<TriggerOccurrence, DurableStoreError> {
+  let valid_id = |value: &str| !value.is_empty() && value.chars().count() <= 256;
+  let valid_handler = matches!(
+    stored.3.as_str(),
+    "trigger.manual"
+      | "trigger.webhook"
+      | "trigger.slack"
+      | "trigger.schedule"
+      | "trigger.interval"
+      | "trigger.event"
+  );
+  if !valid_id(&stored.0)
+    || !valid_id(&stored.1)
+    || !valid_id(&stored.2)
+    || !valid_handler
+    || !is_definition_hash(&stored.4)
+    || !is_definition_hash(&stored.5)
+    || !is_definition_hash(&stored.6)
+    || !valid_id(&stored.8)
+  {
+    return Err(DurableStoreError::TriggerHistoryInvalid(
+      "trigger occurrence contains an invalid identity or hash".to_string(),
+    ));
+  }
+  let received_at = DateTime::parse_from_rfc3339(&stored.7)
+    .map_err(|_| {
+      DurableStoreError::TriggerHistoryInvalid(
+        "trigger occurrence receivedAt is not RFC 3339".to_string(),
+      )
+    })?
+    .with_timezone(&Utc);
+  Ok(TriggerOccurrence {
+    occurrence_schema_version: 1,
+    occurrence_id: stored.0,
+    workflow_id: stored.1,
+    trigger_id: stored.2,
+    trigger_handler: stored.3,
+    definition_hash: stored.4,
+    source_identity_hash: stored.5,
+    payload_hash: stored.6,
+    received_at,
+    run_id: stored.8,
+  })
+}
+
+fn load_trigger_occurrence_by_id(
+  connection: &Connection,
+  occurrence_id: &str,
+) -> Result<Option<TriggerOccurrence>, DurableStoreError> {
+  let stored: Option<StoredTriggerOccurrence> = connection
+    .query_row(
+      "SELECT occurrence_id, workflow_id, trigger_id, trigger_handler,
+              definition_hash, source_identity_hash, payload_hash, received_at, run_id
+       FROM woml_trigger_occurrences WHERE occurrence_id = ?1",
+      [occurrence_id],
+      |row| {
+        Ok((
+          row.get(0)?,
+          row.get(1)?,
+          row.get(2)?,
+          row.get(3)?,
+          row.get(4)?,
+          row.get(5)?,
+          row.get(6)?,
+          row.get(7)?,
+          row.get(8)?,
+        ))
+      },
+    )
+    .optional()?;
+  stored.map(trigger_occurrence_from_stored).transpose()
+}
+
+fn load_trigger_occurrence_by_identity(
+  connection: &Connection,
+  workflow_id: &str,
+  trigger_id: &str,
+  source_identity_hash: &str,
+) -> Result<Option<TriggerOccurrence>, DurableStoreError> {
+  let occurrence_id: Option<String> = connection
+    .query_row(
+      "SELECT occurrence_id FROM woml_trigger_occurrences
+       WHERE workflow_id = ?1 AND trigger_id = ?2 AND source_identity_hash = ?3",
+      params![workflow_id, trigger_id, source_identity_hash],
+      |row| row.get(0),
+    )
+    .optional()?;
+  occurrence_id
+    .map(|occurrence_id| load_trigger_occurrence_by_id(connection, &occurrence_id))
+    .transpose()
+    .map(Option::flatten)
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+  format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn canonical_payload_hash(payload: &Map<String, Value>) -> Result<String, DurableStoreError> {
+  let canonical = canonical_json(payload)?;
+  Ok(sha256_prefixed(&canonical))
+}
+
+fn validate_trigger_occurrence_history(
+  connection: &Connection,
+  occurrence: &TriggerOccurrence,
+) -> Result<Map<String, Value>, DurableStoreError> {
+  let binding = run_binding_in_transaction(connection, &occurrence.run_id).map_err(|error| {
+    DurableStoreError::TriggerHistoryInvalid(format!(
+      "occurrence run binding is missing or invalid: {error}"
+    ))
+  })?;
+  if binding.workflow_id != occurrence.workflow_id
+    || binding.definition_hash != occurrence.definition_hash
+  {
+    return Err(DurableStoreError::TriggerHistoryInvalid(
+      "occurrence does not match its immutable run binding".to_string(),
+    ));
+  }
+  let workflow = definition_for_run(connection, &occurrence.run_id).map_err(|error| {
+    DurableStoreError::TriggerHistoryInvalid(format!(
+      "occurrence definition is missing or invalid: {error}"
+    ))
+  })?;
+  let events = load_events(connection, &occurrence.run_id).map_err(|error| {
+    DurableStoreError::TriggerHistoryInvalid(format!(
+      "occurrence event history cannot be loaded: {error}"
+    ))
+  })?;
+  validate_event_history_against_definition(&workflow, &occurrence.definition_hash, &events)
+    .map_err(DurableStoreError::TriggerHistoryInvalid)?;
+  let Some(RunEvent {
+    event_schema_version: RUN_EVENT_SCHEMA_VERSION_V7,
+    occurred_at,
+    payload: RunEventPayload::RunStarted(start),
+    ..
+  }) = events.first()
+  else {
+    return Err(DurableStoreError::TriggerHistoryInvalid(
+      "occurrence run does not begin with run_started v7".to_string(),
+    ));
+  };
+  if start.workflow_id != occurrence.workflow_id
+    || start.definition_hash != occurrence.definition_hash
+    || start.trigger_id.as_deref() != Some(occurrence.trigger_id.as_str())
+    || start.trigger_handler.as_deref() != Some(occurrence.trigger_handler.as_str())
+    || start.trigger_occurrence_id.as_deref() != Some(occurrence.occurrence_id.as_str())
+    || occurred_at != &occurrence.received_at
+    || canonical_payload_hash(&start.trigger)? != occurrence.payload_hash
+  {
+    return Err(DurableStoreError::TriggerHistoryInvalid(
+      "occurrence fields contradict run_started v7".to_string(),
+    ));
+  }
+  Ok(start.trigger.clone())
+}
+
 fn run_binding_in_transaction(
   connection: &Connection,
   run_id: &str,
@@ -2781,7 +3258,8 @@ fn attempt_run_failed_data(
     | RUN_EVENT_SCHEMA_VERSION_V3
     | RUN_EVENT_SCHEMA_VERSION_V4
     | RUN_EVENT_SCHEMA_VERSION_V5
-    | RUN_EVENT_SCHEMA_VERSION_V6 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | RUN_EVENT_SCHEMA_VERSION_V6
+    | RUN_EVENT_SCHEMA_VERSION_V7 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -2918,7 +3396,7 @@ impl DurableDagEngine {
         )));
       }
     }
-    if self.workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V6
+    if self.workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V6
       && matches!(
         payload,
         RunEventPayload::StepAttemptFailed(_) | RunEventPayload::StepRetryScheduled(_)
@@ -2940,7 +3418,7 @@ impl DurableDagEngine {
     failed_at: DateTime<Utc>,
     failure: StepAttemptFailedData,
   ) -> Result<StepFailureCommit, DurableEngineError> {
-    if self.workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
+    if self.workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
       return Err(DurableEngineError::Contract(
         "The atomic retry failure API requires compiled model v6.".to_string(),
       ));
@@ -3025,7 +3503,7 @@ impl DurableDagEngine {
             generated_event_id(),
             failed_at,
             RunEventPayload::RunFailed(attempt_run_failed_data(
-              RUN_EVENT_SCHEMA_VERSION_V6,
+              run_event_schema_version_for_model(self.workflow.schema_version),
               failure.node_id.clone(),
               failure.attempt,
               failure.invocation_id.clone(),
@@ -3137,7 +3615,7 @@ impl DurableDagEngine {
             invocation_id: invocation_id.to_string(),
             handler: node.handler.clone(),
             idempotency_key: (self.workflow.schema_version
-              == crate::COMPILED_MODEL_SCHEMA_VERSION_V6)
+              >= crate::COMPILED_MODEL_SCHEMA_VERSION_V6)
               .then(|| {
                 step_effect_idempotency_key(run_id, &self.definition_hash, node_id)
               }),

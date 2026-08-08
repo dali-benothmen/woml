@@ -97,6 +97,9 @@ impl InMemoryDagEngine {
       payload: RunEventPayload::RunStarted(RunStartedData {
         workflow_id: self.workflow.workflow_id.clone(),
         definition_hash: self.definition_hash.clone(),
+        trigger_id: None,
+        trigger_handler: None,
+        trigger_occurrence_id: None,
         trigger,
       }),
     };
@@ -492,6 +495,27 @@ pub(crate) fn validate_payload_against_definition(
           "run_started does not match the engine's workflow ID and definition hash.".to_string(),
         );
       }
+      if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V7 {
+        let trigger_id = data
+          .trigger_id
+          .as_deref()
+          .ok_or_else(|| "run_started v7 is missing its triggerId.".to_string())?;
+        let trigger = workflow
+          .trigger(trigger_id)
+          .ok_or_else(|| format!("run_started references unknown trigger {trigger_id:?}."))?;
+        if data.trigger_handler.as_deref() != Some(trigger.handler.as_str())
+          || data.trigger_occurrence_id.is_none()
+        {
+          return Err(
+            "run_started trigger identity does not match the compiled definition.".to_string(),
+          );
+        }
+      } else if data.trigger_id.is_some()
+        || data.trigger_handler.is_some()
+        || data.trigger_occurrence_id.is_some()
+      {
+        return Err("Pre-v7 run_started cannot carry production-trigger identity.".to_string());
+      }
     }
     RunEventPayload::StepAttemptStarted(data) => {
       let node = workflow
@@ -534,7 +558,7 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::StepRetryScheduled(data) => {
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
+      if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
         return Err("step_retry_scheduled requires compiled model v6.".to_string());
       }
       let node = workflow
@@ -939,7 +963,7 @@ pub(crate) fn validate_event_history_against_definition(
             data.node_id
           ));
         }
-        if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
+        if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V6 {
           let expected_key =
             step_effect_idempotency_key(&event.run_id, definition_hash, &data.node_id);
           if data.idempotency_key.as_deref() != Some(expected_key.as_str()) {

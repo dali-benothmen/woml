@@ -1,7 +1,8 @@
 # WOML Production Trigger Contracts v1
 
-Status: frozen in T0. Webhook frontend lowering is implemented in T1; trigger
-admission and execution begin in T2.
+Status: frozen in T0. Webhook frontend lowering is implemented in T1. The Rust
+occurrence and run-start authority is implemented in T2; HTTP ingress begins in
+T3.
 
 This document pins the boundary shared by the TypeScript WOML frontend, Rust
 core, CLI, HTTP listener, provider adapters, and durable store. The normative
@@ -80,6 +81,26 @@ For a new row, Rust generates opaque `occ_...` and `run_...` IDs. A duplicate
 never generates replacement IDs; it returns the values already stored. Manual
 and webhook deliveries without an external idempotency key receive a fresh
 cryptographically random source identity before admission.
+
+### T2 durable implementation
+
+Rust validates every frozen Model v7 trigger shape before admission. SQLite
+store schema v4 adds an immutable occurrence table with database-enforced
+uniqueness for both the source identity and the one-to-one run binding. Rust
+then commits the occurrence, immutable run binding, and sole `run_started` v7
+event in one immediate transaction.
+
+Payload hashes use an RFC 8785 implementation rather than ordinary JSON
+serialization, so semantically identical objects deduplicate even when their
+properties arrive in a different order. The raw source identity is accepted
+only at the in-process admission boundary and is never written to occurrences,
+events, context, or diagnostics.
+
+Concurrent identical admission calls resolve to the same occurrence and run.
+A transaction failure rolls back all three durable records. On restart, Rust
+reports a valid occurrence whose run still contains only `run_started` as
+undispatched recovery work; contradictory occurrence/run/event history fails
+closed.
 
 ## Event and context projection
 

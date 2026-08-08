@@ -23,7 +23,8 @@ pub use durable::{
   DurableEventStore, DurableStoreError, IssuedApprovalToken, NotificationDeliveryWork,
   NotificationDispatchReport, NotificationProviderAdapter, NotificationProviderDeliveryResult,
   NotificationProviderUpdateResult, NotificationUpdateWork, RecoveryReport, RunDefinitionBinding,
-  StepFailureCommit, StepFailureDisposition, DURABLE_STORE_SCHEMA_VERSION,
+  StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest,
+  TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
 };
 pub use engine::{step_effect_idempotency_key, EngineError, InMemoryDagEngine};
 pub use event::{
@@ -38,7 +39,7 @@ pub use event::{
   NotificationSafeFailure, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
   ParallelGroupOutcome, ParallelGroupStartedData, ProviderMessageIdentity, RunEvent,
   RunEventPayload, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
-  RunFailedDataV4, RunFailedDataV5, StepRetryScheduledData,
+  RunFailedDataV4, RunFailedDataV5, RunStartedData, StepRetryScheduledData,
 };
 pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions};
 pub use model::{
@@ -84,17 +85,21 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V3: u32 = 3;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V4: u32 = 4;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V5: u32 = 5;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V6: u32 = 6;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V6;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V7: u32 = 7;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V7;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
 pub const RUN_EVENT_SCHEMA_VERSION_V4: u32 = 4;
 pub const RUN_EVENT_SCHEMA_VERSION_V5: u32 = 5;
 pub const RUN_EVENT_SCHEMA_VERSION_V6: u32 = 6;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V6;
+pub const RUN_EVENT_SCHEMA_VERSION_V7: u32 = 7;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V7;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V6 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V7 {
+    RUN_EVENT_SCHEMA_VERSION_V7
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V6 {
     RUN_EVENT_SCHEMA_VERSION_V6
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V5 {
     RUN_EVENT_SCHEMA_VERSION_V5

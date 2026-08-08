@@ -189,6 +189,9 @@ pub struct RunProjection {
   pub run_id: Option<String>,
   pub workflow_id: Option<String>,
   pub definition_hash: Option<String>,
+  pub trigger_id: Option<String>,
+  pub trigger_handler: Option<String>,
+  pub trigger_occurrence_id: Option<String>,
   pub status: RunStatus,
   pub context: WorkflowContext,
   pub attempts: Vec<AttemptProjection>,
@@ -314,6 +317,9 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         projection.event_schema_version = Some(event.event_schema_version);
         projection.workflow_id = Some(data.workflow_id.clone());
         projection.definition_hash = Some(data.definition_hash.clone());
+        projection.trigger_id = data.trigger_id.clone();
+        projection.trigger_handler = data.trigger_handler.clone();
+        projection.trigger_occurrence_id = data.trigger_occurrence_id.clone();
         projection.context.trigger = data.trigger.clone();
         projection.status = RunStatus::Running;
       }
@@ -338,7 +344,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
             data.node_id
           )));
         }
-        if event.event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V6 {
+        if event.event_schema_version >= crate::RUN_EVENT_SCHEMA_VERSION_V6 {
           let previous = projection.latest_attempt(&data.node_id);
           let expected_attempt = previous.map_or(1, |attempt| attempt.identity.attempt + 1);
           if data.attempt != expected_attempt {

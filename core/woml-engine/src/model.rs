@@ -8,6 +8,7 @@ use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2,
   COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
   COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
+  COMPILED_MODEL_SCHEMA_VERSION_V7,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -290,6 +291,183 @@ fn valid_secret_name(value: &str) -> bool {
     && characters.all(|character| {
       character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
     })
+}
+
+fn object_fields(expression: &ValueExpression) -> Option<&BTreeMap<String, ValueExpression>> {
+  match expression {
+    ValueExpression::Object { fields } => Some(fields),
+    _ => None,
+  }
+}
+
+fn literal_string(expression: Option<&ValueExpression>) -> Option<&str> {
+  match expression {
+    Some(ValueExpression::Literal { value }) => value.as_str(),
+    _ => None,
+  }
+}
+
+fn exact_fields(fields: &BTreeMap<String, ValueExpression>, names: &[&str]) -> bool {
+  fields.len() == names.len() && names.iter().all(|name| fields.contains_key(*name))
+}
+
+fn valid_schema_literal(expression: Option<&ValueExpression>) -> bool {
+  matches!(expression, Some(ValueExpression::Literal { value }) if value.is_object())
+}
+
+fn valid_webhook_path(path: &str) -> bool {
+  path.len() <= 2048
+    && path.starts_with('/')
+    && path != "/_woml"
+    && !path.starts_with("/_woml/")
+    && (path == "/"
+      || path[1..].split('/').all(|segment| {
+        !segment.is_empty()
+          && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'~' | b'-'))
+      }))
+}
+
+fn valid_webhook_authentication(expression: Option<&ValueExpression>) -> bool {
+  let Some(fields) = expression.and_then(object_fields) else {
+    return false;
+  };
+  match literal_string(fields.get("kind")) {
+    Some("none") => exact_fields(fields, &["kind"]),
+    Some("bearer") => {
+      exact_fields(fields, &["kind", "secret"])
+        && matches!(fields.get("secret"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+    }
+    _ => false,
+  }
+}
+
+fn valid_webhook_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  let keys_are_valid = exact_fields(fields, &["path", "method", "authentication"])
+    || exact_fields(fields, &["path", "method", "authentication", "schema"]);
+  keys_are_valid
+    && literal_string(fields.get("path")).is_some_and(valid_webhook_path)
+    && literal_string(fields.get("method")) == Some("POST")
+    && valid_webhook_authentication(fields.get("authentication"))
+    && (!fields.contains_key("schema") || valid_schema_literal(fields.get("schema")))
+}
+
+fn literal_string_array(expression: Option<&ValueExpression>) -> Option<Vec<&str>> {
+  let Some(ValueExpression::Array { items }) = expression else {
+    return None;
+  };
+  items
+    .iter()
+    .map(|item| match item {
+      ValueExpression::Literal { value } => value.as_str(),
+      _ => None,
+    })
+    .collect()
+}
+
+fn unique_non_empty(values: &[&str]) -> bool {
+  let mut seen = HashSet::new();
+  values
+    .iter()
+    .all(|value| !value.is_empty() && seen.insert(*value))
+}
+
+fn valid_slack_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  let Some(events) = literal_string_array(fields.get("events")) else {
+    return false;
+  };
+  let Some(channels) = literal_string_array(fields.get("channels")) else {
+    return false;
+  };
+  exact_fields(fields, &["events", "channels", "botToken", "appToken"])
+    && (1..=2).contains(&events.len())
+    && unique_non_empty(&events)
+    && events
+      .iter()
+      .all(|event| matches!(*event, "app-mention" | "direct-message"))
+    && unique_non_empty(&channels)
+    && matches!(fields.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+    && matches!(fields.get("appToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+}
+
+fn valid_on_missed(expression: Option<&ValueExpression>) -> bool {
+  matches!(literal_string(expression), Some("skip" | "run-once"))
+}
+
+fn valid_schedule_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  exact_fields(fields, &["cron", "timezone", "onMissed"])
+    && literal_string(fields.get("cron")).is_some_and(|value| !value.is_empty())
+    && literal_string(fields.get("timezone")).is_some_and(|value| !value.is_empty())
+    && valid_on_missed(fields.get("onMissed"))
+}
+
+fn valid_interval_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  exact_fields(fields, &["everyMs", "onMissed"])
+    && matches!(fields.get("everyMs"), Some(ValueExpression::Literal { value }) if value.as_u64().is_some_and(|value| (1_000..=2_592_000_000).contains(&value)))
+    && valid_on_missed(fields.get("onMissed"))
+}
+
+fn valid_event_name(value: &str) -> bool {
+  if value.len() > 256
+    || !value
+      .bytes()
+      .next()
+      .is_some_and(|byte| byte.is_ascii_lowercase())
+  {
+    return false;
+  }
+  let mut has_separator = false;
+  let mut previous_separator = false;
+  for byte in value.bytes() {
+    let separator = matches!(byte, b'.' | b'_' | b'-');
+    if separator {
+      if previous_separator {
+        return false;
+      }
+      has_separator = true;
+    } else if !byte.is_ascii_lowercase() && !byte.is_ascii_digit() {
+      return false;
+    }
+    previous_separator = separator;
+  }
+  has_separator && !previous_separator
+}
+
+fn valid_event_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  let keys_are_valid = exact_fields(fields, &["name"]) || exact_fields(fields, &["name", "schema"]);
+  keys_are_valid
+    && literal_string(fields.get("name")).is_some_and(valid_event_name)
+    && (!fields.contains_key("schema") || valid_schema_literal(fields.get("schema")))
+}
+
+fn valid_model_v7_trigger(trigger: &CompiledTrigger) -> bool {
+  match trigger.handler.as_str() {
+    "trigger.manual" => {
+      matches!(&trigger.config, ValueExpression::Object { fields } if fields.is_empty())
+    }
+    "trigger.webhook" => valid_webhook_trigger(&trigger.config),
+    "trigger.slack" => valid_slack_trigger(&trigger.config),
+    "trigger.schedule" => valid_schedule_trigger(&trigger.config),
+    "trigger.interval" => valid_interval_trigger(&trigger.config),
+    "trigger.event" => valid_event_trigger(&trigger.config),
+    _ => false,
+  }
 }
 
 fn valid_slack_destination(value: &str) -> bool {
@@ -1139,6 +1317,13 @@ impl CompiledWorkflowDefinition {
     self.graph.nodes.iter().find(|node| node.id == node_id)
   }
 
+  pub fn trigger(&self, trigger_id: &str) -> Option<&CompiledTrigger> {
+    self
+      .triggers
+      .iter()
+      .find(|trigger| trigger.id == trigger_id)
+  }
+
   pub(crate) fn approval(&self, approval_id: &str) -> Option<ApprovalDefinition> {
     let wait = self.node(approval_id)?;
     if wait.handler != "engine.approval-wait" {
@@ -1294,6 +1479,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V4
         | COMPILED_MODEL_SCHEMA_VERSION_V5
         | COMPILED_MODEL_SCHEMA_VERSION_V6
+        | COMPILED_MODEL_SCHEMA_VERSION_V7
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1348,6 +1534,16 @@ impl CompiledWorkflowDefinition {
         ));
       }
       inspect_expression(&trigger.config, "trigger.config", &mut issues);
+      if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V7 && !valid_model_v7_trigger(trigger)
+      {
+        issues.push(issue(
+          ModelIssueCode::UnsupportedTrigger,
+          format!(
+            "Trigger {:?} does not match a frozen Model v7 trigger contract.",
+            trigger.id
+          ),
+        ));
+      }
     }
 
     if self.graph.nodes.is_empty() {
@@ -1574,14 +1770,19 @@ impl CompiledWorkflowDefinition {
           &trigger.config,
           ValueExpression::Object { fields } if fields.is_empty()
       );
-      if trigger.handler != "trigger.manual" || !is_empty_object {
+      let executable = if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V7 {
+        valid_model_v7_trigger(trigger)
+      } else {
+        trigger.handler == "trigger.manual" && is_empty_object
+      };
+      if !executable {
         issues.push(issue(
-                    ModelIssueCode::UnsupportedTrigger,
-                    format!(
-                        "Trigger {:?} is not executable in the current profile; only trigger.manual with empty config is supported.",
-                        trigger.id
-                    ),
-                ));
+          ModelIssueCode::UnsupportedTrigger,
+          format!(
+            "Trigger {:?} is not executable in the current compiled-model profile.",
+            trigger.id
+          ),
+        ));
       }
     }
 
@@ -1637,7 +1838,7 @@ impl CompiledWorkflowDefinition {
       }
       if node.retry_policy.is_some()
         && !(allow_retry
-          && self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V6
+          && self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V6
           && node.handler == "runtime.script")
       {
         issues.push(issue(

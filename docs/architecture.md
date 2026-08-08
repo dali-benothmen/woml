@@ -42,6 +42,23 @@ retry is safe to resume. A started attempt without a terminal event is
 ambiguous, becomes `interrupted`, and fails closed instead of being replayed.
 Only a successful attempt publishes `context.steps.<id>`.
 
+### Production trigger admission boundary
+
+The TypeScript frontend describes triggers in compiled Model v7, but it does
+not accept external occurrences or create runs. Every listener, scheduler, and
+provider adapter must submit a normalized occurrence to the Rust authority.
+Rust validates the compiled trigger and atomically commits three related facts:
+the immutable occurrence, its run-to-definition binding, and the run's first
+`run_started` Event v7.
+
+SQLite store schema v4 enforces one run per occurrence and uniqueness by the
+workflow, trigger, and hashed source identity. The raw source identity is never
+persisted. Payload hashes use RFC 8785 canonical JSON, so reordered object keys
+do not create a second run. A same-payload replay returns the original run; a
+changed-payload replay conflicts. If the process stops after commit but before
+dispatch, recovery resumes that existing run rather than creating another one.
+Contradictory occurrence, run, definition, or event history fails closed.
+
 Progress and diagnostics cross a versioned native boundary and are printed to
 stderr; stdout stays reserved for the final JSON result. Secrets and executable
 capabilities never enter context, events, progress messages, or durable output.
