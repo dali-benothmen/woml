@@ -10,6 +10,8 @@ import {
   type SlackSocket,
   type UpdateMessage,
 } from '../src/notification-provider';
+import type { SecretStore } from '../src/secrets';
+import { SlackTriggerHost } from '../src/slack-trigger';
 
 const fixtureDirectory = new URL(
   './fixtures/notification-provider/',
@@ -100,7 +102,9 @@ function successfulApi(call: ApiCall): {
     return { body: { ok: true, url: 'wss://wss.slack.test/link/?ticket=secret' } };
   }
   if (call.method === 'auth.test') {
-    return { body: { ok: true, team_id: 'T12345678' } };
+    return {
+      body: { ok: true, team_id: 'T12345678', user_id: 'U87654321' },
+    };
   }
   if (call.method === 'conversations.list') {
     return {
@@ -120,6 +124,23 @@ function successfulApi(call: ApiCall): {
     return { body: { ok: true } };
   }
   throw new Error(`Unexpected Slack method ${call.method}`);
+}
+
+function slackTriggerSecrets(): SecretStore {
+  const values = new Map([
+    ['SLACK_BOT_TOKEN', 'xoxb-real-test-token'],
+    ['SLACK_APP_TOKEN', 'xapp-real-test-token'],
+  ]);
+  return {
+    provider: 'environment',
+    get: async name => values.get(name),
+    has: async name => values.has(name),
+    list: async () => [],
+    set: async () => {
+      throw new Error('read only');
+    },
+    delete: async () => false,
+  };
 }
 
 async function delivery(): Promise<DeliverMessage> {
@@ -312,6 +333,119 @@ describe('N5 real Slack transport', () => {
     expect(sockets[0]!.sent).toEqual([]);
 
     unsubscribe();
+    await approval.close();
+    await shared.close();
+  });
+
+  test('routes approval actions and Slack triggers independently on one shared connection', async () => {
+    const calls: ApiCall[] = [];
+    const sockets: MockSocket[] = [];
+    const interactions: InteractionMessage[] = [];
+    const shared = new SharedSlackTransport({
+      fetch: slackFetch(calls, successfulApi),
+      createWebSocket: () => {
+        const socket = new MockSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const approval = new RealSlackTransport({
+      emit: message => {
+        interactions.push(message);
+      },
+      sharedTransport: shared,
+    });
+    const triggerRequests: string[] = [];
+    const trigger = new SlackTriggerHost({
+      registrations: [
+        {
+          workflowId: 'approval-trigger-coexistence',
+          definitionHash: 'sha256:coexistence',
+          triggerId: 'agentMessage',
+          events: ['app-mention', 'direct-message'],
+          channels: [],
+          credentialNames: {
+            botToken: 'SLACK_BOT_TOKEN',
+            appToken: 'SLACK_APP_TOKEN',
+          },
+        },
+      ],
+      secretStore: slackTriggerSecrets(),
+      transport: shared,
+      submit: async request => {
+        triggerRequests.push(request.sourceIdentity);
+        return {
+          contract: 'woml.trigger-ingress',
+          contractVersion: 1,
+          messageType: 'accepted',
+          requestId: request.requestId,
+          occurrenceId: 'occ_coexistence',
+          runId: 'run_coexistence',
+          duplicate: false,
+        };
+      },
+    });
+    const invocation = await delivery();
+    const credentials = {
+      botToken: 'xoxb-real-test-token',
+      appToken: 'xapp-real-test-token',
+    };
+
+    await trigger.start();
+    await approval.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
+    await approval.deliver({ invocation, credentials });
+    expect(sockets).toHaveLength(1);
+    const post = calls.find(call => call.method === 'chat.postMessage')!;
+    const blocks = post.body.blocks as Array<Record<string, unknown>>;
+    const actions = blocks.find(block => block.type === 'actions')!;
+    const approve = (actions.elements as Array<Record<string, unknown>>)[0]!;
+
+    sockets[0]!.receive({
+      envelope_id: 'env_coexist_approval',
+      type: 'interactive',
+      payload: {
+        type: 'block_actions',
+        user: { id: 'U12345678' },
+        actions: [
+          {
+            block_id: 'woml_approval_actions',
+            action_id: 'woml_approval_approved',
+            value: approve.value,
+          },
+        ],
+      },
+    });
+    await Bun.sleep(0);
+    expect(interactions).toHaveLength(1);
+    expect(triggerRequests).toEqual([]);
+
+    sockets[0]!.receive({
+      envelope_id: 'env_coexist_trigger',
+      type: 'events_api',
+      payload: {
+        type: 'event_callback',
+        event_id: 'EvCoexistence',
+        team_id: 'T12345678',
+        event: {
+          type: 'app_mention',
+          user: 'U12345678',
+          channel: 'C12345678',
+          text: '<@U87654321> continue',
+          ts: '1710000005.000100',
+        },
+      },
+    });
+    await Bun.sleep(0);
+    expect(triggerRequests).toEqual([
+      'slack:T12345678:EvCoexistence:approval-trigger-coexistence:agentMessage',
+    ]);
+    expect(interactions).toHaveLength(1);
+    expect(sockets[0]!.sent.map(value => JSON.parse(value))).toEqual([
+      { envelope_id: 'env_coexist_approval' },
+      { envelope_id: 'env_coexist_trigger' },
+    ]);
+
+    await trigger.close();
     await approval.close();
     await shared.close();
   });

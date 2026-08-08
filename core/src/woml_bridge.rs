@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
+use chrono::{DateTime, Utc};
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunctionCallMode};
 use napi::{Env, JsFunction, JsObject};
 use napi_derive::napi;
@@ -16,10 +17,11 @@ use woml_engine::{
   recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
   resume_workflow_durable_outcome, run_notification_provider_journey,
   settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome,
-  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError, NotificationHostClientError,
-  NotificationHostProcessOptions, NotificationJourneyDiagnostics, NotificationJourneyError,
-  ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError, RuntimeExecutionOptions,
-  ScriptHostProcessOptions, SystemEngineClock, TriggerProgress, TriggerProgressReporter,
+  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
+  ExternalTriggerAdmissionCommand, NotificationHostClientError, NotificationHostProcessOptions,
+  NotificationJourneyDiagnostics, NotificationJourneyError, ParallelFailurePolicy, RunFailure,
+  RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
+  SystemEngineClock, TriggerAdmissionRequest, TriggerProgress, TriggerProgressReporter,
   WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig,
 };
 
@@ -293,7 +295,54 @@ struct NativeTriggerRuntimeError {
 
 struct NativeWebhookRuntimeThread {
   stop: mpsc::Sender<()>,
+  ingress: tokio::sync::mpsc::UnboundedSender<ExternalTriggerAdmissionCommand>,
   join: JoinHandle<()>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeTriggerIngressRequest {
+  contract: String,
+  contract_version: u32,
+  message_type: String,
+  request_id: String,
+  workflow_id: String,
+  definition_hash: String,
+  trigger_id: String,
+  trigger_handler: String,
+  source_identity: String,
+  payload: Map<String, Value>,
+  received_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTriggerIngressAccepted {
+  contract: &'static str,
+  contract_version: u32,
+  message_type: &'static str,
+  request_id: String,
+  occurrence_id: String,
+  run_id: String,
+  duplicate: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTriggerIngressRejected {
+  contract: &'static str,
+  contract_version: u32,
+  message_type: &'static str,
+  request_id: String,
+  failure: NativeTriggerIngressFailure,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTriggerIngressFailure {
+  code: &'static str,
+  message: &'static str,
+  retryable: bool,
 }
 
 static WEBHOOK_RUNTIMES: OnceLock<Mutex<HashMap<String, NativeWebhookRuntimeThread>>> =
@@ -826,11 +875,13 @@ pub fn start_woml_webhook_runtime(
     let (startup_sender, startup_receiver) =
       mpsc::sync_channel::<Result<SocketAddr, NativeTriggerRuntimeError>>(1);
     let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+    let (ingress_sender, ingress_receiver) = tokio::sync::mpsc::unbounded_channel();
     let join = std::thread::Builder::new()
-      .name(format!("woml-webhook-{runtime_id}"))
+      .name(format!("woml-trigger-{runtime_id}"))
       .spawn(move || {
         actix_web::rt::System::new().block_on(async move {
-          match WomlWebhookServer::start(config).await {
+          match WomlWebhookServer::start_with_external_ingress(config, Some(ingress_receiver)).await
+          {
             Ok(server) => {
               let address = server.local_address();
               if startup_sender.send(Ok(address)).is_err() {
@@ -871,6 +922,7 @@ pub fn start_woml_webhook_runtime(
         runtime_id.clone(),
         NativeWebhookRuntimeThread {
           stop: stop_sender,
+          ingress: ingress_sender,
           join,
         },
       );
@@ -885,6 +937,88 @@ pub fn start_woml_webhook_runtime(
   })
 }
 
+#[napi(ts_return_type = "Promise<string>")]
+pub async fn submit_woml_trigger_occurrence(
+  runtime_id: String,
+  ingress_json: String,
+) -> napi::Result<String> {
+  let ingress: NativeTriggerIngressRequest = serde_json::from_str(&ingress_json)
+    .map_err(|error| napi::Error::from_reason(format!("Invalid trigger ingress JSON: {error}")))?;
+  if ingress.contract != "woml.trigger-ingress"
+    || ingress.contract_version != 1
+    || ingress.message_type != "admit"
+    || ingress.request_id.is_empty()
+    || ingress.trigger_handler != "trigger.slack"
+  {
+    return Err(napi::Error::from_reason(
+      "Invalid Slack trigger ingress contract.".to_string(),
+    ));
+  }
+  let request_id = ingress.request_id;
+  let sender = webhook_runtimes()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("Trigger runtime registry is unavailable.".to_string()))?
+    .get(&runtime_id)
+    .map(|runtime| runtime.ingress.clone())
+    .ok_or_else(|| napi::Error::from_reason("WOML trigger runtime does not exist.".to_string()))?;
+  let (response_sender, response_receiver) = tokio::sync::oneshot::channel();
+  sender
+    .send(ExternalTriggerAdmissionCommand {
+      request: TriggerAdmissionRequest {
+        workflow_id: ingress.workflow_id,
+        definition_hash: ingress.definition_hash,
+        trigger_id: ingress.trigger_id,
+        trigger_handler: ingress.trigger_handler,
+        source_identity: ingress.source_identity,
+        payload: ingress.payload,
+        received_at: ingress.received_at,
+      },
+      response: response_sender,
+    })
+    .map_err(|_| napi::Error::from_reason("WOML trigger runtime is stopping.".to_string()))?;
+  let outcome = response_receiver
+    .await
+    .map_err(|_| napi::Error::from_reason("WOML trigger ingress response was lost.".to_string()))?;
+  let json = match outcome {
+    Ok(outcome) => serde_json::to_string(&NativeTriggerIngressAccepted {
+      contract: "woml.trigger-ingress",
+      contract_version: 1,
+      message_type: "accepted",
+      request_id,
+      occurrence_id: outcome.occurrence_id,
+      run_id: outcome.run_id,
+      duplicate: outcome.duplicate,
+    }),
+    Err(DurableStoreError::TriggerIdempotencyConflict) => {
+      serde_json::to_string(&NativeTriggerIngressRejected {
+        contract: "woml.trigger-ingress",
+        contract_version: 1,
+        message_type: "rejected",
+        request_id,
+        failure: NativeTriggerIngressFailure {
+          code: "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+          message: "The source identity is already bound to a different payload.",
+          retryable: false,
+        },
+      })
+    }
+    Err(_) => serde_json::to_string(&NativeTriggerIngressRejected {
+      contract: "woml.trigger-ingress",
+      contract_version: 1,
+      message_type: "rejected",
+      request_id,
+      failure: NativeTriggerIngressFailure {
+        code: "WOML_TRIGGER_UNAVAILABLE",
+        message: "The durable WOML trigger authority is unavailable.",
+        retryable: true,
+      },
+    }),
+  };
+  json.map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode trigger ingress outcome: {error}"))
+  })
+}
+
 #[napi(ts_return_type = "Promise<void>")]
 pub async fn stop_woml_webhook_runtime(runtime_id: String) -> napi::Result<()> {
   let runtime = webhook_runtimes()
@@ -892,6 +1026,7 @@ pub async fn stop_woml_webhook_runtime(runtime_id: String) -> napi::Result<()> {
     .map_err(|_| napi::Error::from_reason("Webhook runtime registry is unavailable.".to_string()))?
     .remove(&runtime_id)
     .ok_or_else(|| napi::Error::from_reason("WOML webhook runtime does not exist.".to_string()))?;
+  drop(runtime.ingress);
   let _ = runtime.stop.send(());
   tokio::task::spawn_blocking(move || runtime.join.join())
     .await

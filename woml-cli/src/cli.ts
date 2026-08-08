@@ -34,6 +34,7 @@ import {
   inspectRunWithRust,
   startWebhookRuntimeWithRust,
   stopWebhookRuntimeWithRust,
+  submitTriggerOccurrenceWithRust,
   TriggerRuntimeError,
   type TriggerProgressV1,
   type RustApprovalRuntimeOutcome,
@@ -51,6 +52,16 @@ import {
   type SecretStore,
 } from './secrets';
 import { readSecretFromTerminal } from './secrets/prompt';
+import {
+  SharedSlackTransport,
+  type SharedSlackTransportOptions,
+} from './notification-provider';
+import {
+  SlackTriggerHost,
+  slackTriggerRegistrations,
+  slackTriggerStartupError,
+  type SlackTriggerProtocolMessage,
+} from './slack-trigger';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -1063,7 +1074,12 @@ async function resolvedSecrets(
   workflow: CompiledWorkflowDefinition,
   store: SecretStore
 ): Promise<Readonly<Record<string, string>>> {
-  const references = workflowSecretReferences(workflow);
+  const references: SecretReferenceExpression[] = [];
+  for (const trigger of workflow.triggers) {
+    if (trigger.handler === 'trigger.webhook') {
+      collectSecretReferences(trigger.config, references);
+    }
+  }
   await preflightSecretReferences(references, store);
   const values: Record<string, string> = {};
   for (const name of [...new Set(references.map(reference => reference.name))]) {
@@ -1077,6 +1093,30 @@ async function resolvedSecrets(
     values[name] = value;
   }
   return values;
+}
+
+export function formatSlackTriggerMessage(
+  message: SlackTriggerProtocolMessage
+): string | undefined {
+  if (message.messageType === 'ready') {
+    return 'WOML Slack trigger host is ready.';
+  }
+  if (message.messageType === 'connection') {
+    return message.state === 'ready'
+      ? `Slack workspace ${message.workspaceId} is ready for triggers.`
+      : message.state === 'reconnecting'
+        ? `Slack workspace ${message.workspaceId} is reconnecting${message.retryAt === undefined ? '.' : ` at ${message.retryAt}.`}`
+        : message.state === 'stopped'
+          ? `Slack workspace ${message.workspaceId} stopped.`
+          : `Connecting Slack workspace ${message.workspaceId}.`;
+  }
+  if (message.messageType === 'failure') {
+    return `Slack trigger failure [${message.code}]: ${message.message}`;
+  }
+  if (message.messageType === 'event') {
+    return `Received Slack ${message.payload.type} ${message.eventId} for trigger "${message.triggerId}".`;
+  }
+  return undefined;
 }
 
 export function formatTriggerProgress(progress: TriggerProgressV1): string {
@@ -1146,11 +1186,15 @@ async function activateWorkflows(
     );
   }
 
-  const webhookSources = sources.filter(
-    source => triggerIds(source.workflow, 'trigger.webhook').length > 0
+  const productionSources = sources.filter(source =>
+    source.workflow.triggers.some(
+      trigger =>
+        trigger.handler === 'trigger.webhook' ||
+        trigger.handler === 'trigger.slack'
+    )
   );
-  const nonWebhookSources = sources.filter(
-    source => triggerIds(source.workflow, 'trigger.webhook').length === 0
+  const oneShotSources = sources.filter(
+    source => !productionSources.includes(source)
   );
   const startupManualTriggers: Record<string, string> = {};
   for (const source of sources) {
@@ -1158,13 +1202,13 @@ async function activateWorkflows(
     if (
       manual !== undefined &&
       args.resumeRunId === undefined &&
-      webhookSources.includes(source)
+      productionSources.includes(source)
     ) {
       startupManualTriggers[source.workflow.workflowId] = manual;
     }
   }
 
-  for (const source of nonWebhookSources) {
+  for (const source of oneShotSources) {
     await executeOneShot(
       source.workflow,
       { ...args, filePath: source.filePath },
@@ -1174,19 +1218,27 @@ async function activateWorkflows(
   }
 
   let runtimeId: string | undefined;
+  let slackHost: SlackTriggerHost | undefined;
+  let slackTransport: SharedSlackTransport | undefined;
   try {
-    if (webhookSources.length > 0) {
+    if (productionSources.length > 0) {
       await mkdir(dirname(args.statePath), { recursive: true });
       const store = dependencies.createSecretStore();
       const registrations = await Promise.all(
-        webhookSources.map(async source => ({
+        productionSources.map(async source => ({
           workflow: source.workflow,
           definitionHash: compiledDefinitionHash(source.workflow),
           resolvedSecrets: await resolvedSecrets(source.workflow, store),
         }))
       );
-      const routes = webhookSources.flatMap(source =>
+      const routes = productionSources.flatMap(source =>
         webhookRouteSummaries(source.workflow)
+      );
+      const slackRegistrations = productionSources.flatMap(source =>
+        slackTriggerRegistrations(
+          source.workflow,
+          compiledDefinitionHash(source.workflow)
+        )
       );
       const seenRoutes = new Map<string, WebhookRouteSummary>();
       for (const route of routes) {
@@ -1204,8 +1256,8 @@ async function activateWorkflows(
         args.statePath,
         {
           nativeCorePath: dependencies.nativeCorePath,
-          host: args.host,
-          port: args.port,
+          host: routes.length === 0 ? '127.0.0.1' : args.host,
+          port: routes.length === 0 ? 0 : args.port,
           startupManualTriggers,
           onTriggerProgress: progress =>
             reportTriggerProgress(
@@ -1217,7 +1269,9 @@ async function activateWorkflows(
         }
       );
       runtimeId = runtime.runtimeId;
-      io.stderr(`WOML workflow active at http://${runtime.host}:${runtime.port}.\n`);
+      if (routes.length > 0) {
+        io.stderr(`WOML workflow active at http://${runtime.host}:${runtime.port}.\n`);
+      }
       for (const route of routes) {
         io.stderr(
           `Webhook ${route.triggerId}: ${route.method} http://${runtime.host}:${runtime.port}${route.path}\n`
@@ -1232,8 +1286,52 @@ async function activateWorkflows(
         );
       }
 
+      if (slackRegistrations.length > 0) {
+        slackTransport =
+          dependencies.createSlackTransport?.({
+            log: message => io.stderr(`[woml] ${message}\n`),
+            onConnectionState: status => {
+              if (status.state === 'reconnecting') {
+                io.stderr(
+                  `Slack Socket Mode reconnecting${status.retryAt === undefined ? '.' : ` at ${status.retryAt}.`}\n`
+                );
+              }
+            },
+          }) ??
+          new SharedSlackTransport({
+            log: message => io.stderr(`[woml] ${message}\n`),
+            onConnectionState: status => {
+              if (status.state === 'reconnecting') {
+                io.stderr(
+                  `Slack Socket Mode reconnecting${status.retryAt === undefined ? '.' : ` at ${status.retryAt}.`}\n`
+                );
+              }
+            },
+          });
+        slackHost = new SlackTriggerHost({
+          registrations: slackRegistrations,
+          secretStore: store,
+          transport: slackTransport,
+          submit: ingress =>
+            submitTriggerOccurrenceWithRust(runtime.runtimeId, ingress, {
+              nativeCorePath: dependencies.nativeCorePath,
+            }),
+          emit: message => {
+            const formatted = formatSlackTriggerMessage(message);
+            if (formatted !== undefined) io.stderr(`${formatted}\n`);
+          },
+          diagnostic: message => io.stderr(`${message}\n`),
+        });
+        try {
+          await slackHost.start();
+        } catch (error) {
+          const failure = slackTriggerStartupError(error);
+          throw new CliInputError(failure.code, failure.message);
+        }
+      }
+
       if (args.resumeRunId !== undefined) {
-        const source = webhookSources[0]!;
+        const source = productionSources[0]!;
         await executeOneShot(
           source.workflow,
           { ...args, filePath: source.filePath },
@@ -1246,6 +1344,8 @@ async function activateWorkflows(
     io.stderr('WOML automation is active. Press Ctrl+C to stop.\n');
     await (dependencies.waitForShutdown ?? waitForShutdownSignal)();
   } finally {
+    await slackHost?.close().catch(() => {});
+    await slackTransport?.close().catch(() => {});
     if (runtimeId !== undefined) {
       await stopWebhookRuntimeWithRust(runtimeId, {
         nativeCorePath: dependencies.nativeCorePath,
@@ -1261,6 +1361,9 @@ export interface CliDependencies {
   readonly waitForShutdown?: () => Promise<void>;
   readonly notificationHostPath?: string;
   readonly nativeCorePath?: string;
+  readonly createSlackTransport?: (
+    options: SharedSlackTransportOptions
+  ) => SharedSlackTransport;
 }
 
 function waitForShutdownSignal(): Promise<void> {

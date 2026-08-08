@@ -966,10 +966,13 @@ Implementation notes:
 - The reviewed app manifest now subscribes to `app_mention` and `message.im`
   and includes `app_mentions:read` and `im:history`. Scope failures continue to
   tell the user to update permissions and reinstall the app.
-- `bun run test:t6` is the T6 gate, and `test:release` now points to it. Slack
-  event decoding, Rust admission, and actual run creation remain T7 work.
+- `bun run test:t6` remains the standalone T6 contract/transport gate. Slack
+  event decoding, Rust admission, and actual run creation were deliberately
+  deferred to—and are now completed by—T7.
 
 ### T7 — Execute and publish Slack triggers
+
+Status: completed.
 
 Changes:
 
@@ -995,6 +998,30 @@ Gate:
 Real/fake Slack journeys prove mention, DM, channel filtering, reconnect,
 redelivery deduplication, no bot loop, restart recovery, approval compatibility,
 packaging, and secret safety.
+
+Implementation notes:
+
+- The long-lived Rust trigger runtime now exposes the frozen asynchronous
+  Trigger Ingress v1 admission boundary to Bun. Slack-only workflows use the
+  same durable occurrence, event log, execution loop, recovery, and run
+  inspection authority as webhooks.
+- Bun decodes `app_mention` and `message.im`, rejects malformed or oversized
+  input, ignores bot/self/unsupported subtype traffic, applies mention channel
+  filters, and emits only the reviewed seven-field `context.trigger` payload.
+- A Slack envelope is acknowledged only after Rust commits a new or duplicate
+  occurrence. Workspace, Slack event ID, workflow, and trigger form the stable
+  source identity; duplicate delivery returns the original run without a
+  second dispatch.
+- `woml run` reports Slack connection readiness, reconnect attempts, matched
+  occurrences, duplicate recognition, filter misses, safe failures, and final
+  run results. Slack credentials remain symbolic in every Rust registration.
+- Approval actions and trigger events have separate listeners and routing on
+  the shared transport. Tests prove that either can be handled without
+  consuming or acknowledging the other's message.
+- `examples/slackTriggerWorkflow.woml` is the runnable one-channel product
+  example and compiles through the reviewed Model v7 contract. The separate
+  two-channel fixture preserves broader contract coverage. `bun run test:t7`
+  is the T7 gate and `test:release` now points to it.
 
 ### T8 — Compile schedules and freeze time semantics
 

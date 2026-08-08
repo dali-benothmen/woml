@@ -80,9 +80,10 @@ pub use runtime::{
 };
 pub use store::{EventStoreError, InMemoryEventStore};
 pub use webhook::{
-  TriggerProgress, TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError,
-  WomlWebhookServer, WomlWebhookServerConfig, TRIGGER_PROGRESS_CONTRACT,
-  TRIGGER_PROGRESS_CONTRACT_VERSION, WEBHOOK_MAX_BODY_BYTES,
+  ExternalTriggerAdmissionCommand, ExternalTriggerAdmissionReceiver, TriggerProgress,
+  TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
+  WomlWebhookServerConfig, TRIGGER_PROGRESS_CONTRACT, TRIGGER_PROGRESS_CONTRACT_VERSION,
+  WEBHOOK_MAX_BODY_BYTES,
 };
 
 pub const COMPILED_MODEL_SCHEMA_VERSION_V1: u32 = 1;

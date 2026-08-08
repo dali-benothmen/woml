@@ -189,6 +189,24 @@ It acknowledges a Slack envelope only after Rust returns a durable acceptance
 or duplicate result. When Rust is unavailable, the adapter leaves the envelope
 unacknowledged so Slack can redeliver it.
 
+### T7 Slack implementation
+
+`woml run` keeps a shared Slack Socket Mode transport active beside the Rust
+runtime. Bun resolves symbolic Slack credentials without placing token values
+in the compiled registration sent to Rust, validates and filters provider
+envelopes, and lowers only the frozen normalized payload through Trigger
+Ingress v1. Rust atomically records the occurrence and run before Bun
+acknowledges Slack. Source identity combines workspace, Slack `event_id`,
+workflow, and trigger, so redelivery returns the original run and does not
+dispatch again.
+
+App mentions honor configured channel filters. Direct messages are accepted
+independently of mention-channel filters when enabled. Bot/self messages,
+unsupported subtypes, edits, deletes, malformed events, and unreviewed outer
+Slack fields never enter `context.trigger`. Slack approval actions and trigger
+events are routed as separate protocol messages, even when their adapters
+share one Socket connection.
+
 ## Progress boundary
 
 Trigger Progress v1 is operational output for long-lived CLI processes. It

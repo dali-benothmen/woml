@@ -14,6 +14,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::model::ValueExpression;
@@ -117,6 +118,14 @@ pub struct WomlWebhookServerConfig {
   pub progress_reporter: Option<TriggerProgressReporter>,
 }
 
+pub struct ExternalTriggerAdmissionCommand {
+  pub request: TriggerAdmissionRequest,
+  pub response: oneshot::Sender<Result<crate::TriggerAdmissionOutcome, DurableStoreError>>,
+}
+
+pub type ExternalTriggerAdmissionReceiver =
+  tokio_mpsc::UnboundedReceiver<ExternalTriggerAdmissionCommand>;
+
 pub struct WomlWebhookServer {
   local_address: SocketAddr,
   handle: actix_web::dev::ServerHandle,
@@ -124,6 +133,13 @@ pub struct WomlWebhookServer {
 
 impl WomlWebhookServer {
   pub async fn start(config: WomlWebhookServerConfig) -> Result<Self, WebhookRuntimeError> {
+    Self::start_with_external_ingress(config, None).await
+  }
+
+  pub async fn start_with_external_ingress(
+    config: WomlWebhookServerConfig,
+    external_ingress: Option<ExternalTriggerAdmissionReceiver>,
+  ) -> Result<Self, WebhookRuntimeError> {
     let (state, recovery_runs, startup_manual_runs) = prepare_state(config)?;
     let listener = TcpListener::bind(state.bind_address)?;
     let local_address = listener.local_addr()?;
@@ -138,6 +154,11 @@ impl WomlWebhookServer {
     .run();
     let handle = server.handle();
     actix_web::rt::spawn(server);
+
+    if let Some(receiver) = external_ingress {
+      let external_state = recovery_state.clone();
+      actix_web::rt::spawn(run_external_ingress(external_state, receiver));
+    }
 
     recovery_state.report(TriggerProgress::Ready {
       contract: TRIGGER_PROGRESS_CONTRACT,
@@ -335,11 +356,11 @@ fn prepare_state(
     if registration.workflow.triggers.iter().any(|trigger| {
       !matches!(
         trigger.handler.as_str(),
-        "trigger.manual" | "trigger.webhook"
+        "trigger.manual" | "trigger.webhook" | "trigger.slack"
       )
     }) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} contains a production trigger that is not active in T3",
+        "workflow {:?} contains a production trigger that is not active in T7",
         registration.workflow.workflow_id
       )));
     }
@@ -368,12 +389,10 @@ fn prepare_state(
       });
     }
 
-    let mut webhook_count = 0;
     for trigger in &registration.workflow.triggers {
       if trigger.handler != "trigger.webhook" {
         continue;
       }
-      webhook_count += 1;
       let route = compile_route(&registration, trigger)?;
       let path = webhook_path(&trigger.config).ok_or_else(|| {
         WebhookRuntimeError::InvalidRegistration(format!(
@@ -384,12 +403,6 @@ fn prepare_state(
       if routes.insert(path.to_string(), Arc::new(route)).is_some() {
         return Err(WebhookRuntimeError::RouteConflict(path.to_string()));
       }
-    }
-    if webhook_count == 0 {
-      return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} does not contain a webhook trigger",
-        registration.workflow.workflow_id
-      )));
     }
     definitions.push((registration.workflow, registration.definition_hash));
   }
@@ -779,6 +792,83 @@ fn admit_startup_manual(state: &WebhookRuntimeState, startup: StartupManualTrigg
       message: "The durable WOML trigger authority is unavailable.".to_string(),
       occurred_at: Utc::now(),
     }),
+  }
+}
+
+async fn run_external_ingress(
+  state: web::Data<WebhookRuntimeState>,
+  mut receiver: ExternalTriggerAdmissionReceiver,
+) {
+  while let Some(command) = receiver.recv().await {
+    let request = command.request;
+    let workflow_id = request.workflow_id.clone();
+    let trigger_id = request.trigger_id.clone();
+    let trigger_handler = request.trigger_handler.clone();
+    let database_path = state.database_path.clone();
+    let admitted = web::block(move || {
+      let mut store = DurableEventStore::open(database_path)?;
+      store.admit_trigger_occurrence(request)
+    })
+    .await;
+
+    let outcome = match admitted {
+      Ok(Ok(outcome)) => outcome,
+      Ok(Err(error)) => {
+        let (code, message) = if matches!(error, DurableStoreError::TriggerIdempotencyConflict) {
+          (
+            "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+            "This provider event is already bound to a different payload.",
+          )
+        } else {
+          (
+            "WOML_TRIGGER_UNAVAILABLE",
+            "The durable WOML trigger authority rejected the provider event.",
+          )
+        };
+        state.report(TriggerProgress::OccurrenceRejected {
+          contract: TRIGGER_PROGRESS_CONTRACT,
+          contract_version: TRIGGER_PROGRESS_CONTRACT_VERSION,
+          workflow_id: Some(workflow_id),
+          trigger_id: Some(trigger_id),
+          trigger_handler,
+          code: code.to_string(),
+          message: message.to_string(),
+          occurred_at: Utc::now(),
+        });
+        let _ = command.response.send(Err(error));
+        continue;
+      }
+      Err(_) => {
+        state.report(TriggerProgress::OccurrenceRejected {
+          contract: TRIGGER_PROGRESS_CONTRACT,
+          contract_version: TRIGGER_PROGRESS_CONTRACT_VERSION,
+          workflow_id: Some(workflow_id),
+          trigger_id: Some(trigger_id),
+          trigger_handler,
+          code: "WOML_TRIGGER_UNAVAILABLE".to_string(),
+          message: "The durable WOML trigger authority is unavailable.".to_string(),
+          occurred_at: Utc::now(),
+        });
+        let _ = command.response.send(Err(DurableStoreError::Contract(
+          "The external trigger admission task failed.".to_string(),
+        )));
+        continue;
+      }
+    };
+
+    let identity = RunProgressIdentity {
+      workflow_id,
+      trigger_id,
+      trigger_handler,
+      occurrence_id: outcome.occurrence_id.clone(),
+      run_id: outcome.run_id.clone(),
+    };
+    state.report_accepted(&identity, outcome.duplicate);
+    if !outcome.duplicate {
+      state.report_run_started(&identity);
+      dispatch_run(state.get_ref(), identity);
+    }
+    let _ = command.response.send(Ok(outcome));
   }
 }
 

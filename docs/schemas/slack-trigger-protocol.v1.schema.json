@@ -3,7 +3,7 @@
   "$id": "https://cronflow.dev/schemas/slack-trigger-protocol/v1",
   "title": "WOML Slack Trigger Protocol v1",
   "description": "Secret-safe protocol between the shared Slack transport host and Rust trigger ingress.",
-  "x-status": "frontend-and-shared-transport-active-runtime-staged",
+  "x-status": "production-runtime-active",
   "x-invariants": [
     "The protocol carries symbolic credential names but never resolved token values.",
     "Only human app mentions and direct messages are normalized as trigger events.",

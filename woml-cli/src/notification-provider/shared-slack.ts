@@ -41,6 +41,7 @@ export interface SlackSocket {
 export interface SlackEnvelope {
   readonly body: Readonly<Record<string, unknown>>;
   readonly envelopeId?: string;
+  readonly appTokenReferences: readonly string[];
   acknowledge(): void;
 }
 
@@ -63,9 +64,16 @@ interface SlackListenerRegistration {
   readonly references: Set<string>;
 }
 
-interface SlackBotIdentity {
+export interface SlackBotIdentity {
   readonly token: string;
   readonly teamId: string;
+  readonly userId: string;
+}
+
+export interface SlackConnectionStatus {
+  readonly state: 'connecting' | 'ready' | 'reconnecting' | 'stopped';
+  readonly appTokenReferences: readonly string[];
+  readonly retryAt?: string;
 }
 
 export interface SharedSlackTransportOptions {
@@ -74,6 +82,7 @@ export interface SharedSlackTransportOptions {
   readonly socketOpenTimeoutMs?: number;
   readonly reconnectBaseDelayMs?: number;
   readonly log?: (message: string) => void;
+  readonly onConnectionState?: (status: SlackConnectionStatus) => void;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -204,6 +213,7 @@ export class SharedSlackTransport {
   readonly #socketOpenTimeoutMs: number;
   readonly #reconnectBaseDelayMs: number;
   readonly #log: (message: string) => void;
+  readonly #onConnectionState: (status: SlackConnectionStatus) => void;
   readonly #connectionsByReference = new Map<string, SlackConnection>();
   readonly #connectionsByToken = new Map<string, SlackConnection>();
   readonly #pendingListeners = new Map<
@@ -223,6 +233,7 @@ export class SharedSlackTransport {
       options.socketOpenTimeoutMs ?? SOCKET_OPEN_TIMEOUT_MS;
     this.#reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? 500;
     this.#log = options.log ?? (() => {});
+    this.#onConnectionState = options.onConnectionState ?? (() => {});
   }
 
   subscribe(
@@ -318,6 +329,7 @@ export class SharedSlackTransport {
     }
     if (connection.socket?.readyState === 1) return;
     if (connection.opening === undefined) {
+      this.#reportConnection(connection, 'connecting');
       connection.opening = this.#openConnection(connection).finally(() => {
         connection!.opening = undefined;
       });
@@ -349,7 +361,9 @@ export class SharedSlackTransport {
     const pending = this.api('auth.test', token, {}, 'none').then(response => {
       if (
         typeof response.team_id !== 'string' ||
-        !/^T[A-Z0-9]{8,31}$/.test(response.team_id)
+        !/^T[A-Z0-9]{8,31}$/.test(response.team_id) ||
+        typeof response.user_id !== 'string' ||
+        !/^U[A-Z0-9]{8,31}$/.test(response.user_id)
       ) {
         throw failure(
           'request_invalid',
@@ -358,7 +372,7 @@ export class SharedSlackTransport {
           false
         );
       }
-      return { token, teamId: response.team_id };
+      return { token, teamId: response.team_id, userId: response.user_id };
     });
     this.#botIdentities.set(token, pending);
     return await pending;
@@ -474,6 +488,7 @@ export class SharedSlackTransport {
         clearTimeout(connection.reconnectTimer);
       }
       connection.socket?.close(1000, 'WOML Slack host shutting down');
+      this.#reportConnection(connection, 'stopped');
     }
     this.#connectionsByReference.clear();
     this.#connectionsByToken.clear();
@@ -573,6 +588,7 @@ export class SharedSlackTransport {
         () => {
           clearTimeout(timer);
           connection.reconnectAttempt = 0;
+          this.#reportConnection(connection, 'ready');
           resolve();
         },
         { once: true }
@@ -602,6 +618,7 @@ export class SharedSlackTransport {
       30_000
     );
     connection.reconnectAttempt += 1;
+    this.#reportConnection(connection, 'reconnecting', delay);
     connection.reconnectTimer = setTimeout(() => {
       connection.reconnectTimer = undefined;
       if (this.#closed || connection.opening !== undefined) return;
@@ -640,6 +657,7 @@ export class SharedSlackTransport {
     const envelope: SlackEnvelope = {
       body,
       ...(envelopeId === undefined ? {} : { envelopeId }),
+      appTokenReferences: [...connection.references].sort(),
       acknowledge: () => {
         if (acknowledged || envelopeId === undefined) return;
         acknowledged = true;
@@ -661,5 +679,19 @@ export class SharedSlackTransport {
       'The shared Slack transport is closed.',
       true
     );
+  }
+
+  #reportConnection(
+    connection: SlackConnection,
+    state: SlackConnectionStatus['state'],
+    retryDelayMs?: number
+  ): void {
+    this.#onConnectionState({
+      state,
+      appTokenReferences: [...connection.references].sort(),
+      ...(retryDelayMs === undefined
+        ? {}
+        : { retryAt: new Date(Date.now() + retryDelayMs).toISOString() }),
+    });
   }
 }

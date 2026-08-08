@@ -145,6 +145,42 @@ export interface WebhookRuntimeHandle {
   readonly port: number;
 }
 
+export interface TriggerIngressAdmit {
+  readonly contract: 'woml.trigger-ingress';
+  readonly contractVersion: 1;
+  readonly messageType: 'admit';
+  readonly requestId: string;
+  readonly workflowId: string;
+  readonly definitionHash: string;
+  readonly triggerId: string;
+  readonly triggerHandler: 'trigger.slack';
+  readonly sourceIdentity: string;
+  readonly payload: Readonly<Record<string, JsonValue>>;
+  readonly receivedAt: string;
+}
+
+export type TriggerIngressOutcome =
+  | {
+      readonly contract: 'woml.trigger-ingress';
+      readonly contractVersion: 1;
+      readonly messageType: 'accepted';
+      readonly requestId: string;
+      readonly occurrenceId: string;
+      readonly runId: string;
+      readonly duplicate: boolean;
+    }
+  | {
+      readonly contract: 'woml.trigger-ingress';
+      readonly contractVersion: 1;
+      readonly messageType: 'rejected';
+      readonly requestId: string;
+      readonly failure: {
+        readonly code: string;
+        readonly message: string;
+        readonly retryable: boolean;
+      };
+    };
+
 export interface RustRunInspection {
   readonly runId: string;
   readonly workflowId: string;
@@ -311,6 +347,10 @@ interface NativeCore {
     progressCallback: (message: string) => void
   ) => Promise<string>;
   readonly stopWomlWebhookRuntime: (runtimeId: string) => Promise<void>;
+  readonly submitWomlTriggerOccurrence: (
+    runtimeId: string,
+    ingressJson: string
+  ) => Promise<string>;
   readonly inspectWomlRun: (eventStorePath: string, runId: string) => string;
   readonly executeWomlWorkflowDurableOutcome: (
     compiledModelJson: string,
@@ -1338,8 +1378,8 @@ export async function startWebhookRuntimeWithRust(
     throw new Error('eventStorePath must not be empty.');
   }
   const port = options.port ?? 3_000;
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
-    throw new Error('Webhook port must be an integer from 1 through 65535.');
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
+    throw new Error('Trigger runtime port must be an integer from 0 through 65535.');
   }
   const timeoutMs = options.scriptTimeoutMs ?? 5_000;
   if (
@@ -1386,6 +1426,70 @@ export async function startWebhookRuntimeWithRust(
     throw new Error('The native core returned invalid webhook runtime startup data.');
   }
   return value as unknown as WebhookRuntimeHandle;
+}
+
+export async function submitTriggerOccurrenceWithRust(
+  runtimeId: string,
+  ingress: TriggerIngressAdmit,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): Promise<TriggerIngressOutcome> {
+  if (runtimeId.length === 0) throw new Error('runtimeId must not be empty.');
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.submitWomlTriggerOccurrence !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose Slack trigger ingress; rebuild the Rust addon.`
+    );
+  }
+  const resultJson = await native
+    .submitWomlTriggerOccurrence(runtimeId, JSON.stringify(ingress))
+    .catch(decodeTriggerRuntimeError);
+  const value: unknown = JSON.parse(resultJson);
+  if (
+    !record(value) ||
+    value.contract !== 'woml.trigger-ingress' ||
+    value.contractVersion !== 1 ||
+    value.requestId !== ingress.requestId
+  ) {
+    throw new Error('The native core returned invalid trigger ingress data.');
+  }
+  if (
+    value.messageType === 'accepted' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'messageType',
+      'requestId',
+      'occurrenceId',
+      'runId',
+      'duplicate',
+    ]) &&
+    typeof value.occurrenceId === 'string' &&
+    value.occurrenceId.length > 0 &&
+    typeof value.runId === 'string' &&
+    value.runId.length > 0 &&
+    typeof value.duplicate === 'boolean'
+  ) {
+    return value as unknown as TriggerIngressOutcome;
+  }
+  if (
+    value.messageType === 'rejected' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'messageType',
+      'requestId',
+      'failure',
+    ]) &&
+    record(value.failure) &&
+    exactKeys(value.failure, ['code', 'message', 'retryable']) &&
+    typeof value.failure.code === 'string' &&
+    typeof value.failure.message === 'string' &&
+    typeof value.failure.retryable === 'boolean'
+  ) {
+    return value as unknown as TriggerIngressOutcome;
+  }
+  throw new Error('The native core returned invalid trigger ingress data.');
 }
 
 export async function stopWebhookRuntimeWithRust(

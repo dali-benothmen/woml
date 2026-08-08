@@ -35,11 +35,19 @@ export async function resolveSlackCredentials(
 ): Promise<{ readonly botToken: string; readonly appToken: string }> {
   const botToken = await secretStore.get(references.botToken.name);
   const appToken = await secretStore.get(references.appToken.name);
-  if (botToken === undefined || appToken === undefined) {
+  const missing = [
+    ...(botToken === undefined || botToken.length === 0
+      ? [references.botToken.name]
+      : []),
+    ...(appToken === undefined || appToken.length === 0
+      ? [references.appToken.name]
+      : []),
+  ];
+  if (missing.length > 0) {
     throw new SecretStoreError(
       'WOML_SECRET_NOT_FOUND',
-      'A required Slack credential is missing.'
+      `Missing required Slack credential${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}.`
     );
   }
-  return { botToken, appToken };
+  return { botToken: botToken!, appToken: appToken! };
 }

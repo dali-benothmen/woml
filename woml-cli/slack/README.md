@@ -88,11 +88,28 @@ updates all delivered messages, and continues only the selected WOML route.
 </triggers>
 ```
 
-T6 validates and compiles this definition into Model v7. Receiving mentions
-and direct messages and starting durable runs is delivered in T7; until then,
-the runtime fails activation explicitly rather than claiming the trigger is
-active. After changing scopes or event subscriptions, reinstall the app to the
-workspace and refresh the stored bot token.
+WOML validates and compiles this definition into Model v7. Keep
+`woml run workflow.woml` active, then mention the app in a listed channel or
+send it a direct message. A valid message starts one durable workflow run and
+is available to scripts as:
+
+```js
+context.trigger.type
+context.trigger.text
+context.trigger.userId
+context.trigger.channelId
+context.trigger.messageTs
+context.trigger.threadTs
+context.trigger.teamId
+```
+
+Channel filters apply to app mentions; direct messages remain accepted when
+`direct-message` is enabled. Repeating the same Slack event does not execute a
+second run. After changing scopes or event subscriptions, reinstall the app to
+the workspace and refresh the stored bot token.
+
+The repository includes `examples/slackTriggerWorkflow.woml`, configured for
+`#woml-testing`. Edit that channel filter if your workspace uses another name.
 
 ## Common failures
 
@@ -106,5 +123,10 @@ workspace and refresh the stored bot token.
   visibility.
 - `WOML_SLACK_RATE_LIMITED`: WOML follows Slack's `Retry-After` value through
   its durable retry policy.
+- `WOML_SLACK_TRIGGER_SCOPE_MISSING`: add the missing scopes, reinstall the
+  app, and refresh the stored token.
+- `WOML_SLACK_TRIGGER_UNAVAILABLE`: keep WOML active and restore Socket Mode;
+  an event is not acknowledged before durable admission, so Slack may redeliver
+  it safely.
 - `WOML_NOTIFICATION_DELIVERY_AMBIGUOUS`: the connection ended after a send
   may have reached Slack. WOML fails closed instead of creating a duplicate.
