@@ -1,7 +1,9 @@
 # Deploying a WOML Webhook Runtime
 
-Webhook is WOML's first supported Production Trigger. `woml run` is the
-long-lived process: a process supervisor starts it once, keeps it alive, sends
+Webhook is one of WOML's supported Production Triggers. This guide focuses on
+its HTTP boundary; the complete mixed-trigger operations guide is
+[Operating WOML Production Triggers](woml-production-triggers.md). `woml run`
+is the long-lived process: a supervisor starts it once, keeps it alive, sends
 SIGTERM during deployment, and restarts it after exit.
 
 ```bash
@@ -61,7 +63,7 @@ ambiguous and fails closed; WOML never guesses that it is safe to replay.
 
 ## Release gate
 
-Run `bun run test:t5` from `woml-cli` before publishing. It rebuilds the native
+Run `bun run test:t13` from `woml-cli` before publishing. It rebuilds the native
 package, runs frontend, Rust, and CLI suites, exercises the webhook example,
 checks concurrency and failure boundaries, and scans public/durable artifacts
 for configured WOML secrets.

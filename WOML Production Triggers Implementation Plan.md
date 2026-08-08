@@ -1,6 +1,7 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 through T12 completed on 2026-08-08. Manual, webhook, Slack, cron
+Status: T0 through T13 completed on 2026-08-08. Production Triggers is a
+complete publishable single-node milestone. Manual, webhook, Slack, cron
 schedule, fixed-rate interval, and named event triggers are active. Rust owns atomic
 occurrence admission, HTTP validation, durable run creation, background DAG
 execution, the injected clock, SQLite schedule and interval cursors, bounded
@@ -1274,6 +1275,8 @@ Implementation notes:
 
 ### T13 — Complete Production Triggers
 
+Status: completed.
+
 Changes:
 
 - Run cross-trigger composition and compatibility tests.
@@ -1296,6 +1299,24 @@ Gate:
 All five reviewed examples work from a clean package, every safe restart
 boundary recovers, ambiguous script work still fails closed, and the complete
 release gate passes.
+
+Implementation notes:
+
+- The T13 coexistence journey activates webhook, Slack, schedule, interval,
+  and named event in one long-lived runtime. It executes real webhook and event
+  occurrences while the Slack connection and both Rust schedulers remain
+  registered, then proves secret-safe output and graceful shutdown.
+- Historical Model v7 event definitions without the later authored publisher
+  secret remain readable during recovery. Current source and active ingress
+  still require a resolved symbolic secret, preserving both immutable history
+  and authenticated publication.
+- `docs/woml-production-triggers.md` is the unified deployment, security,
+  state, recovery, migration, and troubleshooting guide. The webhook-specific
+  guide remains as focused HTTP material.
+- `bun run test:t13` is the completed milestone gate, and `test:release` now
+  points to it. The transitive gate rebuilds the package and runs all frontend,
+  Rust, isolated CLI, schema, packaging, crash/recovery, contention, and secret
+  safety checks.
 
 ## 16. Expected File Areas
 
@@ -1391,9 +1412,9 @@ trigger.
 ## 19. Global Roadmap After Production Triggers
 
 1. **Retries and idempotency** — completed in RI7.
-2. **Production triggers** — this milestone: webhook first, followed by Slack,
-   schedule, interval, and event. Discord, WhatsApp, and Telegram later reuse
-   the provider-trigger boundary.
+2. **Production triggers** — completed in T13: webhook, Slack, schedule,
+   interval, and event. Discord, WhatsApp, and Telegram later reuse the
+   provider-trigger boundary.
 3. **Services and capabilities** — HTTP, database, messaging, and other useful
    registered operations that automatically receive the relevant effect key;
    this includes outbound Slack messaging for conversational agents.

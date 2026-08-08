@@ -1,6 +1,6 @@
 # WOML Production Trigger Contracts v1
 
-Status: frozen in T0 and implemented through T12. Long-lived `woml run` now
+Status: frozen in T0 and completed in T13. Long-lived `woml run` now
 activates manual, webhook, Slack, cron schedule, and fixed-rate interval
 triggers through the shared durable Rust occurrence boundary, including named
 event publication and deterministic multi-workflow fan-out.

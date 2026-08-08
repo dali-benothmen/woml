@@ -75,16 +75,17 @@ Restart recovery applies the same bounded `skip` or `run-once` policy as cron,
 and only `{ scheduledAt, triggeredAt }` enters workflow context.
 
 Named application events add a fan-out boundary above Trigger Ingress rather
-than a second run creator. The frontend lowers each exact event name and
-optional schema into Model v7. Event Publication v1 deterministically matches
+than a second run creator. The frontend lowers each exact event name, symbolic
+publisher-secret reference, and optional schema into Model v7. Event
+Publication v1 deterministically matches
 subscribers and sends one independently validated occurrence per matching
 trigger through the existing Rust authority. Its source identity hashes the
 publisher event ID together with workflow and trigger identity, allowing a
 crash or publisher retry to finish missing deliveries without duplicating
 already accepted runs. The Rust host serves the reserved authenticated HTTP
 endpoint, and `woml emit` is a secret-store-backed client for the same public
-contract. Control credentials remain outside compiled models, durable workflow
-context, fixtures, and diagnostics.
+contract. Resolved credential values remain outside compiled models, durable
+workflow context, fixtures, and diagnostics.
 
 The webhook listener is part of this WOML Rust path, not the legacy Cronflow
 webhook module. It validates transport, authentication, body size and JSON
@@ -105,9 +106,9 @@ Slack-trigger adapter remain separate protocol consumers. Matching app-token
 credentials share one Socket connection, while each consumer owns its own
 message semantics. The shared layer never acknowledges ordinary event
 envelopes automatically: approval interactions acknowledge in the approval
-adapter, and T7 trigger events will acknowledge only after durable Rust
-admission. T6 activates Slack trigger compilation to Model v7; event decoding
-and execution remain intentionally unavailable until T7.
+adapter, while trigger events acknowledge only after durable Rust admission.
+Slack event decoding, normalization, filtering, redelivery deduplication, and
+execution are active in the T13 Production Triggers profile.
 
 `woml run` is the long-lived activation lifecycle. The Bun CLI preflights the
 definitions and symbolic secrets, then starts the Rust listener through N-API

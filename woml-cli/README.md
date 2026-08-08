@@ -44,8 +44,19 @@ The generated example omits `Idempotency-Key`, so every call creates a fresh
 occurrence. Add that header when a caller needs safe delivery retries; repeating
 the same key and payload returns the original run instead of executing twice.
 
-Webhook is the first supported Production Trigger. Deployment and security
-guidance is in [WOML webhook deployment](../docs/woml-webhook-deployment.md).
+Webhook, Slack, schedule, interval, and named event are supported Production
+Triggers. Activation, deployment, recovery, security, and troubleshooting are
+covered in [Operating WOML Production Triggers](../docs/woml-production-triggers.md).
+
+The release examples are:
+
+```bash
+woml run examples/webhookWorkflow.woml
+woml run examples/slackTriggerWorkflow.woml
+woml run examples/scheduleWorkflow.woml
+woml run examples/intervalWorkflow.woml
+woml run examples/events
+```
 
 ## Execute once
 
@@ -115,7 +126,7 @@ again.
 cd woml-cli
 bun install
 bun run build
-bun run test:ri7
+bun run test:t13
 ```
 
 The RI7 gate builds the distributable CLI/native core and verifies the

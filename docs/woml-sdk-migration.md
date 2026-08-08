@@ -58,12 +58,17 @@ replace positional or “last result” access with the producing step's path:
    `attempt.idempotencyKey` for external APIs that support duplicate handling.
 7. Run the workflow with an explicit state path and test the printed recovery
    command before deploying it.
+8. Replace SDK webhook/schedule/provider registration with the corresponding
+   WOML trigger tag. Keep credentials as `{{secrets.NAME}}` references and
+   configure their values through `woml secrets set NAME`.
 
 ## Current parity boundary
 
 Sequential scripts, branch, parallel, Human Approval, Slack approval
-notifications, secrets, durable retry, and production webhooks are available
-through `woml run`. Schedule, interval, event, and Slack triggers, general
-HTTP/database services, lifecycle controls, and the hosted production runtime
-remain roadmap items. Keep an SDK workflow in place when it depends on one of
-those unavailable features.
+notifications, secrets, durable retry, and manual, webhook, Slack, schedule,
+interval, and named-event triggers are available through `woml run`.
+
+General outbound HTTP/database/messaging services, the module system, lifecycle
+controls, and the hosted production runtime remain roadmap items. Keep an SDK
+workflow in place when it depends on those unavailable capabilities. The SDK
+is not retired merely because Production Triggers are complete.

@@ -60,10 +60,10 @@ includes conditional branches and bounded parallel groups:
 | Workflow `version` | Frozen | Executable as user-defined workflow metadata |
 | Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
 | Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
-| Multiple triggers, webhook, and inline payload schema | Frozen and hardened through Production Triggers T0–T5 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
-| Slack trigger | Frozen and hardened through Production Triggers T6–T9 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
-| Schedule and interval triggers | Frozen and activated through Production Triggers T8–T10 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
-| Event trigger | Executable in Production Triggers T12 | Authenticated publication fans out durably to every exact-name subscriber |
+| Multiple triggers, webhook, and inline payload schema | Completed in Production Triggers T13 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
+| Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
+| Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
+| Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
 | Config and lifecycle | Designed | Unavailable until their activation phases |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |

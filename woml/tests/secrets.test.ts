@@ -83,7 +83,7 @@ describe('WOML secret references', () => {
     }
   });
 
-  test('allows references only in reviewed Slack and webhook credential sinks', () => {
+  test('allows references only in reviewed Slack, webhook, and event credential sinks', () => {
     const valid = workflow(`<approval id="review">
       <notify>
         <slack channels="#approvals" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />
@@ -93,6 +93,19 @@ describe('WOML secret references', () => {
     </approval>`);
     const compiled = compileWoml(parseWoml(valid, { file: 'workflow.woml' }));
     expect(compiled.schemaVersion).toBe(5);
+
+    const eventSource = `<workflow id="event-secret-test">
+  <triggers><event id="message" name="message.received" secret="{{secrets.EVENT_TOKEN}}" /></triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+    const event = compileWoml(
+      parseWoml(eventSource, { file: 'event.woml' })
+    );
+    expect(event.triggers[0]?.config).toMatchObject({
+      fields: {
+        secret: { kind: 'secretReference', name: 'EVENT_TOKEN' },
+      },
+    });
 
     const unsupported = workflow(
       '<step id="a" name="{{secrets.SECRET_NAME}}"><script>return true;</script></step>'
