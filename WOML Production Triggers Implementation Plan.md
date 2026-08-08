@@ -1,9 +1,9 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0, T1, and T2 completed on 2026-08-08. The contracts are frozen, the
+Status: T0 through T3 completed on 2026-08-08. The contracts are frozen, the
 TypeScript frontend compiles multiple manual/webhook triggers to Model v7, and
-Rust owns atomic occurrence admission and run creation. HTTP execution begins
-in T3.
+Rust owns atomic occurrence admission, HTTP validation, durable run creation,
+and background DAG execution. The user-facing CLI journey begins in T4.
 
 ## 1. Product Outcome
 
@@ -767,6 +767,8 @@ concurrent identical submissions produce one run and one `run_started` event.
 
 ### T3 — Execute webhooks through Rust
 
+Status: completed.
+
 Changes:
 
 - Bind the HTTP listener in the WOML Rust runtime.
@@ -1147,5 +1149,6 @@ implementation began:
 
 The corresponding schemas, protocol document, reviewed fixtures, and
 conformance tests form the versioned gate for later phases. T1 compiles the
-reviewed webhook source to Model v7, and T2 now supplies the Rust-owned atomic
-occurrence/run/`run_started` boundary that T3 ingress will call.
+reviewed webhook source to Model v7, T2 supplies the Rust-owned atomic
+occurrence/run/`run_started` boundary, and T3 connects real HTTP requests to
+that authority and the existing durable DAG runtime.

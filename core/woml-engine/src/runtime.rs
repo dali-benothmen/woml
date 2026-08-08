@@ -473,6 +473,21 @@ pub async fn resume_workflow_durable_outcome(
   resume_workflow_durable_internal(database_path, run_id, options, true).await
 }
 
+/// Continues one run that was already atomically admitted by a production
+/// trigger. Unlike the one-shot CLI resume APIs, this does not run global crash
+/// recovery before dispatch: a long-lived trigger server may have other runs
+/// executing concurrently, and their active attempts must not be mistaken for
+/// leftovers from a dead process.
+pub async fn execute_admitted_trigger_run_durable(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let store = DurableEventStore::open(database_path)?;
+  let engine = DurableDagEngine::resume(store, run_id)?;
+  resume_with_engine(engine, run_id, options).await
+}
+
 async fn resume_workflow_durable_internal(
   database_path: PathBuf,
   run_id: &str,

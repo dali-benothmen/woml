@@ -59,6 +59,14 @@ changed-payload replay conflicts. If the process stops after commit but before
 dispatch, recovery resumes that existing run rather than creating another one.
 Contradictory occurrence, run, definition, or event history fails closed.
 
+The T3 webhook listener is part of this WOML Rust path, not the legacy Cronflow
+webhook module. It validates transport, authentication, body size and JSON
+Schema before admission, returns the durable run identity asynchronously, and
+dispatches only newly admitted runs. A duplicate returns the original run
+without executing it again. Server startup performs crash recovery once;
+individual requests never run global recovery while other attempts may be
+active.
+
 Progress and diagnostics cross a versioned native boundary and are printed to
 stderr; stdout stays reserved for the final JSON result. Secrets and executable
 capabilities never enter context, events, progress messages, or durable output.

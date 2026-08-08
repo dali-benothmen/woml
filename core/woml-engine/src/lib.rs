@@ -16,6 +16,7 @@ pub mod projection;
 pub mod protocol;
 pub mod runtime;
 pub mod store;
+pub mod webhook;
 
 pub use durable::{
   ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,
@@ -68,16 +69,20 @@ pub use projection::{
   RetryScheduleProjection, RunFailure, RunProjection, RunStatus, WorkflowContext,
 };
 pub use runtime::{
-  execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
-  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
-  resume_workflow_durable_outcome, settle_approval_timeout_durable, BranchFailureSite, EngineClock,
-  ExecutionProgress, ExecutionProgressReporter, FailedApprovalDetails, FailedNotificationDetails,
-  FailedParallelDetails, FixedEngineClock, RuntimeExecutionError, RuntimeExecutionOptions,
-  SystemEngineClock, WaitingWorkflowApproval, WorkflowExecutionResult, WorkflowRuntimeOutcome,
-  EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION, RUNTIME_OUTCOME_CONTRACT,
-  RUNTIME_OUTCOME_VERSION,
+  execute_admitted_trigger_run_durable, execute_workflow, execute_workflow_durable,
+  execute_workflow_durable_outcome, recover_durable_runs, resolve_human_approval_durable,
+  resume_workflow_durable, resume_workflow_durable_outcome, settle_approval_timeout_durable,
+  BranchFailureSite, EngineClock, ExecutionProgress, ExecutionProgressReporter,
+  FailedApprovalDetails, FailedNotificationDetails, FailedParallelDetails, FixedEngineClock,
+  RuntimeExecutionError, RuntimeExecutionOptions, SystemEngineClock, WaitingWorkflowApproval,
+  WorkflowExecutionResult, WorkflowRuntimeOutcome, EXECUTION_PROGRESS_CONTRACT,
+  EXECUTION_PROGRESS_VERSION, RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
 };
 pub use store::{EventStoreError, InMemoryEventStore};
+pub use webhook::{
+  WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig,
+  WEBHOOK_MAX_BODY_BYTES,
+};
 
 pub const COMPILED_MODEL_SCHEMA_VERSION_V1: u32 = 1;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V2: u32 = 2;

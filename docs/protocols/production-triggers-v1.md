@@ -1,8 +1,8 @@
 # WOML Production Trigger Contracts v1
 
-Status: frozen in T0. Webhook frontend lowering is implemented in T1. The Rust
-occurrence and run-start authority is implemented in T2; HTTP ingress begins in
-T3.
+Status: frozen in T0. Webhook frontend lowering is implemented in T1, the Rust
+occurrence authority in T2, and the Rust HTTP ingress plus background durable
+execution path in T3. The user-facing `woml serve` journey begins in T4.
 
 This document pins the boundary shared by the TypeScript WOML frontend, Rust
 core, CLI, HTTP listener, provider adapters, and durable store. The normative
@@ -149,6 +149,28 @@ Webhook responses are asynchronous; acceptance does not mean workflow success.
 
 Rejected requests create no occurrence, run, or run event. Error bodies may
 contain bounded JSON Pointer issues but never raw payloads or credentials.
+
+### T3 HTTP implementation
+
+The WOML Rust runtime binds the listener directly; it does not reuse the legacy
+Cronflow webhook server. Registration resolves symbolic bearer secrets before
+binding, rejects inactive trigger kinds and route conflicts, compiles inline
+schemas once as Draft 2020-12 validators, and disables external schema
+retrieval.
+
+For each request, Rust resolves the exact static route and POST method, compares
+bearer credentials through fixed-length SHA-256 digests in constant time,
+requires `application/json`, enforces the 1 MiB limit while streaming, parses a
+top-level object, and applies the compiled schema. Only then does it call the T2
+atomic occurrence authority.
+
+A new or duplicate occurrence returns the frozen `202` response immediately.
+Only a new occurrence is dispatched, and it continues the already-created run
+through the same durable DAG runtime as manual execution. Startup performs
+crash recovery once and dispatches committed occurrences that contain only
+their valid `run_started` event. Per-request dispatch deliberately does not run
+global recovery, because another webhook run may be actively executing in the
+same long-lived process.
 
 ## Slack adapter boundary
 
