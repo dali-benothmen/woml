@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/schedule-progress/v1",
+  "title": "WOML Schedule Progress v1",
+  "description": "Safe operational diagnostics emitted by the durable Rust scheduler.",
+  "oneOf": [
+    { "$ref": "#/$defs/nextDue" },
+    { "$ref": "#/$defs/schedulerError" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": [
+        "contract", "contractVersion", "type", "workflowId", "triggerId",
+        "occurredAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.schedule-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "type": "string" },
+        "workflowId": { "type": "string", "minLength": 1 },
+        "triggerId": { "type": "string", "minLength": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "nextDue": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contract", "contractVersion", "type", "workflowId", "triggerId",
+            "timezone", "nextScheduledAt", "reason", "occurredAt"
+          ],
+          "properties": {
+            "contract": { "const": "woml.schedule-progress" },
+            "contractVersion": { "const": 1 },
+            "type": { "const": "next_due" },
+            "workflowId": { "type": "string", "minLength": 1 },
+            "triggerId": { "type": "string", "minLength": 1 },
+            "timezone": { "type": "string", "minLength": 1 },
+            "nextScheduledAt": { "type": "string", "format": "date-time" },
+            "reason": {
+              "enum": [
+                "initialized", "restarted", "advanced", "misfire_skipped",
+                "misfire_run_once"
+              ]
+            },
+            "occurredAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "schedulerError": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contract", "contractVersion", "type", "workflowId", "triggerId",
+            "code", "message", "occurredAt"
+          ],
+          "properties": {
+            "contract": { "const": "woml.schedule-progress" },
+            "contractVersion": { "const": 1 },
+            "type": { "const": "scheduler_error" },
+            "workflowId": { "type": "string", "minLength": 1 },
+            "triggerId": { "type": "string", "minLength": 1 },
+            "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" },
+            "message": { "type": "string", "minLength": 1 },
+            "occurredAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,11 +1,12 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 through T5 completed on 2026-08-08. The contracts are frozen, the
-TypeScript frontend compiles multiple manual/webhook triggers to Model v7, and
-Rust owns atomic occurrence admission, HTTP validation, durable run creation,
-background DAG execution, and Trigger Progress v1. `woml run` now activates a
-workflow and stays alive, `woml test` owns one-shot execution, and `woml runs
-get` inspects durable results. There is no separate public `woml serve` mode.
+Status: T0 through T9 completed on 2026-08-08. Manual, webhook, Slack, and cron
+schedule triggers are active. Rust owns atomic occurrence admission, HTTP
+validation, durable run creation, background DAG execution, the injected
+schedule clock, SQLite cursors, bounded misfire recovery, and process-crash
+recovery. `woml run` stays alive, while `woml test` owns one-shot execution and
+`woml runs get` inspects durable results. There is no separate public `woml
+serve` mode.
 
 ## 1. Product Outcome
 
@@ -1021,7 +1022,7 @@ Implementation notes:
 - `examples/slackTriggerWorkflow.woml` is the runnable one-channel product
   example and compiles through the reviewed Model v7 contract. The separate
   two-channel fixture preserves broader contract coverage. `bun run test:t7`
-  is the T7 gate and `test:release` now points to it.
+  remains the historical T7 gate.
 
 ### T8 — Compile schedules and freeze time semantics
 
@@ -1057,15 +1058,13 @@ Implementation notes:
   non-hour offsets, nonexistent DST times, and both UTC instants of a repeated
   wall time.
 - Misfire behavior, occurrence identity, and the exact two-field
-  `context.trigger` contract are recorded now even though Rust does not execute
-  the clock until T9.
-- `woml run` identifies a valid schedule and fails explicitly with
-  `WOML_TRIGGER_UNSUPPORTED`; it never claims automation readiness before the
-  durable scheduler exists.
+  `context.trigger` contract were frozen before Rust began driving the clock.
 - `examples/scheduleWorkflow.woml` is the reviewed Model v7 product fixture.
-  `bun run test:t8` is the T8 gate and `test:release` points to it.
+  `bun run test:t8` remains the historical T8 gate.
 
 ### T9 — Execute and publish durable schedules
+
+Status: completed.
 
 Changes:
 
@@ -1084,6 +1083,28 @@ Gate:
 
 Fake-clock, restart, DST, simultaneous-due, and clean-package tests pass; no
 wall-clock timing assertion is used as the correctness proof.
+
+Implementation notes:
+
+- Durable store schema v5 adds one mutable cursor per workflow/trigger while
+  keeping definitions, occurrences, runs, and events immutable.
+- A due occurrence, run binding, `run_started` event, and cursor advance commit
+  in one immediate SQLite transaction through the T2 admission authority.
+- Rust implements WOML Cron v1 against the same frozen occurrence table as the
+  TypeScript frontend, including POSIX day matching, leap dates, non-hour
+  offsets, and both DST gap/repeat rules.
+- The scheduler clock is injected. Fake-clock tests prove normal firing,
+  simultaneous due schedules, `skip`, bounded `run-once`, and restart behavior
+  without sleeping until real cron instants.
+- Schedule-only and Slack-only runtimes do not bind an unnecessary HTTP port.
+  Webhook definitions still bind the configured listener.
+- Schedule Progress v1 is a new strict diagnostics contract; Trigger Progress
+  v1 remains unchanged and takes over after occurrence admission.
+- `context.trigger` for a schedule is exactly `{ scheduledAt, triggeredAt }` in
+  RFC 3339 UTC. Occurrence identity is stable from workflow ID, trigger ID, and
+  planned UTC instant.
+- `woml run examples/scheduleWorkflow.woml` remains active and reports its next
+  due instant. `bun run test:t9` is the T9 gate and `test:release` points to it.
 
 ### T10 — Execute and publish durable intervals
 

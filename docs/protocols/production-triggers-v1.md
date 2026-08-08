@@ -207,11 +207,11 @@ Slack fields never enter `context.trigger`. Slack approval actions and trigger
 events are routed as separate protocol messages, even when their adapters
 share one Socket connection.
 
-## Schedule frontend boundary
+## Durable schedule boundary
 
-T8 activates schedule validation and Model v7 lowering without activating a
-clock. The versioned `woml.schedule-semantics` v1 artifact is the conformance
-boundary that the T9 Rust scheduler must satisfy.
+The versioned `woml.schedule-semantics` v1 artifact is shared by the TypeScript
+frontend and the T9 Rust scheduler. Both implementations pass the same
+occurrence table; Bun never decides that a schedule is due.
 
 WOML Cron v1 contains exactly five numeric fields separated by single ASCII
 spaces, in this order: minute, hour, day-of-month, month, and day-of-week. It
@@ -235,9 +235,19 @@ planned instant. A schedule occurrence is identified by workflow, trigger,
 and planned UTC instant, and its public trigger context is exactly
 `{ scheduledAt, triggeredAt }` with RFC 3339 UTC timestamps.
 
-`woml run` rejects schedule activation explicitly during T8. Rust owns the
-durable cursor, clock, occurrence claim, and execution beginning in T9; the Bun
-frontend never decides that a schedule is due.
+Rust owns the injected clock, durable cursor, recovery policy, occurrence
+claim, and run creation. The cursor advance, immutable trigger occurrence,
+run binding, and `run_started` event commit in one SQLite transaction. A crash
+therefore exposes either the previous cursor with no occurrence or the
+advanced cursor with a complete admitted run.
+
+On first registration, the cursor begins at the first matching instant at or
+after the current whole minute. On restart, `skip` advances past elapsed
+instants without runs, while `run-once` admits at most the latest elapsed
+instant. During an active process, one normally due instant runs even if the
+clock wakes slightly late; multiple elapsed instants use the same bounded
+misfire policy. Different schedule registrations are independent and may fire
+concurrently.
 
 ## Progress boundary
 
@@ -246,6 +256,12 @@ distinguishes readiness, occurrence acceptance (including duplicate), run
 start, terminal run status, and safe rejection summaries. Progress never
 changes the final workflow result contract and never contains resolved secrets
 or rejected payload bodies.
+
+Schedule Progress v1 is separate from Trigger Progress v1. Its `next_due`
+message exposes the next UTC instant, configured timezone, and cursor reason.
+Its `scheduler_error` message contains only a safe code and message. Once an
+occurrence is admitted, existing Trigger Progress v1 messages describe its run
+lifecycle.
 
 ### T4 CLI implementation
 

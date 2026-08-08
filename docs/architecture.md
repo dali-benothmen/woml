@@ -51,13 +51,20 @@ Rust validates the compiled trigger and atomically commits three related facts:
 the immutable occurrence, its run-to-definition binding, and the run's first
 `run_started` Event v7.
 
-SQLite store schema v4 enforces one run per occurrence and uniqueness by the
+SQLite store schema v5 preserves the v4 one-run-per-occurrence guarantees and
+adds durable schedule cursors. Occurrences remain unique by the
 workflow, trigger, and hashed source identity. The raw source identity is never
 persisted. Payload hashes use RFC 8785 canonical JSON, so reordered object keys
 do not create a second run. A same-payload replay returns the original run; a
 changed-payload replay conflicts. If the process stops after commit but before
 dispatch, recovery resumes that existing run rather than creating another one.
 Contradictory occurrence, run, definition, or event history fails closed.
+
+For cron schedules, the mutable cursor is the scheduler's durable coordination
+record. Rust commits its advance in the same immediate transaction as the
+immutable occurrence, run binding, and first event. Schedule-only and provider-
+only runtimes do not bind an HTTP socket; webhook workflows bind the configured
+listener.
 
 The webhook listener is part of this WOML Rust path, not the legacy Cronflow
 webhook module. It validates transport, authentication, body size and JSON

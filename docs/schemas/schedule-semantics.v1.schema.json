@@ -3,7 +3,7 @@
   "$id": "https://cronflow.dev/schemas/schedule-semantics/v1",
   "title": "WOML Schedule Semantics v1",
   "description": "Deterministic conformance table for WOML Cron v1, IANA timezone, DST, misfire, occurrence identity, and context behavior.",
-  "x-status": "frontend-active-runtime-staged",
+  "x-status": "frontend-and-rust-runtime-active",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -49,7 +49,7 @@
     "contextTrigger": { "const": ["scheduledAt", "triggeredAt"] },
     "occurrenceCases": {
       "type": "array",
-      "minItems": 8,
+      "minItems": 10,
       "items": {
         "type": "object",
         "additionalProperties": false,

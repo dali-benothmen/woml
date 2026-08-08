@@ -9,6 +9,7 @@ import {
   compiledDefinitionHash,
   executeWorkflowWithRustDurable,
   executeWorkflowWithRust,
+  parseScheduleProgress,
   parseTriggerProgress,
   recoverDurableRuns,
   RustWorkflowExecutionError,
@@ -71,6 +72,46 @@ describe('Trigger Progress v1 decoding', () => {
         })
       )
     ).toThrow('invalid trigger progress');
+  });
+});
+
+describe('Schedule Progress v1 decoding', () => {
+  test('accepts next-due diagnostics without widening Trigger Progress v1', () => {
+    const progress = parseScheduleProgress(
+      JSON.stringify({
+        contract: 'woml.schedule-progress',
+        contractVersion: 1,
+        type: 'next_due',
+        workflowId: 'daily-report',
+        triggerId: 'dailyReport',
+        timezone: 'Europe/Berlin',
+        nextScheduledAt: '2026-08-09T07:00:00.000Z',
+        reason: 'initialized',
+        occurredAt: '2026-08-08T12:00:00.000Z',
+      })
+    );
+    expect(progress.type).toBe('next_due');
+    expect(() => parseTriggerProgress(JSON.stringify(progress))).toThrow(
+      'invalid trigger progress'
+    );
+  });
+
+  test('rejects unknown schedule progress fields', () => {
+    expect(() =>
+      parseScheduleProgress(
+        JSON.stringify({
+          contract: 'woml.schedule-progress',
+          contractVersion: 1,
+          type: 'scheduler_error',
+          workflowId: 'daily-report',
+          triggerId: 'dailyReport',
+          code: 'WOML_SCHEDULE_RUNTIME_FAILED',
+          message: 'safe summary',
+          occurredAt: '2026-08-08T12:00:00.000Z',
+          payload: { secret: true },
+        })
+      )
+    ).toThrow('invalid schedule progress');
   });
 });
 

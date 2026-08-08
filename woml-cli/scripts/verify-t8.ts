@@ -42,7 +42,7 @@ if (
   semantics.contractVersion !== 1 ||
   semantics.dialect !== 'woml-cron-v1' ||
   !Array.isArray(semantics.occurrenceCases) ||
-  semantics.occurrenceCases.length < 8
+  semantics.occurrenceCases.length < 10
 ) {
   throw new Error(
     'T8 verification failed: Schedule Semantics v1 is missing required conformance cases.'

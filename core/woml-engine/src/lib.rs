@@ -15,6 +15,7 @@ pub mod notification_runtime;
 pub mod projection;
 pub mod protocol;
 pub mod runtime;
+pub mod schedule;
 pub mod store;
 pub mod webhook;
 
@@ -24,8 +25,9 @@ pub use durable::{
   DurableEventStore, DurableStoreError, IssuedApprovalToken, NotificationDeliveryWork,
   NotificationDispatchReport, NotificationProviderAdapter, NotificationProviderDeliveryResult,
   NotificationProviderUpdateResult, NotificationUpdateWork, RecoveryReport, RunDefinitionBinding,
-  StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest,
-  TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
+  ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, StepFailureCommit,
+  StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest, TriggerOccurrence,
+  TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
 };
 pub use engine::{step_effect_idempotency_key, EngineError, InMemoryDagEngine};
 pub use event::{
@@ -77,6 +79,11 @@ pub use runtime::{
   RuntimeExecutionError, RuntimeExecutionOptions, SystemEngineClock, WaitingWorkflowApproval,
   WorkflowExecutionResult, WorkflowRuntimeOutcome, EXECUTION_PROGRESS_CONTRACT,
   EXECUTION_PROGRESS_VERSION, RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
+};
+pub use schedule::{
+  ScheduleClock, ScheduleError, ScheduleMisfirePolicy, ScheduleProgress, ScheduleProgressReason,
+  ScheduleProgressReporter, SystemScheduleClock, WomlSchedule, SCHEDULE_PROGRESS_CONTRACT,
+  SCHEDULE_PROGRESS_CONTRACT_VERSION,
 };
 pub use store::{EventStoreError, InMemoryEventStore};
 pub use webhook::{

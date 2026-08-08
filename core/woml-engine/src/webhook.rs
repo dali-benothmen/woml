@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use actix_web::http::{header, Method, StatusCode};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use futures_util::StreamExt;
 use jsonschema::error::ValidationErrorKind;
 use jsonschema::Validator;
@@ -18,9 +18,14 @@ use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::model::ValueExpression;
+use crate::schedule::{
+  ScheduleMisfirePolicy, ScheduleProgress, ScheduleProgressReason, WomlSchedule,
+  SCHEDULE_PROGRESS_CONTRACT, SCHEDULE_PROGRESS_CONTRACT_VERSION,
+};
 use crate::{
   execute_admitted_trigger_run_durable, CompiledWorkflowDefinition, DurableEventStore,
-  DurableStoreError, ModelValidationError, RuntimeExecutionOptions, TriggerAdmissionRequest,
+  DurableStoreError, ModelValidationError, RuntimeExecutionOptions, ScheduleCursorRegistration,
+  TriggerAdmissionRequest,
 };
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -128,7 +133,8 @@ pub type ExternalTriggerAdmissionReceiver =
 
 pub struct WomlWebhookServer {
   local_address: SocketAddr,
-  handle: actix_web::dev::ServerHandle,
+  handle: Option<actix_web::dev::ServerHandle>,
+  schedule_tasks: Vec<actix_web::rt::task::JoinHandle<()>>,
 }
 
 impl WomlWebhookServer {
@@ -141,19 +147,33 @@ impl WomlWebhookServer {
     external_ingress: Option<ExternalTriggerAdmissionReceiver>,
   ) -> Result<Self, WebhookRuntimeError> {
     let (state, recovery_runs, startup_manual_runs) = prepare_state(config)?;
-    let listener = TcpListener::bind(state.bind_address)?;
-    let local_address = listener.local_addr()?;
+    let listener = if state.routes.is_empty() {
+      None
+    } else {
+      Some(TcpListener::bind(state.bind_address)?)
+    };
+    let local_address = listener
+      .as_ref()
+      .map(TcpListener::local_addr)
+      .transpose()?
+      .unwrap_or_else(|| "127.0.0.1:0".parse().expect("valid internal address"));
     let app_state = web::Data::new(state);
     let recovery_state = app_state.clone();
-    let server = HttpServer::new(move || {
-      App::new()
-        .app_data(app_state.clone())
-        .default_service(web::to(handle_webhook))
-    })
-    .listen(listener)?
-    .run();
-    let handle = server.handle();
-    actix_web::rt::spawn(server);
+    let (schedule_tasks, recovered_schedule_runs) = initialize_schedules(recovery_state.clone())?;
+    let handle = if let Some(listener) = listener {
+      let server = HttpServer::new(move || {
+        App::new()
+          .app_data(app_state.clone())
+          .default_service(web::to(handle_webhook))
+      })
+      .listen(listener)?
+      .run();
+      let handle = server.handle();
+      actix_web::rt::spawn(server);
+      Some(handle)
+    } else {
+      None
+    };
 
     if let Some(receiver) = external_ingress {
       let external_state = recovery_state.clone();
@@ -171,6 +191,13 @@ impl WomlWebhookServer {
       recovery_state.report_run_started(&identity);
       dispatch_run(recovery_state.get_ref(), identity);
     }
+    for (identity, duplicate) in recovered_schedule_runs {
+      recovery_state.report_accepted(&identity, duplicate);
+      if !duplicate {
+        recovery_state.report_run_started(&identity);
+        dispatch_run(recovery_state.get_ref(), identity);
+      }
+    }
     for startup in startup_manual_runs {
       admit_startup_manual(recovery_state.get_ref(), startup);
     }
@@ -178,6 +205,7 @@ impl WomlWebhookServer {
     Ok(Self {
       local_address,
       handle,
+      schedule_tasks,
     })
   }
 
@@ -186,7 +214,12 @@ impl WomlWebhookServer {
   }
 
   pub async fn stop(self) {
-    self.handle.stop(true).await;
+    for task in self.schedule_tasks {
+      task.abort();
+    }
+    if let Some(handle) = self.handle {
+      handle.stop(true).await;
+    }
   }
 }
 
@@ -215,6 +248,16 @@ struct WebhookRuntimeState {
   registration_count: usize,
   execution: RuntimeExecutionOptions,
   progress_reporter: Option<TriggerProgressReporter>,
+  schedules: Vec<ScheduleRuntimeRegistration>,
+}
+
+#[derive(Clone)]
+struct ScheduleRuntimeRegistration {
+  workflow_id: String,
+  definition_hash: String,
+  trigger_id: String,
+  schedule: WomlSchedule,
+  on_missed: ScheduleMisfirePolicy,
 }
 
 struct WebhookRoute {
@@ -344,6 +387,7 @@ fn prepare_state(
   let mut routes = HashMap::new();
   let mut definitions = Vec::new();
   let mut startup_manual_runs = Vec::new();
+  let mut schedules = Vec::new();
   let mut registration_count = 0;
   for registration in config.registrations {
     registration.workflow.validate_for_durable_execution()?;
@@ -356,11 +400,11 @@ fn prepare_state(
     if registration.workflow.triggers.iter().any(|trigger| {
       !matches!(
         trigger.handler.as_str(),
-        "trigger.manual" | "trigger.webhook" | "trigger.slack"
+        "trigger.manual" | "trigger.webhook" | "trigger.slack" | "trigger.schedule"
       )
     }) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} contains a production trigger that is not active in T7",
+        "workflow {:?} contains a production trigger that is not active in T9",
         registration.workflow.workflow_id
       )));
     }
@@ -390,18 +434,20 @@ fn prepare_state(
     }
 
     for trigger in &registration.workflow.triggers {
-      if trigger.handler != "trigger.webhook" {
-        continue;
+      if trigger.handler == "trigger.schedule" {
+        schedules.push(compile_schedule(&registration, trigger)?);
       }
-      let route = compile_route(&registration, trigger)?;
-      let path = webhook_path(&trigger.config).ok_or_else(|| {
-        WebhookRuntimeError::InvalidRegistration(format!(
-          "trigger {:?} has no valid static path",
-          trigger.id
-        ))
-      })?;
-      if routes.insert(path.to_string(), Arc::new(route)).is_some() {
-        return Err(WebhookRuntimeError::RouteConflict(path.to_string()));
+      if trigger.handler == "trigger.webhook" {
+        let route = compile_route(&registration, trigger)?;
+        let path = webhook_path(&trigger.config).ok_or_else(|| {
+          WebhookRuntimeError::InvalidRegistration(format!(
+            "trigger {:?} has no valid static path",
+            trigger.id
+          ))
+        })?;
+        if routes.insert(path.to_string(), Arc::new(route)).is_some() {
+          return Err(WebhookRuntimeError::RouteConflict(path.to_string()));
+        }
       }
     }
     definitions.push((registration.workflow, registration.definition_hash));
@@ -443,6 +489,7 @@ fn prepare_state(
       registration_count,
       execution: config.execution,
       progress_reporter: config.progress_reporter,
+      schedules,
     },
     recovery_runs,
     startup_manual_runs,
@@ -548,6 +595,345 @@ fn literal_string(expression: Option<&ValueExpression>) -> Option<&str> {
 
 fn webhook_path(config: &ValueExpression) -> Option<&str> {
   literal_string(object_fields(config)?.get("path"))
+}
+
+fn compile_schedule(
+  registration: &WebhookDefinitionRegistration,
+  trigger: &crate::model::CompiledTrigger,
+) -> Result<ScheduleRuntimeRegistration, WebhookRuntimeError> {
+  let fields = object_fields(&trigger.config).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "schedule trigger {:?} config must be an object",
+      trigger.id
+    ))
+  })?;
+  let cron = literal_string(fields.get("cron")).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "schedule trigger {:?} is missing cron",
+      trigger.id
+    ))
+  })?;
+  let timezone = literal_string(fields.get("timezone")).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "schedule trigger {:?} is missing timezone",
+      trigger.id
+    ))
+  })?;
+  let on_missed = literal_string(fields.get("onMissed")).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "schedule trigger {:?} is missing onMissed",
+      trigger.id
+    ))
+  })?;
+  let schedule = WomlSchedule::parse(cron, timezone).map_err(|error| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "schedule trigger {:?} is invalid: {error}",
+      trigger.id
+    ))
+  })?;
+  let on_missed = ScheduleMisfirePolicy::parse(on_missed).map_err(|error| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "schedule trigger {:?} is invalid: {error}",
+      trigger.id
+    ))
+  })?;
+  Ok(ScheduleRuntimeRegistration {
+    workflow_id: registration.workflow.workflow_id.clone(),
+    definition_hash: registration.definition_hash.clone(),
+    trigger_id: trigger.id.clone(),
+    schedule,
+    on_missed,
+  })
+}
+
+fn initialize_schedules(
+  state: web::Data<WebhookRuntimeState>,
+) -> Result<
+  (
+    Vec<actix_web::rt::task::JoinHandle<()>>,
+    Vec<(RunProgressIdentity, bool)>,
+  ),
+  WebhookRuntimeError,
+> {
+  let now = state.execution.schedule_clock.now();
+  let mut recovered_runs = Vec::new();
+  let mut prepared = Vec::new();
+  for registration in state.schedules.clone() {
+    let initial_next = registration
+      .schedule
+      .next_at_or_after(now)
+      .map_err(|error| {
+        WebhookRuntimeError::InvalidRegistration(format!(
+          "schedule trigger {:?} could not compute its first occurrence: {error}",
+          registration.trigger_id
+        ))
+      })?;
+    let mut store = DurableEventStore::open(&state.database_path)?;
+    let registered = store.register_schedule_cursor(
+      &ScheduleCursorRegistration {
+        workflow_id: registration.workflow_id.clone(),
+        trigger_id: registration.trigger_id.clone(),
+        definition_hash: registration.definition_hash.clone(),
+        cron: registration.schedule.cron().to_string(),
+        timezone: registration.schedule.timezone().to_string(),
+        on_missed: registration.on_missed.as_str().to_string(),
+      },
+      initial_next,
+      now,
+    )?;
+    let mut cursor = registered.cursor;
+    let mut reason = if registered.initialized {
+      ScheduleProgressReason::Initialized
+    } else {
+      ScheduleProgressReason::Restarted
+    };
+
+    if !registered.initialized && cursor.next_scheduled_at < now {
+      let next = registration.schedule.next_after(now).map_err(|error| {
+        WebhookRuntimeError::InvalidRegistration(format!(
+          "schedule trigger {:?} could not recover its cursor: {error}",
+          registration.trigger_id
+        ))
+      })?;
+      match registration.on_missed {
+        ScheduleMisfirePolicy::Skip => {
+          cursor = store.advance_schedule_cursor(
+            &registration.workflow_id,
+            &registration.trigger_id,
+            cursor.next_scheduled_at,
+            next,
+            now,
+          )?;
+          reason = ScheduleProgressReason::MisfireSkipped;
+        }
+        ScheduleMisfirePolicy::RunOnce => {
+          let planned = registration
+            .schedule
+            .latest_at_or_before(now)
+            .map_err(|error| {
+              WebhookRuntimeError::InvalidRegistration(format!(
+                "schedule trigger {:?} could not recover its latest occurrence: {error}",
+                registration.trigger_id
+              ))
+            })?;
+          let (outcome, advanced) = store.claim_schedule_occurrence(
+            cursor.next_scheduled_at,
+            next,
+            schedule_admission(&registration, planned, now),
+          )?;
+          cursor = advanced;
+          recovered_runs.push((
+            schedule_identity(&registration, &outcome),
+            outcome.duplicate,
+          ));
+          reason = ScheduleProgressReason::MisfireRunOnce;
+        }
+      }
+    }
+    report_schedule_next_due(state.get_ref(), &registration, &cursor, reason, now);
+    prepared.push(registration);
+  }
+
+  let tasks = prepared
+    .into_iter()
+    .map(|registration| {
+      let task_state = state.clone();
+      actix_web::rt::spawn(async move {
+        run_schedule_loop(task_state, registration).await;
+      })
+    })
+    .collect();
+  Ok((tasks, recovered_runs))
+}
+
+async fn run_schedule_loop(
+  state: web::Data<WebhookRuntimeState>,
+  registration: ScheduleRuntimeRegistration,
+) {
+  loop {
+    let cursor = match DurableEventStore::open(&state.database_path)
+      .and_then(|store| store.schedule_cursor(&registration.workflow_id, &registration.trigger_id))
+    {
+      Ok(cursor) => cursor,
+      Err(error) => {
+        report_schedule_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+    state
+      .execution
+      .schedule_clock
+      .sleep_until(cursor.next_scheduled_at)
+      .await;
+    let now = state.execution.schedule_clock.now();
+    if now < cursor.next_scheduled_at {
+      continue;
+    }
+
+    let following = match registration.schedule.next_after(cursor.next_scheduled_at) {
+      Ok(value) => value,
+      Err(error) => {
+        report_schedule_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+    let multiple_elapsed = following <= now;
+    let mut store = match DurableEventStore::open(&state.database_path) {
+      Ok(store) => store,
+      Err(error) => {
+        report_schedule_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+
+    if multiple_elapsed && registration.on_missed == ScheduleMisfirePolicy::Skip {
+      let next = match registration.schedule.next_after(now) {
+        Ok(value) => value,
+        Err(error) => {
+          report_schedule_error(state.get_ref(), &registration, &error.to_string());
+          return;
+        }
+      };
+      match store.advance_schedule_cursor(
+        &registration.workflow_id,
+        &registration.trigger_id,
+        cursor.next_scheduled_at,
+        next,
+        now,
+      ) {
+        Ok(advanced) => report_schedule_next_due(
+          state.get_ref(),
+          &registration,
+          &advanced,
+          ScheduleProgressReason::MisfireSkipped,
+          now,
+        ),
+        Err(DurableStoreError::ScheduleCursorConflict) => continue,
+        Err(error) => {
+          report_schedule_error(state.get_ref(), &registration, &error.to_string());
+          return;
+        }
+      }
+      continue;
+    }
+
+    let (planned, next, reason) = if multiple_elapsed {
+      let planned = match registration.schedule.latest_at_or_before(now) {
+        Ok(value) => value,
+        Err(error) => {
+          report_schedule_error(state.get_ref(), &registration, &error.to_string());
+          return;
+        }
+      };
+      let next = match registration.schedule.next_after(now) {
+        Ok(value) => value,
+        Err(error) => {
+          report_schedule_error(state.get_ref(), &registration, &error.to_string());
+          return;
+        }
+      };
+      (planned, next, ScheduleProgressReason::MisfireRunOnce)
+    } else {
+      (
+        cursor.next_scheduled_at,
+        following,
+        ScheduleProgressReason::Advanced,
+      )
+    };
+    let (outcome, advanced) = match store.claim_schedule_occurrence(
+      cursor.next_scheduled_at,
+      next,
+      schedule_admission(&registration, planned, now),
+    ) {
+      Ok(value) => value,
+      Err(DurableStoreError::ScheduleCursorConflict) => continue,
+      Err(error) => {
+        report_schedule_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+    let identity = schedule_identity(&registration, &outcome);
+    state.report_accepted(&identity, outcome.duplicate);
+    if !outcome.duplicate {
+      state.report_run_started(&identity);
+      dispatch_run(state.get_ref(), identity);
+    }
+    report_schedule_next_due(state.get_ref(), &registration, &advanced, reason, now);
+  }
+}
+
+fn schedule_admission(
+  registration: &ScheduleRuntimeRegistration,
+  planned: chrono::DateTime<Utc>,
+  triggered_at: chrono::DateTime<Utc>,
+) -> TriggerAdmissionRequest {
+  let planned_text = planned.to_rfc3339_opts(SecondsFormat::Millis, true);
+  let triggered_text = triggered_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+  TriggerAdmissionRequest {
+    workflow_id: registration.workflow_id.clone(),
+    definition_hash: registration.definition_hash.clone(),
+    trigger_id: registration.trigger_id.clone(),
+    trigger_handler: "trigger.schedule".to_string(),
+    source_identity: format!(
+      "{}:{}:{planned_text}",
+      registration.workflow_id, registration.trigger_id
+    ),
+    payload: serde_json::Map::from_iter([
+      ("scheduledAt".to_string(), Value::String(planned_text)),
+      ("triggeredAt".to_string(), Value::String(triggered_text)),
+    ]),
+    received_at: triggered_at,
+  }
+}
+
+fn schedule_identity(
+  registration: &ScheduleRuntimeRegistration,
+  outcome: &crate::TriggerAdmissionOutcome,
+) -> RunProgressIdentity {
+  RunProgressIdentity {
+    workflow_id: registration.workflow_id.clone(),
+    trigger_id: registration.trigger_id.clone(),
+    trigger_handler: "trigger.schedule".to_string(),
+    occurrence_id: outcome.occurrence_id.clone(),
+    run_id: outcome.run_id.clone(),
+  }
+}
+
+fn report_schedule_next_due(
+  state: &WebhookRuntimeState,
+  registration: &ScheduleRuntimeRegistration,
+  cursor: &crate::ScheduleCursor,
+  reason: ScheduleProgressReason,
+  occurred_at: chrono::DateTime<Utc>,
+) {
+  state.execution.report_schedule(ScheduleProgress::NextDue {
+    contract: SCHEDULE_PROGRESS_CONTRACT,
+    contract_version: SCHEDULE_PROGRESS_CONTRACT_VERSION,
+    workflow_id: registration.workflow_id.clone(),
+    trigger_id: registration.trigger_id.clone(),
+    timezone: registration.schedule.timezone().to_string(),
+    next_scheduled_at: cursor.next_scheduled_at,
+    reason,
+    occurred_at,
+  });
+}
+
+fn report_schedule_error(
+  state: &WebhookRuntimeState,
+  registration: &ScheduleRuntimeRegistration,
+  message: &str,
+) {
+  state
+    .execution
+    .report_schedule(ScheduleProgress::SchedulerError {
+      contract: SCHEDULE_PROGRESS_CONTRACT,
+      contract_version: SCHEDULE_PROGRESS_CONTRACT_VERSION,
+      workflow_id: registration.workflow_id.clone(),
+      trigger_id: registration.trigger_id.clone(),
+      code: "WOML_SCHEDULE_RUNTIME_FAILED".to_string(),
+      message: message.to_string(),
+      occurred_at: state.execution.schedule_clock.now(),
+    });
 }
 
 async fn handle_webhook(

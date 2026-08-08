@@ -40,11 +40,12 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 4;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 5;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
 const STORE_SCHEMA_VERSION_V4: &str = "4";
+const STORE_SCHEMA_VERSION_V5: &str = "5";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
@@ -209,6 +210,24 @@ BEGIN
 END;
 "#;
 
+const CREATE_SCHEDULE_SCHEMA_V5: &str = r#"
+CREATE TABLE woml_schedule_cursors (
+  workflow_id TEXT NOT NULL,
+  trigger_id TEXT NOT NULL,
+  definition_hash TEXT NOT NULL,
+  cron TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  on_missed TEXT NOT NULL CHECK (on_missed IN ('skip', 'run-once')),
+  next_scheduled_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (workflow_id, trigger_id),
+  FOREIGN KEY (definition_hash) REFERENCES woml_definitions(definition_hash)
+);
+
+CREATE INDEX woml_schedule_cursors_definition
+  ON woml_schedule_cursors(definition_hash);
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDefinitionBinding {
   pub run_id: String,
@@ -248,6 +267,35 @@ pub struct TriggerAdmissionOutcome {
   pub occurrence_id: String,
   pub run_id: String,
   pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleCursorRegistration {
+  pub workflow_id: String,
+  pub trigger_id: String,
+  pub definition_hash: String,
+  pub cron: String,
+  pub timezone: String,
+  pub on_missed: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleCursor {
+  pub workflow_id: String,
+  pub trigger_id: String,
+  pub definition_hash: String,
+  pub cron: String,
+  pub timezone: String,
+  pub on_missed: String,
+  pub next_scheduled_at: DateTime<Utc>,
+  pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleCursorRegistrationOutcome {
+  pub cursor: ScheduleCursor,
+  pub initialized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -416,6 +464,8 @@ pub enum DurableStoreError {
   TriggerHandlerMismatch,
   #[error("the trigger source identity is already bound to a different payload")]
   TriggerIdempotencyConflict,
+  #[error("the durable schedule cursor changed before this operation could commit")]
+  ScheduleCursorConflict,
   #[error("stored trigger occurrence history is contradictory: {0}")]
   TriggerHistoryInvalid(String),
   #[error("stored event is invalid: {0}")]
@@ -493,6 +543,22 @@ fn migrate_store_v3_to_v4(connection: &mut Connection) -> Result<(), DurableStor
   Ok(())
 }
 
+fn migrate_store_v4_to_v5(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_SCHEDULE_SCHEMA_V5)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V5, STORE_SCHEMA_VERSION_V4],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v4-to-v5 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
 fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
   for (object_type, name) in [
     ("table", "woml_approval_tokens"),
@@ -560,6 +626,26 @@ fn validate_store_v4_schema(connection: &Connection) -> Result<(), DurableStoreE
   Ok(())
 }
 
+fn validate_store_v5_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v4_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_schedule_cursors"),
+    ("index", "woml_schedule_cursors_definition"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v5 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -583,21 +669,28 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
-      Some(STORE_SCHEMA_VERSION_V4) => validate_store_v4_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V5) => validate_store_v5_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V4) => {
+        validate_store_v4_schema(&connection)?;
+        migrate_store_v4_to_v5(&mut connection)?;
+      }
       Some(STORE_SCHEMA_VERSION_V3) => {
         validate_store_v3_schema(&connection)?;
         migrate_store_v3_to_v4(&mut connection)?;
+        migrate_store_v4_to_v5(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V2) => {
         validate_store_v2_schema(&connection)?;
         migrate_store_v2_to_v3(&mut connection)?;
         migrate_store_v3_to_v4(&mut connection)?;
+        migrate_store_v4_to_v5(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V1) => {
         migrate_store_v1_to_v2(&mut connection)?;
         validate_store_v2_schema(&connection)?;
         migrate_store_v2_to_v3(&mut connection)?;
         migrate_store_v3_to_v4(&mut connection)?;
+        migrate_store_v4_to_v5(&mut connection)?;
       }
       Some(version) => {
         return Err(DurableStoreError::UnsupportedStoreVersion(
@@ -613,6 +706,7 @@ impl DurableEventStore {
         validate_store_v2_schema(&connection)?;
         migrate_store_v2_to_v3(&mut connection)?;
         migrate_store_v3_to_v4(&mut connection)?;
+        migrate_store_v4_to_v5(&mut connection)?;
       }
     }
     Ok(Self { connection })
@@ -717,124 +811,138 @@ impl DurableEventStore {
     &mut self,
     request: TriggerAdmissionRequest,
   ) -> Result<TriggerAdmissionOutcome, DurableStoreError> {
-    if request.source_identity.is_empty() || request.source_identity.len() > 512 {
-      return Err(DurableStoreError::Contract(
-        "Trigger sourceIdentity must contain between 1 and 512 UTF-8 bytes.".to_string(),
-      ));
-    }
-    if !is_definition_hash(&request.definition_hash) {
-      return Err(DurableStoreError::TriggerDefinitionMismatch);
-    }
-
-    let source_identity_hash = sha256_prefixed(request.source_identity.as_bytes());
-    let payload_hash = canonical_payload_hash(&request.payload)?;
+    validate_trigger_admission_request(&request)?;
     let transaction = self
       .connection
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request)?;
+    transaction.commit()?;
+    Ok(outcome)
+  }
 
-    let model_json: String = transaction
-      .query_row(
-        "SELECT model_json FROM woml_definitions WHERE definition_hash = ?1",
-        [&request.definition_hash],
-        |row| row.get(0),
-      )
-      .optional()?
-      .ok_or_else(|| DurableStoreError::DefinitionNotFound(request.definition_hash.clone()))?;
-    let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
-    workflow.validate_structure()?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V7
-      || workflow.workflow_id != request.workflow_id
-    {
-      return Err(DurableStoreError::TriggerDefinitionMismatch);
+  pub fn register_schedule_cursor(
+    &mut self,
+    registration: &ScheduleCursorRegistration,
+    initial_next_scheduled_at: DateTime<Utc>,
+    registered_at: DateTime<Utc>,
+  ) -> Result<ScheduleCursorRegistrationOutcome, DurableStoreError> {
+    validate_schedule_cursor_registration(registration)?;
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    validate_schedule_registration_definition(&transaction, registration)?;
+    let existing = load_schedule_cursor(
+      &transaction,
+      &registration.workflow_id,
+      &registration.trigger_id,
+    )?;
+    let initialized = existing.as_ref().is_none_or(|cursor| {
+      cursor.definition_hash != registration.definition_hash
+        || cursor.cron != registration.cron
+        || cursor.timezone != registration.timezone
+        || cursor.on_missed != registration.on_missed
+    });
+    if initialized {
+      transaction.execute(
+        "INSERT INTO woml_schedule_cursors(
+           workflow_id, trigger_id, definition_hash, cron, timezone, on_missed,
+           next_scheduled_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(workflow_id, trigger_id) DO UPDATE SET
+           definition_hash = excluded.definition_hash,
+           cron = excluded.cron,
+           timezone = excluded.timezone,
+           on_missed = excluded.on_missed,
+           next_scheduled_at = excluded.next_scheduled_at,
+           updated_at = excluded.updated_at",
+        params![
+          registration.workflow_id,
+          registration.trigger_id,
+          registration.definition_hash,
+          registration.cron,
+          registration.timezone,
+          registration.on_missed,
+          initial_next_scheduled_at.to_rfc3339(),
+          registered_at.to_rfc3339(),
+        ],
+      )?;
     }
-    let trigger =
-      workflow
-        .trigger(&request.trigger_id)
-        .ok_or_else(|| DurableStoreError::TriggerNotFound {
-          workflow_id: request.workflow_id.clone(),
-          trigger_id: request.trigger_id.clone(),
-        })?;
-    if trigger.handler != request.trigger_handler {
+    let cursor = load_schedule_cursor(
+      &transaction,
+      &registration.workflow_id,
+      &registration.trigger_id,
+    )?
+    .ok_or_else(|| DurableStoreError::Contract("Schedule cursor was not stored.".to_string()))?;
+    transaction.commit()?;
+    Ok(ScheduleCursorRegistrationOutcome {
+      cursor,
+      initialized,
+    })
+  }
+
+  pub fn schedule_cursor(
+    &self,
+    workflow_id: &str,
+    trigger_id: &str,
+  ) -> Result<ScheduleCursor, DurableStoreError> {
+    load_schedule_cursor(&self.connection, workflow_id, trigger_id)?.ok_or_else(|| {
+      DurableStoreError::Contract(format!(
+        "Schedule cursor for workflow {workflow_id:?}, trigger {trigger_id:?} does not exist."
+      ))
+    })
+  }
+
+  pub fn advance_schedule_cursor(
+    &mut self,
+    workflow_id: &str,
+    trigger_id: &str,
+    expected_next_scheduled_at: DateTime<Utc>,
+    next_scheduled_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+  ) -> Result<ScheduleCursor, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    update_schedule_cursor(
+      &transaction,
+      workflow_id,
+      trigger_id,
+      expected_next_scheduled_at,
+      next_scheduled_at,
+      updated_at,
+    )?;
+    let cursor = load_schedule_cursor(&transaction, workflow_id, trigger_id)?
+      .ok_or(DurableStoreError::ScheduleCursorConflict)?;
+    transaction.commit()?;
+    Ok(cursor)
+  }
+
+  pub fn claim_schedule_occurrence(
+    &mut self,
+    expected_next_scheduled_at: DateTime<Utc>,
+    next_scheduled_at: DateTime<Utc>,
+    request: TriggerAdmissionRequest,
+  ) -> Result<(TriggerAdmissionOutcome, ScheduleCursor), DurableStoreError> {
+    validate_trigger_admission_request(&request)?;
+    if request.trigger_handler != "trigger.schedule" {
       return Err(DurableStoreError::TriggerHandlerMismatch);
     }
-
-    if let Some(existing) = load_trigger_occurrence_by_identity(
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request)?;
+    update_schedule_cursor(
       &transaction,
       &request.workflow_id,
       &request.trigger_id,
-      &source_identity_hash,
-    )? {
-      if existing.payload_hash != payload_hash {
-        return Err(DurableStoreError::TriggerIdempotencyConflict);
-      }
-      validate_trigger_occurrence_history(&transaction, &existing)?;
-      transaction.commit()?;
-      return Ok(TriggerAdmissionOutcome {
-        occurrence_id: existing.occurrence_id,
-        run_id: existing.run_id,
-        duplicate: true,
-      });
-    }
-
-    let occurrence_id = format!("occ_{}", Uuid::new_v4().simple());
-    let run_id = format!("run_{}", Uuid::new_v4().simple());
-    transaction.execute(
-      "INSERT INTO woml_runs(run_id, workflow_id, definition_hash, created_at)
-       VALUES (?1, ?2, ?3, ?4)",
-      params![
-        run_id,
-        request.workflow_id,
-        request.definition_hash,
-        request.received_at.to_rfc3339(),
-      ],
-    )?;
-
-    let payload = RunEventPayload::RunStarted(RunStartedData {
-      workflow_id: request.workflow_id.clone(),
-      definition_hash: request.definition_hash.clone(),
-      trigger_id: Some(request.trigger_id.clone()),
-      trigger_handler: Some(request.trigger_handler.clone()),
-      trigger_occurrence_id: Some(occurrence_id.clone()),
-      trigger: request.payload,
-    });
-    validate_payload_against_definition(&workflow, &request.definition_hash, &payload)
-      .map_err(DurableStoreError::Contract)?;
-    let mut events = Vec::new();
-    append_to_history(
-      &transaction,
-      &mut events,
-      &run_id,
-      generated_event_id(),
+      expected_next_scheduled_at,
+      next_scheduled_at,
       request.received_at,
-      RUN_EVENT_SCHEMA_VERSION_V7,
-      payload,
     )?;
-    validate_event_history_against_definition(&workflow, &request.definition_hash, &events)
-      .map_err(DurableStoreError::Contract)?;
-
-    transaction.execute(
-      "INSERT INTO woml_trigger_occurrences(
-         occurrence_id, workflow_id, trigger_id, trigger_handler,
-         definition_hash, source_identity_hash, payload_hash, received_at, run_id
-       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-      params![
-        occurrence_id,
-        request.workflow_id,
-        request.trigger_id,
-        request.trigger_handler,
-        request.definition_hash,
-        source_identity_hash,
-        payload_hash,
-        request.received_at.to_rfc3339(),
-        run_id,
-      ],
-    )?;
+    let cursor = load_schedule_cursor(&transaction, &request.workflow_id, &request.trigger_id)?
+      .ok_or(DurableStoreError::ScheduleCursorConflict)?;
     transaction.commit()?;
-    Ok(TriggerAdmissionOutcome {
-      occurrence_id,
-      run_id,
-      duplicate: false,
-    })
+    Ok((outcome, cursor))
   }
 
   pub fn recover_undispatched_trigger_runs(
@@ -2939,6 +3047,266 @@ fn ensure_run_exists(connection: &Connection, run_id: &str) -> Result<(), Durabl
     return Err(DurableStoreError::RunNotFound(run_id.to_string()));
   }
   Ok(())
+}
+
+fn validate_trigger_admission_request(
+  request: &TriggerAdmissionRequest,
+) -> Result<(), DurableStoreError> {
+  if request.source_identity.is_empty() || request.source_identity.len() > 512 {
+    return Err(DurableStoreError::Contract(
+      "Trigger sourceIdentity must contain between 1 and 512 UTF-8 bytes.".to_string(),
+    ));
+  }
+  if !is_definition_hash(&request.definition_hash) {
+    return Err(DurableStoreError::TriggerDefinitionMismatch);
+  }
+  Ok(())
+}
+
+fn admit_trigger_occurrence_in_transaction(
+  transaction: &Transaction<'_>,
+  request: &TriggerAdmissionRequest,
+) -> Result<TriggerAdmissionOutcome, DurableStoreError> {
+  let source_identity_hash = sha256_prefixed(request.source_identity.as_bytes());
+  let payload_hash = canonical_payload_hash(&request.payload)?;
+  let model_json: String = transaction
+    .query_row(
+      "SELECT model_json FROM woml_definitions WHERE definition_hash = ?1",
+      [&request.definition_hash],
+      |row| row.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| DurableStoreError::DefinitionNotFound(request.definition_hash.clone()))?;
+  let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
+  workflow.validate_structure()?;
+  if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V7
+    || workflow.workflow_id != request.workflow_id
+  {
+    return Err(DurableStoreError::TriggerDefinitionMismatch);
+  }
+  let trigger =
+    workflow
+      .trigger(&request.trigger_id)
+      .ok_or_else(|| DurableStoreError::TriggerNotFound {
+        workflow_id: request.workflow_id.clone(),
+        trigger_id: request.trigger_id.clone(),
+      })?;
+  if trigger.handler != request.trigger_handler {
+    return Err(DurableStoreError::TriggerHandlerMismatch);
+  }
+
+  if let Some(existing) = load_trigger_occurrence_by_identity(
+    transaction,
+    &request.workflow_id,
+    &request.trigger_id,
+    &source_identity_hash,
+  )? {
+    if existing.payload_hash != payload_hash {
+      return Err(DurableStoreError::TriggerIdempotencyConflict);
+    }
+    validate_trigger_occurrence_history(transaction, &existing)?;
+    return Ok(TriggerAdmissionOutcome {
+      occurrence_id: existing.occurrence_id,
+      run_id: existing.run_id,
+      duplicate: true,
+    });
+  }
+
+  let occurrence_id = format!("occ_{}", Uuid::new_v4().simple());
+  let run_id = format!("run_{}", Uuid::new_v4().simple());
+  transaction.execute(
+    "INSERT INTO woml_runs(run_id, workflow_id, definition_hash, created_at)
+     VALUES (?1, ?2, ?3, ?4)",
+    params![
+      run_id,
+      request.workflow_id,
+      request.definition_hash,
+      request.received_at.to_rfc3339(),
+    ],
+  )?;
+
+  let payload = RunEventPayload::RunStarted(RunStartedData {
+    workflow_id: request.workflow_id.clone(),
+    definition_hash: request.definition_hash.clone(),
+    trigger_id: Some(request.trigger_id.clone()),
+    trigger_handler: Some(request.trigger_handler.clone()),
+    trigger_occurrence_id: Some(occurrence_id.clone()),
+    trigger: request.payload.clone(),
+  });
+  validate_payload_against_definition(&workflow, &request.definition_hash, &payload)
+    .map_err(DurableStoreError::Contract)?;
+  let mut events = Vec::new();
+  append_to_history(
+    transaction,
+    &mut events,
+    &run_id,
+    generated_event_id(),
+    request.received_at,
+    RUN_EVENT_SCHEMA_VERSION_V7,
+    payload,
+  )?;
+  validate_event_history_against_definition(&workflow, &request.definition_hash, &events)
+    .map_err(DurableStoreError::Contract)?;
+
+  transaction.execute(
+    "INSERT INTO woml_trigger_occurrences(
+       occurrence_id, workflow_id, trigger_id, trigger_handler,
+       definition_hash, source_identity_hash, payload_hash, received_at, run_id
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    params![
+      occurrence_id,
+      request.workflow_id,
+      request.trigger_id,
+      request.trigger_handler,
+      request.definition_hash,
+      source_identity_hash,
+      payload_hash,
+      request.received_at.to_rfc3339(),
+      run_id,
+    ],
+  )?;
+  Ok(TriggerAdmissionOutcome {
+    occurrence_id,
+    run_id,
+    duplicate: false,
+  })
+}
+
+fn validate_schedule_cursor_registration(
+  registration: &ScheduleCursorRegistration,
+) -> Result<(), DurableStoreError> {
+  if registration.workflow_id.is_empty()
+    || registration.trigger_id.is_empty()
+    || registration.cron.is_empty()
+    || registration.timezone.is_empty()
+    || !matches!(registration.on_missed.as_str(), "skip" | "run-once")
+    || !is_definition_hash(&registration.definition_hash)
+  {
+    return Err(DurableStoreError::Contract(
+      "Schedule cursor registration is invalid.".to_string(),
+    ));
+  }
+  Ok(())
+}
+
+fn validate_schedule_registration_definition(
+  transaction: &Transaction<'_>,
+  registration: &ScheduleCursorRegistration,
+) -> Result<(), DurableStoreError> {
+  let model_json: String = transaction
+    .query_row(
+      "SELECT model_json FROM woml_definitions WHERE definition_hash = ?1",
+      [&registration.definition_hash],
+      |row| row.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| DurableStoreError::DefinitionNotFound(registration.definition_hash.clone()))?;
+  let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
+  if workflow.workflow_id != registration.workflow_id {
+    return Err(DurableStoreError::TriggerDefinitionMismatch);
+  }
+  let trigger = workflow.trigger(&registration.trigger_id).ok_or_else(|| {
+    DurableStoreError::TriggerNotFound {
+      workflow_id: registration.workflow_id.clone(),
+      trigger_id: registration.trigger_id.clone(),
+    }
+  })?;
+  if trigger.handler != "trigger.schedule" {
+    return Err(DurableStoreError::TriggerHandlerMismatch);
+  }
+  let crate::model::ValueExpression::Object { fields } = &trigger.config else {
+    return Err(DurableStoreError::TriggerDefinitionMismatch);
+  };
+  let literal = |name: &str| match fields.get(name) {
+    Some(crate::model::ValueExpression::Literal { value }) => value.as_str(),
+    _ => None,
+  };
+  if literal("cron") != Some(registration.cron.as_str())
+    || literal("timezone") != Some(registration.timezone.as_str())
+    || literal("onMissed") != Some(registration.on_missed.as_str())
+  {
+    return Err(DurableStoreError::TriggerDefinitionMismatch);
+  }
+  Ok(())
+}
+
+fn load_schedule_cursor(
+  connection: &Connection,
+  workflow_id: &str,
+  trigger_id: &str,
+) -> Result<Option<ScheduleCursor>, DurableStoreError> {
+  let stored = connection
+    .query_row(
+      "SELECT workflow_id, trigger_id, definition_hash, cron, timezone, on_missed,
+              next_scheduled_at, updated_at
+       FROM woml_schedule_cursors
+       WHERE workflow_id = ?1 AND trigger_id = ?2",
+      params![workflow_id, trigger_id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, String>(4)?,
+          row.get::<_, String>(5)?,
+          row.get::<_, String>(6)?,
+          row.get::<_, String>(7)?,
+        ))
+      },
+    )
+    .optional()?;
+  stored
+    .map(|stored| {
+      Ok(ScheduleCursor {
+        workflow_id: stored.0,
+        trigger_id: stored.1,
+        definition_hash: stored.2,
+        cron: stored.3,
+        timezone: stored.4,
+        on_missed: stored.5,
+        next_scheduled_at: parse_durable_timestamp(&stored.6, "schedule next instant")?,
+        updated_at: parse_durable_timestamp(&stored.7, "schedule update instant")?,
+      })
+    })
+    .transpose()
+}
+
+fn update_schedule_cursor(
+  transaction: &Transaction<'_>,
+  workflow_id: &str,
+  trigger_id: &str,
+  expected_next_scheduled_at: DateTime<Utc>,
+  next_scheduled_at: DateTime<Utc>,
+  updated_at: DateTime<Utc>,
+) -> Result<(), DurableStoreError> {
+  if next_scheduled_at <= expected_next_scheduled_at {
+    return Err(DurableStoreError::Contract(
+      "A schedule cursor must advance to a later planned instant.".to_string(),
+    ));
+  }
+  let changed = transaction.execute(
+    "UPDATE woml_schedule_cursors
+     SET next_scheduled_at = ?1, updated_at = ?2
+     WHERE workflow_id = ?3 AND trigger_id = ?4 AND next_scheduled_at = ?5",
+    params![
+      next_scheduled_at.to_rfc3339(),
+      updated_at.to_rfc3339(),
+      workflow_id,
+      trigger_id,
+      expected_next_scheduled_at.to_rfc3339(),
+    ],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::ScheduleCursorConflict);
+  }
+  Ok(())
+}
+
+fn parse_durable_timestamp(value: &str, label: &str) -> Result<DateTime<Utc>, DurableStoreError> {
+  DateTime::parse_from_rfc3339(value)
+    .map(|value| value.with_timezone(&Utc))
+    .map_err(|_| DurableStoreError::Contract(format!("Stored {label} is not RFC 3339.")))
 }
 
 type StoredTriggerOccurrence = (

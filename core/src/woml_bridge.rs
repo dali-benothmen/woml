@@ -20,9 +20,10 @@ use woml_engine::{
   CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
   ExternalTriggerAdmissionCommand, NotificationHostClientError, NotificationHostProcessOptions,
   NotificationJourneyDiagnostics, NotificationJourneyError, ParallelFailurePolicy, RunFailure,
-  RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
-  SystemEngineClock, TriggerAdmissionRequest, TriggerProgress, TriggerProgressReporter,
-  WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig,
+  RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, ScheduleProgress,
+  ScheduleProgressReporter, ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest,
+  TriggerProgress, TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError,
+  WomlWebhookServer, WomlWebhookServerConfig,
 };
 
 #[derive(Serialize)]
@@ -376,20 +377,30 @@ fn trigger_runtime_napi_error(error: NativeTriggerRuntimeError) -> napi::Error {
   napi::Error::from_reason(reason)
 }
 
-fn native_trigger_progress_reporter(
+fn native_runtime_progress_reporters(
   env: &Env,
   progress_callback: JsFunction,
-) -> napi::Result<TriggerProgressReporter> {
+) -> napi::Result<(TriggerProgressReporter, ScheduleProgressReporter)> {
   let mut progress = progress_callback
     .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
       Ok(vec![context.value])
     })?;
   progress.unref(env)?;
-  Ok(Arc::new(move |message: TriggerProgress| {
-    if let Ok(json) = serde_json::to_string(&message) {
-      let _ = progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-    }
-  }))
+  let progress = Arc::new(progress);
+  let trigger_progress = progress.clone();
+  let schedule_progress = progress;
+  Ok((
+    Arc::new(move |message: TriggerProgress| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = trigger_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    }),
+    Arc::new(move |message: ScheduleProgress| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = schedule_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    }),
+  ))
 }
 
 #[derive(Debug, Serialize)]
@@ -852,7 +863,8 @@ pub fn start_woml_webhook_runtime(
   let bind_address: SocketAddr = bind_address
     .parse()
     .map_err(|error| napi::Error::from_reason(format!("Invalid webhook bind address: {error}")))?;
-  let progress_reporter = native_trigger_progress_reporter(&env, progress_callback)?;
+  let (progress_reporter, schedule_progress_reporter) =
+    native_runtime_progress_reporters(&env, progress_callback)?;
   let registrations = registrations
     .into_iter()
     .map(|registration| WebhookDefinitionRegistration {
@@ -866,7 +878,8 @@ pub fn start_woml_webhook_runtime(
     database_path: PathBuf::from(event_store_path),
     registrations,
     startup_manual_triggers,
-    execution: runtime_options(bun_executable, script_host_path, script_timeout_ms),
+    execution: runtime_options(bun_executable, script_host_path, script_timeout_ms)
+      .with_schedule_progress_reporter(schedule_progress_reporter),
     progress_reporter: Some(progress_reporter),
   };
 

@@ -126,6 +126,34 @@ export type TriggerProgressV1 =
       readonly occurredAt: string;
     };
 
+export type ScheduleProgressV1 =
+  | {
+      readonly contract: 'woml.schedule-progress';
+      readonly contractVersion: 1;
+      readonly type: 'next_due';
+      readonly workflowId: string;
+      readonly triggerId: string;
+      readonly timezone: string;
+      readonly nextScheduledAt: string;
+      readonly reason:
+        | 'initialized'
+        | 'restarted'
+        | 'advanced'
+        | 'misfire_skipped'
+        | 'misfire_run_once';
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.schedule-progress';
+      readonly contractVersion: 1;
+      readonly type: 'scheduler_error';
+      readonly workflowId: string;
+      readonly triggerId: string;
+      readonly code: string;
+      readonly message: string;
+      readonly occurredAt: string;
+    };
+
 export interface WebhookRuntimeRegistration {
   readonly workflow: CompiledWorkflowDefinition;
   readonly definitionHash: string;
@@ -137,6 +165,7 @@ export interface WebhookRuntimeOptions extends RustExecutorOptions {
   readonly port?: number;
   readonly startupManualTriggers?: Readonly<Record<string, string>>;
   readonly onTriggerProgress?: (progress: TriggerProgressV1) => void;
+  readonly onScheduleProgress?: (progress: ScheduleProgressV1) => void;
 }
 
 export interface WebhookRuntimeHandle {
@@ -810,6 +839,68 @@ export function parseTriggerProgress(json: string): TriggerProgressV1 {
   throw new Error('The native core returned invalid trigger progress.');
 }
 
+export function parseScheduleProgress(json: string): ScheduleProgressV1 {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    value.contract !== 'woml.schedule-progress' ||
+    value.contractVersion !== 1 ||
+    typeof value.workflowId !== 'string' ||
+    value.workflowId.length === 0 ||
+    typeof value.triggerId !== 'string' ||
+    value.triggerId.length === 0 ||
+    !dateTime(value.occurredAt)
+  ) {
+    throw new Error('The native core returned invalid schedule progress.');
+  }
+  if (
+    value.type === 'next_due' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'workflowId',
+      'triggerId',
+      'timezone',
+      'nextScheduledAt',
+      'reason',
+      'occurredAt',
+    ]) &&
+    typeof value.timezone === 'string' &&
+    value.timezone.length > 0 &&
+    dateTime(value.nextScheduledAt) &&
+    [
+      'initialized',
+      'restarted',
+      'advanced',
+      'misfire_skipped',
+      'misfire_run_once',
+    ].includes(String(value.reason))
+  ) {
+    return value as ScheduleProgressV1;
+  }
+  if (
+    value.type === 'scheduler_error' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'workflowId',
+      'triggerId',
+      'code',
+      'message',
+      'occurredAt',
+    ]) &&
+    typeof value.code === 'string' &&
+    /^WOML_[A-Z0-9_]+$/.test(value.code) &&
+    typeof value.message === 'string' &&
+    value.message.length > 0
+  ) {
+    return value as ScheduleProgressV1;
+  }
+  throw new Error('The native core returned invalid schedule progress.');
+}
+
 function executionResult(value: unknown): value is RustWorkflowExecutionResult {
   if (
     !record(value) ||
@@ -1408,7 +1499,14 @@ export async function startWebhookRuntimeWithRust(
       options.bunExecutable ?? process.execPath,
       options.scriptHostPath ?? defaultScriptHostPath(),
       timeoutMs,
-      message => options.onTriggerProgress?.(parseTriggerProgress(message))
+      message => {
+        const decoded: unknown = JSON.parse(message);
+        if (record(decoded) && decoded.contract === 'woml.schedule-progress') {
+          options.onScheduleProgress?.(parseScheduleProgress(message));
+          return;
+        }
+        options.onTriggerProgress?.(parseTriggerProgress(message));
+      }
     )
     .catch(decodeTriggerRuntimeError);
   const value: unknown = JSON.parse(resultJson);
@@ -1420,7 +1518,7 @@ export async function startWebhookRuntimeWithRust(
     typeof value.host !== 'string' ||
     value.host.length === 0 ||
     !Number.isSafeInteger(value.port) ||
-    Number(value.port) < 1 ||
+    Number(value.port) < 0 ||
     Number(value.port) > 65_535
   ) {
     throw new Error('The native core returned invalid webhook runtime startup data.');

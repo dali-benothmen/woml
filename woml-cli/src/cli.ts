@@ -36,6 +36,7 @@ import {
   stopWebhookRuntimeWithRust,
   submitTriggerOccurrenceWithRust,
   TriggerRuntimeError,
+  type ScheduleProgressV1,
   type TriggerProgressV1,
   type RustApprovalRuntimeOutcome,
 } from './rust-executor';
@@ -1167,6 +1168,19 @@ function reportTriggerProgress(
   }
 }
 
+export function formatScheduleProgress(progress: ScheduleProgressV1): string {
+  if (progress.type === 'scheduler_error') {
+    return `Schedule ${progress.triggerId} failed [${progress.code}]: ${progress.message}`;
+  }
+  const recovery =
+    progress.reason === 'misfire_skipped'
+      ? ' (missed occurrences skipped)'
+      : progress.reason === 'misfire_run_once'
+        ? ' (one missed occurrence recovered)'
+        : '';
+  return `Schedule ${progress.triggerId} (${progress.timezone}) next due at ${progress.nextScheduledAt}${recovery}.`;
+}
+
 async function activateWorkflows(
   sources: readonly CompiledWorkflowSource[],
   args: RunArguments,
@@ -1186,23 +1200,12 @@ async function activateWorkflows(
     );
   }
 
-  const stagedSchedule = sources
-    .flatMap(source =>
-      source.workflow.triggers.map(trigger => ({ source, trigger }))
-    )
-    .find(item => item.trigger.handler === 'trigger.schedule');
-  if (stagedSchedule !== undefined) {
-    throw new CliInputError(
-      'WOML_TRIGGER_UNSUPPORTED',
-      `Schedule trigger "${stagedSchedule.trigger.id}" is valid WOML, but durable clock execution is not active until the scheduler runtime milestone.`
-    );
-  }
-
   const productionSources = sources.filter(source =>
     source.workflow.triggers.some(
       trigger =>
         trigger.handler === 'trigger.webhook' ||
-        trigger.handler === 'trigger.slack'
+        trigger.handler === 'trigger.slack' ||
+        trigger.handler === 'trigger.schedule'
     )
   );
   const oneShotSources = sources.filter(
@@ -1278,6 +1281,8 @@ async function activateWorkflows(
               io,
               dependencies.nativeCorePath
             ),
+          onScheduleProgress: progress =>
+            io.stderr(`${formatScheduleProgress(progress)}\n`),
         }
       );
       runtimeId = runtime.runtimeId;

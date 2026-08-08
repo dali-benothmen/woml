@@ -23,6 +23,9 @@ use crate::event::{
 use crate::model::{ApprovalDefinition, ParallelGroupDefinition, ValueExpression};
 use crate::projection::{ApprovalRequestStatus, AttemptStatus};
 use crate::protocol::{ExecuteMessage, HostOutcome, ScriptAttempt};
+use crate::schedule::{
+  ScheduleClock, ScheduleProgress, ScheduleProgressReporter, SystemScheduleClock,
+};
 use crate::{
   run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
   AttemptFailure, AttemptFailureKind, BranchFailure, CompiledWorkflowDefinition, DurableDagEngine,
@@ -118,6 +121,8 @@ pub struct RuntimeExecutionOptions {
   pub max_context_bytes: Option<usize>,
   pub clock: Arc<dyn EngineClock>,
   pub progress_reporter: Option<ExecutionProgressReporter>,
+  pub schedule_clock: Arc<dyn ScheduleClock>,
+  pub schedule_progress_reporter: Option<ScheduleProgressReporter>,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -128,9 +133,17 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
       .field("script_timeout_ms", &self.script_timeout_ms)
       .field("max_context_bytes", &self.max_context_bytes)
       .field("clock", &"dyn EngineClock")
+      .field("schedule_clock", &"dyn ScheduleClock")
       .field(
         "progress_reporter",
         &self.progress_reporter.as_ref().map(|_| "configured"),
+      )
+      .field(
+        "schedule_progress_reporter",
+        &self
+          .schedule_progress_reporter
+          .as_ref()
+          .map(|_| "configured"),
       )
       .finish()
   }
@@ -144,6 +157,8 @@ impl RuntimeExecutionOptions {
       max_context_bytes: None,
       clock: Arc::new(SystemEngineClock),
       progress_reporter: None,
+      schedule_clock: Arc::new(SystemScheduleClock),
+      schedule_progress_reporter: None,
     }
   }
 
@@ -155,6 +170,22 @@ impl RuntimeExecutionOptions {
   pub fn with_progress_reporter(mut self, reporter: ExecutionProgressReporter) -> Self {
     self.progress_reporter = Some(reporter);
     self
+  }
+
+  pub fn with_schedule_clock(mut self, clock: Arc<dyn ScheduleClock>) -> Self {
+    self.schedule_clock = clock;
+    self
+  }
+
+  pub fn with_schedule_progress_reporter(mut self, reporter: ScheduleProgressReporter) -> Self {
+    self.schedule_progress_reporter = Some(reporter);
+    self
+  }
+
+  pub(crate) fn report_schedule(&self, progress: ScheduleProgress) {
+    if let Some(reporter) = &self.schedule_progress_reporter {
+      reporter(progress);
+    }
   }
 
   fn report(&self, progress: ExecutionProgress) {

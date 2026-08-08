@@ -766,9 +766,9 @@ OR semantics.
 
 `timezone` must be a canonical IANA identifier and defaults to `UTC`.
 Nonexistent DST wall times are skipped and repeated wall times create one
-occurrence for each UTC instant. T8 freezes this compile-time contract; the
-durable Rust clock and actual schedule execution arrive in T9, so the CLI
-rejects activation instead of pretending a timer is running.
+occurrence for each UTC instant. The durable Rust scheduler owns the clock and
+SQLite cursor. `woml run` remains active, reports the next planned UTC instant,
+and safely continues according to `on-missed` after restart.
 
 ### 9.5 `<interval>`
 
