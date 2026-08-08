@@ -1599,7 +1599,7 @@ describe('compileWoml', () => {
 
   test('T11 accepts an event without a schema and pins the name grammar', () => {
     const event = (name: string) => `<workflow id="event-errors">
-  <triggers><event id="message" name="${name}" /></triggers>
+  <triggers><event id="message" name="${name}" secret="{{secrets.EVENT_CONTROL_TOKEN}}" /></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
 </workflow>`;
     expect(compile(event('agent.response-requested')).triggers[0]).toEqual({
@@ -1609,6 +1609,10 @@ describe('compileWoml', () => {
         kind: 'object',
         fields: {
           name: { kind: 'literal', value: 'agent.response-requested' },
+          secret: {
+            kind: 'secretReference',
+            name: 'EVENT_CONTROL_TOKEN',
+          },
         },
       },
     });
@@ -1632,7 +1636,7 @@ describe('compileWoml', () => {
 
   test('T11 validates event schema JSON, Draft 2020-12, and structure', () => {
     const event = (children: string) => `<workflow id="event-schema-errors">
-  <triggers><event id="message" name="message.received">${children}</event></triggers>
+  <triggers><event id="message" name="message.received" secret="{{secrets.EVENT_CONTROL_TOKEN}}">${children}</event></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
 </workflow>`;
     expect(
@@ -1650,6 +1654,22 @@ describe('compileWoml', () => {
     expect(
       validationError(event('<step id="bad" />')).diagnostic.code
     ).toBe('WOML_EVENT_STRUCTURE_INVALID');
+  });
+
+  test('T11 requires an explicit symbolic publisher secret on every event', () => {
+    const source = (secret: string) => `<workflow id="event-secret-errors">
+  <triggers><event id="message" name="message.received"${secret} /></triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+    expect(validationError(source('')).diagnostic.code).toBe(
+      'WOML_MISSING_ATTRIBUTE'
+    );
+    expect(
+      validationError(source(' secret="literal-token"')).diagnostic.code
+    ).toBe('WOML_SECRET_LITERAL_FORBIDDEN');
+    expect(
+      validationError(source(' secret="{{secrets.bad-name}}"')).diagnostic.code
+    ).toBe('WOML_SECRET_REFERENCE_INVALID');
   });
 
   test('requires the workflow root and validates trigger IDs', () => {

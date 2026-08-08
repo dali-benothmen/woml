@@ -276,8 +276,6 @@ struct NativeWebhookRegistration {
   workflow: CompiledWorkflowDefinition,
   definition_hash: String,
   resolved_secrets: BTreeMap<String, String>,
-  #[serde(default)]
-  event_control_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -883,7 +881,6 @@ pub fn start_woml_webhook_runtime(
       workflow: registration.workflow,
       definition_hash: registration.definition_hash,
       resolved_secrets: registration.resolved_secrets,
-      event_control_token: registration.event_control_token,
     })
     .collect();
   let config = WomlWebhookServerConfig {

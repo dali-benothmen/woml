@@ -10,7 +10,7 @@ const workflowPath = resolve(
 );
 
 describe('T12 named-event CLI safety boundary', () => {
-  test('requires an explicit symbolic control secret before binding', async () => {
+  test('automatically resolves the secret referenced by <event> before binding', async () => {
     let stdout = '';
     let stderr = '';
     const io: CliIo = {
@@ -40,7 +40,36 @@ describe('T12 named-event CLI safety boundary', () => {
 
     expect(exitCode).toBe(1);
     expect(stdout).toBe('');
-    expect(stderr).toContain('WOML_EVENT_CONTROL_SECRET_REQUIRED');
-    expect(stderr).toContain('--control-secret <NAME>');
+    expect(stderr).toContain('WOML_SECRET_NOT_FOUND');
+    expect(stderr).toContain('EVENT_CONTROL_TOKEN');
+  });
+
+  test('rejects the removed --control-secret runtime convention', async () => {
+    let stderr = '';
+    const exitCode = await runCli(
+      ['run', workflowPath, '--control-secret', 'CUSTOM_EVENT_TOKEN'],
+      {
+        stdout: () => {},
+        stderr: text => {
+          stderr += text;
+        },
+      },
+      {
+        createSecretStore: () => ({
+          provider: 'environment',
+          get: async () => undefined,
+          has: async () => false,
+          list: async () => [],
+          set: async () => {},
+          delete: async () => false,
+        }),
+        readSecret: async () => '',
+        waitForShutdown: async () => {},
+      }
+    );
+
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain('Usage: woml run');
+    expect(stderr).not.toContain('--control-secret');
   });
 });

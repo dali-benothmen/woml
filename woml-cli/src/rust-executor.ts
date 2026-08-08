@@ -188,7 +188,6 @@ export interface WebhookRuntimeRegistration {
   readonly workflow: CompiledWorkflowDefinition;
   readonly definitionHash: string;
   readonly resolvedSecrets: Readonly<Record<string, string>>;
-  readonly eventControlToken?: string;
 }
 
 export interface WebhookRuntimeOptions extends RustExecutorOptions {

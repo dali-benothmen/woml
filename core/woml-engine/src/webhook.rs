@@ -102,7 +102,6 @@ pub struct WebhookDefinitionRegistration {
   pub workflow: CompiledWorkflowDefinition,
   pub definition_hash: String,
   pub resolved_secrets: BTreeMap<String, String>,
-  pub event_control_token: Option<String>,
 }
 
 impl WebhookDefinitionRegistration {
@@ -111,17 +110,11 @@ impl WebhookDefinitionRegistration {
       workflow,
       definition_hash: definition_hash.into(),
       resolved_secrets: BTreeMap::new(),
-      event_control_token: None,
     }
   }
 
   pub fn with_secret(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
     self.resolved_secrets.insert(name.into(), value.into());
-    self
-  }
-
-  pub fn with_event_control_token(mut self, value: impl Into<String>) -> Self {
-    self.event_control_token = Some(value.into());
     self
   }
 }
@@ -268,7 +261,7 @@ struct WebhookRuntimeState {
   database_path: PathBuf,
   routes: HashMap<String, Arc<WebhookRoute>>,
   event_subscribers: BTreeMap<String, Vec<Arc<EventSubscriber>>>,
-  event_control_token_digest: Option<[u8; 32]>,
+  event_token_digests: BTreeMap<String, [u8; 32]>,
   registration_count: usize,
   execution: RuntimeExecutionOptions,
   progress_reporter: Option<TriggerProgressReporter>,
@@ -480,7 +473,7 @@ fn prepare_state(
   let mut schedules = Vec::new();
   let mut intervals = Vec::new();
   let mut event_subscribers = BTreeMap::<String, Vec<Arc<EventSubscriber>>>::new();
-  let mut event_control_token_digest: Option<[u8; 32]> = None;
+  let mut event_token_digests = BTreeMap::<String, [u8; 32]>::new();
   let mut registration_count = 0;
   for registration in config.registrations {
     registration.workflow.validate_for_durable_execution()?;
@@ -551,27 +544,17 @@ fn prepare_state(
         }
       }
       if trigger.handler == "trigger.event" {
-        let token = registration
-          .event_control_token
-          .as_deref()
-          .filter(|value| !value.is_empty())
-          .ok_or_else(|| {
-            WebhookRuntimeError::InvalidRegistration(format!(
-              "event trigger {:?} requires a runtime control secret",
-              trigger.id
-            ))
-          })?;
-        let token_digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-        if event_control_token_digest
-          .as_ref()
+        let (event_name, subscriber, token_digest) =
+          compile_event_subscriber(&registration, trigger)?;
+        if event_token_digests
+          .get(&event_name)
           .is_some_and(|existing| existing != &token_digest)
         {
-          return Err(WebhookRuntimeError::InvalidRegistration(
-            "all event subscribers in one runtime must share one control secret".to_string(),
-          ));
+          return Err(WebhookRuntimeError::InvalidRegistration(format!(
+            "all subscribers to event {event_name:?} must resolve to the same secret"
+          )));
         }
-        event_control_token_digest = Some(token_digest);
-        let (event_name, subscriber) = compile_event_subscriber(&registration, trigger)?;
+        event_token_digests.insert(event_name.clone(), token_digest);
         let subscribers = event_subscribers.entry(event_name).or_default();
         if subscribers.len() >= EVENT_MAX_SUBSCRIBERS {
           return Err(WebhookRuntimeError::InvalidRegistration(format!(
@@ -618,7 +601,7 @@ fn prepare_state(
       database_path: config.database_path,
       routes,
       event_subscribers,
-      event_control_token_digest,
+      event_token_digests,
       registration_count,
       execution: config.execution,
       progress_reporter: config.progress_reporter,
@@ -633,7 +616,7 @@ fn prepare_state(
 fn compile_event_subscriber(
   registration: &WebhookDefinitionRegistration,
   trigger: &crate::model::CompiledTrigger,
-) -> Result<(String, EventSubscriber), WebhookRuntimeError> {
+) -> Result<(String, EventSubscriber, [u8; 32]), WebhookRuntimeError> {
   let fields = object_fields(&trigger.config).ok_or_else(|| {
     WebhookRuntimeError::InvalidRegistration(format!(
       "event trigger {:?} config must be an object",
@@ -649,6 +632,18 @@ fn compile_event_subscriber(
       ))
     })?
     .to_string();
+  let Some(ValueExpression::SecretReference { name }) = fields.get("secret") else {
+    return Err(WebhookRuntimeError::InvalidRegistration(format!(
+      "event trigger {:?} requires a symbolic secret",
+      trigger.id
+    )));
+  };
+  let token = registration
+    .resolved_secrets
+    .get(name)
+    .filter(|value| !value.is_empty())
+    .ok_or_else(|| WebhookRuntimeError::SecretMissing(name.clone()))?;
+  let token_digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
   let schema = match fields.get("schema") {
     None => None,
     Some(ValueExpression::Literal { value }) => {
@@ -683,6 +678,7 @@ fn compile_event_subscriber(
       trigger_id: trigger.id.clone(),
       schema,
     },
+    token_digest,
   ))
 }
 
@@ -1814,22 +1810,6 @@ async fn handle_event_publication(
       "The WOML event publisher accepts POST requests only.",
     );
   }
-  let Some(token_digest) = &state.event_control_token_digest else {
-    return event_rejected_response(
-      state.get_ref(),
-      StatusCode::SERVICE_UNAVAILABLE,
-      "WOML_EVENT_UNAVAILABLE",
-      "The WOML event publisher is unavailable.",
-    );
-  };
-  if !authorized_bearer(&request, token_digest) {
-    return event_rejected_response(
-      state.get_ref(),
-      StatusCode::UNAUTHORIZED,
-      "WOML_EVENT_UNAUTHORIZED",
-      "Event publisher authentication failed.",
-    );
-  }
   if !valid_event_name(&event_name) {
     return event_rejected_response(
       state.get_ref(),
@@ -1846,6 +1826,22 @@ async fn handle_event_publication(
       "No loaded WOML workflow subscribes to this event name.",
     );
   };
+  let Some(token_digest) = state.event_token_digests.get(&event_name) else {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::SERVICE_UNAVAILABLE,
+      "WOML_EVENT_UNAVAILABLE",
+      "The WOML event publisher is unavailable.",
+    );
+  };
+  if !authorized_bearer(&request, token_digest) {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::UNAUTHORIZED,
+      "WOML_EVENT_UNAUTHORIZED",
+      "Event publisher authentication failed.",
+    );
+  }
   let event_id = match request
     .headers()
     .get("Event-ID")

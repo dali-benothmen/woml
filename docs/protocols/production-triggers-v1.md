@@ -312,7 +312,8 @@ use 400, 401, 404, 405, 413, or 503 as pinned by Event Publisher HTTP v1.
 The T12 terminal journey is:
 
 ```bash
-woml run workflows/ --port 3000 --control-secret WOML_CONTROL_TOKEN
+woml secrets set EVENT_CONTROL_TOKEN
+woml run workflows/ --port 3000
 
 curl --request POST http://127.0.0.1:3000/_woml/events/order.created \
   --header 'Authorization: Bearer <control-token>' \
@@ -325,11 +326,20 @@ A successful response names every matching workflow and trigger and returns
 its original or new `runId`, `duplicate` flag, or safe rejection. It never
 waits for those workflow runs to finish.
 
-The endpoint exists only when `woml run` receives `--control-secret <NAME>`.
-The value is resolved from the existing WOML secret store, compared through a
-fixed-width digest, and never enters WOML source, Model v7, event payloads,
-state, or diagnostics. `woml emit` uses `--token-secret <NAME>` and resolves
-the same symbolic secret client-side.
+Each event trigger declares `secret="{{secrets.NAME}}"`. When triggers are
+loaded, `woml run` automatically resolves only those symbolic names; a missing
+value fails before the listener binds. Subscribers to one event name must
+resolve to the same value, while separate event names may use separate values.
+Resolved values are compared through fixed-width digests and never enter WOML
+source, Model v7, event payloads, state, or diagnostics. Because `woml emit`
+does not load a workflow file, its publisher secret name is explicitly selected
+with the required `--token-secret <NAME>` option.
+
+Model v7 definitions persisted before authored event credentials existed may
+omit the symbolic `secret` field and remain readable for event folding and run
+recovery. Such a historical definition cannot register a new publisher route;
+active ingress always requires a current compiled trigger with a resolved
+symbolic secret.
 
 ## Progress boundary
 

@@ -167,6 +167,7 @@ interface ValidatedEventTrigger {
   readonly kind: 'event';
   readonly id: string;
   readonly name: string;
+  readonly secret: SecretReferenceExpression;
   readonly schema?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -273,7 +274,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   interval: {
     attributes: new Set(['id', 'every', 'on-missed']),
   },
-  event: { attributes: new Set(['id', 'name']) },
+  event: { attributes: new Set(['id', 'name', 'secret']) },
   'when-approved': { attributes: new Set() },
   'when-rejected': { attributes: new Set() },
 };
@@ -398,7 +399,9 @@ function validateSecretReferenceSinks(
       (attribute.name === 'bot-token' || attribute.name === 'app-token');
     const isWebhookCredential =
       element.name === 'webhook' && attribute.name === 'secret';
-    if (isSlackCredential || isWebhookCredential) {
+    const isEventCredential =
+      element.name === 'event' && attribute.name === 'secret';
+    if (isSlackCredential || isWebhookCredential || isEventCredential) {
       requireSecretReference(document, attribute);
       continue;
     }
@@ -886,6 +889,10 @@ function validateEventTrigger(
     'trigger'
   );
   const name = requiredAttribute(document, event, 'name');
+  const secret = requireSecretReference(
+    document,
+    requiredAttribute(document, event, 'secret')
+  );
   if (name.value.length > 256 || !eventNamePattern.test(name.value)) {
     failValidation(
       document,
@@ -917,6 +924,7 @@ function validateEventTrigger(
     kind: 'event',
     id,
     name: name.value,
+    secret,
     ...(schema === undefined ? {} : { schema }),
   };
 }
@@ -2482,6 +2490,7 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
         kind: 'object',
         fields: {
           name: { kind: 'literal', value: trigger.name },
+          secret: trigger.secret,
           ...(trigger.schema === undefined
             ? {}
             : { schema: { kind: 'literal' as const, value: trigger.schema } }),

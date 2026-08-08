@@ -3,6 +3,8 @@ import { chmod, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { runCli } from '../src/cli';
+
 const packageRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(packageRoot, '..');
 const cliPath = join(packageRoot, 'dist', 'cli.js');
@@ -66,8 +68,6 @@ describe('T12 event publication product journey', () => {
           String(port),
           '--state',
           statePath,
-          '--control-secret',
-          'EVENT_CONTROL_TOKEN',
         ],
         {
           cwd: projectRoot,
@@ -203,4 +203,69 @@ describe('T12 event publication product journey', () => {
     },
     45_000
   );
+
+  test('resolves the publisher secret selected by --token-secret', async () => {
+    let requestedSecret = '';
+    let authorization = '';
+    let stdout = '';
+    const exitCode = await runCli(
+      [
+        'emit',
+        'order.created',
+        '--id',
+        'custom-secret-1',
+        '--data',
+        `@${payload}`,
+        '--server',
+        'http://127.0.0.1:3000',
+        '--token-secret',
+        'CUSTOM_EVENT_TOKEN',
+      ],
+      {
+        stdout: text => {
+          stdout += text;
+        },
+        stderr: () => {},
+      },
+      {
+        createSecretStore: () => ({
+          provider: 'environment',
+          get: async name => {
+            requestedSecret = name;
+            return 'custom-control-token';
+          },
+          has: async () => true,
+          list: async () => [],
+          set: async () => {},
+          delete: async () => false,
+        }),
+        readSecret: async () => '',
+        fetch: async (_input, init) => {
+          authorization = new Headers(init?.headers).get('Authorization') ?? '';
+          return new Response(
+            JSON.stringify({
+              eventId: 'custom-secret-1',
+              eventName: 'order.created',
+              status: 'accepted',
+              deliveries: [
+                {
+                  workflowId: 'send-confirmation',
+                  triggerId: 'orderCreated',
+                  status: 'accepted',
+                  runId: 'run_custom',
+                  duplicate: false,
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        },
+      }
+    );
+
+    expect(exitCode).toBe(0);
+    expect(requestedSecret).toBe('CUSTOM_EVENT_TOKEN');
+    expect(authorization).toBe('Bearer custom-control-token');
+    expect(stdout).not.toContain('custom-control-token');
+  });
 });

@@ -520,7 +520,7 @@ describe('woml test one-shot compatibility', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe(
-      'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--control-secret <NAME>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]\n'
+      'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]\n'
     );
     expect(result.exitCode).toBe(2);
   });

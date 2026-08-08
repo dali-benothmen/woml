@@ -9,6 +9,7 @@
         "kind": "object",
         "fields": {
           "name": { "kind": "literal", "value": "order.created" },
+          "secret": { "kind": "secretReference", "name": "EVENT_CONTROL_TOKEN" },
           "schema": {
             "kind": "literal",
             "value": {

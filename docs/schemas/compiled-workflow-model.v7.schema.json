@@ -229,6 +229,7 @@
           "required": ["name"],
           "properties": {
             "name": { "$ref": "#/$defs/eventNameLiteral" },
+            "secret": { "$ref": "#/$defs/secretReference" },
             "schema": { "$ref": "#/$defs/schemaLiteral" }
           }
         }

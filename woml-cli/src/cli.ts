@@ -86,7 +86,7 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--control-secret <NAME>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+  return 'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
 }
 
 function testUsage(): string {
@@ -123,7 +123,6 @@ interface RunArguments {
   readonly host: string;
   readonly port: number;
   readonly triggerId?: string;
-  readonly controlSecretName?: string;
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
@@ -144,7 +143,6 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   let host = '127.0.0.1';
   let port = 3_000;
   let triggerId: string | undefined;
-  let controlSecretName: string | undefined;
   const seen = new Set<string>();
   for (let index = 0; index < options.length; index += 2) {
     const option = options[index];
@@ -158,8 +156,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         option !== '--trigger' &&
         (command !== 'run' ||
           (option !== '--host' &&
-            option !== '--port' &&
-            option !== '--control-secret')))
+            option !== '--port')))
     ) {
       throw new CliInputError(
         'WOML_CLI_ARGUMENTS_INVALID',
@@ -213,16 +210,6 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       port = parsedPort;
-    } else if (option === '--control-secret') {
-      try {
-        requireValidSecretName(value);
-      } catch {
-        throw new CliInputError(
-          'WOML_CLI_ARGUMENTS_INVALID',
-          '--control-secret requires a valid symbolic secret name.'
-        );
-      }
-      controlSecretName = value;
     } else {
       if (value.length === 0) {
         throw new CliInputError(
@@ -242,7 +229,6 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     host,
     port,
     triggerId,
-    controlSecretName,
   };
 }
 
@@ -261,7 +247,6 @@ interface EmitArguments {
 
 const eventNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
 const eventIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
-
 function parseEmitArguments(args: readonly string[]): EmitArguments {
   const [, eventName, ...options] = args;
   if (
@@ -1226,7 +1211,10 @@ async function resolvedSecrets(
 ): Promise<Readonly<Record<string, string>>> {
   const references: SecretReferenceExpression[] = [];
   for (const trigger of workflow.triggers) {
-    if (trigger.handler === 'trigger.webhook') {
+    if (
+      trigger.handler === 'trigger.webhook' ||
+      trigger.handler === 'trigger.event'
+    ) {
       collectSecretReferences(trigger.config, references);
     }
   }
@@ -1406,37 +1394,11 @@ async function activateWorkflows(
       const eventRoutes = productionSources.flatMap(source =>
         eventRouteSummaries(source.workflow)
       );
-      if (eventRoutes.length > 0 && args.controlSecretName === undefined) {
-        throw new CliInputError(
-          'WOML_EVENT_CONTROL_SECRET_REQUIRED',
-          'event triggers require --control-secret <NAME> so the publisher endpoint is never exposed without authentication.'
-        );
-      }
-      if (eventRoutes.length === 0 && args.controlSecretName !== undefined) {
-        throw new CliInputError(
-          'WOML_EVENT_CONTROL_SECRET_UNUSED',
-          '--control-secret requires at least one loaded <event> trigger.'
-        );
-      }
-      const eventControlToken =
-        args.controlSecretName === undefined
-          ? undefined
-          : await store.get(args.controlSecretName);
-      if (
-        args.controlSecretName !== undefined &&
-        (eventControlToken === undefined || eventControlToken.length === 0)
-      ) {
-        throw new SecretStoreError(
-          'WOML_SECRET_NOT_FOUND',
-          `Missing required secret: ${args.controlSecretName}.`
-        );
-      }
       const registrations = await Promise.all(
         productionSources.map(async source => ({
           workflow: source.workflow,
           definitionHash: compiledDefinitionHash(source.workflow),
           resolvedSecrets: await resolvedSecrets(source.workflow, store),
-          ...(eventControlToken === undefined ? {} : { eventControlToken }),
         }))
       );
       const routes = productionSources.flatMap(source =>
@@ -1593,7 +1555,7 @@ export interface CliDependencies {
   readonly createSlackTransport?: (
     options: SharedSlackTransportOptions
   ) => SharedSlackTransport;
-  readonly fetch?: typeof globalThis.fetch;
+  readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>;
 }
 
 function waitForShutdownSignal(): Promise<void> {
@@ -1669,7 +1631,7 @@ async function runEmitCommand(
     if (token === undefined || token.length === 0) {
       throw new SecretStoreError(
         'WOML_SECRET_NOT_FOUND',
-        `Missing required secret: ${emit.tokenSecretName}.`
+        `Missing required secret: ${emit.tokenSecretName}. Configure it with: woml secrets set ${emit.tokenSecretName}`
       );
     }
     let response: Response;

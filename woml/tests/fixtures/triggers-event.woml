@@ -1,6 +1,6 @@
 <workflow id="event-trigger-contract">
   <triggers>
-    <event id="orderCreated" name="order.created">
+    <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
       <schema>
         {
           "type": "object",

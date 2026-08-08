@@ -450,9 +450,18 @@ fn valid_event_trigger(config: &ValueExpression) -> bool {
   let Some(fields) = object_fields(config) else {
     return false;
   };
-  let keys_are_valid = exact_fields(fields, &["name"]) || exact_fields(fields, &["name", "schema"]);
+  // Model v7 event definitions were persisted before publisher authentication
+  // became an authored frontend requirement. Keep those immutable definitions
+  // readable for recovery; the active ingress runtime separately requires the
+  // symbolic secret on newly registered event triggers.
+  let keys_are_valid = exact_fields(fields, &["name"])
+    || exact_fields(fields, &["name", "schema"])
+    || exact_fields(fields, &["name", "secret"])
+    || exact_fields(fields, &["name", "schema", "secret"]);
   keys_are_valid
     && literal_string(fields.get("name")).is_some_and(valid_event_name)
+    && (!fields.contains_key("secret")
+      || matches!(fields.get("secret"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name)))
     && (!fields.contains_key("schema") || valid_schema_literal(fields.get("schema")))
 }
 

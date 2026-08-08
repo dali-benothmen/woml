@@ -417,7 +417,11 @@ not silently move the grid. Missed-run behavior matches schedule.
 ### 6.7 Event
 
 ```xml
-<event id="orderCreated" name="order.created">
+<event
+  id="orderCreated"
+  name="order.created"
+  secret="{{secrets.EVENT_CONTROL_TOKEN}}"
+>
   <schema>
     {
       "type": "object",
@@ -434,6 +438,7 @@ not silently move the grid. Missed-run behavior matches schedule.
 |---|---:|---|
 | `id` | Yes | Stable trigger identity. |
 | `name` | Yes | Dot-separated event name such as `order.created`. |
+| `secret` | Yes | Symbolic publisher credential, written as `{{secrets.NAME}}`. |
 
 `<event>` may contain at most one inline Draft 2020-12 `<schema>`. One published
 event carries a required publisher event ID and a top-level JSON object. Every
@@ -445,16 +450,19 @@ The first built-in publisher uses a versioned authenticated engine API and a
 CLI client:
 
 ```bash
+woml secrets set EVENT_CONTROL_TOKEN
+
 woml emit order.created \
   --id event_123 \
   --data @order-created.json \
   --server http://127.0.0.1:3000 \
-  --token-secret WOML_CONTROL_TOKEN
+  --token-secret EVENT_CONTROL_TOKEN
 ```
 
-The control endpoint is disabled unless `woml run` is configured with a
-control secret. Future broker adapters call the same Rust ingress operation and
-must not bypass occurrence deduplication.
+`woml run` reads the symbolic reference from each `<event>` and resolves only
+that named value from the existing WOML secret store. No secret value enters
+the source or compiled model. Future broker adapters call the same Rust ingress
+operation and must not bypass occurrence deduplication.
 
 ## 7. `context.trigger` Contract
 
@@ -642,13 +650,15 @@ feed that future admission boundary rather than implement a conflicting one.
 
 ```text
 woml run <workflow.woml|directory> [--host <address>] [--port <port>]
-  [--state <path>] [--control-secret <NAME>]
+  [--state <path>]
   [--trigger <manualTriggerId>] [--resume <runId>]
   [--approval-port <port>]
 ```
 
 - Default host: `127.0.0.1`.
 - Default state: `.woml/state.sqlite`.
+- Event workflows automatically resolve every secret explicitly referenced by
+  their `<event secret="{{secrets.NAME}}">` attributes.
 - A directory loads its direct `*.woml` files in lexical order.
 - Route, workflow-ID, and trigger conflicts fail startup before the port binds.
 - Definitions are a static registration snapshot for the process lifetime.
@@ -697,8 +707,10 @@ woml emit <eventName> --id <publisherEventId> --data @<jsonFile>
   --server <url> --token-secret <NAME>
 ```
 
-The CLI resolves the control token from the existing WOML secret store and does
-not accept its value as a command-line argument.
+The CLI resolves the named token from the existing WOML secret store and does
+not accept its value as a command-line argument. Unlike `woml run`, this
+publisher command does not load a workflow file, so the symbolic name is
+provided explicitly with `--token-secret`.
 
 ## 14. Error Surface
 
@@ -1164,12 +1176,13 @@ Status: completed.
 
 Changes:
 
-- Activate `<event>` with the frozen name grammar and optional inline schema.
+- Activate `<event>` with the frozen name grammar, required symbolic publisher
+  secret, and optional inline schema.
 - Freeze authenticated publisher request/response and fan-out result contracts.
 - Freeze publisher event ID, duplicate/conflict, partial subscriber rejection,
   and payload-size behavior.
-- Extend secret sinks for the optional server control token without exposing it
-  in compiled workflows.
+- Extend the reviewed secret sinks so an event publisher credential compiles as
+  a symbolic reference and is resolved only at runtime.
 
 Result:
 
@@ -1182,8 +1195,9 @@ fixtures pass conformance tests.
 
 Implementation notes:
 
-- `<event id="..." name="...">` now validates and lowers to the reviewed
-  `trigger.event` Model v7 shape, with an optional inline Draft 2020-12 schema.
+- `<event id="..." name="..." secret="{{secrets.NAME}}">` validates and
+  lowers to the reviewed `trigger.event` Model v7 shape, with a symbolic secret
+  reference and optional inline Draft 2020-12 schema.
 - Event names use the frozen lowercase segmented grammar and are limited to
   256 characters. Schema diagnostics point to the responsible WOML source.
 - Event Publication v1 and Event Publisher HTTP v1 pin the logical publisher,
@@ -1197,9 +1211,15 @@ Implementation notes:
 - Each subscriber uses a collision-safe hash of event ID, workflow ID, and
   trigger ID as its Trigger Ingress source identity. A retry after a crash can
   complete remaining subscribers without duplicating accepted runs.
-- `--control-secret <NAME>` and `--token-secret <NAME>` are frozen symbolic
-  secret sinks. Their values never enter WOML, Model v7, publisher messages,
-  durable state, fixtures, or diagnostics.
+- There is no conventional or hard-coded event secret name. `woml run` resolves
+  the name authored on `<event>`; `woml emit` requires `--token-secret <NAME>`
+  because it does not read a workflow. Secret values never enter WOML, Model
+  v7, publisher messages, durable state, fixtures, or diagnostics.
+- Historical Model v7 event definitions persisted before the publisher-secret
+  field existed remain valid for folding and interrupted-run recovery. The
+  current WOML frontend and active event ingress still require the symbolic
+  secret, so backward-readable storage does not create an unauthenticated
+  publisher route.
 - T11 originally gave an explicit T12 diagnostic instead of opening an inactive
   listener. T12 replaces that staging boundary with the authenticated runtime.
   `examples/eventWorkflow.woml` remains the reviewed T11 contract source, and
@@ -1232,9 +1252,11 @@ Implementation notes:
 
 - The long-lived Rust trigger host now serves authenticated
   `POST /_woml/events/{eventName}` routes beside workflow-owned webhooks.
-- `woml run <directory> --control-secret <NAME>` loads direct `.woml` files in
-  lexical order, prints each unique event URL once, and provides a safe curl
-  example without resolving credentials into the output.
+- `woml run <directory>` automatically resolves the secret references authored
+  on its event triggers, loads direct `.woml` files in lexical order, prints
+  each unique event URL once, and provides a safe curl example without
+  resolving credentials into the output. Subscribers to the same event name
+  must resolve to the same token; unrelated event names may use different ones.
 - One publication validates every exact-name subscriber independently and
   returns deterministic `accepted`, `partial`, or `rejected` delivery results.
   Accepted runs execute asynchronously through the existing durable Rust DAG.

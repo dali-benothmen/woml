@@ -790,7 +790,7 @@ cron expression if doing so would change its semantics.
 ### 9.6 `<event>`
 
 ```xml
-<event id="orderCreated" name="order.created">
+<event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
   <schema>
     { "type": "object", "required": ["orderId"] }
   </schema>
@@ -801,12 +801,14 @@ cron expression if doing so would change its semantics.
 |---|---:|---|---|
 | `id` | Yes | Trigger ID | Stable trigger identity. |
 | `name` | Yes | Non-empty string | Event name consumed by the workflow. |
+| `secret` | Yes | Secret reference | Publisher bearer credential, written as `{{secrets.NAME}}`. |
 
 `<event>` may contain at most one inline Draft 2020-12 `<schema>` using the
 same source rules as webhook schemas.
 
-The frontend compiles this trigger to `trigger.event` with literal `name` and optional
-literal `schema` fields. The name is 256 characters or fewer, begins with a
+The frontend compiles this trigger to `trigger.event` with literal `name`, a
+symbolic `secret` reference, and optional literal `schema` fields. The name is
+256 characters or fewer, begins with a
 lowercase letter, and contains at least two lowercase alphanumeric segments
 separated by one `.`, `_`, or `-`. Examples are `order.created`,
 `payment_failed`, and `agent-response`.
@@ -818,6 +820,10 @@ out in loaded workflow and trigger order. Each matching subscriber validates
 and admits independently, so the response may be `accepted`, `partial`, or
 `rejected`. The T12 Rust runtime serves this endpoint, and `woml emit` provides
 the built-in secret-store-backed publisher client.
+
+At startup, `woml run` resolves only the symbolic secrets referenced by loaded
+event triggers. The secret value is held in memory for authentication and is
+never written into WOML, Model v7, runtime events, or durable state.
 
 ## 10. `<steps>` and Sequential Execution
 

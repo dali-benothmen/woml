@@ -32,6 +32,17 @@ fn event_model(workflow_id: &str, require_warehouse: bool) -> CompiledWorkflowDe
   serde_json::from_value(value).unwrap()
 }
 
+#[test]
+fn historical_model_v7_events_without_ingress_secrets_remain_recoverable() {
+  let mut value: Value = serde_json::from_str(EVENT_MODEL).unwrap();
+  value["triggers"][0]["config"]["fields"]
+    .as_object_mut()
+    .unwrap()
+    .remove("secret");
+  let workflow: CompiledWorkflowDefinition = serde_json::from_value(value).unwrap();
+  workflow.validate_for_durable_execution().unwrap();
+}
+
 fn registration(
   workflow_id: &str,
   hash_character: char,
@@ -41,7 +52,7 @@ fn registration(
     event_model(workflow_id, require_warehouse),
     format!("sha256:{}", hash_character.to_string().repeat(64)),
   )
-  .with_event_control_token(CONTROL_TOKEN)
+  .with_secret("EVENT_CONTROL_TOKEN", CONTROL_TOKEN)
 }
 
 fn definition_hash(character: char) -> String {
@@ -199,6 +210,33 @@ async fn wait_for_terminal(database: &TemporaryDatabase, run_id: &str) {
     );
     actix_web::rt::time::sleep(Duration::from_millis(10)).await;
   }
+}
+
+#[actix_web::test]
+async fn subscribers_to_one_event_must_resolve_the_same_authentication_secret() {
+  let Some(host) = host_options() else {
+    return;
+  };
+  let database = TemporaryDatabase::new("event-secret-conflict");
+  let result = WomlWebhookServer::start(WomlWebhookServerConfig {
+    bind_address: "127.0.0.1:0".parse().unwrap(),
+    database_path: database.path().to_path_buf(),
+    registrations: vec![
+      registration("send-confirmation", '1', false),
+      registration("update-inventory", '2', false)
+        .with_secret("EVENT_CONTROL_TOKEN", "different-token"),
+    ],
+    startup_manual_triggers: Default::default(),
+    execution: RuntimeExecutionOptions::new(host, 2_000),
+    progress_reporter: None,
+  })
+  .await;
+  let error = result
+    .err()
+    .expect("conflicting event secrets must fail startup");
+  assert!(error
+    .to_string()
+    .contains("all subscribers to event \"order.created\" must resolve to the same secret"));
 }
 
 #[actix_web::test]
@@ -407,9 +445,9 @@ async fn retry_after_a_mid_fanout_crash_completes_only_the_missing_subscriber() 
     host,
     vec![
       WebhookDefinitionRegistration::new(first_model, first_hash)
-        .with_event_control_token(CONTROL_TOKEN),
+        .with_secret("EVENT_CONTROL_TOKEN", CONTROL_TOKEN),
       WebhookDefinitionRegistration::new(second_model, second_hash)
-        .with_event_control_token(CONTROL_TOKEN),
+        .with_secret("EVENT_CONTROL_TOKEN", CONTROL_TOKEN),
     ],
   )
   .await;
