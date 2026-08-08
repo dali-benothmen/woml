@@ -1,9 +1,9 @@
 # WOML Production Trigger Contracts v1
 
-Status: frozen in T0 and implemented through T10. Long-lived `woml run` now
+Status: frozen in T0 and implemented through T11. Long-lived `woml run` now
 activates manual, webhook, Slack, cron schedule, and fixed-rate interval
 triggers through the shared durable Rust occurrence boundary. Named events
-remain staged for T11.
+compile in T11; their publisher endpoint and fan-out activate in T12.
 
 This document pins the boundary shared by the TypeScript WOML frontend, Rust
 core, CLI, HTTP listener, provider adapters, and durable store. The normative
@@ -18,6 +18,8 @@ machine-readable artifacts are:
 - `docs/schemas/trigger-progress.v1.schema.json`
 - `docs/schemas/schedule-progress.v1.schema.json`
 - `docs/schemas/interval-progress.v1.schema.json`
+- `docs/schemas/event-publication.v1.schema.json`
+- `docs/schemas/event-publisher-http.v1.schema.json`
 
 Model v1–v6 and Event v1–v6 remain immutable. A Model v7 run uses Event v7 for
 its entire history.
@@ -36,8 +38,9 @@ Model v7 keeps the existing DAG and defines a strict trigger union:
 | `<event>` | `trigger.event` |
 
 Trigger IDs are unique within a workflow and every trigger starts the same DAG.
-Manual, webhook, Slack, schedule, and interval syntax are active through T10.
-The event shape remains a frozen fixture and stays rejected until T11.
+Manual, webhook, Slack, schedule, and interval syntax are executable through
+T10. Event syntax and lowering are active in T11, while event execution remains
+rejected until T12.
 Resolved credentials never appear in a compiled definition; only
 `secretReference` expressions are permitted.
 
@@ -270,6 +273,66 @@ On restart, `skip` advances directly to the first grid point after now.
 future grid point. Independent intervals may be admitted simultaneously, and
 an interval may start a new run while an earlier run from the same trigger is
 still executing.
+
+## Named event publisher and fan-out boundary
+
+Event Publication v1 accepts one semantic event occurrence and synchronously
+returns its durable admission results. The publisher provides an event name, a
+required event ID, and one top-level JSON object. It does not select workflows.
+WOML finds every exact-name subscriber and processes them in loaded workflow
+order, then authored trigger order. At most 1,000 subscribers may share one
+event name in the first profile.
+
+Each subscriber validates the payload against its own optional Draft 2020-12
+schema. A missing schema accepts any top-level object. Validation or admission
+failure for one subscriber never rolls back another subscriber. The overall
+result is `accepted` when every delivery is accepted, `partial` when accepted
+and rejected deliveries coexist, and `rejected` when no subscriber accepts.
+Accepted runs continue asynchronously after publication returns.
+
+The per-subscriber Trigger Ingress source identity is:
+
+```text
+material = UTF-8(eventId + NUL + workflowId + NUL + triggerId)
+sourceIdentity = "event:v1:sha256:" + hex(SHA-256(material))
+```
+
+This stays within the frozen Trigger Ingress size limit and avoids delimiter
+ambiguity. Repeating the same event ID and canonical payload returns each
+already-accepted subscriber's original run with `duplicate: true`. Reusing the
+ID with a changed payload rejects that subscriber with
+`WOML_TRIGGER_IDEMPOTENCY_CONFLICT`. Retrying after a crash safely completes
+the remaining fan-out while recognizing earlier admissions as duplicates.
+
+The first public transport is `POST /_woml/events/{eventName}`. The reserved
+`/_woml` prefix prevents collisions with workflow-owned webhook routes. The
+request requires `Authorization: Bearer <control-token>`, `Event-ID`,
+`Content-Type: application/json`, and a body no larger than 1 MiB. A completed
+fan-out returns HTTP 200 with all safe delivery results. Request-level failures
+use 400, 401, 404, 405, 413, or 503 as pinned by Event Publisher HTTP v1.
+
+The T12 terminal journey will be:
+
+```bash
+woml run workflows/ --port 3000 --control-secret WOML_CONTROL_TOKEN
+
+curl --request POST http://127.0.0.1:3000/_woml/events/order.created \
+  --header 'Authorization: Bearer <control-token>' \
+  --header 'Event-ID: order-42-created' \
+  --header 'Content-Type: application/json' \
+  --data '{"orderId":"order-42"}'
+```
+
+A successful response names every matching workflow and trigger and returns
+its original or new `runId`, `duplicate` flag, or safe rejection. It never
+waits for those workflow runs to finish.
+
+The endpoint exists only when `woml run` receives `--control-secret <NAME>`.
+The value is resolved from the existing WOML secret store, compared through a
+fixed-width digest, and never enters WOML source, Model v7, event payloads,
+state, or diagnostics. `woml emit` uses `--token-secret <NAME>` and resolves
+the same symbolic secret client-side. T11 freezes these surfaces without
+accepting the flags prematurely; T12 implements them.
 
 ## Progress boundary
 

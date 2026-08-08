@@ -1580,14 +1580,76 @@ describe('compileWoml', () => {
     );
   });
 
-  test('keeps event runtime-staged after T10', () => {
+  test('T11 lowers the reviewed named-event fixture exactly to Model v7', () => {
     const source = readFileSync(
       new URL('./fixtures/triggers-event.woml', import.meta.url),
       'utf8'
     );
-    expect(validationError(source).diagnostic.code).toBe(
-      'WOML_FEATURE_NOT_EXECUTABLE'
+    const expected = JSON.parse(
+      readFileSync(
+        new URL(
+          './fixtures/triggers-event.compiled.v7.json',
+          import.meta.url
+        ),
+        'utf8'
+      )
     );
+    expect(compile(source)).toEqual(expected);
+  });
+
+  test('T11 accepts an event without a schema and pins the name grammar', () => {
+    const event = (name: string) => `<workflow id="event-errors">
+  <triggers><event id="message" name="${name}" /></triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+    expect(compile(event('agent.response-requested')).triggers[0]).toEqual({
+      id: 'message',
+      handler: 'trigger.event',
+      config: {
+        kind: 'object',
+        fields: {
+          name: { kind: 'literal', value: 'agent.response-requested' },
+        },
+      },
+    });
+    for (const name of [
+      'order',
+      'Order.created',
+      'order..created',
+      'order.',
+      '.order',
+      'order/created',
+      `event.${'a'.repeat(251)}`,
+    ]) {
+      const source = event(name);
+      const error = validationError(source);
+      expect(error.diagnostic.code).toBe('WOML_EVENT_NAME_INVALID');
+      expect(error.diagnostic.location.start.offset).toBe(
+        source.indexOf(name)
+      );
+    }
+  });
+
+  test('T11 validates event schema JSON, Draft 2020-12, and structure', () => {
+    const event = (children: string) => `<workflow id="event-schema-errors">
+  <triggers><event id="message" name="message.received">${children}</event></triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+    expect(
+      validationError(event('<schema>{ nope }</schema>')).diagnostic.code
+    ).toBe('WOML_EVENT_SCHEMA_JSON_INVALID');
+    expect(
+      validationError(event('<schema>{"type":"not-a-type"}</schema>'))
+        .diagnostic.code
+    ).toBe('WOML_EVENT_SCHEMA_INVALID');
+    expect(
+      validationError(
+        event('<schema>{}</schema><schema>{}</schema>')
+      ).diagnostic.code
+    ).toBe('WOML_EVENT_STRUCTURE_INVALID');
+    expect(
+      validationError(event('<step id="bad" />')).diagnostic.code
+    ).toBe('WOML_EVENT_STRUCTURE_INVALID');
   });
 
   test('requires the workflow root and validates trigger IDs', () => {

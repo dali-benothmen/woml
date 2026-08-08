@@ -1,0 +1,22 @@
+<workflow id="event-trigger-contract">
+  <triggers>
+    <event id="orderCreated" name="order.created">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+  <steps>
+    <step id="capture">
+      <script>
+        return context.trigger;
+      </script>
+    </step>
+  </steps>
+</workflow>

@@ -1,12 +1,16 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 through T10 completed on 2026-08-08. Manual, webhook, Slack, cron
+Status: T0 through T11 completed on 2026-08-08. Manual, webhook, Slack, cron
 schedule, and fixed-rate interval triggers are active. Rust owns atomic
 occurrence admission, HTTP validation, durable run creation, background DAG
 execution, the injected clock, SQLite schedule and interval cursors, bounded
 misfire recovery, and process-crash recovery. `woml run` stays alive, while
 `woml test` owns one-shot execution and `woml runs get` inspects durable
 results. There is no separate public `woml serve` mode.
+
+Named event syntax, Model v7 lowering, and Event Publication v1 are frozen and
+frontend-active. The authenticated endpoint, `woml emit`, and runtime fan-out
+remain deliberately unavailable until T12.
 
 ## 1. Product Outcome
 
@@ -493,6 +497,11 @@ T0 freezes these artifacts before implementation:
 7. **Trigger Progress v1** — secret-safe readiness, occurrence acceptance,
    duplicate, rejection-summary, run-start, and run-terminal messages for the
    CLI.
+8. **Event Publication v1** — authenticated publisher intent, deterministic
+   subscriber ordering, per-subscriber accepted/rejected results, duplicate and
+   conflict behavior, and bounded fan-out.
+9. **Event Publisher HTTP v1** — reserved route, required headers, public
+   response envelope, request-level errors, and transport status mapping.
 
 Model v1–v6 and Event v1–v6 remain immutable. A Model v7 run uses Event v7 for
 its complete history; one run never mixes versions.
@@ -1152,6 +1161,8 @@ Implementation notes:
 
 ### T11 — Freeze and compile named events
 
+Status: completed.
+
 Changes:
 
 - Activate `<event>` with the frozen name grammar and optional inline schema.
@@ -1169,6 +1180,30 @@ Gate:
 
 Compiled, ingress, fan-out, duplicate, schema-failure, and secret-safety
 fixtures pass conformance tests.
+
+Implementation notes:
+
+- `<event id="..." name="...">` now validates and lowers to the reviewed
+  `trigger.event` Model v7 shape, with an optional inline Draft 2020-12 schema.
+- Event names use the frozen lowercase segmented grammar and are limited to
+  256 characters. Schema diagnostics point to the responsible WOML source.
+- Event Publication v1 and Event Publisher HTTP v1 pin the logical publisher,
+  reserved `POST /_woml/events/{eventName}` transport, required `Event-ID`,
+  bearer control authentication, 1 MiB payload limit, and 1,000-subscriber
+  first-profile bound.
+- Fan-out order is deterministic. Per-subscriber outcomes independently report
+  accepted, duplicate, schema-invalid, idempotency-conflict, unavailable, or
+  invalid-history results. Overall status is `accepted`, `partial`, or
+  `rejected` and a completed fan-out returns HTTP 200.
+- Each subscriber uses a collision-safe hash of event ID, workflow ID, and
+  trigger ID as its Trigger Ingress source identity. A retry after a crash can
+  complete remaining subscribers without duplicating accepted runs.
+- `--control-secret <NAME>` and `--token-secret <NAME>` are frozen symbolic
+  secret sinks. Their values never enter WOML, Model v7, publisher messages,
+  durable state, fixtures, or diagnostics.
+- The CLI gives an explicit T12 diagnostic instead of opening an inactive event
+  listener. `examples/eventWorkflow.woml` is the reviewed T11 product source,
+  and `bun run test:t11` is the T11 release gate.
 
 ### T12 — Execute event publication and fan-out
 

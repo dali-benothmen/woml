@@ -163,12 +163,20 @@ interface ValidatedIntervalTrigger {
   readonly onMissed: 'skip' | 'run-once';
 }
 
+interface ValidatedEventTrigger {
+  readonly kind: 'event';
+  readonly id: string;
+  readonly name: string;
+  readonly schema?: Readonly<Record<string, JsonValue>>;
+}
+
 type ValidatedTrigger =
   | ValidatedManualTrigger
   | ValidatedWebhookTrigger
   | ValidatedSlackTrigger
   | ValidatedScheduleTrigger
-  | ValidatedIntervalTrigger;
+  | ValidatedIntervalTrigger
+  | ValidatedEventTrigger;
 
 interface LoweredFlowFragment {
   readonly entryId: string;
@@ -196,6 +204,7 @@ const supportedElements = new Set([
   'slack',
   'schedule',
   'interval',
+  'event',
   'when-approved',
   'when-rejected',
 ]);
@@ -205,7 +214,6 @@ const stagedElements = new Set([
   'lifecycle',
   'on-success',
   'on-failure',
-  'event',
 ]);
 
 const elementProfiles: Readonly<Record<string, ElementProfile>> = {
@@ -265,6 +273,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   interval: {
     attributes: new Set(['id', 'every', 'on-missed']),
   },
+  event: { attributes: new Set(['id', 'name']) },
   'when-approved': { attributes: new Set() },
   'when-rejected': { attributes: new Set() },
 };
@@ -272,6 +281,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
 const workflowIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const javascriptSafeIdPattern = /^[a-z][A-Za-z0-9]*$/;
 const webhookPathPattern = /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?$/;
+const eventNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
 
 function diagnostic(
   document: WomlSourceDocument,
@@ -602,8 +612,11 @@ function validateWorkflowChildren(
 
 function schemaBody(
   document: WomlSourceDocument,
-  schema: WomlSourceElement
+  schema: WomlSourceElement,
+  owner: 'webhook' | 'event'
 ): Readonly<Record<string, JsonValue>> {
+  const ownerLabel = owner === 'webhook' ? 'webhook' : 'event';
+  const codePrefix = owner === 'webhook' ? 'WOML_WEBHOOK' : 'WOML_EVENT';
   if (Object.keys(schema.attributes).length > 0) {
     const attribute = Object.values(schema.attributes)[0];
     failValidation(
@@ -617,7 +630,7 @@ function schemaBody(
   if (invalidChild !== undefined) {
     failValidation(
       document,
-      'WOML_WEBHOOK_SCHEMA_STRUCTURE_INVALID',
+      `${codePrefix}_SCHEMA_STRUCTURE_INVALID`,
       '<schema> must contain inline JSON only.',
       invalidChild.span
     );
@@ -638,7 +651,7 @@ function schemaBody(
     const start = Math.min(span.start.offset + relative, span.end.offset);
     failValidation(
       document,
-      'WOML_WEBHOOK_SCHEMA_JSON_INVALID',
+      `${codePrefix}_SCHEMA_JSON_INVALID`,
       '<schema> must contain valid JSON.',
       source.span(start, Math.min(start + 1, span.end.offset))
     );
@@ -650,7 +663,7 @@ function schemaBody(
   ) {
     failValidation(
       document,
-      'WOML_WEBHOOK_SCHEMA_INVALID',
+      `${codePrefix}_SCHEMA_INVALID`,
       '<schema> must contain a JSON Schema object.',
       span
     );
@@ -670,8 +683,8 @@ function schemaBody(
     const reason = issue?.message ?? schemaError;
     failValidation(
       document,
-      'WOML_WEBHOOK_SCHEMA_INVALID',
-      `Inline webhook JSON Schema is invalid${reason === undefined ? '.' : `: ${reason}.`}`,
+      `${codePrefix}_SCHEMA_INVALID`,
+      `Inline ${ownerLabel} JSON Schema is invalid${reason === undefined ? '.' : `: ${reason}.`}`,
       span
     );
   }
@@ -756,7 +769,7 @@ function validateWebhookTrigger(
   }
   const schema = children[0] === undefined
     ? undefined
-    : schemaBody(document, children[0]);
+    : schemaBody(document, children[0], 'webhook');
   return {
     kind: 'webhook',
     id,
@@ -863,6 +876,51 @@ function validateIntervalTrigger(
   return { kind: 'interval', id, everyMs, onMissed };
 }
 
+function validateEventTrigger(
+  document: WomlSourceDocument,
+  event: WomlSourceElement
+): ValidatedEventTrigger {
+  const id = validateJavaScriptSafeId(
+    document,
+    requiredAttribute(document, event, 'id'),
+    'trigger'
+  );
+  const name = requiredAttribute(document, event, 'name');
+  if (name.value.length > 256 || !eventNamePattern.test(name.value)) {
+    failValidation(
+      document,
+      'WOML_EVENT_NAME_INVALID',
+      `Event name "${name.value}" must start with a lowercase letter and contain at least two lowercase alphanumeric segments separated by one dot, underscore, or hyphen.`,
+      name.valueSpan,
+      'Examples: order.created, payment_failed, agent-response'
+    );
+  }
+  const children = elementChildren(document, event);
+  if (
+    children.length > 1 ||
+    (children.length === 1 && children[0].name !== 'schema')
+  ) {
+    const offender =
+      children.find(child => child.name !== 'schema') ?? children[1];
+    failValidation(
+      document,
+      'WOML_EVENT_STRUCTURE_INVALID',
+      '<event> may contain at most one inline <schema>.',
+      offender?.openTagSpan ?? event.openTagSpan
+    );
+  }
+  const schema =
+    children[0] === undefined
+      ? undefined
+      : schemaBody(document, children[0], 'event');
+  return {
+    kind: 'event',
+    id,
+    name: name.value,
+    ...(schema === undefined ? {} : { schema }),
+  };
+}
+
 function validateTriggers(
   document: WomlSourceDocument,
   triggers: WomlSourceElement
@@ -899,6 +957,9 @@ function validateTriggers(
     }
     if (child.name === 'interval') {
       return validateIntervalTrigger(document, child);
+    }
+    if (child.name === 'event') {
+      return validateEventTrigger(document, child);
     }
     failValidation(
       document,
@@ -2409,6 +2470,21 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
         fields: {
           everyMs: { kind: 'literal', value: trigger.everyMs },
           onMissed: { kind: 'literal', value: trigger.onMissed },
+        },
+      },
+    };
+  }
+  if (trigger.kind === 'event') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.event',
+      config: {
+        kind: 'object',
+        fields: {
+          name: { kind: 'literal', value: trigger.name },
+          ...(trigger.schema === undefined
+            ? {}
+            : { schema: { kind: 'literal' as const, value: trigger.schema } }),
         },
       },
     };

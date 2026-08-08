@@ -74,6 +74,17 @@ interval cursor advances in the same transaction as occurrence admission.
 Restart recovery applies the same bounded `skip` or `run-once` policy as cron,
 and only `{ scheduledAt, triggeredAt }` enters workflow context.
 
+Named application events add a fan-out boundary above Trigger Ingress rather
+than a second run creator. The T11 frontend lowers each exact event name and
+optional schema into Model v7. Event Publication v1 deterministically matches
+subscribers and sends one independently validated occurrence per matching
+trigger through the existing Rust authority. Its source identity hashes the
+publisher event ID together with workflow and trigger identity, allowing a
+crash or publisher retry to finish missing deliveries without duplicating
+already accepted runs. The reserved authenticated HTTP endpoint and `woml
+emit` client activate in T12; control credentials remain outside compiled
+models and durable workflow context.
+
 The webhook listener is part of this WOML Rust path, not the legacy Cronflow
 webhook module. It validates transport, authentication, body size and JSON
 Schema before admission, returns the durable run identity asynchronously, and

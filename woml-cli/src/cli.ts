@@ -1201,6 +1201,17 @@ async function activateWorkflows(
   io: CliIo,
   dependencies: CliDependencies
 ): Promise<void> {
+  const stagedEvent = sources
+    .flatMap(source =>
+      source.workflow.triggers.map(trigger => ({ source, trigger }))
+    )
+    .find(entry => entry.trigger.handler === 'trigger.event');
+  if (stagedEvent !== undefined) {
+    throw new CliInputError(
+      'WOML_TRIGGER_UNSUPPORTED',
+      `event trigger "${stagedEvent.trigger.id}" in workflow "${stagedEvent.source.workflow.workflowId}" is compiled in T11, but event publication and fan-out become executable in T12.`
+    );
+  }
   if (sources.length > 1 && args.resumeRunId !== undefined) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',

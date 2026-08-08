@@ -1,0 +1,28 @@
+{
+  "contract": "woml.event-publication",
+  "contractVersion": 1,
+  "messageType": "published",
+  "requestId": "publish_request_1",
+  "eventId": "order-42-created",
+  "eventName": "order.created",
+  "status": "accepted",
+  "deliveries": [
+    {
+      "workflowId": "send-confirmation",
+      "triggerId": "orderCreated",
+      "status": "accepted",
+      "occurrenceId": "occ_confirmation",
+      "runId": "run_confirmation",
+      "duplicate": false
+    },
+    {
+      "workflowId": "update-inventory",
+      "triggerId": "orderCreated",
+      "status": "accepted",
+      "occurrenceId": "occ_inventory",
+      "runId": "run_inventory",
+      "duplicate": false
+    }
+  ],
+  "completedAt": "2026-08-08T12:00:00.100Z"
+}
