@@ -36,6 +36,7 @@ import {
   stopWebhookRuntimeWithRust,
   submitTriggerOccurrenceWithRust,
   TriggerRuntimeError,
+  type IntervalProgressV1,
   type ScheduleProgressV1,
   type TriggerProgressV1,
   type RustApprovalRuntimeOutcome,
@@ -1181,6 +1182,19 @@ export function formatScheduleProgress(progress: ScheduleProgressV1): string {
   return `Schedule ${progress.triggerId} (${progress.timezone}) next due at ${progress.nextScheduledAt}${recovery}.`;
 }
 
+export function formatIntervalProgress(progress: IntervalProgressV1): string {
+  if (progress.type === 'scheduler_error') {
+    return `Interval ${progress.triggerId} failed [${progress.code}]: ${progress.message}`;
+  }
+  const recovery =
+    progress.reason === 'misfire_skipped'
+      ? ' (missed occurrences skipped)'
+      : progress.reason === 'misfire_run_once'
+        ? ' (one missed occurrence recovered)'
+        : '';
+  return `Interval ${progress.triggerId} every ${progress.everyMs}ms next due at ${progress.nextScheduledAt}${recovery}.`;
+}
+
 async function activateWorkflows(
   sources: readonly CompiledWorkflowSource[],
   args: RunArguments,
@@ -1205,7 +1219,8 @@ async function activateWorkflows(
       trigger =>
         trigger.handler === 'trigger.webhook' ||
         trigger.handler === 'trigger.slack' ||
-        trigger.handler === 'trigger.schedule'
+        trigger.handler === 'trigger.schedule' ||
+        trigger.handler === 'trigger.interval'
     )
   );
   const oneShotSources = sources.filter(
@@ -1283,6 +1298,8 @@ async function activateWorkflows(
             ),
           onScheduleProgress: progress =>
             io.stderr(`${formatScheduleProgress(progress)}\n`),
+          onIntervalProgress: progress =>
+            io.stderr(`${formatIntervalProgress(progress)}\n`),
         }
       );
       runtimeId = runtime.runtimeId;

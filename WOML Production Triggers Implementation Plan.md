@@ -1,12 +1,12 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 through T9 completed on 2026-08-08. Manual, webhook, Slack, and cron
-schedule triggers are active. Rust owns atomic occurrence admission, HTTP
-validation, durable run creation, background DAG execution, the injected
-schedule clock, SQLite cursors, bounded misfire recovery, and process-crash
-recovery. `woml run` stays alive, while `woml test` owns one-shot execution and
-`woml runs get` inspects durable results. There is no separate public `woml
-serve` mode.
+Status: T0 through T10 completed on 2026-08-08. Manual, webhook, Slack, cron
+schedule, and fixed-rate interval triggers are active. Rust owns atomic
+occurrence admission, HTTP validation, durable run creation, background DAG
+execution, the injected clock, SQLite schedule and interval cursors, bounded
+misfire recovery, and process-crash recovery. `woml run` stays alive, while
+`woml test` owns one-shot execution and `woml runs get` inspects durable
+results. There is no separate public `woml serve` mode.
 
 ## 1. Product Outcome
 
@@ -1104,9 +1104,11 @@ Implementation notes:
   RFC 3339 UTC. Occurrence identity is stable from workflow ID, trigger ID, and
   planned UTC instant.
 - `woml run examples/scheduleWorkflow.woml` remains active and reports its next
-  due instant. `bun run test:t9` is the T9 gate and `test:release` points to it.
+  due instant. `bun run test:t9` remains the historical T9 gate.
 
 ### T10 — Execute and publish durable intervals
+
+Status: completed.
 
 Changes:
 
@@ -1125,6 +1127,28 @@ Gate:
 
 Deterministic-clock tests prove the exact grid, misfire behavior, simultaneous
 intervals, and absence of duplicate sequences.
+
+Implementation notes:
+
+- The frontend accepts whole durations from `1s` through `30d`, lowers them to
+  exact `everyMs`, and defaults `on-missed` to `skip`.
+- Durable store schema v6 adds an interval cursor containing the definition,
+  duration, policy, first-registration UTC anchor, next sequence, and next
+  planned instant.
+- Rust computes every occurrence as `anchor + sequence × every`; workflow
+  execution duration never moves the grid and does not block later interval
+  admissions.
+- Cursor advancement and occurrence/run creation commit atomically. Source
+  identity includes workflow, trigger, anchor, and sequence, while
+  `context.trigger` remains exactly `{ scheduledAt, triggeredAt }`.
+- Restart recovery is bounded: `skip` moves directly to the next future grid
+  point and `run-once` admits only the latest missed occurrence.
+- Interval Progress v1 reports the durable anchor, next sequence, next planned
+  instant, recovery reason, and safe runtime errors without widening Trigger
+  Progress v1.
+- `woml run examples/intervalWorkflow.woml` stays active, needs no HTTP socket,
+  prints its next due instant, and fires every five seconds. `bun run test:t10`
+  is the T10 release gate.
 
 ### T11 — Freeze and compile named events
 

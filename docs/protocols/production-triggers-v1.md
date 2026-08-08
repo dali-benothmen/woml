@@ -1,9 +1,9 @@
 # WOML Production Trigger Contracts v1
 
-Status: frozen in T0. Webhook frontend lowering is implemented in T1, the Rust
-occurrence authority in T2, and the Rust HTTP ingress plus background durable
-execution path in T3. T4 exposes that runtime through long-lived `woml run`,
-one-shot `woml test`, and durable `woml runs get` inspection.
+Status: frozen in T0 and implemented through T10. Long-lived `woml run` now
+activates manual, webhook, Slack, cron schedule, and fixed-rate interval
+triggers through the shared durable Rust occurrence boundary. Named events
+remain staged for T11.
 
 This document pins the boundary shared by the TypeScript WOML frontend, Rust
 core, CLI, HTTP listener, provider adapters, and durable store. The normative
@@ -16,6 +16,8 @@ machine-readable artifacts are:
 - `docs/schemas/webhook-http.v1.schema.json`
 - `docs/schemas/slack-trigger-protocol.v1.schema.json`
 - `docs/schemas/trigger-progress.v1.schema.json`
+- `docs/schemas/schedule-progress.v1.schema.json`
+- `docs/schemas/interval-progress.v1.schema.json`
 
 Model v1–v6 and Event v1–v6 remain immutable. A Model v7 run uses Event v7 for
 its entire history.
@@ -34,8 +36,8 @@ Model v7 keeps the existing DAG and defines a strict trigger union:
 | `<event>` | `trigger.event` |
 
 Trigger IDs are unique within a workflow and every trigger starts the same DAG.
-Only manual and webhook syntax is accepted by the T1 frontend. The remaining
-shapes are frozen fixtures but stay rejected until their activation phases.
+Manual, webhook, Slack, schedule, and interval syntax are active through T10.
+The event shape remains a frozen fixture and stays rejected until T11.
 Resolved credentials never appear in a compiled definition; only
 `secretReference` expressions are permitted.
 
@@ -249,6 +251,26 @@ clock wakes slightly late; multiple elapsed instants use the same bounded
 misfire policy. Different schedule registrations are independent and may fire
 concurrently.
 
+## Durable interval boundary
+
+Store schema v6 adds one mutable interval cursor per workflow and trigger. Its
+first successful registration freezes a millisecond-precision UTC anchor and
+starts at sequence 1. Planned instants are always derived as `anchor + sequence
+× everyMs`; neither dispatch latency nor workflow completion changes that
+grid. A definition or interval configuration change intentionally initializes
+a new anchor.
+
+Rust atomically advances the expected sequence and planned instant while it
+admits the immutable occurrence. The source identity is workflow ID, trigger
+ID, anchor, and sequence. Anchor and sequence remain engine metadata;
+`context.trigger` is exactly `{ scheduledAt, triggeredAt }` in RFC 3339 UTC.
+
+On restart, `skip` advances directly to the first grid point after now.
+`run-once` admits only the latest due sequence and then advances to the first
+future grid point. Independent intervals may be admitted simultaneously, and
+an interval may start a new run while an earlier run from the same trigger is
+still executing.
+
 ## Progress boundary
 
 Trigger Progress v1 is operational output for long-lived CLI processes. It
@@ -262,6 +284,11 @@ message exposes the next UTC instant, configured timezone, and cursor reason.
 Its `scheduler_error` message contains only a safe code and message. Once an
 occurrence is admitted, existing Trigger Progress v1 messages describe its run
 lifecycle.
+
+Interval Progress v1 is also separate. Its `next_due` message exposes only the
+duration, durable anchor, next sequence, next planned instant, and recovery
+reason. Its `scheduler_error` carries a safe code and message. Once a tick is
+admitted, Trigger Progress v1 describes the resulting run.
 
 ### T4 CLI implementation
 

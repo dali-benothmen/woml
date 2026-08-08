@@ -20,6 +20,7 @@ use crate::event::{
   ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
   RunSucceededData, StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
 };
+use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{ApprovalDefinition, ParallelGroupDefinition, ValueExpression};
 use crate::projection::{ApprovalRequestStatus, AttemptStatus};
 use crate::protocol::{ExecuteMessage, HostOutcome, ScriptAttempt};
@@ -123,6 +124,7 @@ pub struct RuntimeExecutionOptions {
   pub progress_reporter: Option<ExecutionProgressReporter>,
   pub schedule_clock: Arc<dyn ScheduleClock>,
   pub schedule_progress_reporter: Option<ScheduleProgressReporter>,
+  pub interval_progress_reporter: Option<IntervalProgressReporter>,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -145,6 +147,13 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
           .as_ref()
           .map(|_| "configured"),
       )
+      .field(
+        "interval_progress_reporter",
+        &self
+          .interval_progress_reporter
+          .as_ref()
+          .map(|_| "configured"),
+      )
       .finish()
   }
 }
@@ -159,6 +168,7 @@ impl RuntimeExecutionOptions {
       progress_reporter: None,
       schedule_clock: Arc::new(SystemScheduleClock),
       schedule_progress_reporter: None,
+      interval_progress_reporter: None,
     }
   }
 
@@ -182,8 +192,19 @@ impl RuntimeExecutionOptions {
     self
   }
 
+  pub fn with_interval_progress_reporter(mut self, reporter: IntervalProgressReporter) -> Self {
+    self.interval_progress_reporter = Some(reporter);
+    self
+  }
+
   pub(crate) fn report_schedule(&self, progress: ScheduleProgress) {
     if let Some(reporter) = &self.schedule_progress_reporter {
+      reporter(progress);
+    }
+  }
+
+  pub(crate) fn report_interval(&self, progress: IntervalProgress) {
+    if let Some(reporter) = &self.interval_progress_reporter {
       reporter(progress);
     }
   }

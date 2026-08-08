@@ -1533,20 +1533,61 @@ describe('compileWoml', () => {
     );
   });
 
-  test('keeps interval and event runtime-staged after T8', () => {
-    const fixtureNames = [
-      'triggers-interval.woml',
-      'triggers-event.woml',
-    ];
-    for (const name of fixtureNames) {
-      const source = readFileSync(
-        new URL(`./fixtures/${name}`, import.meta.url),
+  test('T10 lowers the reviewed interval fixture exactly to Model v7', () => {
+    const source = readFileSync(
+      new URL('./fixtures/triggers-interval.woml', import.meta.url),
+      'utf8'
+    );
+    const expected = JSON.parse(
+      readFileSync(
+        new URL(
+          './fixtures/triggers-interval.compiled.v7.json',
+          import.meta.url
+        ),
         'utf8'
-      );
-      expect(validationError(source).diagnostic.code).toBe(
-        'WOML_FEATURE_NOT_EXECUTABLE'
+      )
+    );
+    expect(compile(source)).toEqual(expected);
+  });
+
+  test('T10 validates the fixed-rate duration bounds and defaults', () => {
+    const interval = (attributes: string) => `<workflow id="interval-errors">
+  <triggers><interval id="refresh" ${attributes} /></triggers>
+  <steps><step id="capture"><script>return context.trigger;</script></step></steps>
+</workflow>`;
+    expect(compile(interval('every="1s"')).triggers[0]).toEqual({
+      id: 'refresh',
+      handler: 'trigger.interval',
+      config: {
+        kind: 'object',
+        fields: {
+          everyMs: { kind: 'literal', value: 1_000 },
+          onMissed: { kind: 'literal', value: 'skip' },
+        },
+      },
+    });
+    for (const value of ['0s', '999ms', '1.5s', '31d', '1h30m']) {
+      const source = interval(`every="${value}"`);
+      const error = validationError(source);
+      expect(error.diagnostic.code).toBe('WOML_INTERVAL_INVALID');
+      expect(error.diagnostic.location.start.offset).toBe(
+        source.indexOf(value)
       );
     }
+    const badPolicy = interval('every="5m" on-missed="catch-up"');
+    expect(validationError(badPolicy).diagnostic.code).toBe(
+      'WOML_TRIGGER_MISFIRE_INVALID'
+    );
+  });
+
+  test('keeps event runtime-staged after T10', () => {
+    const source = readFileSync(
+      new URL('./fixtures/triggers-event.woml', import.meta.url),
+      'utf8'
+    );
+    expect(validationError(source).diagnostic.code).toBe(
+      'WOML_FEATURE_NOT_EXECUTABLE'
+    );
   });
 
   test('requires the workflow root and validates trigger IDs', () => {

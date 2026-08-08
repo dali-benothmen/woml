@@ -9,6 +9,7 @@ import {
   compiledDefinitionHash,
   executeWorkflowWithRustDurable,
   executeWorkflowWithRust,
+  parseIntervalProgress,
   parseScheduleProgress,
   parseTriggerProgress,
   recoverDurableRuns,
@@ -112,6 +113,48 @@ describe('Schedule Progress v1 decoding', () => {
         })
       )
     ).toThrow('invalid schedule progress');
+  });
+});
+
+describe('Interval Progress v1 decoding', () => {
+  test('accepts an anchored next-due diagnostic', () => {
+    const progress = parseIntervalProgress(
+      JSON.stringify({
+        contract: 'woml.interval-progress',
+        contractVersion: 1,
+        type: 'next_due',
+        workflowId: 'heartbeat',
+        triggerId: 'tick',
+        everyMs: 5000,
+        anchorAt: '2026-08-08T12:00:00.000Z',
+        nextSequence: 4,
+        nextScheduledAt: '2026-08-08T12:00:20.000Z',
+        reason: 'advanced',
+        occurredAt: '2026-08-08T12:00:15.000Z',
+      })
+    );
+    expect(progress.type).toBe('next_due');
+    expect(() => parseTriggerProgress(JSON.stringify(progress))).toThrow(
+      'invalid trigger progress'
+    );
+  });
+
+  test('rejects unknown interval progress fields', () => {
+    expect(() =>
+      parseIntervalProgress(
+        JSON.stringify({
+          contract: 'woml.interval-progress',
+          contractVersion: 1,
+          type: 'scheduler_error',
+          workflowId: 'heartbeat',
+          triggerId: 'tick',
+          code: 'WOML_INTERVAL_RUNTIME_FAILED',
+          message: 'safe summary',
+          occurredAt: '2026-08-08T12:00:00.000Z',
+          context: { secret: true },
+        })
+      )
+    ).toThrow('invalid interval progress');
   });
 });
 

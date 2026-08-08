@@ -61,8 +61,9 @@ includes conditional branches and bounded parallel groups:
 | Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
 | Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
 | Multiple triggers, webhook, and inline payload schema | Frozen and hardened through Production Triggers T0–T5 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
-| Slack trigger | Frozen; frontend activated in Production Triggers T6 | Compiles to reviewed Model v7; event ingestion remains runtime-staged until T7 |
-| Config, lifecycle, schedule, interval, and event triggers | Schedule, interval, and event shapes frozen in Production Triggers T0; config/lifecycle remain designed | Unavailable until their activation phases |
+| Slack trigger | Frozen and hardened through Production Triggers T6–T9 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
+| Schedule and interval triggers | Frozen and activated through Production Triggers T8–T10 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
+| Config, lifecycle, and event triggers | Event shape frozen in Production Triggers T0; config/lifecycle remain designed | Unavailable until their activation phases |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |

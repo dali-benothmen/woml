@@ -154,6 +154,36 @@ export type ScheduleProgressV1 =
       readonly occurredAt: string;
     };
 
+export type IntervalProgressV1 =
+  | {
+      readonly contract: 'woml.interval-progress';
+      readonly contractVersion: 1;
+      readonly type: 'next_due';
+      readonly workflowId: string;
+      readonly triggerId: string;
+      readonly everyMs: number;
+      readonly anchorAt: string;
+      readonly nextSequence: number;
+      readonly nextScheduledAt: string;
+      readonly reason:
+        | 'initialized'
+        | 'restarted'
+        | 'advanced'
+        | 'misfire_skipped'
+        | 'misfire_run_once';
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.interval-progress';
+      readonly contractVersion: 1;
+      readonly type: 'scheduler_error';
+      readonly workflowId: string;
+      readonly triggerId: string;
+      readonly code: string;
+      readonly message: string;
+      readonly occurredAt: string;
+    };
+
 export interface WebhookRuntimeRegistration {
   readonly workflow: CompiledWorkflowDefinition;
   readonly definitionHash: string;
@@ -166,6 +196,7 @@ export interface WebhookRuntimeOptions extends RustExecutorOptions {
   readonly startupManualTriggers?: Readonly<Record<string, string>>;
   readonly onTriggerProgress?: (progress: TriggerProgressV1) => void;
   readonly onScheduleProgress?: (progress: ScheduleProgressV1) => void;
+  readonly onIntervalProgress?: (progress: IntervalProgressV1) => void;
 }
 
 export interface WebhookRuntimeHandle {
@@ -901,6 +932,74 @@ export function parseScheduleProgress(json: string): ScheduleProgressV1 {
   throw new Error('The native core returned invalid schedule progress.');
 }
 
+export function parseIntervalProgress(json: string): IntervalProgressV1 {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    value.contract !== 'woml.interval-progress' ||
+    value.contractVersion !== 1 ||
+    typeof value.workflowId !== 'string' ||
+    value.workflowId.length === 0 ||
+    typeof value.triggerId !== 'string' ||
+    value.triggerId.length === 0 ||
+    !dateTime(value.occurredAt)
+  ) {
+    throw new Error('The native core returned invalid interval progress.');
+  }
+  if (
+    value.type === 'next_due' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'workflowId',
+      'triggerId',
+      'everyMs',
+      'anchorAt',
+      'nextSequence',
+      'nextScheduledAt',
+      'reason',
+      'occurredAt',
+    ]) &&
+    Number.isSafeInteger(value.everyMs) &&
+    Number(value.everyMs) >= 1_000 &&
+    Number(value.everyMs) <= 2_592_000_000 &&
+    dateTime(value.anchorAt) &&
+    Number.isSafeInteger(value.nextSequence) &&
+    Number(value.nextSequence) >= 1 &&
+    dateTime(value.nextScheduledAt) &&
+    [
+      'initialized',
+      'restarted',
+      'advanced',
+      'misfire_skipped',
+      'misfire_run_once',
+    ].includes(String(value.reason))
+  ) {
+    return value as IntervalProgressV1;
+  }
+  if (
+    value.type === 'scheduler_error' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'workflowId',
+      'triggerId',
+      'code',
+      'message',
+      'occurredAt',
+    ]) &&
+    typeof value.code === 'string' &&
+    /^WOML_[A-Z0-9_]+$/.test(value.code) &&
+    typeof value.message === 'string' &&
+    value.message.length > 0
+  ) {
+    return value as IntervalProgressV1;
+  }
+  throw new Error('The native core returned invalid interval progress.');
+}
+
 function executionResult(value: unknown): value is RustWorkflowExecutionResult {
   if (
     !record(value) ||
@@ -1503,6 +1602,10 @@ export async function startWebhookRuntimeWithRust(
         const decoded: unknown = JSON.parse(message);
         if (record(decoded) && decoded.contract === 'woml.schedule-progress') {
           options.onScheduleProgress?.(parseScheduleProgress(message));
+          return;
+        }
+        if (record(decoded) && decoded.contract === 'woml.interval-progress') {
+          options.onIntervalProgress?.(parseIntervalProgress(message));
           return;
         }
         options.onTriggerProgress?.(parseTriggerProgress(message));

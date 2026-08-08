@@ -8,6 +8,7 @@ pub mod durable;
 pub mod engine;
 pub mod event;
 pub mod host;
+pub mod interval;
 pub mod model;
 pub mod notification_host;
 pub mod notification_protocol;
@@ -22,7 +23,8 @@ pub mod webhook;
 pub use durable::{
   ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,
   ApprovalTimeoutSettlementStatus, ApprovalTokenBinding, DurableDagEngine, DurableEngineError,
-  DurableEventStore, DurableStoreError, IssuedApprovalToken, NotificationDeliveryWork,
+  DurableEventStore, DurableStoreError, IntervalCursor, IntervalCursorRegistration,
+  IntervalCursorRegistrationOutcome, IssuedApprovalToken, NotificationDeliveryWork,
   NotificationDispatchReport, NotificationProviderAdapter, NotificationProviderDeliveryResult,
   NotificationProviderUpdateResult, NotificationUpdateWork, RecoveryReport, RunDefinitionBinding,
   ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, StepFailureCommit,
@@ -45,6 +47,10 @@ pub use event::{
   RunFailedDataV4, RunFailedDataV5, RunStartedData, StepRetryScheduledData,
 };
 pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions};
+pub use interval::{
+  IntervalError, IntervalProgress, IntervalProgressReason, IntervalProgressReporter, WomlInterval,
+  INTERVAL_PROGRESS_CONTRACT, INTERVAL_PROGRESS_CONTRACT_VERSION, MAX_INTERVAL_MS, MIN_INTERVAL_MS,
+};
 pub use model::{
   CompiledWorkflowDefinition, ModelIssue, ModelIssueCode, ModelValidationError,
   NotificationDefinition,

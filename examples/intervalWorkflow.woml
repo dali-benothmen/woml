@@ -1,0 +1,15 @@
+<workflow id="interval-demo" name="Interval Demo">
+  <triggers>
+    <interval id="heartbeat" every="5s" on-missed="skip" />
+  </triggers>
+  <steps>
+    <step id="report">
+      <script>
+        return {
+          message: `Interval fired at ${context.trigger.triggeredAt}`,
+          scheduledAt: context.trigger.scheduledAt
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>

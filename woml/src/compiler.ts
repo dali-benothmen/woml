@@ -156,11 +156,19 @@ interface ValidatedScheduleTrigger {
   readonly onMissed: 'skip' | 'run-once';
 }
 
+interface ValidatedIntervalTrigger {
+  readonly kind: 'interval';
+  readonly id: string;
+  readonly everyMs: number;
+  readonly onMissed: 'skip' | 'run-once';
+}
+
 type ValidatedTrigger =
   | ValidatedManualTrigger
   | ValidatedWebhookTrigger
   | ValidatedSlackTrigger
-  | ValidatedScheduleTrigger;
+  | ValidatedScheduleTrigger
+  | ValidatedIntervalTrigger;
 
 interface LoweredFlowFragment {
   readonly entryId: string;
@@ -187,6 +195,7 @@ const supportedElements = new Set([
   'notify',
   'slack',
   'schedule',
+  'interval',
   'when-approved',
   'when-rejected',
 ]);
@@ -196,7 +205,6 @@ const stagedElements = new Set([
   'lifecycle',
   'on-success',
   'on-failure',
-  'interval',
   'event',
 ]);
 
@@ -253,6 +261,9 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   schedule: {
     attributes: new Set(['id', 'cron', 'timezone', 'on-missed']),
+  },
+  interval: {
+    attributes: new Set(['id', 'every', 'on-missed']),
   },
   'when-approved': { attributes: new Set() },
   'when-rejected': { attributes: new Set() },
@@ -804,6 +815,54 @@ function validateScheduleTrigger(
   return { kind: 'schedule', id, cron: cron.value, timezone, onMissed };
 }
 
+function validateIntervalTrigger(
+  document: WomlSourceDocument,
+  interval: WomlSourceElement
+): ValidatedIntervalTrigger {
+  ensureEmptyElement(document, interval);
+  const id = validateJavaScriptSafeId(
+    document,
+    requiredAttribute(document, interval, 'id'),
+    'trigger'
+  );
+  const every = requiredAttribute(document, interval, 'every');
+  const match = /^([1-9][0-9]*)(ms|s|m|h|d)$/.exec(every.value);
+  if (match === null) {
+    failValidation(
+      document,
+      'WOML_INTERVAL_INVALID',
+      `Interval every="${every.value}" must be one positive whole duration using ms, s, m, h, or d.`,
+      every.valueSpan,
+      'Examples: 1s, 5m, 24h, 30d'
+    );
+  }
+  const everyMs =
+    Number(match[1]) *
+    durationUnitsMs[match[2] as keyof typeof durationUnitsMs];
+  if (
+    !Number.isSafeInteger(everyMs) ||
+    everyMs < durationUnitsMs.s ||
+    everyMs > durationUnitsMs.d * 30
+  ) {
+    failValidation(
+      document,
+      'WOML_INTERVAL_INVALID',
+      `Interval every="${every.value}" must resolve to a whole duration from 1s through 30d.`,
+      every.valueSpan
+    );
+  }
+  const onMissed = interval.attributes['on-missed']?.value ?? 'skip';
+  if (onMissed !== 'skip' && onMissed !== 'run-once') {
+    failValidation(
+      document,
+      'WOML_TRIGGER_MISFIRE_INVALID',
+      `Interval on-missed must be "skip" or "run-once", found "${onMissed}".`,
+      interval.attributes['on-missed']!.valueSpan
+    );
+  }
+  return { kind: 'interval', id, everyMs, onMissed };
+}
+
 function validateTriggers(
   document: WomlSourceDocument,
   triggers: WomlSourceElement
@@ -837,6 +896,9 @@ function validateTriggers(
     }
     if (child.name === 'schedule') {
       return validateScheduleTrigger(document, child);
+    }
+    if (child.name === 'interval') {
+      return validateIntervalTrigger(document, child);
     }
     failValidation(
       document,
@@ -2333,6 +2395,19 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
         fields: {
           cron: { kind: 'literal', value: trigger.cron },
           timezone: { kind: 'literal', value: trigger.timezone },
+          onMissed: { kind: 'literal', value: trigger.onMissed },
+        },
+      },
+    };
+  }
+  if (trigger.kind === 'interval') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.interval',
+      config: {
+        kind: 'object',
+        fields: {
+          everyMs: { kind: 'literal', value: trigger.everyMs },
           onMissed: { kind: 'literal', value: trigger.onMissed },
         },
       },

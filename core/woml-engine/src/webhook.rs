@@ -17,6 +17,10 @@ use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use uuid::Uuid;
 
+use crate::interval::{
+  IntervalProgress, IntervalProgressReason, WomlInterval, INTERVAL_PROGRESS_CONTRACT,
+  INTERVAL_PROGRESS_CONTRACT_VERSION,
+};
 use crate::model::ValueExpression;
 use crate::schedule::{
   ScheduleMisfirePolicy, ScheduleProgress, ScheduleProgressReason, WomlSchedule,
@@ -24,8 +28,8 @@ use crate::schedule::{
 };
 use crate::{
   execute_admitted_trigger_run_durable, CompiledWorkflowDefinition, DurableEventStore,
-  DurableStoreError, ModelValidationError, RuntimeExecutionOptions, ScheduleCursorRegistration,
-  TriggerAdmissionRequest,
+  DurableStoreError, IntervalCursorRegistration, ModelValidationError, RuntimeExecutionOptions,
+  ScheduleCursorRegistration, TriggerAdmissionRequest,
 };
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -134,7 +138,7 @@ pub type ExternalTriggerAdmissionReceiver =
 pub struct WomlWebhookServer {
   local_address: SocketAddr,
   handle: Option<actix_web::dev::ServerHandle>,
-  schedule_tasks: Vec<actix_web::rt::task::JoinHandle<()>>,
+  timed_trigger_tasks: Vec<actix_web::rt::task::JoinHandle<()>>,
 }
 
 impl WomlWebhookServer {
@@ -159,7 +163,10 @@ impl WomlWebhookServer {
       .unwrap_or_else(|| "127.0.0.1:0".parse().expect("valid internal address"));
     let app_state = web::Data::new(state);
     let recovery_state = app_state.clone();
-    let (schedule_tasks, recovered_schedule_runs) = initialize_schedules(recovery_state.clone())?;
+    let (mut timed_trigger_tasks, recovered_schedule_runs) =
+      initialize_schedules(recovery_state.clone())?;
+    let (interval_tasks, recovered_interval_runs) = initialize_intervals(recovery_state.clone())?;
+    timed_trigger_tasks.extend(interval_tasks);
     let handle = if let Some(listener) = listener {
       let server = HttpServer::new(move || {
         App::new()
@@ -198,6 +205,13 @@ impl WomlWebhookServer {
         dispatch_run(recovery_state.get_ref(), identity);
       }
     }
+    for (identity, duplicate) in recovered_interval_runs {
+      recovery_state.report_accepted(&identity, duplicate);
+      if !duplicate {
+        recovery_state.report_run_started(&identity);
+        dispatch_run(recovery_state.get_ref(), identity);
+      }
+    }
     for startup in startup_manual_runs {
       admit_startup_manual(recovery_state.get_ref(), startup);
     }
@@ -205,7 +219,7 @@ impl WomlWebhookServer {
     Ok(Self {
       local_address,
       handle,
-      schedule_tasks,
+      timed_trigger_tasks,
     })
   }
 
@@ -214,7 +228,7 @@ impl WomlWebhookServer {
   }
 
   pub async fn stop(self) {
-    for task in self.schedule_tasks {
+    for task in self.timed_trigger_tasks {
       task.abort();
     }
     if let Some(handle) = self.handle {
@@ -249,6 +263,7 @@ struct WebhookRuntimeState {
   execution: RuntimeExecutionOptions,
   progress_reporter: Option<TriggerProgressReporter>,
   schedules: Vec<ScheduleRuntimeRegistration>,
+  intervals: Vec<IntervalRuntimeRegistration>,
 }
 
 #[derive(Clone)]
@@ -257,6 +272,15 @@ struct ScheduleRuntimeRegistration {
   definition_hash: String,
   trigger_id: String,
   schedule: WomlSchedule,
+  on_missed: ScheduleMisfirePolicy,
+}
+
+#[derive(Clone)]
+struct IntervalRuntimeRegistration {
+  workflow_id: String,
+  definition_hash: String,
+  trigger_id: String,
+  interval: WomlInterval,
   on_missed: ScheduleMisfirePolicy,
 }
 
@@ -388,6 +412,7 @@ fn prepare_state(
   let mut definitions = Vec::new();
   let mut startup_manual_runs = Vec::new();
   let mut schedules = Vec::new();
+  let mut intervals = Vec::new();
   let mut registration_count = 0;
   for registration in config.registrations {
     registration.workflow.validate_for_durable_execution()?;
@@ -400,11 +425,15 @@ fn prepare_state(
     if registration.workflow.triggers.iter().any(|trigger| {
       !matches!(
         trigger.handler.as_str(),
-        "trigger.manual" | "trigger.webhook" | "trigger.slack" | "trigger.schedule"
+        "trigger.manual"
+          | "trigger.webhook"
+          | "trigger.slack"
+          | "trigger.schedule"
+          | "trigger.interval"
       )
     }) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} contains a production trigger that is not active in T9",
+        "workflow {:?} contains a production trigger that is not active in T10",
         registration.workflow.workflow_id
       )));
     }
@@ -436,6 +465,9 @@ fn prepare_state(
     for trigger in &registration.workflow.triggers {
       if trigger.handler == "trigger.schedule" {
         schedules.push(compile_schedule(&registration, trigger)?);
+      }
+      if trigger.handler == "trigger.interval" {
+        intervals.push(compile_interval(&registration, trigger)?);
       }
       if trigger.handler == "trigger.webhook" {
         let route = compile_route(&registration, trigger)?;
@@ -490,6 +522,7 @@ fn prepare_state(
       execution: config.execution,
       progress_reporter: config.progress_reporter,
       schedules,
+      intervals,
     },
     recovery_runs,
     startup_manual_runs,
@@ -593,6 +626,13 @@ fn literal_string(expression: Option<&ValueExpression>) -> Option<&str> {
   }
 }
 
+fn literal_u64(expression: Option<&ValueExpression>) -> Option<u64> {
+  match expression {
+    Some(ValueExpression::Literal { value }) => value.as_u64(),
+    _ => None,
+  }
+}
+
 fn webhook_path(config: &ValueExpression) -> Option<&str> {
   literal_string(object_fields(config)?.get("path"))
 }
@@ -642,6 +682,49 @@ fn compile_schedule(
     definition_hash: registration.definition_hash.clone(),
     trigger_id: trigger.id.clone(),
     schedule,
+    on_missed,
+  })
+}
+
+fn compile_interval(
+  registration: &WebhookDefinitionRegistration,
+  trigger: &crate::model::CompiledTrigger,
+) -> Result<IntervalRuntimeRegistration, WebhookRuntimeError> {
+  let fields = object_fields(&trigger.config).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "interval trigger {:?} config must be an object",
+      trigger.id
+    ))
+  })?;
+  let every_ms = literal_u64(fields.get("everyMs")).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "interval trigger {:?} is missing everyMs",
+      trigger.id
+    ))
+  })?;
+  let on_missed = literal_string(fields.get("onMissed")).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "interval trigger {:?} is missing onMissed",
+      trigger.id
+    ))
+  })?;
+  let interval = WomlInterval::new(every_ms).map_err(|error| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "interval trigger {:?} is invalid: {error}",
+      trigger.id
+    ))
+  })?;
+  let on_missed = ScheduleMisfirePolicy::parse(on_missed).map_err(|error| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "interval trigger {:?} is invalid: {error}",
+      trigger.id
+    ))
+  })?;
+  Ok(IntervalRuntimeRegistration {
+    workflow_id: registration.workflow.workflow_id.clone(),
+    definition_hash: registration.definition_hash.clone(),
+    trigger_id: trigger.id.clone(),
+    interval,
     on_missed,
   })
 }
@@ -931,6 +1014,390 @@ fn report_schedule_error(
       workflow_id: registration.workflow_id.clone(),
       trigger_id: registration.trigger_id.clone(),
       code: "WOML_SCHEDULE_RUNTIME_FAILED".to_string(),
+      message: message.to_string(),
+      occurred_at: state.execution.schedule_clock.now(),
+    });
+}
+
+fn initialize_intervals(
+  state: web::Data<WebhookRuntimeState>,
+) -> Result<
+  (
+    Vec<actix_web::rt::task::JoinHandle<()>>,
+    Vec<(RunProgressIdentity, bool)>,
+  ),
+  WebhookRuntimeError,
+> {
+  let now = state.execution.schedule_clock.now();
+  let mut recovered_runs = Vec::new();
+  let mut prepared = Vec::new();
+  for registration in state.intervals.clone() {
+    let mut store = DurableEventStore::open(&state.database_path)?;
+    let registered = store.register_interval_cursor(
+      &IntervalCursorRegistration {
+        workflow_id: registration.workflow_id.clone(),
+        trigger_id: registration.trigger_id.clone(),
+        definition_hash: registration.definition_hash.clone(),
+        every_ms: registration.interval.every_ms(),
+        on_missed: registration.on_missed.as_str().to_string(),
+      },
+      now,
+      now,
+    )?;
+    let mut cursor = registered.cursor;
+    let mut reason = if registered.initialized {
+      IntervalProgressReason::Initialized
+    } else {
+      IntervalProgressReason::Restarted
+    };
+
+    if !registered.initialized && cursor.next_scheduled_at < now {
+      let next_sequence = registration
+        .interval
+        .next_sequence_after(cursor.anchor_at, now)
+        .map_err(|error| interval_registration_error(&registration, "recover its cursor", error))?;
+      let next_scheduled_at = registration
+        .interval
+        .planned_at(cursor.anchor_at, next_sequence)
+        .map_err(|error| interval_registration_error(&registration, "recover its cursor", error))?;
+      match registration.on_missed {
+        ScheduleMisfirePolicy::Skip => {
+          cursor = store.advance_interval_cursor(
+            &registration.workflow_id,
+            &registration.trigger_id,
+            cursor.next_sequence,
+            cursor.next_scheduled_at,
+            next_sequence,
+            next_scheduled_at,
+            now,
+          )?;
+          reason = IntervalProgressReason::MisfireSkipped;
+        }
+        ScheduleMisfirePolicy::RunOnce => {
+          let planned_sequence = registration
+            .interval
+            .latest_sequence_at_or_before(cursor.anchor_at, now)
+            .map_err(|error| {
+              interval_registration_error(&registration, "recover its latest occurrence", error)
+            })?;
+          let planned_at = registration
+            .interval
+            .planned_at(cursor.anchor_at, planned_sequence)
+            .map_err(|error| {
+              interval_registration_error(&registration, "recover its latest occurrence", error)
+            })?;
+          let (outcome, advanced) = store.claim_interval_occurrence(
+            cursor.next_sequence,
+            cursor.next_scheduled_at,
+            next_sequence,
+            next_scheduled_at,
+            interval_admission(
+              &registration,
+              cursor.anchor_at,
+              planned_sequence,
+              planned_at,
+              now,
+            ),
+          )?;
+          cursor = advanced;
+          recovered_runs.push((
+            interval_identity(&registration, &outcome),
+            outcome.duplicate,
+          ));
+          reason = IntervalProgressReason::MisfireRunOnce;
+        }
+      }
+    }
+    report_interval_next_due(state.get_ref(), &registration, &cursor, reason, now);
+    prepared.push(registration);
+  }
+
+  let tasks = prepared
+    .into_iter()
+    .map(|registration| {
+      let task_state = state.clone();
+      actix_web::rt::spawn(async move {
+        run_interval_loop(task_state, registration).await;
+      })
+    })
+    .collect();
+  Ok((tasks, recovered_runs))
+}
+
+fn interval_registration_error(
+  registration: &IntervalRuntimeRegistration,
+  operation: &str,
+  error: crate::IntervalError,
+) -> WebhookRuntimeError {
+  WebhookRuntimeError::InvalidRegistration(format!(
+    "interval trigger {:?} could not {operation}: {error}",
+    registration.trigger_id
+  ))
+}
+
+async fn run_interval_loop(
+  state: web::Data<WebhookRuntimeState>,
+  registration: IntervalRuntimeRegistration,
+) {
+  loop {
+    let cursor = match DurableEventStore::open(&state.database_path)
+      .and_then(|store| store.interval_cursor(&registration.workflow_id, &registration.trigger_id))
+    {
+      Ok(cursor) => cursor,
+      Err(error) => {
+        report_interval_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+    state
+      .execution
+      .schedule_clock
+      .sleep_until(cursor.next_scheduled_at)
+      .await;
+    let now = state.execution.schedule_clock.now();
+    if now < cursor.next_scheduled_at {
+      continue;
+    }
+
+    let following_sequence = match cursor.next_sequence.checked_add(1) {
+      Some(value) => value,
+      None => {
+        report_interval_error(
+          state.get_ref(),
+          &registration,
+          "interval sequence exceeds the supported range",
+        );
+        return;
+      }
+    };
+    let following_at = match registration
+      .interval
+      .planned_at(cursor.anchor_at, following_sequence)
+    {
+      Ok(value) => value,
+      Err(error) => {
+        report_interval_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+    let multiple_elapsed = following_at <= now;
+    let mut store = match DurableEventStore::open(&state.database_path) {
+      Ok(store) => store,
+      Err(error) => {
+        report_interval_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+
+    if multiple_elapsed && registration.on_missed == ScheduleMisfirePolicy::Skip {
+      let next_sequence = match registration
+        .interval
+        .next_sequence_after(cursor.anchor_at, now)
+      {
+        Ok(value) => value,
+        Err(error) => {
+          report_interval_error(state.get_ref(), &registration, &error.to_string());
+          return;
+        }
+      };
+      let next_scheduled_at = match registration
+        .interval
+        .planned_at(cursor.anchor_at, next_sequence)
+      {
+        Ok(value) => value,
+        Err(error) => {
+          report_interval_error(state.get_ref(), &registration, &error.to_string());
+          return;
+        }
+      };
+      match store.advance_interval_cursor(
+        &registration.workflow_id,
+        &registration.trigger_id,
+        cursor.next_sequence,
+        cursor.next_scheduled_at,
+        next_sequence,
+        next_scheduled_at,
+        now,
+      ) {
+        Ok(advanced) => report_interval_next_due(
+          state.get_ref(),
+          &registration,
+          &advanced,
+          IntervalProgressReason::MisfireSkipped,
+          now,
+        ),
+        Err(DurableStoreError::IntervalCursorConflict) => continue,
+        Err(error) => {
+          report_interval_error(state.get_ref(), &registration, &error.to_string());
+          return;
+        }
+      }
+      continue;
+    }
+
+    let (planned_sequence, planned_at, next_sequence, next_scheduled_at, reason) =
+      if multiple_elapsed {
+        let planned_sequence = match registration
+          .interval
+          .latest_sequence_at_or_before(cursor.anchor_at, now)
+        {
+          Ok(value) => value,
+          Err(error) => {
+            report_interval_error(state.get_ref(), &registration, &error.to_string());
+            return;
+          }
+        };
+        let planned_at = match registration
+          .interval
+          .planned_at(cursor.anchor_at, planned_sequence)
+        {
+          Ok(value) => value,
+          Err(error) => {
+            report_interval_error(state.get_ref(), &registration, &error.to_string());
+            return;
+          }
+        };
+        let next_sequence = match registration
+          .interval
+          .next_sequence_after(cursor.anchor_at, now)
+        {
+          Ok(value) => value,
+          Err(error) => {
+            report_interval_error(state.get_ref(), &registration, &error.to_string());
+            return;
+          }
+        };
+        let next_at = match registration
+          .interval
+          .planned_at(cursor.anchor_at, next_sequence)
+        {
+          Ok(value) => value,
+          Err(error) => {
+            report_interval_error(state.get_ref(), &registration, &error.to_string());
+            return;
+          }
+        };
+        (
+          planned_sequence,
+          planned_at,
+          next_sequence,
+          next_at,
+          IntervalProgressReason::MisfireRunOnce,
+        )
+      } else {
+        (
+          cursor.next_sequence,
+          cursor.next_scheduled_at,
+          following_sequence,
+          following_at,
+          IntervalProgressReason::Advanced,
+        )
+      };
+
+    let (outcome, advanced) = match store.claim_interval_occurrence(
+      cursor.next_sequence,
+      cursor.next_scheduled_at,
+      next_sequence,
+      next_scheduled_at,
+      interval_admission(
+        &registration,
+        cursor.anchor_at,
+        planned_sequence,
+        planned_at,
+        now,
+      ),
+    ) {
+      Ok(value) => value,
+      Err(DurableStoreError::IntervalCursorConflict) => continue,
+      Err(error) => {
+        report_interval_error(state.get_ref(), &registration, &error.to_string());
+        return;
+      }
+    };
+    let identity = interval_identity(&registration, &outcome);
+    state.report_accepted(&identity, outcome.duplicate);
+    if !outcome.duplicate {
+      state.report_run_started(&identity);
+      dispatch_run(state.get_ref(), identity);
+    }
+    report_interval_next_due(state.get_ref(), &registration, &advanced, reason, now);
+  }
+}
+
+fn interval_admission(
+  registration: &IntervalRuntimeRegistration,
+  anchor_at: chrono::DateTime<Utc>,
+  sequence: u64,
+  planned_at: chrono::DateTime<Utc>,
+  triggered_at: chrono::DateTime<Utc>,
+) -> TriggerAdmissionRequest {
+  let anchor_text = anchor_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+  let planned_text = planned_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+  let triggered_text = triggered_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+  TriggerAdmissionRequest {
+    workflow_id: registration.workflow_id.clone(),
+    definition_hash: registration.definition_hash.clone(),
+    trigger_id: registration.trigger_id.clone(),
+    trigger_handler: "trigger.interval".to_string(),
+    source_identity: format!(
+      "{}:{}:{anchor_text}:{sequence}",
+      registration.workflow_id, registration.trigger_id
+    ),
+    payload: serde_json::Map::from_iter([
+      ("scheduledAt".to_string(), Value::String(planned_text)),
+      ("triggeredAt".to_string(), Value::String(triggered_text)),
+    ]),
+    received_at: triggered_at,
+  }
+}
+
+fn interval_identity(
+  registration: &IntervalRuntimeRegistration,
+  outcome: &crate::TriggerAdmissionOutcome,
+) -> RunProgressIdentity {
+  RunProgressIdentity {
+    workflow_id: registration.workflow_id.clone(),
+    trigger_id: registration.trigger_id.clone(),
+    trigger_handler: "trigger.interval".to_string(),
+    occurrence_id: outcome.occurrence_id.clone(),
+    run_id: outcome.run_id.clone(),
+  }
+}
+
+fn report_interval_next_due(
+  state: &WebhookRuntimeState,
+  registration: &IntervalRuntimeRegistration,
+  cursor: &crate::IntervalCursor,
+  reason: IntervalProgressReason,
+  occurred_at: chrono::DateTime<Utc>,
+) {
+  state.execution.report_interval(IntervalProgress::NextDue {
+    contract: INTERVAL_PROGRESS_CONTRACT,
+    contract_version: INTERVAL_PROGRESS_CONTRACT_VERSION,
+    workflow_id: registration.workflow_id.clone(),
+    trigger_id: registration.trigger_id.clone(),
+    every_ms: registration.interval.every_ms(),
+    anchor_at: cursor.anchor_at,
+    next_sequence: cursor.next_sequence,
+    next_scheduled_at: cursor.next_scheduled_at,
+    reason,
+    occurred_at,
+  });
+}
+
+fn report_interval_error(
+  state: &WebhookRuntimeState,
+  registration: &IntervalRuntimeRegistration,
+  message: &str,
+) {
+  state
+    .execution
+    .report_interval(IntervalProgress::SchedulerError {
+      contract: INTERVAL_PROGRESS_CONTRACT,
+      contract_version: INTERVAL_PROGRESS_CONTRACT_VERSION,
+      workflow_id: registration.workflow_id.clone(),
+      trigger_id: registration.trigger_id.clone(),
+      code: "WOML_INTERVAL_RUNTIME_FAILED".to_string(),
       message: message.to_string(),
       occurred_at: state.execution.schedule_clock.now(),
     });
