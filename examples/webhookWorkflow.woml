@@ -1,0 +1,29 @@
+<workflow id="webhook-demo" name="Webhook Demo" version="1.0.0">
+  <triggers>
+    <webhook
+      id="newOrder"
+      path="/webhooks/orders"
+      method="POST"
+      auth="none">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      </schema>
+    </webhook>
+  </triggers>
+  <steps>
+    <step id="captureOrder" name="Capture order">
+      <script>
+        return {
+          message: `Received order ${context.trigger.orderId}`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>

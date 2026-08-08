@@ -1,12 +1,12 @@
 # WOML CLI
 
-The WOML CLI compiles a `.woml` workflow, executes its DAG through the Rust
-core, runs embedded JavaScript in isolated Bun Workers, and prints the final
-JSON result.
+The WOML CLI compiles `.woml` workflows, activates their triggers through the
+Rust core, and runs embedded JavaScript in isolated Bun Workers.
 
-## Run a workflow
+## Activate an automation
 
-From a built or linked checkout:
+`woml run` executes a selected manual trigger once at startup, activates every
+production trigger, and stays alive until Ctrl+C:
 
 ```bash
 woml run examples/retryWorkflow.woml
@@ -18,8 +18,46 @@ To choose the durable state database explicitly:
 woml run examples/retryWorkflow.woml --state .woml/state.sqlite
 ```
 
-Retry progress is printed to stderr. The final workflow result is the only JSON
-written to stdout, so it can be redirected or piped without mixing in logs.
+To activate the webhook example:
+
+```bash
+woml run examples/webhookWorkflow.woml --host 127.0.0.1 --port 3000
+```
+
+At startup WOML prints a copy-pasteable `curl` example for every registered
+webhook. Its sample JSON includes the required fields from the webhook schema.
+
+Then, from another terminal:
+
+```bash
+curl --request POST http://127.0.0.1:3000/webhooks/orders \
+  --header 'Content-Type: application/json' \
+  --data '{"orderId":"order-42"}'
+```
+
+Readiness, accepted occurrences, run IDs, failures, and terminal statuses are
+printed as an ongoing stream to stderr. A successful run also prints its final
+workflow JSON, for example `Run run_... result: {"message":"Received order
+order-42"}`. Finishing one run does not deactivate the workflow.
+
+The generated example omits `Idempotency-Key`, so every call creates a fresh
+occurrence. Add that header when a caller needs safe delivery retries; repeating
+the same key and payload returns the original run instead of executing twice.
+
+## Execute once
+
+Use `woml test` when you intentionally want one manual execution that prints
+its JSON result and exits:
+
+```bash
+woml test woml/tests/fixtures/hello.woml
+```
+
+Inspect an asynchronously triggered durable run with:
+
+```bash
+woml runs get run_... --state .woml/state.sqlite
+```
 
 ## Retry a step
 
@@ -55,8 +93,8 @@ arbitrary JavaScript side effect exactly once by itself.
 
 ## Resume a safely scheduled retry
 
-After the engine durably schedules the first retry, the CLI prints a recovery
-command. If the CLI stops while waiting, run that exact command:
+After the engine durably schedules a retry, the CLI prints a recovery command.
+If the CLI stops while waiting, run that exact command:
 
 ```bash
 woml run "examples/retryWorkflow.woml" \

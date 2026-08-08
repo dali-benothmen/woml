@@ -1747,8 +1747,9 @@ threading between two sequential script steps:
 </workflow>
 ```
 
-For `woml run hello.woml`, the manual trigger payload is `{}`. The successful
-context is:
+For `woml run hello.woml` or one-shot `woml test hello.woml`, the manual trigger
+payload is `{}`. `woml run` remains active after the startup occurrence;
+`woml test` prints the result and exits. The successful context is:
 
 ```json
 {

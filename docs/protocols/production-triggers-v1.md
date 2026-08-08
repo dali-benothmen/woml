@@ -2,7 +2,8 @@
 
 Status: frozen in T0. Webhook frontend lowering is implemented in T1, the Rust
 occurrence authority in T2, and the Rust HTTP ingress plus background durable
-execution path in T3. The user-facing `woml serve` journey begins in T4.
+execution path in T3. T4 exposes that runtime through long-lived `woml run`,
+one-shot `woml test`, and durable `woml runs get` inspection.
 
 This document pins the boundary shared by the TypeScript WOML frontend, Rust
 core, CLI, HTTP listener, provider adapters, and durable store. The normative
@@ -195,6 +196,30 @@ distinguishes readiness, occurrence acceptance (including duplicate), run
 start, terminal run status, and safe rejection summaries. Progress never
 changes the final workflow result contract and never contains resolved secrets
 or rejected payload bodies.
+
+### T4 CLI implementation
+
+`woml run <workflow.woml|directory>` compiles every definition, resolves
+symbolic secrets in memory, preflights workflow IDs and webhook routes, starts
+the Rust listener, and remains active until SIGINT or SIGTERM. A selected
+manual trigger fires once at activation; completing that run does not stop the
+runtime. Each subsequent webhook occurrence is admitted and executed
+independently through the same Rust authority.
+
+Rust emits Trigger Progress v1 for readiness, acceptance, duplicate
+recognition, run start, terminal status, and safe rejection summaries. Bun
+validates those messages and formats them for the terminal; it does not infer
+run state. After a succeeded terminal message, Bun reads the folded durable
+projection and prints the final workflow JSON; this is a presentation read and
+does not change Trigger Progress v1. Startup also prints a schema-informed
+`curl` example for each webhook. `woml runs get <runId> --state <path>` reads
+the same folded durable projection. `woml test <workflow.woml>` retains the
+explicit one-manual-run journey and exits after printing its result.
+
+The N-API bridge owns a dedicated Actix runtime thread for each activated local
+webhook runtime. Graceful shutdown stops admission and joins that thread. The
+public product has no separate `woml serve` command, and source hot reload is
+not part of T4.
 
 ## Frozen fixtures
 

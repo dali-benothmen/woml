@@ -1,0 +1,9 @@
+{
+  "contract": "woml.trigger-progress",
+  "contractVersion": 1,
+  "type": "run_terminal",
+  "workflowId": "webhook-trigger-contract",
+  "runId": "run_webhook_001",
+  "status": "succeeded",
+  "occurredAt": "2026-08-08T12:00:00.100Z"
+}

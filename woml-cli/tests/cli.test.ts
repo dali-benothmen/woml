@@ -69,7 +69,8 @@ interface CommandResult {
 }
 
 async function runCli(...args: string[]): Promise<CommandResult> {
-  const process = Bun.spawn([cliPath, ...args], {
+  const commandArgs = args[0] === 'run' ? ['test', ...args.slice(1)] : args;
+  const process = Bun.spawn([cliPath, ...commandArgs], {
     cwd: projectRoot,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -159,13 +160,15 @@ beforeAll(async () => {
   }
   await chmod(cliPath, 0o755);
   temporaryDirectory = await mkdtemp(join(tmpdir(), 'woml-cli-phase4-'));
-});
+}, 120_000);
 
 afterAll(async () => {
-  await rm(temporaryDirectory, { recursive: true, force: true });
+  if (temporaryDirectory !== undefined) {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
 });
 
-describe('woml run', () => {
+describe('woml test one-shot compatibility', () => {
   test('has no production dependency on the TypeScript workflow executor', async () => {
     const source = await Bun.file(join(packageRoot, 'src', 'cli.ts')).text();
     expect(source).toContain('executeWorkflowWithRust');
@@ -193,7 +196,7 @@ describe('woml run', () => {
     async () => {
       const statePath = join(temporaryDirectory, 'retry-state.sqlite');
       const result = await runCli(
-        'run',
+        'test',
         retryFixturePath,
         '--state',
         statePath
@@ -227,7 +230,7 @@ describe('woml run', () => {
     async () => {
       const statePath = join(temporaryDirectory, 'retry-resume-state.sqlite');
       const child = Bun.spawn(
-        [cliPath, 'run', retryFixturePath, '--state', statePath],
+        [cliPath, 'test', retryFixturePath, '--state', statePath],
         { cwd: projectRoot, stdout: 'pipe', stderr: 'pipe' }
       );
       const reader = child.stderr.getReader();
@@ -268,7 +271,7 @@ describe('woml run', () => {
       expect(attemptOneStarts).toHaveLength(1);
 
       const resumed = await runCli(
-        'run',
+        'test',
         retryFixturePath,
         '--state',
         statePath,
@@ -326,7 +329,7 @@ describe('woml run', () => {
       const result = Bun.spawnSync([
         process.execPath,
         cliPath,
-        'run',
+        'test',
         retryCompositionFixturePath,
         '--state',
         statePath,
@@ -467,7 +470,7 @@ describe('woml run', () => {
     });
   }
 
-  test('rejects invalid parallel concurrency through woml run', async () => {
+  test('rejects invalid parallel concurrency through woml test', async () => {
     const workflowPath = join(
       temporaryDirectory,
       'parallel-invalid-concurrency.woml'
@@ -488,7 +491,7 @@ describe('woml run', () => {
     expect(result.exitCode).toBe(1);
   });
 
-  test('rejects a terminal parallel group through woml run', async () => {
+  test('rejects a terminal parallel group through woml test', async () => {
     const workflowPath = join(temporaryDirectory, 'parallel-terminal.woml');
     await writeFile(
       workflowPath,
@@ -517,7 +520,7 @@ describe('woml run', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe(
-      'Usage: woml run <workflow.woml> [--state <path>] [--resume <runId>] [--approval-port <port>]\n'
+      'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]\n'
     );
     expect(result.exitCode).toBe(2);
   });
@@ -694,17 +697,17 @@ describe('woml run', () => {
     }
     const entriesBeforeRun = (await readdir(consumerDirectory)).sort();
     const executable = join(consumerDirectory, 'node_modules', '.bin', 'woml');
-    const helloResult = Bun.spawnSync([executable, 'run', 'hello.woml'], {
+    const helloResult = Bun.spawnSync([executable, 'test', 'hello.woml'], {
       cwd: consumerDirectory,
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const branchResult = Bun.spawnSync([executable, 'run', 'branch.woml'], {
+    const branchResult = Bun.spawnSync([executable, 'test', 'branch.woml'], {
       cwd: consumerDirectory,
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const parallelResult = Bun.spawnSync([executable, 'run', 'parallel.woml'], {
+    const parallelResult = Bun.spawnSync([executable, 'test', 'parallel.woml'], {
       cwd: consumerDirectory,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -716,7 +719,7 @@ describe('woml run', () => {
     const retryResult = Bun.spawnSync(
       [
         executable,
-        'run',
+        'test',
         'retry.woml',
         '--state',
         packagedRetryState,
@@ -730,7 +733,7 @@ describe('woml run', () => {
     const approval = spawnPackagedApproval(
       executable,
       [
-        'run',
+        'test',
         'approval.woml',
         '--state',
         join(temporaryDirectory, 'packaged-approval.sqlite'),

@@ -1,9 +1,11 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 through T3 completed on 2026-08-08. The contracts are frozen, the
+Status: T0 through T4 completed on 2026-08-08. The contracts are frozen, the
 TypeScript frontend compiles multiple manual/webhook triggers to Model v7, and
 Rust owns atomic occurrence admission, HTTP validation, durable run creation,
-and background DAG execution. The user-facing CLI journey begins in T4.
+background DAG execution, and Trigger Progress v1. `woml run` now activates a
+workflow and stays alive, `woml test` owns one-shot execution, and `woml runs
+get` inspects durable results. There is no separate public `woml serve` mode.
 
 ## 1. Product Outcome
 
@@ -27,7 +29,7 @@ Slack release until all five trigger types are complete.
 The first acceptance journey is:
 
 ```bash
-woml serve examples/webhookWorkflow.woml --host 127.0.0.1 --port 3000
+woml run examples/webhookWorkflow.woml --host 127.0.0.1 --port 3000
 ```
 
 followed by:
@@ -62,13 +64,14 @@ agent's inbound conversation channel. The outbound conversational reply is a
 separate `slack.send` capability on the next Services and Capabilities roadmap;
 keeping that effect explicit avoids hiding message sends inside trigger logic.
 
-## 2. Why `woml serve` Exists
+## 2. `woml run` Is the Long-Lived Automation Runtime
 
-`woml run` starts one manual run and exits when that run finishes. A webhook,
-Slack Socket Mode connection, schedule, interval, or event subscription must
-still be alive after the command returns, so it needs a long-lived process.
+WOML is workflow automation, so its primary command must activate a workflow,
+not merely execute one occurrence and exit. A triggered run is one execution of
+the DAG; the WOML runtime is the long-lived process that remains ready for the
+next webhook, Slack message, schedule, interval, event, or manual occurrence.
 
-`woml serve` is that process. It:
+`woml run` therefore:
 
 1. compiles and validates the supplied WOML definitions;
 2. asks Rust to register their trigger contracts;
@@ -76,14 +79,27 @@ still be alive after the command returns, so it needs a long-lived process.
 4. accepts occurrences and creates runs atomically; and
 5. stays alive until it receives a shutdown signal.
 
-It is not a requirement for one-shot workflows and it is not the notification
-delivery mechanism. In the future hosted WOML product, the platform will run
-this lifecycle for the user and the command may be invisible.
+There is no separate public `woml serve` command. That distinction would expose
+an infrastructure concept without giving the workflow author useful product
+value.
+
+For compatibility with the current manual workflow journey, a selected
+`<manual>` trigger fires once when `woml run` activates the definition. The
+process remains alive after that occurrence finishes. A separate `woml test`
+command performs one selected manual occurrence and exits; it is for local
+experimentation, CI, and debugging, not production activation.
+
+`--watch` is not the mechanism that keeps automation alive. When added later,
+it means only “reload changed WOML source while the already-long-lived runtime
+continues operating.” In a future hosted WOML product, the platform owns this
+same activation lifecycle and the terminal command may be invisible.
 
 ## 3. Baseline Entering This Milestone
 
-Today the executable WOML frontend requires exactly one `<manual>` trigger.
-`woml run` compiles it and asks the Rust core to execute one durable run.
+At the start of this milestone, the executable WOML frontend requires exactly
+one `<manual>` trigger. `woml run` compiles it, asks the Rust core to execute one
+durable run, and exits. T4 deliberately replaces that command lifecycle with
+the long-lived activation behavior defined above.
 
 The language catalog already describes webhook, schedule, interval, and event
 tags, but the frontend rejects them and the Rust executable profile accepts
@@ -132,9 +148,10 @@ Production Triggers are complete when:
    failure from other subscribers.
 9. Rust owns occurrence admission, deduplication, scheduling, run creation, and
    recovery. Provider adapters do not decide whether a trigger starts a run.
-10. `woml serve` exposes source-aware startup errors, clear readiness output, and
-   secret-safe run progress.
-11. Older manual-only Model/Event v1–v6 workflows behave exactly as before.
+10. `woml run` exposes source-aware startup errors, clear readiness output,
+    secret-safe progress for many occurrences, and graceful shutdown.
+11. Older manual-only Model/Event v1–v6 definitions and run semantics remain
+    compatible; their former one-shot CLI journey moves to `woml test`.
 12. Each trigger type passes its clean-package acceptance journey before being
     advertised as executable.
 
@@ -154,8 +171,8 @@ Production Triggers are complete when:
 - `<event>` with a named event, JSON payload, optional JSON Schema, and durable
   fan-out through a versioned engine ingress API.
 - A single-node durable trigger-occurrence authority in Rust.
-- `woml serve`, read-only run inspection, and a local/application event publish
-  command.
+- Long-lived `woml run`, one-shot `woml test`, read-only run inspection, and a
+  local/application event publish command.
 - Versioned model, event, ingress, occurrence, and HTTP response contracts.
 - Restart recovery, deduplication, diagnostics, security, packaging, and docs.
 
@@ -179,8 +196,10 @@ Production Triggers are complete when:
   that future operation can reply without changing this trigger contract.
 - Kafka, SQS, NATS, Redis, or other broker adapters. The first event profile
   freezes the engine boundary those adapters will call.
-- Hot reload of workflow definitions. Restarting `woml serve` activates a new
-  immutable definition; existing runs stay bound to the old hash.
+- Hot reload of workflow definitions. Restarting `woml run` activates a new
+  immutable definition; existing runs stay bound to the old hash. A future
+  `woml run --watch` may automate that reload without changing the meaning of
+  plain `woml run`.
 - Workflow-level concurrency, rate limiting, queues, cancellation, and general
   lifecycle hooks. Those remain in Lifecycle and Engine Controls.
 - Exposing request credentials, headers, internal occurrence records, or
@@ -205,7 +224,14 @@ manual triggers, the author selects one explicitly:
 woml run workflow.woml --trigger manualRun
 ```
 
-Omitting `--trigger` remains valid when exactly one manual trigger exists.
+Omitting `--trigger` remains valid when exactly one manual trigger exists. That
+manual occurrence fires once during activation; after it finishes, `woml run`
+stays ready for every other configured trigger and for clean shutdown. For a
+single execution that exits, the author uses:
+
+```bash
+woml test workflow.woml --trigger manualRun
+```
 
 ### 6.2 Webhook
 
@@ -249,7 +275,7 @@ never placed in the model, event log, SQLite occurrence records, context,
 diagnostics, or access logs. Missing secrets fail startup before the port binds.
 
 `auth="none"` is allowed for deliberate public endpoints, local testing, or a
-trusted reverse proxy. `woml serve` prints a visible warning for each such route.
+trusted reverse proxy. `woml run` prints a visible warning for each such route.
 
 ### 6.3 Slack
 
@@ -325,7 +351,7 @@ shared Slack transport
                          -> Rust occurrence core
 ```
 
-Under `woml serve`, one long-lived Slack transport host owns each workspace
+Under `woml run`, one long-lived Slack transport host owns each workspace
 connection and routes separate approval-adapter and trigger-adapter messages.
 This is what makes connection reuse real rather than merely sharing utility
 functions in two processes.
@@ -422,7 +448,7 @@ woml emit order.created \
   --token-secret WOML_CONTROL_TOKEN
 ```
 
-The control endpoint is disabled unless `woml serve` is configured with a
+The control endpoint is disabled unless `woml run` is configured with a
 control secret. Future broker adapters call the same Rust ingress operation and
 must not bypass occurrence deduplication.
 
@@ -603,11 +629,13 @@ feed that future admission boundary rather than implement a conflicting one.
 
 ## 13. CLI Product Surface
 
-### 13.1 Serve
+### 13.1 Activate a workflow
 
 ```text
-woml serve <workflow.woml|directory> [--host <address>] [--port <port>]
+woml run <workflow.woml|directory> [--host <address>] [--port <port>]
   [--state <path>] [--control-secret <NAME>]
+  [--trigger <manualTriggerId>] [--resume <runId>]
+  [--approval-port <port>]
 ```
 
 - Default host: `127.0.0.1`.
@@ -615,12 +643,34 @@ woml serve <workflow.woml|directory> [--host <address>] [--port <port>]
 - A directory loads its direct `*.woml` files in lexical order.
 - Route, workflow-ID, and trigger conflicts fail startup before the port binds.
 - Definitions are a static registration snapshot for the process lifetime.
+- A selected manual trigger fires once at startup; external and time-based
+  triggers remain active afterward.
+- Finishing, failing, or pausing one workflow occurrence does not stop the
+  runtime or prevent the next occurrence.
 - Readiness lists registered webhook routes, Slack workspaces/event filters,
   schedules, intervals, and events without printing resolved secrets.
+- Progress output is an ongoing stream keyed by occurrence ID and run ID; one
+  terminal result is not presented as the terminal result of the process.
 - SIGINT/SIGTERM stops new admission and leaves committed runs recoverable.
   It never pretends an interrupted active script is safe to replay.
 
-### 13.2 Inspect a run
+Plain `woml run` does not reload changed source. A future `--watch` option may
+activate new immutable definitions after validation while already-started runs
+remain bound to their original definition hash.
+
+### 13.2 Execute once for testing
+
+```text
+woml test <workflow.woml> [--trigger <manualTriggerId>]
+  [--state <path>] [--approval-port <port>]
+```
+
+This command invokes one manual occurrence, prints its terminal result, and
+exits. It preserves a fast playground and CI journey without weakening the
+automation meaning of `woml run`. It does not activate webhook, Slack,
+schedule, interval, or event listeners.
+
+### 13.3 Inspect a run
 
 ```text
 woml runs get <runId> [--state <path>]
@@ -631,7 +681,7 @@ or safe failure. It gives webhook and event callers a way to inspect an
 asynchronously accepted run without defining a hosted management API in this
 milestone.
 
-### 13.3 Emit an event
+### 13.4 Emit an event
 
 ```text
 woml emit <eventName> --id <publisherEventId> --data @<jsonFile>
@@ -683,7 +733,7 @@ or rejected request bodies.
 | T1 | Teach the TypeScript frontend to validate and lower multiple triggers and executable webhook syntax. | A webhook WOML file compiles to an exact Model v7 DAG definition. |
 | T2 | Build Rust's atomic trigger-occurrence and run-start authority. | Any approved ingress can create or deduplicate one durable run safely. |
 | T3 | Build the Rust webhook listener, authentication, JSON/schema validation, and HTTP responses. | A real POST request safely creates one WOML run. |
-| T4 | Add `woml serve`, run inspection, readiness, and webhook diagnostics. | Users can start, call, and inspect a webhook workflow from the terminal. |
+| T4 | Turn `woml run` into the long-lived runtime; add `woml test`, run inspection, readiness, and webhook diagnostics. | One command activates an automation that keeps accepting and reporting workflow runs. |
 | T5 | Harden, package, and publish webhook. | Webhook is independently production-ready in the single-node profile. |
 | T6 | Compile Slack trigger syntax and extract the reusable Slack transport. | A Slack trigger shares the proven provider connection without sharing the wrong protocol. |
 | T7 | Execute, harden, package, and publish Slack triggers. | Mentions and direct messages start one durable WOML run per Slack event. |
@@ -789,24 +839,41 @@ oversize rejection, duplicate replay, conflict, and recovery after acceptance.
 
 ### T4 — Ship the webhook CLI journey
 
+Status: completed.
+
 Changes:
 
-- Add `woml serve` with file/directory loading, host, port, and state options.
+- Change `woml run` from one-shot execution into long-lived workflow activation
+  with file/directory loading, host, port, state, and manual-trigger options.
+- Preserve the former one-shot manual journey as `woml test`.
 - Preflight every definition, route, and secret before listening.
-- Add secret-safe readiness and per-run progress output.
+- Add secret-safe readiness and continuous occurrence/run progress output.
+- Print a schema-informed, copy-pasteable `curl` example for every registered
+  webhook at startup.
+- Print the final workflow JSON automatically when an asynchronous run
+  succeeds, while retaining `woml runs get` for later inspection.
 - Add `woml runs get` for asynchronous result/status inspection.
-- Preserve `woml run` and add `--trigger` only where manual selection is needed.
 - Add graceful signal handling without unsafe active-attempt replay.
+- Keep source reload out of plain `woml run`; reserve `--watch` for a later
+  reviewed hot-reload contract.
 
 Result:
 
-A user can serve, call, observe, stop, restart, and inspect a webhook workflow
-using the packaged CLI.
+A user can activate, call repeatedly, observe, stop, restart, and inspect a
+webhook workflow using the packaged CLI. Completing one run does not deactivate
+the workflow.
 
 Gate:
 
-The complete curl journey works from a clean package and a restarted listener
-returns the original run for a repeated idempotency key.
+- From a clean package, `woml run` reaches readiness and remains alive after a
+  manual occurrence or webhook-triggered run reaches a terminal state.
+- Two webhook requests accepted by the same process create and report two
+  independent runs.
+- Readiness includes a usable `curl` command, and successful terminal output
+  includes the folded workflow result.
+- SIGINT/SIGTERM performs the documented graceful shutdown, and restarting
+  `woml run` returns the original run for a repeated idempotency key.
+- `woml test` executes one manual occurrence, prints its result, and exits.
 
 ### T5 — Harden and publish webhook
 
@@ -866,7 +933,7 @@ Changes:
   identity.
 - Coordinate durable Rust admission with Slack envelope acknowledgement.
 - Add Slack readiness, reconnect, missing-scope, channel-filter, and occurrence
-  diagnostics to `woml serve`.
+  diagnostics to `woml run`.
 - Test coexistence with approval buttons and notification message updates.
 - Add the Slack trigger example to the clean-package release smoke suite.
 
@@ -907,7 +974,7 @@ Changes:
 - Add durable schedule cursors and an injected Rust clock.
 - Claim due occurrences atomically through the T2 authority.
 - Implement `skip` and bounded `run-once` recovery.
-- Register schedules in `woml serve` and report their next due instants.
+- Register schedules in `woml run` and report their next due instants.
 - Recover process crashes at every cursor/occurrence/run boundary.
 
 Result:
@@ -927,7 +994,8 @@ Changes:
 - Activate `<interval>` validation and lowering.
 - Store the first registration anchor and monotonically increasing sequence.
 - Compute fixed-rate occurrences without drift.
-- Reuse schedule misfire, occurrence, recovery, progress, and serve machinery.
+- Reuse schedule misfire, occurrence, recovery, progress, and long-lived runtime
+  machinery.
 - Test intervals shorter and longer than workflow execution time.
 
 Result:
@@ -996,7 +1064,8 @@ Changes:
 Result:
 
 Webhook, Slack, schedule, interval, and event are supported Production Triggers,
-while manual execution remains backward compatible.
+while manual definitions and execution semantics remain compatible through the
+long-lived `woml run` and one-shot `woml test` journeys.
 
 Gate:
 
@@ -1121,12 +1190,16 @@ trigger.
 After T13, the next planning milestone is Services and Capabilities, beginning
 with a safe built-in HTTP operation.
 
-## 20. T0 Review Gate (Completed)
+## 20. T0 Review Gate (Completed; CLI Naming Clarified After T3)
 
 T0 reviewed and froze these expensive contract choices before frontend
 implementation began:
 
-- `woml serve` is the long-lived local/deployable trigger runner;
+- `woml run` is the long-lived local/deployable automation runtime, and there is
+  no separate public `woml serve` command;
+- `woml test` is the explicit one-shot manual execution journey;
+- `--watch` is reserved for future source reload and is not required to keep a
+  workflow active;
 - webhook v1 is asynchronous POST JSON and returns a durable run ID;
 - webhook auth is explicit `bearer` or `none`;
 - the standard `Idempotency-Key` header provides optional request deduplication;
@@ -1152,3 +1225,8 @@ conformance tests form the versioned gate for later phases. T1 compiles the
 reviewed webhook source to Model v7, T2 supplies the Rust-owned atomic
 occurrence/run/`run_started` boundary, and T3 connects real HTTP requests to
 that authority and the existing durable DAG runtime.
+
+The long-lived `woml run` decision is a product-surface correction made after
+T3. It does not alter Model v7, Event v7, Occurrence v1, Ingress v1, Webhook
+HTTP v1, or the Rust execution boundary. T4 implements the corrected lifecycle
+and CLI names without reopening those frozen runtime contracts.

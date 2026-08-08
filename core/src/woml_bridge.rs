@@ -1,12 +1,15 @@
 //! Minimal native boundary for the WOML Rust execution path.
 
+use std::collections::{BTreeMap, HashMap};
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::thread::JoinHandle;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunctionCallMode};
 use napi::{Env, JsFunction, JsObject};
 use napi_derive::napi;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use woml_engine::{
   execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
@@ -15,8 +18,9 @@ use woml_engine::{
   settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome,
   CompiledWorkflowDefinition, DurableEventStore, DurableStoreError, NotificationHostClientError,
   NotificationHostProcessOptions, NotificationJourneyDiagnostics, NotificationJourneyError,
-  ParallelFailurePolicy, RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
-  SystemEngineClock,
+  ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError, RuntimeExecutionOptions,
+  ScriptHostProcessOptions, SystemEngineClock, TriggerProgress, TriggerProgressReporter,
+  WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig,
 };
 
 #[derive(Serialize)]
@@ -261,6 +265,129 @@ fn native_notification_error(error: NotificationJourneyError) -> napi::Error {
     "WOML notification provider journey failed and its error could not be encoded.".to_string()
   });
   napi::Error::from_reason(reason)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeWebhookRegistration {
+  workflow: CompiledWorkflowDefinition,
+  definition_hash: String,
+  resolved_secrets: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeWebhookRuntimeStarted {
+  runtime_id: String,
+  host: String,
+  port: u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTriggerRuntimeError {
+  kind: &'static str,
+  code: &'static str,
+  message: String,
+}
+
+struct NativeWebhookRuntimeThread {
+  stop: mpsc::Sender<()>,
+  join: JoinHandle<()>,
+}
+
+static WEBHOOK_RUNTIMES: OnceLock<Mutex<HashMap<String, NativeWebhookRuntimeThread>>> =
+  OnceLock::new();
+
+fn webhook_runtimes() -> &'static Mutex<HashMap<String, NativeWebhookRuntimeThread>> {
+  WEBHOOK_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn native_trigger_runtime_error(error: WebhookRuntimeError) -> NativeTriggerRuntimeError {
+  let code = match error {
+    WebhookRuntimeError::RouteConflict(_) => "WOML_WEBHOOK_ROUTE_CONFLICT",
+    WebhookRuntimeError::SecretMissing(_) => "WOML_WEBHOOK_SECRET_MISSING",
+    WebhookRuntimeError::InvalidSchema { .. } => "WOML_TRIGGER_SCHEMA_INVALID",
+    WebhookRuntimeError::DurableStore(_) => "WOML_TRIGGER_UNAVAILABLE",
+    WebhookRuntimeError::Io(_) => "WOML_WEBHOOK_BIND_FAILED",
+    WebhookRuntimeError::InvalidRegistration(_) | WebhookRuntimeError::Model(_) => {
+      "WOML_TRIGGER_REGISTRATION_INVALID"
+    }
+  };
+  NativeTriggerRuntimeError {
+    kind: "woml_trigger_runtime_error",
+    code,
+    message: error.to_string(),
+  }
+}
+
+fn trigger_runtime_napi_error(error: NativeTriggerRuntimeError) -> napi::Error {
+  let reason = serde_json::to_string(&error)
+    .unwrap_or_else(|_| "WOML trigger runtime failed to start.".to_string());
+  napi::Error::from_reason(reason)
+}
+
+fn native_trigger_progress_reporter(
+  env: &Env,
+  progress_callback: JsFunction,
+) -> napi::Result<TriggerProgressReporter> {
+  let mut progress = progress_callback
+    .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
+      Ok(vec![context.value])
+    })?;
+  progress.unref(env)?;
+  Ok(Arc::new(move |message: TriggerProgress| {
+    if let Ok(json) = serde_json::to_string(&message) {
+      let _ = progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+    }
+  }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeRunInspection {
+  run_id: String,
+  workflow_id: String,
+  status: RunStatus,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  terminal_node_id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  result: Option<Value>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  failure_code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeRunInspectionError {
+  kind: &'static str,
+  code: &'static str,
+  message: String,
+}
+
+fn native_run_inspection_error(error: DurableStoreError) -> napi::Error {
+  let code = if matches!(error, DurableStoreError::RunNotFound(_)) {
+    "WOML_RUN_NOT_FOUND"
+  } else {
+    "WOML_RUN_INSPECTION_FAILED"
+  };
+  let reason = serde_json::to_string(&NativeRunInspectionError {
+    kind: "woml_run_inspection_error",
+    code,
+    message: error.to_string(),
+  })
+  .unwrap_or_else(|_| "WOML run inspection failed.".to_string());
+  napi::Error::from_reason(reason)
+}
+
+fn run_failure_code(failure: &RunFailure) -> String {
+  match failure {
+    RunFailure::Attempt(failure) => failure.code.clone(),
+    RunFailure::Branch(failure) => failure.code().to_string(),
+    RunFailure::Parallel { failure, .. } => failure.code.clone(),
+    RunFailure::Approval { failure, .. } => failure.code.clone(),
+    RunFailure::Notification { failure, .. } => failure.code.clone(),
+  }
 }
 
 fn runtime_options(
@@ -651,6 +778,147 @@ pub fn settle_woml_approval_timeout(
   serde_json::to_string(&outcome).map_err(|error| {
     napi::Error::from_reason(format!("Could not encode approval timeout: {error}"))
   })
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub fn start_woml_webhook_runtime(
+  env: Env,
+  registrations_json: String,
+  startup_manual_triggers_json: String,
+  bind_address: String,
+  event_store_path: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  progress_callback: JsFunction,
+) -> napi::Result<JsObject> {
+  let registrations: Vec<NativeWebhookRegistration> = serde_json::from_str(&registrations_json)
+    .map_err(|error| {
+      napi::Error::from_reason(format!("Invalid webhook registration JSON: {error}"))
+    })?;
+  let startup_manual_triggers: BTreeMap<String, String> =
+    serde_json::from_str(&startup_manual_triggers_json).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid startup manual trigger JSON: {error}"))
+    })?;
+  let bind_address: SocketAddr = bind_address
+    .parse()
+    .map_err(|error| napi::Error::from_reason(format!("Invalid webhook bind address: {error}")))?;
+  let progress_reporter = native_trigger_progress_reporter(&env, progress_callback)?;
+  let registrations = registrations
+    .into_iter()
+    .map(|registration| WebhookDefinitionRegistration {
+      workflow: registration.workflow,
+      definition_hash: registration.definition_hash,
+      resolved_secrets: registration.resolved_secrets,
+    })
+    .collect();
+  let config = WomlWebhookServerConfig {
+    bind_address,
+    database_path: PathBuf::from(event_store_path),
+    registrations,
+    startup_manual_triggers,
+    execution: runtime_options(bun_executable, script_host_path, script_timeout_ms),
+    progress_reporter: Some(progress_reporter),
+  };
+
+  env.spawn_future(async move {
+    let runtime_id = format!("runtime_{}", uuid::Uuid::new_v4().simple());
+    let (startup_sender, startup_receiver) =
+      mpsc::sync_channel::<Result<SocketAddr, NativeTriggerRuntimeError>>(1);
+    let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+    let join = std::thread::Builder::new()
+      .name(format!("woml-webhook-{runtime_id}"))
+      .spawn(move || {
+        actix_web::rt::System::new().block_on(async move {
+          match WomlWebhookServer::start(config).await {
+            Ok(server) => {
+              let address = server.local_address();
+              if startup_sender.send(Ok(address)).is_err() {
+                server.stop().await;
+                return;
+              }
+              let _ = actix_web::rt::task::spawn_blocking(move || stop_receiver.recv()).await;
+              server.stop().await;
+            }
+            Err(error) => {
+              let _ = startup_sender.send(Err(native_trigger_runtime_error(error)));
+            }
+          }
+        });
+      })
+      .map_err(|error| {
+        napi::Error::from_reason(format!("Could not start WOML webhook runtime: {error}"))
+      })?;
+
+    let startup = tokio::task::spawn_blocking(move || startup_receiver.recv())
+      .await
+      .map_err(|error| napi::Error::from_reason(format!("Webhook startup task failed: {error}")))?
+      .map_err(|_| napi::Error::from_reason("Webhook startup channel closed.".to_string()))?;
+    let address = match startup {
+      Ok(address) => address,
+      Err(error) => {
+        let _ = tokio::task::spawn_blocking(move || join.join()).await;
+        return Err(trigger_runtime_napi_error(error));
+      }
+    };
+
+    webhook_runtimes()
+      .lock()
+      .map_err(|_| {
+        napi::Error::from_reason("Webhook runtime registry is unavailable.".to_string())
+      })?
+      .insert(
+        runtime_id.clone(),
+        NativeWebhookRuntimeThread {
+          stop: stop_sender,
+          join,
+        },
+      );
+    serde_json::to_string(&NativeWebhookRuntimeStarted {
+      runtime_id,
+      host: address.ip().to_string(),
+      port: address.port(),
+    })
+    .map_err(|error| {
+      napi::Error::from_reason(format!("Could not encode webhook runtime startup: {error}"))
+    })
+  })
+}
+
+#[napi(ts_return_type = "Promise<void>")]
+pub async fn stop_woml_webhook_runtime(runtime_id: String) -> napi::Result<()> {
+  let runtime = webhook_runtimes()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("Webhook runtime registry is unavailable.".to_string()))?
+    .remove(&runtime_id)
+    .ok_or_else(|| napi::Error::from_reason("WOML webhook runtime does not exist.".to_string()))?;
+  let _ = runtime.stop.send(());
+  tokio::task::spawn_blocking(move || runtime.join.join())
+    .await
+    .map_err(|error| napi::Error::from_reason(format!("Webhook shutdown task failed: {error}")))?
+    .map_err(|_| {
+      napi::Error::from_reason("WOML webhook runtime panicked during shutdown.".to_string())
+    })?;
+  Ok(())
+}
+
+#[napi]
+pub fn inspect_woml_run(event_store_path: String, run_id: String) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(native_run_inspection_error)?;
+  let projection = store
+    .projection(&run_id)
+    .map_err(native_run_inspection_error)?;
+  let inspection = NativeRunInspection {
+    run_id: projection.run_id.unwrap_or(run_id),
+    workflow_id: projection.workflow_id.unwrap_or_default(),
+    status: projection.status,
+    terminal_node_id: projection.terminal_node_id,
+    result: projection.result,
+    failure_code: projection.failure.as_ref().map(run_failure_code),
+  };
+  serde_json::to_string(&inspection)
+    .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML run: {error}")))
 }
 
 #[napi]

@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
@@ -10,7 +12,7 @@ use uuid::Uuid;
 use woml_engine::model::ValueExpression;
 use woml_engine::{
   CompiledWorkflowDefinition, DurableEventStore, RunEventPayload, RunStatus,
-  RuntimeExecutionOptions, ScriptHostProcessOptions, TriggerAdmissionRequest,
+  RuntimeExecutionOptions, ScriptHostProcessOptions, TriggerAdmissionRequest, TriggerProgress,
   WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig,
   WEBHOOK_MAX_BODY_BYTES,
 };
@@ -80,7 +82,9 @@ async fn start_server(
     database_path: database.path().to_path_buf(),
     registrations: vec![WebhookDefinitionRegistration::new(model(), WEBHOOK_HASH)
       .with_secret("ORDER_WEBHOOK_TOKEN", BEARER_TOKEN)],
+    startup_manual_triggers: Default::default(),
     execution: RuntimeExecutionOptions::new(host, 2_000),
+    progress_reporter: None,
   })
   .await
   .unwrap()
@@ -238,6 +242,65 @@ async fn a_real_post_is_admitted_then_executes_through_the_durable_dag() {
 }
 
 #[actix_web::test]
+async fn selected_manual_trigger_fires_once_at_long_lived_runtime_startup() {
+  let Some(host) = host_options() else {
+    return;
+  };
+  let database = TemporaryDatabase::new("startup-manual");
+  let progress = Arc::new(Mutex::new(Vec::<TriggerProgress>::new()));
+  let captured = progress.clone();
+  let server = WomlWebhookServer::start(WomlWebhookServerConfig {
+    bind_address: "127.0.0.1:0".parse().unwrap(),
+    database_path: database.path().to_path_buf(),
+    registrations: vec![WebhookDefinitionRegistration::new(model(), WEBHOOK_HASH)
+      .with_secret("ORDER_WEBHOOK_TOKEN", BEARER_TOKEN)],
+    startup_manual_triggers: BTreeMap::from([(
+      "webhook-trigger-contract".to_string(),
+      "manualStart".to_string(),
+    )]),
+    execution: RuntimeExecutionOptions::new(host, 2_000),
+    progress_reporter: Some(Arc::new(move |message| {
+      captured.lock().unwrap().push(message);
+    })),
+  })
+  .await
+  .unwrap();
+
+  let deadline = Instant::now() + Duration::from_secs(10);
+  let run_id = loop {
+    let selected = progress.lock().unwrap().iter().find_map(|message| {
+      if let TriggerProgress::OccurrenceAccepted {
+        trigger_handler,
+        run_id,
+        duplicate,
+        ..
+      } = message
+      {
+        (trigger_handler == "trigger.manual" && !duplicate).then(|| run_id.clone())
+      } else {
+        None
+      }
+    });
+    if let Some(run_id) = selected {
+      break run_id;
+    }
+    assert!(Instant::now() < deadline, "manual trigger was not admitted");
+    actix_web::rt::time::sleep(Duration::from_millis(10)).await;
+  };
+  wait_for_status(&database, &run_id, RunStatus::Succeeded).await;
+  assert_eq!(run_count(&database), 1);
+  let store = DurableEventStore::open(database.path()).unwrap();
+  let projection = store.projection(&run_id).unwrap();
+  assert_eq!(projection.trigger_id.as_deref(), Some("manualStart"));
+  assert_eq!(
+    projection.trigger_handler.as_deref(),
+    Some("trigger.manual")
+  );
+  assert!(projection.context.trigger.is_empty());
+  server.stop().await;
+}
+
+#[actix_web::test]
 async fn schema_auth_shape_content_type_method_and_route_rejections_create_no_run() {
   let database = TemporaryDatabase::new("rejections");
   let server = start_server(&database, placeholder_host()).await;
@@ -380,7 +443,9 @@ async fn runtime_validation_uses_draft_2020_12_semantics() {
       "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     )
     .with_secret("ORDER_WEBHOOK_TOKEN", BEARER_TOKEN)],
+    startup_manual_triggers: Default::default(),
     execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
+    progress_reporter: None,
   })
   .await
   .unwrap();
@@ -507,7 +572,9 @@ async fn missing_secrets_and_invalid_inline_schemas_fail_before_binding() {
     bind_address: "127.0.0.1:0".parse().unwrap(),
     database_path: database.path().to_path_buf(),
     registrations: vec![WebhookDefinitionRegistration::new(model(), WEBHOOK_HASH)],
+    startup_manual_triggers: Default::default(),
     execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
+    progress_reporter: None,
   })
   .await;
   assert!(matches!(
@@ -533,7 +600,9 @@ async fn missing_secrets_and_invalid_inline_schemas_fail_before_binding() {
       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     .with_secret("ORDER_WEBHOOK_TOKEN", BEARER_TOKEN)],
+    startup_manual_triggers: Default::default(),
     execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
+    progress_reporter: None,
   })
   .await;
   assert!(matches!(

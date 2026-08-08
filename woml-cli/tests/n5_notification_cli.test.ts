@@ -69,7 +69,7 @@ describe('N5 notification CLI product path', () => {
     try {
       const exitCode = await runCli(
         [
-          'run',
+          'test',
           workflowPath,
           '--state',
           join(directory, 'state.sqlite'),
@@ -106,7 +106,7 @@ describe('N5 notification CLI product path', () => {
     };
     try {
       const exitCode = await runCli(
-        ['run', workflowPath, '--state', join(directory, 'state.sqlite')],
+        ['test', workflowPath, '--state', join(directory, 'state.sqlite')],
         io,
         {
           createSecretStore: () => new ConfiguredSecrets(),
@@ -157,7 +157,7 @@ describe('N5 notification CLI product path', () => {
     try {
       const exitCode = await runCli(
         [
-          'run',
+          'test',
           oneChannelWorkflow,
           '--state',
           join(directory, 'state.sqlite'),

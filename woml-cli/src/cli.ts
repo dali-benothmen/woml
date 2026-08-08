@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import { mkdir, stat } from 'node:fs/promises';
-import { dirname, extname, resolve } from 'node:path';
+import { mkdir, readdir, stat } from 'node:fs/promises';
+import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   compileWoml,
@@ -9,6 +9,7 @@ import {
   parseWoml,
   WomlDiagnosticError,
   type CompiledWorkflowDefinition,
+  type JsonValue,
   type SecretReferenceExpression,
   type SourcePosition,
   type ValueExpression,
@@ -16,6 +17,7 @@ import {
   type WomlSourceElement,
 } from 'woml';
 import {
+  compiledDefinitionHash,
   executeApprovalWorkflowWithRust,
   executeWorkflowWithRust,
   executeWorkflowWithRustDurable,
@@ -27,7 +29,13 @@ import {
   resumeWorkflowWithRustDurable,
   RustWorkflowExecutionError,
   runNotificationProviderJourneyWithRust,
+  RunInspectionError,
   settleApprovalTimeoutWithRust,
+  inspectRunWithRust,
+  startWebhookRuntimeWithRust,
+  stopWebhookRuntimeWithRust,
+  TriggerRuntimeError,
+  type TriggerProgressV1,
   type RustApprovalRuntimeOutcome,
 } from './rust-executor';
 import {
@@ -65,7 +73,15 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml> [--state <path>] [--resume <runId>] [--approval-port <port>]';
+  return 'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+}
+
+function testUsage(): string {
+  return 'Usage: woml test <workflow.woml> [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+}
+
+function runsUsage(): string {
+  return 'Usage: woml runs get <runId> [--state <path>]';
 }
 
 function secretsUsage(): string {
@@ -78,28 +94,38 @@ function secretsUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${runsUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
+  readonly command: 'run' | 'test';
   readonly filePath: string;
   readonly statePath: string;
   readonly resumeRunId?: string;
   readonly approvalPort: number;
+  readonly host: string;
+  readonly port: number;
+  readonly triggerId?: string;
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
   const [command, filePath, ...options] = args;
   if (
-    command !== 'run' ||
+    (command !== 'run' && command !== 'test') ||
     filePath === undefined ||
     filePath.startsWith('--')
   ) {
-    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', runUsage());
+    throw new CliInputError(
+      'WOML_CLI_ARGUMENTS_INVALID',
+      command === 'test' ? testUsage() : runUsage()
+    );
   }
   let statePath = resolve('.woml/state.sqlite');
   let resumeRunId: string | undefined;
   let approvalPort = DEFAULT_APPROVAL_PORT;
+  let host = '127.0.0.1';
+  let port = 3_000;
+  let triggerId: string | undefined;
   const seen = new Set<string>();
   for (let index = 0; index < options.length; index += 2) {
     const option = options[index];
@@ -109,9 +135,14 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       seen.has(option) ||
       (option !== '--state' &&
         option !== '--resume' &&
-        option !== '--approval-port')
+        option !== '--approval-port' &&
+        option !== '--trigger' &&
+        (command !== 'run' || (option !== '--host' && option !== '--port')))
     ) {
-      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', runUsage());
+      throw new CliInputError(
+        'WOML_CLI_ARGUMENTS_INVALID',
+        command === 'test' ? testUsage() : runUsage()
+      );
     }
     seen.add(option);
     if (option === '--state') {
@@ -130,7 +161,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       resumeRunId = value;
-    } else {
+    } else if (option === '--approval-port') {
       const port = Number(value);
       if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
         throw new CliInputError(
@@ -139,9 +170,70 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       approvalPort = port;
+    } else if (option === '--host') {
+      if (value.length === 0 || /[\s/:]/.test(value)) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--host requires an IP address or hostname without a port.'
+        );
+      }
+      host = value;
+    } else if (option === '--port') {
+      const parsedPort = Number(value);
+      if (
+        !Number.isSafeInteger(parsedPort) ||
+        parsedPort < 1 ||
+        parsedPort > 65_535
+      ) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--port must be an integer from 1 through 65535.'
+        );
+      }
+      port = parsedPort;
+    } else {
+      if (value.length === 0) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--trigger requires a manual trigger ID.'
+        );
+      }
+      triggerId = value;
     }
   }
-  return { filePath, statePath, resumeRunId, approvalPort };
+  return {
+    command,
+    filePath,
+    statePath,
+    resumeRunId,
+    approvalPort,
+    host,
+    port,
+    triggerId,
+  };
+}
+
+interface RunsGetArguments {
+  readonly runId: string;
+  readonly statePath: string;
+}
+
+function parseRunsGetArguments(args: readonly string[]): RunsGetArguments {
+  const [, operation, runId, ...options] = args;
+  if (
+    operation !== 'get' ||
+    runId === undefined ||
+    runId.length === 0 ||
+    runId.startsWith('--') ||
+    (options.length !== 0 &&
+      (options.length !== 2 || options[0] !== '--state' || !options[1]))
+  ) {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', runsUsage());
+  }
+  return {
+    runId,
+    statePath: resolve(options[1] ?? '.woml/state.sqlite'),
+  };
 }
 
 function runtimeCode(code: string): string {
@@ -367,6 +459,14 @@ function formatError(
     return `WOML secrets error [${error.code}]: ${error.message}`;
   }
 
+  if (error instanceof TriggerRuntimeError) {
+    return `WOML trigger error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof RunInspectionError) {
+    return `WOML run error [${error.code}]: ${error.message}`;
+  }
+
   if (error instanceof NotificationProviderError) {
     const details = formatNotificationDeliveryFailures(error.diagnostics);
     return `WOML notification error [${error.code}]: ${error.message}${details}`;
@@ -454,6 +554,67 @@ async function readWorkflow(filePath: string): Promise<string> {
   }
 
   return await Bun.file(filePath).text();
+}
+
+interface CompiledWorkflowSource {
+  readonly filePath: string;
+  readonly document: WomlSourceDocument;
+  readonly workflow: CompiledWorkflowDefinition;
+}
+
+async function workflowFilePaths(inputPath: string): Promise<readonly string[]> {
+  let entry;
+  try {
+    entry = await stat(inputPath);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      throw new CliInputError(
+        'WOML_FILE_NOT_FOUND',
+        'workflow file or directory does not exist.'
+      );
+    }
+    throw error;
+  }
+  if (entry.isFile()) return [inputPath];
+  if (!entry.isDirectory()) {
+    throw new CliInputError(
+      'WOML_NOT_A_FILE',
+      'workflow path must point to a .woml file or directory.'
+    );
+  }
+  const paths = (await readdir(inputPath, { withFileTypes: true }))
+    .filter(child => child.isFile() && extname(child.name) === '.woml')
+    .map(child => join(inputPath, child.name))
+    .sort((left, right) => left.localeCompare(right));
+  if (paths.length === 0) {
+    throw new CliInputError(
+      'WOML_WORKFLOW_DIRECTORY_EMPTY',
+      'workflow directory does not contain any direct .woml files.'
+    );
+  }
+  return paths;
+}
+
+async function compileWorkflowSources(
+  inputPath: string
+): Promise<readonly CompiledWorkflowSource[]> {
+  const compiled: CompiledWorkflowSource[] = [];
+  for (const filePath of await workflowFilePaths(inputPath)) {
+    const source = await readWorkflow(filePath);
+    const document = parseWoml(source, { file: filePath });
+    compiled.push({ filePath, document, workflow: compileWoml(document) });
+  }
+  const workflowIds = new Set<string>();
+  for (const item of compiled) {
+    if (workflowIds.has(item.workflow.workflowId)) {
+      throw new CliInputError(
+        'WOML_WORKFLOW_ID_DUPLICATE',
+        `workflow ID "${item.workflow.workflowId}" is declared more than once.`
+      );
+    }
+    workflowIds.add(item.workflow.workflowId);
+  }
+  return compiled;
 }
 
 function printWaitingApproval(
@@ -669,16 +830,455 @@ async function runNotificationWorkflow(
   io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
 }
 
+async function executeOneShot(
+  workflow: CompiledWorkflowDefinition,
+  args: RunArguments,
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<void> {
+  const hasApproval = workflowHasApproval(workflow);
+  const hasNotifications = workflowHasNotifications(workflow);
+  if (
+    args.resumeRunId !== undefined &&
+    !hasApproval &&
+    workflow.schemaVersion !== 6
+  ) {
+    throw new CliInputError(
+      'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
+      '--resume requires a durable workflow with Human Approval or retry support.'
+    );
+  }
+  if (hasNotifications) {
+    await runNotificationWorkflow(workflow, args, io, dependencies);
+    return;
+  }
+  if (hasApproval) {
+    await runApprovalWorkflow(workflow, args, io, dependencies);
+    return;
+  }
+  if (workflow.schemaVersion === 6) {
+    await mkdir(dirname(args.statePath), { recursive: true });
+    const onProgress = durableRetryProgress(io, args);
+    const execution =
+      args.resumeRunId === undefined
+        ? await executeWorkflowWithRustDurable(workflow, args.statePath, {
+            nativeCorePath: dependencies.nativeCorePath,
+            onProgress,
+          })
+        : await resumeWorkflowWithRustDurable(
+            workflow,
+            args.statePath,
+            args.resumeRunId,
+            {
+              nativeCorePath: dependencies.nativeCorePath,
+              onProgress,
+            }
+          );
+    io.stdout(`${JSON.stringify(execution.result)}\n`);
+    return;
+  }
+  const execution = await executeWorkflowWithRust(workflow, {
+    nativeCorePath: dependencies.nativeCorePath,
+  });
+  io.stdout(`${JSON.stringify(execution.result)}\n`);
+}
+
+function triggerIds(
+  workflow: CompiledWorkflowDefinition,
+  handler: string
+): readonly string[] {
+  return workflow.triggers
+    .filter(trigger => trigger.handler === handler)
+    .map(trigger => trigger.id);
+}
+
+function selectedManualTrigger(
+  workflow: CompiledWorkflowDefinition,
+  requestedId: string | undefined
+): string | undefined {
+  const manualIds = triggerIds(workflow, 'trigger.manual');
+  if (requestedId !== undefined) {
+    if (!manualIds.includes(requestedId)) {
+      throw new CliInputError(
+        'WOML_MANUAL_TRIGGER_NOT_FOUND',
+        `workflow "${workflow.workflowId}" has no manual trigger "${requestedId}".`
+      );
+    }
+    return requestedId;
+  }
+  if (manualIds.length > 1) {
+    throw new CliInputError(
+      'WOML_MANUAL_TRIGGER_SELECTION_REQUIRED',
+      `workflow "${workflow.workflowId}" declares multiple manual triggers; select one with --trigger.`
+    );
+  }
+  return manualIds[0];
+}
+
+function objectFields(
+  expression: ValueExpression | undefined
+): Readonly<Record<string, ValueExpression>> | undefined {
+  return expression?.kind === 'object' ? expression.fields : undefined;
+}
+
+function literalString(expression: ValueExpression | undefined): string | undefined {
+  return expression?.kind === 'literal' && typeof expression.value === 'string'
+    ? expression.value
+    : undefined;
+}
+
+interface WebhookRouteSummary {
+  readonly workflowId: string;
+  readonly triggerId: string;
+  readonly path: string;
+  readonly method: string;
+  readonly authentication: string;
+  readonly schema?: JsonValue;
+}
+
+function webhookRouteSummaries(
+  workflow: CompiledWorkflowDefinition
+): readonly WebhookRouteSummary[] {
+  return workflow.triggers
+    .filter(trigger => trigger.handler === 'trigger.webhook')
+    .map(trigger => {
+      const fields = objectFields(trigger.config);
+      const authentication = objectFields(fields?.authentication);
+      return {
+        workflowId: workflow.workflowId,
+        triggerId: trigger.id,
+        path: literalString(fields?.path) ?? '',
+        method: literalString(fields?.method) ?? 'POST',
+        authentication: literalString(authentication?.kind) ?? '',
+        ...(fields?.schema?.kind === 'literal'
+          ? { schema: fields.schema.value }
+          : {}),
+      };
+    });
+}
+
+function jsonObject(
+  value: JsonValue | undefined
+): Readonly<Record<string, JsonValue>> | undefined {
+  return value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value)
+    ? (value as Readonly<Record<string, JsonValue>>)
+    : undefined;
+}
+
+function nonNegativeInteger(value: JsonValue | undefined): number | undefined {
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+    ? value
+    : undefined;
+}
+
+function webhookSchemaSample(schema: JsonValue | undefined, depth = 0): JsonValue {
+  if (depth > 8) return null;
+  const fields = jsonObject(schema);
+  if (fields === undefined) return {};
+
+  if (fields.const !== undefined) return fields.const;
+  if (Array.isArray(fields.enum) && fields.enum.length > 0) {
+    return fields.enum[0]!;
+  }
+  if (Array.isArray(fields.examples) && fields.examples.length > 0) {
+    return fields.examples[0]!;
+  }
+  if (fields.default !== undefined) return fields.default;
+
+  const alternatives = Array.isArray(fields.oneOf)
+    ? fields.oneOf
+    : Array.isArray(fields.anyOf)
+      ? fields.anyOf
+      : undefined;
+  if (alternatives !== undefined && alternatives.length > 0) {
+    return webhookSchemaSample(alternatives[0], depth + 1);
+  }
+
+  const declaredType = Array.isArray(fields.type)
+    ? fields.type.find(value => value !== 'null')
+    : fields.type;
+  const properties = jsonObject(fields.properties);
+  if (declaredType === 'object' || properties !== undefined) {
+    const required = Array.isArray(fields.required)
+      ? fields.required.filter(
+          (value): value is string => typeof value === 'string'
+        )
+      : [];
+    return Object.fromEntries(
+      required.map(name => [
+        name,
+        webhookSchemaSample(properties?.[name], depth + 1),
+      ])
+    );
+  }
+  if (declaredType === 'array') {
+    const minimum = Math.min(nonNegativeInteger(fields.minItems) ?? 0, 3);
+    return Array.from({ length: minimum }, () =>
+      webhookSchemaSample(fields.items, depth + 1)
+    );
+  }
+  if (declaredType === 'boolean') return true;
+  if (declaredType === 'integer' || declaredType === 'number') {
+    return typeof fields.minimum === 'number' ? fields.minimum : 0;
+  }
+  if (declaredType === 'null') return null;
+  if (declaredType === 'string') {
+    if (fields.format === 'email') return 'user@example.com';
+    if (fields.format === 'uuid') return '00000000-0000-4000-8000-000000000000';
+    if (fields.format === 'date-time') return '2026-01-01T00:00:00Z';
+    const minimum = Math.min(nonNegativeInteger(fields.minLength) ?? 0, 32);
+    return 'example'.padEnd(minimum, 'x');
+  }
+  return 'example';
+}
+
+function shellSingleQuoted(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+export function webhookCurlExample(
+  route: WebhookRouteSummary,
+  host: string,
+  port: number
+): string {
+  const url = `http://${host}:${port}${route.path}`;
+  const lines = [
+    `curl --request ${route.method} ${shellSingleQuoted(url)}`,
+    `  --header 'Content-Type: application/json'`,
+  ];
+  if (route.authentication === 'bearer') {
+    lines.push(`  --header 'Authorization: Bearer <token>'`);
+  }
+  lines.push(
+    `  --data ${shellSingleQuoted(JSON.stringify(webhookSchemaSample(route.schema)))}`
+  );
+  return lines.map((line, index) => `${line}${index < lines.length - 1 ? ' \\' : ''}`).join('\n');
+}
+
+async function resolvedSecrets(
+  workflow: CompiledWorkflowDefinition,
+  store: SecretStore
+): Promise<Readonly<Record<string, string>>> {
+  const references = workflowSecretReferences(workflow);
+  await preflightSecretReferences(references, store);
+  const values: Record<string, string> = {};
+  for (const name of [...new Set(references.map(reference => reference.name))]) {
+    const value = await store.get(name);
+    if (value === undefined || value.length === 0) {
+      throw new SecretStoreError(
+        'WOML_SECRET_NOT_FOUND',
+        `Missing required secret: ${name}.`
+      );
+    }
+    values[name] = value;
+  }
+  return values;
+}
+
+export function formatTriggerProgress(progress: TriggerProgressV1): string {
+  if (progress.type === 'ready') {
+    return `WOML runtime is ready with ${progress.registrationCount} registered trigger${progress.registrationCount === 1 ? '' : 's'}.`;
+  }
+  if (progress.type === 'occurrence_accepted') {
+    return `${progress.duplicate ? 'Recognized duplicate' : 'Accepted'} ${progress.triggerHandler} "${progress.triggerId}" for workflow "${progress.workflowId}": ${progress.runId}.`;
+  }
+  if (progress.type === 'run_started') {
+    return `Run ${progress.runId} started for workflow "${progress.workflowId}".`;
+  }
+  if (progress.type === 'run_terminal') {
+    return progress.status === 'succeeded'
+      ? `Run ${progress.runId} succeeded.`
+      : `Run ${progress.runId} failed [${progress.failureCode ?? 'WOML_TRIGGER_EXECUTION_FAILED'}].`;
+  }
+  const target =
+    progress.triggerId === undefined
+      ? progress.triggerHandler
+      : `${progress.triggerHandler} "${progress.triggerId}"`;
+  return `Rejected ${target} [${progress.code}]: ${progress.message}`;
+}
+
+function reportTriggerProgress(
+  progress: TriggerProgressV1,
+  statePath: string,
+  io: CliIo,
+  nativeCorePath?: string
+): void {
+  io.stderr(`${formatTriggerProgress(progress)}\n`);
+  if (progress.type !== 'run_terminal' || progress.status !== 'succeeded') {
+    return;
+  }
+  try {
+    const run = inspectRunWithRust(statePath, progress.runId, { nativeCorePath });
+    if (run.result !== undefined) {
+      io.stderr(`Run ${progress.runId} result: ${JSON.stringify(run.result)}\n`);
+    }
+  } catch (error) {
+    const code =
+      error instanceof RunInspectionError
+        ? error.code
+        : 'WOML_RUN_INSPECTION_FAILED';
+    io.stderr(
+      `Run ${progress.runId} result is temporarily unavailable [${code}]. Inspect it with: woml runs get ${progress.runId} --state ${JSON.stringify(statePath)}\n`
+    );
+  }
+}
+
+async function activateWorkflows(
+  sources: readonly CompiledWorkflowSource[],
+  args: RunArguments,
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<void> {
+  if (sources.length > 1 && args.resumeRunId !== undefined) {
+    throw new CliInputError(
+      'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',
+      '--resume requires one workflow file, not a directory.'
+    );
+  }
+  if (sources.length > 1 && args.triggerId !== undefined) {
+    throw new CliInputError(
+      'WOML_TRIGGER_REQUIRES_SINGLE_WORKFLOW',
+      '--trigger requires one workflow file, not a directory.'
+    );
+  }
+
+  const webhookSources = sources.filter(
+    source => triggerIds(source.workflow, 'trigger.webhook').length > 0
+  );
+  const nonWebhookSources = sources.filter(
+    source => triggerIds(source.workflow, 'trigger.webhook').length === 0
+  );
+  const startupManualTriggers: Record<string, string> = {};
+  for (const source of sources) {
+    const manual = selectedManualTrigger(source.workflow, args.triggerId);
+    if (
+      manual !== undefined &&
+      args.resumeRunId === undefined &&
+      webhookSources.includes(source)
+    ) {
+      startupManualTriggers[source.workflow.workflowId] = manual;
+    }
+  }
+
+  for (const source of nonWebhookSources) {
+    await executeOneShot(
+      source.workflow,
+      { ...args, filePath: source.filePath },
+      io,
+      dependencies
+    );
+  }
+
+  let runtimeId: string | undefined;
+  try {
+    if (webhookSources.length > 0) {
+      await mkdir(dirname(args.statePath), { recursive: true });
+      const store = dependencies.createSecretStore();
+      const registrations = await Promise.all(
+        webhookSources.map(async source => ({
+          workflow: source.workflow,
+          definitionHash: compiledDefinitionHash(source.workflow),
+          resolvedSecrets: await resolvedSecrets(source.workflow, store),
+        }))
+      );
+      const routes = webhookSources.flatMap(source =>
+        webhookRouteSummaries(source.workflow)
+      );
+      const seenRoutes = new Map<string, WebhookRouteSummary>();
+      for (const route of routes) {
+        const previous = seenRoutes.get(route.path);
+        if (previous !== undefined) {
+          throw new CliInputError(
+            'WOML_WEBHOOK_ROUTE_CONFLICT',
+            `webhook route "${route.path}" is claimed by triggers "${previous.triggerId}" and "${route.triggerId}".`
+          );
+        }
+        seenRoutes.set(route.path, route);
+      }
+      const runtime = await startWebhookRuntimeWithRust(
+        registrations,
+        args.statePath,
+        {
+          nativeCorePath: dependencies.nativeCorePath,
+          host: args.host,
+          port: args.port,
+          startupManualTriggers,
+          onTriggerProgress: progress =>
+            reportTriggerProgress(
+              progress,
+              args.statePath,
+              io,
+              dependencies.nativeCorePath
+            ),
+        }
+      );
+      runtimeId = runtime.runtimeId;
+      io.stderr(`WOML workflow active at http://${runtime.host}:${runtime.port}.\n`);
+      for (const route of routes) {
+        io.stderr(
+          `Webhook ${route.triggerId}: ${route.method} http://${runtime.host}:${runtime.port}${route.path}\n`
+        );
+        if (route.authentication === 'none') {
+          io.stderr(
+            `Warning: webhook ${route.triggerId} has auth="none" and accepts unauthenticated requests.\n`
+          );
+        }
+        io.stderr(
+          `Try webhook ${route.triggerId}:\n${webhookCurlExample(route, runtime.host, runtime.port)}\n`
+        );
+      }
+
+      if (args.resumeRunId !== undefined) {
+        const source = webhookSources[0]!;
+        await executeOneShot(
+          source.workflow,
+          { ...args, filePath: source.filePath },
+          io,
+          dependencies
+        );
+      }
+    }
+
+    io.stderr('WOML automation is active. Press Ctrl+C to stop.\n');
+    await (dependencies.waitForShutdown ?? waitForShutdownSignal)();
+  } finally {
+    if (runtimeId !== undefined) {
+      await stopWebhookRuntimeWithRust(runtimeId, {
+        nativeCorePath: dependencies.nativeCorePath,
+      });
+    }
+  }
+  io.stderr('WOML automation stopped.\n');
+}
+
 export interface CliDependencies {
   readonly createSecretStore: () => SecretStore;
   readonly readSecret: (name: string) => Promise<string>;
+  readonly waitForShutdown?: () => Promise<void>;
   readonly notificationHostPath?: string;
   readonly nativeCorePath?: string;
+}
+
+function waitForShutdownSignal(): Promise<void> {
+  return new Promise(resolveShutdown => {
+    const shutdown = (): void => {
+      process.off('SIGINT', shutdown);
+      process.off('SIGTERM', shutdown);
+      resolveShutdown();
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
 }
 
 const defaultDependencies: CliDependencies = {
   createSecretStore: () => createSecretStore(),
   readSecret: readSecretFromTerminal,
+  waitForShutdown: waitForShutdownSignal,
 };
 
 async function runSecretsCommand(
@@ -757,78 +1357,74 @@ export async function runCli(
     return await runSecretsCommand(args, io, dependencies);
   }
 
+  if (args[0] === 'runs') {
+    try {
+      const inspection = parseRunsGetArguments(args);
+      io.stdout(
+        `${JSON.stringify(
+          inspectRunWithRust(inspection.statePath, inspection.runId, {
+            nativeCorePath: dependencies.nativeCorePath,
+          })
+        )}\n`
+      );
+      return 0;
+    } catch (error) {
+      if (error instanceof CliInputError && error.message === runsUsage()) {
+        io.stderr(`${runsUsage()}\n`);
+        return 2;
+      }
+      io.stderr(`${formatError(error)}\n`);
+      return 1;
+    }
+  }
+
   let runArguments: RunArguments;
   try {
     runArguments = parseRunArguments(args);
   } catch (error) {
-    if (error instanceof CliInputError && error.message !== runUsage()) {
+    const commandUsage = args[0] === 'test' ? testUsage() : runUsage();
+    if (error instanceof CliInputError && error.message !== commandUsage) {
       io.stderr(`${error.message}\n`);
     }
-    io.stderr(`${args.length === 0 ? usage() : runUsage()}\n`);
+    io.stderr(`${args.length === 0 ? usage() : commandUsage}\n`);
     return 2;
   }
   const { filePath } = runArguments;
 
-  let document: WomlSourceDocument | undefined;
+  let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
-    const source = await readWorkflow(filePath);
-    document = parseWoml(source, { file: filePath });
-    const workflow = compileWoml(document);
-    const hasApproval = workflowHasApproval(workflow);
-    const hasNotifications = workflowHasNotifications(workflow);
-    if (
-      runArguments.resumeRunId !== undefined &&
-      !hasApproval &&
-      workflow.schemaVersion !== 6
-    ) {
-      throw new CliInputError(
-        'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
-        '--resume requires a durable workflow with Human Approval or retry support.'
-      );
-    }
-    if (hasNotifications) {
-      await runNotificationWorkflow(
-        workflow,
-        runArguments,
-        io,
-        dependencies
-      );
+    sources = await compileWorkflowSources(filePath);
+    if (runArguments.command === 'test') {
+      if ((await stat(filePath)).isDirectory()) {
+        throw new CliInputError(
+          'WOML_TEST_REQUIRES_FILE',
+          'woml test requires one .woml file, not a directory.'
+        );
+      }
+      const source = sources[0]!;
+      if (
+        selectedManualTrigger(source.workflow, runArguments.triggerId) ===
+        undefined
+      ) {
+        throw new CliInputError(
+          'WOML_TEST_REQUIRES_MANUAL_TRIGGER',
+          'woml test requires the workflow to declare a <manual> trigger.'
+        );
+      }
+      await executeOneShot(source.workflow, runArguments, io, dependencies);
       return 0;
     }
-    if (hasApproval) {
-      await runApprovalWorkflow(workflow, runArguments, io, dependencies);
-      return 0;
-    }
-    if (workflow.schemaVersion === 6) {
-      await mkdir(dirname(runArguments.statePath), { recursive: true });
-      const onProgress = durableRetryProgress(io, runArguments);
-      const execution =
-        runArguments.resumeRunId === undefined
-          ? await executeWorkflowWithRustDurable(
-              workflow,
-              runArguments.statePath,
-              {
-                nativeCorePath: dependencies.nativeCorePath,
-                onProgress,
-              }
-            )
-          : await resumeWorkflowWithRustDurable(
-              workflow,
-              runArguments.statePath,
-              runArguments.resumeRunId,
-              {
-                nativeCorePath: dependencies.nativeCorePath,
-                onProgress,
-              }
-            );
-      io.stdout(`${JSON.stringify(execution.result)}\n`);
-      return 0;
-    }
-    const execution = await executeWorkflowWithRust(workflow);
-    io.stdout(`${JSON.stringify(execution.result)}\n`);
+    await activateWorkflows(sources, runArguments, io, dependencies);
     return 0;
   } catch (error) {
-    io.stderr(`${formatError(error, filePath, document)}\n`);
+    const source = sources?.length === 1 ? sources[0] : undefined;
+    io.stderr(
+      `${formatError(
+        error,
+        source?.filePath ?? filePath,
+        source?.document
+      )}\n`
+    );
     return 1;
   }
 }

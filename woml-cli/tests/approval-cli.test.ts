@@ -29,7 +29,8 @@ async function availablePort(): Promise<number> {
 }
 
 function spawnApproval(args: readonly string[], cwd = projectRoot) {
-  const child = Bun.spawn([cliPath, ...args], {
+  const commandArgs = args[0] === 'run' ? ['test', ...args.slice(1)] : args;
+  const child = Bun.spawn([cliPath, ...commandArgs], {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -119,13 +120,15 @@ beforeAll(async () => {
   }
   await chmod(cliPath, 0o755);
   temporaryDirectory = await mkdtemp(join(tmpdir(), 'woml-cli-approval-a6-'));
-});
+}, 120_000);
 
 afterAll(async () => {
-  await rm(temporaryDirectory, { recursive: true, force: true });
+  if (temporaryDirectory !== undefined) {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
 });
 
-describe('woml run Human Approval', () => {
+describe('woml test Human Approval', () => {
   for (const decision of ['approved', 'rejected'] as const) {
     test(`runs the real ${decision} browser/API journey`, async () => {
       const defaultDirectory = join(temporaryDirectory, 'default-product-path');
@@ -280,7 +283,7 @@ describe('woml run Human Approval', () => {
     const mismatched = Bun.spawn(
       [
         cliPath,
-        'run',
+        'test',
         changedWorkflowPath,
         '--state',
         statePath,
@@ -353,7 +356,7 @@ describe('woml run Human Approval', () => {
       const workflowPath = join(temporaryDirectory, `${item.name}.woml`);
       await writeFile(workflowPath, item.source);
       const running = spawnApproval([
-        'run',
+        'test',
         workflowPath,
         '--state',
         join(temporaryDirectory, `${item.name}.sqlite`),
@@ -495,7 +498,7 @@ describe('woml run Human Approval', () => {
     const child = Bun.spawn(
       [
         cliPath,
-        'run',
+        'test',
         workflowPath,
         '--state',
         join(temporaryDirectory, 'timeout-reject.sqlite'),
@@ -530,7 +533,7 @@ describe('woml run Human Approval', () => {
       const child = Bun.spawn(
         [
           cliPath,
-          'run',
+          'test',
           approvalFixturePath,
           '--state',
           statePath,

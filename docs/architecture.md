@@ -59,7 +59,7 @@ changed-payload replay conflicts. If the process stops after commit but before
 dispatch, recovery resumes that existing run rather than creating another one.
 Contradictory occurrence, run, definition, or event history fails closed.
 
-The T3 webhook listener is part of this WOML Rust path, not the legacy Cronflow
+The webhook listener is part of this WOML Rust path, not the legacy Cronflow
 webhook module. It validates transport, authentication, body size and JSON
 Schema before admission, returns the durable run identity asynchronously, and
 dispatches only newly admitted runs. A duplicate returns the original run
@@ -67,9 +67,18 @@ without executing it again. Server startup performs crash recovery once;
 individual requests never run global recovery while other attempts may be
 active.
 
-Progress and diagnostics cross a versioned native boundary and are printed to
-stderr; stdout stays reserved for the final JSON result. Secrets and executable
-capabilities never enter context, events, progress messages, or durable output.
+`woml run` is the long-lived activation lifecycle. The Bun CLI preflights the
+definitions and symbolic secrets, then starts the Rust listener through N-API
+and waits for SIGINT or SIGTERM. Rust runs Actix on a dedicated runtime thread,
+owns every occurrence and background DAG execution, and emits versioned Trigger
+Progress v1. Completing one run does not stop the activated workflow. `woml
+test` is the separate one-shot manual journey, and `woml runs get` reads a safe
+folded durable result.
+
+Progress and diagnostics are printed to stderr. One-shot manual results and
+explicit run inspection are JSON on stdout; a long-lived runtime does not
+pretend to have one final process result. Secrets and executable capabilities
+never enter context, events, progress messages, or durable output.
 
 The contracts between these layers are versioned artifacts under
 `docs/schemas/` and `docs/protocols/`. Neither side may infer or silently add a

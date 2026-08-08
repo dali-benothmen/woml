@@ -9,6 +9,7 @@ import {
   compiledDefinitionHash,
   executeWorkflowWithRustDurable,
   executeWorkflowWithRust,
+  parseTriggerProgress,
   recoverDurableRuns,
   RustWorkflowExecutionError,
 } from '../src/rust-executor';
@@ -36,6 +37,42 @@ const resultLimitedHostPath = resolve(
   'tests/fixtures/result-limited-script-host.ts'
 );
 const nativeTest = nativeCorePath === undefined ? test.skip : test;
+
+describe('Trigger Progress v1 decoding', () => {
+  test('accepts every frozen T4 progress fixture', async () => {
+    const directory = resolve(
+      packageRoot,
+      '../woml/tests/fixtures/trigger-contracts'
+    );
+    for (const name of [
+      'progress-ready.v1.json',
+      'progress-accepted.v1.json',
+      'progress-run-started.v1.json',
+      'progress-run-succeeded.v1.json',
+      'progress-run-failed.v1.json',
+      'progress-rejected.v1.json',
+    ]) {
+      const progress = parseTriggerProgress(await Bun.file(join(directory, name)).text());
+      expect(progress.contract).toBe('woml.trigger-progress');
+      expect(progress.contractVersion).toBe(1);
+    }
+  });
+
+  test('rejects unknown fields instead of silently widening the contract', () => {
+    expect(() =>
+      parseTriggerProgress(
+        JSON.stringify({
+          contract: 'woml.trigger-progress',
+          contractVersion: 1,
+          type: 'ready',
+          registrationCount: 1,
+          occurredAt: '2026-08-08T12:00:00.000Z',
+          secret: 'must-not-pass',
+        })
+      )
+    ).toThrow('invalid trigger progress');
+  });
+});
 
 async function helloWorkflow(): Promise<CompiledWorkflowDefinition> {
   const path = resolve(packageRoot, '../woml/tests/fixtures/hello.woml');

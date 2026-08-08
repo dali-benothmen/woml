@@ -73,6 +73,107 @@ export interface RustRecoveryReport {
   readonly resumableRuns: number;
 }
 
+export type TriggerProgressV1 =
+  | {
+      readonly contract: 'woml.trigger-progress';
+      readonly contractVersion: 1;
+      readonly type: 'ready';
+      readonly registrationCount: number;
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.trigger-progress';
+      readonly contractVersion: 1;
+      readonly type: 'occurrence_accepted';
+      readonly workflowId: string;
+      readonly triggerId: string;
+      readonly triggerHandler: string;
+      readonly occurrenceId: string;
+      readonly runId: string;
+      readonly duplicate: boolean;
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.trigger-progress';
+      readonly contractVersion: 1;
+      readonly type: 'run_started';
+      readonly workflowId: string;
+      readonly triggerId: string;
+      readonly triggerHandler: string;
+      readonly occurrenceId: string;
+      readonly runId: string;
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.trigger-progress';
+      readonly contractVersion: 1;
+      readonly type: 'run_terminal';
+      readonly workflowId: string;
+      readonly runId: string;
+      readonly status: 'succeeded' | 'failed';
+      readonly failureCode?: string;
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.trigger-progress';
+      readonly contractVersion: 1;
+      readonly type: 'occurrence_rejected';
+      readonly workflowId?: string;
+      readonly triggerId?: string;
+      readonly triggerHandler: string;
+      readonly code: string;
+      readonly message: string;
+      readonly occurredAt: string;
+    };
+
+export interface WebhookRuntimeRegistration {
+  readonly workflow: CompiledWorkflowDefinition;
+  readonly definitionHash: string;
+  readonly resolvedSecrets: Readonly<Record<string, string>>;
+}
+
+export interface WebhookRuntimeOptions extends RustExecutorOptions {
+  readonly host?: string;
+  readonly port?: number;
+  readonly startupManualTriggers?: Readonly<Record<string, string>>;
+  readonly onTriggerProgress?: (progress: TriggerProgressV1) => void;
+}
+
+export interface WebhookRuntimeHandle {
+  readonly runtimeId: string;
+  readonly host: string;
+  readonly port: number;
+}
+
+export interface RustRunInspection {
+  readonly runId: string;
+  readonly workflowId: string;
+  readonly status: 'not_started' | 'running' | 'waiting' | 'succeeded' | 'failed';
+  readonly terminalNodeId?: string;
+  readonly result?: JsonValue;
+  readonly failureCode?: string;
+}
+
+export class TriggerRuntimeError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'TriggerRuntimeError';
+    this.code = code;
+  }
+}
+
+export class RunInspectionError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'RunInspectionError';
+    this.code = code;
+  }
+}
+
 interface NativeExecutionErrorEnvelope {
   readonly kind: 'woml_execution_error';
   readonly code: string;
@@ -199,6 +300,18 @@ interface NativeCore {
     progressCallback: (message: string) => void
   ) => Promise<string>;
   readonly recoverWomlRuns: (eventStorePath: string) => string;
+  readonly startWomlWebhookRuntime: (
+    registrationsJson: string,
+    startupManualTriggersJson: string,
+    bindAddress: string,
+    eventStorePath: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    progressCallback: (message: string) => void
+  ) => Promise<string>;
+  readonly stopWomlWebhookRuntime: (runtimeId: string) => Promise<void>;
+  readonly inspectWomlRun: (eventStorePath: string, runId: string) => string;
   readonly executeWomlWorkflowDurableOutcome: (
     compiledModelJson: string,
     definitionHash: string,
@@ -545,6 +658,116 @@ export function parseExecutionProgress(json: string): ExecutionProgressV1 {
     return value as ExecutionProgressV1;
   }
   throw new Error('The native core returned invalid execution progress.');
+}
+
+export function parseTriggerProgress(json: string): TriggerProgressV1 {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    value.contract !== 'woml.trigger-progress' ||
+    value.contractVersion !== 1 ||
+    !dateTime(value.occurredAt)
+  ) {
+    throw new Error('The native core returned invalid trigger progress.');
+  }
+  if (
+    value.type === 'ready' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'registrationCount',
+      'occurredAt',
+    ]) &&
+    Number.isSafeInteger(value.registrationCount) &&
+    Number(value.registrationCount) >= 1
+  ) {
+    return value as TriggerProgressV1;
+  }
+  if (
+    (value.type === 'occurrence_accepted' || value.type === 'run_started') &&
+    exactKeys(
+      value,
+      [
+        'contract',
+        'contractVersion',
+        'type',
+        'workflowId',
+        'triggerId',
+        'triggerHandler',
+        'occurrenceId',
+        'runId',
+        'occurredAt',
+      ],
+      value.type === 'occurrence_accepted' ? ['duplicate'] : []
+    ) &&
+    typeof value.workflowId === 'string' &&
+    value.workflowId.length > 0 &&
+    typeof value.triggerId === 'string' &&
+    value.triggerId.length > 0 &&
+    typeof value.triggerHandler === 'string' &&
+    value.triggerHandler.startsWith('trigger.') &&
+    typeof value.occurrenceId === 'string' &&
+    value.occurrenceId.length > 0 &&
+    typeof value.runId === 'string' &&
+    value.runId.length > 0 &&
+    (value.type !== 'occurrence_accepted' ||
+      typeof value.duplicate === 'boolean')
+  ) {
+    return value as TriggerProgressV1;
+  }
+  if (
+    value.type === 'run_terminal' &&
+    exactKeys(
+      value,
+      [
+        'contract',
+        'contractVersion',
+        'type',
+        'workflowId',
+        'runId',
+        'status',
+        'occurredAt',
+      ],
+      ['failureCode']
+    ) &&
+    typeof value.workflowId === 'string' &&
+    value.workflowId.length > 0 &&
+    typeof value.runId === 'string' &&
+    value.runId.length > 0 &&
+    (value.status === 'succeeded' || value.status === 'failed') &&
+    (value.failureCode === undefined ||
+      (typeof value.failureCode === 'string' && value.failureCode.length > 0))
+  ) {
+    return value as TriggerProgressV1;
+  }
+  if (
+    value.type === 'occurrence_rejected' &&
+    exactKeys(
+      value,
+      [
+        'contract',
+        'contractVersion',
+        'type',
+        'triggerHandler',
+        'code',
+        'message',
+        'occurredAt',
+      ],
+      ['workflowId', 'triggerId']
+    ) &&
+    (value.workflowId === undefined || typeof value.workflowId === 'string') &&
+    (value.triggerId === undefined || typeof value.triggerId === 'string') &&
+    typeof value.triggerHandler === 'string' &&
+    value.triggerHandler.startsWith('trigger.') &&
+    typeof value.code === 'string' &&
+    value.code.length > 0 &&
+    typeof value.message === 'string' &&
+    value.message.length > 0
+  ) {
+    return value as TriggerProgressV1;
+  }
+  throw new Error('The native core returned invalid trigger progress.');
 }
 
 function executionResult(value: unknown): value is RustWorkflowExecutionResult {
@@ -1079,6 +1302,164 @@ export function recoverDurableRuns(
   return JSON.parse(
     native.recoverWomlRuns(eventStorePath)
   ) as RustRecoveryReport;
+}
+
+function decodeTriggerRuntimeError(error: unknown): never {
+  if (error instanceof TriggerRuntimeError) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    const value: unknown = JSON.parse(message);
+    if (
+      record(value) &&
+      value.kind === 'woml_trigger_runtime_error' &&
+      typeof value.code === 'string' &&
+      typeof value.message === 'string'
+    ) {
+      throw new TriggerRuntimeError(value.code, value.message);
+    }
+  } catch (decoded) {
+    if (decoded instanceof TriggerRuntimeError) throw decoded;
+  }
+  throw new TriggerRuntimeError(
+    'WOML_TRIGGER_RUNTIME_INTERNAL',
+    'The native trigger runtime failed unexpectedly.'
+  );
+}
+
+export async function startWebhookRuntimeWithRust(
+  registrations: readonly WebhookRuntimeRegistration[],
+  eventStorePath: string,
+  options: WebhookRuntimeOptions = {}
+): Promise<WebhookRuntimeHandle> {
+  if (registrations.length === 0) {
+    throw new Error('At least one webhook workflow registration is required.');
+  }
+  if (eventStorePath.length === 0) {
+    throw new Error('eventStorePath must not be empty.');
+  }
+  const port = options.port ?? 3_000;
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('Webhook port must be an integer from 1 through 65535.');
+  }
+  const timeoutMs = options.scriptTimeoutMs ?? 5_000;
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 0xffff_ffff
+  ) {
+    throw new Error('scriptTimeoutMs must be a positive 32-bit integer.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (
+    typeof native.startWomlWebhookRuntime !== 'function' ||
+    typeof native.stopWomlWebhookRuntime !== 'function'
+  ) {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose the T4 webhook runtime; rebuild the Rust addon.`
+    );
+  }
+  const resultJson = await native
+    .startWomlWebhookRuntime(
+      JSON.stringify(registrations),
+      JSON.stringify(options.startupManualTriggers ?? {}),
+      `${options.host ?? '127.0.0.1'}:${port}`,
+      eventStorePath,
+      options.bunExecutable ?? process.execPath,
+      options.scriptHostPath ?? defaultScriptHostPath(),
+      timeoutMs,
+      message => options.onTriggerProgress?.(parseTriggerProgress(message))
+    )
+    .catch(decodeTriggerRuntimeError);
+  const value: unknown = JSON.parse(resultJson);
+  if (
+    !record(value) ||
+    !exactKeys(value, ['runtimeId', 'host', 'port']) ||
+    typeof value.runtimeId !== 'string' ||
+    value.runtimeId.length === 0 ||
+    typeof value.host !== 'string' ||
+    value.host.length === 0 ||
+    !Number.isSafeInteger(value.port) ||
+    Number(value.port) < 1 ||
+    Number(value.port) > 65_535
+  ) {
+    throw new Error('The native core returned invalid webhook runtime startup data.');
+  }
+  return value as unknown as WebhookRuntimeHandle;
+}
+
+export async function stopWebhookRuntimeWithRust(
+  runtimeId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): Promise<void> {
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.stopWomlWebhookRuntime !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose the T4 webhook runtime; rebuild the Rust addon.`
+    );
+  }
+  await native.stopWomlWebhookRuntime(runtimeId);
+}
+
+export function inspectRunWithRust(
+  eventStorePath: string,
+  runId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRunInspection {
+  if (eventStorePath.length === 0 || runId.length === 0) {
+    throw new Error('eventStorePath and runId must not be empty.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.inspectWomlRun !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose run inspection; rebuild the Rust addon.`
+    );
+  }
+  let inspectionJson: string;
+  try {
+    inspectionJson = native.inspectWomlRun(eventStorePath, runId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      const value: unknown = JSON.parse(message);
+      if (
+        record(value) &&
+        value.kind === 'woml_run_inspection_error' &&
+        typeof value.code === 'string' &&
+        typeof value.message === 'string'
+      ) {
+        throw new RunInspectionError(value.code, value.message);
+      }
+    } catch (decoded) {
+      if (decoded instanceof RunInspectionError) throw decoded;
+    }
+    throw new RunInspectionError(
+      'WOML_RUN_INSPECTION_FAILED',
+      'The durable WOML run could not be inspected.'
+    );
+  }
+  const value: unknown = JSON.parse(inspectionJson);
+  if (
+    !record(value) ||
+    !exactKeys(
+      value,
+      ['runId', 'workflowId', 'status'],
+      ['terminalNodeId', 'result', 'failureCode']
+    ) ||
+    typeof value.runId !== 'string' ||
+    typeof value.workflowId !== 'string' ||
+    !['not_started', 'running', 'waiting', 'succeeded', 'failed'].includes(
+      String(value.status)
+    ) ||
+    (value.terminalNodeId !== undefined &&
+      typeof value.terminalNodeId !== 'string') ||
+    (value.failureCode !== undefined && typeof value.failureCode !== 'string')
+  ) {
+    throw new Error('The native core returned invalid run inspection data.');
+  }
+  return value as unknown as RustRunInspection;
 }
 
 function parseNotificationJourney(
