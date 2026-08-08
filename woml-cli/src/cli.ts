@@ -86,7 +86,7 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+  return 'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--control-secret <NAME>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
 }
 
 function testUsage(): string {
@@ -106,8 +106,12 @@ function secretsUsage(): string {
   ].join('\n');
 }
 
+function emitUsage(): string {
+  return 'Usage: woml emit <eventName> --id <publisherEventId> --data @<jsonFile> --server <url> --token-secret <NAME>';
+}
+
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${runsUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${runsUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -119,6 +123,7 @@ interface RunArguments {
   readonly host: string;
   readonly port: number;
   readonly triggerId?: string;
+  readonly controlSecretName?: string;
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
@@ -139,6 +144,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   let host = '127.0.0.1';
   let port = 3_000;
   let triggerId: string | undefined;
+  let controlSecretName: string | undefined;
   const seen = new Set<string>();
   for (let index = 0; index < options.length; index += 2) {
     const option = options[index];
@@ -150,7 +156,10 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         option !== '--resume' &&
         option !== '--approval-port' &&
         option !== '--trigger' &&
-        (command !== 'run' || (option !== '--host' && option !== '--port')))
+        (command !== 'run' ||
+          (option !== '--host' &&
+            option !== '--port' &&
+            option !== '--control-secret')))
     ) {
       throw new CliInputError(
         'WOML_CLI_ARGUMENTS_INVALID',
@@ -204,6 +213,16 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       port = parsedPort;
+    } else if (option === '--control-secret') {
+      try {
+        requireValidSecretName(value);
+      } catch {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--control-secret requires a valid symbolic secret name.'
+        );
+      }
+      controlSecretName = value;
     } else {
       if (value.length === 0) {
         throw new CliInputError(
@@ -223,12 +242,102 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     host,
     port,
     triggerId,
+    controlSecretName,
   };
 }
 
 interface RunsGetArguments {
   readonly runId: string;
   readonly statePath: string;
+}
+
+interface EmitArguments {
+  readonly eventName: string;
+  readonly eventId: string;
+  readonly dataPath: string;
+  readonly server: string;
+  readonly tokenSecretName: string;
+}
+
+const eventNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
+const eventIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+function parseEmitArguments(args: readonly string[]): EmitArguments {
+  const [, eventName, ...options] = args;
+  if (
+    eventName === undefined ||
+    eventName.length > 256 ||
+    !eventNamePattern.test(eventName) ||
+    options.length !== 8
+  ) {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', emitUsage());
+  }
+  const values = new Map<string, string>();
+  for (let index = 0; index < options.length; index += 2) {
+    const option = options[index]!;
+    const value = options[index + 1];
+    if (
+      value === undefined ||
+      values.has(option) ||
+      !['--id', '--data', '--server', '--token-secret'].includes(option)
+    ) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', emitUsage());
+    }
+    values.set(option, value);
+  }
+  const eventId = values.get('--id');
+  const data = values.get('--data');
+  const serverValue = values.get('--server');
+  const tokenSecretName = values.get('--token-secret');
+  if (
+    eventId === undefined ||
+    eventId.length > 256 ||
+    !eventIdPattern.test(eventId) ||
+    data === undefined ||
+    !data.startsWith('@') ||
+    data.length === 1 ||
+    serverValue === undefined ||
+    tokenSecretName === undefined
+  ) {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', emitUsage());
+  }
+  try {
+    requireValidSecretName(tokenSecretName);
+  } catch {
+    throw new CliInputError(
+      'WOML_CLI_ARGUMENTS_INVALID',
+      '--token-secret requires a valid symbolic secret name.'
+    );
+  }
+  let server: URL;
+  try {
+    server = new URL(serverValue);
+  } catch {
+    throw new CliInputError(
+      'WOML_CLI_ARGUMENTS_INVALID',
+      '--server requires an absolute http:// or https:// URL.'
+    );
+  }
+  if (
+    !['http:', 'https:'].includes(server.protocol) ||
+    server.username.length > 0 ||
+    server.password.length > 0 ||
+    (server.pathname !== '/' && server.pathname !== '') ||
+    server.search.length > 0 ||
+    server.hash.length > 0
+  ) {
+    throw new CliInputError(
+      'WOML_CLI_ARGUMENTS_INVALID',
+      '--server must be an HTTP origin without credentials, a path, query, or fragment.'
+    );
+  }
+  return {
+    eventName,
+    eventId,
+    dataPath: resolve(data.slice(1)),
+    server: server.origin,
+    tokenSecretName,
+  };
 }
 
 function parseRunsGetArguments(args: readonly string[]): RunsGetArguments {
@@ -949,6 +1058,11 @@ interface WebhookRouteSummary {
   readonly schema?: JsonValue;
 }
 
+interface EventRouteSummary {
+  readonly eventName: string;
+  readonly schema?: JsonValue;
+}
+
 function webhookRouteSummaries(
   workflow: CompiledWorkflowDefinition
 ): readonly WebhookRouteSummary[] {
@@ -963,6 +1077,22 @@ function webhookRouteSummaries(
         path: literalString(fields?.path) ?? '',
         method: literalString(fields?.method) ?? 'POST',
         authentication: literalString(authentication?.kind) ?? '',
+        ...(fields?.schema?.kind === 'literal'
+          ? { schema: fields.schema.value }
+          : {}),
+      };
+    });
+}
+
+function eventRouteSummaries(
+  workflow: CompiledWorkflowDefinition
+): readonly EventRouteSummary[] {
+  return workflow.triggers
+    .filter(trigger => trigger.handler === 'trigger.event')
+    .map(trigger => {
+      const fields = objectFields(trigger.config);
+      return {
+        eventName: literalString(fields?.name) ?? '',
         ...(fields?.schema?.kind === 'literal'
           ? { schema: fields.schema.value }
           : {}),
@@ -1070,6 +1200,24 @@ export function webhookCurlExample(
     `  --data ${shellSingleQuoted(JSON.stringify(webhookSchemaSample(route.schema)))}`
   );
   return lines.map((line, index) => `${line}${index < lines.length - 1 ? ' \\' : ''}`).join('\n');
+}
+
+export function eventCurlExample(
+  route: EventRouteSummary,
+  host: string,
+  port: number
+): string {
+  const url = `http://${host}:${port}/_woml/events/${route.eventName}`;
+  const lines = [
+    `curl --request POST ${shellSingleQuoted(url)}`,
+    `  --header 'Authorization: Bearer <control-token>'`,
+    `  --header 'Event-ID: <event-id>'`,
+    `  --header 'Content-Type: application/json'`,
+    `  --data ${shellSingleQuoted(JSON.stringify(webhookSchemaSample(route.schema)))}`,
+  ];
+  return lines
+    .map((line, index) => `${line}${index < lines.length - 1 ? ' \\' : ''}`)
+    .join('\n');
 }
 
 async function resolvedSecrets(
@@ -1201,17 +1349,6 @@ async function activateWorkflows(
   io: CliIo,
   dependencies: CliDependencies
 ): Promise<void> {
-  const stagedEvent = sources
-    .flatMap(source =>
-      source.workflow.triggers.map(trigger => ({ source, trigger }))
-    )
-    .find(entry => entry.trigger.handler === 'trigger.event');
-  if (stagedEvent !== undefined) {
-    throw new CliInputError(
-      'WOML_TRIGGER_UNSUPPORTED',
-      `event trigger "${stagedEvent.trigger.id}" in workflow "${stagedEvent.source.workflow.workflowId}" is compiled in T11, but event publication and fan-out become executable in T12.`
-    );
-  }
   if (sources.length > 1 && args.resumeRunId !== undefined) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',
@@ -1231,7 +1368,8 @@ async function activateWorkflows(
         trigger.handler === 'trigger.webhook' ||
         trigger.handler === 'trigger.slack' ||
         trigger.handler === 'trigger.schedule' ||
-        trigger.handler === 'trigger.interval'
+        trigger.handler === 'trigger.interval' ||
+        trigger.handler === 'trigger.event'
     )
   );
   const oneShotSources = sources.filter(
@@ -1265,11 +1403,40 @@ async function activateWorkflows(
     if (productionSources.length > 0) {
       await mkdir(dirname(args.statePath), { recursive: true });
       const store = dependencies.createSecretStore();
+      const eventRoutes = productionSources.flatMap(source =>
+        eventRouteSummaries(source.workflow)
+      );
+      if (eventRoutes.length > 0 && args.controlSecretName === undefined) {
+        throw new CliInputError(
+          'WOML_EVENT_CONTROL_SECRET_REQUIRED',
+          'event triggers require --control-secret <NAME> so the publisher endpoint is never exposed without authentication.'
+        );
+      }
+      if (eventRoutes.length === 0 && args.controlSecretName !== undefined) {
+        throw new CliInputError(
+          'WOML_EVENT_CONTROL_SECRET_UNUSED',
+          '--control-secret requires at least one loaded <event> trigger.'
+        );
+      }
+      const eventControlToken =
+        args.controlSecretName === undefined
+          ? undefined
+          : await store.get(args.controlSecretName);
+      if (
+        args.controlSecretName !== undefined &&
+        (eventControlToken === undefined || eventControlToken.length === 0)
+      ) {
+        throw new SecretStoreError(
+          'WOML_SECRET_NOT_FOUND',
+          `Missing required secret: ${args.controlSecretName}.`
+        );
+      }
       const registrations = await Promise.all(
         productionSources.map(async source => ({
           workflow: source.workflow,
           definitionHash: compiledDefinitionHash(source.workflow),
           resolvedSecrets: await resolvedSecrets(source.workflow, store),
+          ...(eventControlToken === undefined ? {} : { eventControlToken }),
         }))
       );
       const routes = productionSources.flatMap(source =>
@@ -1281,6 +1448,14 @@ async function activateWorkflows(
           compiledDefinitionHash(source.workflow)
         )
       );
+      const uniqueEventRoutes: EventRouteSummary[] = [];
+      const seenEventNames = new Set<string>();
+      for (const route of eventRoutes) {
+        if (!seenEventNames.has(route.eventName)) {
+          seenEventNames.add(route.eventName);
+          uniqueEventRoutes.push(route);
+        }
+      }
       const seenRoutes = new Map<string, WebhookRouteSummary>();
       for (const route of routes) {
         const previous = seenRoutes.get(route.path);
@@ -1292,13 +1467,14 @@ async function activateWorkflows(
         }
         seenRoutes.set(route.path, route);
       }
+      const hasHttpEndpoint = routes.length > 0 || uniqueEventRoutes.length > 0;
       const runtime = await startWebhookRuntimeWithRust(
         registrations,
         args.statePath,
         {
           nativeCorePath: dependencies.nativeCorePath,
-          host: routes.length === 0 ? '127.0.0.1' : args.host,
-          port: routes.length === 0 ? 0 : args.port,
+          host: hasHttpEndpoint ? args.host : '127.0.0.1',
+          port: hasHttpEndpoint ? args.port : 0,
           startupManualTriggers,
           onTriggerProgress: progress =>
             reportTriggerProgress(
@@ -1314,8 +1490,16 @@ async function activateWorkflows(
         }
       );
       runtimeId = runtime.runtimeId;
-      if (routes.length > 0) {
+      if (hasHttpEndpoint) {
         io.stderr(`WOML workflow active at http://${runtime.host}:${runtime.port}.\n`);
+      }
+      for (const route of uniqueEventRoutes) {
+        io.stderr(
+          `Event ${route.eventName}: POST http://${runtime.host}:${runtime.port}/_woml/events/${route.eventName}\n`
+        );
+        io.stderr(
+          `Try event ${route.eventName}:\n${eventCurlExample(route, runtime.host, runtime.port)}\n`
+        );
       }
       for (const route of routes) {
         io.stderr(
@@ -1409,6 +1593,7 @@ export interface CliDependencies {
   readonly createSlackTransport?: (
     options: SharedSlackTransportOptions
   ) => SharedSlackTransport;
+  readonly fetch?: typeof globalThis.fetch;
 }
 
 function waitForShutdownSignal(): Promise<void> {
@@ -1427,7 +1612,118 @@ const defaultDependencies: CliDependencies = {
   createSecretStore: () => createSecretStore(),
   readSecret: readSecretFromTerminal,
   waitForShutdown: waitForShutdownSignal,
+  fetch: globalThis.fetch,
 };
+
+async function runEmitCommand(
+  args: readonly string[],
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<number> {
+  try {
+    const emit = parseEmitArguments(args);
+    let dataEntry;
+    try {
+      dataEntry = await stat(emit.dataPath);
+    } catch {
+      throw new CliInputError(
+        'WOML_EVENT_DATA_NOT_FOUND',
+        'event data file does not exist.'
+      );
+    }
+    if (!dataEntry.isFile()) {
+      throw new CliInputError(
+        'WOML_EVENT_DATA_INVALID',
+        'event data path must point to a JSON file.'
+      );
+    }
+    const source = await Bun.file(emit.dataPath).text();
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(source);
+    } catch {
+      throw new CliInputError(
+        'WOML_EVENT_PAYLOAD_INVALID',
+        'event data must contain valid JSON.'
+      );
+    }
+    if (
+      decoded === null ||
+      typeof decoded !== 'object' ||
+      Array.isArray(decoded)
+    ) {
+      throw new CliInputError(
+        'WOML_EVENT_PAYLOAD_INVALID',
+        'event data must contain one top-level JSON object.'
+      );
+    }
+    const payload = JSON.stringify(decoded);
+    if (new TextEncoder().encode(payload).byteLength > 1_048_576) {
+      throw new CliInputError(
+        'WOML_EVENT_PAYLOAD_TOO_LARGE',
+        'event payload exceeds the 1 MiB limit.'
+      );
+    }
+    const store = dependencies.createSecretStore();
+    const token = await store.get(emit.tokenSecretName);
+    if (token === undefined || token.length === 0) {
+      throw new SecretStoreError(
+        'WOML_SECRET_NOT_FOUND',
+        `Missing required secret: ${emit.tokenSecretName}.`
+      );
+    }
+    let response: Response;
+    try {
+      response = await (dependencies.fetch ?? globalThis.fetch)(
+        `${emit.server}/_woml/events/${encodeURIComponent(emit.eventName)}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Event-ID': emit.eventId,
+            'Content-Type': 'application/json',
+          },
+          body: payload,
+        }
+      );
+    } catch {
+      throw new CliInputError(
+        'WOML_EVENT_UNAVAILABLE',
+        'could not reach the WOML event publisher.'
+      );
+    }
+    let responseBody: unknown;
+    try {
+      responseBody = JSON.parse(await response.text());
+    } catch {
+      throw new CliInputError(
+        'WOML_EVENT_RESPONSE_INVALID',
+        'the WOML event publisher returned an invalid response.'
+      );
+    }
+    if (!response.ok) {
+      const root = jsonObject(responseBody as JsonValue);
+      const error = jsonObject(root?.error);
+      const code =
+        typeof error?.code === 'string' ? error.code : 'WOML_EVENT_UNAVAILABLE';
+      const message =
+        typeof error?.message === 'string'
+          ? error.message
+          : 'The WOML event publisher rejected the request.';
+      io.stderr(`WOML event error [${code}]: ${message}\n`);
+      return 1;
+    }
+    io.stdout(`${JSON.stringify(responseBody)}\n`);
+    return 0;
+  } catch (error) {
+    if (error instanceof CliInputError && error.message === emitUsage()) {
+      io.stderr(`${emitUsage()}\n`);
+      return 2;
+    }
+    io.stderr(`${formatError(error)}\n`);
+    return 1;
+  }
+}
 
 async function runSecretsCommand(
   args: readonly string[],
@@ -1503,6 +1799,10 @@ export async function runCli(
 ): Promise<number> {
   if (args[0] === 'secrets') {
     return await runSecretsCommand(args, io, dependencies);
+  }
+
+  if (args[0] === 'emit') {
+    return await runEmitCommand(args, io, dependencies);
   }
 
   if (args[0] === 'runs') {

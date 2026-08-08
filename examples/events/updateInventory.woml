@@ -1,0 +1,25 @@
+<workflow id="update-inventory" name="Update order inventory">
+  <triggers>
+    <event id="orderCreated" name="order.created">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+  <steps>
+    <step id="inventory">
+      <script>
+        return {
+          workflow: "update-inventory",
+          message: `Inventory updated for ${context.trigger.orderId}`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>

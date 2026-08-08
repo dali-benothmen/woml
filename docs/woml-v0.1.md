@@ -63,7 +63,7 @@ includes conditional branches and bounded parallel groups:
 | Multiple triggers, webhook, and inline payload schema | Frozen and hardened through Production Triggers T0–T5 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
 | Slack trigger | Frozen and hardened through Production Triggers T6–T9 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
 | Schedule and interval triggers | Frozen and activated through Production Triggers T8–T10 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
-| Event trigger | Frozen and frontend-activated in Production Triggers T11 | Compiles to reviewed Model v7; authenticated publication and fan-out remain unavailable until T12 |
+| Event trigger | Executable in Production Triggers T12 | Authenticated publication fans out durably to every exact-name subscriber |
 | Config and lifecycle | Designed | Unavailable until their activation phases |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
@@ -805,7 +805,7 @@ cron expression if doing so would change its semantics.
 `<event>` may contain at most one inline Draft 2020-12 `<schema>` using the
 same source rules as webhook schemas.
 
-T11 compiles this trigger to `trigger.event` with literal `name` and optional
+The frontend compiles this trigger to `trigger.event` with literal `name` and optional
 literal `schema` fields. The name is 256 characters or fewer, begins with a
 lowercase letter, and contains at least two lowercase alphanumeric segments
 separated by one `.`, `_`, or `-`. Examples are `order.created`,
@@ -816,8 +816,8 @@ Event Publication v1 freezes authenticated publishing at
 credential, and one top-level JSON object of at most 1 MiB. Publication fans
 out in loaded workflow and trigger order. Each matching subscriber validates
 and admits independently, so the response may be `accepted`, `partial`, or
-`rejected`. T11 defines and compiles this contract; T12 activates the endpoint
-and runtime fan-out.
+`rejected`. The T12 Rust runtime serves this endpoint, and `woml emit` provides
+the built-in secret-store-backed publisher client.
 
 ## 10. `<steps>` and Sequential Execution
 

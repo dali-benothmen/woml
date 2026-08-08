@@ -1,9 +1,9 @@
 # WOML Production Trigger Contracts v1
 
-Status: frozen in T0 and implemented through T11. Long-lived `woml run` now
+Status: frozen in T0 and implemented through T12. Long-lived `woml run` now
 activates manual, webhook, Slack, cron schedule, and fixed-rate interval
-triggers through the shared durable Rust occurrence boundary. Named events
-compile in T11; their publisher endpoint and fan-out activate in T12.
+triggers through the shared durable Rust occurrence boundary, including named
+event publication and deterministic multi-workflow fan-out.
 
 This document pins the boundary shared by the TypeScript WOML frontend, Rust
 core, CLI, HTTP listener, provider adapters, and durable store. The normative
@@ -38,9 +38,7 @@ Model v7 keeps the existing DAG and defines a strict trigger union:
 | `<event>` | `trigger.event` |
 
 Trigger IDs are unique within a workflow and every trigger starts the same DAG.
-Manual, webhook, Slack, schedule, and interval syntax are executable through
-T10. Event syntax and lowering are active in T11, while event execution remains
-rejected until T12.
+Manual, webhook, Slack, schedule, interval, and event syntax are executable.
 Resolved credentials never appear in a compiled definition; only
 `secretReference` expressions are permitted.
 
@@ -311,7 +309,7 @@ request requires `Authorization: Bearer <control-token>`, `Event-ID`,
 fan-out returns HTTP 200 with all safe delivery results. Request-level failures
 use 400, 401, 404, 405, 413, or 503 as pinned by Event Publisher HTTP v1.
 
-The T12 terminal journey will be:
+The T12 terminal journey is:
 
 ```bash
 woml run workflows/ --port 3000 --control-secret WOML_CONTROL_TOKEN
@@ -331,8 +329,7 @@ The endpoint exists only when `woml run` receives `--control-secret <NAME>`.
 The value is resolved from the existing WOML secret store, compared through a
 fixed-width digest, and never enters WOML source, Model v7, event payloads,
 state, or diagnostics. `woml emit` uses `--token-secret <NAME>` and resolves
-the same symbolic secret client-side. T11 freezes these surfaces without
-accepting the flags prematurely; T12 implements them.
+the same symbolic secret client-side.
 
 ## Progress boundary
 

@@ -18,8 +18,8 @@ use woml_engine::{
   resume_workflow_durable_outcome, run_notification_provider_journey,
   settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome,
   CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
-  ExternalTriggerAdmissionCommand, NotificationHostClientError, NotificationHostProcessOptions,
-  IntervalProgress, IntervalProgressReporter, NotificationJourneyDiagnostics,
+  ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter,
+  NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
   NotificationJourneyError, ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError,
   RuntimeExecutionOptions, ScheduleProgress, ScheduleProgressReporter, ScriptHostProcessOptions,
   SystemEngineClock, TriggerAdmissionRequest, TriggerProgress, TriggerProgressReporter,
@@ -276,6 +276,8 @@ struct NativeWebhookRegistration {
   workflow: CompiledWorkflowDefinition,
   definition_hash: String,
   resolved_secrets: BTreeMap<String, String>,
+  #[serde(default)]
+  event_control_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -881,6 +883,7 @@ pub fn start_woml_webhook_runtime(
       workflow: registration.workflow,
       definition_hash: registration.definition_hash,
       resolved_secrets: registration.resolved_secrets,
+      event_control_token: registration.event_control_token,
     })
     .collect();
   let config = WomlWebhookServerConfig {

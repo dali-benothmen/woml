@@ -64,8 +64,8 @@ Contradictory occurrence, run, definition, or event history fails closed.
 For cron schedules, the mutable cursor is the scheduler's durable coordination
 record. Rust commits its advance in the same immediate transaction as the
 immutable occurrence, run binding, and first event. Schedule-only and provider-
-only runtimes do not bind an HTTP socket; webhook workflows bind the configured
-listener.
+only runtimes do not bind an HTTP socket; webhook and named-event workflows
+bind the configured listener.
 
 For fixed-rate intervals, Rust persists the first registration anchor and the
 next positive sequence. Every planned instant is recomputed as `anchor +
@@ -75,15 +75,16 @@ Restart recovery applies the same bounded `skip` or `run-once` policy as cron,
 and only `{ scheduledAt, triggeredAt }` enters workflow context.
 
 Named application events add a fan-out boundary above Trigger Ingress rather
-than a second run creator. The T11 frontend lowers each exact event name and
+than a second run creator. The frontend lowers each exact event name and
 optional schema into Model v7. Event Publication v1 deterministically matches
 subscribers and sends one independently validated occurrence per matching
 trigger through the existing Rust authority. Its source identity hashes the
 publisher event ID together with workflow and trigger identity, allowing a
 crash or publisher retry to finish missing deliveries without duplicating
-already accepted runs. The reserved authenticated HTTP endpoint and `woml
-emit` client activate in T12; control credentials remain outside compiled
-models and durable workflow context.
+already accepted runs. The Rust host serves the reserved authenticated HTTP
+endpoint, and `woml emit` is a secret-store-backed client for the same public
+contract. Control credentials remain outside compiled models, durable workflow
+context, fixtures, and diagnostics.
 
 The webhook listener is part of this WOML Rust path, not the legacy Cronflow
 webhook module. It validates transport, authentication, body size and JSON

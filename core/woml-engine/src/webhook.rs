@@ -33,6 +33,7 @@ use crate::{
 };
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
+pub const EVENT_MAX_SUBSCRIBERS: usize = 1_000;
 pub const TRIGGER_PROGRESS_CONTRACT: &str = "woml.trigger-progress";
 pub const TRIGGER_PROGRESS_CONTRACT_VERSION: u32 = 1;
 
@@ -101,6 +102,7 @@ pub struct WebhookDefinitionRegistration {
   pub workflow: CompiledWorkflowDefinition,
   pub definition_hash: String,
   pub resolved_secrets: BTreeMap<String, String>,
+  pub event_control_token: Option<String>,
 }
 
 impl WebhookDefinitionRegistration {
@@ -109,11 +111,17 @@ impl WebhookDefinitionRegistration {
       workflow,
       definition_hash: definition_hash.into(),
       resolved_secrets: BTreeMap::new(),
+      event_control_token: None,
     }
   }
 
   pub fn with_secret(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
     self.resolved_secrets.insert(name.into(), value.into());
+    self
+  }
+
+  pub fn with_event_control_token(mut self, value: impl Into<String>) -> Self {
+    self.event_control_token = Some(value.into());
     self
   }
 }
@@ -151,7 +159,7 @@ impl WomlWebhookServer {
     external_ingress: Option<ExternalTriggerAdmissionReceiver>,
   ) -> Result<Self, WebhookRuntimeError> {
     let (state, recovery_runs, startup_manual_runs) = prepare_state(config)?;
-    let listener = if state.routes.is_empty() {
+    let listener = if state.routes.is_empty() && state.event_subscribers.is_empty() {
       None
     } else {
       Some(TcpListener::bind(state.bind_address)?)
@@ -239,19 +247,19 @@ impl WomlWebhookServer {
 
 #[derive(Debug, Error)]
 pub enum WebhookRuntimeError {
-  #[error("invalid WOML webhook registration: {0}")]
+  #[error("invalid WOML trigger registration: {0}")]
   InvalidRegistration(String),
-  #[error("compiled WOML webhook definition is invalid: {0}")]
+  #[error("compiled WOML trigger definition is invalid: {0}")]
   Model(#[from] ModelValidationError),
   #[error("webhook route {0:?} is registered more than once")]
   RouteConflict(String),
-  #[error("webhook secret {0:?} is missing or empty")]
+  #[error("trigger secret {0:?} is missing or empty")]
   SecretMissing(String),
-  #[error("webhook JSON Schema is invalid for trigger {trigger_id:?}: {message}")]
+  #[error("trigger JSON Schema is invalid for trigger {trigger_id:?}: {message}")]
   InvalidSchema { trigger_id: String, message: String },
-  #[error("durable webhook storage is unavailable: {0}")]
+  #[error("durable trigger storage is unavailable: {0}")]
   DurableStore(#[from] DurableStoreError),
-  #[error("the webhook listener could not bind: {0}")]
+  #[error("the trigger listener could not bind: {0}")]
   Io(#[from] std::io::Error),
 }
 
@@ -259,6 +267,8 @@ struct WebhookRuntimeState {
   bind_address: SocketAddr,
   database_path: PathBuf,
   routes: HashMap<String, Arc<WebhookRoute>>,
+  event_subscribers: BTreeMap<String, Vec<Arc<EventSubscriber>>>,
+  event_control_token_digest: Option<[u8; 32]>,
   registration_count: usize,
   execution: RuntimeExecutionOptions,
   progress_reporter: Option<TriggerProgressReporter>,
@@ -289,6 +299,13 @@ struct WebhookRoute {
   definition_hash: String,
   trigger_id: String,
   authentication: WebhookAuthentication,
+  schema: Option<Arc<Validator>>,
+}
+
+struct EventSubscriber {
+  workflow_id: String,
+  definition_hash: String,
+  trigger_id: String,
   schema: Option<Arc<Validator>>,
 }
 
@@ -358,6 +375,24 @@ impl WebhookRuntimeState {
       occurred_at: Utc::now(),
     });
   }
+
+  fn report_event_rejected(
+    &self,
+    subscriber: Option<&EventSubscriber>,
+    code: &'static str,
+    message: &'static str,
+  ) {
+    self.report(TriggerProgress::OccurrenceRejected {
+      contract: TRIGGER_PROGRESS_CONTRACT,
+      contract_version: TRIGGER_PROGRESS_CONTRACT_VERSION,
+      workflow_id: subscriber.map(|subscriber| subscriber.workflow_id.clone()),
+      trigger_id: subscriber.map(|subscriber| subscriber.trigger_id.clone()),
+      trigger_handler: "trigger.event".to_string(),
+      code: code.to_string(),
+      message: message.to_string(),
+      occurred_at: Utc::now(),
+    });
+  }
 }
 
 enum WebhookAuthentication {
@@ -392,6 +427,37 @@ struct WebhookSchemaIssue {
   message: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all_fields = "camelCase")]
+enum EventDeliveryResponse {
+  #[serde(rename = "accepted")]
+  Accepted {
+    workflow_id: String,
+    trigger_id: String,
+    run_id: String,
+    duplicate: bool,
+  },
+  #[serde(rename = "rejected")]
+  Rejected {
+    workflow_id: String,
+    trigger_id: String,
+    code: &'static str,
+    message: &'static str,
+    retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issues: Option<Vec<WebhookSchemaIssue>>,
+  },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventPublishedResponse {
+  event_id: String,
+  event_name: String,
+  status: &'static str,
+  deliveries: Vec<EventDeliveryResponse>,
+}
+
 fn prepare_state(
   config: WomlWebhookServerConfig,
 ) -> Result<
@@ -413,6 +479,8 @@ fn prepare_state(
   let mut startup_manual_runs = Vec::new();
   let mut schedules = Vec::new();
   let mut intervals = Vec::new();
+  let mut event_subscribers = BTreeMap::<String, Vec<Arc<EventSubscriber>>>::new();
+  let mut event_control_token_digest: Option<[u8; 32]> = None;
   let mut registration_count = 0;
   for registration in config.registrations {
     registration.workflow.validate_for_durable_execution()?;
@@ -430,10 +498,11 @@ fn prepare_state(
           | "trigger.slack"
           | "trigger.schedule"
           | "trigger.interval"
+          | "trigger.event"
       )
     }) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} contains a production trigger that is not active in T10",
+        "workflow {:?} contains an unsupported production trigger",
         registration.workflow.workflow_id
       )));
     }
@@ -481,6 +550,36 @@ fn prepare_state(
           return Err(WebhookRuntimeError::RouteConflict(path.to_string()));
         }
       }
+      if trigger.handler == "trigger.event" {
+        let token = registration
+          .event_control_token
+          .as_deref()
+          .filter(|value| !value.is_empty())
+          .ok_or_else(|| {
+            WebhookRuntimeError::InvalidRegistration(format!(
+              "event trigger {:?} requires a runtime control secret",
+              trigger.id
+            ))
+          })?;
+        let token_digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        if event_control_token_digest
+          .as_ref()
+          .is_some_and(|existing| existing != &token_digest)
+        {
+          return Err(WebhookRuntimeError::InvalidRegistration(
+            "all event subscribers in one runtime must share one control secret".to_string(),
+          ));
+        }
+        event_control_token_digest = Some(token_digest);
+        let (event_name, subscriber) = compile_event_subscriber(&registration, trigger)?;
+        let subscribers = event_subscribers.entry(event_name).or_default();
+        if subscribers.len() >= EVENT_MAX_SUBSCRIBERS {
+          return Err(WebhookRuntimeError::InvalidRegistration(format!(
+            "an event name cannot have more than {EVENT_MAX_SUBSCRIBERS} subscribers"
+          )));
+        }
+        subscribers.push(Arc::new(subscriber));
+      }
     }
     definitions.push((registration.workflow, registration.definition_hash));
   }
@@ -518,6 +617,8 @@ fn prepare_state(
       bind_address: config.bind_address,
       database_path: config.database_path,
       routes,
+      event_subscribers,
+      event_control_token_digest,
       registration_count,
       execution: config.execution,
       progress_reporter: config.progress_reporter,
@@ -527,6 +628,88 @@ fn prepare_state(
     recovery_runs,
     startup_manual_runs,
   ))
+}
+
+fn compile_event_subscriber(
+  registration: &WebhookDefinitionRegistration,
+  trigger: &crate::model::CompiledTrigger,
+) -> Result<(String, EventSubscriber), WebhookRuntimeError> {
+  let fields = object_fields(&trigger.config).ok_or_else(|| {
+    WebhookRuntimeError::InvalidRegistration(format!(
+      "event trigger {:?} config must be an object",
+      trigger.id
+    ))
+  })?;
+  let event_name = literal_string(fields.get("name"))
+    .filter(|value| valid_event_name(value))
+    .ok_or_else(|| {
+      WebhookRuntimeError::InvalidRegistration(format!(
+        "event trigger {:?} has an invalid name",
+        trigger.id
+      ))
+    })?
+    .to_string();
+  let schema = match fields.get("schema") {
+    None => None,
+    Some(ValueExpression::Literal { value }) => {
+      jsonschema::draft202012::meta::validate(value).map_err(|error| {
+        WebhookRuntimeError::InvalidSchema {
+          trigger_id: trigger.id.clone(),
+          message: error.to_string(),
+        }
+      })?;
+      Some(Arc::new(
+        jsonschema::draft202012::options()
+          .should_validate_formats(true)
+          .build(value)
+          .map_err(|error| WebhookRuntimeError::InvalidSchema {
+            trigger_id: trigger.id.clone(),
+            message: error.to_string(),
+          })?,
+      ))
+    }
+    Some(_) => {
+      return Err(WebhookRuntimeError::InvalidRegistration(format!(
+        "event trigger {:?} schema must be a literal object",
+        trigger.id
+      )))
+    }
+  };
+  Ok((
+    event_name,
+    EventSubscriber {
+      workflow_id: registration.workflow.workflow_id.clone(),
+      definition_hash: registration.definition_hash.clone(),
+      trigger_id: trigger.id.clone(),
+      schema,
+    },
+  ))
+}
+
+fn valid_event_name(value: &str) -> bool {
+  if value.len() > 256
+    || !value
+      .bytes()
+      .next()
+      .is_some_and(|byte| byte.is_ascii_lowercase())
+  {
+    return false;
+  }
+  let mut has_separator = false;
+  let mut previous_separator = false;
+  for byte in value.bytes() {
+    let separator = matches!(byte, b'.' | b'_' | b'-');
+    if separator {
+      if previous_separator {
+        return false;
+      }
+      has_separator = true;
+    } else if !byte.is_ascii_lowercase() && !byte.is_ascii_digit() {
+      return false;
+    }
+    previous_separator = separator;
+  }
+  has_separator && !previous_separator
 }
 
 fn compile_route(
@@ -1408,6 +1591,13 @@ async fn handle_webhook(
   mut body: web::Payload,
   state: web::Data<WebhookRuntimeState>,
 ) -> HttpResponse {
+  let event_name = request
+    .path()
+    .strip_prefix("/_woml/events/")
+    .map(str::to_string);
+  if let Some(event_name) = event_name {
+    return handle_event_publication(request, body, state, event_name).await;
+  }
   let Some(route) = state.routes.get(request.path()).cloned() else {
     return rejected_response(
       state.get_ref(),
@@ -1610,6 +1800,290 @@ async fn handle_webhook(
   })
 }
 
+async fn handle_event_publication(
+  request: HttpRequest,
+  mut body: web::Payload,
+  state: web::Data<WebhookRuntimeState>,
+  event_name: String,
+) -> HttpResponse {
+  if request.method() != Method::POST {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::METHOD_NOT_ALLOWED,
+      "WOML_EVENT_METHOD_NOT_ALLOWED",
+      "The WOML event publisher accepts POST requests only.",
+    );
+  }
+  let Some(token_digest) = &state.event_control_token_digest else {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::SERVICE_UNAVAILABLE,
+      "WOML_EVENT_UNAVAILABLE",
+      "The WOML event publisher is unavailable.",
+    );
+  };
+  if !authorized_bearer(&request, token_digest) {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::UNAUTHORIZED,
+      "WOML_EVENT_UNAUTHORIZED",
+      "Event publisher authentication failed.",
+    );
+  }
+  if !valid_event_name(&event_name) {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::BAD_REQUEST,
+      "WOML_EVENT_NAME_INVALID",
+      "Event name is invalid.",
+    );
+  }
+  let Some(subscribers) = state.event_subscribers.get(&event_name).cloned() else {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::NOT_FOUND,
+      "WOML_EVENT_NOT_FOUND",
+      "No loaded WOML workflow subscribes to this event name.",
+    );
+  };
+  let event_id = match request
+    .headers()
+    .get("Event-ID")
+    .and_then(|value| value.to_str().ok())
+  {
+    Some(value) if valid_event_id(value) => value.to_string(),
+    _ => {
+      return event_rejected_response(
+        state.get_ref(),
+        StatusCode::BAD_REQUEST,
+        "WOML_EVENT_ID_INVALID",
+        "Event-ID must contain 1 to 256 URL-safe identifier characters.",
+      )
+    }
+  };
+  if !has_json_content_type(&request) {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::BAD_REQUEST,
+      "WOML_EVENT_PAYLOAD_INVALID",
+      "Event payload must use application/json.",
+    );
+  }
+  if request
+    .headers()
+    .get(header::CONTENT_LENGTH)
+    .and_then(|value| value.to_str().ok())
+    .and_then(|value| value.parse::<u64>().ok())
+    .is_some_and(|length| length > WEBHOOK_MAX_BODY_BYTES as u64)
+  {
+    return event_rejected_response(
+      state.get_ref(),
+      StatusCode::PAYLOAD_TOO_LARGE,
+      "WOML_EVENT_PAYLOAD_TOO_LARGE",
+      "Event payload exceeds the 1 MiB limit.",
+    );
+  }
+
+  let mut bytes = Vec::new();
+  while let Some(chunk) = body.next().await {
+    let Ok(chunk) = chunk else {
+      return event_rejected_response(
+        state.get_ref(),
+        StatusCode::BAD_REQUEST,
+        "WOML_EVENT_PAYLOAD_INVALID",
+        "Event payload must be a valid JSON object.",
+      );
+    };
+    if bytes.len().saturating_add(chunk.len()) > WEBHOOK_MAX_BODY_BYTES {
+      return event_rejected_response(
+        state.get_ref(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "WOML_EVENT_PAYLOAD_TOO_LARGE",
+        "Event payload exceeds the 1 MiB limit.",
+      );
+    }
+    bytes.extend_from_slice(&chunk);
+  }
+  let payload = match serde_json::from_slice::<Value>(&bytes) {
+    Ok(Value::Object(payload)) => payload,
+    _ => {
+      return event_rejected_response(
+        state.get_ref(),
+        StatusCode::BAD_REQUEST,
+        "WOML_EVENT_PAYLOAD_INVALID",
+        "Event payload must be a valid JSON object.",
+      )
+    }
+  };
+
+  let received_at = Utc::now();
+  let mut deliveries = Vec::with_capacity(subscribers.len());
+  for subscriber in subscribers {
+    if let Some(validator) = &subscriber.schema {
+      let value = Value::Object(payload.clone());
+      let mut issues = validator
+        .iter_errors(&value)
+        .take(100)
+        .map(schema_issue)
+        .collect::<Vec<_>>();
+      if !issues.is_empty() {
+        issues.sort_by(|left, right| {
+          left
+            .path
+            .cmp(&right.path)
+            .then(left.message.cmp(right.message))
+        });
+        let code = "WOML_TRIGGER_SCHEMA_INVALID";
+        let message = "Event payload does not match this subscriber schema.";
+        state.report_event_rejected(Some(subscriber.as_ref()), code, message);
+        deliveries.push(EventDeliveryResponse::Rejected {
+          workflow_id: subscriber.workflow_id.clone(),
+          trigger_id: subscriber.trigger_id.clone(),
+          code,
+          message,
+          retryable: false,
+          issues: Some(issues),
+        });
+        continue;
+      }
+    }
+
+    let admission = TriggerAdmissionRequest {
+      workflow_id: subscriber.workflow_id.clone(),
+      definition_hash: subscriber.definition_hash.clone(),
+      trigger_id: subscriber.trigger_id.clone(),
+      trigger_handler: "trigger.event".to_string(),
+      source_identity: event_source_identity(
+        &event_id,
+        &subscriber.workflow_id,
+        &subscriber.trigger_id,
+      ),
+      payload: payload.clone(),
+      received_at,
+    };
+    let database_path = state.database_path.clone();
+    let admitted = web::block(move || {
+      let mut store = DurableEventStore::open(database_path)?;
+      store.admit_trigger_occurrence(admission)
+    })
+    .await;
+    match admitted {
+      Ok(Ok(outcome)) => {
+        let identity = RunProgressIdentity {
+          workflow_id: subscriber.workflow_id.clone(),
+          trigger_id: subscriber.trigger_id.clone(),
+          trigger_handler: "trigger.event".to_string(),
+          occurrence_id: outcome.occurrence_id,
+          run_id: outcome.run_id.clone(),
+        };
+        state.report_accepted(&identity, outcome.duplicate);
+        if !outcome.duplicate {
+          state.report_run_started(&identity);
+          dispatch_run(state.get_ref(), identity);
+        }
+        deliveries.push(EventDeliveryResponse::Accepted {
+          workflow_id: subscriber.workflow_id.clone(),
+          trigger_id: subscriber.trigger_id.clone(),
+          run_id: outcome.run_id,
+          duplicate: outcome.duplicate,
+        });
+      }
+      Ok(Err(error)) => {
+        let (code, message, retryable) = event_admission_failure(&error);
+        state.report_event_rejected(Some(subscriber.as_ref()), code, message);
+        deliveries.push(EventDeliveryResponse::Rejected {
+          workflow_id: subscriber.workflow_id.clone(),
+          trigger_id: subscriber.trigger_id.clone(),
+          code,
+          message,
+          retryable,
+          issues: None,
+        });
+      }
+      Err(_) => {
+        let code = "WOML_TRIGGER_UNAVAILABLE";
+        let message = "The durable WOML trigger authority is unavailable.";
+        state.report_event_rejected(Some(subscriber.as_ref()), code, message);
+        deliveries.push(EventDeliveryResponse::Rejected {
+          workflow_id: subscriber.workflow_id.clone(),
+          trigger_id: subscriber.trigger_id.clone(),
+          code,
+          message,
+          retryable: true,
+          issues: None,
+        });
+      }
+    }
+  }
+
+  let accepted = deliveries
+    .iter()
+    .filter(|delivery| matches!(delivery, EventDeliveryResponse::Accepted { .. }))
+    .count();
+  let status = if accepted == deliveries.len() {
+    "accepted"
+  } else if accepted == 0 {
+    "rejected"
+  } else {
+    "partial"
+  };
+  let mut response = HttpResponse::Ok();
+  response.insert_header((header::CACHE_CONTROL, "no-store"));
+  response.json(EventPublishedResponse {
+    event_id,
+    event_name,
+    status,
+    deliveries,
+  })
+}
+
+fn valid_event_id(value: &str) -> bool {
+  let bytes = value.as_bytes();
+  !bytes.is_empty()
+    && bytes.len() <= 256
+    && bytes[0].is_ascii_alphanumeric()
+    && bytes[1..]
+      .iter()
+      .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn event_source_identity(event_id: &str, workflow_id: &str, trigger_id: &str) -> String {
+  let mut hasher = Sha256::new();
+  hasher.update(event_id.as_bytes());
+  hasher.update([0]);
+  hasher.update(workflow_id.as_bytes());
+  hasher.update([0]);
+  hasher.update(trigger_id.as_bytes());
+  format!("event:v1:sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn event_admission_failure(error: &DurableStoreError) -> (&'static str, &'static str, bool) {
+  match error {
+    DurableStoreError::TriggerIdempotencyConflict => (
+      "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+      "This event ID is already bound to a different payload.",
+      false,
+    ),
+    DurableStoreError::TriggerDefinitionMismatch
+    | DurableStoreError::TriggerHandlerMismatch
+    | DurableStoreError::DefinitionConflict(_) => (
+      "WOML_TRIGGER_DEFINITION_MISMATCH",
+      "The event subscriber no longer matches its registered workflow definition.",
+      false,
+    ),
+    DurableStoreError::TriggerHistoryInvalid(_) | DurableStoreError::InvalidStoredEvent(_) => (
+      "WOML_TRIGGER_HISTORY_INVALID",
+      "The durable event subscriber history is contradictory.",
+      false,
+    ),
+    _ => (
+      "WOML_TRIGGER_UNAVAILABLE",
+      "The durable WOML trigger authority is unavailable.",
+      true,
+    ),
+  }
+}
+
 fn admit_startup_manual(state: &WebhookRuntimeState, startup: StartupManualTrigger) {
   let request = TriggerAdmissionRequest {
     workflow_id: startup.workflow_id.clone(),
@@ -1773,23 +2247,24 @@ fn runtime_failure_code(error: &crate::RuntimeExecutionError) -> String {
 fn authorized(request: &HttpRequest, authentication: &WebhookAuthentication) -> bool {
   match authentication {
     WebhookAuthentication::None => true,
-    WebhookAuthentication::Bearer { token_digest } => {
-      let Some(value) = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-      else {
-        return false;
-      };
-      let Some((scheme, presented)) = value.split_once(' ') else {
-        return false;
-      };
-      if !scheme.eq_ignore_ascii_case("bearer") || presented.is_empty() {
-        return false;
-      }
-      bearer_token_matches(token_digest, presented)
-    }
+    WebhookAuthentication::Bearer { token_digest } => authorized_bearer(request, token_digest),
   }
+}
+
+fn authorized_bearer(request: &HttpRequest, token_digest: &[u8; 32]) -> bool {
+  let Some(value) = request
+    .headers()
+    .get(header::AUTHORIZATION)
+    .and_then(|value| value.to_str().ok())
+  else {
+    return false;
+  };
+  let Some((scheme, presented)) = value.split_once(' ') else {
+    return false;
+  };
+  scheme.eq_ignore_ascii_case("bearer")
+    && !presented.is_empty()
+    && bearer_token_matches(token_digest, presented)
 }
 
 fn bearer_token_matches(expected_digest: &[u8; 32], presented: &str) -> bool {
@@ -1863,6 +2338,16 @@ fn rejected_response(
 ) -> HttpResponse {
   state.report_rejected(route, code, message);
   error_response(status, code, message, issues)
+}
+
+fn event_rejected_response(
+  state: &WebhookRuntimeState,
+  status: StatusCode,
+  code: &'static str,
+  message: &'static str,
+) -> HttpResponse {
+  state.report_event_rejected(None, code, message);
+  error_response(status, code, message, None)
 }
 
 fn error_response(

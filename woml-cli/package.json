@@ -27,7 +27,8 @@
     "test:t9": "bun scripts/verify-t9.ts",
     "test:t10": "bun scripts/verify-t10.ts",
     "test:t11": "bun scripts/verify-t11.ts",
-    "test:release": "bun scripts/verify-t11.ts",
+    "test:t12": "bun scripts/verify-t12.ts",
+    "test:release": "bun scripts/verify-t12.ts",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"
   },

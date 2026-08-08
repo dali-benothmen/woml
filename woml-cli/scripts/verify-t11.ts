@@ -61,7 +61,7 @@ process.stdout.write(
 
 // T10 reaches the complete transitive release gate. N6 rebuilds the package
 // and runs every frontend, Rust, isolated CLI, packaging, and secret test,
-// including the T11 contract and deliberate runtime-staging suites.
+// including the T11 contract and event authentication safety boundary.
 await import('./verify-t10.ts');
 
 process.stdout.write('[T11] named-event compiler and contract release gate passed\n');

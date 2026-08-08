@@ -1,16 +1,15 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 through T11 completed on 2026-08-08. Manual, webhook, Slack, cron
-schedule, and fixed-rate interval triggers are active. Rust owns atomic
+Status: T0 through T12 completed on 2026-08-08. Manual, webhook, Slack, cron
+schedule, fixed-rate interval, and named event triggers are active. Rust owns atomic
 occurrence admission, HTTP validation, durable run creation, background DAG
 execution, the injected clock, SQLite schedule and interval cursors, bounded
 misfire recovery, and process-crash recovery. `woml run` stays alive, while
 `woml test` owns one-shot execution and `woml runs get` inspects durable
 results. There is no separate public `woml serve` mode.
 
-Named event syntax, Model v7 lowering, and Event Publication v1 are frozen and
-frontend-active. The authenticated endpoint, `woml emit`, and runtime fan-out
-remain deliberately unavailable until T12.
+Named event syntax, Model v7 lowering, Event Publication v1, the authenticated
+publisher endpoint, deterministic runtime fan-out, and `woml emit` are active.
 
 ## 1. Product Outcome
 
@@ -1201,11 +1200,14 @@ Implementation notes:
 - `--control-secret <NAME>` and `--token-secret <NAME>` are frozen symbolic
   secret sinks. Their values never enter WOML, Model v7, publisher messages,
   durable state, fixtures, or diagnostics.
-- The CLI gives an explicit T12 diagnostic instead of opening an inactive event
-  listener. `examples/eventWorkflow.woml` is the reviewed T11 product source,
-  and `bun run test:t11` is the T11 release gate.
+- T11 originally gave an explicit T12 diagnostic instead of opening an inactive
+  listener. T12 replaces that staging boundary with the authenticated runtime.
+  `examples/eventWorkflow.woml` remains the reviewed T11 contract source, and
+  `bun run test:t11` remains its compiler/contract gate.
 
 ### T12 — Execute event publication and fan-out
+
+Status: completed.
 
 Changes:
 
@@ -1225,6 +1227,28 @@ Gate:
 
 Multi-workflow, duplicate, partial validation, concurrent publication, restart,
 and clean-package CLI journeys pass.
+
+Implementation notes:
+
+- The long-lived Rust trigger host now serves authenticated
+  `POST /_woml/events/{eventName}` routes beside workflow-owned webhooks.
+- `woml run <directory> --control-secret <NAME>` loads direct `.woml` files in
+  lexical order, prints each unique event URL once, and provides a safe curl
+  example without resolving credentials into the output.
+- One publication validates every exact-name subscriber independently and
+  returns deterministic `accepted`, `partial`, or `rejected` delivery results.
+  Accepted runs execute asynchronously through the existing durable Rust DAG.
+- Event IDs are combined with workflow and trigger identity before durable
+  admission. Replays return the original run, changed payloads conflict, and a
+  retry after a mid-fan-out crash admits only subscribers that were still
+  missing.
+- `woml emit` reads a JSON object from `@<file>`, resolves its bearer token from
+  the existing symbolic secret store, and publishes through the same HTTP
+  contract used by any external application.
+- `examples/events/` contains two workflows subscribed to `order.created` plus
+  a sample payload. The T12 gate proves HTTP and CLI publication, two-workflow
+  fan-out, partial schema rejection, authentication, restart deduplication,
+  mid-fan-out recovery, and secret safety.
 
 ### T13 — Complete Production Triggers
 
@@ -1263,7 +1287,7 @@ release gate passes.
 | Shared Slack transport | Refactored modules under `woml-cli/src/notification-provider/` or a new `woml-cli/src/slack/` boundary shared by trigger and notification adapters |
 | Native/CLI boundary | `core/src/woml_bridge.rs`, `woml-cli/src/rust-executor.ts` or focused trigger clients |
 | CLI commands/diagnostics | `woml-cli/src/cli.ts` split into command modules as the surface grows |
-| Product fixtures | `examples/webhookWorkflow.woml`, `slackTriggerWorkflow.woml`, `scheduleWorkflow.woml`, `intervalWorkflow.woml`, `eventWorkflow.woml` |
+| Product fixtures | `examples/webhookWorkflow.woml`, `slackTriggerWorkflow.woml`, `scheduleWorkflow.woml`, `intervalWorkflow.woml`, `eventWorkflow.woml`, and the two-subscriber `examples/events/` journey |
 | Public docs | `docs/woml-v0.1.md`, `docs/architecture.md`, CLI and trigger operations guides |
 
 Exact modules may differ after code inspection. Layer ownership may not: the

@@ -11,7 +11,7 @@
     "Every trigger starts the same graph entry nodes.",
     "Resolved secret values never appear in the compiled model.",
     "Webhook v1 executes POST only and uses an exact static path.",
-    "Manual, webhook, Slack, schedule, and interval shapes are frontend- and runtime-active through T10; event is frontend-active in T11 and runtime-staged until T12."
+    "Manual, webhook, Slack, schedule, interval, and event shapes are frontend- and runtime-active through T12."
   ],
   "type": "object",
   "additionalProperties": false,

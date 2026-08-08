@@ -1,0 +1,25 @@
+<workflow id="send-confirmation" name="Send order confirmation">
+  <triggers>
+    <event id="orderCreated" name="order.created">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+  <steps>
+    <step id="confirmation">
+      <script>
+        return {
+          workflow: "send-confirmation",
+          message: `Confirmation sent for ${context.trigger.orderId}`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
