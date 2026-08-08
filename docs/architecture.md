@@ -65,7 +65,11 @@ Schema before admission, returns the durable run identity asynchronously, and
 dispatches only newly admitted runs. A duplicate returns the original run
 without executing it again. Server startup performs crash recovery once;
 individual requests never run global recovery while other attempts may be
-active.
+active. The T5 production gate covers concurrent requests, slow and malformed
+clients, SQLite contention, listener and route conflicts, bounded bodies,
+secret leakage, host failure, and composition with every already-published
+control-flow primitive. Bearer routes retain only a fixed-width credential
+digest after registration and compare candidate digests in constant time.
 
 `woml run` is the long-lived activation lifecycle. The Bun CLI preflights the
 definitions and symbolic secrets, then starts the Rust listener through N-API
@@ -75,10 +79,11 @@ Progress v1. Completing one run does not stop the activated workflow. `woml
 test` is the separate one-shot manual journey, and `woml runs get` reads a safe
 folded durable result.
 
-Progress and diagnostics are printed to stderr. One-shot manual results and
-explicit run inspection are JSON on stdout; a long-lived runtime does not
-pretend to have one final process result. Secrets and executable capabilities
-never enter context, events, progress messages, or durable output.
+Progress and diagnostics are printed to stderr. A successful asynchronous run
+is then folded from durable state and its final JSON is printed with its run ID;
+`woml runs get` provides the same result later. One-shot manual results remain
+JSON on stdout. Secrets and executable capabilities never enter context,
+events, progress messages, or durable output.
 
 The contracts between these layers are versioned artifacts under
 `docs/schemas/` and `docs/protocols/`. Neither side may infer or silently add a

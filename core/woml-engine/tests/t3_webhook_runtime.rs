@@ -1,20 +1,22 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
+use futures_util::future::join_all;
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 use woml_engine::model::ValueExpression;
 use woml_engine::{
-  CompiledWorkflowDefinition, DurableEventStore, RunEventPayload, RunStatus,
-  RuntimeExecutionOptions, ScriptHostProcessOptions, TriggerAdmissionRequest, TriggerProgress,
-  WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig,
-  WEBHOOK_MAX_BODY_BYTES,
+  execute_admitted_trigger_run_durable, run_notification_provider_journey, ApprovalDecision,
+  CompiledWorkflowDefinition, DurableEventStore, NotificationHostProcessOptions, RunEventPayload,
+  RunStatus, RuntimeExecutionOptions, ScriptHostProcessOptions, TriggerAdmissionRequest,
+  TriggerProgress, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
+  WomlWebhookServerConfig, WorkflowRuntimeOutcome, WEBHOOK_MAX_BODY_BYTES,
 };
 
 const WEBHOOK_MODEL: &str =
@@ -23,9 +25,25 @@ const WEBHOOK_HASH: &str =
   "sha256:4b4899d13cefc7ed88033d24c898549a4eb8862bebf4a73ed1c26f0af99bd082";
 const WEBHOOK_PATH: &str = "/webhooks/orders";
 const BEARER_TOKEN: &str = "t3-super-secret-token";
+const BRANCH_MODEL: &str = include_str!("../../../woml/tests/fixtures/branch.compiled.v2.json");
+const PARALLEL_MODEL: &str = include_str!("../../../woml/tests/fixtures/parallel.compiled.v3.json");
+const RETRY_MODEL: &str = include_str!("../../../woml/tests/fixtures/retry.compiled.v6.json");
+const APPROVAL_MODEL: &str = include_str!("../../../woml/tests/fixtures/approval.compiled.v4.json");
+const NOTIFICATION_MODEL: &str =
+  include_str!("../../../woml/tests/fixtures/approval-slack.compiled.v5.json");
 
 fn model() -> CompiledWorkflowDefinition {
   serde_json::from_str(WEBHOOK_MODEL).unwrap()
+}
+
+fn production_model(source: &str, path: &str, trigger_id: &str) -> CompiledWorkflowDefinition {
+  let mut value: Value = serde_json::from_str(source).unwrap();
+  let webhook: Value = serde_json::from_str(WEBHOOK_MODEL).unwrap();
+  value["schemaVersion"] = json!(7);
+  value["triggers"] = json!([webhook["triggers"][1].clone()]);
+  value["triggers"][0]["id"] = json!(trigger_id);
+  value["triggers"][0]["config"]["fields"]["path"]["value"] = json!(path);
+  serde_json::from_value(value).unwrap()
 }
 
 fn host_options() -> Option<ScriptHostProcessOptions> {
@@ -44,6 +62,21 @@ fn host_options() -> Option<ScriptHostProcessOptions> {
 
 fn placeholder_host() -> ScriptHostProcessOptions {
   ScriptHostProcessOptions::new("bun", "unused-script-host.ts")
+}
+
+fn notification_host_options() -> Option<NotificationHostProcessOptions> {
+  let bun = std::process::Command::new("bun")
+    .arg("--version")
+    .output()
+    .ok()?
+    .status
+    .success()
+    .then_some(PathBuf::from("bun"))?;
+  let host = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .join("../../woml-cli/tests/fixtures/fake-notification-provider-host.ts");
+  host
+    .exists()
+    .then(|| NotificationHostProcessOptions::new(bun, host))
 }
 
 struct TemporaryDatabase {
@@ -156,6 +189,27 @@ async fn request(
   .unwrap()
 }
 
+async fn raw_status(address: SocketAddr, bytes: Vec<u8>) -> u16 {
+  actix_web::rt::task::spawn_blocking(move || {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+      .set_read_timeout(Some(Duration::from_secs(10)))
+      .unwrap();
+    stream.write_all(&bytes).unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    String::from_utf8_lossy(&response)
+      .lines()
+      .next()
+      .and_then(|line| line.split_whitespace().nth(1))
+      .and_then(|status| status.parse().ok())
+      .unwrap()
+  })
+  .await
+  .unwrap()
+}
+
 fn standard_headers<'a>(token: &'a str, key: &'a str) -> [(&'a str, &'a str); 3] {
   [
     ("Authorization", token),
@@ -193,6 +247,17 @@ async fn wait_for_status(database: &TemporaryDatabase, run_id: &str, expected: R
     assert!(Instant::now() < deadline, "run did not reach {expected:?}");
     actix_web::rt::time::sleep(Duration::from_millis(10)).await;
   }
+}
+
+fn registration(
+  workflow: CompiledWorkflowDefinition,
+  hash_character: char,
+) -> WebhookDefinitionRegistration {
+  WebhookDefinitionRegistration::new(
+    workflow,
+    format!("sha256:{}", hash_character.to_string().repeat(64)),
+  )
+  .with_secret("ORDER_WEBHOOK_TOKEN", BEARER_TOKEN)
 }
 
 #[actix_web::test]
@@ -610,4 +675,343 @@ async fn missing_secrets_and_invalid_inline_schemas_fail_before_binding() {
     Err(WebhookRuntimeError::InvalidSchema { .. })
   ));
   assert_eq!(run_count(&database), 0);
+}
+
+#[actix_web::test]
+async fn concurrent_requests_and_database_contention_preserve_one_run_per_occurrence() {
+  let Some(host) = host_options() else {
+    return;
+  };
+  let database = TemporaryDatabase::new("concurrency");
+  let server = start_server(&database, host).await;
+  let address = server.local_address();
+  let authorization = format!("Bearer {BEARER_TOKEN}");
+  let responses = join_all((0..8).map(|index| {
+    let authorization = authorization.clone();
+    async move {
+      let key = format!("concurrent-{index}");
+      let order = format!(r#"{{"orderId":"order-{index}"}}"#);
+      request(
+        address,
+        "POST",
+        WEBHOOK_PATH,
+        &standard_headers(&authorization, &key),
+        order.as_bytes(),
+        None,
+      )
+      .await
+    }
+  }))
+  .await;
+  assert!(responses.iter().all(|response| response.status == 202));
+  let run_ids = responses
+    .iter()
+    .map(|response| response.body["runId"].as_str().unwrap().to_string())
+    .collect::<std::collections::HashSet<_>>();
+  assert_eq!(run_ids.len(), 8);
+  for run_id in &run_ids {
+    wait_for_status(&database, run_id, RunStatus::Succeeded).await;
+  }
+
+  let lock = Connection::open(database.path()).unwrap();
+  lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+  let blocked_request = actix_web::rt::spawn({
+    let authorization = authorization.clone();
+    async move {
+      request(
+        address,
+        "POST",
+        WEBHOOK_PATH,
+        &standard_headers(&authorization, "contention-key"),
+        br#"{"orderId":"after-contention"}"#,
+        None,
+      )
+      .await
+    }
+  });
+  actix_web::rt::time::sleep(Duration::from_millis(100)).await;
+  lock.execute_batch("COMMIT").unwrap();
+  let response = blocked_request.await.unwrap();
+  assert_eq!(response.status, 202);
+  let run_id = response.body["runId"].as_str().unwrap();
+  wait_for_status(&database, run_id, RunStatus::Succeeded).await;
+  assert_eq!(run_count(&database), 9);
+  server.stop().await;
+}
+
+#[actix_web::test]
+async fn slow_clients_malformed_framing_and_streamed_oversize_bodies_do_not_block_admission() {
+  let database = TemporaryDatabase::new("transport-hardening");
+  let server = start_server(&database, placeholder_host()).await;
+  let address = server.local_address();
+  let (slow_ready_sender, slow_ready_receiver) = std::sync::mpsc::sync_channel(1);
+  let slow_client = actix_web::rt::task::spawn_blocking(move || {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+      .write_all(
+        format!(
+          "POST {WEBHOOK_PATH} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{{"
+        )
+        .as_bytes(),
+      )
+      .unwrap();
+    slow_ready_sender.send(()).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+  });
+  actix_web::rt::task::spawn_blocking(move || slow_ready_receiver.recv().unwrap())
+    .await
+    .unwrap();
+
+  let started = Instant::now();
+  let authorization = format!("Bearer {BEARER_TOKEN}");
+  let healthy = request(
+    address,
+    "POST",
+    WEBHOOK_PATH,
+    &standard_headers(&authorization, "healthy-while-slow"),
+    br#"{"orderId":"healthy"}"#,
+    None,
+  )
+  .await;
+  assert_eq!(healthy.status, 202);
+  assert!(started.elapsed() < Duration::from_millis(450));
+  slow_client.await.unwrap();
+
+  let malformed = raw_status(
+    address,
+    format!(
+      "POST {WEBHOOK_PATH} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: nope\r\nConnection: close\r\n\r\n{{}}"
+    )
+    .into_bytes(),
+  )
+  .await;
+  assert_eq!(malformed, 400);
+
+  let chunk_length = WEBHOOK_MAX_BODY_BYTES + 1;
+  let mut streamed = format!(
+    "POST {WEBHOOK_PATH} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {BEARER_TOKEN}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{chunk_length:X}\r\n"
+  )
+  .into_bytes();
+  streamed.extend(std::iter::repeat_n(b'x', chunk_length));
+  streamed.extend_from_slice(b"\r\n0\r\n\r\n");
+  assert_eq!(raw_status(address, streamed).await, 413);
+  assert_eq!(run_count(&database), 1);
+  server.stop().await;
+}
+
+#[actix_web::test]
+async fn route_and_port_conflicts_fail_before_a_second_runtime_becomes_ready() {
+  let route_database = TemporaryDatabase::new("route-conflict");
+  let duplicate_route = WomlWebhookServer::start(WomlWebhookServerConfig {
+    bind_address: "127.0.0.1:0".parse().unwrap(),
+    database_path: route_database.path().to_path_buf(),
+    registrations: vec![registration(model(), '1'), registration(model(), '2')],
+    startup_manual_triggers: BTreeMap::new(),
+    execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
+    progress_reporter: None,
+  })
+  .await;
+  assert!(matches!(
+    duplicate_route,
+    Err(WebhookRuntimeError::RouteConflict(ref path)) if path == WEBHOOK_PATH
+  ));
+  assert_eq!(run_count(&route_database), 0);
+
+  let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+  let occupied = reservation.local_addr().unwrap();
+  let port_database = TemporaryDatabase::new("port-conflict");
+  let port_conflict = WomlWebhookServer::start(WomlWebhookServerConfig {
+    bind_address: occupied,
+    database_path: port_database.path().to_path_buf(),
+    registrations: vec![registration(model(), '3')],
+    startup_manual_triggers: BTreeMap::new(),
+    execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
+    progress_reporter: None,
+  })
+  .await;
+  assert!(matches!(
+    port_conflict,
+    Err(WebhookRuntimeError::Io(ref error))
+      if error.kind() == std::io::ErrorKind::AddrInUse
+  ));
+}
+
+#[actix_web::test]
+async fn host_crashes_fail_closed_and_credentials_never_enter_state_or_progress() {
+  let database = TemporaryDatabase::new("host-crash");
+  let progress = Arc::new(Mutex::new(Vec::<TriggerProgress>::new()));
+  let captured = progress.clone();
+  let server = WomlWebhookServer::start(WomlWebhookServerConfig {
+    bind_address: "127.0.0.1:0".parse().unwrap(),
+    database_path: database.path().to_path_buf(),
+    registrations: vec![registration(model(), '4')],
+    startup_manual_triggers: BTreeMap::new(),
+    execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
+    progress_reporter: Some(Arc::new(move |message| {
+      captured.lock().unwrap().push(message);
+    })),
+  })
+  .await
+  .unwrap();
+  let secret_key = "private-delivery-identity";
+  let authorization = format!("Bearer {BEARER_TOKEN}");
+  let response = request(
+    server.local_address(),
+    "POST",
+    WEBHOOK_PATH,
+    &standard_headers(&authorization, secret_key),
+    br#"{"orderId":"safe-payload"}"#,
+    None,
+  )
+  .await;
+  let run_id = response.body["runId"].as_str().unwrap();
+  wait_for_status(&database, run_id, RunStatus::Failed).await;
+  server.stop().await;
+
+  let progress_json = serde_json::to_string(&*progress.lock().unwrap()).unwrap();
+  assert!(!progress_json.contains(BEARER_TOKEN));
+  assert!(!progress_json.contains(secret_key));
+  for suffix in ["", "-wal", "-shm"] {
+    let path = format!("{}{suffix}", database.path().display());
+    if let Ok(bytes) = std::fs::read(path) {
+      assert!(!bytes
+        .windows(BEARER_TOKEN.len())
+        .any(|item| item == BEARER_TOKEN.as_bytes()));
+      assert!(!bytes
+        .windows(secret_key.len())
+        .any(|item| item == secret_key.as_bytes()));
+    }
+  }
+  if let Some(host) = host_options() {
+    let restarted = start_server(&database, host).await;
+    actix_web::rt::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+      DurableEventStore::open(database.path())
+        .unwrap()
+        .projection(run_id)
+        .unwrap()
+        .status,
+      RunStatus::Failed
+    );
+    restarted.stop().await;
+  }
+  let store = DurableEventStore::open(database.path()).unwrap();
+  let events = store.events(run_id).unwrap();
+  assert_eq!(
+    events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::StepAttemptStarted(_)))
+      .count(),
+    1
+  );
+}
+
+#[actix_web::test]
+async fn webhook_composes_with_retry_branch_parallel_approval_and_slack_delivery() {
+  let (Some(host), Some(notification_host)) = (host_options(), notification_host_options()) else {
+    return;
+  };
+  let database = TemporaryDatabase::new("composition");
+  let workflows = [
+    (production_model(RETRY_MODEL, "/retry", "retryHook"), '5'),
+    (production_model(BRANCH_MODEL, "/branch", "branchHook"), '6'),
+    (
+      production_model(PARALLEL_MODEL, "/parallel", "parallelHook"),
+      '7',
+    ),
+    (
+      production_model(APPROVAL_MODEL, "/approval", "approvalHook"),
+      '8',
+    ),
+    (
+      production_model(NOTIFICATION_MODEL, "/slack", "slackHook"),
+      '9',
+    ),
+  ];
+  let registrations = workflows
+    .iter()
+    .map(|(workflow, hash)| registration(workflow.clone(), *hash))
+    .collect();
+  let server = WomlWebhookServer::start(WomlWebhookServerConfig {
+    bind_address: "127.0.0.1:0".parse().unwrap(),
+    database_path: database.path().to_path_buf(),
+    registrations,
+    startup_manual_triggers: BTreeMap::new(),
+    execution: RuntimeExecutionOptions::new(host.clone(), 3_000),
+    progress_reporter: None,
+  })
+  .await
+  .unwrap();
+  let address = server.local_address();
+  let authorization = format!("Bearer {BEARER_TOKEN}");
+
+  for (index, path) in ["/retry", "/branch", "/parallel"].iter().enumerate() {
+    let key = format!("composition-{index}");
+    let response = request(
+      address,
+      "POST",
+      path,
+      &standard_headers(&authorization, &key),
+      br#"{"orderId":"composition"}"#,
+      None,
+    )
+    .await;
+    assert_eq!(response.status, 202);
+    wait_for_status(
+      &database,
+      response.body["runId"].as_str().unwrap(),
+      RunStatus::Succeeded,
+    )
+    .await;
+  }
+
+  let approval = request(
+    address,
+    "POST",
+    "/approval",
+    &standard_headers(&authorization, "approval-composition"),
+    br#"{"orderId":"approval"}"#,
+    None,
+  )
+  .await;
+  wait_for_status(
+    &database,
+    approval.body["runId"].as_str().unwrap(),
+    RunStatus::Waiting,
+  )
+  .await;
+
+  let slack = request(
+    address,
+    "POST",
+    "/slack",
+    &standard_headers(&authorization, "slack-composition"),
+    br#"{"orderId":"slack"}"#,
+    None,
+  )
+  .await;
+  let slack_run_id = slack.body["runId"].as_str().unwrap();
+  wait_for_status(&database, slack_run_id, RunStatus::Waiting).await;
+  let journey = run_notification_provider_journey(
+    database.path(),
+    slack_run_id,
+    notification_host,
+    Duration::from_secs(5),
+  )
+  .await
+  .unwrap();
+  assert_eq!(
+    journey.decision.as_ref().map(|decision| decision.decision),
+    Some(ApprovalDecision::Approved)
+  );
+  let resumed = execute_admitted_trigger_run_durable(
+    database.path().to_path_buf(),
+    slack_run_id,
+    RuntimeExecutionOptions::new(host, 3_000),
+  )
+  .await
+  .unwrap();
+  assert!(matches!(resumed, WorkflowRuntimeOutcome::Succeeded { .. }));
+  wait_for_status(&database, slack_run_id, RunStatus::Succeeded).await;
+  server.stop().await;
 }

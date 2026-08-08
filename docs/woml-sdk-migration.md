@@ -62,8 +62,8 @@ replace positional or “last result” access with the producing step's path:
 ## Current parity boundary
 
 Sequential scripts, branch, parallel, Human Approval, Slack approval
-notifications, secrets, and durable retry are available through `woml run`.
-Production webhook/schedule/interval/event triggers, general HTTP/database
-services, lifecycle controls, and the hosted production runtime remain roadmap
-items. Keep an SDK workflow in place when it depends on one of those unavailable
-features.
+notifications, secrets, durable retry, and production webhooks are available
+through `woml run`. Schedule, interval, event, and Slack triggers, general
+HTTP/database services, lifecycle controls, and the hosted production runtime
+remain roadmap items. Keep an SDK workflow in place when it depends on one of
+those unavailable features.

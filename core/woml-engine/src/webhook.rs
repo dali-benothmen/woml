@@ -274,7 +274,7 @@ impl WebhookRuntimeState {
 
 enum WebhookAuthentication {
   None,
-  Bearer { token: Arc<[u8]> },
+  Bearer { token_digest: [u8; 32] },
 }
 
 #[derive(Debug, Serialize)]
@@ -473,7 +473,7 @@ fn compile_route(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| WebhookRuntimeError::SecretMissing(name.clone()))?;
       WebhookAuthentication::Bearer {
-        token: Arc::from(token.as_bytes()),
+        token_digest: Sha256::digest(token.as_bytes()).into(),
       }
     }
     _ => {
@@ -830,7 +830,7 @@ fn runtime_failure_code(error: &crate::RuntimeExecutionError) -> String {
 fn authorized(request: &HttpRequest, authentication: &WebhookAuthentication) -> bool {
   match authentication {
     WebhookAuthentication::None => true,
-    WebhookAuthentication::Bearer { token } => {
+    WebhookAuthentication::Bearer { token_digest } => {
       let Some(value) = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -844,11 +844,14 @@ fn authorized(request: &HttpRequest, authentication: &WebhookAuthentication) -> 
       if !scheme.eq_ignore_ascii_case("bearer") || presented.is_empty() {
         return false;
       }
-      let expected_hash = Sha256::digest(token.as_ref());
-      let presented_hash = Sha256::digest(presented.as_bytes());
-      bool::from(expected_hash.ct_eq(&presented_hash))
+      bearer_token_matches(token_digest, presented)
     }
   }
+}
+
+fn bearer_token_matches(expected_digest: &[u8; 32], presented: &str) -> bool {
+  let presented_digest: [u8; 32] = Sha256::digest(presented.as_bytes()).into();
+  bool::from(expected_digest.ct_eq(&presented_digest))
 }
 
 fn has_json_content_type(request: &HttpRequest) -> bool {
@@ -937,4 +940,17 @@ fn error_response(
       issues,
     },
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn bearer_comparison_hashes_every_candidate_to_the_same_fixed_width() {
+    let expected: [u8; 32] = Sha256::digest(b"correct-token").into();
+    assert!(bearer_token_matches(&expected, "correct-token"));
+    assert!(!bearer_token_matches(&expected, "x"));
+    assert!(!bearer_token_matches(&expected, &"x".repeat(8_192)));
+  }
 }

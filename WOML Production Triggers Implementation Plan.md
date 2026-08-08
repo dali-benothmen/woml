@@ -1,6 +1,6 @@
 # WOML Production Triggers Implementation Plan
 
-Status: T0 through T4 completed on 2026-08-08. The contracts are frozen, the
+Status: T0 through T5 completed on 2026-08-08. The contracts are frozen, the
 TypeScript frontend compiles multiple manual/webhook triggers to Model v7, and
 Rust owns atomic occurrence admission, HTTP validation, durable run creation,
 background DAG execution, and Trigger Progress v1. `woml run` now activates a
@@ -877,6 +877,8 @@ Gate:
 
 ### T5 — Harden and publish webhook
 
+Status: completed.
+
 Changes:
 
 - Test concurrent requests, slow clients, malformed framing, route conflicts,
@@ -895,6 +897,23 @@ Gate:
 
 The webhook-specific gate and the complete WOML release gate pass without
 changing manual workflows.
+
+Implementation notes:
+
+- The hardening gate covers concurrent admission, SQLite contention, slow
+  clients, malformed framing, streamed and declared oversize bodies, route and
+  port conflicts, duplicate delivery, restart recovery, and script-host
+  failure.
+- A discovered host-startup gap was closed: the attempt and terminal failure
+  are now durable instead of leaving the run indefinitely `running`.
+- Bearer credentials are reduced to fixed-width SHA-256 digests during route
+  registration and candidate digests are compared in constant time.
+- State, progress, and packaged-artifact scans reject raw credentials and raw
+  idempotency identities.
+- Webhook-originated runs are proven to compose with retry, branch, parallel,
+  durable approval waiting, and the existing Slack notification journey.
+- `bun run test:t5` is the webhook release gate, and `test:release` now points
+  to it.
 
 ### T6 — Compile Slack triggers and extract shared transport
 

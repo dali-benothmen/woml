@@ -60,7 +60,7 @@ includes conditional branches and bounded parallel groups:
 | Workflow `version` | Frozen | Executable as user-defined workflow metadata |
 | Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
 | Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
-| Multiple triggers, webhook, and inline payload schema | Frozen in Production Triggers T0; TypeScript lowering implemented in T1 | Compiles to Model v7; runtime admission/execution remains unavailable until T2–T5 |
+| Multiple triggers, webhook, and inline payload schema | Frozen and hardened through Production Triggers T0–T5 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
 | Slack trigger | Frozen in Production Triggers T0 | Frontend- and runtime-staged until T6–T7 |
 | Config, lifecycle, schedule, interval, and event triggers | Schedule, interval, and event shapes frozen in Production Triggers T0; config/lifecycle remain designed | Unavailable until their activation phases |
 | Branch | Frozen | Executable and publishable |

@@ -20,7 +20,8 @@
     "test": "bun test",
     "test:n6": "bun scripts/verify-n6.ts",
     "test:ri7": "bun scripts/verify-ri7.ts",
-    "test:release": "bun scripts/verify-ri7.ts",
+    "test:t5": "bun scripts/verify-t5.ts",
+    "test:release": "bun scripts/verify-t5.ts",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"
   },

@@ -909,18 +909,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         let source = source.ok_or_else(|| {
           RuntimeExecutionError::Stalled(format!("node {node_id:?} has no script source"))
         })?;
-        if host.is_none() {
-          *host = Some(ScriptHostClient::spawn(options.script_host.clone()).await?);
-        }
-        let outcome = execute_script_node(
-          engine,
-          run_id,
-          node_id,
-          &source,
-          options,
-          host.as_ref().expect("script host was initialized"),
-        )
-        .await?;
+        let outcome = execute_script_node(engine, run_id, node_id, &source, options, host).await?;
         let ScriptNodeOutcome::Succeeded(output) = outcome else {
           continue;
         };
@@ -1424,7 +1413,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   node_id: &str,
   source: &str,
   options: &RuntimeExecutionOptions,
-  host: &ScriptHostClient,
+  host: &mut Option<ScriptHostClient>,
 ) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
   let invocation_id = generated_id("inv");
   let projection = engine.projection(run_id)?;
@@ -1485,6 +1474,28 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     }
   }
 
+  if host.is_none() {
+    match ScriptHostClient::spawn(options.script_host.clone()).await {
+      Ok(client) => *host = Some(client),
+      Err(error) => {
+        return settle_script_attempt_failure(
+          engine,
+          options,
+          run_id,
+          node_id,
+          attempt_number,
+          &invocation_id,
+          AttemptFailure {
+            kind: AttemptFailureKind::HostCrashed,
+            code: AttemptFailureKind::HostCrashed.code().to_string(),
+            message: error.to_string(),
+            details: None,
+          },
+        );
+      }
+    }
+  }
+
   let request = ExecuteMessage::runtime_script(
     &invocation_id,
     run_id,
@@ -1495,7 +1506,12 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     source,
     &context,
   );
-  let outcome = match host.execute(&request).await {
+  let outcome = match host
+    .as_ref()
+    .expect("script host was initialized")
+    .execute(&request)
+    .await
+  {
     Ok(completed) => completed.outcome,
     Err(error) => {
       let failure = AttemptFailure {

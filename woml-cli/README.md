@@ -44,6 +44,9 @@ The generated example omits `Idempotency-Key`, so every call creates a fresh
 occurrence. Add that header when a caller needs safe delivery retries; repeating
 the same key and payload returns the original run instead of executing twice.
 
+Webhook is the first supported Production Trigger. Deployment and security
+guidance is in [WOML webhook deployment](../docs/woml-webhook-deployment.md).
+
 ## Execute once
 
 Use `woml test` when you intentionally want one manual execution that prints

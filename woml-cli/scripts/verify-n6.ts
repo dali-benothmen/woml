@@ -14,7 +14,6 @@ const cliRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(cliRoot, '..');
 const frontendRoot = resolve(projectRoot, 'woml');
 const coreManifest = resolve(projectRoot, 'core', 'Cargo.toml');
-const engineManifest = resolve(projectRoot, 'core', 'woml-engine', 'Cargo.toml');
 const bun = Bun.which('bun');
 const cargo = Bun.which('cargo');
 
@@ -41,12 +40,27 @@ const checks: readonly Check[] = [
   {
     label: 'run the Rust workflow-engine suite',
     cwd: projectRoot,
-    command: [cargo, 'test', '--manifest-path', engineManifest],
+    command: [
+      cargo,
+      'test',
+      '--manifest-path',
+      coreManifest,
+      '--package',
+      'woml-engine',
+      '--locked',
+    ],
   },
   {
     label: 'check the production Rust N-API bridge library',
     cwd: projectRoot,
-    command: [cargo, 'check', '--manifest-path', coreManifest, '--lib'],
+    command: [
+      cargo,
+      'check',
+      '--manifest-path',
+      coreManifest,
+      '--lib',
+      '--locked',
+    ],
   },
   {
     label: 'lint every Rust workflow-engine target',
@@ -55,8 +69,11 @@ const checks: readonly Check[] = [
       cargo,
       'clippy',
       '--manifest-path',
-      engineManifest,
+      coreManifest,
+      '--package',
+      'woml-engine',
       '--all-targets',
+      '--locked',
       '--',
       '-D',
       'warnings',

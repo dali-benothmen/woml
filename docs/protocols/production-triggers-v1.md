@@ -221,6 +221,23 @@ webhook runtime. Graceful shutdown stops admission and joins that thread. The
 public product has no separate `woml serve` command, and source hot reload is
 not part of T4.
 
+### T5 production profile
+
+Webhook is publishable after the T5 hardening gate. The gate exercises
+concurrent requests, SQLite lock contention, slow clients, malformed HTTP
+framing, actual streamed and declared oversize bodies, route/port conflicts,
+deduplication, recovery, and host failure. Host startup failure is represented
+as a durable attempt plus terminal `WOML_SCRIPT_HOST_CRASHED` failure rather
+than leaving an active run behind.
+
+Bearer registration hashes the resolved token once and discards the raw route
+credential. Every request hashes the presented token to the same fixed width
+before a `subtle` constant-time comparison. Tests and the release verifier scan
+progress, SQLite state/WAL files, packaged artifacts, and public output for raw
+credentials and idempotency identities. Cross-feature tests admit webhook runs
+that execute retry, branch, parallel, approval waiting, and the existing Slack
+approval notification journey without changing any of those contracts.
+
 ## Frozen fixtures
 
 Reviewed source/model fixtures live under `woml/tests/fixtures/triggers-*`.
