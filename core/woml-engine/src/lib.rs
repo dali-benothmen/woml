@@ -6,6 +6,7 @@
 
 pub mod capability;
 pub mod database;
+mod database_postgres;
 pub mod durable;
 pub mod engine;
 pub mod event;

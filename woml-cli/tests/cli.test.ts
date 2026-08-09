@@ -61,6 +61,11 @@ const databaseExamplePath = join(
   'examples',
   'sqliteWorkflow.woml'
 );
+const postgresExamplePath = join(
+  projectRoot,
+  'examples',
+  'postgresWorkflow.woml'
+);
 const retryCompositionFixturePath = join(
   import.meta.dir,
   '..',
@@ -799,6 +804,10 @@ describe('woml test one-shot compatibility', () => {
         packagedUserDatabase
       )
     );
+    await Bun.write(
+      join(consumerDirectory, 'postgres.woml'),
+      await Bun.file(postgresExamplePath).text()
+    );
 
     const packed = Bun.spawnSync(
       [
@@ -901,6 +910,29 @@ describe('woml test one-shot compatibility', () => {
       ],
       { cwd: consumerDirectory, stdout: 'pipe', stderr: 'pipe' }
     );
+    const postgresConnection = process.env.WOML_TEST_POSTGRES_URL;
+    const postgresResult =
+      postgresConnection === undefined
+        ? undefined
+        : Bun.spawnSync(
+            [
+              executable,
+              'test',
+              'postgres.woml',
+              '--state',
+              join(temporaryDirectory, 'packaged-postgres-state.sqlite'),
+            ],
+            {
+              cwd: consumerDirectory,
+              env: {
+                ...process.env,
+                WOML_SECRETS_PROVIDER: 'env',
+                WOML_SECRET_POSTGRES_URL: postgresConnection,
+              },
+              stdout: 'pipe',
+              stderr: 'pipe',
+            }
+          );
     const approval = spawnPackagedApproval(
       executable,
       [
@@ -973,6 +1005,15 @@ describe('woml test one-shot compatibility', () => {
       name: 'Ada',
       visits: 1,
     });
+    if (postgresResult !== undefined) {
+      expect(postgresResult.stderr.toString()).toBe('');
+      expect(postgresResult.exitCode).toBe(0);
+      expect(JSON.parse(postgresResult.stdout.toString())).toMatchObject({
+        name: 'Ada',
+        visits: expect.any(Number),
+      });
+      expect(postgresResult.stdout.toString()).not.toContain(postgresConnection);
+    }
     expect(approvalPage.status).toBe(200);
     expect(await approvalPage.text()).toContain('Editorial approval');
     expect(approvalResponse.status).toBe(200);

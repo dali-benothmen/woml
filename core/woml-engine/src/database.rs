@@ -1,4 +1,4 @@
-//! Database v1 capability with the SC7 user-owned SQLite backend.
+//! Database v1 capability with Rust-owned SQLite and PostgreSQL backends.
 
 use std::{
   collections::{HashMap, HashSet},
@@ -69,6 +69,7 @@ impl std::fmt::Debug for PooledSqliteConnection {
 pub struct ManagedDatabasePool {
   connections: Mutex<HashMap<PathBuf, Arc<PooledSqliteConnection>>>,
   protected_paths: Mutex<HashSet<PathBuf>>,
+  postgres: Arc<crate::database_postgres::ManagedPostgresPools>,
 }
 
 impl ManagedDatabasePool {
@@ -192,11 +193,20 @@ impl CapabilityHandler for ManagedDatabaseHandler {
     request: &crate::CapabilityCallRequest,
   ) -> Result<(), CapabilityFailure> {
     let parsed = parse_request(&request.input, self.operation)?;
-    self.pool.validate_path(&parsed.connection).map(|_| ())
+    match parsed.driver.as_str() {
+      "sqlite" => self.pool.validate_path(&parsed.connection).map(|_| ()),
+      "postgres" => crate::database_postgres::validate_connection(&parsed.connection),
+      _ => unreachable!("the database request parser validates the driver"),
+    }
   }
 
-  fn safe_metadata(&self, _input: &Value) -> Map<String, Value> {
-    Map::from_iter([("driver".to_string(), Value::String("sqlite".to_string()))])
+  fn safe_metadata(&self, input: &Value) -> Map<String, Value> {
+    let driver = input
+      .get("driver")
+      .and_then(Value::as_str)
+      .filter(|driver| matches!(*driver, "sqlite" | "postgres"))
+      .unwrap_or("unknown");
+    Map::from_iter([("driver".to_string(), Value::String(driver.to_string()))])
   }
 
   fn safe_result_metadata(&self, result: &Value) -> Map<String, Value> {
@@ -220,6 +230,15 @@ impl CapabilityHandler for ManagedDatabaseHandler {
       Ok(request) => request,
       Err(error) => return Box::pin(async move { Err(error) }),
     };
+    if request.driver == "postgres" {
+      return crate::database_postgres::execute(
+        self.pool.postgres.clone(),
+        self.operation.to_string(),
+        request.connection,
+        request.input,
+        cancellation,
+      );
+    }
     let write = !matches!(self.operation, "query" | "read");
     let pooled = match if write {
       self.pool.connection(&request.connection)
@@ -287,7 +306,7 @@ fn parse_request(input: &Value, operation: &str) -> Result<DatabaseRequest, Capa
   if request.contract != DATABASE_CONTRACT
     || request.contract_version != DATABASE_CONTRACT_VERSION
     || request.kind != "request"
-    || request.driver != "sqlite"
+    || !matches!(request.driver.as_str(), "sqlite" | "postgres")
     || request.operation != operation
     || !DATABASE_OPERATIONS.contains(&request.operation.as_str())
   {
@@ -295,7 +314,11 @@ fn parse_request(input: &Value, operation: &str) -> Result<DatabaseRequest, Capa
       "Database input does not match the frozen Database v1 envelope.",
     ));
   }
-  database_path(&request.connection)?;
+  if request.driver == "sqlite" {
+    database_path(&request.connection)?;
+  } else {
+    crate::database_postgres::validate_connection(&request.connection)?;
+  }
   validate_operation_input(operation, &request.input)?;
   Ok(request)
 }

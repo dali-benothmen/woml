@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cronflow.dev/schemas/database/v1",
   "title": "WOML Database v1",
-  "description": "SQLite/PostgreSQL-portable request and result contract for services.db. SC7 executes SQLite; SC8 adds PostgreSQL.",
-  "x-status": "database-contract-frozen-sc7",
+  "description": "SQLite/PostgreSQL-portable request and result contract for services.db. SQLite was activated by SC7 and PostgreSQL by SC8.",
+  "x-status": "database-contract-frozen-sc7-postgres-driver-activated-sc8",
   "oneOf": [
     { "$ref": "#/$defs/request" },
     { "$ref": "#/$defs/result" }
@@ -194,7 +194,7 @@
         "contract": { "const": "woml.database" },
         "contractVersion": { "const": 1 },
         "kind": { "const": "request" },
-        "driver": { "enum": ["sqlite"] },
+        "driver": { "enum": ["sqlite", "postgres"] },
         "connection": { "type": "string", "minLength": 1, "maxLength": 4096 },
         "operation": { "enum": ["query", "execute", "read", "insert", "update", "delete", "transaction"] },
         "input": {}
@@ -215,6 +215,7 @@
       "additionalProperties": {
         "oneOf": [
           { "type": "null" },
+          { "type": "boolean" },
           { "type": "number" },
           { "type": "string" },
           { "type": "object", "additionalProperties": false, "required": ["bytesBase64"], "properties": { "bytesBase64": { "type": "string", "contentEncoding": "base64" } } }

@@ -553,12 +553,12 @@ function normalizeDatabaseConfig(input: JsonValue): JsonObject {
   if (
     object === undefined ||
     Object.keys(object).some(key => key !== 'driver' && key !== 'connection') ||
-    object.driver !== 'sqlite' ||
+    (object.driver !== 'sqlite' && object.driver !== 'postgres') ||
     typeof object.connection !== 'string' ||
     object.connection.length === 0
   ) {
     throw new TypeError(
-      'services.db() requires exactly { driver: "sqlite", connection: "path/to/database.sqlite" }.'
+      'services.db() requires exactly { driver: "sqlite" | "postgres", connection: "database connection" }.'
     );
   }
   return { driver: object.driver, connection: object.connection };

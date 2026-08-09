@@ -1,6 +1,6 @@
 # WOML Database Service
 
-SC7 provides a zero-setup, Rust-managed SQLite database inside `<script>`:
+SC8 provides Rust-managed SQLite and PostgreSQL databases inside `<script>`:
 
 ```js
 const db = services.db({
@@ -21,16 +21,31 @@ cancellation, result conversion, operation events, and recovery policy.
 
 ## Configuration and ownership
 
-Database v1 accepts exactly `driver` and `connection`. SC7 supports only
-`driver: "sqlite"`; PostgreSQL is the next database milestone. `connection`
-must be a filesystem path. In-memory databases, SQLite URI strings,
-directories, and the SQLite file used for WOML runtime state are rejected.
+Database v1 accepts exactly `driver` and `connection`. SC7 introduced
+`driver: "sqlite"`; SC8 adds `driver: "postgres"` without changing the methods
+or result envelopes. SQLite `connection` must be a filesystem path. In-memory
+databases, SQLite URI strings, directories, and the SQLite file used for WOML
+runtime state are rejected.
 
 The workflow database is application data owned by the workflow author. It is
 separate from `.woml/state.sqlite`, which remains private engine storage. WOML
 does not create a missing parent directory, so the path's directory must exist.
 A write operation can create the SQLite file; a read opens an existing file
 read-only and never creates storage as a hidden side effect.
+
+PostgreSQL `connection` is a URL or libpq-style connection string and should
+normally come from WOML secrets:
+
+```js
+const db = services.db({
+  driver: "postgres",
+  connection: secrets.POSTGRES_URL
+});
+```
+
+Configure it with `woml secrets set POSTGRES_URL`. Rust resolves the private
+value, negotiates TLS when enabled, and owns the pool. Connection values and
+credentials are never written to operation events or diagnostics.
 
 ## Query, execute, and CRUD
 
@@ -49,8 +64,9 @@ const changed = await db.execute({
 }, { name: "deactivate-customer" });
 ```
 
-Never interpolate untrusted values into SQL text. Positional `?` parameters
-accept `null`, booleans, JavaScript-safe numbers, strings, and binary values as
+Never interpolate untrusted values into SQL text. SQLite uses positional `?`
+parameters; PostgreSQL uses `$1`, `$2`, and so on. Parameters accept `null`,
+booleans, JavaScript-safe numbers, strings, and binary values as
 `{ bytesBase64: "..." }`.
 
 The portable CRUD helpers quote strict ASCII identifiers and parameterize every
@@ -88,7 +104,8 @@ operation must be explicit SQL passed to `execute`.
 
 Queries and reads return `{ rows, rowCount }`. Mutations return
 `{ rowsAffected, lastInsertId }`, where `lastInsertId` is `null` when the
-statement is not an insert.
+statement is not an insert. PostgreSQL always returns `lastInsertId: null`;
+Database v1 does not yet provide a portable returning-write operation.
 
 ## Atomic transactions
 
@@ -128,7 +145,8 @@ must not depend on loop order or attempt number.
 Failures throw `WomlServiceError` with stable fields including `code`,
 `service`, `operation`, `retryable`, and `ambiguous`. Constraints, busy/locked
 connections, invalid input, cancellation, unsafe results, and size limits stay
-distinct. An interrupted write is marked ambiguous and is not replayed
+distinct. PostgreSQL also classifies connection loss and transaction conflicts
+without exposing server messages. An interrupted write is marked ambiguous and is not replayed
 automatically. Transaction atomicity prevents a normal failed batch from
 committing a partial result, but it does not turn an externally interrupted
 commit into proof of exactly-once execution.
@@ -146,6 +164,23 @@ returned rows, and credentials are not operation metadata. A script may still
 deliberately return selected database data as its step result, which follows
 the normal bounded workflow-context rules.
 
+## PostgreSQL pooling and portability
+
+Rust reuses PostgreSQL connections by a hash of their private configuration. A
+single pool allows up to 16 active connections, and one runtime allows up to 64
+pools. Calls beyond a pool's current capacity wait for a permit rather than
+opening unbounded sockets. Cancellation discards the affected connection;
+closed connections are replaced on later calls.
+
+The CRUD helpers are the portable part of Database v1. Raw SQL is intentionally
+native to the selected database: SQLite and PostgreSQL have different
+placeholder syntax, schema features, functions, conflict syntax, and types.
+PostgreSQL results support Booleans, safe integers, finite numbers, text,
+binary, UUID, date/time, and JSON serialized as text. Cast an unsupported
+PostgreSQL type explicitly. Document and NoSQL databases are not supported by
+SC8; they will receive a separate method contract rather than pretending to be
+SQL drivers.
+
 ## Run the example
 
 From the project root after building the CLI:
@@ -158,3 +193,14 @@ The first run creates `.woml/customers.sqlite`; each later run increments Ada's
 visit count. The workflow remains portable to the PostgreSQL milestone only for
 the parts explicitly promised by Database v1—SQLite-specific raw SQL remains
 SQLite-specific.
+
+To run PostgreSQL:
+
+```bash
+woml secrets set POSTGRES_URL
+woml run examples/postgresWorkflow.woml
+```
+
+For local development, a value can resemble
+`postgresql://user:password@127.0.0.1:5432/app?sslmode=disable`. Production
+connections should use TLS according to the database provider's instructions.

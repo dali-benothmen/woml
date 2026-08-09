@@ -158,7 +158,7 @@ describe('SC0 frozen service and capability contracts', () => {
     const names = (await readdir(fixtureDirectory))
       .filter(name => name.endsWith('.json'))
       .sort();
-    expect(names.length).toBe(15);
+    expect(names.length).toBe(17);
     for (const name of names) {
       const fixture = await json(join(fixtureDirectory, name));
       if (name === 'script-host-messages.v4.json') {

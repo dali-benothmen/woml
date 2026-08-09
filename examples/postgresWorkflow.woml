@@ -1,0 +1,41 @@
+<workflow version="0.1" id="postgres-customer-demo" name="PostgreSQL Customer Visits">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="recordVisit" name="Record and read a PostgreSQL customer visit">
+      <script>
+        const db = services.db({
+          driver: "postgres",
+          connection: secrets.POSTGRES_URL
+        });
+
+        await db.execute({
+          text: `CREATE TABLE IF NOT EXISTS woml_customers (
+            name TEXT PRIMARY KEY,
+            visits INTEGER NOT NULL
+          )`
+        }, { name: "create-customers-table" });
+
+        const visit = await db.transaction({
+          operations: [
+            {
+              operation: "execute",
+              text: `INSERT INTO woml_customers (name, visits) VALUES ($1, 1)
+                ON CONFLICT(name) DO UPDATE SET visits = woml_customers.visits + 1`,
+              values: ["Ada"]
+            },
+            {
+              operation: "query",
+              text: "SELECT name, visits FROM woml_customers WHERE name = $1",
+              values: ["Ada"]
+            }
+          ]
+        }, { name: "record-ada-visit" });
+
+        return visit.results[1].rows[0];
+      </script>
+    </step>
+  </steps>
+</workflow>

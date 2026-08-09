@@ -1,18 +1,19 @@
 # WOML Database v1
 
-Status: frozen and first executed by SC7 on 2026-08-10. SQLite is the SC7
-backend; PostgreSQL joins this same JavaScript contract in SC8.
+Status: frozen and executed through SC8 on 2026-08-10. SQLite and PostgreSQL
+share this JavaScript contract. The PostgreSQL driver activation is pinned in
+`database-v1-sc8-activation.md`.
 
 ## JavaScript surface
 
 ```js
 const db = services.db({
-  driver: "sqlite",
-  connection: "./data/customers.sqlite"
+  driver: "postgres",
+  connection: secrets.POSTGRES_URL
 });
 
 const customers = await db.query({
-  text: "SELECT id, name FROM customers WHERE active = ?",
+  text: "SELECT id, name FROM customers WHERE active = $1",
   values: [true]
 });
 ```
@@ -51,6 +52,10 @@ Parameters are JSON `null`, booleans, finite strings/numbers, or
 results use `{ bytesBase64 }`. SQLite integers outside JavaScript's safe range
 are rejected as `invalid_result` rather than silently rounded. SQLite has no
 portable boolean column type, so queried booleans may appear as `0` or `1`.
+PostgreSQL supports Boolean results directly. Its reviewed result types are
+Boolean, safe integers, finite floating-point numbers, text, binary, UUID,
+date, timestamp, timestamp-with-time-zone, and JSON/JSONB serialized as text.
+Authors cast other PostgreSQL types to one of those types explicitly.
 
 Inputs use Capability Call v1's 1 MiB limit and results use its 4 MiB limit.
 Database v1 additionally limits a result to 10,000 rows, 256 columns, SQL text
@@ -59,12 +64,13 @@ letters/digits/underscores beginning with a letter or underscore.
 
 ## Effects, failures, and recovery
 
-`query` and `read` are read effects. The SQLite handler verifies that raw
-`query` statements are read-only. Every other method is an unsafe write. SQLite
-constraint, busy, cancellation, malformed result, unavailable database, and
-invalid input failures have distinct safe WOML codes; raw SQLite messages, SQL,
-parameters, rows, and connection paths never enter durable events or terminal
-diagnostics.
+`query` and `read` are read effects. SQLite verifies prepared-statement
+read-only status; PostgreSQL executes raw `query` inside a read-only
+transaction. Every other method is an unsafe write. Constraint, contention,
+cancellation, malformed result, unavailable database, connection-loss, and
+invalid-input failures have distinct safe WOML codes. Provider messages, SQL,
+parameters, rows, connection paths, URLs, and credentials never enter durable
+operation metadata or terminal diagnostics.
 
 Rust records the generic managed operation start before dispatch and its
 terminal event before returning to Bun. Recovery fails an unclosed write
@@ -85,3 +91,26 @@ ordinary file databases.
 The user database is application data. It is not WOML context, the event log,
 cache, or the future durable user-state API. Conversely, the internal WOML
 state database can never be opened through `services.db`.
+
+## PostgreSQL ownership and pooling
+
+`driver: "postgres"` accepts a PostgreSQL URL or libpq-style connection
+string. Authors normally pass `secrets.POSTGRES_URL`; the resolved value stays
+in invocation memory and Rust's connection configuration. TLS uses the system
+of Web PKI roots bundled by the runtime when SSL is enabled. Local development
+may opt into `sslmode=disable`; production credentials should require TLS.
+
+Rust keeps a pool per hashed connection configuration, permits at most 16
+active connections per pool, and permits at most 64 pools in one process.
+Idle connections are reused, closed connections are discarded, and calls wait
+for a bounded pool permit instead of opening an unbounded number of sockets.
+Cancellation drops the affected connection so PostgreSQL stops the active
+operation; later calls acquire a healthy connection. A cancelled or lost read
+is retryable where the failure proves no unsafe write. A write whose terminal
+outcome cannot be proven is marked ambiguous and fails closed.
+
+PostgreSQL raw SQL uses `$1`, `$2`, and so on. Prepared parameter types are
+inferred by PostgreSQL, so ambiguous expressions should include a cast such as
+`$1::INT4`. CRUD helpers generate the correct placeholders automatically.
+PostgreSQL mutation results always report `lastInsertId: null`; Database v1 has
+no portable `RETURNING` operation.

@@ -32,7 +32,7 @@ authoring experience. Each invocation runs in an isolated Worker with a real
 timeout boundary and receives only the versioned bindings approved for its
 model. Model v8 and Script Bindings v1 inject exactly `context`, `attempt`,
 `services`, and source-proven `secrets` into capability scripts. Native Fetch,
-managed HTTP, and the SQLite Database v1 facade are active through SC7. Bun reports
+managed HTTP, and the SQLite/PostgreSQL Database v1 facade are active through SC8. Bun reports
 outcomes; it never decides whether to retry or how the graph advances.
 
 ### Services and capability boundary
@@ -51,8 +51,9 @@ operations use Rust-managed calls. All converge on the generic `operation_starte
 only sorted secret names; resolved values exist only in the invocation-memory
 boundary and never in context, events, progress, or fixtures. Native Fetch is
 executed by Bun; `services.http.request()` is executed by a pooled Rust client;
-and Database v1 uses Rust-owned, user-database SQLite connections that cannot
-open WOML's internal state database. Other `services.*` capabilities remain
+and Database v1 uses Rust-owned SQLite and PostgreSQL pools. SQLite user
+connections cannot open WOML's internal state database; PostgreSQL connection
+strings and credentials never become safe event metadata. Other `services.*` capabilities remain
 unavailable until their individual milestones. The authoritative Database v1
 guide is `docs/woml-database.md`.
 

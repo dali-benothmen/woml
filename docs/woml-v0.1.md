@@ -70,8 +70,8 @@ includes conditional branches and bounded parallel groups:
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
-| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC7 implemented and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, and SQLite Database v1 are executable and publishable |
-| Storage, cache, event, queue, PostgreSQL, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
+| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC8 implemented and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, and SQLite/PostgreSQL Database v1 are executable and publishable |
+| Storage, cache, service events, queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
@@ -970,9 +970,9 @@ Script Bindings v1 provides the capability profile:
 - `secrets` exposes only literal `secrets.NAME` values proven necessary by the
   frontend; the Model v8 definition records names only.
 
-Using either binding, or native `fetch`, selects Model v8. SC2–SC7 implement
+Using either binding, or native `fetch`, selects Model v8. SC2–SC8 implement
 its event authority, Script Host v4, observed native Fetch, Rust-managed HTTP,
-and SQLite Database v1. There is no fallback that runs an untracked service call. Service clients
+and SQLite/PostgreSQL Database v1. There is no fallback that runs an untracked service call. Service clients
 and secret values never become context or persisted step output.
 
 Native `fetch()` preserves Bun's standard `Request`/`Response` behavior.

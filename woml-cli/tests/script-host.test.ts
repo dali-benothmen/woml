@@ -938,6 +938,74 @@ return {
     });
   });
 
+  test('protocol v4 forwards PostgreSQL through the same Database v1 facade', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const databaseResult = {
+          contract: 'woml.database',
+          contractVersion: 1,
+          kind: 'result',
+          operation: 'query',
+          data: { rows: [{ ready: true }], rowCount: 1 },
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(databaseResult)),
+            durationMs: 1,
+            result: databaseResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_postgres',
+        `const db = services.db({ driver: 'postgres', connection: secrets.POSTGRES_URL });
+        return await db.query({ text: 'SELECT $1::BOOL AS ready', values: [true] });`,
+        { POSTGRES_URL: 'secret-value' }
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.call.input).toEqual({
+      contract: 'woml.database',
+      contractVersion: 1,
+      kind: 'request',
+      driver: 'postgres',
+      connection: 'secret-value',
+      operation: 'query',
+      input: { text: 'SELECT $1::BOOL AS ready', values: [true] },
+    });
+    expect(completed[0]?.outcome).toEqual({
+      kind: 'success',
+      value: { rows: [{ ready: true }], rowCount: 1 },
+    });
+  });
+
   test('protocol v4 bindings are deeply read-only and reject a known secret in results', async () => {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({
