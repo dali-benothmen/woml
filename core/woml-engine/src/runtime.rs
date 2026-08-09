@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::{poll_fn, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -29,12 +29,12 @@ use crate::schedule::{
 };
 use crate::{
   run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
-  AttemptFailure, AttemptFailureKind, BranchFailure, CompiledWorkflowDefinition, DurableDagEngine,
-  DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
-  IssuedApprovalToken, RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection,
-  RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions,
-  StepFailureDisposition, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
-  RUN_EVENT_SCHEMA_VERSION_V2,
+  AttemptFailure, AttemptFailureKind, BranchFailure, CapabilityRegistry,
+  CompiledWorkflowDefinition, DurableCapabilityAuthority, DurableDagEngine, DurableEngineError,
+  DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine, IssuedApprovalToken,
+  RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection, RunStatus,
+  ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions, StepFailureDisposition,
+  WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
 pub trait EngineClock: Send + Sync {
@@ -125,6 +125,9 @@ pub struct RuntimeExecutionOptions {
   pub schedule_clock: Arc<dyn ScheduleClock>,
   pub schedule_progress_reporter: Option<ScheduleProgressReporter>,
   pub interval_progress_reporter: Option<IntervalProgressReporter>,
+  pub resolved_secrets: Arc<BTreeMap<String, String>>,
+  pub capability_registry: Arc<CapabilityRegistry>,
+  capability_authority: Option<Arc<DurableCapabilityAuthority>>,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -136,6 +139,8 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
       .field("max_context_bytes", &self.max_context_bytes)
       .field("clock", &"dyn EngineClock")
       .field("schedule_clock", &"dyn ScheduleClock")
+      .field("resolved_secret_count", &self.resolved_secrets.len())
+      .field("capability_registry", &"CapabilityRegistry")
       .field(
         "progress_reporter",
         &self.progress_reporter.as_ref().map(|_| "configured"),
@@ -169,6 +174,9 @@ impl RuntimeExecutionOptions {
       schedule_clock: Arc::new(SystemScheduleClock),
       schedule_progress_reporter: None,
       interval_progress_reporter: None,
+      resolved_secrets: Arc::new(BTreeMap::new()),
+      capability_registry: Arc::new(CapabilityRegistry::default()),
+      capability_authority: None,
     }
   }
 
@@ -184,6 +192,16 @@ impl RuntimeExecutionOptions {
 
   pub fn with_schedule_clock(mut self, clock: Arc<dyn ScheduleClock>) -> Self {
     self.schedule_clock = clock;
+    self
+  }
+
+  pub fn with_resolved_secrets(mut self, secrets: BTreeMap<String, String>) -> Self {
+    self.resolved_secrets = Arc::new(secrets);
+    self
+  }
+
+  pub fn with_capability_registry(mut self, registry: Arc<CapabilityRegistry>) -> Self {
+    self.capability_registry = registry;
     self
   }
 
@@ -501,6 +519,7 @@ async fn execute_workflow_durable_internal(
   options: RuntimeExecutionOptions,
   database_path: PathBuf,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
   let engine = DurableDagEngine::new(workflow, definition_hash, store)?;
@@ -535,6 +554,7 @@ pub async fn execute_admitted_trigger_run_durable(
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let options = attach_durable_capability_authority(options, &database_path)?;
   let store = DurableEventStore::open(database_path)?;
   let engine = DurableDagEngine::resume(store, run_id)?;
   resume_with_engine(engine, run_id, options).await
@@ -546,6 +566,7 @@ async fn resume_workflow_durable_internal(
   options: RuntimeExecutionOptions,
   approval_outcome_api: bool,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
   let engine = DurableDagEngine::resume(store, run_id)?;
@@ -563,6 +584,18 @@ async fn resume_workflow_durable_internal(
   resume_with_engine(engine, run_id, options).await
 }
 
+fn attach_durable_capability_authority(
+  mut options: RuntimeExecutionOptions,
+  database_path: &std::path::Path,
+) -> Result<RuntimeExecutionOptions, RuntimeExecutionError> {
+  let store = DurableEventStore::open(database_path.to_path_buf())?;
+  options.capability_authority = Some(Arc::new(DurableCapabilityAuthority::new(
+    Arc::clone(&options.capability_registry),
+    Arc::new(tokio::sync::Mutex::new(store)),
+  )));
+  Ok(options)
+}
+
 fn workflow_has_approval(workflow: &CompiledWorkflowDefinition) -> bool {
   workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V4
     && workflow
@@ -570,6 +603,36 @@ fn workflow_has_approval(workflow: &CompiledWorkflowDefinition) -> bool {
       .nodes
       .iter()
       .any(|node| node.handler == "engine.approval-wait")
+}
+
+fn resolved_script_secrets(
+  workflow: &CompiledWorkflowDefinition,
+  node_id: &str,
+  options: &RuntimeExecutionOptions,
+) -> Result<BTreeMap<String, String>, RuntimeExecutionError> {
+  let Some(runtime) = workflow
+    .node(node_id)
+    .and_then(|node| node.script_runtime.as_ref())
+  else {
+    return Ok(BTreeMap::new());
+  };
+  runtime
+    .required_secrets
+    .iter()
+    .map(|name| {
+      options
+        .resolved_secrets
+        .get(name)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .map(|value| (name.clone(), value))
+        .ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(format!(
+            "script node {node_id:?} requires unresolved secret {name:?}"
+          ))
+        })
+    })
+    .collect()
 }
 
 fn succeeded_execution(
@@ -778,7 +841,13 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         )));
       }
       if host.is_none() {
-        *host = Some(ScriptHostClient::spawn(options.script_host.clone()).await?);
+        *host = Some(
+          ScriptHostClient::spawn_with_authority(
+            options.script_host.clone(),
+            options.capability_authority.clone(),
+          )
+          .await?,
+        );
       }
       let completed = execute_parallel_group(
         engine,
@@ -1060,6 +1129,7 @@ struct ParallelInvocationRequest {
   attempt_number: u32,
   max_attempts: u32,
   idempotency_key: String,
+  secrets: BTreeMap<String, String>,
 }
 
 async fn next_parallel_completion(
@@ -1133,7 +1203,7 @@ async fn execute_parallel_request(
     details: None,
     ..AttemptFailure::legacy_defaults()
   })?;
-  let request = ExecuteMessage::runtime_script(
+  let request = ExecuteMessage::runtime_script_with_secrets(
     &invocation.invocation_id,
     &invocation.run_id,
     &invocation.node_id,
@@ -1141,6 +1211,7 @@ async fn execute_parallel_request(
     invocation.timeout_ms,
     &invocation.source,
     &invocation.context,
+    &invocation.secrets,
   );
   match host.execute(&request).await {
     Ok(completed) => match completed.outcome {
@@ -1218,6 +1289,7 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
           RuntimeExecutionError::Stalled(format!("parallel child {node_id:?} has no script source"))
         })?
         .to_string();
+      let secrets = resolved_script_secrets(engine.workflow(), &node_id, options)?;
       let invocation_id = generated_id("inv");
       let max_attempts = engine
         .workflow()
@@ -1251,6 +1323,7 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             attempt_number,
             max_attempts,
             idempotency_key,
+            secrets,
           },
         )),
       });
@@ -1471,6 +1544,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   options: &RuntimeExecutionOptions,
   host: &mut Option<ScriptHostClient>,
 ) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
+  let secrets = resolved_script_secrets(engine.workflow(), node_id, options)?;
   let invocation_id = generated_id("inv");
   let projection = engine.projection(run_id)?;
   let attempt_number = match projection.latest_attempt(node_id) {
@@ -1532,7 +1606,12 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   }
 
   if host.is_none() {
-    match ScriptHostClient::spawn(options.script_host.clone()).await {
+    match ScriptHostClient::spawn_with_authority(
+      options.script_host.clone(),
+      options.capability_authority.clone(),
+    )
+    .await
+    {
       Ok(client) => *host = Some(client),
       Err(error) => {
         return settle_script_attempt_failure(
@@ -1554,7 +1633,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     }
   }
 
-  let request = ExecuteMessage::runtime_script(
+  let request = ExecuteMessage::runtime_script_with_secrets(
     &invocation_id,
     run_id,
     node_id,
@@ -1563,6 +1642,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     options.script_timeout_ms,
     source,
     &context,
+    &secrets,
   );
   let outcome = match host
     .as_ref()
@@ -1963,7 +2043,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V4
     | crate::RUN_EVENT_SCHEMA_VERSION_V5
     | crate::RUN_EVENT_SCHEMA_VERSION_V6
-    | crate::RUN_EVENT_SCHEMA_VERSION_V7 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V7
+    | crate::RUN_EVENT_SCHEMA_VERSION_V8 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -2094,6 +2175,34 @@ impl RuntimeDagEngine for InMemoryDagEngine {
     run_id: &str,
     trigger: Map<String, Value>,
   ) -> Result<(), RuntimeExecutionError> {
+    if self.event_schema_version() >= crate::RUN_EVENT_SCHEMA_VERSION_V7 {
+      let trigger_definition = self
+        .workflow()
+        .triggers
+        .iter()
+        .find(|candidate| candidate.handler == "trigger.manual")
+        .ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(
+            "a direct Model v7+ run requires a manual trigger".to_string(),
+          )
+        })?;
+      self.append_event(RunEvent {
+        event_schema_version: self.event_schema_version(),
+        event_id: generated_id("evt"),
+        run_id: run_id.to_string(),
+        sequence: 1,
+        occurred_at: chrono::Utc::now(),
+        payload: RunEventPayload::RunStarted(crate::RunStartedData {
+          workflow_id: self.workflow().workflow_id.clone(),
+          definition_hash: self.definition_hash().to_string(),
+          trigger_id: Some(trigger_definition.id.clone()),
+          trigger_handler: Some(trigger_definition.handler.clone()),
+          trigger_occurrence_id: Some(generated_id("occ")),
+          trigger,
+        }),
+      })?;
+      return Ok(());
+    }
     self.start_run(generated_id("evt"), run_id, chrono::Utc::now(), trigger)?;
     Ok(())
   }
@@ -2142,6 +2251,33 @@ impl RuntimeDagEngine for DurableDagEngine {
     run_id: &str,
     trigger: Map<String, Value>,
   ) -> Result<(), RuntimeExecutionError> {
+    if self.event_schema_version() >= crate::RUN_EVENT_SCHEMA_VERSION_V7 {
+      let trigger_definition = self
+        .workflow()
+        .triggers
+        .iter()
+        .find(|candidate| candidate.handler == "trigger.manual")
+        .ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(
+            "a direct Model v7+ run requires a manual trigger".to_string(),
+          )
+        })?;
+      DurableDagEngine::append_payload(
+        self,
+        generated_id("evt"),
+        run_id,
+        chrono::Utc::now(),
+        RunEventPayload::RunStarted(crate::RunStartedData {
+          workflow_id: self.workflow().workflow_id.clone(),
+          definition_hash: self.definition_hash().to_string(),
+          trigger_id: Some(trigger_definition.id.clone()),
+          trigger_handler: Some(trigger_definition.handler.clone()),
+          trigger_occurrence_id: Some(generated_id("occ")),
+          trigger,
+        }),
+      )?;
+      return Ok(());
+    }
     self.start_run(generated_id("evt"), run_id, chrono::Utc::now(), trigger)?;
     Ok(())
   }

@@ -1,10 +1,11 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0, SC1, and SC2 completed on 2026-08-09. The cross-layer
+Status: active. SC0 through SC3 completed on 2026-08-09. The cross-layer
 contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
-Script Bindings v1 and symbolic secret dependencies, and Rust can now durably
-supervise a provider-neutral capability operation. SC3 is next; no public
-service is executable from a WOML script yet.
+Script Bindings v1 and symbolic secret dependencies, and a real WOML script can
+now call from an isolated Bun Worker through the durable Rust capability
+authority. SC4 is next; public native Fetch remains unavailable until its
+tracking contract is implemented.
 
 ## 1. Product Outcome
 
@@ -56,7 +57,7 @@ The first publishable journey is a real HTTP workflow:
 The same script may use Bun's native Fetch API instead:
 
 ```js
-const response = await fetch("https://api.example.com/customers/42");
+const response = await fetch('https://api.example.com/customers/42');
 return await response.json();
 ```
 
@@ -251,10 +252,10 @@ capabilities and must never be copied into context or returned as step output.
 Only statically named secret access is executable in the first profile:
 
 ```js
-secrets.CUSTOMER_API_TOKEN       // valid
-secrets["CUSTOMER_API_TOKEN"]    // rejected in v1
-secrets[name]                    // rejected in v1
-Object.keys(secrets)             // does not enumerate the project store
+secrets.CUSTOMER_API_TOKEN; // valid
+secrets['CUSTOMER_API_TOKEN']; // rejected in v1
+secrets[name]; // rejected in v1
+Object.keys(secrets); // does not enumerate the project store
 ```
 
 The frontend records required secret names, never values, in the compiled
@@ -268,12 +269,14 @@ Native Fetch remains the standard Bun call:
 
 ```js
 const controller = new AbortController();
-const response = await fetch(new Request(url, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify(payload),
-  signal: controller.signal
-}));
+const response = await fetch(
+  new Request(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: controller.signal,
+  })
+);
 
 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 return await response.json();
@@ -297,16 +300,16 @@ compatibility:
 
 ```js
 const response = await services.http.request({
-  method: "POST",
-  url: "https://api.example.com/orders",
+  method: 'POST',
+  url: 'https://api.example.com/orders',
   headers: {
-    authorization: `Bearer ${secrets.ORDER_API_TOKEN}`
+    authorization: `Bearer ${secrets.ORDER_API_TOKEN}`,
   },
   json: {
-    orderId: context.trigger.orderId
+    orderId: context.trigger.orderId,
   },
-  responseType: "json",
-  timeout: "10s"
+  responseType: 'json',
+  timeout: '10s',
 });
 
 return response.data;
@@ -334,21 +337,21 @@ connections remain in Rust:
 
 ```js
 const db = services.db({
-  driver: "postgres",
-  connection: secrets.DATABASE_URL
+  driver: 'postgres',
+  connection: secrets.DATABASE_URL,
 });
 
 const rows = await db.query({
-  text: "SELECT id, name FROM customers WHERE active = $1",
-  values: [true]
+  text: 'SELECT id, name FROM customers WHERE active = $1',
+  values: [true],
 });
 
 await db.insert({
-  table: "audit_log",
+  table: 'audit_log',
   values: {
     customer_id: rows[0].id,
-    action: "loaded"
-  }
+    action: 'loaded',
+  },
 });
 ```
 
@@ -368,14 +371,14 @@ Storage keeps large or reusable objects outside workflow context:
 
 ```js
 const object = await services.storage.put({
-  key: "reports/2026-08-09.json",
+  key: 'reports/2026-08-09.json',
   value: report,
-  contentType: "application/json"
+  contentType: 'application/json',
 });
 
 const saved = await services.storage.get({
   key: object.key,
-  responseType: "json"
+  responseType: 'json',
 });
 ```
 
@@ -392,8 +395,8 @@ and conditional-write behavior. External object-store adapters come later.
 Cache provides best-effort, workflow-scoped JSON values:
 
 ```js
-await services.cache.set("customer:42", customer, { ttl: "15m" });
-const cached = await services.cache.get("customer:42");
+await services.cache.set('customer:42', customer, { ttl: '15m' });
+const cached = await services.cache.get('customer:42');
 ```
 
 V1 includes `get`, `set`, `delete`, `has`, `increment`, and `setIfAbsent` with
@@ -409,8 +412,8 @@ cache adapters and coherence belong to Production Runtime or the Module System.
 Internal event publication reuses the Event Publication v1 authority directly:
 
 ```js
-const publication = await services.events.emit("customer.updated", {
-  customerId: "customer-42"
+const publication = await services.events.emit('customer.updated', {
+  customerId: 'customer-42',
 });
 ```
 
@@ -431,8 +434,8 @@ one consumer. WOML must preserve that distinction.
 Producer:
 
 ```js
-await services.queue.send("image-processing", {
-  imageId: "image-42"
+await services.queue.send('image-processing', {
+  imageId: 'image-42',
 });
 ```
 
@@ -509,8 +512,8 @@ This must work:
 
 ```js
 const [profile, orders] = await Promise.all([
-  services.http.request({ url: profileUrl, responseType: "json" }),
-  services.http.request({ url: ordersUrl, responseType: "json" })
+  services.http.request({ url: profileUrl, responseType: 'json' }),
+  services.http.request({ url: ordersUrl, responseType: 'json' }),
 ]);
 ```
 
@@ -727,6 +730,8 @@ oversized, cancelled, and interrupted fake operations obey the contract.
 
 ### SC3 — Implement Script Host v4 and inject `services`/`secrets`
 
+Status: completed on 2026-08-09.
+
 Changes:
 
 - Add full-duplex Content-Length-framed v4 messages.
@@ -742,7 +747,10 @@ Changes:
 Result:
 
 A real WOML script can call the test capability from Bun, await Rust, and use
-the JSON result.
+the JSON result. Model v8 CLI runs now resolve only each script's declared
+secret names, use the durable Rust execution path automatically, and reject a
+known secret before it can become a persisted step result. Native `fetch()`
+remains explicitly unavailable until SC4 rather than running untracked.
 
 Gate:
 
@@ -1000,21 +1008,21 @@ from a clean installation.
 
 ## 14. Expected File Areas
 
-| Area | Expected locations |
-|---|---|
-| WOML model/lowering | `woml/src/compiler.ts`, `woml/src/model.ts`, frontend tests and fixtures |
-| Script analysis and bindings | new WOML script-analysis helpers, Model v8 fixtures |
-| Bun host and Worker | `woml-cli/src/script-host/*`, `script-host.ts`, Worker tests |
-| Rust protocol/host | `core/woml-engine/src/protocol.rs`, `host.rs` |
-| Capability registry | new `core/woml-engine/src/capabilities/*` modules |
-| Events/folding/store | `event.rs`, `projection.rs`, `durable.rs`, SQLite migrations |
-| Native Fetch facade | new Bun Worker runtime/fetch modules and conformance tests |
-| Service JavaScript facades | new `woml-cli/src/services/*` modules and public typings |
-| Rust service handlers | HTTP, database, storage, cache, events, and queue capability modules |
-| Trigger/runtime bridge | Rust runtime and frontend changes for the queue consumer profile |
-| CLI/secrets/progress | `woml-cli/src/cli.ts`, secret store/resolution, `rust-executor.ts` |
-| Versioned artifacts | `docs/schemas/*`, `docs/protocols/*`, compiled/event fixtures |
-| Examples | new native Fetch and one example per built-in service |
+| Area                         | Expected locations                                                       |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| WOML model/lowering          | `woml/src/compiler.ts`, `woml/src/model.ts`, frontend tests and fixtures |
+| Script analysis and bindings | new WOML script-analysis helpers, Model v8 fixtures                      |
+| Bun host and Worker          | `woml-cli/src/script-host/*`, `script-host.ts`, Worker tests             |
+| Rust protocol/host           | `core/woml-engine/src/protocol.rs`, `host.rs`                            |
+| Capability registry          | new `core/woml-engine/src/capabilities/*` modules                        |
+| Events/folding/store         | `event.rs`, `projection.rs`, `durable.rs`, SQLite migrations             |
+| Native Fetch facade          | new Bun Worker runtime/fetch modules and conformance tests               |
+| Service JavaScript facades   | new `woml-cli/src/services/*` modules and public typings                 |
+| Rust service handlers        | HTTP, database, storage, cache, events, and queue capability modules     |
+| Trigger/runtime bridge       | Rust runtime and frontend changes for the queue consumer profile         |
+| CLI/secrets/progress         | `woml-cli/src/cli.ts`, secret store/resolution, `rust-executor.ts`       |
+| Versioned artifacts          | `docs/schemas/*`, `docs/protocols/*`, compiled/event fixtures            |
+| Examples                     | new native Fetch and one example per built-in service                    |
 
 Exact filenames may change as the capability subsystem takes shape. Layer
 ownership may not: TypeScript understands source and symbolic dependencies,
@@ -1023,23 +1031,23 @@ preserves native Fetch behavior.
 
 ## 15. Verification Matrix
 
-| Area | Required proof |
-|---|---|
-| Compatibility | Models v1-v7 and Script Host v1-v3 execute unchanged. |
-| Multiplexing | Nested calls and invocations correlate only by IDs and may complete out of order. |
-| Fetch | Wrapped behavior matches native Bun for every frozen compatibility case. |
-| HTTP | Rust handles status, body modes, timeout, cancellation, limits, pooling, and safe errors. |
-| Database | Parameterization, transactions, pool isolation, and ambiguous-write rules hold. |
-| Storage | Objects are atomic, bounded, addressable, and absent from run-event bodies. |
-| Cache | TTL/atomicity work; eviction never masquerades as durable state loss. |
-| Events | Internal emit reuses durable fan-out and cannot form an unbounded cycle. |
-| Queue | One message follows the frozen claim/ack/redelivery/dead-letter lifecycle. |
-| Retry | Safe failures follow reviewed policy; ambiguous effects fail closed. |
-| Parallel | Calls are independent, bounded, cancellable, and do not cross contexts. |
-| Secrets | Only symbolic names are durable; known values cannot enter results/logs/events. |
-| Recovery | Every started-without-terminal boundary has an explicit outcome. |
-| Performance | Benchmarks report evidence; no unsupported faster-than-Fetch claim is published. |
-| Packaging | Every example works from the produced clean package. |
+| Area          | Required proof                                                                            |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| Compatibility | Models v1-v7 and Script Host v1-v3 execute unchanged.                                     |
+| Multiplexing  | Nested calls and invocations correlate only by IDs and may complete out of order.         |
+| Fetch         | Wrapped behavior matches native Bun for every frozen compatibility case.                  |
+| HTTP          | Rust handles status, body modes, timeout, cancellation, limits, pooling, and safe errors. |
+| Database      | Parameterization, transactions, pool isolation, and ambiguous-write rules hold.           |
+| Storage       | Objects are atomic, bounded, addressable, and absent from run-event bodies.               |
+| Cache         | TTL/atomicity work; eviction never masquerades as durable state loss.                     |
+| Events        | Internal emit reuses durable fan-out and cannot form an unbounded cycle.                  |
+| Queue         | One message follows the frozen claim/ack/redelivery/dead-letter lifecycle.                |
+| Retry         | Safe failures follow reviewed policy; ambiguous effects fail closed.                      |
+| Parallel      | Calls are independent, bounded, cancellable, and do not cross contexts.                   |
+| Secrets       | Only symbolic names are durable; known values cannot enter results/logs/events.           |
+| Recovery      | Every started-without-terminal boundary has an explicit outcome.                          |
+| Performance   | Benchmarks report evidence; no unsupported faster-than-Fetch claim is published.          |
+| Packaging     | Every example works from the produced clean package.                                      |
 
 ## 16. Risks and Guardrails
 

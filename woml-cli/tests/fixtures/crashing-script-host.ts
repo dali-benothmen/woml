@@ -2,7 +2,7 @@ import { encodeFrame } from '../../src/script-host/framing';
 
 const ready = {
   protocol: 'woml.script-host',
-  protocolVersion: 3,
+  protocolVersion: Number(process.env.WOML_SCRIPT_HOST_PROTOCOL_VERSION ?? '3'),
   messageType: 'ready',
   hostInstanceId: 'host_r3_crash_fixture',
 };

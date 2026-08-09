@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
 
 export interface RustRunEvent {
-  readonly eventSchemaVersion: 1 | 2 | 3 | 4 | 5 | 6;
+  readonly eventSchemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
@@ -33,6 +33,7 @@ export interface RustExecutorOptions {
   readonly scriptTimeoutMs?: number;
   readonly trigger?: JsonObject;
   readonly onProgress?: (progress: ExecutionProgressV1) => void;
+  readonly resolvedSecrets?: Readonly<Record<string, string>>;
 }
 
 export type ExecutionProgressV1 =
@@ -244,7 +245,12 @@ export type TriggerIngressOutcome =
 export interface RustRunInspection {
   readonly runId: string;
   readonly workflowId: string;
-  readonly status: 'not_started' | 'running' | 'waiting' | 'succeeded' | 'failed';
+  readonly status:
+    | 'not_started'
+    | 'running'
+    | 'waiting'
+    | 'succeeded'
+    | 'failed';
   readonly terminalNodeId?: string;
   readonly result?: JsonValue;
   readonly failureCode?: string;
@@ -364,7 +370,8 @@ interface NativeCore {
     triggerJson: string,
     bunExecutable: string,
     scriptHostPath: string,
-    scriptTimeoutMs: number
+    scriptTimeoutMs: number,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly executeWomlWorkflowDurable: (
     compiledModelJson: string,
@@ -373,7 +380,8 @@ interface NativeCore {
     bunExecutable: string,
     scriptHostPath: string,
     scriptTimeoutMs: number,
-    eventStorePath: string
+    eventStorePath: string,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly executeWomlWorkflowDurableWithProgress: (
     compiledModelJson: string,
@@ -383,7 +391,8 @@ interface NativeCore {
     scriptHostPath: string,
     scriptTimeoutMs: number,
     eventStorePath: string,
-    progressCallback: (message: string) => void
+    progressCallback: (message: string) => void,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly resumeWomlWorkflowDurableWithProgress: (
     compiledModelJson: string,
@@ -393,7 +402,8 @@ interface NativeCore {
     scriptHostPath: string,
     scriptTimeoutMs: number,
     eventStorePath: string,
-    progressCallback: (message: string) => void
+    progressCallback: (message: string) => void,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly recoverWomlRuns: (eventStorePath: string) => string;
   readonly startWomlWebhookRuntime: (
@@ -419,7 +429,8 @@ interface NativeCore {
     bunExecutable: string,
     scriptHostPath: string,
     scriptTimeoutMs: number,
-    eventStorePath: string
+    eventStorePath: string,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly executeWomlWorkflowDurableOutcomeWithProgress: (
     compiledModelJson: string,
@@ -429,7 +440,8 @@ interface NativeCore {
     scriptHostPath: string,
     scriptTimeoutMs: number,
     eventStorePath: string,
-    progressCallback: (message: string) => void
+    progressCallback: (message: string) => void,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly resumeWomlWorkflowDurableOutcome: (
     compiledModelJson: string,
@@ -438,7 +450,8 @@ interface NativeCore {
     bunExecutable: string,
     scriptHostPath: string,
     scriptTimeoutMs: number,
-    eventStorePath: string
+    eventStorePath: string,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly resumeWomlWorkflowDurableOutcomeWithProgress: (
     compiledModelJson: string,
@@ -448,7 +461,8 @@ interface NativeCore {
     scriptHostPath: string,
     scriptTimeoutMs: number,
     eventStorePath: string,
-    progressCallback: (message: string) => void
+    progressCallback: (message: string) => void,
+    resolvedSecretsJson: string
   ) => Promise<string>;
   readonly resolveWomlApproval: (
     eventStorePath: string,
@@ -548,7 +562,10 @@ export interface NotificationDispatchReport {
 
 export interface NotificationProviderJourneyResult {
   readonly runId: string;
-  readonly decision: Omit<ApprovalDecisionResult, 'contract' | 'version'> | null;
+  readonly decision: Omit<
+    ApprovalDecisionResult,
+    'contract' | 'version'
+  > | null;
   readonly resolution: 'approved' | 'rejected' | 'timeout_failed';
   readonly deliveries: NotificationDispatchReport;
   readonly updates: NotificationDispatchReport;
@@ -1198,7 +1215,8 @@ function decodeNativeExecutionError(error: unknown): never {
         (decoded.requestId === undefined ||
           typeof decoded.requestId === 'string') &&
         (decoded.attempt === undefined ||
-          (Number.isSafeInteger(decoded.attempt) && Number(decoded.attempt) >= 1)) &&
+          (Number.isSafeInteger(decoded.attempt) &&
+            Number(decoded.attempt) >= 1)) &&
         (decoded.maxAttempts === undefined ||
           (Number.isSafeInteger(decoded.maxAttempts) &&
             Number(decoded.maxAttempts) >= 1)) &&
@@ -1283,7 +1301,8 @@ export async function executeWorkflowWithRust(
       JSON.stringify(options.trigger ?? {}),
       bunExecutable,
       scriptHostPath,
-      timeoutMs
+      timeoutMs,
+      JSON.stringify(options.resolvedSecrets ?? {})
     );
   } catch (error) {
     decodeNativeExecutionError(error);
@@ -1328,20 +1347,24 @@ export async function executeWorkflowWithRustDurable(
     );
   }
   const arguments_ = [
-      JSON.stringify(workflow),
-      compiledDefinitionHash(workflow),
-      JSON.stringify(options.trigger ?? {}),
-      options.bunExecutable ?? process.execPath,
-      options.scriptHostPath ?? defaultScriptHostPath(),
-      timeoutMs,
-      eventStorePath,
+    JSON.stringify(workflow),
+    compiledDefinitionHash(workflow),
+    JSON.stringify(options.trigger ?? {}),
+    options.bunExecutable ?? process.execPath,
+    options.scriptHostPath ?? defaultScriptHostPath(),
+    timeoutMs,
+    eventStorePath,
   ] as const;
-  const resultJson = await (options.onProgress === undefined
-    ? native.executeWomlWorkflowDurable(...arguments_)
-    : native.executeWomlWorkflowDurableWithProgress(
-        ...arguments_,
-        progressCallback
-      )).catch(decodeNativeExecutionError);
+  const secretsJson = JSON.stringify(options.resolvedSecrets ?? {});
+  const resultJson = await (
+    options.onProgress === undefined
+      ? native.executeWomlWorkflowDurable(...arguments_, secretsJson)
+      : native.executeWomlWorkflowDurableWithProgress(
+          ...arguments_,
+          progressCallback,
+          JSON.stringify(options.resolvedSecrets ?? {})
+        )
+  ).catch(decodeNativeExecutionError);
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
 }
 
@@ -1371,7 +1394,8 @@ export async function resumeWorkflowWithRustDurable(
       runtime.scriptHostPath,
       runtime.timeoutMs,
       eventStorePath,
-      message => options.onProgress?.(parseExecutionProgress(message))
+      message => options.onProgress?.(parseExecutionProgress(message)),
+      JSON.stringify(options.resolvedSecrets ?? {})
     )
     .catch(decodeNativeExecutionError);
   return JSON.parse(resultJson) as RustWorkflowExecutionResult;
@@ -1426,12 +1450,18 @@ export async function executeApprovalWorkflowWithRust(
     runtime.timeoutMs,
     eventStorePath,
   ] as const;
-  const resultJson = await (options.onProgress === undefined
-    ? native.executeWomlWorkflowDurableOutcome(...arguments_)
-    : native.executeWomlWorkflowDurableOutcomeWithProgress(
-        ...arguments_,
-        message => options.onProgress?.(parseExecutionProgress(message))
-      )).catch(decodeNativeExecutionError);
+  const resultJson = await (
+    options.onProgress === undefined
+      ? native.executeWomlWorkflowDurableOutcome(
+          ...arguments_,
+          JSON.stringify(options.resolvedSecrets ?? {})
+        )
+      : native.executeWomlWorkflowDurableOutcomeWithProgress(
+          ...arguments_,
+          message => options.onProgress?.(parseExecutionProgress(message)),
+          JSON.stringify(options.resolvedSecrets ?? {})
+        )
+  ).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
 }
 
@@ -1455,12 +1485,18 @@ export async function resumeApprovalWorkflowWithRust(
     runtime.timeoutMs,
     eventStorePath,
   ] as const;
-  const resultJson = await (options.onProgress === undefined
-    ? native.resumeWomlWorkflowDurableOutcome(...arguments_)
-    : native.resumeWomlWorkflowDurableOutcomeWithProgress(
-        ...arguments_,
-        message => options.onProgress?.(parseExecutionProgress(message))
-      )).catch(decodeNativeExecutionError);
+  const resultJson = await (
+    options.onProgress === undefined
+      ? native.resumeWomlWorkflowDurableOutcome(
+          ...arguments_,
+          JSON.stringify(options.resolvedSecrets ?? {})
+        )
+      : native.resumeWomlWorkflowDurableOutcomeWithProgress(
+          ...arguments_,
+          message => options.onProgress?.(parseExecutionProgress(message)),
+          JSON.stringify(options.resolvedSecrets ?? {})
+        )
+  ).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
 }
 
@@ -1569,7 +1605,9 @@ export async function startWebhookRuntimeWithRust(
   }
   const port = options.port ?? 3_000;
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
-    throw new Error('Trigger runtime port must be an integer from 0 through 65535.');
+    throw new Error(
+      'Trigger runtime port must be an integer from 0 through 65535.'
+    );
   }
   const timeoutMs = options.scriptTimeoutMs ?? 5_000;
   if (
@@ -1624,7 +1662,9 @@ export async function startWebhookRuntimeWithRust(
     Number(value.port) < 0 ||
     Number(value.port) > 65_535
   ) {
-    throw new Error('The native core returned invalid webhook runtime startup data.');
+    throw new Error(
+      'The native core returned invalid webhook runtime startup data.'
+    );
   }
   return value as unknown as WebhookRuntimeHandle;
 }
@@ -1790,7 +1830,9 @@ function parseNotificationJourney(
     !record(value.updates) ||
     !notificationJourneyDiagnostics(value.diagnostics)
   ) {
-    throw new Error('The native core returned an invalid notification journey.');
+    throw new Error(
+      'The native core returned an invalid notification journey.'
+    );
   }
   return value as unknown as NotificationProviderJourneyResult;
 }
@@ -1915,7 +1957,11 @@ export async function runNotificationProviderJourneyWithRust(
     );
   }
   const timeoutMs = options.interactionTimeoutMs ?? 30_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 0xffff_ffff) {
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 0xffff_ffff
+  ) {
     throw new Error('interactionTimeoutMs must be a positive 32-bit integer.');
   }
   const json = await native

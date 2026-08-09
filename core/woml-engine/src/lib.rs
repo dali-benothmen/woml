@@ -22,12 +22,13 @@ pub mod store;
 pub mod webhook;
 
 pub use capability::{
-  derive_operation_key, CapabilityCallIdentity, CapabilityCallLimits, CapabilityCallRequest,
-  CapabilityCallResult, CapabilityCancellationToken, CapabilityDescriptor, CapabilityEffect,
-  CapabilityFailure, CapabilityFailureKind, CapabilityHandler, CapabilityRegistry,
-  CapabilityRegistryError, DurableCapabilityAuthority, DurableCapabilityAuthorityError,
-  TestCapabilityHandler, CAPABILITY_CALL_CONTRACT, CAPABILITY_CALL_CONTRACT_VERSION,
-  DEFAULT_CAPABILITY_INPUT_BYTES, DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
+  capability_transport_failure, derive_operation_key, CapabilityCallIdentity, CapabilityCallLimits,
+  CapabilityCallRequest, CapabilityCallResult, CapabilityCancellationToken, CapabilityDescriptor,
+  CapabilityEffect, CapabilityFailure, CapabilityFailureKind, CapabilityHandler,
+  CapabilityRegistry, CapabilityRegistryError, DurableCapabilityAuthority,
+  DurableCapabilityAuthorityError, TestCapabilityHandler, CAPABILITY_CALL_CONTRACT,
+  CAPABILITY_CALL_CONTRACT_VERSION, DEFAULT_CAPABILITY_FRAME_BYTES, DEFAULT_CAPABILITY_INPUT_BYTES,
+  DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
 };
 pub use durable::{
   ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,

@@ -9,6 +9,8 @@ import {
 import { ScriptHost } from '../src/script-host/host';
 import { isScriptHostMessage } from '../src/script-host/protocol';
 import type {
+  CapabilityCallMessage,
+  CapabilityResultMessage,
   CancelMessage,
   CompletedMessage,
   ExecuteMessage,
@@ -58,6 +60,31 @@ function execute(
         },
       }
     : { ...base, protocolVersion, attempt: 1 };
+}
+
+function executeV4(
+  invocationId: string,
+  source: string,
+  secrets: Readonly<Record<string, string>> = {}
+): ExecuteMessage {
+  return {
+    protocol: 'woml.script-host',
+    protocolVersion: 4,
+    messageType: 'execute',
+    invocationId,
+    runId: `run_${invocationId}`,
+    nodeId: 'serviceStep',
+    attempt: {
+      number: 1,
+      maxAttempts: 1,
+      idempotencyKey: defaultEffectKey,
+    },
+    handler: 'runtime.script',
+    timeoutMs: 2_000,
+    source,
+    context: { trigger: {}, steps: {} },
+    bindings: { bindingVersion: 1, servicesVersion: 1, secrets },
+  };
 }
 
 function cancel(
@@ -398,7 +425,7 @@ return {
       workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
       protocolVersion: 3,
       send: async message => {
-        sent.push(message);
+        if (message.messageType === 'completed') sent.push(message);
       },
     });
     host.accept(execute('inv_completed_first', 'return { won: true };'));
@@ -502,7 +529,7 @@ return {
     const host = new ScriptHost({
       workerUrl: new URL('./fixtures/missing-worker.ts', import.meta.url),
       send: async message => {
-        sent.push(message);
+        if (message.messageType === 'completed') sent.push(message);
       },
     });
 
@@ -518,10 +545,7 @@ return {
     expect([
       ['worker_crashed', 'WOML_SCRIPT_WORKER_CRASHED'],
       ['invocation_cancelled', 'WOML_SCRIPT_CANCELLED'],
-    ]).toContainEqual([
-      sent[0].outcome.error.kind,
-      sent[0].outcome.error.code,
-    ]);
+    ]).toContainEqual([sent[0].outcome.error.kind, sent[0].outcome.error.code]);
   });
 
   test('enforces context and result byte limits with separate failures', async () => {
@@ -576,5 +600,182 @@ return {
     expect(result.messages[0].messageType).toBe('ready');
     expect(result.stderr).toContain('MessageProtocolError');
     expect(result.stderr).not.toContain('return { ok: true }');
+  });
+
+  test('protocol v4 routes Promise.all capability replies out of order and isolates simultaneous runs', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        calls.push(message);
+        const input = message.call.input as {
+          readonly value: string;
+          readonly delayMs: number;
+        };
+        setTimeout(() => {
+          const result: CapabilityResultMessage = {
+            protocol: 'woml.script-host',
+            protocolVersion: 4,
+            messageType: 'capability_result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            result: {
+              contract: 'woml.capability-call',
+              contractVersion: 1,
+              messageType: 'result',
+              invocationId: message.invocationId,
+              callId: message.callId,
+              outcome: 'succeeded',
+              resultContractVersion: 1,
+              resultBytes: Buffer.byteLength(JSON.stringify(input.value)),
+              durationMs: input.delayMs,
+              result: input.value,
+            },
+          };
+          host.accept(result);
+        }, input.delayMs);
+      },
+    });
+
+    host.accept(
+      executeV4(
+        'inv_v4_a',
+        `const [slow, fast] = await Promise.all([
+          services.test.control({ value: 'a-slow', delayMs: 40 }),
+          services.test.control({ value: 'a-fast', delayMs: 2 })
+        ]); return { slow, fast };`
+      )
+    );
+    host.accept(
+      executeV4(
+        'inv_v4_b',
+        `return { value: await services.test.control({ value: 'b', delayMs: 1 }) };`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(3);
+    expect(byInvocation(completed).get('inv_v4_a')?.outcome).toEqual({
+      kind: 'success',
+      value: { slow: 'a-slow', fast: 'a-fast' },
+    });
+    expect(byInvocation(completed).get('inv_v4_b')?.outcome).toEqual({
+      kind: 'success',
+      value: { value: 'b' },
+    });
+  });
+
+  test('protocol v4 bindings are deeply read-only and reject a known secret in results', async () => {
+    const sent: CompletedMessage[] = [];
+    const host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') sent.push(message);
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_secret',
+        `return {
+          frozen: Object.isFrozen(secrets) && Object.isFrozen(services),
+          leaked: 'prefix-' + secrets.API_TOKEN
+        };`,
+        { API_TOKEN: 'secret-v4-value' }
+      )
+    );
+    await host.drain();
+    expect(sent[0]?.outcome).toEqual({
+      kind: 'failure',
+      error: {
+        kind: 'invalid_script_result',
+        code: 'WOML_SCRIPT_NON_JSON_RESULT',
+        message: 'Script results must not contain a resolved secret value.',
+      },
+    });
+    expect(JSON.stringify(sent)).not.toContain('secret-v4-value');
+  });
+
+  test('protocol v4 cancellation drops a known late reply and rejects an unknown reply', async () => {
+    const completed: CompletedMessage[] = [];
+    let captured: CapabilityCallMessage | undefined;
+    const host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') completed.push(message);
+        else captured = message;
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_cancel',
+        `return await services.test.control({ mode: 'delay', delayMs: 1000 });`
+      )
+    );
+    while (captured === undefined) await Bun.sleep(1);
+    host.accept({
+      protocol: 'woml.script-host',
+      protocolVersion: 4,
+      messageType: 'cancel',
+      invocationId: 'inv_v4_cancel',
+      reason: 'run_cancelled',
+    });
+    await host.drain();
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'failure',
+      error: { kind: 'invocation_cancelled' },
+    });
+
+    const call = captured!;
+    const lateResult: CapabilityResultMessage = {
+      protocol: 'woml.script-host',
+      protocolVersion: 4,
+      messageType: 'capability_result',
+      invocationId: call.invocationId,
+      callId: call.callId,
+      result: {
+        contract: 'woml.capability-call',
+        contractVersion: 1,
+        messageType: 'result',
+        invocationId: call.invocationId,
+        callId: call.callId,
+        outcome: 'succeeded',
+        resultContractVersion: 1,
+        resultBytes: 4,
+        durationMs: 1,
+        result: null,
+      },
+    };
+    expect(() => host.accept(lateResult)).not.toThrow();
+
+    expect(() =>
+      host.accept({
+        protocol: 'woml.script-host',
+        protocolVersion: 4,
+        messageType: 'capability_result',
+        invocationId: call.invocationId,
+        callId: 'call_never_existed',
+        result: {
+          contract: 'woml.capability-call',
+          contractVersion: 1,
+          messageType: 'result',
+          invocationId: call.invocationId,
+          callId: 'call_never_existed',
+          outcome: 'succeeded',
+          resultContractVersion: 1,
+          resultBytes: 4,
+          durationMs: 1,
+          result: null,
+        },
+      })
+    ).toThrow('unknown call ID');
   });
 });

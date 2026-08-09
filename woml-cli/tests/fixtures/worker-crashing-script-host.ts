@@ -1,4 +1,7 @@
-import { FrameDecoder, SerializedFrameWriter } from '../../src/script-host/framing';
+import {
+  FrameDecoder,
+  SerializedFrameWriter,
+} from '../../src/script-host/framing';
 import { ScriptHost } from '../../src/script-host/host';
 import type { ReadyMessage } from '../../src/script-host/types';
 
@@ -13,14 +16,17 @@ async function writeStdout(frame: Uint8Array): Promise<void> {
 
 const decoder = new FrameDecoder();
 const writer = new SerializedFrameWriter(writeStdout);
+const protocolVersion = Number(
+  process.env.WOML_SCRIPT_HOST_PROTOCOL_VERSION ?? '3'
+) as ReadyMessage['protocolVersion'];
 const host = new ScriptHost({
   workerUrl: new URL('./missing-script-worker.ts', import.meta.url),
-  protocolVersion: 3,
+  protocolVersion,
   send: message => writer.send(message),
 });
 const ready: ReadyMessage = {
   protocol: 'woml.script-host',
-  protocolVersion: 3,
+  protocolVersion,
   messageType: 'ready',
   hostInstanceId: 'host_ri7_worker_crash',
 };

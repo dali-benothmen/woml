@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   compileWoml,
+  analyzeWomlScript,
   isWomlElement,
   parseWoml,
   WomlDiagnosticError,
@@ -154,9 +155,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         option !== '--resume' &&
         option !== '--approval-port' &&
         option !== '--trigger' &&
-        (command !== 'run' ||
-          (option !== '--host' &&
-            option !== '--port')))
+        (command !== 'run' || (option !== '--host' && option !== '--port')))
     ) {
       throw new CliInputError(
         'WOML_CLI_ARGUMENTS_INVALID',
@@ -356,7 +355,10 @@ export function formatExecutionProgress(progress: ExecutionProgressV1): string {
   if (progress.type === 'step_attempt_succeeded') {
     return `Step ${progress.nodeId} succeeded on attempt ${progress.attempt}/${progress.maxAttempts}.`;
   }
-  const remainingMs = Math.max(0, Date.parse(progress.scheduledAt) - Date.now());
+  const remainingMs = Math.max(
+    0,
+    Date.parse(progress.scheduledAt) - Date.now()
+  );
   const delay =
     remainingMs === 0
       ? 'now'
@@ -669,7 +671,9 @@ interface CompiledWorkflowSource {
   readonly workflow: CompiledWorkflowDefinition;
 }
 
-async function workflowFilePaths(inputPath: string): Promise<readonly string[]> {
+async function workflowFilePaths(
+  inputPath: string
+): Promise<readonly string[]> {
   let entry;
   try {
     entry = await stat(inputPath);
@@ -724,15 +728,27 @@ async function compileWorkflowSources(
   return compiled;
 }
 
-function requireExecutableScriptProfile(
+function requireSc3ExecutableProfile(
   sources: readonly CompiledWorkflowSource[]
 ): void {
-  const pending = sources.find(source => source.workflow.schemaVersion === 8);
-  if (pending === undefined) return;
-  throw new CliInputError(
-    'WOML_SCRIPT_BINDINGS_RUNTIME_UNAVAILABLE',
-    `workflow "${pending.workflow.workflowId}" uses Script Bindings v1 (services, script secrets, or tracked Fetch). It compiled successfully, but execution is unavailable until the Rust capability runtime and Script Host v4 are implemented.`
-  );
+  for (const source of sources) {
+    for (const node of source.workflow.graph.nodes) {
+      if (node.handler !== 'runtime.script' || node.inputs.kind !== 'object') {
+        continue;
+      }
+      const script = node.inputs.fields.source;
+      if (
+        script?.kind === 'literal' &&
+        typeof script.value === 'string' &&
+        analyzeWomlScript(script.value).usesNativeFetch
+      ) {
+        throw new CliInputError(
+          'WOML_NATIVE_FETCH_RUNTIME_UNAVAILABLE',
+          `workflow "${source.workflow.workflowId}" uses native fetch(), which remains unavailable until SC4 adds durable Fetch tracking.`
+        );
+      }
+    }
+  }
 }
 
 function printWaitingApproval(
@@ -769,8 +785,13 @@ async function runApprovalWorkflow(
   dependencies: CliDependencies
 ): Promise<void> {
   await mkdir(dirname(args.statePath), { recursive: true });
+  const secrets = await resolvedSecrets(
+    workflow,
+    dependencies.createSecretStore()
+  );
   const runtimeOptions = {
     nativeCorePath: dependencies.nativeCorePath,
+    resolvedSecrets: secrets,
     onProgress: (progress: ExecutionProgressV1) =>
       io.stderr(`${formatExecutionProgress(progress)}\n`),
   };
@@ -838,13 +859,14 @@ function workflowSecretReferences(
   }
   for (const node of workflow.graph.nodes) {
     collectSecretReferences(node.inputs, references);
+    for (const name of node.scriptRuntime?.requiredSecrets ?? []) {
+      references.push({ kind: 'secretReference', name });
+    }
   }
   return references;
 }
 
-function workflowHasApproval(
-  workflow: CompiledWorkflowDefinition
-): boolean {
+function workflowHasApproval(workflow: CompiledWorkflowDefinition): boolean {
   return workflow.graph.nodes.some(
     node => node.handler === 'engine.approval-wait'
   );
@@ -870,7 +892,8 @@ function printSlackApproval(
   const approval = outcome.approval;
   io.stderr('\nWOML workflow is waiting for approval in Slack.\n');
   io.stderr(`Approval: ${approval.name ?? approval.approvalId}\n`);
-  if (approval.description !== undefined) io.stderr(`${approval.description}\n`);
+  if (approval.description !== undefined)
+    io.stderr(`${approval.description}\n`);
   io.stderr(`Workflow: ${outcome.workflowId}\n`);
   io.stderr(`Run ID: ${outcome.runId}\n`);
   io.stderr(
@@ -900,8 +923,8 @@ async function runNotificationWorkflow(
   io: CliIo,
   dependencies: CliDependencies
 ): Promise<void> {
-  await preflightSecretReferences(
-    workflowSecretReferences(workflow),
+  const secrets = await resolvedSecrets(
+    workflow,
     dependencies.createSecretStore()
   );
   await mkdir(dirname(args.statePath), { recursive: true });
@@ -912,6 +935,7 @@ async function runNotificationWorkflow(
       ? await executeApprovalWorkflowWithRust(workflow, args.statePath, {
           nativeCorePath: dependencies.nativeCorePath,
           onProgress: runtimeProgress,
+          resolvedSecrets: secrets,
         })
       : await resumeApprovalWorkflowWithRust(
           workflow,
@@ -920,6 +944,7 @@ async function runNotificationWorkflow(
           {
             nativeCorePath: dependencies.nativeCorePath,
             onProgress: runtimeProgress,
+            resolvedSecrets: secrets,
           }
         );
   while (outcome.status === 'waiting') {
@@ -942,6 +967,7 @@ async function runNotificationWorkflow(
       {
         nativeCorePath: dependencies.nativeCorePath,
         onProgress: runtimeProgress,
+        resolvedSecrets: secrets,
       }
     );
   }
@@ -959,7 +985,8 @@ async function executeOneShot(
   if (
     args.resumeRunId !== undefined &&
     !hasApproval &&
-    workflow.schemaVersion !== 6
+    workflow.schemaVersion !== 6 &&
+    workflow.schemaVersion !== 8
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -974,14 +1001,19 @@ async function executeOneShot(
     await runApprovalWorkflow(workflow, args, io, dependencies);
     return;
   }
-  if (workflow.schemaVersion === 6) {
+  if (workflow.schemaVersion === 6 || workflow.schemaVersion === 8) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);
+    const secrets = await resolvedSecrets(
+      workflow,
+      dependencies.createSecretStore()
+    );
     const execution =
       args.resumeRunId === undefined
         ? await executeWorkflowWithRustDurable(workflow, args.statePath, {
             nativeCorePath: dependencies.nativeCorePath,
             onProgress,
+            resolvedSecrets: secrets,
           })
         : await resumeWorkflowWithRustDurable(
             workflow,
@@ -990,6 +1022,7 @@ async function executeOneShot(
             {
               nativeCorePath: dependencies.nativeCorePath,
               onProgress,
+              resolvedSecrets: secrets,
             }
           );
     io.stdout(`${JSON.stringify(execution.result)}\n`);
@@ -1039,7 +1072,9 @@ function objectFields(
   return expression?.kind === 'object' ? expression.fields : undefined;
 }
 
-function literalString(expression: ValueExpression | undefined): string | undefined {
+function literalString(
+  expression: ValueExpression | undefined
+): string | undefined {
   return expression?.kind === 'literal' && typeof expression.value === 'string'
     ? expression.value
     : undefined;
@@ -1099,22 +1134,21 @@ function eventRouteSummaries(
 function jsonObject(
   value: JsonValue | undefined
 ): Readonly<Record<string, JsonValue>> | undefined {
-  return value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value)
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Readonly<Record<string, JsonValue>>)
     : undefined;
 }
 
 function nonNegativeInteger(value: JsonValue | undefined): number | undefined {
-  return typeof value === 'number' &&
-    Number.isSafeInteger(value) &&
-    value >= 0
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined;
 }
 
-function webhookSchemaSample(schema: JsonValue | undefined, depth = 0): JsonValue {
+function webhookSchemaSample(
+  schema: JsonValue | undefined,
+  depth = 0
+): JsonValue {
   if (depth > 8) return null;
   const fields = jsonObject(schema);
   if (fields === undefined) return {};
@@ -1195,7 +1229,9 @@ export function webhookCurlExample(
   lines.push(
     `  --data ${shellSingleQuoted(JSON.stringify(webhookSchemaSample(route.schema)))}`
   );
-  return lines.map((line, index) => `${line}${index < lines.length - 1 ? ' \\' : ''}`).join('\n');
+  return lines
+    .map((line, index) => `${line}${index < lines.length - 1 ? ' \\' : ''}`)
+    .join('\n');
 }
 
 export function eventCurlExample(
@@ -1220,18 +1256,12 @@ async function resolvedSecrets(
   workflow: CompiledWorkflowDefinition,
   store: SecretStore
 ): Promise<Readonly<Record<string, string>>> {
-  const references: SecretReferenceExpression[] = [];
-  for (const trigger of workflow.triggers) {
-    if (
-      trigger.handler === 'trigger.webhook' ||
-      trigger.handler === 'trigger.event'
-    ) {
-      collectSecretReferences(trigger.config, references);
-    }
-  }
+  const references = [...workflowSecretReferences(workflow)];
   await preflightSecretReferences(references, store);
   const values: Record<string, string> = {};
-  for (const name of [...new Set(references.map(reference => reference.name))]) {
+  for (const name of [
+    ...new Set(references.map(reference => reference.name)),
+  ]) {
     const value = await store.get(name);
     if (value === undefined || value.length === 0) {
       throw new SecretStoreError(
@@ -1301,9 +1331,13 @@ function reportTriggerProgress(
     return;
   }
   try {
-    const run = inspectRunWithRust(statePath, progress.runId, { nativeCorePath });
+    const run = inspectRunWithRust(statePath, progress.runId, {
+      nativeCorePath,
+    });
     if (run.result !== undefined) {
-      io.stderr(`Run ${progress.runId} result: ${JSON.stringify(run.result)}\n`);
+      io.stderr(
+        `Run ${progress.runId} result: ${JSON.stringify(run.result)}\n`
+      );
     }
   } catch (error) {
     const code =
@@ -1464,7 +1498,9 @@ async function activateWorkflows(
       );
       runtimeId = runtime.runtimeId;
       if (hasHttpEndpoint) {
-        io.stderr(`WOML workflow active at http://${runtime.host}:${runtime.port}.\n`);
+        io.stderr(
+          `WOML workflow active at http://${runtime.host}:${runtime.port}.\n`
+        );
       }
       for (const route of uniqueEventRoutes) {
         io.stderr(
@@ -1815,7 +1851,7 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowSources(filePath);
-    requireExecutableScriptProfile(sources);
+    requireSc3ExecutableProfile(sources);
     if (runArguments.command === 'test') {
       if ((await stat(filePath)).isDirectory()) {
         throw new CliInputError(
@@ -1841,11 +1877,7 @@ export async function runCli(
   } catch (error) {
     const source = sources?.length === 1 ? sources[0] : undefined;
     io.stderr(
-      `${formatError(
-        error,
-        source?.filePath ?? filePath,
-        source?.document
-      )}\n`
+      `${formatError(error, source?.filePath ?? filePath, source?.document)}\n`
     );
     return 1;
   }

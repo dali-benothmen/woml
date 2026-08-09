@@ -474,12 +474,27 @@ fn runtime_options(
   )
 }
 
+fn runtime_options_with_secrets(
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  resolved_secrets_json: String,
+) -> napi::Result<RuntimeExecutionOptions> {
+  let secrets: BTreeMap<String, String> = serde_json::from_str(&resolved_secrets_json)
+    .map_err(|error| napi::Error::from_reason(format!("Invalid resolved secrets JSON: {error}")))?;
+  Ok(
+    runtime_options(bun_executable, script_host_path, script_timeout_ms)
+      .with_resolved_secrets(secrets),
+  )
+}
+
 fn runtime_options_with_progress(
   env: &Env,
   bun_executable: String,
   script_host_path: String,
   script_timeout_ms: u32,
   progress_callback: JsFunction,
+  resolved_secrets_json: String,
 ) -> napi::Result<RuntimeExecutionOptions> {
   let mut progress = progress_callback
     .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
@@ -487,13 +502,17 @@ fn runtime_options_with_progress(
     })?;
   progress.unref(env)?;
   Ok(
-    runtime_options(bun_executable, script_host_path, script_timeout_ms).with_progress_reporter(
-      Arc::new(move |message| {
-        if let Ok(json) = serde_json::to_string(&message) {
-          let _ = progress.call(json, ThreadsafeFunctionCallMode::Blocking);
-        }
-      }),
-    ),
+    runtime_options_with_secrets(
+      bun_executable,
+      script_host_path,
+      script_timeout_ms,
+      resolved_secrets_json,
+    )?
+    .with_progress_reporter(Arc::new(move |message| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    })),
   )
 }
 
@@ -505,6 +524,7 @@ pub async fn execute_woml_workflow(
   bun_executable: String,
   script_host_path: String,
   script_timeout_ms: u32,
+  resolved_secrets_json: String,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -512,11 +532,12 @@ pub async fn execute_woml_workflow(
     })?;
   let trigger: Map<String, Value> = serde_json::from_str(&trigger_json)
     .map_err(|error| napi::Error::from_reason(format!("Invalid trigger JSON: {error}")))?;
-  let host_options = ScriptHostProcessOptions::new(
-    PathBuf::from(bun_executable),
-    PathBuf::from(script_host_path),
-  );
-  let options = RuntimeExecutionOptions::new(host_options, u64::from(script_timeout_ms));
+  let options = runtime_options_with_secrets(
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    resolved_secrets_json,
+  )?;
   let result = execute_workflow(workflow, definition_hash, trigger, options)
     .await
     .map_err(native_execution_error)?;
@@ -533,6 +554,7 @@ pub async fn execute_woml_workflow_durable(
   script_host_path: String,
   script_timeout_ms: u32,
   event_store_path: String,
+  resolved_secrets_json: String,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -540,11 +562,12 @@ pub async fn execute_woml_workflow_durable(
     })?;
   let trigger: Map<String, Value> = serde_json::from_str(&trigger_json)
     .map_err(|error| napi::Error::from_reason(format!("Invalid trigger JSON: {error}")))?;
-  let host_options = ScriptHostProcessOptions::new(
-    PathBuf::from(bun_executable),
-    PathBuf::from(script_host_path),
-  );
-  let options = RuntimeExecutionOptions::new(host_options, u64::from(script_timeout_ms));
+  let options = runtime_options_with_secrets(
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    resolved_secrets_json,
+  )?;
   let result = execute_workflow_durable(
     workflow,
     definition_hash,
@@ -569,6 +592,7 @@ pub fn execute_woml_workflow_durable_with_progress(
   script_timeout_ms: u32,
   event_store_path: String,
   progress_callback: JsFunction,
+  resolved_secrets_json: String,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -582,6 +606,7 @@ pub fn execute_woml_workflow_durable_with_progress(
     script_host_path,
     script_timeout_ms,
     progress_callback,
+    resolved_secrets_json,
   )?;
   env.spawn_future(async move {
     let result = execute_workflow_durable(
@@ -633,6 +658,7 @@ pub fn resume_woml_workflow_durable_with_progress(
   script_timeout_ms: u32,
   event_store_path: String,
   progress_callback: JsFunction,
+  resolved_secrets_json: String,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -645,6 +671,7 @@ pub fn resume_woml_workflow_durable_with_progress(
     script_host_path,
     script_timeout_ms,
     progress_callback,
+    resolved_secrets_json,
   )?;
   env.spawn_future(async move {
     let result = resume_workflow_durable(PathBuf::from(event_store_path), &run_id, options)
@@ -664,6 +691,7 @@ pub async fn execute_woml_workflow_durable_outcome(
   script_host_path: String,
   script_timeout_ms: u32,
   event_store_path: String,
+  resolved_secrets_json: String,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -675,7 +703,12 @@ pub async fn execute_woml_workflow_durable_outcome(
     workflow,
     definition_hash,
     trigger,
-    runtime_options(bun_executable, script_host_path, script_timeout_ms),
+    runtime_options_with_secrets(
+      bun_executable,
+      script_host_path,
+      script_timeout_ms,
+      resolved_secrets_json,
+    )?,
     PathBuf::from(event_store_path),
   )
   .await
@@ -696,6 +729,7 @@ pub fn execute_woml_workflow_durable_outcome_with_progress(
   script_timeout_ms: u32,
   event_store_path: String,
   progress_callback: JsFunction,
+  resolved_secrets_json: String,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -709,6 +743,7 @@ pub fn execute_woml_workflow_durable_outcome_with_progress(
     script_host_path,
     script_timeout_ms,
     progress_callback,
+    resolved_secrets_json,
   )?;
   env.spawn_future(async move {
     let outcome = execute_workflow_durable_outcome(
@@ -735,6 +770,7 @@ pub async fn resume_woml_workflow_durable_outcome(
   script_host_path: String,
   script_timeout_ms: u32,
   event_store_path: String,
+  resolved_secrets_json: String,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -758,7 +794,12 @@ pub async fn resume_woml_workflow_durable_outcome(
   let outcome = resume_workflow_durable_outcome(
     PathBuf::from(event_store_path),
     &run_id,
-    runtime_options(bun_executable, script_host_path, script_timeout_ms),
+    runtime_options_with_secrets(
+      bun_executable,
+      script_host_path,
+      script_timeout_ms,
+      resolved_secrets_json,
+    )?,
   )
   .await
   .map_err(native_execution_error)?;
@@ -778,6 +819,7 @@ pub fn resume_woml_workflow_durable_outcome_with_progress(
   script_timeout_ms: u32,
   event_store_path: String,
   progress_callback: JsFunction,
+  resolved_secrets_json: String,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -790,6 +832,7 @@ pub fn resume_woml_workflow_durable_outcome_with_progress(
     script_host_path,
     script_timeout_ms,
     progress_callback,
+    resolved_secrets_json,
   )?;
   env.spawn_future(async move {
     let outcome =
@@ -875,6 +918,19 @@ pub fn start_woml_webhook_runtime(
     .map_err(|error| napi::Error::from_reason(format!("Invalid webhook bind address: {error}")))?;
   let (progress_reporter, schedule_progress_reporter, interval_progress_reporter) =
     native_runtime_progress_reporters(&env, progress_callback)?;
+  let mut runtime_secrets = BTreeMap::new();
+  for registration in &registrations {
+    for (name, value) in &registration.resolved_secrets {
+      if runtime_secrets
+        .insert(name.clone(), value.clone())
+        .is_some_and(|existing| existing != *value)
+      {
+        return Err(napi::Error::from_reason(format!(
+          "Resolved secret {name:?} has conflicting values across workflow registrations."
+        )));
+      }
+    }
+  }
   let registrations = registrations
     .into_iter()
     .map(|registration| WebhookDefinitionRegistration {
@@ -889,6 +945,7 @@ pub fn start_woml_webhook_runtime(
     registrations,
     startup_manual_triggers,
     execution: runtime_options(bun_executable, script_host_path, script_timeout_ms)
+      .with_resolved_secrets(runtime_secrets)
       .with_schedule_progress_reporter(schedule_progress_reporter)
       .with_interval_progress_reporter(interval_progress_reporter),
     progress_reporter: Some(progress_reporter),

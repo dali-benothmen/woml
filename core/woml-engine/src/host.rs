@@ -13,7 +13,13 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-use crate::protocol::{CancelMessage, CompletedMessage, ExecuteMessage, ReadyMessage};
+use crate::protocol::{
+  CancelMessage, CapabilityCallMessage, CapabilityResultMessage, CompletedMessage, ExecuteMessage,
+  ReadyMessage,
+};
+use crate::{
+  capability_transport_failure, CapabilityCancellationToken, DurableCapabilityAuthority,
+};
 
 const HEADER_PREFIX: &str = "Content-Length: ";
 const MAX_HEADER_BYTES: usize = 128;
@@ -34,7 +40,7 @@ impl ScriptHostProcessOptions {
       host_script_path: host_script_path.into(),
       startup_timeout: Duration::from_secs(5),
       shutdown_timeout: Duration::from_secs(2),
-      max_frame_bytes: None,
+      max_frame_bytes: Some(crate::DEFAULT_CAPABILITY_FRAME_BYTES as usize),
     }
   }
 }
@@ -54,6 +60,7 @@ type PendingResult = Result<CompletedMessage, ScriptHostClientError>;
 #[derive(Debug, Default)]
 struct SharedState {
   pending: HashMap<String, oneshot::Sender<PendingResult>>,
+  active_calls: HashMap<(String, String), CapabilityCancellationToken>,
   terminal_error: Option<ScriptHostClientError>,
 }
 
@@ -69,12 +76,22 @@ pub struct ScriptHostClient {
 
 impl ScriptHostClient {
   pub async fn spawn(options: ScriptHostProcessOptions) -> Result<Self, ScriptHostClientError> {
-    let mut child = Command::new(&options.bun_executable)
-      .arg(&options.host_script_path)
-      .env(
-        "WOML_SCRIPT_HOST_PROTOCOL_VERSION",
-        crate::protocol::SCRIPT_HOST_PROTOCOL_VERSION.to_string(),
-      )
+    Self::spawn_with_authority(options, None).await
+  }
+
+  pub async fn spawn_with_authority(
+    options: ScriptHostProcessOptions,
+    authority: Option<Arc<DurableCapabilityAuthority>>,
+  ) -> Result<Self, ScriptHostClientError> {
+    let mut command = Command::new(&options.bun_executable);
+    command.arg(&options.host_script_path).env(
+      "WOML_SCRIPT_HOST_PROTOCOL_VERSION",
+      crate::protocol::SCRIPT_HOST_PROTOCOL_VERSION.to_string(),
+    );
+    if let Some(limit) = options.max_frame_bytes {
+      command.env("WOML_SCRIPT_HOST_MAX_FRAME_BYTES", limit.to_string());
+    }
+    let mut child = command
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::inherit())
@@ -116,16 +133,25 @@ impl ScriptHostClient {
     };
     ready.validate().map_err(ScriptHostClientError::Protocol)?;
 
+    let stdin = Arc::new(Mutex::new(Some(stdin)));
     let shared = Arc::new(Mutex::new(SharedState::default()));
     let reader_shared = Arc::clone(&shared);
+    let reader_stdin = Arc::clone(&stdin);
     let max_frame_bytes = options.max_frame_bytes;
     let reader_task = tokio::spawn(async move {
-      completion_reader(reader, reader_shared, max_frame_bytes).await;
+      host_message_reader(
+        reader,
+        reader_stdin,
+        reader_shared,
+        authority,
+        max_frame_bytes,
+      )
+      .await;
     });
 
     Ok(Self {
       child,
-      stdin: Arc::new(Mutex::new(Some(stdin))),
+      stdin,
       shared,
       reader_task,
       shutdown_timeout: options.shutdown_timeout,
@@ -165,6 +191,7 @@ impl ScriptHostClient {
   }
 
   pub async fn cancel(&self, invocation_id: &str) -> Result<(), ScriptHostClientError> {
+    cancel_invocation_calls(&self.shared, invocation_id).await;
     if let Err(error) = self
       .write_message(&CancelMessage::parallel_fail_fast(invocation_id))
       .await
@@ -210,13 +237,16 @@ impl ScriptHostClient {
   }
 }
 
-async fn completion_reader<R: AsyncRead + Unpin>(
+async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
   mut reader: BufReader<R>,
+  stdin: Arc<Mutex<Option<ChildStdin>>>,
   shared: Arc<Mutex<SharedState>>,
+  authority: Option<Arc<DurableCapabilityAuthority>>,
   max_frame_bytes: Option<usize>,
 ) {
   loop {
-    let message = match read_json_frame::<_, CompletedMessage>(&mut reader, max_frame_bytes).await {
+    let message = match read_json_frame::<_, serde_json::Value>(&mut reader, max_frame_bytes).await
+    {
       Ok(Some(message)) => message,
       Ok(None) => {
         fail_all(
@@ -231,38 +261,193 @@ async fn completion_reader<R: AsyncRead + Unpin>(
         return;
       }
     };
-    if let Err(message_error) = message.validate() {
-      fail_all(&shared, ScriptHostClientError::Protocol(message_error)).await;
-      return;
+    match message
+      .get("messageType")
+      .and_then(serde_json::Value::as_str)
+    {
+      Some("completed") => {
+        let message: CompletedMessage = match serde_json::from_value(message) {
+          Ok(message) => message,
+          Err(error) => {
+            fail_all(&shared, ScriptHostClientError::Protocol(error.to_string())).await;
+            return;
+          }
+        };
+        if let Err(message_error) = message.validate() {
+          fail_all(&shared, ScriptHostClientError::Protocol(message_error)).await;
+          return;
+        }
+        cancel_invocation_calls(&shared, &message.invocation_id).await;
+        let sender = {
+          let mut state = shared.lock().await;
+          state.pending.remove(&message.invocation_id)
+        };
+        let Some(sender) = sender else {
+          fail_all(
+            &shared,
+            ScriptHostClientError::Protocol(format!(
+              "received completion for unknown invocation {:?}",
+              message.invocation_id
+            )),
+          )
+          .await;
+          return;
+        };
+        let _ = sender.send(Ok(message));
+      }
+      Some("capability_call") => {
+        let message: CapabilityCallMessage = match serde_json::from_value(message) {
+          Ok(message) => message,
+          Err(error) => {
+            fail_all(&shared, ScriptHostClientError::Protocol(error.to_string())).await;
+            return;
+          }
+        };
+        if let Err(error) = message.validate() {
+          fail_all(&shared, ScriptHostClientError::Protocol(error)).await;
+          return;
+        }
+        let key = (message.invocation_id.clone(), message.call_id.clone());
+        let cancellation = CapabilityCancellationToken::default();
+        {
+          let mut state = shared.lock().await;
+          if !state.pending.contains_key(&message.invocation_id) {
+            drop(state);
+            fail_all(
+              &shared,
+              ScriptHostClientError::Protocol(format!(
+                "received capability call for unknown invocation {:?}",
+                message.invocation_id
+              )),
+            )
+            .await;
+            return;
+          }
+          if state
+            .active_calls
+            .insert(key.clone(), cancellation.clone())
+            .is_some()
+          {
+            drop(state);
+            fail_all(
+              &shared,
+              ScriptHostClientError::Protocol(format!(
+                "received duplicate capability call ID {:?}",
+                message.call_id
+              )),
+            )
+            .await;
+            return;
+          }
+        }
+        let call = message.call;
+        let call_shared = Arc::clone(&shared);
+        let call_stdin = Arc::clone(&stdin);
+        let call_authority = authority.clone();
+        tokio::spawn(async move {
+          let result = match call_authority {
+            Some(authority) => authority
+              .execute(call.clone(), cancellation)
+              .await
+              .unwrap_or_else(|error| {
+                capability_transport_failure(
+                  &call,
+                  "WOML_CAPABILITY_AUTHORITY_FAILED",
+                  &error.to_string(),
+                  false,
+                  true,
+                )
+              }),
+            None => capability_transport_failure(
+              &call,
+              "WOML_CAPABILITY_AUTHORITY_UNAVAILABLE",
+              "The durable capability authority is unavailable for this invocation.",
+              true,
+              false,
+            ),
+          };
+          let should_send = call_shared.lock().await.active_calls.remove(&key).is_some();
+          if should_send {
+            if let Err(error) =
+              write_serialized_message(&call_stdin, &CapabilityResultMessage::new(&result)).await
+            {
+              fail_all(&call_shared, error).await;
+            }
+          }
+        });
+      }
+      _ => {
+        fail_all(
+          &shared,
+          ScriptHostClientError::Protocol(
+            "received an unsupported Bun-to-Rust script-host v4 message".to_string(),
+          ),
+        )
+        .await;
+        return;
+      }
     }
-
-    let sender = {
-      let mut state = shared.lock().await;
-      state.pending.remove(&message.invocation_id)
-    };
-    let Some(sender) = sender else {
-      fail_all(
-        &shared,
-        ScriptHostClientError::Protocol(format!(
-          "received completion for unknown invocation {:?}",
-          message.invocation_id
-        )),
-      )
-      .await;
-      return;
-    };
-    let _ = sender.send(Ok(message));
   }
 }
 
+async fn cancel_invocation_calls(shared: &Arc<Mutex<SharedState>>, invocation_id: &str) {
+  let calls = {
+    let mut state = shared.lock().await;
+    let keys = state
+      .active_calls
+      .keys()
+      .filter(|(active_invocation, _)| active_invocation == invocation_id)
+      .cloned()
+      .collect::<Vec<_>>();
+    keys
+      .into_iter()
+      .filter_map(|key| state.active_calls.remove(&key))
+      .collect::<Vec<_>>()
+  };
+  for call in calls {
+    call.cancel();
+  }
+}
+
+async fn write_serialized_message<T: Serialize>(
+  stdin: &Arc<Mutex<Option<ChildStdin>>>,
+  message: &T,
+) -> Result<(), ScriptHostClientError> {
+  let body = serde_json::to_vec(message)
+    .map_err(|error| ScriptHostClientError::Protocol(error.to_string()))?;
+  let header = format!("Content-Length: {}\r\n\r\n", body.len());
+  let mut stdin = stdin.lock().await;
+  let writer = stdin.as_mut().ok_or_else(|| {
+    ScriptHostClientError::HostCrashed("the host input stream is closed".to_string())
+  })?;
+  writer
+    .write_all(header.as_bytes())
+    .await
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
+  writer
+    .write_all(&body)
+    .await
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
+  writer
+    .flush()
+    .await
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))
+}
+
 async fn fail_all(shared: &Arc<Mutex<SharedState>>, error: ScriptHostClientError) {
-  let pending = {
+  let (pending, active_calls) = {
     let mut state = shared.lock().await;
     if state.terminal_error.is_none() {
       state.terminal_error = Some(error.clone());
     }
-    std::mem::take(&mut state.pending)
+    (
+      std::mem::take(&mut state.pending),
+      std::mem::take(&mut state.active_calls),
+    )
   };
+  for (_, call) in active_calls {
+    call.cancel();
+  }
   for (_, sender) in pending {
     let _ = sender.send(Err(error.clone()));
   }

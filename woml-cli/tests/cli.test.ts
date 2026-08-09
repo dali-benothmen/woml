@@ -67,6 +67,15 @@ const retryCompositionFixturePath = join(
   'fixtures',
   'retry-composition.woml'
 );
+const sc3SecretFixturePath = join(
+  import.meta.dir,
+  '..',
+  '..',
+  'woml',
+  'tests',
+  'fixtures',
+  'sc3-secret-runtime.woml'
+);
 let temporaryDirectory: string;
 
 interface CommandResult {
@@ -182,12 +191,12 @@ describe('woml test one-shot compatibility', () => {
     expect(source).not.toMatch(/\bexecuteWorkflow\s*\(/);
   });
 
-  test('reports that Model v8 compiled but is intentionally not executable yet', async () => {
+  test('keeps native Fetch unavailable until SC4 tracking is implemented', async () => {
     const result = await runCli('run', servicesBindingsFixturePath);
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('WOML_SCRIPT_BINDINGS_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('compiled successfully');
+    expect(result.stderr).toContain('WOML_NATIVE_FETCH_RUNTIME_UNAVAILABLE');
+    expect(result.stderr).toContain('SC4 adds durable Fetch tracking');
     expect(result.stderr).not.toContain('CUSTOMER_API_TOKEN');
   });
 
@@ -207,168 +216,164 @@ describe('woml test one-shot compatibility', () => {
     });
   });
 
-  test(
-    'runs retry.woml durably through attempts 1, 2, and 3',
-    async () => {
-      const statePath = join(temporaryDirectory, 'retry-state.sqlite');
-      const result = await runCli(
-        'test',
-        retryFixturePath,
-        '--state',
-        statePath
-      );
-
-      expect(result.stdout).toBe('{"message":"Hello World"}\n');
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).toContain(
-        'Step greet failed (attempt 1/3): WOML_SCRIPT_THROWN\n'
-      );
-      expect(result.stderr).toContain('Retry 2/3 scheduled in 1s.\n');
-      expect(result.stderr).toContain(
-        `Recovery: woml run ${JSON.stringify(retryFixturePath)} --state ${JSON.stringify(
-          statePath
-        )} --resume "run_`
-      );
-      expect(result.stderr).toContain(
-        'Step greet failed (attempt 2/3): WOML_SCRIPT_THROWN\n'
-      );
-      expect(result.stderr).toContain('Retry 3/3 scheduled in 2s.\n');
-      expect(result.stderr).toContain(
-        'Step greet succeeded on attempt 3/3.\n'
-      );
-      expect((await stat(statePath)).isFile()).toBe(true);
-    },
-    10_000
-  );
-
-  test(
-    'resumes a durably scheduled retry without replaying attempt 1',
-    async () => {
-      const statePath = join(temporaryDirectory, 'retry-resume-state.sqlite');
-      const child = Bun.spawn(
-        [cliPath, 'test', retryFixturePath, '--state', statePath],
-        { cwd: projectRoot, stdout: 'pipe', stderr: 'pipe' }
-      );
-      const reader = child.stderr.getReader();
-      const decoder = new TextDecoder();
-      let firstStderr = '';
-      while (!firstStderr.includes('Retry 2/3 scheduled')) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        firstStderr += decoder.decode(chunk.value, { stream: true });
+  test('runs Model v8 with only its declared script secret injected', async () => {
+    const statePath = join(temporaryDirectory, 'sc3-secret-state.sqlite');
+    const child = Bun.spawn(
+      [cliPath, 'test', sc3SecretFixturePath, '--state', statePath],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          WOML_SECRETS_PROVIDER: 'env',
+          WOML_SECRET_SC3_TEST_TOKEN: 'runtime-secret',
+          WOML_SECRET_UNDECLARED_TOKEN: 'must-not-be-injected',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
       }
-      child.kill();
-      await child.exited;
-      reader.releaseLock();
-      expect(firstStderr).toContain(
-        'Step greet failed (attempt 1/3): WOML_SCRIPT_THROWN'
-      );
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toBe('{"secretLength":14}\n');
+    expect(stderr).toBe('');
+  });
 
-      const database = new Database(statePath, { readonly: true });
-      const row = database
-        .query('SELECT run_id AS runId FROM woml_runs LIMIT 1')
-        .get() as { runId: string };
-      const eventRows = database
-        .query(
-          'SELECT event_json AS eventJson FROM woml_run_events WHERE run_id = ? ORDER BY sequence'
-        )
-        .all(row.runId) as { eventJson: string }[];
-      database.close();
-      const attemptOneStarts = eventRows
-        .map(event => JSON.parse(event.eventJson) as Record<string, unknown>)
-        .filter(event => {
-          const data = event.data as Record<string, unknown> | undefined;
-          return (
-            event.type === 'step_attempt_started' &&
-            data?.nodeId === 'greet' &&
-            data.attempt === 1
-          );
-        });
-      expect(attemptOneStarts).toHaveLength(1);
+  test('runs retry.woml durably through attempts 1, 2, and 3', async () => {
+    const statePath = join(temporaryDirectory, 'retry-state.sqlite');
+    const result = await runCli('test', retryFixturePath, '--state', statePath);
 
-      const resumed = await runCli(
-        'test',
-        retryFixturePath,
-        '--state',
-        statePath,
-        '--resume',
-        row.runId
-      );
-      expect(resumed.exitCode).toBe(0);
-      expect(resumed.stdout).toBe('{"message":"Hello World"}\n');
-      expect(resumed.stderr).not.toContain('attempt 1/3');
-      expect(resumed.stderr).toContain(
-        'Step greet succeeded on attempt 3/3.\n'
-      );
-    },
-    10_000
-  );
-
-  test(
-    'reports source-aware retry exhaustion after the final attempt',
-    async () => {
-      const workflowPath = join(temporaryDirectory, 'retry-exhausted.woml');
-      const statePath = join(temporaryDirectory, 'retry-exhausted.sqlite');
-      const source = (await Bun.file(retryFixturePath).text()).replace(
-        'if (attempt.number < 3)',
-        'if (true)'
-      );
-      await writeFile(workflowPath, source);
-
-      const result = await runCli(
-        'run',
-        workflowPath,
-        '--state',
+    expect(result.stdout).toBe('{"message":"Hello World"}\n');
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain(
+      'Step greet failed (attempt 1/3): WOML_SCRIPT_THROWN\n'
+    );
+    expect(result.stderr).toContain('Retry 2/3 scheduled in 1s.\n');
+    expect(result.stderr).toContain(
+      `Recovery: woml run ${JSON.stringify(retryFixturePath)} --state ${JSON.stringify(
         statePath
-      );
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toBe('');
-      expect(result.stderr).toContain(
-        'Step greet failed (attempt 3/3): WOML_SCRIPT_THROWN\n'
-      );
-      expect(result.stderr).toMatch(
-        new RegExp(
-          `WOML runtime error \\[WOML_STEP_RETRIES_EXHAUSTED\\] at ${workflowPath.replaceAll('.', '\\.')}:\\d+:\\d+ \\(step "greet"\\): attempt 3 of 3 failed \\[WOML_SCRIPT_THROWN\\]\\.`
-        )
-      );
-    },
-    10_000
-  );
+      )} --resume "run_`
+    );
+    expect(result.stderr).toContain(
+      'Step greet failed (attempt 2/3): WOML_SCRIPT_THROWN\n'
+    );
+    expect(result.stderr).toContain('Retry 3/3 scheduled in 2s.\n');
+    expect(result.stderr).toContain('Step greet succeeded on attempt 3/3.\n');
+    expect((await stat(statePath)).isFile()).toBe(true);
+  }, 10_000);
 
-  test(
-    'runs retry inside parallel inside a selected branch',
-    async () => {
-      const statePath = join(
-        temporaryDirectory,
-        'retry-composition-state.sqlite'
-      );
-      const result = Bun.spawnSync([
-        process.execPath,
-        cliPath,
-        'test',
-        retryCompositionFixturePath,
-        '--state',
-        statePath,
-      ]);
+  test('resumes a durably scheduled retry without replaying attempt 1', async () => {
+    const statePath = join(temporaryDirectory, 'retry-resume-state.sqlite');
+    const child = Bun.spawn(
+      [cliPath, 'test', retryFixturePath, '--state', statePath],
+      { cwd: projectRoot, stdout: 'pipe', stderr: 'pipe' }
+    );
+    const reader = child.stderr.getReader();
+    const decoder = new TextDecoder();
+    let firstStderr = '';
+    while (!firstStderr.includes('Retry 2/3 scheduled')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      firstStderr += decoder.decode(chunk.value, { stream: true });
+    }
+    child.kill();
+    await child.exited;
+    reader.releaseLock();
+    expect(firstStderr).toContain(
+      'Step greet failed (attempt 1/3): WOML_SCRIPT_THROWN'
+    );
 
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr.toString()).toContain(
-        'Step leftCheck failed (attempt 1/2): WOML_SCRIPT_THROWN\n'
-      );
-      expect(result.stderr.toString()).toContain(
-        'Step rightCheck failed (attempt 1/3): WOML_SCRIPT_THROWN\n'
-      );
-      expect(result.stderr.toString()).toContain(
-        'Step leftCheck succeeded on attempt 2/2.\n'
-      );
-      expect(result.stderr.toString()).toContain(
-        'Step rightCheck succeeded on attempt 3/3.\n'
-      );
-      expect(result.stdout.toString()).toBe('{"total":42}\n');
-      expect((await stat(statePath)).isFile()).toBe(true);
-    },
-    10_000
-  );
+    const database = new Database(statePath, { readonly: true });
+    const row = database
+      .query('SELECT run_id AS runId FROM woml_runs LIMIT 1')
+      .get() as { runId: string };
+    const eventRows = database
+      .query(
+        'SELECT event_json AS eventJson FROM woml_run_events WHERE run_id = ? ORDER BY sequence'
+      )
+      .all(row.runId) as { eventJson: string }[];
+    database.close();
+    const attemptOneStarts = eventRows
+      .map(event => JSON.parse(event.eventJson) as Record<string, unknown>)
+      .filter(event => {
+        const data = event.data as Record<string, unknown> | undefined;
+        return (
+          event.type === 'step_attempt_started' &&
+          data?.nodeId === 'greet' &&
+          data.attempt === 1
+        );
+      });
+    expect(attemptOneStarts).toHaveLength(1);
+
+    const resumed = await runCli(
+      'test',
+      retryFixturePath,
+      '--state',
+      statePath,
+      '--resume',
+      row.runId
+    );
+    expect(resumed.exitCode).toBe(0);
+    expect(resumed.stdout).toBe('{"message":"Hello World"}\n');
+    expect(resumed.stderr).not.toContain('attempt 1/3');
+    expect(resumed.stderr).toContain('Step greet succeeded on attempt 3/3.\n');
+  }, 10_000);
+
+  test('reports source-aware retry exhaustion after the final attempt', async () => {
+    const workflowPath = join(temporaryDirectory, 'retry-exhausted.woml');
+    const statePath = join(temporaryDirectory, 'retry-exhausted.sqlite');
+    const source = (await Bun.file(retryFixturePath).text()).replace(
+      'if (attempt.number < 3)',
+      'if (true)'
+    );
+    await writeFile(workflowPath, source);
+
+    const result = await runCli('run', workflowPath, '--state', statePath);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      'Step greet failed (attempt 3/3): WOML_SCRIPT_THROWN\n'
+    );
+    expect(result.stderr).toMatch(
+      new RegExp(
+        `WOML runtime error \\[WOML_STEP_RETRIES_EXHAUSTED\\] at ${workflowPath.replaceAll('.', '\\.')}:\\d+:\\d+ \\(step "greet"\\): attempt 3 of 3 failed \\[WOML_SCRIPT_THROWN\\]\\.`
+      )
+    );
+  }, 10_000);
+
+  test('runs retry inside parallel inside a selected branch', async () => {
+    const statePath = join(
+      temporaryDirectory,
+      'retry-composition-state.sqlite'
+    );
+    const result = Bun.spawnSync([
+      process.execPath,
+      cliPath,
+      'test',
+      retryCompositionFixturePath,
+      '--state',
+      statePath,
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toContain(
+      'Step leftCheck failed (attempt 1/2): WOML_SCRIPT_THROWN\n'
+    );
+    expect(result.stderr.toString()).toContain(
+      'Step rightCheck failed (attempt 1/3): WOML_SCRIPT_THROWN\n'
+    );
+    expect(result.stderr.toString()).toContain(
+      'Step leftCheck succeeded on attempt 2/2.\n'
+    );
+    expect(result.stderr.toString()).toContain(
+      'Step rightCheck succeeded on attempt 3/3.\n'
+    );
+    expect(result.stdout.toString()).toBe('{"total":42}\n');
+    expect((await stat(statePath)).isFile()).toBe(true);
+  }, 10_000);
 
   test('runs the selected when route through the public executable', async () => {
     const result = await runCli('run', branchFixturePath);
@@ -723,23 +728,20 @@ describe('woml test one-shot compatibility', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const parallelResult = Bun.spawnSync([executable, 'test', 'parallel.woml'], {
-      cwd: consumerDirectory,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const parallelResult = Bun.spawnSync(
+      [executable, 'test', 'parallel.woml'],
+      {
+        cwd: consumerDirectory,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
     const packagedRetryState = join(
       temporaryDirectory,
       'packaged-retry.sqlite'
     );
     const retryResult = Bun.spawnSync(
-      [
-        executable,
-        'test',
-        'retry.woml',
-        '--state',
-        packagedRetryState,
-      ],
+      [executable, 'test', 'retry.woml', '--state', packagedRetryState],
       {
         cwd: consumerDirectory,
         stdout: 'pipe',
@@ -785,9 +787,7 @@ describe('woml test one-shot compatibility', () => {
     );
     expect(parallelResult.stderr.toString()).toBe('');
     expect(parallelResult.exitCode).toBe(0);
-    expect(retryResult.stdout.toString()).toBe(
-      '{"message":"Hello World"}\n'
-    );
+    expect(retryResult.stdout.toString()).toBe('{"message":"Hello World"}\n');
     expect(retryResult.stderr.toString()).toContain(
       'Step greet failed (attempt 1/3): WOML_SCRIPT_THROWN'
     );

@@ -30,10 +30,10 @@ function limitsFromEnvironment(): ScriptHostLimits {
 
 function protocolVersionFromEnvironment(): ScriptHostProtocolVersion {
   const raw = process.env.WOML_SCRIPT_HOST_PROTOCOL_VERSION ?? '3';
-  if (raw === '1' || raw === '2' || raw === '3') {
+  if (raw === '1' || raw === '2' || raw === '3' || raw === '4') {
     return Number(raw) as ScriptHostProtocolVersion;
   }
-  throw new Error('WOML_SCRIPT_HOST_PROTOCOL_VERSION must be 1, 2, or 3.');
+  throw new Error('WOML_SCRIPT_HOST_PROTOCOL_VERSION must be 1, 2, 3, or 4.');
 }
 
 async function writeStdout(frame: Uint8Array): Promise<void> {

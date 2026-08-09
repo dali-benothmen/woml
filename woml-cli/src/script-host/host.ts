@@ -1,6 +1,8 @@
 import { findJsonViolation } from './json';
 import { assertInboundMessage, MessageProtocolError } from './protocol';
 import type {
+  CapabilityCallMessage,
+  CapabilityResultMessage,
   CancelMessage,
   CompletedMessage,
   ExecuteMessage,
@@ -12,19 +14,26 @@ import type {
   ScriptHostProtocolVersion,
   SuccessMessage,
 } from './types';
-import type { ScriptWorkerRequest, ScriptWorkerResponse } from './worker';
+import type {
+  ScriptWorkerInbound,
+  ScriptWorkerOutbound,
+  ScriptWorkerRequest,
+  ScriptWorkerResponse,
+} from './worker';
 
 export interface ScriptHostOptions {
   readonly workerUrl: URL;
   readonly limits?: ScriptHostLimits;
-  readonly send: (message: CompletedMessage) => Promise<void>;
+  readonly send: (
+    message: CompletedMessage | CapabilityCallMessage
+  ) => Promise<void>;
   readonly protocolVersion?: ScriptHostProtocolVersion;
 }
 
 type WorkerOutcome =
   | { readonly kind: 'response'; readonly response: ScriptWorkerResponse }
   | { readonly kind: 'timeout' }
-  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'cancelled'; readonly reason: CancelMessage['reason'] }
   | { readonly kind: 'crashed'; readonly message: string };
 
 function elapsedMilliseconds(startedAt: number): number {
@@ -68,11 +77,18 @@ function byteLength(value: unknown): number {
 export class ScriptHost {
   readonly #workerUrl: URL;
   readonly #limits: ScriptHostLimits;
-  readonly #send: (message: CompletedMessage) => Promise<void>;
+  readonly #send: (
+    message: CompletedMessage | CapabilityCallMessage
+  ) => Promise<void>;
   readonly #protocolVersion: ScriptHostProtocolVersion;
   readonly #tasks = new Map<string, Promise<void>>();
   readonly #workers = new Map<string, Worker>();
-  readonly #cancellations = new Map<string, () => void>();
+  readonly #cancellations = new Map<
+    string,
+    (reason: CancelMessage['reason']) => void
+  >();
+  readonly #pendingCalls = new Map<string, Set<string>>();
+  readonly #closedCalls = new Set<string>();
   #aborted = false;
 
   constructor(options: ScriptHostOptions) {
@@ -89,6 +105,10 @@ export class ScriptHost {
     assertInboundMessage(message, this.#protocolVersion);
     if (message.messageType === 'cancel') {
       this.#cancel(message);
+      return;
+    }
+    if (message.messageType === 'capability_result') {
+      this.#capabilityResult(message);
       return;
     }
     if (this.#tasks.has(message.invocationId)) {
@@ -115,10 +135,41 @@ export class ScriptHost {
     for (const worker of this.#workers.values()) worker.terminate();
     this.#workers.clear();
     this.#cancellations.clear();
+    this.#pendingCalls.clear();
+    this.#closedCalls.clear();
   }
 
   #cancel(message: CancelMessage): void {
-    this.#cancellations.get(message.invocationId)?.();
+    this.#cancellations.get(message.invocationId)?.(message.reason);
+  }
+
+  #capabilityResult(message: CapabilityResultMessage): void {
+    if (
+      message.invocationId !== message.result.invocationId ||
+      message.callId !== message.result.callId
+    ) {
+      throw new MessageProtocolError(
+        'Capability result wrapper IDs do not match its result payload.'
+      );
+    }
+    const worker = this.#workers.get(message.invocationId);
+    const calls = this.#pendingCalls.get(message.invocationId);
+    if (
+      worker === undefined ||
+      calls === undefined ||
+      !calls.delete(message.callId)
+    ) {
+      const key = `${message.invocationId}\0${message.callId}`;
+      if (this.#closedCalls.delete(key)) return;
+      throw new MessageProtocolError(
+        `Capability result references unknown call ID "${message.callId}".`
+      );
+    }
+    worker.postMessage({
+      messageType: 'capability_result',
+      callId: message.callId,
+      result: message.result,
+    } satisfies ScriptWorkerInbound);
   }
 
   async #execute(request: ExecuteMessage): Promise<void> {
@@ -158,7 +209,14 @@ export class ScriptHost {
         failureMessage(request, startedAt, {
           kind: 'invocation_cancelled',
           code: 'WOML_SCRIPT_CANCELLED',
-          message: 'Invocation was cancelled by parallel fail-fast.',
+          message:
+            outcome.reason === 'parallel_fail_fast'
+              ? 'Invocation was cancelled by parallel fail-fast.'
+              : outcome.reason === 'run_cancelled'
+                ? 'Invocation was cancelled because its run was cancelled.'
+                : outcome.reason === 'step_timed_out'
+                  ? 'Invocation was cancelled because its step timed out.'
+                  : 'Invocation was cancelled because the script host is shutting down.',
         })
       );
       return;
@@ -178,15 +236,33 @@ export class ScriptHost {
     if (!response.ok) {
       await this.#send(
         failureMessage(request, startedAt, {
-          kind:
-            response.error.kind === 'non-json'
-              ? 'invalid_script_result'
-              : 'script_threw',
-          code:
-            response.error.kind === 'non-json'
-              ? 'WOML_SCRIPT_NON_JSON_RESULT'
-              : 'WOML_SCRIPT_THROWN',
-          message: response.error.message,
+          ...(response.error.kind === 'service' &&
+          response.error.capability !== undefined &&
+          response.error.operation !== undefined &&
+          response.error.callId !== undefined &&
+          response.error.cause !== undefined
+            ? {
+                kind: 'service_failed' as const,
+                code: response.error.cause.code as never,
+                message: response.error.message,
+                capability: response.error.capability,
+                operation: response.error.operation,
+                callId: response.error.callId,
+                retryable: response.error.cause.retryable,
+                ambiguous: response.error.cause.ambiguous,
+                cause: response.error.cause,
+              }
+            : {
+                kind:
+                  response.error.kind === 'non-json'
+                    ? ('invalid_script_result' as const)
+                    : ('script_threw' as const),
+                code:
+                  response.error.kind === 'non-json'
+                    ? ('WOML_SCRIPT_NON_JSON_RESULT' as const)
+                    : ('WOML_SCRIPT_THROWN' as const),
+                message: response.error.message,
+              }),
         })
       );
       return;
@@ -199,6 +275,23 @@ export class ScriptHost {
           kind: 'invalid_script_result',
           code: 'WOML_SCRIPT_NON_JSON_RESULT',
           message: `${violation.path}: ${violation.reason}`,
+        })
+      );
+      return;
+    }
+
+    if (
+      request.protocolVersion === 4 &&
+      containsKnownSecret(
+        response.result,
+        Object.values(request.bindings.secrets)
+      )
+    ) {
+      await this.#send(
+        failureMessage(request, startedAt, {
+          kind: 'invalid_script_result',
+          code: 'WOML_SCRIPT_NON_JSON_RESULT',
+          message: 'Script results must not contain a resolved secret value.',
         })
       );
       return;
@@ -253,6 +346,16 @@ export class ScriptHost {
         clearTimeout(timeout);
         this.#workers.delete(request.invocationId);
         this.#cancellations.delete(request.invocationId);
+        for (const callId of this.#pendingCalls.get(request.invocationId) ??
+          []) {
+          this.#closedCalls.add(`${request.invocationId}\0${callId}`);
+        }
+        while (this.#closedCalls.size > 4_096) {
+          const oldest = this.#closedCalls.values().next().value;
+          if (oldest === undefined) break;
+          this.#closedCalls.delete(oldest);
+        }
+        this.#pendingCalls.delete(request.invocationId);
         worker.terminate();
         resolve(outcome);
       };
@@ -260,12 +363,54 @@ export class ScriptHost {
         () => finish({ kind: 'timeout' }),
         request.timeoutMs
       );
-      this.#cancellations.set(request.invocationId, () => {
-        finish({ kind: 'cancelled' });
+      this.#cancellations.set(request.invocationId, reason => {
+        finish({ kind: 'cancelled', reason });
       });
 
-      worker.onmessage = (event: MessageEvent<ScriptWorkerResponse>) => {
-        finish({ kind: 'response', response: event.data });
+      this.#pendingCalls.set(request.invocationId, new Set());
+      worker.onmessage = (event: MessageEvent<ScriptWorkerOutbound>) => {
+        const message = event.data;
+        if (message.messageType === 'completed') {
+          finish({ kind: 'response', response: message.response });
+          return;
+        }
+        const call = message.call;
+        if (
+          request.protocolVersion !== 4 ||
+          call.invocationId !== request.invocationId ||
+          call.runId !== request.runId ||
+          call.nodeId !== request.nodeId ||
+          call.attemptNumber !== request.attempt.number
+        ) {
+          finish({
+            kind: 'crashed',
+            message:
+              'The isolated script Worker emitted an invalid capability call.',
+          });
+          return;
+        }
+        const calls = this.#pendingCalls.get(request.invocationId);
+        if (calls === undefined || calls.has(call.callId)) {
+          finish({
+            kind: 'crashed',
+            message: 'The isolated script Worker reused a capability call ID.',
+          });
+          return;
+        }
+        calls.add(call.callId);
+        void this.#send({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_call',
+          invocationId: request.invocationId,
+          callId: call.callId,
+          call,
+        }).catch(() => {
+          finish({
+            kind: 'crashed',
+            message: 'The capability call could not be sent to Rust.',
+          });
+        });
       };
       worker.onerror = (event: ErrorEvent) => {
         event.preventDefault();
@@ -289,13 +434,23 @@ export class ScriptHost {
 
       try {
         const attempt: ScriptAttempt | undefined =
-          request.protocolVersion === 3 ? request.attempt : undefined;
+          request.protocolVersion === 3 || request.protocolVersion === 4
+            ? request.attempt
+            : undefined;
         worker.postMessage({
-          nodeId: request.nodeId,
-          source: request.source,
-          context: request.context,
-          attempt,
-        } satisfies ScriptWorkerRequest);
+          messageType: 'execute',
+          request: {
+            invocationId: request.invocationId,
+            runId: request.runId,
+            nodeId: request.nodeId,
+            source: request.source,
+            context: request.context,
+            attempt,
+            ...(request.protocolVersion === 4
+              ? { bindings: request.bindings }
+              : {}),
+          } satisfies ScriptWorkerRequest,
+        } satisfies ScriptWorkerInbound);
       } catch {
         finish({
           kind: 'crashed',
@@ -305,4 +460,22 @@ export class ScriptHost {
       }
     });
   }
+}
+
+function containsKnownSecret(
+  value: unknown,
+  secrets: readonly string[]
+): boolean {
+  const known = secrets.filter(secret => secret.length > 0);
+  if (known.length === 0) return false;
+  if (typeof value === 'string') {
+    return known.some(secret => value.includes(secret));
+  }
+  if (Array.isArray(value)) {
+    return value.some(item => containsKnownSecret(item, known));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value).some(item => containsKnownSecret(item, known));
+  }
+  return false;
 }

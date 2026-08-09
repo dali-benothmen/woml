@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, sync::OnceLock};
+
 use serde_json::Value;
 
-use crate::{AttemptFailure, AttemptFailureKind, FailureSizeDetails, WorkflowContext};
+use crate::{
+  AttemptFailure, AttemptFailureKind, CapabilityCallRequest, CapabilityCallResult,
+  CapabilityFailure, FailureSizeDetails, WorkflowContext,
+};
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 3;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -23,7 +28,7 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v3 ready message.".to_string());
+      return Err("The child did not send a valid script-host v4 ready message.".to_string());
     }
     Ok(())
   }
@@ -65,6 +70,15 @@ pub struct ExecuteMessage<'a> {
   pub timeout_ms: u64,
   pub source: &'a str,
   pub context: &'a WorkflowContext,
+  pub bindings: ScriptBindings<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptBindings<'a> {
+  pub binding_version: u32,
+  pub services_version: u32,
+  pub secrets: &'a BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -103,6 +117,30 @@ impl<'a> ExecuteMessage<'a> {
     source: &'a str,
     context: &'a WorkflowContext,
   ) -> Self {
+    static EMPTY_SECRETS: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    Self::runtime_script_with_secrets(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      EMPTY_SECRETS.get_or_init(BTreeMap::new),
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn runtime_script_with_secrets(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    secrets: &'a BTreeMap<String, String>,
+  ) -> Self {
     Self {
       protocol: SCRIPT_HOST_PROTOCOL,
       protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
@@ -115,6 +153,11 @@ impl<'a> ExecuteMessage<'a> {
       timeout_ms,
       source,
       context,
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
     }
   }
 }
@@ -140,7 +183,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v3 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v4 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;
@@ -166,6 +209,7 @@ pub enum HostReportedFailureKind {
   ResultTooLarge,
   WorkerCrashed,
   InvocationCancelled,
+  ServiceFailed,
 }
 
 impl HostReportedFailureKind {
@@ -178,18 +222,31 @@ impl HostReportedFailureKind {
       Self::ResultTooLarge => AttemptFailureKind::ResultTooLarge,
       Self::WorkerCrashed => AttemptFailureKind::WorkerCrashed,
       Self::InvocationCancelled => AttemptFailureKind::InvocationCancelled,
+      Self::ServiceFailed => AttemptFailureKind::ServiceFailed,
     }
   }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostReportedFailure {
   pub kind: HostReportedFailureKind,
   pub code: String,
   pub message: String,
   #[serde(default)]
   pub details: Option<FailureSizeDetails>,
+  #[serde(default)]
+  pub capability: Option<String>,
+  #[serde(default)]
+  pub operation: Option<String>,
+  #[serde(default)]
+  pub call_id: Option<String>,
+  #[serde(default)]
+  pub retryable: Option<bool>,
+  #[serde(default)]
+  pub ambiguous: Option<bool>,
+  #[serde(default)]
+  pub cause: Option<CapabilityFailure>,
 }
 
 impl HostReportedFailure {
@@ -204,7 +261,61 @@ impl HostReportedFailure {
       code: self.code,
       message: self.message,
       details: self.details,
-      ..AttemptFailure::legacy_defaults()
+      capability: self.capability,
+      operation: self.operation,
+      call_id: self.call_id,
+      retryable: self.retryable,
+      ambiguous: self.ambiguous,
+      cause: self.cause,
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityCallMessage {
+  pub protocol: String,
+  pub protocol_version: u32,
+  pub message_type: String,
+  pub invocation_id: String,
+  pub call_id: String,
+  pub call: CapabilityCallRequest,
+}
+
+impl CapabilityCallMessage {
+  pub fn validate(&self) -> Result<(), String> {
+    if self.protocol != SCRIPT_HOST_PROTOCOL
+      || self.protocol_version != SCRIPT_HOST_PROTOCOL_VERSION
+      || self.message_type != "capability_call"
+      || self.invocation_id != self.call.invocation_id
+      || self.call_id != self.call.call_id
+    {
+      return Err("The child sent an invalid script-host v4 capability call envelope.".to_string());
+    }
+    self.call.validate().map_err(|error| error.message)
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityResultMessage<'a> {
+  pub protocol: &'static str,
+  pub protocol_version: u32,
+  pub message_type: &'static str,
+  pub invocation_id: &'a str,
+  pub call_id: &'a str,
+  pub result: &'a CapabilityCallResult,
+}
+
+impl<'a> CapabilityResultMessage<'a> {
+  pub fn new(result: &'a CapabilityCallResult) -> Self {
+    Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "capability_result",
+      invocation_id: result.invocation_id(),
+      call_id: result.call_id(),
+      result,
     }
   }
 }

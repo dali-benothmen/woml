@@ -985,6 +985,28 @@ fn failed_result(
   CapabilityCallResult::Failed(failed_fields(request, started, "failed", error))
 }
 
+/// Builds a safe correlated failure when a capability request cannot reach a
+/// durable authority. The original input is deliberately excluded.
+pub fn capability_transport_failure(
+  request: &CapabilityCallRequest,
+  code: &str,
+  message: &str,
+  retryable: bool,
+  ambiguous: bool,
+) -> CapabilityCallResult {
+  failed_result(
+    request,
+    Instant::now(),
+    failure(
+      CapabilityFailureKind::TransportFailed,
+      code,
+      message,
+      retryable,
+      ambiguous,
+    ),
+  )
+}
+
 /// Deterministic fake handler used by Rust conformance tests. It is never
 /// registered in a production registry automatically.
 #[derive(Debug, Default)]
