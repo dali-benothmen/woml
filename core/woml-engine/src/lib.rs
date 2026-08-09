@@ -5,6 +5,7 @@
 //! derives all run state by folding versioned events.
 
 pub mod capability;
+pub mod database;
 pub mod durable;
 pub mod engine;
 pub mod event;
@@ -33,6 +34,7 @@ pub use capability::{
   DEFAULT_CAPABILITY_INPUT_BYTES, DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
   NATIVE_FETCH_OBSERVATION_CONTRACT, NATIVE_FETCH_OBSERVATION_CONTRACT_VERSION,
 };
+pub use database::{ManagedDatabaseHandler, ManagedDatabasePool};
 pub use durable::{
   ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,
   ApprovalTimeoutSettlementStatus, ApprovalTokenBinding, DurableDagEngine, DurableEngineError,

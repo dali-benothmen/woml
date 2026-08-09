@@ -1,0 +1,12 @@
+{
+  "contract": "woml.database",
+  "contractVersion": 1,
+  "kind": "result",
+  "operation": "transaction",
+  "data": {
+    "results": [
+      { "rowsAffected": 1, "lastInsertId": 42 },
+      { "rows": [{ "id": 42, "name": "Dali" }], "rowCount": 1 }
+    ]
+  }
+}

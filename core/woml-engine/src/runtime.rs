@@ -128,6 +128,7 @@ pub struct RuntimeExecutionOptions {
   pub resolved_secrets: Arc<BTreeMap<String, String>>,
   pub capability_registry: Arc<CapabilityRegistry>,
   capability_authority: Option<Arc<DurableCapabilityAuthority>>,
+  managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -169,6 +170,12 @@ impl RuntimeExecutionOptions {
     capability_registry
       .register(Arc::new(crate::ManagedHttpHandler::default()))
       .expect("the production HTTP capability is registered exactly once");
+    let managed_database_pool = Arc::new(crate::ManagedDatabasePool::default());
+    for handler in crate::ManagedDatabaseHandler::handlers(Arc::clone(&managed_database_pool)) {
+      capability_registry
+        .register(handler)
+        .expect("each production database operation is registered exactly once");
+    }
     Self {
       script_host,
       script_timeout_ms,
@@ -181,6 +188,7 @@ impl RuntimeExecutionOptions {
       resolved_secrets: Arc::new(BTreeMap::new()),
       capability_registry,
       capability_authority: None,
+      managed_database_pool: Some(managed_database_pool),
     }
   }
 
@@ -206,6 +214,7 @@ impl RuntimeExecutionOptions {
 
   pub fn with_capability_registry(mut self, registry: Arc<CapabilityRegistry>) -> Self {
     self.capability_registry = registry;
+    self.managed_database_pool = None;
     self
   }
 
@@ -592,7 +601,19 @@ fn attach_durable_capability_authority(
   mut options: RuntimeExecutionOptions,
   database_path: &std::path::Path,
 ) -> Result<RuntimeExecutionOptions, RuntimeExecutionError> {
+  if let Some(pool) = &options.managed_database_pool {
+    pool
+      .protect_path(database_path)
+      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
+  }
   let store = DurableEventStore::open(database_path.to_path_buf())?;
+  if let Some(pool) = &options.managed_database_pool {
+    // Protect the post-open canonical identity as well as the pre-open lexical
+    // path so a state path created during this call cannot gain an alias.
+    pool
+      .protect_path(database_path)
+      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
+  }
   options.capability_authority = Some(Arc::new(DurableCapabilityAuthority::new(
     Arc::clone(&options.capability_registry),
     Arc::new(tokio::sync::Mutex::new(store)),

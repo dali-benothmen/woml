@@ -1,0 +1,22 @@
+{
+  "contract": "woml.database",
+  "contractVersion": 1,
+  "kind": "request",
+  "driver": "sqlite",
+  "connection": "./data/customers.sqlite",
+  "operation": "transaction",
+  "input": {
+    "operations": [
+      {
+        "operation": "insert",
+        "table": "customers",
+        "values": { "name": "Dali", "active": true }
+      },
+      {
+        "operation": "query",
+        "text": "SELECT id, name FROM customers WHERE active = ?",
+        "values": [true]
+      }
+    ]
+  }
+}

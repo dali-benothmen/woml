@@ -45,10 +45,10 @@ const language = await Bun.file(
   resolve(projectRoot, 'docs/woml-v0.1.md')
 ).text();
 if (
-  !architecture.includes('managed HTTP execution are active through SC6') ||
-  !language.includes('SC0–SC6 implemented and hardened')
+  !architecture.includes('SQLite Database v1 facade are active through SC7') ||
+  !language.includes('SC0–SC7 implemented and hardened')
 ) {
-  throw new Error('SC6 architecture or language status is stale.');
+  throw new Error('Services architecture or language status is stale.');
 }
 
 process.stdout.write(

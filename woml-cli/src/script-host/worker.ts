@@ -538,16 +538,214 @@ function publicHttpResult(result: JsonValue): JsonObject {
   };
 }
 
+const databaseOperations = new Set([
+  'query',
+  'execute',
+  'read',
+  'insert',
+  'update',
+  'delete',
+  'transaction',
+]);
+
+function normalizeDatabaseConfig(input: JsonValue): JsonObject {
+  const object = plainObject(input);
+  if (
+    object === undefined ||
+    Object.keys(object).some(key => key !== 'driver' && key !== 'connection') ||
+    object.driver !== 'sqlite' ||
+    typeof object.connection !== 'string' ||
+    object.connection.length === 0
+  ) {
+    throw new TypeError(
+      'services.db() requires exactly { driver: "sqlite", connection: "path/to/database.sqlite" }.'
+    );
+  }
+  return { driver: object.driver, connection: object.connection };
+}
+
+function normalizeDatabaseRequest(
+  config: JsonObject,
+  operation: string,
+  input: JsonValue
+): JsonObject {
+  if (!databaseOperations.has(operation)) {
+    throw new TypeError(`Unknown Database v1 operation "${operation}".`);
+  }
+  return {
+    contract: 'woml.database',
+    contractVersion: 1,
+    kind: 'request',
+    driver: config.driver,
+    connection: config.connection,
+    operation,
+    input,
+  };
+}
+
+function publicDatabaseResult(result: JsonValue, operation: string): JsonValue {
+  const object = plainObject(result);
+  if (
+    object?.contract !== 'woml.database' ||
+    object.contractVersion !== 1 ||
+    object.kind !== 'result' ||
+    object.operation !== operation ||
+    object.data === undefined
+  ) {
+    throw new TypeError('Rust returned an invalid Database v1 result.');
+  }
+  return object.data;
+}
+
 function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
   if (request.attempt === undefined || request.bindings === undefined) {
     return Object.freeze({});
   }
+  const attempt = request.attempt;
   const capabilityCache = new Map<string, unknown>();
+  const invokeCapability = async (
+    capability: string,
+    operation: string,
+    input: JsonValue,
+    callOptions?: JsonValue
+  ): Promise<JsonValue> => {
+    const managedHttp = capability === 'http' && operation === 'request';
+    const managedDatabase =
+      capability === 'db' && databaseOperations.has(operation);
+    if (!managedHttp && !managedDatabase && callOptions !== undefined) {
+      throw new TypeError(
+        'Named service-call options are supported by managed WOML services only.'
+      );
+    }
+    const violation = findJsonViolation(input);
+    if (violation !== undefined) {
+      throw new TypeError(`${violation.path}: ${violation.reason}`);
+    }
+    const inputBytes = Buffer.byteLength(JSON.stringify(input), 'utf8');
+    if (inputBytes > 1_048_576) {
+      const id = callId();
+      throw new ServiceCallError(capability, operation, id, {
+        kind: 'input_too_large',
+        code: 'WOML_CAPABILITY_INPUT_TOO_LARGE',
+        message: 'The capability input exceeds its configured byte limit.',
+        retryable: false,
+        ambiguous: false,
+        details: { actualBytes: inputBytes, limitBytes: 1_048_576 },
+      });
+    }
+    const identity = namedOperation(capability, operation, callOptions);
+    const method = managedHttp
+      ? String((input as JsonObject).method)
+      : undefined;
+    const effectful = managedHttp
+      ? method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
+      : managedDatabase && operation !== 'query' && operation !== 'read';
+    if (effectful && identity.mode === 'automatic') {
+      const key = `${capability}.${operation}`;
+      const count = (automaticEffectfulCalls.get(key) ?? 0) + 1;
+      automaticEffectfulCalls.set(key, count);
+      if (count > 1) {
+        throw new TypeError(
+          `Multiple effectful services.${capability}.${operation}() calls in one step require stable names, for example { name: "write-customer" }.`
+        );
+      }
+    }
+    const httpIdempotency = managedHttp
+      ? plainObject((input as JsonObject).idempotency)
+      : undefined;
+    const providerIdempotencyKey =
+      typeof httpIdempotency?.value === 'string'
+        ? httpIdempotency.value
+        : undefined;
+    const timeoutMs = managedHttp
+      ? Math.min(86_400_000, Number((input as JsonObject).timeoutMs) + 1_000)
+      : 30_000;
+    const id = callId();
+    const call: CapabilityCallRequest = {
+      contract: 'woml.capability-call',
+      contractVersion: 1,
+      messageType: 'request',
+      invocationId: request.invocationId,
+      callId: id,
+      runId: request.runId,
+      nodeId: request.nodeId,
+      attemptNumber: attempt.number,
+      capability,
+      operation,
+      inputContractVersion: 1,
+      resultContractVersion: 1,
+      identity: {
+        mode: identity.mode,
+        stepIdempotencyKey: attempt.idempotencyKey,
+        operationName: identity.name,
+        operationKey: await operationKey(
+          attempt.idempotencyKey,
+          identity.name
+        ),
+        ...(providerIdempotencyKey === undefined
+          ? {}
+          : { providerIdempotencyKey }),
+      },
+      limits: {
+        inputBytes: 1_048_576,
+        resultBytes: 4_194_304,
+        timeoutMs,
+      },
+      input,
+    };
+    const result = await new Promise<JsonValue>((resolve, reject) => {
+      pendingCalls.set(id, { capability, operation, resolve, reject });
+      self.postMessage({
+        messageType: 'capability_call',
+        call,
+      } satisfies ScriptWorkerOutbound);
+    });
+    return managedHttp
+      ? publicHttpResult(result)
+      : managedDatabase
+        ? publicDatabaseResult(result, operation)
+        : result;
+  };
   return new Proxy(Object.freeze({}), {
     get(_target, capabilityProperty) {
       if (typeof capabilityProperty !== 'string') return undefined;
       const cached = capabilityCache.get(capabilityProperty);
       if (cached !== undefined) return cached;
+      if (capabilityProperty === 'db') {
+        const database = (rawConfig: JsonValue): unknown => {
+          const config = Object.freeze(normalizeDatabaseConfig(rawConfig));
+          const operationCache = new Map<string, unknown>();
+          return new Proxy(Object.freeze({}), {
+            get(_databaseTarget, operationProperty) {
+              if (typeof operationProperty !== 'string') return undefined;
+              const known = operationCache.get(operationProperty);
+              if (known !== undefined) return known;
+              if (!databaseOperations.has(operationProperty)) {
+                return undefined;
+              }
+              const invoke = async (
+                rawInput: JsonValue = null,
+                callOptions?: JsonValue
+              ): Promise<JsonValue> =>
+                invokeCapability(
+                  'db',
+                  operationProperty,
+                  normalizeDatabaseRequest(config, operationProperty, rawInput),
+                  callOptions
+                );
+              Object.freeze(invoke);
+              operationCache.set(operationProperty, invoke);
+              return invoke;
+            },
+            set: () => false,
+            defineProperty: () => false,
+            deleteProperty: () => false,
+          });
+        };
+        Object.freeze(database);
+        capabilityCache.set(capabilityProperty, database);
+        return database;
+      }
       const operationCache = new Map<string, unknown>();
       const capability = new Proxy(Object.freeze({}), {
         get(_capabilityTarget, operationProperty) {
@@ -557,123 +755,15 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
           const invoke = async (
             rawInput: JsonValue = null,
             callOptions?: JsonValue
-          ): Promise<JsonValue> => {
-            const managedHttp =
-              capabilityProperty === 'http' && operationProperty === 'request';
-            if (!managedHttp && callOptions !== undefined) {
-              throw new TypeError(
-                'Named service-call options are currently supported by services.http.request() only.'
-              );
-            }
-            const input = managedHttp
-              ? normalizeHttpRequest(rawInput)
-              : rawInput;
-            const violation = findJsonViolation(input);
-            if (violation !== undefined) {
-              throw new TypeError(`${violation.path}: ${violation.reason}`);
-            }
-            const inputBytes = Buffer.byteLength(JSON.stringify(input), 'utf8');
-            if (inputBytes > 1_048_576) {
-              const id = callId();
-              throw new ServiceCallError(
-                capabilityProperty,
-                operationProperty,
-                id,
-                {
-                  kind: 'input_too_large',
-                  code: 'WOML_CAPABILITY_INPUT_TOO_LARGE',
-                  message:
-                    'The capability input exceeds its configured byte limit.',
-                  retryable: false,
-                  ambiguous: false,
-                  details: { actualBytes: inputBytes, limitBytes: 1_048_576 },
-                }
-              );
-            }
-            const identity = namedOperation(
+          ): Promise<JsonValue> =>
+            invokeCapability(
               capabilityProperty,
               operationProperty,
+              capabilityProperty === 'http' && operationProperty === 'request'
+                ? normalizeHttpRequest(rawInput)
+                : rawInput,
               callOptions
             );
-            const method = managedHttp
-              ? String((input as JsonObject).method)
-              : undefined;
-            const effectful =
-              managedHttp &&
-              method !== 'GET' &&
-              method !== 'HEAD' &&
-              method !== 'OPTIONS';
-            if (effectful && identity.mode === 'automatic') {
-              const key = `${capabilityProperty}.${operationProperty}`;
-              const count = (automaticEffectfulCalls.get(key) ?? 0) + 1;
-              automaticEffectfulCalls.set(key, count);
-              if (count > 1) {
-                throw new TypeError(
-                  'Multiple effectful services.http.request() calls in one step require stable names, for example { name: "create-order" }.'
-                );
-              }
-            }
-            const operationName = identity.name;
-            const httpIdempotency = managedHttp
-              ? plainObject((input as JsonObject).idempotency)
-              : undefined;
-            const providerIdempotencyKey =
-              typeof httpIdempotency?.value === 'string'
-                ? httpIdempotency.value
-                : undefined;
-            const timeoutMs = managedHttp
-              ? Math.min(
-                  86_400_000,
-                  Number((input as JsonObject).timeoutMs) + 1_000
-                )
-              : 30_000;
-            const id = callId();
-            const call: CapabilityCallRequest = {
-              contract: 'woml.capability-call',
-              contractVersion: 1,
-              messageType: 'request',
-              invocationId: request.invocationId,
-              callId: id,
-              runId: request.runId,
-              nodeId: request.nodeId,
-              attemptNumber: request.attempt!.number,
-              capability: capabilityProperty,
-              operation: operationProperty,
-              inputContractVersion: 1,
-              resultContractVersion: 1,
-              identity: {
-                mode: identity.mode,
-                stepIdempotencyKey: request.attempt!.idempotencyKey,
-                operationName,
-                operationKey: await operationKey(
-                  request.attempt!.idempotencyKey,
-                  operationName
-                ),
-                ...(providerIdempotencyKey === undefined
-                  ? {}
-                  : { providerIdempotencyKey }),
-              },
-              limits: {
-                inputBytes: 1_048_576,
-                resultBytes: 4_194_304,
-                timeoutMs,
-              },
-              input,
-            };
-            const result = await new Promise<JsonValue>((resolve, reject) => {
-              pendingCalls.set(id, {
-                capability: capabilityProperty,
-                operation: operationProperty,
-                resolve,
-                reject,
-              });
-              self.postMessage({
-                messageType: 'capability_call',
-                call,
-              } satisfies ScriptWorkerOutbound);
-            });
-            return managedHttp ? publicHttpResult(result) : result;
-          };
           Object.freeze(invoke);
           operationCache.set(operationProperty, invoke);
           return invoke;

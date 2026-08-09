@@ -56,6 +56,11 @@ const httpExamplePath = join(
   'examples',
   'httpComparisonWorkflow.woml'
 );
+const databaseExamplePath = join(
+  projectRoot,
+  'examples',
+  'sqliteWorkflow.woml'
+);
 const retryCompositionFixturePath = join(
   import.meta.dir,
   '..',
@@ -783,6 +788,17 @@ describe('woml test one-shot compatibility', () => {
         localHttpUrl
       )
     );
+    const packagedUserDatabase = join(
+      temporaryDirectory,
+      'packaged-user.sqlite'
+    );
+    await Bun.write(
+      join(consumerDirectory, 'database.woml'),
+      (await Bun.file(databaseExamplePath).text()).replace(
+        './.woml/customers.sqlite',
+        packagedUserDatabase
+      )
+    );
 
     const packed = Bun.spawnSync(
       [
@@ -875,6 +891,16 @@ describe('woml test one-shot compatibility', () => {
     );
     httpServer.kill('SIGTERM');
     await httpServer.exited;
+    const databaseResult = Bun.spawnSync(
+      [
+        executable,
+        'test',
+        'database.woml',
+        '--state',
+        join(temporaryDirectory, 'packaged-database-state.sqlite'),
+      ],
+      { cwd: consumerDirectory, stdout: 'pipe', stderr: 'pipe' }
+    );
     const approval = spawnPackagedApproval(
       executable,
       [
@@ -940,6 +966,12 @@ describe('woml test one-shot compatibility', () => {
         url: localHttpUrl,
         redirected: false,
       },
+    });
+    expect(databaseResult.stderr.toString()).toBe('');
+    expect(databaseResult.exitCode).toBe(0);
+    expect(JSON.parse(databaseResult.stdout.toString())).toEqual({
+      name: 'Ada',
+      visits: 1,
     });
     expect(approvalPage.status).toBe(200);
     expect(await approvalPage.text()).toContain('Editorial approval');

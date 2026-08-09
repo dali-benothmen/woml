@@ -31,8 +31,8 @@ The long-lived Bun host executes JavaScript because JavaScript is part of the
 authoring experience. Each invocation runs in an isolated Worker with a real
 timeout boundary and receives only the versioned bindings approved for its
 model. Model v8 and Script Bindings v1 inject exactly `context`, `attempt`,
-`services`, and source-proven `secrets` into capability scripts. Native Fetch
-observation and managed HTTP execution are active through SC6. Bun reports
+`services`, and source-proven `secrets` into capability scripts. Native Fetch,
+managed HTTP, and the SQLite Database v1 facade are active through SC7. Bun reports
 outcomes; it never decides whether to retry or how the graph advances.
 
 ### Services and capability boundary
@@ -45,14 +45,16 @@ idempotency identity, durable Run Event v8 append, and recovery. Bun owns the
 JavaScript facades and isolated execution.
 
 Native Fetch stays Bun's real Fetch implementation and uses redacted observed
-events. `services.http.request()` and future `services.*` operations use Rust-
-managed calls. Both converge on the generic `operation_started`,
+events. `services.http.request()`, `services.db()`, and future `services.*`
+operations use Rust-managed calls. All converge on the generic `operation_started`,
 `operation_succeeded`, and `operation_failed` vocabulary. Compiled models keep
 only sorted secret names; resolved values exist only in the invocation-memory
 boundary and never in context, events, progress, or fixtures. Native Fetch is
-executed by Bun; `services.http.request()` is executed by a pooled Rust client.
-Other `services.*` capabilities remain unavailable until their individual
-milestones.
+executed by Bun; `services.http.request()` is executed by a pooled Rust client;
+and Database v1 uses Rust-owned, user-database SQLite connections that cannot
+open WOML's internal state database. Other `services.*` capabilities remain
+unavailable until their individual milestones. The authoritative Database v1
+guide is `docs/woml-database.md`.
 
 The local outbound-HTTP profile permits reachable HTTP(S) destinations and is
 not an SSRF sandbox. Hosted deployments must apply network-layer egress policy,

@@ -47,6 +47,7 @@ async function validators() {
     'service-progress.v1.schema.json',
     'native-fetch-observation.v1.schema.json',
     'managed-http.v1.schema.json',
+    'database.v1.schema.json',
     'script-host-protocol.v4.schema.json',
   ];
   for (const name of schemaNames)
@@ -63,6 +64,7 @@ async function validators() {
     progress: get('https://cronflow.dev/schemas/service-progress/v1'),
     fetch: get('https://cronflow.dev/schemas/native-fetch-observation/v1'),
     http: get('https://cronflow.dev/schemas/managed-http/v1'),
+    database: get('https://cronflow.dev/schemas/database/v1'),
     host: get('https://cronflow.dev/schemas/script-host-protocol/v4'),
   };
 }
@@ -156,7 +158,7 @@ describe('SC0 frozen service and capability contracts', () => {
     const names = (await readdir(fixtureDirectory))
       .filter(name => name.endsWith('.json'))
       .sort();
-    expect(names.length).toBe(13);
+    expect(names.length).toBe(15);
     for (const name of names) {
       const fixture = await json(join(fixtureDirectory, name));
       if (name === 'script-host-messages.v4.json') {
@@ -198,7 +200,9 @@ describe('SC0 frozen service and capability contracts', () => {
           ? schemas.progress
           : name.startsWith('native-fetch-')
             ? schemas.fetch
-            : schemas.http;
+            : name.startsWith('database-')
+              ? schemas.database
+              : schemas.http;
       expect(
         validator(fixture),
         `${name}: ${JSON.stringify(validator.errors)}`

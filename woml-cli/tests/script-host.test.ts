@@ -845,6 +845,99 @@ return {
     });
   });
 
+  test('protocol v4 lowers services.db() calls and exposes only Database v1 data', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const databaseResult = {
+          contract: 'woml.database',
+          contractVersion: 1,
+          kind: 'result',
+          operation: message.call.operation,
+          data:
+            message.call.operation === 'insert'
+              ? { rowsAffected: 1, lastInsertId: 7 }
+              : { rows: [{ id: 7, name: 'Ada' }], rowCount: 1 },
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(databaseResult)),
+            durationMs: 1,
+            result: databaseResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_database',
+        `const db = services.db({ driver: 'sqlite', connection: './customers.sqlite' });
+        const inserted = await db.insert({
+          table: 'customers', values: { name: 'Ada' }
+        }, { name: 'create-customer' });
+        const selected = await db.query({
+          text: 'SELECT id, name FROM customers WHERE id = ?', values: [inserted.lastInsertId]
+        });
+        return { inserted, selected, frozen: Object.isFrozen(db) };`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.call).toMatchObject({
+      capability: 'db',
+      operation: 'insert',
+      identity: {
+        mode: 'named',
+        operationName: 'db.insert.create-customer',
+      },
+      input: {
+        contract: 'woml.database',
+        contractVersion: 1,
+        kind: 'request',
+        driver: 'sqlite',
+        connection: './customers.sqlite',
+        operation: 'insert',
+        input: { table: 'customers', values: { name: 'Ada' } },
+      },
+    });
+    expect(calls[1]?.call).toMatchObject({
+      capability: 'db',
+      operation: 'query',
+      identity: { mode: 'automatic', operationName: 'db.query' },
+    });
+    expect(completed[0]?.outcome).toEqual({
+      kind: 'success',
+      value: {
+        inserted: { rowsAffected: 1, lastInsertId: 7 },
+        selected: { rows: [{ id: 7, name: 'Ada' }], rowCount: 1 },
+        frozen: true,
+      },
+    });
+  });
+
   test('protocol v4 bindings are deeply read-only and reject a known secret in results', async () => {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({

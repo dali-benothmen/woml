@@ -1,14 +1,17 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0 through SC6 completed on 2026-08-10. The cross-layer
+Status: active. SC0 through SC7 completed on 2026-08-10. The cross-layer
 contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
 Script Bindings v1 and symbolic secret dependencies, and a real WOML script can
 now call from an isolated Bun Worker through the durable Rust capability
 authority. Native `fetch()` preserves Bun's API while Rust records safe,
 durable observations. Managed `services.http.request()` now executes through
 Rust with pooling, bounded results, cancellation, safe errors, and durable
-operation events. The HTTP capability foundation is now hardened and
-publishable. SC7 is next: SQL Database v1 with user-owned SQLite.
+operation events. The HTTP capability foundation is hardened and publishable.
+Database v1 now adds the read-only `services.db()` facade, a Rust-owned SQLite
+pool, parameterized SQL and CRUD, atomic transaction batches, bounded/redacted
+results, and strict separation from WOML runtime state. SC8 is next: PostgreSQL
+and database hardening.
 
 ## 1. Product Outcome
 
@@ -854,6 +857,8 @@ The HTTP-specific and full WOML release gates pass, older workflows remain
 unchanged, and performance claims match recorded benchmark evidence.
 
 ### SC7 — Freeze and execute SQL Database v1 with user-owned SQLite
+
+Status: completed on 2026-08-10.
 
 Changes:
 

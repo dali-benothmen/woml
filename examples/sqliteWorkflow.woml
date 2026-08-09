@@ -1,0 +1,41 @@
+<workflow version="0.1" id="sqlite-customer-demo" name="SQLite Customer Visits">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="recordVisit" name="Record and read a customer visit">
+      <script>
+        const db = services.db({
+          driver: "sqlite",
+          connection: "./.woml/customers.sqlite"
+        });
+
+        await db.execute({
+          text: `CREATE TABLE IF NOT EXISTS customers (
+            name TEXT PRIMARY KEY,
+            visits INTEGER NOT NULL
+          )`
+        }, { name: "create-customers-table" });
+
+        const visit = await db.transaction({
+          operations: [
+            {
+              operation: "execute",
+              text: `INSERT INTO customers (name, visits) VALUES (?, 1)
+                ON CONFLICT(name) DO UPDATE SET visits = visits + 1`,
+              values: ["Ada"]
+            },
+            {
+              operation: "query",
+              text: "SELECT name, visits FROM customers WHERE name = ?",
+              values: ["Ada"]
+            }
+          ]
+        }, { name: "record-ada-visit" });
+
+        return visit.results[1].rows[0];
+      </script>
+    </step>
+  </steps>
+</workflow>
