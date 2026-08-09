@@ -724,6 +724,17 @@ async function compileWorkflowSources(
   return compiled;
 }
 
+function requireExecutableScriptProfile(
+  sources: readonly CompiledWorkflowSource[]
+): void {
+  const pending = sources.find(source => source.workflow.schemaVersion === 8);
+  if (pending === undefined) return;
+  throw new CliInputError(
+    'WOML_SCRIPT_BINDINGS_RUNTIME_UNAVAILABLE',
+    `workflow "${pending.workflow.workflowId}" uses Script Bindings v1 (services, script secrets, or tracked Fetch). It compiled successfully, but execution is unavailable until the Rust capability runtime and Script Host v4 are implemented.`
+  );
+}
+
 function printWaitingApproval(
   io: CliIo,
   outcome: Extract<RustApprovalRuntimeOutcome, { status: 'waiting' }>,
@@ -1804,6 +1815,7 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowSources(filePath);
+    requireExecutableScriptProfile(sources);
     if (runArguments.command === 'test') {
       if ((await stat(filePath)).isDirectory()) {
         throw new CliInputError(

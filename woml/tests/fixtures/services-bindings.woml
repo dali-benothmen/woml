@@ -1,0 +1,33 @@
+<workflow id="services-bindings-contract" version="1.0.0" name="Services bindings contract">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+  <steps>
+    <step id="loadCustomer" name="Load customer">
+      <script>
+        const response = await services.http.request({
+          method: "GET",
+          url: "https://api.example.test/customers/42",
+          headers: {
+            authorization: `Bearer ${secrets.CUSTOMER_API_TOKEN}`
+          }
+        });
+        return response.data;
+      </script>
+    </step>
+    <step id="enrichCustomer">
+      <script>
+        const response = await fetch("https://api.example.test/enrichment/42");
+        return {
+          customer: context.steps.loadCustomer,
+          enrichment: await response.json()
+        };
+      </script>
+    </step>
+    <step id="finish">
+      <script>
+        return { message: `Hello ${context.steps.enrichCustomer.customer.name}` };
+      </script>
+    </step>
+  </steps>
+</workflow>

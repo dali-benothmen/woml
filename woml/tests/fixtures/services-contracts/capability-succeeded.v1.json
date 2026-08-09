@@ -1,0 +1,6 @@
+{
+  "contract": "woml.capability-call", "contractVersion": 1, "messageType": "result",
+  "invocationId": "invocation-a", "callId": "call-http-a", "outcome": "succeeded", "resultContractVersion": 1,
+  "resultBytes": 142, "durationMs": 18.4,
+  "result": { "contract": "woml.managed-http", "contractVersion": 1, "kind": "result", "status": 200, "ok": true, "headers": { "content-type": "application/json" }, "data": { "id": "customer-42", "name": "Dali" }, "url": "https://api.example.test/customers/42", "redirected": false }
+}

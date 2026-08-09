@@ -1,0 +1,5 @@
+{
+  "contract": "woml.managed-http", "contractVersion": 1, "kind": "result", "status": 201, "ok": true,
+  "headers": { "content-type": "application/json" }, "data": { "orderId": "order-42", "created": true },
+  "url": "https://api.example.test/orders", "redirected": false
+}

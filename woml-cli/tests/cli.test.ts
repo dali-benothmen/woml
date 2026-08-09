@@ -51,6 +51,13 @@ const retryFixturePath = join(
   'retry.woml'
 );
 const retryExamplePath = join(projectRoot, 'examples', 'retryWorkflow.woml');
+const servicesBindingsFixturePath = join(
+  projectRoot,
+  'woml',
+  'tests',
+  'fixtures',
+  'services-bindings.woml'
+);
 const retryCompositionFixturePath = join(
   import.meta.dir,
   '..',
@@ -173,6 +180,15 @@ describe('woml test one-shot compatibility', () => {
     const source = await Bun.file(join(packageRoot, 'src', 'cli.ts')).text();
     expect(source).toContain('executeWorkflowWithRust');
     expect(source).not.toMatch(/\bexecuteWorkflow\s*\(/);
+  });
+
+  test('reports that Model v8 compiled but is intentionally not executable yet', async () => {
+    const result = await runCli('run', servicesBindingsFixturePath);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('WOML_SCRIPT_BINDINGS_RUNTIME_UNAVAILABLE');
+    expect(result.stderr).toContain('compiled successfully');
+    expect(result.stderr).not.toContain('CUSTOMER_API_TOKEN');
   });
 
   test('runs hello.woml through the public executable', async () => {

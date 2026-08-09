@@ -11,9 +11,11 @@ import {
   type ContextReferenceExpression,
   type JsonValue,
   type RetryPolicy,
+  type ScriptRuntimeBindingsV1,
   type SecretReferenceExpression,
   type ValueExpression,
 } from './model';
+import { analyzeWomlScript, type ScriptAnalysis } from './script-analysis';
 import {
   SourceFile,
   WomlCompileError,
@@ -41,6 +43,7 @@ interface ValidatedStep {
   readonly kind: 'step';
   readonly id: string;
   readonly source: string;
+  readonly scriptAnalysis: ScriptAnalysis;
   readonly retryPolicy?: RetryPolicy;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
@@ -992,10 +995,15 @@ function validateTriggers(
   return validated;
 }
 
-function scriptSource(
+interface ScriptBody {
+  readonly source: string;
+  readonly span: SourceSpan;
+}
+
+function scriptBody(
   document: WomlSourceDocument,
   script: WomlSourceElement
-): string {
+): ScriptBody {
   const rawBodies = script.children.filter(
     (child): child is WomlSourceRawText => child.kind === 'raw'
   );
@@ -1010,7 +1018,28 @@ function scriptSource(
       script.children[0]?.span ?? script.openTagSpan
     );
   }
-  return rawBodies[0]?.value ?? '';
+  return {
+    source: rawBodies[0]?.value ?? '',
+    span: rawBodies[0]?.span ?? script.openTagSpan,
+  };
+}
+
+function validateScriptAnalysis(
+  document: WomlSourceDocument,
+  body: ScriptBody
+): ScriptAnalysis {
+  const analysis = analyzeWomlScript(body.source);
+  if (analysis.issue === undefined) return analysis;
+  const sourceFile = new SourceFile(document.file, document.source);
+  const start = body.span.start.offset + analysis.issue.start;
+  const end = body.span.start.offset + analysis.issue.end;
+  failValidation(
+    document,
+    analysis.issue.code,
+    analysis.issue.message,
+    sourceFile.span(start, Math.max(start + 1, end)),
+    analysis.issue.hint
+  );
 }
 
 function referenceSpan(
@@ -1644,13 +1673,62 @@ function validateStep(
     );
   }
 
+  const body = scriptBody(document, operations[0]);
   return {
     kind: 'step',
     id,
-    source: scriptSource(document, operations[0]),
+    source: body.source,
+    scriptAnalysis: validateScriptAnalysis(document, body),
     retryPolicy: stepRetryPolicy(document, step),
     metadata: flowItemMetadata(document, step),
   };
+}
+
+function collectScriptAnalyses(
+  items: readonly ValidatedFlowItem[],
+  analyses = new Map<string, ScriptAnalysis>()
+): Map<string, ScriptAnalysis> {
+  for (const item of items) {
+    if (item.kind === 'step') {
+      analyses.set(item.id, item.scriptAnalysis);
+      continue;
+    }
+    if (item.kind === 'parallel') {
+      for (const child of item.children) {
+        analyses.set(child.id, child.scriptAnalysis);
+      }
+      continue;
+    }
+    if (item.kind === 'branch') {
+      for (const arm of item.arms) collectScriptAnalyses(arm.items, analyses);
+      continue;
+    }
+    collectScriptAnalyses(item.approvedItems, analyses);
+    collectScriptAnalyses(item.rejectedItems, analyses);
+  }
+  return analyses;
+}
+
+const scriptRuntimeBindings = [
+  'context',
+  'attempt',
+  'services',
+  'secrets',
+] as const;
+
+function withScriptRuntimeBindings(
+  nodes: readonly CompiledWorkflowNode[],
+  analyses: ReadonlyMap<string, ScriptAnalysis>
+): readonly CompiledWorkflowNode[] {
+  return nodes.map(node => {
+    if (node.handler !== 'runtime.script') return node;
+    const scriptRuntime: ScriptRuntimeBindingsV1 = {
+      bindingVersion: 1,
+      bindings: scriptRuntimeBindings,
+      requiredSecrets: analyses.get(node.id)?.requiredSecrets ?? [],
+    };
+    return { ...node, scriptRuntime };
+  });
 }
 
 function validateBranchArm(
@@ -2574,18 +2652,30 @@ export function compileWoml(
   const workflow = document.root;
   const { workflowId, metadata, triggers, flow } = validateDocument(document);
   const lowered = lowerFlowItems(flow.items);
+  const scriptAnalyses = collectScriptAnalyses(flow.items);
+  const usesScriptRuntimeV1 = [...scriptAnalyses.values()].some(
+    analysis =>
+      analysis.requiredSecrets.length > 0 ||
+      analysis.usesServices ||
+      analysis.usesNativeFetch
+  );
+  const nodes = usesScriptRuntimeV1
+    ? withScriptRuntimeBindings(lowered.nodes, scriptAnalyses)
+    : lowered.nodes;
   const definition = {
     workflowId,
     ...(metadata === undefined ? {} : { metadata }),
     triggers: triggers.map(lowerTrigger),
     graph: {
       entryNodeIds: [lowered.entryId],
-      nodes: lowered.nodes,
+      nodes,
       edges: lowered.edges,
     } satisfies CompiledWorkflowGraph,
   };
   const compiled: CompiledWorkflowDefinition =
-    triggers.length > 1 || triggers.some(trigger => trigger.kind !== 'manual')
+    usesScriptRuntimeV1
+      ? { schemaVersion: 8, ...definition }
+      : triggers.length > 1 || triggers.some(trigger => trigger.kind !== 'manual')
       ? { schemaVersion: 7, ...definition }
       : lowered.nodes.some(node => node.retryPolicy !== undefined)
         ? { schemaVersion: 6, ...definition }

@@ -119,7 +119,14 @@ export interface CompiledWorkflowNode {
   readonly inputs: ValueExpression;
   readonly timeoutMs?: number;
   readonly retryPolicy?: RetryPolicy;
+  readonly scriptRuntime?: ScriptRuntimeBindingsV1;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+export interface ScriptRuntimeBindingsV1 {
+  readonly bindingVersion: 1;
+  readonly bindings: readonly ['context', 'attempt', 'services', 'secrets'];
+  readonly requiredSecrets: readonly string[];
 }
 
 export interface CompiledWorkflowEdge {
@@ -180,6 +187,11 @@ export interface CompiledWorkflowDefinitionV7
   readonly schemaVersion: 7;
 }
 
+export interface CompiledWorkflowDefinitionV8
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 8;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -187,7 +199,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV4
   | CompiledWorkflowDefinitionV5
   | CompiledWorkflowDefinitionV6
-  | CompiledWorkflowDefinitionV7;
+  | CompiledWorkflowDefinitionV7
+  | CompiledWorkflowDefinitionV8;
 
 export interface CompiledGraphIssue {
   readonly code:

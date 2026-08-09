@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/attempt-failure/v3",
+  "title": "WOML Attempt Failure v3",
+  "description": "Attempt failure taxonomy preserving an uncaught managed-capability failure without flattening it into script_threw.",
+  "x-status": "services-capabilities-contract-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/attempt-failure/v2",
+  "$ref": "#/$defs/attemptFailure",
+  "$defs": {
+    "attemptFailure": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/attempt-failure/v2#/$defs/attemptFailure" },
+        { "$ref": "#/$defs/serviceFailed" }
+      ]
+    },
+    "hostReportedFailure": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/attempt-failure/v2#/$defs/hostReportedFailure" },
+        { "$ref": "#/$defs/serviceFailed" }
+      ]
+    },
+    "serviceFailed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message", "capability", "operation", "callId", "retryable", "ambiguous", "cause"],
+      "properties": {
+        "kind": { "const": "service_failed" },
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "capability": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", "maxLength": 128 },
+        "operation": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", "maxLength": 128 },
+        "callId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "retryable": { "type": "boolean" },
+        "ambiguous": { "type": "boolean" },
+        "cause": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/failure" }
+      }
+    }
+  }
+}

@@ -70,7 +70,9 @@ includes conditional branches and bounded parallel groups:
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
-| Database, HTTP, RAK, and other capabilities | Deferred | Unavailable |
+| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0 contracts and SC1 frontend completed | Model v8 compilation and source diagnostics are implemented; execution remains unavailable until SC2-SC5 complete the Rust/Bun runtime |
+| Database, storage, cache, event, queue, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
+| RAK | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
 claim that the first CLI profile can execute every element shown. The minimum
@@ -947,7 +949,7 @@ in `docs/protocols/retry-idempotency-v1.md`.
 write ordinary statements and may use `await`, loops, conditions, exceptions,
 and returned objects without adding a function wrapper.
 
-The currently published CLI profile injects exactly one binding:
+The base published CLI profile injects exactly one binding:
 
 - `context` is the fixed read-only, JSON-compatible data projection for the
   current workflow run.
@@ -962,10 +964,18 @@ Model v6 freezes a second read-only binding for the retry runtime:
 The Bun Script Host v3 supplies this binding to every Model v6 invocation. It is
 separate from context and does not define `context.run`.
 
-`services` is unavailable in this profile. A script that references it receives
-the normal JavaScript missing-binding failure. A later capability profile may
-add a `services` binding; service clients and secrets must never become context
-or persisted step output.
+SC1 freezes Script Bindings v1 for the next capability profile:
+
+- `services` is the read-only namespace for WOML-owned capabilities.
+- `secrets` exposes only literal `secrets.NAME` values proven necessary by the
+  frontend; the Model v8 definition records names only.
+
+Using either binding, or native `fetch`, selects Model v8. Model v8 compilation
+and source-aware diagnostics are implemented, but the current Rust runtime
+intentionally rejects that model until SC2-SC5 implement its event authority,
+Script Host v4, Fetch observation, and managed HTTP. There is no fallback that
+runs an untracked service call. Service clients and secret values never become
+context or persisted step output.
 
 The complete v0.1 context paths are:
 
@@ -1111,8 +1121,10 @@ Destination order is preserved. A duplicate destination within the same Slack
 credential set is invalid, including duplicates repeated across tags. Every
 destination becomes a separate durable delivery and
 message, but all of them resolve the same approval. The first valid decision
-wins. Literal credentials, interpolation, context/service references, and
-`secrets.NAME` inside `<script>` are invalid.
+wins. Literal credentials, interpolation, and context/service references in
+notification credential attributes are invalid. JavaScript-style
+`secrets.NAME` is a separate Model v8 script binding and is not attribute
+syntax.
 
 ### 12.2 Resolving an approval
 
@@ -1730,7 +1742,7 @@ The following concepts are not part of the fundamental grammar in this draft:
 - Pause and cancellation syntax.
 - Explicit arbitrary DAG edges.
 - External schema files.
-- Resolved secrets, direct script access through `secrets.NAME`, or
+- Resolved secrets in source/models/events, dynamic script secret access, or
   `context.env`.
 - RAK, packages, `<requires>`, and dynamic capability vocabularies.
 - Declarative capability operations.

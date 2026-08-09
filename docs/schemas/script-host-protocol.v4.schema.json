@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/script-host-protocol/v4",
+  "title": "WOML Script Host Protocol v4",
+  "description": "Full-duplex Content-Length-framed Rust/Bun protocol adding Script Bindings v1, managed capability calls, and tracked native Fetch.",
+  "x-status": "services-capabilities-contract-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/script-host-protocol/v3",
+  "x-multiplexing": "Multiple execute messages and multiple nested calls per invocation may be in flight. Every response correlates by invocationId and callId/requestId and may arrive out of order.",
+  "x-framing": { "format": "Content-Length: <UTF-8 byte length>\\r\\n\\r\\n<JSON bytes>", "maximumFrameBytes": 8388608 },
+  "oneOf": [
+    { "$ref": "#/$defs/ready" }, { "$ref": "#/$defs/execute" }, { "$ref": "#/$defs/cancel" },
+    { "$ref": "#/$defs/completedSuccess" }, { "$ref": "#/$defs/completedFailure" },
+    { "$ref": "#/$defs/capabilityCall" }, { "$ref": "#/$defs/capabilityResult" },
+    { "$ref": "#/$defs/fetchObservation" }, { "$ref": "#/$defs/fetchObservationAck" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "ready": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "hostInstanceId"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "ready" }, "hostInstanceId": { "$ref": "#/$defs/id" }
+    } },
+    "execute": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "runId", "nodeId", "attempt", "handler", "timeoutMs", "source", "context", "bindings"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "execute" }, "invocationId": { "$ref": "#/$defs/id" },
+      "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" }, "attempt": { "$ref": "https://cronflow.dev/schemas/script-host-protocol/v3#/$defs/attempt" },
+      "handler": { "const": "runtime.script" }, "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 86400000 }, "source": { "type": "string" },
+      "context": { "$ref": "https://cronflow.dev/schemas/script-host-protocol/v3#/$defs/context" }, "bindings": { "$ref": "#/$defs/bindings" }
+    } },
+    "bindings": { "type": "object", "additionalProperties": false, "required": ["bindingVersion", "servicesVersion", "secrets"], "properties": {
+      "bindingVersion": { "const": 1 }, "servicesVersion": { "const": 1 },
+      "secrets": { "type": "object", "maxProperties": 64, "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 }, "additionalProperties": { "type": "string", "maxLength": 65536 } }
+    } },
+    "cancel": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "reason"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "cancel" }, "invocationId": { "$ref": "#/$defs/id" },
+      "reason": { "enum": ["parallel_fail_fast", "step_timed_out", "run_cancelled", "host_shutdown"] }
+    } },
+    "completedSuccess": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "durationMs"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "completed" }, "invocationId": { "$ref": "#/$defs/id" },
+      "outcome": { "$ref": "https://cronflow.dev/schemas/script-host-protocol/v3#/$defs/successOutcome" }, "durationMs": { "type": "number", "minimum": 0 }
+    } },
+    "completedFailure": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "durationMs"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "completed" }, "invocationId": { "$ref": "#/$defs/id" },
+      "outcome": { "$ref": "#/$defs/failureOutcome" }, "durationMs": { "type": "number", "minimum": 0 }
+    } },
+    "capabilityCall": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "callId", "call"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "capability_call" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+      "call": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/request" }
+    } },
+    "capabilityResult": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "callId", "result"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "capability_result" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+      "result": { "oneOf": [{ "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/succeeded" }, { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/failed" }, { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/cancelled" }] }
+    } },
+    "fetchObservation": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "requestId", "observation"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "fetch_observation" }, "invocationId": { "$ref": "#/$defs/id" }, "requestId": { "$ref": "#/$defs/id" },
+      "observation": { "$ref": "https://cronflow.dev/schemas/native-fetch-observation/v1" }
+    } },
+    "failureOutcome": { "type": "object", "additionalProperties": false, "required": ["kind", "error"], "properties": {
+      "kind": { "const": "failure" }, "error": { "$ref": "https://cronflow.dev/schemas/attempt-failure/v3#/$defs/hostReportedFailure" }
+    } },
+    "fetchObservationAck": { "type": "object", "additionalProperties": false, "required": ["protocol", "protocolVersion", "messageType", "invocationId", "requestId", "accepted"], "properties": {
+      "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 4 }, "messageType": { "const": "fetch_observation_ack" }, "invocationId": { "$ref": "#/$defs/id" }, "requestId": { "$ref": "#/$defs/id" },
+      "accepted": { "type": "boolean" }, "error": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/failure" }
+    }, "allOf": [
+      { "if": { "properties": { "accepted": { "const": false } }, "required": ["accepted"] }, "then": { "required": ["error"] } },
+      { "if": { "properties": { "accepted": { "const": true } }, "required": ["accepted"] }, "then": { "not": { "required": ["error"] } } }
+    ] }
+  }
+}

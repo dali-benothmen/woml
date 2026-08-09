@@ -14,6 +14,7 @@ export {
   type CompiledWorkflowDefinitionV5,
   type CompiledWorkflowDefinitionV6,
   type CompiledWorkflowDefinitionV7,
+  type CompiledWorkflowDefinitionV8,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,
@@ -27,10 +28,16 @@ export {
   type LiteralExpression,
   type ObjectExpression,
   type RetryPolicy,
+  type ScriptRuntimeBindingsV1,
   type SecretReferenceExpression,
   type TemplateExpression,
   type ValueExpression,
 } from './model';
+export {
+  analyzeWomlScript,
+  type ScriptAnalysis,
+  type ScriptAnalysisIssue,
+} from './script-analysis';
 export { parseWoml, type ParseWomlOptions } from './parser';
 export {
   isValidSecretName,
