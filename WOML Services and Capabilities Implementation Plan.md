@@ -1,11 +1,13 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0 through SC4 completed on 2026-08-09. The cross-layer
+Status: active. SC0 through SC5 completed on 2026-08-09. The cross-layer
 contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
 Script Bindings v1 and symbolic secret dependencies, and a real WOML script can
 now call from an isolated Bun Worker through the durable Rust capability
-authority. Native `fetch()` now preserves Bun's API while Rust records safe,
-durable observations. SC5 is next: the managed `services.http.request()` API.
+authority. Native `fetch()` preserves Bun's API while Rust records safe,
+durable observations. Managed `services.http.request()` now executes through
+Rust with pooling, bounded results, cancellation, safe errors, and durable
+operation events. SC6 is next: harden and publish the HTTP foundation.
 
 ## 1. Product Outcome
 
@@ -496,6 +498,11 @@ Call ordering alone is not a universal exactly-once mechanism for arbitrary
 dynamic JavaScript. SC0 must freeze the automatic single-call behavior and the
 explicit naming/key escape hatch for a step that performs several writes.
 
+SC5 freezes that escape hatch as an optional second argument:
+`services.http.request(request, { name: "stable-name" })`. A step may use one
+automatic effectful `http.request`; additional effectful calls require stable
+names. Read-only HTTP calls remain freely multiplexable.
+
 ### 7.2 Persistence boundary
 
 Rust appends operation-started before dispatching a managed effect. A terminal
@@ -793,6 +800,8 @@ fetches, redaction, and fail-closed crash handling.
 
 ### SC5 — Execute `services.http.request()` through Rust
 
+Status: completed on 2026-08-09.
+
 Changes:
 
 - Implement the frozen JavaScript facade and Rust HTTP handler.
@@ -805,7 +814,9 @@ Changes:
 Result:
 
 The first managed service works end to end from `.woml` through Rust and back
-to the script.
+to the script. Authors receive only `{ status, ok, headers, data, url,
+redirected }`; request credentials, query values, and bodies do not enter the
+durable operation metadata.
 
 Gate:
 

@@ -165,6 +165,10 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
 
 impl RuntimeExecutionOptions {
   pub fn new(script_host: ScriptHostProcessOptions, script_timeout_ms: u64) -> Self {
+    let capability_registry = Arc::new(CapabilityRegistry::default());
+    capability_registry
+      .register(Arc::new(crate::ManagedHttpHandler::default()))
+      .expect("the production HTTP capability is registered exactly once");
     Self {
       script_host,
       script_timeout_ms,
@@ -175,7 +179,7 @@ impl RuntimeExecutionOptions {
       schedule_progress_reporter: None,
       interval_progress_reporter: None,
       resolved_secrets: Arc::new(BTreeMap::new()),
-      capability_registry: Arc::new(CapabilityRegistry::default()),
+      capability_registry,
       capability_authority: None,
     }
   }

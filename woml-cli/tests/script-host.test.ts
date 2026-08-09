@@ -674,6 +674,177 @@ return {
     });
   });
 
+  test('protocol v4 lowers managed HTTP defaults and exposes only its public result', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const managedResult = {
+          contract: 'woml.managed-http',
+          contractVersion: 1,
+          kind: 'result',
+          status: 201,
+          ok: true,
+          headers: { 'content-type': 'application/json' },
+          data: { created: true },
+          url: 'https://api.example.test/orders?expand=customer',
+          redirected: false,
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(managedResult)),
+            durationMs: 3,
+            result: managedResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_managed_http',
+        `return await services.http.request({
+          url: 'https://api.example.test/orders',
+          method: 'post',
+          query: { expand: 'customer' },
+          json: { amount: 42 },
+          timeout: '2s',
+          idempotency: { header: 'Idempotency-Key', value: 'order-42' }
+        }, { name: 'create-order' });`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.call).toMatchObject({
+      capability: 'http',
+      operation: 'request',
+      identity: {
+        mode: 'named',
+        operationName: 'http.request.create-order',
+        providerIdempotencyKey: 'order-42',
+      },
+      limits: { timeoutMs: 3_000 },
+      input: {
+        contract: 'woml.managed-http',
+        contractVersion: 1,
+        kind: 'request',
+        method: 'POST',
+        headers: {},
+        responseType: 'json',
+        timeoutMs: 2_000,
+        acceptedStatus: { minimum: 200, maximum: 299 },
+        redirect: 'follow',
+        maximumRedirects: 10,
+      },
+    });
+    expect(completed[0]?.outcome).toEqual({
+      kind: 'success',
+      value: {
+        status: 201,
+        ok: true,
+        headers: { 'content-type': 'application/json' },
+        data: { created: true },
+        url: 'https://api.example.test/orders?expand=customer',
+        redirected: false,
+      },
+    });
+  });
+
+  test('protocol v4 requires names when a step makes multiple effectful managed HTTP calls', async () => {
+    const completed: CompletedMessage[] = [];
+    let callCount = 0;
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        callCount += 1;
+        const managedResult = {
+          contract: 'woml.managed-http',
+          contractVersion: 1,
+          kind: 'result',
+          status: 204,
+          ok: true,
+          headers: {},
+          data: null,
+          url: 'https://api.example.test/orders',
+          redirected: false,
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(managedResult)),
+            durationMs: 1,
+            result: managedResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_effect_names',
+        `await services.http.request({
+          url: 'https://api.example.test/orders', method: 'POST', responseType: 'text'
+        });
+        try {
+          await services.http.request({
+            url: 'https://api.example.test/audit', method: 'POST', responseType: 'text'
+          });
+          return { rejected: false };
+        } catch (error) {
+          return { rejected: true, message: error.message };
+        }`
+      )
+    );
+    await host.drain();
+
+    expect(callCount).toBe(1);
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'success',
+      value: {
+        rejected: true,
+        message: expect.stringContaining('require stable names'),
+      },
+    });
+  });
+
   test('protocol v4 bindings are deeply read-only and reject a known secret in results', async () => {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({

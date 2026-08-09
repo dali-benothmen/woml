@@ -297,7 +297,19 @@ impl CapabilityCancellationToken {
 pub trait CapabilityHandler: Send + Sync + 'static {
   fn descriptor(&self) -> CapabilityDescriptor;
 
+  fn validate_request(&self, _request: &CapabilityCallRequest) -> Result<(), CapabilityFailure> {
+    Ok(())
+  }
+
+  fn effect(&self, _input: &Value) -> CapabilityEffect {
+    self.descriptor().effect
+  }
+
   fn safe_metadata(&self, _input: &Value) -> Map<String, Value> {
+    Map::new()
+  }
+
+  fn safe_result_metadata(&self, _result: &Value) -> Map<String, Value> {
     Map::new()
   }
 
@@ -588,6 +600,10 @@ impl DurableCapabilityAuthority {
     let payload = match &result {
       CapabilityCallResult::Succeeded(success) => {
         let encoded = serde_json::to_vec(&success.result).unwrap_or_default();
+        let result_metadata = self
+          .registry
+          .safe_result_metadata(&request, &success.result)
+          .unwrap_or_default();
         RunEventPayload::OperationSucceeded(OperationSucceededData {
           node_id: request.node_id.clone(),
           attempt_number: request.attempt_number,
@@ -597,7 +613,7 @@ impl DurableCapabilityAuthority {
           capability: request.capability.clone(),
           operation: request.operation.clone(),
           execution_mode: OperationExecutionMode::Managed,
-          metadata,
+          metadata: result_metadata,
           duration_ms: success.duration_ms,
           result_bytes: success.result_bytes,
           result_digest: format!("sha256:{}", hex::encode(Sha256::digest(&encoded))),
@@ -990,9 +1006,9 @@ impl CapabilityRegistry {
         )
       }
     };
-    let descriptor = handler.descriptor();
-    let may_have_effect = descriptor.effect != CapabilityEffect::Read;
-    let safe_to_retry = descriptor.effect != CapabilityEffect::UnsafeWrite;
+    let effect = handler.effect(&request.input);
+    let may_have_effect = effect != CapabilityEffect::Read;
+    let safe_to_retry = effect != CapabilityEffect::UnsafeWrite;
 
     let handler_future =
       AssertUnwindSafe(handler.execute(request.input.clone(), cancellation.clone())).catch_unwind();
@@ -1117,7 +1133,27 @@ impl CapabilityRegistry {
         false,
       ));
     }
+    handler.validate_request(request)?;
     Ok(handler)
+  }
+
+  pub fn safe_result_metadata(
+    &self,
+    request: &CapabilityCallRequest,
+    result: &Value,
+  ) -> Result<Map<String, Value>, CapabilityFailure> {
+    let handler = self.lookup_and_validate(request)?;
+    let metadata = handler.safe_result_metadata(result);
+    validate_safe_metadata(&metadata).map_err(|message| {
+      failure(
+        CapabilityFailureKind::InvalidResult,
+        "WOML_CAPABILITY_UNSAFE_RESULT_METADATA",
+        message,
+        false,
+        false,
+      )
+    })?;
+    Ok(metadata)
   }
 
   fn acquire(&self, invocation_id: &str) -> Option<CapabilityPermit<'_>> {

@@ -9,6 +9,7 @@ pub mod durable;
 pub mod engine;
 pub mod event;
 pub mod host;
+pub mod http;
 pub mod interval;
 pub mod model;
 pub mod notification_host;
@@ -60,6 +61,7 @@ pub use event::{
   RunFailedDataV4, RunFailedDataV5, RunStartedData, StepRetryScheduledData,
 };
 pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions};
+pub use http::ManagedHttpHandler;
 pub use interval::{
   IntervalError, IntervalProgress, IntervalProgressReason, IntervalProgressReporter, WomlInterval,
   INTERVAL_PROGRESS_CONTRACT, INTERVAL_PROGRESS_CONTRACT_VERSION, MAX_INTERVAL_MS, MIN_INTERVAL_MS,

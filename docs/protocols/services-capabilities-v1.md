@@ -1,7 +1,7 @@
 # WOML Services and Capabilities Contracts v1
 
-Status: frozen by SC0 on 2026-08-09. No service is executable until its later
-implementation phase.
+Status: frozen by SC0 on 2026-08-09. Native Fetch observation shipped in SC4;
+Managed HTTP v1 became executable in SC5.
 
 ## Public boundary
 
@@ -41,8 +41,9 @@ against the active attempt before it records or dispatches the operation.
 Automatic operation identity is allowed for one effectful call to a given
 capability operation in a step. A script that may perform multiple effectful
 calls must give them stable logical names. Read-only calls may be multiplexed.
-The exact JavaScript option exposing the name is finalized with the first
-effectful service facade; the protocol shape is already reserved.
+Managed HTTP freezes the author-facing naming shape as the optional second
+argument `services.http.request(request, { name: "stable-name" })`. WOML
+prefixes that name with `http.request.` before deriving the operation key.
 
 Default v1 limits are 1 MiB input, 4 MiB result, 8 MiB protocol frame, 30
 seconds, 32 calls in flight per invocation, and 256 calls in flight across one
@@ -103,6 +104,12 @@ override permits another response. A non-accepted response rejects with a
 `service_rejected` WOML service error. JSON parse errors are `invalid_result`.
 TLS validation and compression use the Rust client's secure defaults.
 Cancellation is best effort and its terminal classification remains explicit.
+
+The optional external idempotency shape is
+`idempotency: { header: "Idempotency-Key", value: "..." }`. WOML verifies that
+the same value is present in Capability Call identity before Rust dispatches
+the request; the idempotency header must not also be supplied in `headers`.
+Byte request bodies and byte response data are standard Base64 strings.
 
 Retry classification is conservative: reads and a write carrying a reviewed
 external idempotency key can be retryable for failures known to occur before a

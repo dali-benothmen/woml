@@ -4,6 +4,7 @@ import type {
   CapabilityCallResult,
   CapabilityFailure,
   FetchObservationAckMessage,
+  JsonObject,
   JsonValue,
   NativeFetchObservation,
   ScriptAttempt,
@@ -149,9 +150,14 @@ function serializeError(error: unknown): ScriptWorkerResponse {
 }
 
 class ServiceCallError extends Error {
+  readonly code: string;
+  readonly service: string;
   readonly capability: string;
   readonly operation: string;
   readonly callId: string;
+  readonly retryable: boolean;
+  readonly ambiguous: boolean;
+  readonly details?: Readonly<Record<string, JsonValue>>;
   readonly cause: CapabilityFailure;
 
   constructor(
@@ -162,9 +168,14 @@ class ServiceCallError extends Error {
   ) {
     super(cause.message);
     this.name = 'WomlServiceError';
+    this.code = cause.code;
+    this.service = capability;
     this.capability = capability;
     this.operation = operation;
     this.callId = callId;
+    this.retryable = cause.retryable;
+    this.ambiguous = cause.ambiguous;
+    this.details = cause.details;
     this.cause = cause;
   }
 }
@@ -184,7 +195,8 @@ const pendingFetchAcks = new Map<
     readonly reject: (error: NativeFetchTrackingError) => void;
   }
 >();
-let callSequence = 0;
+const operationSequences = new Map<string, number>();
+const automaticEffectfulCalls = new Map<string, number>();
 let fetchSequence = 0;
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const nativeFetchFailures = new WeakMap<
@@ -373,6 +385,159 @@ function callId(): string {
   return `call_${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
+function plainObject(value: unknown): Record<string, JsonValue> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, JsonValue>)
+    : undefined;
+}
+
+function httpTimeoutMilliseconds(input: Record<string, JsonValue>): number {
+  if (input.timeout !== undefined && input.timeoutMs !== undefined) {
+    throw new TypeError('Managed HTTP accepts timeout or timeoutMs, not both.');
+  }
+  const value = input.timeout ?? input.timeoutMs ?? 30_000;
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (typeof value !== 'string') {
+    throw new TypeError(
+      'Managed HTTP timeout must be milliseconds or a duration string.'
+    );
+  }
+  const match = value.match(/^(\d+)(ms|s|m|h)$/);
+  if (match === null) {
+    throw new TypeError(
+      'Managed HTTP timeout must look like 500ms, 10s, 2m, or 1h.'
+    );
+  }
+  const multiplier =
+    match[2] === 'ms'
+      ? 1
+      : match[2] === 's'
+        ? 1_000
+        : match[2] === 'm'
+          ? 60_000
+          : 3_600_000;
+  return Number(match[1]) * multiplier;
+}
+
+function normalizeHttpRequest(input: JsonValue): JsonObject {
+  const object = plainObject(input);
+  if (object === undefined) {
+    throw new TypeError('services.http.request() requires a request object.');
+  }
+  const allowed = new Set([
+    'url',
+    'method',
+    'headers',
+    'query',
+    'json',
+    'text',
+    'bytesBase64',
+    'responseType',
+    'timeout',
+    'timeoutMs',
+    'acceptedStatus',
+    'redirect',
+    'maximumRedirects',
+    'idempotency',
+  ]);
+  const unknown = Object.keys(object).find(key => !allowed.has(key));
+  if (unknown !== undefined) {
+    throw new TypeError(`Unknown managed HTTP option "${unknown}".`);
+  }
+  if (typeof object.url !== 'string' || object.url.length === 0) {
+    throw new TypeError('Managed HTTP requires a URL string.');
+  }
+  const method = String(object.method ?? 'GET').toUpperCase();
+  const headers = plainObject(object.headers ?? {});
+  if (
+    headers === undefined ||
+    Object.values(headers).some(value => typeof value !== 'string')
+  ) {
+    throw new TypeError('Managed HTTP headers must contain string values.');
+  }
+  const timeoutMs = httpTimeoutMilliseconds(object);
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 86_400_000
+  ) {
+    throw new TypeError(
+      'Managed HTTP timeout must be between 1 ms and 24 hours.'
+    );
+  }
+  const normalized: Record<string, JsonValue> = {
+    contract: 'woml.managed-http',
+    contractVersion: 1,
+    kind: 'request',
+    method,
+    url: object.url,
+    headers,
+    responseType: object.responseType ?? 'json',
+    timeoutMs,
+    acceptedStatus: object.acceptedStatus ?? { minimum: 200, maximum: 299 },
+    redirect: object.redirect ?? 'follow',
+    maximumRedirects: object.maximumRedirects ?? 10,
+  };
+  for (const field of [
+    'query',
+    'json',
+    'text',
+    'bytesBase64',
+    'idempotency',
+  ] as const) {
+    if (object[field] !== undefined) normalized[field] = object[field];
+  }
+  return normalized;
+}
+
+function namedOperation(
+  capability: string,
+  operation: string,
+  options: JsonValue | undefined
+): { readonly mode: 'automatic' | 'named'; readonly name: string } {
+  if (options === undefined) {
+    const key = `${capability}.${operation}`;
+    const sequence = (operationSequences.get(key) ?? 0) + 1;
+    operationSequences.set(key, sequence);
+    return {
+      mode: 'automatic',
+      name: sequence === 1 ? key : `${key}.${sequence}`,
+    };
+  }
+  const object = plainObject(options);
+  const name = object?.name;
+  if (
+    object === undefined ||
+    Object.keys(object).length !== 1 ||
+    typeof name !== 'string' ||
+    !/^[a-z][a-z0-9._-]{0,127}$/.test(name)
+  ) {
+    throw new TypeError(
+      'Service call options must be exactly { name: "stable-operation-name" }.'
+    );
+  }
+  return { mode: 'named', name: `${capability}.${operation}.${name}` };
+}
+
+function publicHttpResult(result: JsonValue): JsonObject {
+  const object = plainObject(result);
+  if (
+    object?.contract !== 'woml.managed-http' ||
+    object.contractVersion !== 1 ||
+    object.kind !== 'result'
+  ) {
+    throw new TypeError('Rust returned an invalid Managed HTTP v1 result.');
+  }
+  return {
+    status: object.status,
+    ok: object.ok,
+    headers: object.headers,
+    data: object.data,
+    url: object.url,
+    redirected: object.redirected,
+  };
+}
+
 function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
   if (request.attempt === undefined || request.bindings === undefined) {
     return Object.freeze({});
@@ -390,8 +555,19 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
           const known = operationCache.get(operationProperty);
           if (known !== undefined) return known;
           const invoke = async (
-            input: JsonValue = null
+            rawInput: JsonValue = null,
+            callOptions?: JsonValue
           ): Promise<JsonValue> => {
+            const managedHttp =
+              capabilityProperty === 'http' && operationProperty === 'request';
+            if (!managedHttp && callOptions !== undefined) {
+              throw new TypeError(
+                'Named service-call options are currently supported by services.http.request() only.'
+              );
+            }
+            const input = managedHttp
+              ? normalizeHttpRequest(rawInput)
+              : rawInput;
             const violation = findJsonViolation(input);
             if (violation !== undefined) {
               throw new TypeError(`${violation.path}: ${violation.reason}`);
@@ -414,11 +590,43 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
                 }
               );
             }
-            const sequence = ++callSequence;
-            const operationName =
-              sequence === 1
-                ? `${capabilityProperty}.${operationProperty}`
-                : `${capabilityProperty}.${operationProperty}.${sequence}`;
+            const identity = namedOperation(
+              capabilityProperty,
+              operationProperty,
+              callOptions
+            );
+            const method = managedHttp
+              ? String((input as JsonObject).method)
+              : undefined;
+            const effectful =
+              managedHttp &&
+              method !== 'GET' &&
+              method !== 'HEAD' &&
+              method !== 'OPTIONS';
+            if (effectful && identity.mode === 'automatic') {
+              const key = `${capabilityProperty}.${operationProperty}`;
+              const count = (automaticEffectfulCalls.get(key) ?? 0) + 1;
+              automaticEffectfulCalls.set(key, count);
+              if (count > 1) {
+                throw new TypeError(
+                  'Multiple effectful services.http.request() calls in one step require stable names, for example { name: "create-order" }.'
+                );
+              }
+            }
+            const operationName = identity.name;
+            const httpIdempotency = managedHttp
+              ? plainObject((input as JsonObject).idempotency)
+              : undefined;
+            const providerIdempotencyKey =
+              typeof httpIdempotency?.value === 'string'
+                ? httpIdempotency.value
+                : undefined;
+            const timeoutMs = managedHttp
+              ? Math.min(
+                  86_400_000,
+                  Number((input as JsonObject).timeoutMs) + 1_000
+                )
+              : 30_000;
             const id = callId();
             const call: CapabilityCallRequest = {
               contract: 'woml.capability-call',
@@ -434,22 +642,25 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
               inputContractVersion: 1,
               resultContractVersion: 1,
               identity: {
-                mode: 'automatic',
+                mode: identity.mode,
                 stepIdempotencyKey: request.attempt!.idempotencyKey,
                 operationName,
                 operationKey: await operationKey(
                   request.attempt!.idempotencyKey,
                   operationName
                 ),
+                ...(providerIdempotencyKey === undefined
+                  ? {}
+                  : { providerIdempotencyKey }),
               },
               limits: {
                 inputBytes: 1_048_576,
                 resultBytes: 4_194_304,
-                timeoutMs: 30_000,
+                timeoutMs,
               },
               input,
             };
-            return await new Promise<JsonValue>((resolve, reject) => {
+            const result = await new Promise<JsonValue>((resolve, reject) => {
               pendingCalls.set(id, {
                 capability: capabilityProperty,
                 operation: operationProperty,
@@ -461,6 +672,7 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
                 call,
               } satisfies ScriptWorkerOutbound);
             });
+            return managedHttp ? publicHttpResult(result) : result;
           };
           Object.freeze(invoke);
           operationCache.set(operationProperty, invoke);
@@ -481,6 +693,8 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
 
 async function execute(request: ScriptWorkerRequest): Promise<void> {
   try {
+    operationSequences.clear();
+    automaticEffectfulCalls.clear();
     const context = deepFreezeJson(request.context);
     const attempt =
       request.attempt === undefined
