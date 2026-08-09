@@ -1095,12 +1095,14 @@ async fn invoke_parallel_child(
           actual_bytes: Some(encoded.len() as u64),
           limit_bytes: Some(limit as u64),
         }),
+        ..AttemptFailure::legacy_defaults()
       }),
       Err(error) => Err(AttemptFailure {
         kind: AttemptFailureKind::InvalidScriptResult,
         code: AttemptFailureKind::InvalidScriptResult.code().to_string(),
         message: format!("Invocation context could not be encoded: {error}"),
         details: None,
+        ..AttemptFailure::legacy_defaults()
       }),
       _ => execute_parallel_request(host, &request).await,
     }
@@ -1129,6 +1131,7 @@ async fn execute_parallel_request(
     code: AttemptFailureKind::InvalidScriptResult.code().to_string(),
     message,
     details: None,
+    ..AttemptFailure::legacy_defaults()
   })?;
   let request = ExecuteMessage::runtime_script(
     &invocation.invocation_id,
@@ -1149,6 +1152,7 @@ async fn execute_parallel_request(
       code: AttemptFailureKind::HostCrashed.code().to_string(),
       message: error.to_string(),
       details: None,
+      ..AttemptFailure::legacy_defaults()
     }),
   }
 }
@@ -1513,6 +1517,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
           actual_bytes: Some(actual as u64),
           limit_bytes: Some(limit as u64),
         }),
+        ..AttemptFailure::legacy_defaults()
       };
       return settle_script_attempt_failure(
         engine,
@@ -1542,6 +1547,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
             code: AttemptFailureKind::HostCrashed.code().to_string(),
             message: error.to_string(),
             details: None,
+            ..AttemptFailure::legacy_defaults()
           },
         );
       }
@@ -1571,6 +1577,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
         code: AttemptFailureKind::HostCrashed.code().to_string(),
         message: error.to_string(),
         details: None,
+        ..AttemptFailure::legacy_defaults()
       };
       return settle_script_attempt_failure(
         engine,

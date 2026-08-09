@@ -34,6 +34,7 @@ fn script_failure(message: &str) -> AttemptFailure {
     code: AttemptFailureKind::ScriptThrew.code().to_string(),
     message: message.to_string(),
     details: None,
+    ..AttemptFailure::legacy_defaults()
   }
 }
 

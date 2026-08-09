@@ -5,7 +5,7 @@
   "description": "Generic, asynchronous, invocation-scoped call and result contract for Rust-managed services.",
   "x-status": "services-capabilities-contract-frozen",
   "x-correlation": "Every reply correlates by invocationId and callId; replies may arrive out of order.",
-  "x-idempotency": "operationKey identifies a logical operation. automatic identity is limited to one effectful call per capability operation per step attempt; authors must supply a stable name when multiple effectful calls can occur.",
+  "x-idempotency": "operationKey is sha256(UTF8('woml.capability-operation\\0v1\\0' + stepIdempotencyKey + '\\0' + operationName)). automatic identity is limited to one effectful call per capability operation per step attempt; authors must supply a stable name when multiple effectful calls can occur.",
   "x-defaultLimits": { "inputBytes": 1048576, "resultBytes": 4194304, "frameBytes": 8388608, "timeoutMs": 30000, "inFlightPerInvocation": 32, "inFlightGlobal": 256 },
   "oneOf": [
     { "$ref": "#/$defs/request" },

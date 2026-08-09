@@ -8,9 +8,10 @@ use thiserror::Error;
 use crate::event::{
   ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalResolution,
   ApprovalTimeoutPolicy, AttemptFailure, BranchFailure, EventValidationError,
-  NotificationResolution, NotificationSafeFailure, ParallelFailure, ParallelFailurePolicy,
-  ParallelGroupOutcome, ProviderMessageIdentity, RunEvent, RunEventPayload, RunFailedData,
-  RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, StepAttemptStartedData,
+  NotificationResolution, NotificationSafeFailure, OperationExecutionMode, ParallelFailure,
+  ParallelFailurePolicy, ParallelGroupOutcome, ProviderMessageIdentity, RunEvent, RunEventPayload,
+  RunFailedData, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5,
+  StepAttemptStartedData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -50,6 +51,39 @@ pub struct AttemptProjection {
   pub handler: String,
   pub idempotency_key: Option<String>,
   pub status: AttemptStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OperationIdentity {
+  pub invocation_id: String,
+  pub call_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OperationStatus {
+  Started,
+  Succeeded {
+    duration_ms: f64,
+    result_bytes: u64,
+    result_digest: String,
+  },
+  Failed {
+    duration_ms: f64,
+    failure: crate::CapabilityFailure,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationProjection {
+  pub identity: OperationIdentity,
+  pub node_id: String,
+  pub attempt_number: u32,
+  pub operation_key: String,
+  pub capability: String,
+  pub operation: String,
+  pub execution_mode: OperationExecutionMode,
+  pub metadata: Map<String, Value>,
+  pub status: OperationStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +229,7 @@ pub struct RunProjection {
   pub status: RunStatus,
   pub context: WorkflowContext,
   pub attempts: Vec<AttemptProjection>,
+  pub operations: BTreeMap<OperationIdentity, OperationProjection>,
   pub pending_retries: BTreeMap<String, RetryScheduleProjection>,
   pub branch_selections: BTreeMap<String, String>,
   pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
@@ -237,6 +272,18 @@ impl RunProjection {
       .rev()
       .find(|attempt| attempt.identity.node_id == node_id)
   }
+
+  pub fn active_managed_operations(&self, invocation_id: &str) -> Vec<&OperationProjection> {
+    self
+      .operations
+      .values()
+      .filter(|operation| {
+        operation.identity.invocation_id == invocation_id
+          && operation.execution_mode == OperationExecutionMode::Managed
+          && operation.status == OperationStatus::Started
+      })
+      .collect()
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -252,6 +299,54 @@ fn identity(node_id: &str, attempt: u32, invocation_id: &str) -> AttemptIdentity
     node_id: node_id.to_string(),
     attempt,
     invocation_id: invocation_id.to_string(),
+  }
+}
+
+fn validate_operation_terminal_identity(
+  started: &OperationProjection,
+  node_id: &str,
+  attempt_number: u32,
+  operation_key: &str,
+  capability: &str,
+  operation: &str,
+  execution_mode: OperationExecutionMode,
+) -> Result<(), FoldError> {
+  if started.status != OperationStatus::Started {
+    return Err(FoldError::InvalidHistory(
+      "An operation may have at most one terminal event.".to_string(),
+    ));
+  }
+  if started.node_id != node_id
+    || started.attempt_number != attempt_number
+    || started.operation_key != operation_key
+    || started.capability != capability
+    || started.operation != operation
+    || started.execution_mode != execution_mode
+  {
+    return Err(FoldError::InvalidHistory(
+      "Terminal operation identity does not match operation_started.".to_string(),
+    ));
+  }
+  Ok(())
+}
+
+fn require_active_operation_attempt(
+  projection: &RunProjection,
+  node_id: &str,
+  attempt_number: u32,
+  invocation_id: &str,
+) -> Result<(), FoldError> {
+  if projection.attempts.iter().any(|attempt| {
+    attempt.identity.node_id == node_id
+      && attempt.identity.attempt == attempt_number
+      && attempt.identity.invocation_id == invocation_id
+      && attempt.status == AttemptStatus::Started
+  }) {
+    Ok(())
+  } else {
+    Err(FoldError::InvalidHistory(
+      "A terminal operation event requires its matching active step attempt.".to_string(),
+    ))
   }
 }
 
@@ -401,6 +496,15 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
       }
       RunEventPayload::StepAttemptSucceeded(data) => {
         require_running(&projection)?;
+        if !projection
+          .active_managed_operations(&data.invocation_id)
+          .is_empty()
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "Attempt {:?} cannot succeed while a managed operation remains active.",
+            data.invocation_id
+          )));
+        }
         let key = identity(&data.node_id, data.attempt, &data.invocation_id);
         let attempt_index = *attempt_indexes.get(&key).ok_or_else(|| {
           FoldError::InvalidHistory(format!(
@@ -431,6 +535,15 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
       }
       RunEventPayload::StepAttemptFailed(data) => {
         require_running(&projection)?;
+        if !projection
+          .active_managed_operations(&data.invocation_id)
+          .is_empty()
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "Attempt {:?} cannot fail while a managed operation remains active.",
+            data.invocation_id
+          )));
+        }
         let key = identity(&data.node_id, data.attempt, &data.invocation_id);
         let attempt_index = *attempt_indexes.get(&key).ok_or_else(|| {
           FoldError::InvalidHistory(format!(
@@ -908,8 +1021,124 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           failed_at: event.occurred_at,
         };
       }
+      RunEventPayload::OperationStarted(data) => {
+        require_running(&projection)?;
+        let attempt_active = projection.attempts.iter().any(|attempt| {
+          attempt.identity.node_id == data.node_id
+            && attempt.identity.attempt == data.attempt_number
+            && attempt.identity.invocation_id == data.invocation_id
+            && attempt.status == AttemptStatus::Started
+        });
+        if !attempt_active {
+          return Err(FoldError::InvalidHistory(
+            "operation_started requires its matching active step attempt.".to_string(),
+          ));
+        }
+        let key = OperationIdentity {
+          invocation_id: data.invocation_id.clone(),
+          call_id: data.call_id.clone(),
+        };
+        if projection.operations.contains_key(&key) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Operation call {:?} was started more than once in invocation {:?}.",
+            data.call_id, data.invocation_id
+          )));
+        }
+        if projection.operations.values().any(|operation| {
+          operation.identity.invocation_id == data.invocation_id
+            && operation.operation_key == data.operation_key
+        }) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Logical operation key {:?} was reused within invocation {:?}.",
+            data.operation_key, data.invocation_id
+          )));
+        }
+        projection.operations.insert(
+          key.clone(),
+          OperationProjection {
+            identity: key,
+            node_id: data.node_id.clone(),
+            attempt_number: data.attempt_number,
+            operation_key: data.operation_key.clone(),
+            capability: data.capability.clone(),
+            operation: data.operation.clone(),
+            execution_mode: data.execution_mode,
+            metadata: data.metadata.clone(),
+            status: OperationStatus::Started,
+          },
+        );
+      }
+      RunEventPayload::OperationSucceeded(data) => {
+        require_running(&projection)?;
+        require_active_operation_attempt(
+          &projection,
+          &data.node_id,
+          data.attempt_number,
+          &data.invocation_id,
+        )?;
+        let key = OperationIdentity {
+          invocation_id: data.invocation_id.clone(),
+          call_id: data.call_id.clone(),
+        };
+        let operation = projection.operations.get_mut(&key).ok_or_else(|| {
+          FoldError::InvalidHistory("operation_succeeded has no matching start.".to_string())
+        })?;
+        validate_operation_terminal_identity(
+          operation,
+          &data.node_id,
+          data.attempt_number,
+          &data.operation_key,
+          &data.capability,
+          &data.operation,
+          data.execution_mode,
+        )?;
+        operation.metadata = data.metadata.clone();
+        operation.status = OperationStatus::Succeeded {
+          duration_ms: data.duration_ms,
+          result_bytes: data.result_bytes,
+          result_digest: data.result_digest.clone(),
+        };
+      }
+      RunEventPayload::OperationFailed(data) => {
+        require_running(&projection)?;
+        require_active_operation_attempt(
+          &projection,
+          &data.node_id,
+          data.attempt_number,
+          &data.invocation_id,
+        )?;
+        let key = OperationIdentity {
+          invocation_id: data.invocation_id.clone(),
+          call_id: data.call_id.clone(),
+        };
+        let operation = projection.operations.get_mut(&key).ok_or_else(|| {
+          FoldError::InvalidHistory("operation_failed has no matching start.".to_string())
+        })?;
+        validate_operation_terminal_identity(
+          operation,
+          &data.node_id,
+          data.attempt_number,
+          &data.operation_key,
+          &data.capability,
+          &data.operation,
+          data.execution_mode,
+        )?;
+        operation.metadata = data.metadata.clone();
+        operation.status = OperationStatus::Failed {
+          duration_ms: data.duration_ms,
+          failure: data.failure.clone(),
+        };
+      }
       RunEventPayload::RunSucceeded(data) => {
         require_running(&projection)?;
+        if projection.operations.values().any(|operation| {
+          operation.execution_mode == OperationExecutionMode::Managed
+            && operation.status == OperationStatus::Started
+        }) {
+          return Err(FoldError::InvalidHistory(
+            "A run cannot succeed while a managed operation remains active.".to_string(),
+          ));
+        }
         if !projection.pending_retries.is_empty() {
           return Err(FoldError::InvalidHistory(
             "A run cannot succeed while a retry remains pending.".to_string(),
@@ -935,6 +1164,14 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         projection.result = Some(data.result.clone());
       }
       RunEventPayload::RunFailed(data) => {
+        if projection.operations.values().any(|operation| {
+          operation.execution_mode == OperationExecutionMode::Managed
+            && operation.status == OperationStatus::Started
+        }) {
+          return Err(FoldError::InvalidHistory(
+            "A run cannot fail while a managed operation remains active.".to_string(),
+          ));
+        }
         if matches!(data, RunFailedData::V5(_)) {
           if projection.status != RunStatus::Waiting {
             return Err(FoldError::InvalidHistory(

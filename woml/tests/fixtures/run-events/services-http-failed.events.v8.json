@@ -5,7 +5,7 @@
   },
   {
     "eventSchemaVersion": 8, "eventId": "event_services_failed_002", "runId": "run-services-failed", "sequence": 2, "occurredAt": "2026-08-09T08:10:00.001Z", "type": "step_attempt_started",
-    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-service-failed", "handler": "runtime.script", "idempotencyKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-service-failed", "handler": "runtime.script", "idempotencyKey": "sha256:ff3f848f1abaca96b1e56cd9483623301935b57378158ac61db3f3e91e27742a" }
   },
   {
     "eventSchemaVersion": 8, "eventId": "event_services_failed_003", "runId": "run-services-failed", "sequence": 3, "occurredAt": "2026-08-09T08:10:00.002Z", "type": "operation_started",

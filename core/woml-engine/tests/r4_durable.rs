@@ -376,6 +376,7 @@ fn recovery_finishes_a_known_failure_without_reclassifying_it_as_interrupted() {
     code: AttemptFailureKind::ScriptThrew.code().to_string(),
     message: "boom".to_string(),
     details: None,
+    ..AttemptFailure::legacy_defaults()
   };
   store
     .append_payload(

@@ -4,9 +4,10 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::{
+  capability::{validate_safe_metadata, CapabilityFailure},
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3,
   RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6,
-  RUN_EVENT_SCHEMA_VERSION_V7,
+  RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,8 +44,65 @@ pub enum RunEventPayload {
   NotificationMessageUpdateAttemptStarted(NotificationMessageUpdateAttemptStartedData),
   NotificationMessageUpdated(NotificationMessageUpdatedData),
   NotificationMessageUpdateFailed(NotificationMessageUpdateFailedData),
+  OperationStarted(OperationStartedData),
+  OperationSucceeded(OperationSucceededData),
+  OperationFailed(OperationFailedData),
   RunSucceeded(RunSucceededData),
   RunFailed(RunFailedData),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationExecutionMode {
+  Observed,
+  Managed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationStartedData {
+  pub node_id: String,
+  pub attempt_number: u32,
+  pub invocation_id: String,
+  pub call_id: String,
+  pub operation_key: String,
+  pub capability: String,
+  pub operation: String,
+  pub execution_mode: OperationExecutionMode,
+  pub metadata: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationSucceededData {
+  pub node_id: String,
+  pub attempt_number: u32,
+  pub invocation_id: String,
+  pub call_id: String,
+  pub operation_key: String,
+  pub capability: String,
+  pub operation: String,
+  pub execution_mode: OperationExecutionMode,
+  pub metadata: Map<String, Value>,
+  pub duration_ms: f64,
+  pub result_bytes: u64,
+  pub result_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationFailedData {
+  pub node_id: String,
+  pub attempt_number: u32,
+  pub invocation_id: String,
+  pub call_id: String,
+  pub operation_key: String,
+  pub capability: String,
+  pub operation: String,
+  pub execution_mode: OperationExecutionMode,
+  pub metadata: Map<String, Value>,
+  pub duration_ms: f64,
+  pub failure: CapabilityFailure,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -469,6 +527,7 @@ pub enum AttemptFailureKind {
   HostCrashed,
   InvocationCancelled,
   Interrupted,
+  ServiceFailed,
 }
 
 impl AttemptFailureKind {
@@ -483,6 +542,7 @@ impl AttemptFailureKind {
       Self::HostCrashed => "WOML_SCRIPT_HOST_CRASHED",
       Self::InvocationCancelled => "WOML_SCRIPT_CANCELLED",
       Self::Interrupted => "WOML_STEP_INTERRUPTED",
+      Self::ServiceFailed => "WOML_SERVICE_FAILED",
     }
   }
 
@@ -501,13 +561,25 @@ pub struct FailureSizeDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttemptFailure {
   pub kind: AttemptFailureKind,
   pub code: String,
   pub message: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub details: Option<FailureSizeDetails>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub capability: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub operation: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub call_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub retryable: Option<bool>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub ambiguous: Option<bool>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub cause: Option<CapabilityFailure>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -621,6 +693,45 @@ fn valid_sha256(value: &str) -> bool {
         .bytes()
         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
   })
+}
+
+fn valid_capability_name(value: &str) -> bool {
+  value.len() <= 128
+    && value.split(['.', '_', '-']).all(|segment| {
+      let mut characters = segment.chars();
+      matches!(characters.next(), Some(first) if first.is_ascii_lowercase())
+        && characters.all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+    })
+}
+
+fn validate_operation_base(
+  event_schema_version: u32,
+  node_id: &str,
+  attempt_number: u32,
+  invocation_id: &str,
+  call_id: &str,
+  operation_key: &str,
+  capability: &str,
+  operation: &str,
+  metadata: &Map<String, Value>,
+) -> Result<(), EventValidationError> {
+  if event_schema_version != RUN_EVENT_SCHEMA_VERSION_V8 {
+    return Err(EventValidationError::Invalid(
+      "Operation events are available only in run-event schema v8.".to_string(),
+    ));
+  }
+  validate_identity(node_id, attempt_number, invocation_id)?;
+  if attempt_number > 10
+    || !valid_id(call_id)
+    || !valid_sha256(operation_key)
+    || !valid_capability_name(capability)
+    || !valid_capability_name(operation)
+  {
+    return Err(EventValidationError::Invalid(
+      "Operation event contains an invalid correlation or logical operation identity.".to_string(),
+    ));
+  }
+  validate_safe_metadata(metadata).map_err(EventValidationError::Invalid)
 }
 
 fn valid_trigger_handler(value: &str) -> bool {
@@ -772,8 +883,47 @@ fn validate_notification_identity(
 }
 
 impl AttemptFailure {
+  pub fn legacy_defaults() -> Self {
+    Self {
+      kind: AttemptFailureKind::Interrupted,
+      code: AttemptFailureKind::Interrupted.code().to_string(),
+      message: "legacy failure defaults".to_string(),
+      details: None,
+      capability: None,
+      operation: None,
+      call_id: None,
+      retryable: None,
+      ambiguous: None,
+      cause: None,
+    }
+  }
+
   pub fn validate(&self) -> Result<(), EventValidationError> {
-    if self.code != self.kind.code() {
+    let service_fields = (
+      self.capability.as_deref(),
+      self.operation.as_deref(),
+      self.call_id.as_deref(),
+      self.retryable,
+      self.ambiguous,
+      self.cause.as_ref(),
+    );
+    if self.kind == AttemptFailureKind::ServiceFailed {
+      let valid = matches!(service_fields,
+        (Some(capability), Some(operation), Some(call_id), Some(retryable), Some(ambiguous), Some(cause))
+          if valid_capability_name(capability)
+            && valid_capability_name(operation)
+            && valid_id(call_id)
+            && retryable == cause.retryable
+            && ambiguous == cause.ambiguous
+            && self.code == cause.code
+            && cause.validate().is_ok()
+      );
+      if !valid || self.details.is_some() {
+        return Err(EventValidationError::Invalid(
+          "service_failed requires capability, operation, callId, retryable, ambiguous, and a matching safe cause.".to_string(),
+        ));
+      }
+    } else if self.code != self.kind.code() {
       return Err(EventValidationError::Invalid(format!(
         "Failure kind {:?} requires code {:?}, received {:?}.",
         self.kind,
@@ -784,6 +934,22 @@ impl AttemptFailure {
     if self.message.is_empty() {
       return Err(EventValidationError::Invalid(
         "Failure message must not be empty.".to_string(),
+      ));
+    }
+    if self.kind != AttemptFailureKind::ServiceFailed
+      && [
+        self.capability.is_some(),
+        self.operation.is_some(),
+        self.call_id.is_some(),
+        self.retryable.is_some(),
+        self.ambiguous.is_some(),
+        self.cause.is_some(),
+      ]
+      .into_iter()
+      .any(|present| present)
+    {
+      return Err(EventValidationError::Invalid(
+        "Only service_failed may contain service failure fields.".to_string(),
       ));
     }
     match (&self.details, self.kind.accepts_size_details()) {
@@ -811,6 +977,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V5
         | RUN_EVENT_SCHEMA_VERSION_V6
         | RUN_EVENT_SCHEMA_VERSION_V7
+        | RUN_EVENT_SCHEMA_VERSION_V8
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -833,7 +1000,7 @@ impl RunEvent {
           data.trigger_handler.as_deref(),
           data.trigger_occurrence_id.as_deref(),
         );
-        if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V7 {
+        if self.event_schema_version >= RUN_EVENT_SCHEMA_VERSION_V7 {
           if !matches!(
             trigger_identity,
             (Some(trigger_id), Some(handler), Some(occurrence_id))
@@ -890,6 +1057,7 @@ impl RunEvent {
               | RUN_EVENT_SCHEMA_VERSION_V5
               | RUN_EVENT_SCHEMA_VERSION_V6
               | RUN_EVENT_SCHEMA_VERSION_V7
+              | RUN_EVENT_SCHEMA_VERSION_V8
           )
         {
           return Err(EventValidationError::Invalid(
@@ -919,6 +1087,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V5
             | RUN_EVENT_SCHEMA_VERSION_V6
             | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) {
           return Err(EventValidationError::Invalid(
             "branch_selected is available only in run-event schema v2 or v3.".to_string(),
@@ -940,6 +1109,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V5
             | RUN_EVENT_SCHEMA_VERSION_V6
             | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !valid_public_structural_id(&data.parallel_id)
         {
           return Err(EventValidationError::Invalid(
@@ -955,6 +1125,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V5
             | RUN_EVENT_SCHEMA_VERSION_V6
             | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !valid_public_structural_id(&data.parallel_id)
           || !valid_ordered_id_lists(&data.failed_node_ids, &data.cancelled_node_ids)
           || (data.outcome == ParallelGroupOutcome::Succeeded
@@ -975,6 +1146,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V5
             | RUN_EVENT_SCHEMA_VERSION_V6
             | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !valid_public_structural_id(&data.approval_id)
           || !is_approval_request_id(&data.request_id)
           || data
@@ -994,6 +1166,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V5
             | RUN_EVENT_SCHEMA_VERSION_V6
             | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !valid_public_structural_id(&data.approval_id)
           || !is_approval_request_id(&data.request_id)
         {
@@ -1008,7 +1181,10 @@ impl RunEvent {
         validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || data.provider != "slack"
           || data.destination.is_empty()
         {
@@ -1022,7 +1198,10 @@ impl RunEvent {
         validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
           || !valid_sha256(&data.idempotency_key)
@@ -1036,7 +1215,10 @@ impl RunEvent {
         validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
           || !valid_provider_message(&data.provider_message)
@@ -1051,7 +1233,10 @@ impl RunEvent {
         data.failure.validate()?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
           || (!data.final_ && (!data.failure.retryable || data.attempt == 3))
@@ -1069,7 +1254,10 @@ impl RunEvent {
         validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || data.provider != "slack"
           || !valid_prefixed_id(&data.provider_actor_id, "U", 9)
         {
@@ -1082,7 +1270,10 @@ impl RunEvent {
         validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
         {
           return Err(EventValidationError::Invalid(
@@ -1095,7 +1286,10 @@ impl RunEvent {
         validate_notification_identity(&data.approval_id, &data.request_id, &data.delivery_id)?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
           || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
@@ -1110,7 +1304,10 @@ impl RunEvent {
         data.failure.validate()?;
         if !matches!(
           self.event_schema_version,
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7
+          RUN_EVENT_SCHEMA_VERSION_V5
+            | RUN_EVENT_SCHEMA_VERSION_V6
+            | RUN_EVENT_SCHEMA_VERSION_V7
+            | RUN_EVENT_SCHEMA_VERSION_V8
         ) || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
           || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
@@ -1121,6 +1318,63 @@ impl RunEvent {
               .to_string(),
           ));
         }
+      }
+      RunEventPayload::OperationStarted(data) => {
+        validate_operation_base(
+          self.event_schema_version,
+          &data.node_id,
+          data.attempt_number,
+          &data.invocation_id,
+          &data.call_id,
+          &data.operation_key,
+          &data.capability,
+          &data.operation,
+          &data.metadata,
+        )?;
+      }
+      RunEventPayload::OperationSucceeded(data) => {
+        validate_operation_base(
+          self.event_schema_version,
+          &data.node_id,
+          data.attempt_number,
+          &data.invocation_id,
+          &data.call_id,
+          &data.operation_key,
+          &data.capability,
+          &data.operation,
+          &data.metadata,
+        )?;
+        if !data.duration_ms.is_finite()
+          || data.duration_ms < 0.0
+          || data.result_bytes > 8_388_608
+          || !valid_sha256(&data.result_digest)
+        {
+          return Err(EventValidationError::Invalid(
+            "operation_succeeded has invalid duration, size, or digest fields.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::OperationFailed(data) => {
+        validate_operation_base(
+          self.event_schema_version,
+          &data.node_id,
+          data.attempt_number,
+          &data.invocation_id,
+          &data.call_id,
+          &data.operation_key,
+          &data.capability,
+          &data.operation,
+          &data.metadata,
+        )?;
+        if !data.duration_ms.is_finite() || data.duration_ms < 0.0 {
+          return Err(EventValidationError::Invalid(
+            "operation_failed requires a non-negative finite durationMs.".to_string(),
+          ));
+        }
+        data
+          .failure
+          .validate()
+          .map_err(EventValidationError::Invalid)?;
       }
       RunEventPayload::RunSucceeded(data) => {
         if !valid_id(&data.terminal_node_id) {
@@ -1157,7 +1411,8 @@ impl RunEvent {
           | RUN_EVENT_SCHEMA_VERSION_V4
           | RUN_EVENT_SCHEMA_VERSION_V5
           | RUN_EVENT_SCHEMA_VERSION_V6
-          | RUN_EVENT_SCHEMA_VERSION_V7,
+          | RUN_EVENT_SCHEMA_VERSION_V7
+          | RUN_EVENT_SCHEMA_VERSION_V8,
           RunFailedData::V2(RunFailedDataV2::Attempt {
             node_id,
             attempt,
@@ -1174,7 +1429,8 @@ impl RunEvent {
           | RUN_EVENT_SCHEMA_VERSION_V4
           | RUN_EVENT_SCHEMA_VERSION_V5
           | RUN_EVENT_SCHEMA_VERSION_V6
-          | RUN_EVENT_SCHEMA_VERSION_V7,
+          | RUN_EVENT_SCHEMA_VERSION_V7
+          | RUN_EVENT_SCHEMA_VERSION_V8,
           RunFailedData::V2(RunFailedDataV2::Branch {
             branch_id,
             arm_id,
@@ -1214,7 +1470,8 @@ impl RunEvent {
           | RUN_EVENT_SCHEMA_VERSION_V4
           | RUN_EVENT_SCHEMA_VERSION_V5
           | RUN_EVENT_SCHEMA_VERSION_V6
-          | RUN_EVENT_SCHEMA_VERSION_V7,
+          | RUN_EVENT_SCHEMA_VERSION_V7
+          | RUN_EVENT_SCHEMA_VERSION_V8,
           RunFailedData::V3(RunFailedDataV3::Parallel {
             parallel_id,
             primary_node_id,
@@ -1243,7 +1500,8 @@ impl RunEvent {
           RUN_EVENT_SCHEMA_VERSION_V4
           | RUN_EVENT_SCHEMA_VERSION_V5
           | RUN_EVENT_SCHEMA_VERSION_V6
-          | RUN_EVENT_SCHEMA_VERSION_V7,
+          | RUN_EVENT_SCHEMA_VERSION_V7
+          | RUN_EVENT_SCHEMA_VERSION_V8,
           RunFailedData::V4(RunFailedDataV4::Approval {
             approval_id,
             request_id,
@@ -1258,7 +1516,10 @@ impl RunEvent {
           failure.validate()?;
         }
         (
-          RUN_EVENT_SCHEMA_VERSION_V5 | RUN_EVENT_SCHEMA_VERSION_V6 | RUN_EVENT_SCHEMA_VERSION_V7,
+          RUN_EVENT_SCHEMA_VERSION_V5
+          | RUN_EVENT_SCHEMA_VERSION_V6
+          | RUN_EVENT_SCHEMA_VERSION_V7
+          | RUN_EVENT_SCHEMA_VERSION_V8,
           RunFailedData::V5(RunFailedDataV5::Notification {
             approval_id,
             request_id,

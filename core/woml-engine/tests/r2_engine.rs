@@ -222,6 +222,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
       },
       timeout_ms: None,
       retry_policy: None,
+      script_runtime: None,
       metadata: None,
     },
   );
@@ -248,6 +249,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
       },
       timeout_ms: None,
       retry_policy: None,
+      script_runtime: None,
       metadata: None,
     },
   );
@@ -323,7 +325,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
 #[test]
 fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
   let mut bad_version = hello_model();
-  bad_version.schema_version = 8;
+  bad_version.schema_version = 9;
   let codes: Vec<_> = bad_version
     .validate_for_execution()
     .unwrap_err()

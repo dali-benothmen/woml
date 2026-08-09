@@ -385,6 +385,7 @@ async fn recovery_after_retry_success_dispatches_only_the_downstream_step() {
             code: "WOML_SCRIPT_THROWN".to_string(),
             message: "temporary".to_string(),
             details: None,
+            ..AttemptFailure::legacy_defaults()
           },
         },
       )

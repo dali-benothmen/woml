@@ -28,6 +28,16 @@ An operation has three identities:
 - optional `providerIdempotencyKey`: sent outside WOML only when a reviewed
   provider contract supports it.
 
+Rust derives `operationKey` as SHA-256 over these exact UTF-8 bytes:
+
+```text
+woml.capability-operation\0v1\0{stepIdempotencyKey}\0{operationName}
+```
+
+The serialized key is `sha256:` followed by the lowercase hexadecimal digest.
+The durable authority independently verifies the request's step identity
+against the active attempt before it records or dispatches the operation.
+
 Automatic operation identity is allowed for one effectful call to a given
 capability operation in a step. A script that may perform multiple effectful
 calls must give them stable logical names. Read-only calls may be multiplexed.

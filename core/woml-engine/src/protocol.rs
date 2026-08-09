@@ -204,6 +204,7 @@ impl HostReportedFailure {
       code: self.code,
       message: self.message,
       details: self.details,
+      ..AttemptFailure::legacy_defaults()
     }
   }
 }

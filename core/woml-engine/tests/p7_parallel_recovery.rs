@@ -245,6 +245,7 @@ async fn recovery_derives_missing_wait_all_group_and_run_failure_atomically() {
           code: AttemptFailureKind::ScriptThrew.code().to_string(),
           message: "weather failed before the runtime recorded the group outcome".to_string(),
           details: None,
+          ..AttemptFailure::legacy_defaults()
         },
       }),
     )
@@ -316,6 +317,7 @@ async fn wait_all_resumes_pending_siblings_after_a_recorded_failure_then_fails_t
           code: AttemptFailureKind::ScriptThrew.code().to_string(),
           message: "weather failed before soil was scheduled".to_string(),
           details: None,
+          ..AttemptFailure::legacy_defaults()
         },
       }),
     )

@@ -8,7 +8,7 @@ use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2,
   COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
   COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
-  COMPILED_MODEL_SCHEMA_VERSION_V7,
+  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,7 +62,17 @@ pub struct CompiledWorkflowNode {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub retry_policy: Option<RetryPolicy>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub script_runtime: Option<ScriptRuntimeBindings>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub metadata: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScriptRuntimeBindings {
+  pub binding_version: u32,
+  pub bindings: Vec<String>,
+  pub required_secrets: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,6 +248,7 @@ pub enum ModelIssueCode {
   UnsupportedParallelExecution,
   InvalidApprovalGroup,
   InvalidNotificationGroup,
+  InvalidScriptRuntime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1489,6 +1500,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V5
         | COMPILED_MODEL_SCHEMA_VERSION_V6
         | COMPILED_MODEL_SCHEMA_VERSION_V7
+        | COMPILED_MODEL_SCHEMA_VERSION_V8
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1543,7 +1555,7 @@ impl CompiledWorkflowDefinition {
         ));
       }
       inspect_expression(&trigger.config, "trigger.config", &mut issues);
-      if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V7 && !valid_model_v7_trigger(trigger)
+      if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V7 && !valid_model_v7_trigger(trigger)
       {
         issues.push(issue(
           ModelIssueCode::UnsupportedTrigger,
@@ -1588,6 +1600,15 @@ impl CompiledWorkflowDefinition {
           format!("Node {:?} has an invalid zero timeout.", node.id),
         ));
       }
+      if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V8 && node.timeout_ms.is_some() {
+        issues.push(issue(
+          ModelIssueCode::UnsupportedTimeout,
+          format!(
+            "Model v8 node {:?} cannot carry timeoutMs in the frozen contract.",
+            node.id
+          ),
+        ));
+      }
       if let Some(retry) = &node.retry_policy {
         if self.schema_version < COMPILED_MODEL_SCHEMA_VERSION_V6 {
           issues.push(issue(
@@ -1626,6 +1647,62 @@ impl CompiledWorkflowDefinition {
             ));
           }
         }
+      }
+      match (
+        self.schema_version,
+        node.handler.as_str(),
+        &node.script_runtime,
+      ) {
+        (COMPILED_MODEL_SCHEMA_VERSION_V8, "runtime.script", Some(runtime)) => {
+          let expected = ["context", "attempt", "services", "secrets"];
+          let valid_secrets = runtime.required_secrets.len() <= 64
+            && runtime
+              .required_secrets
+              .windows(2)
+              .all(|pair| pair[0] < pair[1])
+            && runtime.required_secrets.iter().all(|name| {
+              let mut chars = name.chars();
+              matches!(chars.next(), Some(first) if first.is_ascii_uppercase())
+                && chars.all(|character| {
+                  character == '_' || character.is_ascii_uppercase() || character.is_ascii_digit()
+                })
+                && name.len() <= 128
+            });
+          if runtime.binding_version != 1
+            || runtime.bindings.iter().map(String::as_str).ne(expected)
+            || !valid_secrets
+          {
+            issues.push(issue(
+              ModelIssueCode::InvalidScriptRuntime,
+              format!(
+                "Node {:?} does not match the frozen Model v8 scriptRuntime contract.",
+                node.id
+              ),
+            ));
+          }
+        }
+        (COMPILED_MODEL_SCHEMA_VERSION_V8, "runtime.script", None) => issues.push(issue(
+          ModelIssueCode::InvalidScriptRuntime,
+          format!(
+            "Model v8 runtime.script node {:?} requires scriptRuntime.",
+            node.id
+          ),
+        )),
+        (COMPILED_MODEL_SCHEMA_VERSION_V8, _, Some(_)) => issues.push(issue(
+          ModelIssueCode::InvalidScriptRuntime,
+          format!(
+            "Only Model v8 runtime.script nodes may carry scriptRuntime (node {:?}).",
+            node.id
+          ),
+        )),
+        (version, _, Some(_)) if version < COMPILED_MODEL_SCHEMA_VERSION_V8 => issues.push(issue(
+          ModelIssueCode::InvalidScriptRuntime,
+          format!(
+            "Node {:?} cannot carry scriptRuntime before Model v8.",
+            node.id
+          ),
+        )),
+        _ => {}
       }
       inspect_expression(
         &node.inputs,
@@ -1779,7 +1856,7 @@ impl CompiledWorkflowDefinition {
           &trigger.config,
           ValueExpression::Object { fields } if fields.is_empty()
       );
-      let executable = if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V7 {
+      let executable = if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V7 {
         valid_model_v7_trigger(trigger)
       } else {
         trigger.handler == "trigger.manual" && is_empty_object

@@ -1,9 +1,10 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0 and SC1 completed on 2026-08-09. The cross-layer contracts
-are frozen, and the TypeScript frontend now emits Model v8 with source-proven
-Script Bindings v1 and symbolic secret dependencies. No service executes yet;
-SC2 is next.
+Status: active. SC0, SC1, and SC2 completed on 2026-08-09. The cross-layer
+contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
+Script Bindings v1 and symbolic secret dependencies, and Rust can now durably
+supervise a provider-neutral capability operation. SC3 is next; no public
+service is executable from a WOML script yet.
 
 ## 1. Product Outcome
 
@@ -703,6 +704,8 @@ Reviewed WOML deep-equals Model v8; missing/dynamic/false-positive secret cases
 produce exact source-aware diagnostics and no value enters the model.
 
 ### SC2 — Build the Rust capability authority and event folding
+
+Status: completed on 2026-08-09.
 
 Changes:
 

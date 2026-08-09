@@ -23,10 +23,11 @@ use crate::event::{
   NotificationDeliveryAttemptStartedData, NotificationDeliveryFailedData,
   NotificationDeliveryRequestedData, NotificationDeliverySucceededData,
   NotificationMessageUpdateAttemptStartedData, NotificationMessageUpdateFailedData,
-  NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure, ParallelFailure,
-  ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome, ProviderMessageIdentity,
-  RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4,
-  RunFailedDataV5, RunStartedData, RunSucceededData, StepAttemptFailedData, StepRetryScheduledData,
+  NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure,
+  OperationFailedData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  ParallelGroupOutcome, ProviderMessageIdentity, RunFailedData, RunFailedDataV1, RunFailedDataV2,
+  RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunStartedData, RunSucceededData,
+  StepAttemptFailedData, StepRetryScheduledData,
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, NotificationDeliveryStatus,
@@ -37,7 +38,7 @@ use crate::{
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
   RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
-  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
+  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
 };
 
 pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 6;
@@ -2823,6 +2824,48 @@ impl DurableEventStore {
     if projection.status != RunStatus::Running {
       return Ok(RunRecovery::Unchanged);
     }
+    let active_managed_operations = projection
+      .operations
+      .values()
+      .filter(|operation| {
+        operation.execution_mode == crate::event::OperationExecutionMode::Managed
+          && operation.status == crate::projection::OperationStatus::Started
+      })
+      .cloned()
+      .collect::<Vec<_>>();
+    if !active_managed_operations.is_empty() {
+      let now = Utc::now();
+      for operation in &active_managed_operations {
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          now,
+          event_schema_version,
+          RunEventPayload::OperationFailed(OperationFailedData {
+            node_id: operation.node_id.clone(),
+            attempt_number: operation.attempt_number,
+            invocation_id: operation.identity.invocation_id.clone(),
+            call_id: operation.identity.call_id.clone(),
+            operation_key: operation.operation_key.clone(),
+            capability: operation.capability.clone(),
+            operation: operation.operation.clone(),
+            execution_mode: operation.execution_mode,
+            metadata: operation.metadata.clone(),
+            duration_ms: 0.0,
+            failure: crate::CapabilityFailure {
+              kind: crate::CapabilityFailureKind::Interrupted,
+              code: "WOML_CAPABILITY_INTERRUPTED".to_string(),
+              message: "Recovery found a managed operation without a durable terminal event; it will not be replayed.".to_string(),
+              retryable: false,
+              ambiguous: true,
+              details: None,
+            },
+          }),
+        )?;
+      }
+    }
     let started = projection
       .attempts
       .iter()
@@ -3319,7 +3362,7 @@ fn admit_trigger_occurrence_in_transaction(
     .ok_or_else(|| DurableStoreError::DefinitionNotFound(request.definition_hash.clone()))?;
   let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
   workflow.validate_structure()?;
-  if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V7
+  if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V7
     || workflow.workflow_id != request.workflow_id
   {
     return Err(DurableStoreError::TriggerDefinitionMismatch);
@@ -3382,7 +3425,7 @@ fn admit_trigger_occurrence_in_transaction(
     &run_id,
     generated_event_id(),
     request.received_at,
-    RUN_EVENT_SCHEMA_VERSION_V7,
+    run_event_schema_version_for_model(workflow.schema_version),
     payload,
   )?;
   validate_event_history_against_definition(&workflow, &request.definition_hash, &events)
@@ -3843,16 +3886,24 @@ fn validate_trigger_occurrence_history(
   validate_event_history_against_definition(&workflow, &occurrence.definition_hash, &events)
     .map_err(DurableStoreError::TriggerHistoryInvalid)?;
   let Some(RunEvent {
-    event_schema_version: RUN_EVENT_SCHEMA_VERSION_V7,
+    event_schema_version,
     occurred_at,
     payload: RunEventPayload::RunStarted(start),
     ..
   }) = events.first()
   else {
     return Err(DurableStoreError::TriggerHistoryInvalid(
-      "occurrence run does not begin with run_started v7".to_string(),
+      "occurrence run does not begin with run_started v7 or v8".to_string(),
     ));
   };
+  if !matches!(
+    *event_schema_version,
+    RUN_EVENT_SCHEMA_VERSION_V7 | RUN_EVENT_SCHEMA_VERSION_V8
+  ) {
+    return Err(DurableStoreError::TriggerHistoryInvalid(
+      "occurrence run does not begin with run_started v7 or v8".to_string(),
+    ));
+  }
   if start.workflow_id != occurrence.workflow_id
     || start.definition_hash != occurrence.definition_hash
     || start.trigger_id.as_deref() != Some(occurrence.trigger_id.as_str())
@@ -3862,7 +3913,7 @@ fn validate_trigger_occurrence_history(
     || canonical_payload_hash(&start.trigger)? != occurrence.payload_hash
   {
     return Err(DurableStoreError::TriggerHistoryInvalid(
-      "occurrence fields contradict run_started v7".to_string(),
+      "occurrence fields contradict its durable run_started event".to_string(),
     ));
   }
   Ok(start.trigger.clone())
@@ -3984,6 +4035,7 @@ fn interrupted_failure() -> AttemptFailure {
     code: AttemptFailureKind::Interrupted.code().to_string(),
     message: "Recovery found a started attempt without a terminal event.".to_string(),
     details: None,
+    ..AttemptFailure::legacy_defaults()
   }
 }
 
@@ -4016,7 +4068,8 @@ fn attempt_run_failed_data(
     | RUN_EVENT_SCHEMA_VERSION_V4
     | RUN_EVENT_SCHEMA_VERSION_V5
     | RUN_EVENT_SCHEMA_VERSION_V6
-    | RUN_EVENT_SCHEMA_VERSION_V7 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | RUN_EVENT_SCHEMA_VERSION_V7
+    | RUN_EVENT_SCHEMA_VERSION_V8 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,

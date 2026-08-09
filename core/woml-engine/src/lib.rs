@@ -4,6 +4,7 @@
 //! paths and from N-API. It consumes the versioned Compiled Workflow Model and
 //! derives all run state by folding versioned events.
 
+pub mod capability;
 pub mod durable;
 pub mod engine;
 pub mod event;
@@ -20,6 +21,14 @@ pub mod schedule;
 pub mod store;
 pub mod webhook;
 
+pub use capability::{
+  derive_operation_key, CapabilityCallIdentity, CapabilityCallLimits, CapabilityCallRequest,
+  CapabilityCallResult, CapabilityCancellationToken, CapabilityDescriptor, CapabilityEffect,
+  CapabilityFailure, CapabilityFailureKind, CapabilityHandler, CapabilityRegistry,
+  CapabilityRegistryError, DurableCapabilityAuthority, DurableCapabilityAuthorityError,
+  TestCapabilityHandler, CAPABILITY_CALL_CONTRACT, CAPABILITY_CALL_CONTRACT_VERSION,
+  DEFAULT_CAPABILITY_INPUT_BYTES, DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
+};
 pub use durable::{
   ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,
   ApprovalTimeoutSettlementStatus, ApprovalTokenBinding, DurableDagEngine, DurableEngineError,
@@ -41,7 +50,8 @@ pub use event::{
   NotificationDeliverySucceededData, NotificationMessageUpdateAttemptStartedData,
   NotificationMessageUpdateFailedData, NotificationMessageUpdateRequestedData,
   NotificationMessageUpdatedData, NotificationResolution, NotificationRunFailure,
-  NotificationSafeFailure, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  NotificationSafeFailure, OperationExecutionMode, OperationFailedData, OperationStartedData,
+  OperationSucceededData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
   ParallelGroupOutcome, ParallelGroupStartedData, ProviderMessageIdentity, RunEvent,
   RunEventPayload, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
   RunFailedDataV4, RunFailedDataV5, RunStartedData, StepRetryScheduledData,
@@ -53,7 +63,7 @@ pub use interval::{
 };
 pub use model::{
   CompiledWorkflowDefinition, ModelIssue, ModelIssueCode, ModelValidationError,
-  NotificationDefinition,
+  NotificationDefinition, ScriptRuntimeBindings,
 };
 pub use notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
@@ -73,8 +83,9 @@ pub use notification_runtime::{
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError,
   NotificationDeliveryProjection, NotificationDeliveryStatus, NotificationMessageUpdateProjection,
-  NotificationMessageUpdateStatus, ParallelGroupProjection, ParallelGroupStatus,
-  RetryScheduleProjection, RunFailure, RunProjection, RunStatus, WorkflowContext,
+  NotificationMessageUpdateStatus, OperationIdentity, OperationProjection, OperationStatus,
+  ParallelGroupProjection, ParallelGroupStatus, RetryScheduleProjection, RunFailure, RunProjection,
+  RunStatus, WorkflowContext,
 };
 pub use runtime::{
   execute_admitted_trigger_run_durable, execute_workflow, execute_workflow_durable,
@@ -106,7 +117,8 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V4: u32 = 4;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V5: u32 = 5;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V6: u32 = 6;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V7: u32 = 7;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V7;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V8: u32 = 8;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V8;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
@@ -114,10 +126,13 @@ pub const RUN_EVENT_SCHEMA_VERSION_V4: u32 = 4;
 pub const RUN_EVENT_SCHEMA_VERSION_V5: u32 = 5;
 pub const RUN_EVENT_SCHEMA_VERSION_V6: u32 = 6;
 pub const RUN_EVENT_SCHEMA_VERSION_V7: u32 = 7;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V7;
+pub const RUN_EVENT_SCHEMA_VERSION_V8: u32 = 8;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V8;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V7 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V8 {
+    RUN_EVENT_SCHEMA_VERSION_V8
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V7 {
     RUN_EVENT_SCHEMA_VERSION_V7
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V6 {
     RUN_EVENT_SCHEMA_VERSION_V6

@@ -300,6 +300,7 @@ fn script_node(id: &str, source: &str) -> CompiledWorkflowNode {
     inputs: ValueExpression::Object { fields },
     timeout_ms: None,
     retry_policy: None,
+    script_runtime: None,
     metadata: None,
   }
 }
@@ -315,6 +316,7 @@ fn engine_node(
     inputs: ValueExpression::Object { fields },
     timeout_ms: None,
     retry_policy: None,
+    script_runtime: None,
     metadata: None,
   }
 }

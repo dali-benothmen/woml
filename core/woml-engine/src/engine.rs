@@ -785,6 +785,15 @@ pub(crate) fn validate_payload_against_definition(
         ));
       }
     }
+    RunEventPayload::OperationStarted(data) => {
+      validate_operation_node(workflow, &data.node_id)?;
+    }
+    RunEventPayload::OperationSucceeded(data) => {
+      validate_operation_node(workflow, &data.node_id)?;
+    }
+    RunEventPayload::OperationFailed(data) => {
+      validate_operation_node(workflow, &data.node_id)?;
+    }
     RunEventPayload::RunFailed(data) => {
       if let RunFailedData::V5(RunFailedDataV5::Notification {
         approval_id,
@@ -1188,8 +1197,29 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::NotificationMessageUpdateAttemptStarted(_)
       | RunEventPayload::NotificationMessageUpdated(_)
       | RunEventPayload::NotificationMessageUpdateFailed(_)
+      | RunEventPayload::OperationStarted(_)
+      | RunEventPayload::OperationSucceeded(_)
+      | RunEventPayload::OperationFailed(_)
       | RunEventPayload::RunFailed(_) => {}
     }
+  }
+  Ok(())
+}
+
+fn validate_operation_node(
+  workflow: &CompiledWorkflowDefinition,
+  node_id: &str,
+) -> Result<(), String> {
+  if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V8 {
+    return Err("Operation events require compiled workflow Model v8.".to_string());
+  }
+  let node = workflow
+    .node(node_id)
+    .ok_or_else(|| format!("Operation references unknown node {node_id:?}."))?;
+  if node.handler != "runtime.script" || node.script_runtime.is_none() {
+    return Err(format!(
+      "Operation node {node_id:?} is not a Model v8 runtime.script node."
+    ));
   }
   Ok(())
 }
