@@ -22,6 +22,8 @@ sufficient parity and the relevant production features have migration paths.
 | Parallel chaining | `<parallel>` with child workflow items |
 | Retry option/object | `retry` and backoff attributes on `<step>` |
 | Human-in-the-loop callback | `<approval>` with a durable HTTP/provider decision |
+| Native SDK/Bun Fetch | Native `fetch()` inside `<script>` with durable redacted observation |
+| Supervised HTTP helper | `services.http.request()` inside `<script>` |
 
 WOML makes every downstream dependency explicit. Give each step a stable ID and
 replace positional or “last result” access with the producing step's path:
@@ -68,7 +70,8 @@ Sequential scripts, branch, parallel, Human Approval, Slack approval
 notifications, secrets, durable retry, and manual, webhook, Slack, schedule,
 interval, and named-event triggers are available through `woml run`.
 
-General outbound HTTP/database/messaging services, the module system, lifecycle
-controls, and the hosted production runtime remain roadmap items. Keep an SDK
-workflow in place when it depends on those unavailable capabilities. The SDK
-is not retired merely because Production Triggers are complete.
+Native Fetch and Rust-managed outbound HTTP are now available. Database,
+storage, cache, queue, additional messaging services, the module system,
+lifecycle controls, and the hosted production runtime remain roadmap items.
+Keep an SDK workflow in place when it depends on those unavailable
+capabilities. The SDK is not retired merely because managed HTTP is complete.

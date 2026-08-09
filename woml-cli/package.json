@@ -29,7 +29,9 @@
     "test:t11": "bun scripts/verify-t11.ts",
     "test:t12": "bun scripts/verify-t12.ts",
     "test:t13": "bun scripts/verify-t13.ts",
-    "test:release": "bun scripts/verify-t13.ts",
+    "test:sc6": "bun scripts/verify-sc6.ts",
+    "test:release": "bun scripts/verify-sc6.ts",
+    "benchmark:http": "bun scripts/benchmark-sc6-http.ts",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"
   },

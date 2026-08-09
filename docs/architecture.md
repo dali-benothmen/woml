@@ -30,10 +30,9 @@ must not understand markup, interpolation syntax, or JavaScript source meaning.
 The long-lived Bun host executes JavaScript because JavaScript is part of the
 authoring experience. Each invocation runs in an isolated Worker with a real
 timeout boundary and receives only the versioned bindings approved for its
-model, currently `context` and, for Model v6, `attempt`. Model v8 and Script
-Bindings v1 (`context`, `attempt`, `services`, `secrets`) are frozen and the
-frontend lowering is implemented, but the runtime intentionally remains
-unavailable until the SC2-SC5 capability phases implement it. Bun reports
+model. Model v8 and Script Bindings v1 inject exactly `context`, `attempt`,
+`services`, and source-proven `secrets` into capability scripts. Native Fetch
+observation and managed HTTP execution are active through SC6. Bun reports
 outcomes; it never decides whether to retry or how the graph advances.
 
 ### Services and capability boundary
@@ -50,8 +49,16 @@ events. `services.http.request()` and future `services.*` operations use Rust-
 managed calls. Both converge on the generic `operation_started`,
 `operation_succeeded`, and `operation_failed` vocabulary. Compiled models keep
 only sorted secret names; resolved values exist only in the invocation-memory
-boundary and never in context, events, progress, or fixtures. These are frozen
-contracts, not a claim that services are executable after SC1.
+boundary and never in context, events, progress, or fixtures. Native Fetch is
+executed by Bun; `services.http.request()` is executed by a pooled Rust client.
+Other `services.*` capabilities remain unavailable until their individual
+milestones.
+
+The local outbound-HTTP profile permits reachable HTTP(S) destinations and is
+not an SSRF sandbox. Hosted deployments must apply network-layer egress policy,
+including private/link-local denial, DNS-resolution checks, and redirect
+revalidation. The authoritative operational guidance is
+`docs/woml-http-services.md`.
 
 ### Durable retry boundary
 

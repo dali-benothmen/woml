@@ -249,12 +249,10 @@ describe('SC0 frozen service and capability contracts', () => {
     const duplicate = [
       ...events.slice(0, 4),
       { ...events[3], eventId: 'duplicate', sequence: 5 },
-      ...events
-        .slice(4)
-        .map((event: JsonObject) => ({
-          ...event,
-          sequence: Number(event.sequence) + 1,
-        })),
+      ...events.slice(4).map((event: JsonObject) => ({
+        ...event,
+        sequence: Number(event.sequence) + 1,
+      })),
     ];
     expect(inspectOperationHistory(duplicate)).toContain(
       'duplicate terminal operation'
@@ -471,6 +469,59 @@ describe('SC1 script analysis and Model v8 lowering', () => {
       expect((error as WomlValidationError).diagnostic.code).toBe(
         'WOML_SCRIPT_SYNTAX_INVALID'
       );
+    }
+  });
+});
+
+describe('SC6 HTTP composition compatibility', () => {
+  test('composes native Fetch and managed HTTP with every published control-flow and trigger surface', () => {
+    const fixtures = [
+      'retry-composition.woml',
+      'approval.woml',
+      'triggers-webhook.woml',
+      'triggers-slack.woml',
+      'triggers-schedule.woml',
+      'triggers-interval.woml',
+      'triggers-event.woml',
+    ];
+    for (const fixture of fixtures) {
+      const path = resolve(import.meta.dir, 'fixtures', fixture);
+      const source = readFileSync(path, 'utf8').replace(
+        '<script>',
+        `<script>
+          const sc6Compatibility = Promise.all([
+            fetch("https://example.test/native"),
+            services.http.request({ url: "https://example.test/managed" })
+          ]);`
+      );
+      const compiled = compileWoml(parseWoml(source, { file: fixture }));
+      expect(compiled.schemaVersion, fixture).toBe(8);
+      expect(
+        compiled.graph.nodes.some(
+          node =>
+            node.handler === 'runtime.script' &&
+            node.scriptRuntime?.bindings.includes('services') === true
+        ),
+        fixture
+      ).toBe(true);
+    }
+  });
+
+  test('preserves Model v1-v7 selection when an older workflow does not use HTTP bindings', () => {
+    const expectations = [
+      ['fixtures/hello.woml', 1],
+      ['fixtures/branch.woml', 2],
+      ['fixtures/parallel.woml', 3],
+      ['fixtures/approval.woml', 4],
+      ['fixtures/retry.woml', 6],
+      ['fixtures/triggers-webhook.woml', 7],
+    ] as const;
+    for (const [fixture, schemaVersion] of expectations) {
+      const path = resolve(import.meta.dir, fixture);
+      const compiled = compileWoml(
+        parseWoml(readFileSync(path, 'utf8'), { file: fixture })
+      );
+      expect(compiled.schemaVersion, fixture).toBe(schemaVersion);
     }
   });
 });

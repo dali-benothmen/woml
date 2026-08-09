@@ -145,6 +145,9 @@ fn handle_connection(
   });
 
   let path = target.split('?').next().unwrap_or_default();
+  if path == "/disconnect" {
+    return;
+  }
   let response = match path {
     "/redirect" => format!(
       "HTTP/1.1 302 Found\r\nLocation: http://{address}/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -159,6 +162,11 @@ fn handle_connection(
     }
     "/invalid-json" => response(200, "application/json", b"not-json"),
     "/rejected" => response(418, "application/json", br#"{"error":"teapot"}"#),
+    "/oversized" => response(
+      200,
+      "application/octet-stream",
+      &vec![b'x'; 4_194_305],
+    ),
     _ => response(201, "application/json", br#"{"created":true}"#),
   };
   let _ = stream.write_all(&response);
@@ -346,6 +354,20 @@ async fn managed_http_classifies_timeout_status_and_invalid_json_without_leaking
       "/invalid-json",
       "",
       "WOML_HTTP_RESPONSE_JSON_INVALID",
+      AttemptFailureKind::ServiceFailed,
+    ),
+    (
+      "disconnect",
+      "/disconnect",
+      "",
+      "WOML_HTTP_TRANSPORT_FAILED",
+      AttemptFailureKind::ServiceFailed,
+    ),
+    (
+      "oversized",
+      "/oversized",
+      ", responseType: \"bytes\"",
+      "WOML_HTTP_RESPONSE_TOO_LARGE",
       AttemptFailureKind::ServiceFailed,
     ),
   ] {

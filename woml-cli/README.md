@@ -73,6 +73,27 @@ Inspect an asynchronously triggered durable run with:
 woml runs get run_... --state .woml/state.sqlite
 ```
 
+## Call an HTTP API
+
+Use native Fetch when you need the complete Bun `Request`/`Response` API. Use
+managed HTTP when you want Rust-owned pooling, timeouts, cancellation, status
+policy, response parsing, limits, and durable operation events:
+
+```js
+const response = await services.http.request({
+  url: "https://api.example.com/orders",
+  method: "POST",
+  json: { orderId: "order-42" },
+  idempotency: {
+    header: "Idempotency-Key",
+    value: attempt.idempotencyKey
+  }
+}, { name: "create-order" });
+```
+
+See [WOML Outbound HTTP](../docs/woml-http-services.md) for the complete API,
+failure behavior, SSRF boundary, deployment checklist, and benchmark.
+
 ## Retry a step
 
 Retry is configured on `<step>`; there is no retry tag:
@@ -126,10 +147,10 @@ again.
 cd woml-cli
 bun install
 bun run build
-bun run test:t13
+bun run test:sc6
 ```
 
-The RI7 gate builds the distributable CLI/native core and verifies the
+The SC6 gate builds the distributable CLI/native core and verifies the
 frontend, Rust engine, Bun host, CLI, contracts, compatibility, clean-package
 execution, linting, type checking, and secret-leak protections.
 

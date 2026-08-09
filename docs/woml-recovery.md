@@ -43,9 +43,15 @@ crashes, Worker crashes, cancellation, or interruption. Those outcomes cannot
 prove that an external effect did not happen.
 
 All attempts of one logical step share `attempt.idempotencyKey`. Pass it to an
-external API that guarantees duplicate handling. The key enables that service
-to deduplicate; it does not turn an arbitrary side effect into exactly-once
-execution.
+external API that guarantees duplicate handling. With managed HTTP, use the
+reviewed `idempotency` request field and a stable operation name. The key
+enables that service to deduplicate; it does not turn an arbitrary side effect
+into exactly-once execution.
+
+A managed `operation_started` without `operation_succeeded` or
+`operation_failed` is closed as `interrupted` with `ambiguous: true` before the
+surrounding attempt is recovered. WOML never reconstructs a JavaScript
+instruction pointer or releases an unpersisted service result after restart.
 
 ## Operational output
 

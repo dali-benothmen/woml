@@ -6,6 +6,12 @@ its HTTP boundary; the complete mixed-trigger operations guide is
 is the long-lived process: a supervisor starts it once, keeps it alive, sends
 SIGTERM during deployment, and restarts it after exit.
 
+Inbound webhook policy and outbound workflow HTTP are separate trust
+boundaries. If a webhook payload can influence an outbound destination, apply
+the allowlist and network-layer egress controls in
+[WOML Outbound HTTP](woml-http-services.md); webhook authentication alone does
+not prevent SSRF.
+
 ```bash
 woml run workflows/ \
   --host 127.0.0.1 \

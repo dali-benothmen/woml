@@ -51,6 +51,11 @@ const retryFixturePath = join(
   'retry.woml'
 );
 const retryExamplePath = join(projectRoot, 'examples', 'retryWorkflow.woml');
+const httpExamplePath = join(
+  projectRoot,
+  'examples',
+  'httpComparisonWorkflow.woml'
+);
 const retryCompositionFixturePath = join(
   import.meta.dir,
   '..',
@@ -229,6 +234,61 @@ describe('woml test one-shot compatibility', () => {
       expect(history).toContain('operation_succeeded');
       expect(history).not.toContain('access_token');
       expect(history).not.toContain('must-not-persist');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('composes managed HTTP and native Fetch through retry, branch, and parallel execution', async () => {
+    const port = await availablePort();
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port,
+      fetch: request =>
+        Response.json({ path: new URL(request.url).pathname }, { status: 200 }),
+    });
+    const workflowPath = join(temporaryDirectory, 'sc6-http-composition.woml');
+    await writeFile(
+      workflowPath,
+      `<workflow id="sc6-http-composition" version="1.0.0" name="SC6 HTTP Composition">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="choose"><script>return { useHttp: true };</script></step>
+    <branch id="route">
+      <when test="{{context.steps.choose.useHttp}}">
+        <parallel id="requests" concurrency="2" on-error="wait-all">
+          <step id="managedRequest" retry="2" retry-delay="1ms">
+            <script>
+              return await services.http.request({ url: "http://127.0.0.1:${port}/managed" });
+            </script>
+          </step>
+          <step id="nativeRequest">
+            <script>
+              const response = await fetch("http://127.0.0.1:${port}/native");
+              return { status: response.status, data: await response.json() };
+            </script>
+          </step>
+        </parallel>
+        <result value="{{context.steps.managedRequest}}" />
+      </when>
+      <otherwise>
+        <step id="fallback"><script>return { status: 503 };</script></step>
+        <result value="{{context.steps.fallback}}" />
+      </otherwise>
+    </branch>
+    <step id="finish">
+      <script>return { managedStatus: context.steps.route.status, managedPath: context.steps.route.data.path };</script>
+    </step>
+  </steps>
+</workflow>`
+    );
+    try {
+      const result = await runCli('test', workflowPath);
+      expect(result).toEqual({
+        stdout: '{"managedStatus":200,"managedPath":"/managed"}\n',
+        stderr: '',
+        exitCode: 0,
+      });
     } finally {
       server.stop(true);
     }
@@ -714,6 +774,15 @@ describe('woml test one-shot compatibility', () => {
       join(consumerDirectory, 'retry.woml'),
       await Bun.file(retryExamplePath).text()
     );
+    const httpPort = await availablePort();
+    const localHttpUrl = `http://127.0.0.1:${httpPort}/todos/1`;
+    await Bun.write(
+      join(consumerDirectory, 'http.woml'),
+      (await Bun.file(httpExamplePath).text()).replace(
+        'https://jsonplaceholder.typicode.com/todos/1',
+        localHttpUrl
+      )
+    );
 
     const packed = Bun.spawnSync(
       [
@@ -782,6 +851,30 @@ describe('woml test one-shot compatibility', () => {
         stderr: 'pipe',
       }
     );
+    const httpServer = Bun.spawn(
+      [
+        Bun.which('bun')!,
+        '-e',
+        `const server = Bun.serve({ hostname: '127.0.0.1', port: ${httpPort}, fetch: () => Response.json({ userId: 1, id: 1, title: 'SC6 package smoke', completed: false }) }); console.log('ready'); process.on('SIGTERM', () => { server.stop(true); process.exit(0); }); await new Promise(() => {});`,
+      ],
+      { cwd: consumerDirectory, stdout: 'pipe', stderr: 'pipe' }
+    );
+    const readinessReader = httpServer.stdout.getReader();
+    const readiness = await readinessReader.read();
+    readinessReader.releaseLock();
+    expect(new TextDecoder().decode(readiness.value)).toContain('ready');
+    const httpResult = Bun.spawnSync(
+      [
+        executable,
+        'test',
+        'http.woml',
+        '--state',
+        join(temporaryDirectory, 'packaged-http.sqlite'),
+      ],
+      { cwd: consumerDirectory, stdout: 'pipe', stderr: 'pipe' }
+    );
+    httpServer.kill('SIGTERM');
+    await httpServer.exited;
     const approval = spawnPackagedApproval(
       executable,
       [
@@ -829,6 +922,25 @@ describe('woml test one-shot compatibility', () => {
       'Step greet succeeded on attempt 3/3.'
     );
     expect(retryResult.exitCode).toBe(0);
+    expect(httpResult.stderr.toString()).toBe('');
+    expect(httpResult.exitCode).toBe(0);
+    expect(JSON.parse(httpResult.stdout.toString())).toMatchObject({
+      nativeFetch: {
+        status: 200,
+        data: {
+          title: 'SC6 package smoke',
+        },
+      },
+      managedHttp: {
+        status: 200,
+        ok: true,
+        data: {
+          title: 'SC6 package smoke',
+        },
+        url: localHttpUrl,
+        redirected: false,
+      },
+    });
     expect(approvalPage.status).toBe(200);
     expect(await approvalPage.text()).toContain('Editorial approval');
     expect(approvalResponse.status).toBe(200);

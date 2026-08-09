@@ -70,7 +70,7 @@ includes conditional branches and bounded parallel groups:
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
-| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0 contracts and SC1 frontend completed | Model v8 compilation and source diagnostics are implemented; execution remains unavailable until SC2-SC5 complete the Rust/Bun runtime |
+| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC6 implemented and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, and Rust-managed `services.http.request()` are executable and publishable |
 | Database, storage, cache, event, queue, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
 
@@ -964,18 +964,23 @@ Model v6 freezes a second read-only binding for the retry runtime:
 The Bun Script Host v3 supplies this binding to every Model v6 invocation. It is
 separate from context and does not define `context.run`.
 
-SC1 freezes Script Bindings v1 for the next capability profile:
+Script Bindings v1 provides the capability profile:
 
 - `services` is the read-only namespace for WOML-owned capabilities.
 - `secrets` exposes only literal `secrets.NAME` values proven necessary by the
   frontend; the Model v8 definition records names only.
 
-Using either binding, or native `fetch`, selects Model v8. Model v8 compilation
-and source-aware diagnostics are implemented, but the current Rust runtime
-intentionally rejects that model until SC2-SC5 implement its event authority,
-Script Host v4, Fetch observation, and managed HTTP. There is no fallback that
-runs an untracked service call. Service clients and secret values never become
-context or persisted step output.
+Using either binding, or native `fetch`, selects Model v8. SC2–SC6 implement
+its event authority, Script Host v4, observed native Fetch, and Rust-managed
+HTTP. There is no fallback that runs an untracked service call. Service clients
+and secret values never become context or persisted step output.
+
+Native `fetch()` preserves Bun's standard `Request`/`Response` behavior.
+`services.http.request()` returns `{ status, ok, headers, data, url,
+redirected }` and supplies managed pooling, parsing, status policy, limits,
+timeout, cancellation, and durable operation events. Its complete authoring,
+failure, idempotency, security, and deployment contract is documented in
+`docs/woml-http-services.md`.
 
 The complete v0.1 context paths are:
 
@@ -1746,7 +1751,7 @@ The following concepts are not part of the fundamental grammar in this draft:
   `context.env`.
 - RAK, packages, `<requires>`, and dynamic capability vocabularies.
 - Declarative capability operations.
-- Database, HTTP-client, non-approval Slack operations, email, and other
+- Database, non-approval Slack operations, email, and other
   integration operations.
 
 These features require their own durable execution and context semantics. Their

@@ -194,6 +194,8 @@ investigating a failure.
 7. Back up SQLite consistently and test recovery using a copy.
 8. Use source idempotency keys and `attempt.idempotencyKey` with external
    services that support deduplication.
-9. Monitor readiness, rejection, run-terminal, scheduler, and provider messages.
-10. Run `bun run test:t13` from `woml-cli` before publishing a build.
-
+9. Restrict outbound HTTP with an egress policy when workflow or trigger data
+   can influence destinations; the local profile is not an SSRF sandbox.
+10. Monitor readiness, rejection, run-terminal, scheduler, provider, and
+    managed-service messages.
+11. Run `bun run test:sc6` from `woml-cli` before publishing a build.

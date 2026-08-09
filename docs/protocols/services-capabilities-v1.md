@@ -1,7 +1,8 @@
 # WOML Services and Capabilities Contracts v1
 
-Status: frozen by SC0 on 2026-08-09. Native Fetch observation shipped in SC4;
-Managed HTTP v1 became executable in SC5.
+Status: frozen by SC0 on 2026-08-09 and hardened for independent publication
+by SC6 on 2026-08-10. Native Fetch observation shipped in SC4; Managed HTTP v1
+became executable in SC5.
 
 ## Public boundary
 
