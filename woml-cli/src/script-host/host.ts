@@ -7,6 +7,8 @@ import type {
   CompletedMessage,
   ExecuteMessage,
   FailureMessage,
+  FetchObservationAckMessage,
+  FetchObservationMessage,
   HostReportedFailure,
   JsonValue,
   ScriptAttempt,
@@ -25,7 +27,7 @@ export interface ScriptHostOptions {
   readonly workerUrl: URL;
   readonly limits?: ScriptHostLimits;
   readonly send: (
-    message: CompletedMessage | CapabilityCallMessage
+    message: CompletedMessage | CapabilityCallMessage | FetchObservationMessage
   ) => Promise<void>;
   readonly protocolVersion?: ScriptHostProtocolVersion;
 }
@@ -78,7 +80,7 @@ export class ScriptHost {
   readonly #workerUrl: URL;
   readonly #limits: ScriptHostLimits;
   readonly #send: (
-    message: CompletedMessage | CapabilityCallMessage
+    message: CompletedMessage | CapabilityCallMessage | FetchObservationMessage
   ) => Promise<void>;
   readonly #protocolVersion: ScriptHostProtocolVersion;
   readonly #tasks = new Map<string, Promise<void>>();
@@ -89,6 +91,12 @@ export class ScriptHost {
   >();
   readonly #pendingCalls = new Map<string, Set<string>>();
   readonly #closedCalls = new Set<string>();
+  readonly #pendingFetchAcks = new Map<
+    string,
+    Map<string, 'started' | 'terminal'>
+  >();
+  readonly #activeFetches = new Map<string, Set<string>>();
+  readonly #closedFetchAcks = new Set<string>();
   #aborted = false;
 
   constructor(options: ScriptHostOptions) {
@@ -109,6 +117,10 @@ export class ScriptHost {
     }
     if (message.messageType === 'capability_result') {
       this.#capabilityResult(message);
+      return;
+    }
+    if (message.messageType === 'fetch_observation_ack') {
+      this.#fetchObservationAck(message);
       return;
     }
     if (this.#tasks.has(message.invocationId)) {
@@ -137,6 +149,9 @@ export class ScriptHost {
     this.#cancellations.clear();
     this.#pendingCalls.clear();
     this.#closedCalls.clear();
+    this.#pendingFetchAcks.clear();
+    this.#activeFetches.clear();
+    this.#closedFetchAcks.clear();
   }
 
   #cancel(message: CancelMessage): void {
@@ -169,6 +184,30 @@ export class ScriptHost {
       messageType: 'capability_result',
       callId: message.callId,
       result: message.result,
+    } satisfies ScriptWorkerInbound);
+  }
+
+  #fetchObservationAck(message: FetchObservationAckMessage): void {
+    const worker = this.#workers.get(message.invocationId);
+    const pending = this.#pendingFetchAcks.get(message.invocationId);
+    const phase = pending?.get(message.requestId);
+    if (worker === undefined || pending === undefined || phase === undefined) {
+      const key = `${message.invocationId}\0${message.requestId}`;
+      if (this.#closedFetchAcks.delete(key)) return;
+      throw new MessageProtocolError(
+        `Native Fetch acknowledgement references unknown request ID "${message.requestId}".`
+      );
+    }
+    pending.delete(message.requestId);
+    const active = this.#activeFetches.get(message.invocationId)!;
+    if (message.accepted && phase === 'started') active.add(message.requestId);
+    if (!message.accepted || phase === 'terminal') {
+      active.delete(message.requestId);
+    }
+    worker.postMessage({
+      messageType: 'fetch_observation_ack',
+      requestId: message.requestId,
+      ack: message,
     } satisfies ScriptWorkerInbound);
   }
 
@@ -350,12 +389,24 @@ export class ScriptHost {
           []) {
           this.#closedCalls.add(`${request.invocationId}\0${callId}`);
         }
+        for (const requestId of this.#pendingFetchAcks
+          .get(request.invocationId)
+          ?.keys() ?? []) {
+          this.#closedFetchAcks.add(`${request.invocationId}\0${requestId}`);
+        }
         while (this.#closedCalls.size > 4_096) {
           const oldest = this.#closedCalls.values().next().value;
           if (oldest === undefined) break;
           this.#closedCalls.delete(oldest);
         }
+        while (this.#closedFetchAcks.size > 4_096) {
+          const oldest = this.#closedFetchAcks.values().next().value;
+          if (oldest === undefined) break;
+          this.#closedFetchAcks.delete(oldest);
+        }
         this.#pendingCalls.delete(request.invocationId);
+        this.#pendingFetchAcks.delete(request.invocationId);
+        this.#activeFetches.delete(request.invocationId);
         worker.terminate();
         resolve(outcome);
       };
@@ -368,10 +419,70 @@ export class ScriptHost {
       });
 
       this.#pendingCalls.set(request.invocationId, new Set());
+      this.#pendingFetchAcks.set(request.invocationId, new Map());
+      this.#activeFetches.set(request.invocationId, new Set());
       worker.onmessage = (event: MessageEvent<ScriptWorkerOutbound>) => {
         const message = event.data;
         if (message.messageType === 'completed') {
+          if (
+            (this.#pendingFetchAcks.get(request.invocationId)?.size ?? 0) > 0 ||
+            (this.#activeFetches.get(request.invocationId)?.size ?? 0) > 0
+          ) {
+            finish({
+              kind: 'crashed',
+              message:
+                'The isolated script Worker completed with an unclosed native Fetch observation.',
+            });
+            return;
+          }
           finish({ kind: 'response', response: message.response });
+          return;
+        }
+        if (message.messageType === 'fetch_observation') {
+          const observation = message.observation;
+          if (
+            request.protocolVersion !== 4 ||
+            observation.invocationId !== request.invocationId
+          ) {
+            finish({
+              kind: 'crashed',
+              message:
+                'The isolated script Worker emitted an invalid native Fetch observation.',
+            });
+            return;
+          }
+          const pending = this.#pendingFetchAcks.get(request.invocationId)!;
+          const active = this.#activeFetches.get(request.invocationId)!;
+          const phase =
+            observation.observationType === 'started' ? 'started' : 'terminal';
+          const invalid =
+            pending.has(observation.requestId) ||
+            (phase === 'started'
+              ? active.has(observation.requestId)
+              : !active.has(observation.requestId));
+          if (invalid) {
+            finish({
+              kind: 'crashed',
+              message:
+                'The isolated script Worker violated the native Fetch observation lifecycle.',
+            });
+            return;
+          }
+          pending.set(observation.requestId, phase);
+          void this.#send({
+            protocol: 'woml.script-host',
+            protocolVersion: 4,
+            messageType: 'fetch_observation',
+            invocationId: request.invocationId,
+            requestId: observation.requestId,
+            observation,
+          }).catch(() => {
+            finish({
+              kind: 'crashed',
+              message:
+                'The native Fetch observation could not be sent to Rust.',
+            });
+          });
           return;
         }
         const call = message.call;

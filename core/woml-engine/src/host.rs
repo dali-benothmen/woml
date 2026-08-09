@@ -15,10 +15,12 @@ use tokio::time::timeout;
 
 use crate::protocol::{
   CancelMessage, CapabilityCallMessage, CapabilityResultMessage, CompletedMessage, ExecuteMessage,
+  FetchObservationAckMessage, FetchObservationMessage, HostOutcome, HostReportedFailureKind,
   ReadyMessage,
 };
 use crate::{
-  capability_transport_failure, CapabilityCancellationToken, DurableCapabilityAuthority,
+  capability_transport_failure, CapabilityCancellationToken, CapabilityFailure,
+  CapabilityFailureKind, DurableCapabilityAuthority, NativeFetchInvocationIdentity,
 };
 
 const HEADER_PREFIX: &str = "Content-Length: ";
@@ -57,9 +59,15 @@ pub enum ScriptHostClientError {
 
 type PendingResult = Result<CompletedMessage, ScriptHostClientError>;
 
+#[derive(Debug)]
+struct PendingInvocation {
+  sender: oneshot::Sender<PendingResult>,
+  identity: NativeFetchInvocationIdentity,
+}
+
 #[derive(Debug, Default)]
 struct SharedState {
-  pending: HashMap<String, oneshot::Sender<PendingResult>>,
+  pending: HashMap<String, PendingInvocation>,
   active_calls: HashMap<(String, String), CapabilityCancellationToken>,
   terminal_error: Option<ScriptHostClientError>,
 }
@@ -175,7 +183,19 @@ impl ScriptHostClient {
           "invocation ID {invocation_id:?} is already active"
         )));
       }
-      shared.pending.insert(invocation_id.clone(), sender);
+      shared.pending.insert(
+        invocation_id.clone(),
+        PendingInvocation {
+          sender,
+          identity: NativeFetchInvocationIdentity {
+            run_id: message.run_id.to_string(),
+            node_id: message.node_id.to_string(),
+            attempt_number: message.attempt.number,
+            invocation_id: invocation_id.clone(),
+            step_idempotency_key: message.attempt.idempotency_key.to_string(),
+          },
+        },
+      );
     }
 
     if let Err(error) = self.write_message(message).await {
@@ -277,12 +297,14 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
           fail_all(&shared, ScriptHostClientError::Protocol(message_error)).await;
           return;
         }
-        cancel_invocation_calls(&shared, &message.invocation_id).await;
-        let sender = {
-          let mut state = shared.lock().await;
-          state.pending.remove(&message.invocation_id)
+        let identity = {
+          let state = shared.lock().await;
+          state
+            .pending
+            .get(&message.invocation_id)
+            .map(|pending| pending.identity.clone())
         };
-        let Some(sender) = sender else {
+        let Some(identity) = identity else {
           fail_all(
             &shared,
             ScriptHostClientError::Protocol(format!(
@@ -293,7 +315,39 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
           .await;
           return;
         };
-        let _ = sender.send(Ok(message));
+        if let Some(authority) = &authority {
+          if authority
+            .close_active_native_fetches(&identity, completion_fetch_failure(&message.outcome))
+            .await
+            .is_err()
+          {
+            fail_all(
+              &shared,
+              ScriptHostClientError::Protocol(
+                "native Fetch terminal recovery could not be persisted".to_string(),
+              ),
+            )
+            .await;
+            return;
+          }
+        }
+        cancel_invocation_calls(&shared, &message.invocation_id).await;
+        let sender = {
+          let mut state = shared.lock().await;
+          state.pending.remove(&message.invocation_id)
+        };
+        let Some(pending) = sender else {
+          fail_all(
+            &shared,
+            ScriptHostClientError::Protocol(format!(
+              "received completion for unknown invocation {:?}",
+              message.invocation_id
+            )),
+          )
+          .await;
+          return;
+        };
+        let _ = pending.sender.send(Ok(message));
       }
       Some("capability_call") => {
         let message: CapabilityCallMessage = match serde_json::from_value(message) {
@@ -376,6 +430,63 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
           }
         });
       }
+      Some("fetch_observation") => {
+        let message: FetchObservationMessage = match serde_json::from_value(message) {
+          Ok(message) => message,
+          Err(error) => {
+            fail_all(&shared, ScriptHostClientError::Protocol(error.to_string())).await;
+            return;
+          }
+        };
+        if let Err(error) = message.validate() {
+          fail_all(&shared, ScriptHostClientError::Protocol(error)).await;
+          return;
+        }
+        let identity = {
+          let state = shared.lock().await;
+          state
+            .pending
+            .get(&message.invocation_id)
+            .map(|pending| pending.identity.clone())
+        };
+        let Some(identity) = identity else {
+          fail_all(
+            &shared,
+            ScriptHostClientError::Protocol(format!(
+              "received native-Fetch observation for unknown invocation {:?}",
+              message.invocation_id
+            )),
+          )
+          .await;
+          return;
+        };
+        let observation_shared = Arc::clone(&shared);
+        let observation_stdin = Arc::clone(&stdin);
+        let observation_authority = authority.clone();
+        tokio::spawn(async move {
+          let error = match observation_authority {
+            Some(authority) => authority
+              .observe_native_fetch(&identity, message.observation)
+              .await
+              .err()
+              .map(|_| fetch_tracking_failure(true)),
+            None => Some(fetch_tracking_failure(false)),
+          };
+          let ack = match &error {
+            Some(error) => FetchObservationAckMessage::rejected(
+              &message.invocation_id,
+              &message.request_id,
+              error,
+            ),
+            None => {
+              FetchObservationAckMessage::accepted(&message.invocation_id, &message.request_id)
+            }
+          };
+          if let Err(error) = write_serialized_message(&observation_stdin, &ack).await {
+            fail_all(&observation_shared, error).await;
+          }
+        });
+      }
       _ => {
         fail_all(
           &shared,
@@ -448,8 +559,60 @@ async fn fail_all(shared: &Arc<Mutex<SharedState>>, error: ScriptHostClientError
   for (_, call) in active_calls {
     call.cancel();
   }
-  for (_, sender) in pending {
-    let _ = sender.send(Err(error.clone()));
+  for (_, pending) in pending {
+    let _ = pending.sender.send(Err(error.clone()));
+  }
+}
+
+fn fetch_tracking_failure(ambiguous: bool) -> CapabilityFailure {
+  CapabilityFailure {
+    kind: CapabilityFailureKind::TransportFailed,
+    code: "WOML_NATIVE_FETCH_TRACKING_FAILED".to_string(),
+    message: if ambiguous {
+      "WOML could not durably record the native Fetch observation.".to_string()
+    } else {
+      "Durable native Fetch tracking is unavailable for this invocation.".to_string()
+    },
+    retryable: false,
+    ambiguous,
+    details: None,
+  }
+}
+
+fn completion_fetch_failure(outcome: &HostOutcome) -> CapabilityFailure {
+  let (kind, code, message) = match outcome {
+    HostOutcome::Failure { error }
+      if error.kind == HostReportedFailureKind::InvocationCancelled =>
+    {
+      (
+        CapabilityFailureKind::Cancelled,
+        "WOML_NATIVE_FETCH_CANCELLED",
+        "The script invocation ended while native Fetch was active.",
+      )
+    }
+    HostOutcome::Failure { error } if error.kind == HostReportedFailureKind::ScriptTimedOut => (
+      CapabilityFailureKind::TimedOut,
+      "WOML_NATIVE_FETCH_TIMED_OUT",
+      "The script deadline expired while native Fetch was active.",
+    ),
+    HostOutcome::Failure { error } if error.kind == HostReportedFailureKind::WorkerCrashed => (
+      CapabilityFailureKind::WorkerCrashed,
+      "WOML_NATIVE_FETCH_WORKER_CRASHED",
+      "The script Worker exited while native Fetch was active.",
+    ),
+    _ => (
+      CapabilityFailureKind::Interrupted,
+      "WOML_NATIVE_FETCH_INTERRUPTED",
+      "The script ended without a terminal native Fetch observation.",
+    ),
+  };
+  CapabilityFailure {
+    kind,
+    code: code.to_string(),
+    message: message.to_string(),
+    retryable: false,
+    ambiguous: true,
+    details: None,
   }
 }
 

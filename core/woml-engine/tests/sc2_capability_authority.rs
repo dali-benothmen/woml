@@ -363,3 +363,44 @@ fn recovery_closes_interrupted_managed_operation_as_ambiguous_before_the_attempt
     RunEventPayload::OperationFailed(OperationFailedData { .. })
   ));
 }
+
+#[test]
+fn recovery_closes_interrupted_observed_fetch_as_ambiguous_before_the_attempt() {
+  let mut store = active_store("run-fetch-recovery", "inv-fetch-recovery");
+  let call = request(
+    "run-fetch-recovery",
+    "inv-fetch-recovery",
+    "fetch-active",
+    json!(null),
+  );
+  store
+    .append_payload(
+      "run-fetch-recovery",
+      "event-fetch-operation-start",
+      Utc::now(),
+      RunEventPayload::OperationStarted(OperationStartedData {
+        node_id: call.node_id,
+        attempt_number: call.attempt_number,
+        invocation_id: call.invocation_id,
+        call_id: call.call_id,
+        operation_key: call.identity.operation_key,
+        capability: "http".to_string(),
+        operation: "fetch".to_string(),
+        execution_mode: OperationExecutionMode::Observed,
+        metadata: Map::new(),
+      }),
+    )
+    .unwrap();
+
+  let report = store.recover_interrupted_runs().unwrap();
+  assert_eq!(report.recovered_runs, 1);
+  let projection = store.projection("run-fetch-recovery").unwrap();
+  assert_eq!(projection.status, RunStatus::Failed);
+  assert!(matches!(
+    projection.operations.values().next().unwrap().status,
+    OperationStatus::Failed { ref failure, .. }
+      if failure.kind == CapabilityFailureKind::Interrupted
+        && failure.ambiguous
+        && failure.code == "WOML_NATIVE_FETCH_INTERRUPTED"
+  ));
+}

@@ -51,13 +51,6 @@ const retryFixturePath = join(
   'retry.woml'
 );
 const retryExamplePath = join(projectRoot, 'examples', 'retryWorkflow.woml');
-const servicesBindingsFixturePath = join(
-  projectRoot,
-  'woml',
-  'tests',
-  'fixtures',
-  'services-bindings.woml'
-);
 const retryCompositionFixturePath = join(
   import.meta.dir,
   '..',
@@ -191,13 +184,54 @@ describe('woml test one-shot compatibility', () => {
     expect(source).not.toMatch(/\bexecuteWorkflow\s*\(/);
   });
 
-  test('keeps native Fetch unavailable until SC4 tracking is implemented', async () => {
-    const result = await runCli('run', servicesBindingsFixturePath);
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('WOML_NATIVE_FETCH_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('SC4 adds durable Fetch tracking');
-    expect(result.stderr).not.toContain('CUSTOMER_API_TOKEN');
+  test('runs native Fetch through the public CLI with redacted durable observations', async () => {
+    const port = await availablePort();
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port,
+      fetch: () =>
+        Response.json({ message: 'hello from fetch' }, { status: 202 }),
+    });
+    const workflowPath = join(temporaryDirectory, 'sc4-native-fetch.woml');
+    const statePath = join(temporaryDirectory, 'sc4-native-fetch.sqlite');
+    await writeFile(
+      workflowPath,
+      `<workflow id="sc4-cli-fetch" version="1.0.0" name="SC4 CLI Fetch">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="request">
+      <script>
+        const response = await fetch("http://127.0.0.1:${port}/hello?access_token=must-not-persist");
+        return { status: response.status, native: response instanceof Response, data: await response.json() };
+      </script>
+    </step>
+  </steps>
+</workflow>`
+    );
+    try {
+      const result = await runCli('test', workflowPath, '--state', statePath);
+      expect(result).toEqual({
+        stdout:
+          '{"status":202,"native":true,"data":{"message":"hello from fetch"}}\n',
+        stderr: '',
+        exitCode: 0,
+      });
+      const database = new Database(statePath, { readonly: true });
+      const eventRows = database
+        .query(
+          'SELECT event_json AS eventJson FROM woml_run_events ORDER BY sequence'
+        )
+        .all() as { eventJson: string }[];
+      database.close();
+      const history = eventRows.map(row => row.eventJson).join('\n');
+      expect(history).toContain('operation_started');
+      expect(history).toContain('"executionMode":"observed"');
+      expect(history).toContain('operation_succeeded');
+      expect(history).not.toContain('access_token');
+      expect(history).not.toContain('must-not-persist');
+    } finally {
+      server.stop(true);
+    }
   });
 
   test('runs hello.woml through the public executable', async () => {

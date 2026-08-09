@@ -105,7 +105,8 @@ export function assertInboundMessage(
 ): asserts message is
   | ExecuteMessage
   | CancelMessage
-  | import('./types').CapabilityResultMessage {
+  | import('./types').CapabilityResultMessage
+  | import('./types').FetchObservationAckMessage {
   const validator =
     protocolVersion === 4
       ? validateV4
@@ -127,7 +128,8 @@ export function assertInboundMessage(
     !('messageType' in message) ||
     (message.messageType !== 'execute' &&
       message.messageType !== 'cancel' &&
-      message.messageType !== 'capability_result')
+      message.messageType !== 'capability_result' &&
+      message.messageType !== 'fetch_observation_ack')
   ) {
     throw new MessageProtocolError(
       `The Bun script host received an unsupported protocol-v${protocolVersion} message direction.`

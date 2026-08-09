@@ -14,6 +14,7 @@ import type {
   CancelMessage,
   CompletedMessage,
   ExecuteMessage,
+  FetchObservationMessage,
   ScriptAttempt,
   ScriptHostMessage,
 } from '../src/script-host/types';
@@ -614,6 +615,7 @@ return {
           completed.push(message);
           return;
         }
+        if (message.messageType !== 'capability_call') return;
         calls.push(message);
         const input = message.call.input as {
           readonly value: string;
@@ -703,6 +705,284 @@ return {
     expect(JSON.stringify(sent)).not.toContain('secret-v4-value');
   });
 
+  test('protocol v4 preserves native Fetch behavior while redacting durable observations', async () => {
+    const requests: Array<{
+      url: string;
+      authorization: string;
+      body: string;
+    }> = [];
+    let serverBase = '';
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request): Promise<Response> {
+        const url = new URL(request.url);
+        if (url.pathname === '/redirect') {
+          return Response.redirect(`${serverBase}/final`, 302);
+        }
+        if (url.pathname === '/final') {
+          return new Response(Uint8Array.from([0, 1, 2, 255]), {
+            status: 206,
+            headers: { 'x-woml-test': 'native' },
+          });
+        }
+        requests.push({
+          url: request.url,
+          authorization: request.headers.get('authorization') ?? '',
+          body: await request.text(),
+        });
+        return new Response('accepted', { status: 202 });
+      },
+    });
+    serverBase = server.url.toString().replace(/\/$/, '');
+    try {
+      const completed: CompletedMessage[] = [];
+      const observations: FetchObservationMessage[] = [];
+      let host!: ScriptHost;
+      host = new ScriptHost({
+        workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+        protocolVersion: 4,
+        send: async message => {
+          if (message.messageType === 'completed') {
+            completed.push(message);
+            return;
+          }
+          if (message.messageType !== 'fetch_observation') return;
+          observations.push(message);
+          host.accept({
+            protocol: 'woml.script-host',
+            protocolVersion: 4,
+            messageType: 'fetch_observation_ack',
+            invocationId: message.invocationId,
+            requestId: message.requestId,
+            accepted: true,
+          });
+        },
+      });
+      const base = serverBase;
+      host.accept(
+        executeV4(
+          'inv_v4_fetch_native',
+          `const request = new Request(${JSON.stringify(`${base}/echo?access_token=hidden`)}, {
+            method: 'POST',
+            headers: new Headers({ authorization: 'Bearer secret-header' }),
+            body: 'Héllo 🌍\\r\\nbody'
+          });
+          const response = await fetch(request);
+          const redirected = await globalThis.fetch(${JSON.stringify(`${base}/redirect`)});
+          const concurrent = await Promise.all([
+            fetch(${JSON.stringify(`${base}/final`)}),
+            fetch(${JSON.stringify(`${base}/final`)})
+          ]);
+          const localData = await (await fetch('data:text/plain,native-data')).text();
+          return {
+            responseIsNative: response instanceof Response,
+            status: response.status,
+            text: await response.text(),
+            redirected: redirected.redirected,
+            redirectStatus: redirected.status,
+            header: redirected.headers.get('x-woml-test'),
+            bytes: [...new Uint8Array(await redirected.arrayBuffer())],
+            concurrentStatuses: concurrent.map(item => item.status),
+            localData
+          };`
+        )
+      );
+      await host.drain();
+
+      expect(completed[0]?.outcome).toEqual({
+        kind: 'success',
+        value: {
+          responseIsNative: true,
+          status: 202,
+          text: 'accepted',
+          redirected: true,
+          redirectStatus: 206,
+          header: 'native',
+          bytes: [0, 1, 2, 255],
+          concurrentStatuses: [206, 206],
+          localData: 'native-data',
+        },
+      });
+      expect(requests).toEqual([
+        {
+          url: `${base}/echo?access_token=hidden`,
+          authorization: 'Bearer secret-header',
+          body: 'Héllo 🌍\r\nbody',
+        },
+      ]);
+      expect(observations).toHaveLength(8);
+      expect(observations[0]?.observation).toMatchObject({
+        observationType: 'started',
+        method: 'POST',
+        origin: new URL(base).origin,
+        path: '/echo',
+      });
+      expect(observations[1]?.observation).toMatchObject({
+        observationType: 'completed',
+        status: 202,
+        responseBodyBytes: null,
+      });
+      const durableText = JSON.stringify(observations);
+      expect(durableText).not.toContain('access_token');
+      expect(durableText).not.toContain('secret-header');
+      expect(durableText).not.toContain('Héllo');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('protocol v4 refuses to dispatch native Fetch when start tracking is rejected', async () => {
+    const completed: CompletedMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'fetch_observation') return;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'fetch_observation_ack',
+          invocationId: message.invocationId,
+          requestId: message.requestId,
+          accepted: false,
+          error: {
+            kind: 'transport_failed',
+            code: 'WOML_NATIVE_FETCH_TRACKING_FAILED',
+            message: 'Durable Fetch tracking is unavailable.',
+            retryable: false,
+            ambiguous: false,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_fetch_rejected',
+        `await fetch('http://127.0.0.1:9/must-not-dispatch'); return true;`
+      )
+    );
+    await host.drain();
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'failure',
+      error: {
+        kind: 'service_failed',
+        message: 'Durable Fetch tracking is unavailable.',
+        capability: 'http',
+        operation: 'fetch',
+        retryable: false,
+        ambiguous: false,
+      },
+    });
+  });
+
+  test('protocol v4 classifies an uncaught native Fetch rejection as non-retryable', async () => {
+    const completed: CompletedMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'fetch_observation') return;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'fetch_observation_ack',
+          invocationId: message.invocationId,
+          requestId: message.requestId,
+          accepted: true,
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_fetch_uncaught',
+        `await fetch('http://127.0.0.1:1/unavailable'); return true;`
+      )
+    );
+    await host.drain();
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'failure',
+      error: {
+        kind: 'service_failed',
+        code: 'WOML_NATIVE_FETCH_REJECTED',
+        capability: 'http',
+        operation: 'fetch',
+        retryable: false,
+        ambiguous: true,
+      },
+    });
+  });
+
+  test('protocol v4 cancellation terminates a Worker with active native Fetch exactly once', async () => {
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: async () => {
+        await Bun.sleep(2_000);
+        return new Response('late');
+      },
+    });
+    try {
+      const completed: CompletedMessage[] = [];
+      const observations: FetchObservationMessage[] = [];
+      let host!: ScriptHost;
+      host = new ScriptHost({
+        workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+        protocolVersion: 4,
+        send: async message => {
+          if (message.messageType === 'completed') {
+            completed.push(message);
+            return;
+          }
+          if (message.messageType !== 'fetch_observation') return;
+          observations.push(message);
+          host.accept({
+            protocol: 'woml.script-host',
+            protocolVersion: 4,
+            messageType: 'fetch_observation_ack',
+            invocationId: message.invocationId,
+            requestId: message.requestId,
+            accepted: true,
+          });
+        },
+      });
+      host.accept(
+        executeV4(
+          'inv_v4_fetch_cancel',
+          `return await fetch(${JSON.stringify(server.url.toString())});`
+        )
+      );
+      while (observations.length === 0) await Bun.sleep(1);
+      host.accept({
+        protocol: 'woml.script-host',
+        protocolVersion: 4,
+        messageType: 'cancel',
+        invocationId: 'inv_v4_fetch_cancel',
+        reason: 'run_cancelled',
+      });
+      await host.drain();
+      expect(completed).toHaveLength(1);
+      expect(completed[0]?.outcome).toMatchObject({
+        kind: 'failure',
+        error: { kind: 'invocation_cancelled' },
+      });
+      expect(observations).toHaveLength(1);
+      expect(observations[0]?.observation.observationType).toBe('started');
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test('protocol v4 cancellation drops a known late reply and rejects an unknown reply', async () => {
     const completed: CompletedMessage[] = [];
     let captured: CapabilityCallMessage | undefined;
@@ -711,7 +991,7 @@ return {
       protocolVersion: 4,
       send: async message => {
         if (message.messageType === 'completed') completed.push(message);
-        else captured = message;
+        else if (message.messageType === 'capability_call') captured = message;
       },
     });
     host.accept(

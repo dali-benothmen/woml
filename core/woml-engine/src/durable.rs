@@ -2824,18 +2824,16 @@ impl DurableEventStore {
     if projection.status != RunStatus::Running {
       return Ok(RunRecovery::Unchanged);
     }
-    let active_managed_operations = projection
+    let active_operations = projection
       .operations
       .values()
-      .filter(|operation| {
-        operation.execution_mode == crate::event::OperationExecutionMode::Managed
-          && operation.status == crate::projection::OperationStatus::Started
-      })
+      .filter(|operation| operation.status == crate::projection::OperationStatus::Started)
       .cloned()
       .collect::<Vec<_>>();
-    if !active_managed_operations.is_empty() {
+    if !active_operations.is_empty() {
       let now = Utc::now();
-      for operation in &active_managed_operations {
+      for operation in &active_operations {
+        let observed = operation.execution_mode == crate::event::OperationExecutionMode::Observed;
         append_to_history(
           &transaction,
           &mut events,
@@ -2856,8 +2854,16 @@ impl DurableEventStore {
             duration_ms: 0.0,
             failure: crate::CapabilityFailure {
               kind: crate::CapabilityFailureKind::Interrupted,
-              code: "WOML_CAPABILITY_INTERRUPTED".to_string(),
-              message: "Recovery found a managed operation without a durable terminal event; it will not be replayed.".to_string(),
+              code: if observed {
+                "WOML_NATIVE_FETCH_INTERRUPTED".to_string()
+              } else {
+                "WOML_CAPABILITY_INTERRUPTED".to_string()
+              },
+              message: if observed {
+                "Recovery found native Fetch without a durable terminal observation; its outcome is ambiguous and it will not be replayed.".to_string()
+              } else {
+                "Recovery found a managed operation without a durable terminal event; it will not be replayed.".to_string()
+              },
               retryable: false,
               ambiguous: true,
               details: None,

@@ -26,9 +26,11 @@ pub use capability::{
   CapabilityCallRequest, CapabilityCallResult, CapabilityCancellationToken, CapabilityDescriptor,
   CapabilityEffect, CapabilityFailure, CapabilityFailureKind, CapabilityHandler,
   CapabilityRegistry, CapabilityRegistryError, DurableCapabilityAuthority,
-  DurableCapabilityAuthorityError, TestCapabilityHandler, CAPABILITY_CALL_CONTRACT,
-  CAPABILITY_CALL_CONTRACT_VERSION, DEFAULT_CAPABILITY_FRAME_BYTES, DEFAULT_CAPABILITY_INPUT_BYTES,
-  DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
+  DurableCapabilityAuthorityError, NativeFetchFailure, NativeFetchFailureKind,
+  NativeFetchInvocationIdentity, NativeFetchObservation, TestCapabilityHandler,
+  CAPABILITY_CALL_CONTRACT, CAPABILITY_CALL_CONTRACT_VERSION, DEFAULT_CAPABILITY_FRAME_BYTES,
+  DEFAULT_CAPABILITY_INPUT_BYTES, DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
+  NATIVE_FETCH_OBSERVATION_CONTRACT, NATIVE_FETCH_OBSERVATION_CONTRACT_VERSION,
 };
 pub use durable::{
   ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,

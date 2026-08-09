@@ -5,7 +5,6 @@ import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   compileWoml,
-  analyzeWomlScript,
   isWomlElement,
   parseWoml,
   WomlDiagnosticError,
@@ -726,29 +725,6 @@ async function compileWorkflowSources(
     workflowIds.add(item.workflow.workflowId);
   }
   return compiled;
-}
-
-function requireSc3ExecutableProfile(
-  sources: readonly CompiledWorkflowSource[]
-): void {
-  for (const source of sources) {
-    for (const node of source.workflow.graph.nodes) {
-      if (node.handler !== 'runtime.script' || node.inputs.kind !== 'object') {
-        continue;
-      }
-      const script = node.inputs.fields.source;
-      if (
-        script?.kind === 'literal' &&
-        typeof script.value === 'string' &&
-        analyzeWomlScript(script.value).usesNativeFetch
-      ) {
-        throw new CliInputError(
-          'WOML_NATIVE_FETCH_RUNTIME_UNAVAILABLE',
-          `workflow "${source.workflow.workflowId}" uses native fetch(), which remains unavailable until SC4 adds durable Fetch tracking.`
-        );
-      }
-    }
-  }
 }
 
 function printWaitingApproval(
@@ -1851,7 +1827,6 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowSources(filePath);
-    requireSc3ExecutableProfile(sources);
     if (runArguments.command === 'test') {
       if ((await stat(filePath)).isDirectory()) {
         throw new CliInputError(

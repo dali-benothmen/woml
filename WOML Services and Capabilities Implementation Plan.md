@@ -1,11 +1,11 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0 through SC3 completed on 2026-08-09. The cross-layer
+Status: active. SC0 through SC4 completed on 2026-08-09. The cross-layer
 contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
 Script Bindings v1 and symbolic secret dependencies, and a real WOML script can
 now call from an isolated Bun Worker through the durable Rust capability
-authority. SC4 is next; public native Fetch remains unavailable until its
-tracking contract is implemented.
+authority. Native `fetch()` now preserves Bun's API while Rust records safe,
+durable observations. SC5 is next: the managed `services.http.request()` API.
 
 ## 1. Product Outcome
 
@@ -760,12 +760,15 @@ literal CRLF, backpressure, and secret-result rejection.
 
 ### SC4 — Instrument Bun's native Fetch without changing it
 
+Status: completed on 2026-08-09.
+
 Changes:
 
 - Capture and wrap Bun's native global `fetch` before script execution.
 - Pass native inputs through and return Bun's native `Response` unchanged.
 - Durably acknowledge safe request-start metadata before dispatch.
-- Report response headers/status or native failure without consuming bodies.
+- Report response status when headers arrive, or native failure, without
+  consuming bodies or persisting response headers.
 - Preserve Request, Response, Headers, FormData, Blob, streams, redirects,
   AbortSignal, binary data, and native error behavior.
 - Add unsupported raw-network/dynamic-import diagnostics for the current
@@ -774,7 +777,13 @@ Changes:
 Result:
 
 Ordinary `fetch()` works as it does in Bun and its external operation is
-visible to WOML automatically.
+visible to WOML automatically. Rust acknowledges the redacted start before Bun
+dispatches, records success or failure without consuming the response body,
+and closes interrupted observations as ambiguous without replay. The public
+CLI now executes Model v8 Fetch workflows, while the frontend rejects known
+raw-network and runtime-module bypasses in the current no-module profile.
+Stored Model v1-v7 workflows retain their pre-observation Fetch behavior for
+backward compatibility; newly compiled Fetch scripts always target Model v8.
 
 Gate:
 

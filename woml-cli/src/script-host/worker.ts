@@ -3,7 +3,9 @@ import type {
   CapabilityCallRequest,
   CapabilityCallResult,
   CapabilityFailure,
+  FetchObservationAckMessage,
   JsonValue,
+  NativeFetchObservation,
   ScriptAttempt,
   ScriptBindingsV1,
   ScriptContext,
@@ -41,6 +43,11 @@ export type ScriptWorkerInbound =
       readonly messageType: 'capability_result';
       readonly callId: string;
       readonly result: CapabilityCallResult;
+    }
+  | {
+      readonly messageType: 'fetch_observation_ack';
+      readonly requestId: string;
+      readonly ack: FetchObservationAckMessage;
     };
 
 export type ScriptWorkerOutbound =
@@ -51,6 +58,10 @@ export type ScriptWorkerOutbound =
   | {
       readonly messageType: 'capability_call';
       readonly call: CapabilityCallRequest;
+    }
+  | {
+      readonly messageType: 'fetch_observation';
+      readonly observation: NativeFetchObservation;
     };
 
 type AsyncFunction = (
@@ -68,6 +79,40 @@ const AsyncFunction = Object.getPrototypeOf(
 ).constructor as AsyncFunctionConstructor;
 
 function serializeError(error: unknown): ScriptWorkerResponse {
+  if (error instanceof NativeFetchTrackingError) {
+    return {
+      ok: false,
+      error: {
+        kind: 'service',
+        name: error.name,
+        message: error.message,
+        capability: 'http',
+        operation: 'fetch',
+        callId: error.callId,
+        cause: error.cause,
+      },
+    };
+  }
+  if (
+    (typeof error === 'object' && error !== null) ||
+    typeof error === 'function'
+  ) {
+    const nativeFetch = nativeFetchFailures.get(error);
+    if (nativeFetch !== undefined) {
+      return {
+        ok: false,
+        error: {
+          kind: 'service',
+          name: error instanceof Error ? error.name : 'Error',
+          message: nativeFetch.cause.message,
+          capability: 'http',
+          operation: 'fetch',
+          callId: nativeFetch.callId,
+          cause: nativeFetch.cause,
+        },
+      };
+    }
+  }
   if (error instanceof ServiceCallError) {
     return {
       ok: false,
@@ -132,7 +177,184 @@ interface PendingCapabilityCall {
 }
 
 const pendingCalls = new Map<string, PendingCapabilityCall>();
+const pendingFetchAcks = new Map<
+  string,
+  {
+    readonly resolve: () => void;
+    readonly reject: (error: NativeFetchTrackingError) => void;
+  }
+>();
 let callSequence = 0;
+let fetchSequence = 0;
+const nativeFetch = globalThis.fetch.bind(globalThis);
+const nativeFetchFailures = new WeakMap<
+  object,
+  { readonly callId: string; readonly cause: CapabilityFailure }
+>();
+
+class NativeFetchTrackingError extends Error {
+  readonly callId: string;
+  readonly cause: CapabilityFailure;
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly ambiguous: boolean;
+
+  constructor(callId: string, failure: CapabilityFailure) {
+    super(failure.message);
+    this.name = 'WomlFetchTrackingError';
+    this.callId = callId;
+    this.cause = failure;
+    this.code = failure.code;
+    this.retryable = failure.retryable;
+    this.ambiguous = failure.ambiguous;
+  }
+}
+
+function requestBodyBytes(
+  body: BodyInit | null | undefined
+): number | undefined {
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === 'string') return Buffer.byteLength(body, 'utf8');
+  if (body instanceof URLSearchParams) {
+    return Buffer.byteLength(body.toString(), 'utf8');
+  }
+  if (body instanceof Blob) return body.size;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  return undefined;
+}
+
+function fetchStartObservation(
+  request: ScriptWorkerRequest,
+  requestId: string,
+  input: RequestInfo | URL,
+  init?: RequestInit
+): NativeFetchObservation | undefined {
+  const rawUrl =
+    input instanceof Request
+      ? input.url
+      : input instanceof URL
+        ? input.href
+        : String(input);
+  const url = new URL(rawUrl);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return undefined;
+  }
+  const method = String(
+    init?.method ?? (input instanceof Request ? input.method : 'GET')
+  ).toUpperCase();
+  const bytes = requestBodyBytes(init?.body);
+  return {
+    contract: 'woml.native-fetch-observation',
+    contractVersion: 1,
+    observationType: 'started',
+    invocationId: request.invocationId,
+    requestId,
+    method,
+    origin: url.origin,
+    path: url.pathname,
+    ...(bytes === undefined ? {} : { requestBodyBytes: bytes }),
+    startedAt: new Date().toISOString(),
+  };
+}
+
+async function observeFetch(
+  observation: NativeFetchObservation
+): Promise<void> {
+  if (pendingFetchAcks.has(observation.requestId)) {
+    throw new Error('Native Fetch reused an active request ID.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    pendingFetchAcks.set(observation.requestId, { resolve, reject });
+    self.postMessage({
+      messageType: 'fetch_observation',
+      observation,
+    } satisfies ScriptWorkerOutbound);
+  });
+}
+
+function trackedNativeFetch(request: ScriptWorkerRequest): typeof fetch {
+  const tracked = async (
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ): Promise<Response> => {
+    const requestId = `fetch_${++fetchSequence}_${crypto.randomUUID().replaceAll('-', '')}`;
+    const startedAt = performance.now();
+    const start = fetchStartObservation(request, requestId, input, init);
+    if (start === undefined) return nativeFetch(input, init);
+    await observeFetch(start);
+
+    let response: Response;
+    try {
+      response = await nativeFetch(input, init);
+    } catch (error) {
+      const name = error instanceof Error ? error.name : '';
+      const kind =
+        name === 'AbortError'
+          ? 'cancelled'
+          : name === 'TimeoutError'
+            ? 'timed_out'
+            : 'fetch_rejected';
+      const failure: CapabilityFailure = {
+        kind:
+          kind === 'cancelled'
+            ? 'cancelled'
+            : kind === 'timed_out'
+              ? 'timed_out'
+              : 'transport_failed',
+        code:
+          kind === 'cancelled'
+            ? 'WOML_NATIVE_FETCH_CANCELLED'
+            : kind === 'timed_out'
+              ? 'WOML_NATIVE_FETCH_TIMED_OUT'
+              : 'WOML_NATIVE_FETCH_REJECTED',
+        message:
+          kind === 'cancelled'
+            ? 'Bun Fetch was cancelled.'
+            : kind === 'timed_out'
+              ? 'Bun Fetch exceeded its deadline.'
+              : 'Bun Fetch rejected the request.',
+        retryable: false,
+        ambiguous: true,
+      };
+      await observeFetch({
+        contract: 'woml.native-fetch-observation',
+        contractVersion: 1,
+        observationType: 'failed',
+        invocationId: request.invocationId,
+        requestId,
+        durationMs: Math.max(0, performance.now() - startedAt),
+        failedAt: new Date().toISOString(),
+        error: {
+          kind,
+          code: failure.code,
+          message: failure.message,
+        },
+      });
+      if (
+        (typeof error === 'object' && error !== null) ||
+        typeof error === 'function'
+      ) {
+        nativeFetchFailures.set(error, { callId: requestId, cause: failure });
+      }
+      throw error;
+    }
+
+    await observeFetch({
+      contract: 'woml.native-fetch-observation',
+      contractVersion: 1,
+      observationType: 'completed',
+      invocationId: request.invocationId,
+      requestId,
+      status: response.status,
+      responseBodyBytes: null,
+      durationMs: Math.max(0, performance.now() - startedAt),
+      completedAt: new Date().toISOString(),
+    });
+    return response;
+  };
+  return tracked as typeof fetch;
+}
 
 async function operationKey(
   stepIdempotencyKey: string,
@@ -266,6 +488,14 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
         : deepFreezeJson(request.attempt);
     const secrets = deepFreezeJson(request.bindings?.secrets ?? {});
     const services = deeplyReadonlyServiceFacade(request);
+    if (request.bindings !== undefined) {
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: trackedNativeFetch(request),
+      });
+    }
     const safeNodeId = request.nodeId.replace(/[^A-Za-z0-9_-]/g, '_');
     const body = `"use strict";\n${request.source}\n//# sourceURL=woml-step-${safeNodeId}.js`;
     const script =
@@ -307,6 +537,17 @@ self.onmessage = (event: MessageEvent<ScriptWorkerInbound>) => {
   const message = event.data;
   if (message.messageType === 'execute') {
     void execute(message.request);
+    return;
+  }
+  if (message.messageType === 'fetch_observation_ack') {
+    const pending = pendingFetchAcks.get(message.requestId);
+    if (pending === undefined) return;
+    pendingFetchAcks.delete(message.requestId);
+    if (message.ack.accepted) pending.resolve();
+    else
+      pending.reject(
+        new NativeFetchTrackingError(message.requestId, message.ack.error)
+      );
     return;
   }
   const pending = pendingCalls.get(message.callId);

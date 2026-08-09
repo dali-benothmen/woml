@@ -170,6 +170,66 @@ export interface CapabilityResultMessage {
   readonly result: CapabilityCallResult;
 }
 
+interface NativeFetchObservationBase {
+  readonly contract: 'woml.native-fetch-observation';
+  readonly contractVersion: 1;
+  readonly invocationId: string;
+  readonly requestId: string;
+}
+
+export type NativeFetchObservation =
+  | (NativeFetchObservationBase & {
+      readonly observationType: 'started';
+      readonly method: string;
+      readonly origin: string;
+      readonly path: string;
+      readonly requestBodyBytes?: number;
+      readonly startedAt: string;
+    })
+  | (NativeFetchObservationBase & {
+      readonly observationType: 'completed';
+      readonly status: number;
+      readonly responseBodyBytes: number | null;
+      readonly durationMs: number;
+      readonly completedAt: string;
+    })
+  | (NativeFetchObservationBase & {
+      readonly observationType: 'failed';
+      readonly durationMs: number;
+      readonly failedAt: string;
+      readonly error: {
+        readonly kind:
+          | 'tracking_failed'
+          | 'fetch_rejected'
+          | 'timed_out'
+          | 'cancelled'
+          | 'worker_crashed'
+          | 'host_crashed';
+        readonly code: string;
+        readonly message: string;
+      };
+    });
+
+export interface FetchObservationMessage {
+  readonly protocol: 'woml.script-host';
+  readonly protocolVersion: 4;
+  readonly messageType: 'fetch_observation';
+  readonly invocationId: string;
+  readonly requestId: string;
+  readonly observation: NativeFetchObservation;
+}
+
+export type FetchObservationAckMessage = {
+  readonly protocol: 'woml.script-host';
+  readonly protocolVersion: 4;
+  readonly messageType: 'fetch_observation_ack';
+  readonly invocationId: string;
+  readonly requestId: string;
+} & (
+  | { readonly accepted: true }
+  | { readonly accepted: false; readonly error: CapabilityFailure }
+);
+
 export type HostReportedFailureKind =
   | 'script_threw'
   | 'script_timed_out'
@@ -237,7 +297,9 @@ export type ScriptHostMessage =
   | CancelMessage
   | CompletedMessage
   | CapabilityCallMessage
-  | CapabilityResultMessage;
+  | CapabilityResultMessage
+  | FetchObservationMessage
+  | FetchObservationAckMessage;
 
 export interface ScriptHostLimits {
   readonly maxContextBytes?: number;

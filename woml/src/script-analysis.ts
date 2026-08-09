@@ -33,7 +33,13 @@ interface AcornSyntaxError extends SyntaxError {
 const prefix =
   'async function __woml_script(context, attempt, services, secrets) {\n';
 const suffix = '\n}';
-const reservedBindings = new Set(['services', 'secrets']);
+const reservedBindings = new Set(['services', 'secrets', 'fetch']);
+const unsupportedBunNetworkMethods = new Set([
+  'connect',
+  'listen',
+  'serve',
+  'udpSocket',
+]);
 
 function isNode(value: unknown): value is AstNode {
   return (
@@ -77,15 +83,15 @@ function bindingIdentifiers(node: unknown): readonly AstNode[] {
     case 'Identifier':
       return [node];
     case 'ObjectPattern':
-      return ((node.properties as readonly unknown[] | undefined) ?? []).flatMap(
-        property => {
-          if (!isNode(property)) return [];
-          if (property.type === 'RestElement') {
-            return bindingIdentifiers(property.argument);
-          }
-          return bindingIdentifiers(property.value);
+      return (
+        (node.properties as readonly unknown[] | undefined) ?? []
+      ).flatMap(property => {
+        if (!isNode(property)) return [];
+        if (property.type === 'RestElement') {
+          return bindingIdentifiers(property.argument);
         }
-      );
+        return bindingIdentifiers(property.value);
+      });
     case 'ArrayPattern':
       return ((node.elements as readonly unknown[] | undefined) ?? []).flatMap(
         bindingIdentifiers
@@ -146,7 +152,8 @@ function isNonValueIdentifier(node: AstNode, parent?: AstNode): boolean {
     return true;
   }
   if (
-    (parent.type === 'MethodDefinition' || parent.type === 'LabeledStatement') &&
+    (parent.type === 'MethodDefinition' ||
+      parent.type === 'LabeledStatement') &&
     (parent.key === node || parent.label === node)
   ) {
     return true;
@@ -177,8 +184,11 @@ function memberPropertyName(node: AstNode): string | undefined {
   if (node.type !== 'MemberExpression') return undefined;
   const property = node.property;
   if (!isNode(property)) return undefined;
-  if (node.computed !== true && property.type === 'Identifier') return property.name;
-  return node.computed === true && property.type === 'Literal' && typeof property.value === 'string'
+  if (node.computed !== true && property.type === 'Identifier')
+    return property.name;
+  return node.computed === true &&
+    property.type === 'Literal' &&
+    typeof property.value === 'string'
     ? property.value
     : undefined;
 }
@@ -201,7 +211,10 @@ function isWriteTarget(node: AstNode, parent?: AstNode): boolean {
   );
 }
 
-function parseIssue(error: AcornSyntaxError, sourceLength: number): ScriptAnalysisIssue {
+function parseIssue(
+  error: AcornSyntaxError,
+  sourceLength: number
+): ScriptAnalysisIssue {
   const rawPosition = error.pos ?? error.raisedAt ?? prefix.length;
   const start = Math.max(
     0,
@@ -234,9 +247,9 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
     };
   }
 
-  const wrapperCandidate = (program.body as readonly unknown[] | undefined)?.find(
-    node => isNode(node) && node.type === 'FunctionDeclaration'
-  );
+  const wrapperCandidate = (
+    program.body as readonly unknown[] | undefined
+  )?.find(node => isNode(node) && node.type === 'FunctionDeclaration');
   const wrapper = isNode(wrapperCandidate) ? wrapperCandidate : undefined;
   const body = isNode(wrapper?.body) ? wrapper.body : undefined;
   if (body === undefined) {
@@ -246,7 +259,8 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
       usesNativeFetch: false,
       issue: {
         code: 'WOML_SCRIPT_SYNTAX_INVALID',
-        message: 'The script could not be parsed as an asynchronous function body.',
+        message:
+          'The script could not be parsed as an asynchronous function body.',
         start: 0,
         end: Math.min(source.length, 1),
       },
@@ -264,12 +278,78 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
     }
   };
 
-  const visit = (node: AstNode, parent?: AstNode, grandparent?: AstNode): void => {
+  const visit = (
+    node: AstNode,
+    parent?: AstNode,
+    grandparent?: AstNode
+  ): void => {
     const range = sourceRange(node, source.length);
     if (firstIssue !== undefined && range.start > firstIssue.start) return;
 
+    if (node.type === 'ImportExpression') {
+      fail(
+        issueAt(
+          node,
+          source.length,
+          'WOML_SCRIPT_DYNAMIC_IMPORT_UNSUPPORTED',
+          'Dynamic import is unavailable in the current WOML script profile.',
+          'Use the future WOML module system when it becomes available.'
+        )
+      );
+    }
+
+    if (node.type === 'CallExpression' && isNode(node.callee)) {
+      const callee = node.callee;
+      if (callee.type === 'Identifier' && callee.name === 'require') {
+        fail(
+          issueAt(
+            node,
+            source.length,
+            'WOML_SCRIPT_MODULE_REQUIRE_UNSUPPORTED',
+            'Runtime module loading is unavailable in the current WOML script profile.',
+            'Use the future WOML module system when it becomes available.'
+          )
+        );
+      }
+      if (
+        callee.type === 'MemberExpression' &&
+        memberRootIdentifier(callee)?.name === 'Bun' &&
+        unsupportedBunNetworkMethods.has(memberPropertyName(callee) ?? '')
+      ) {
+        fail(
+          issueAt(
+            node,
+            source.length,
+            'WOML_SCRIPT_RAW_NETWORK_UNSUPPORTED',
+            'Raw Bun networking is unavailable in the tracked WOML script profile.',
+            'Use native fetch() or a managed services operation.'
+          )
+        );
+      }
+    }
+
+    if (
+      (node.type === 'CallExpression' || node.type === 'NewExpression') &&
+      isNode(node.callee) &&
+      node.callee.type === 'Identifier' &&
+      node.callee.name === 'WebSocket'
+    ) {
+      fail(
+        issueAt(
+          node,
+          source.length,
+          'WOML_SCRIPT_RAW_NETWORK_UNSUPPORTED',
+          'WebSocket networking is unavailable in the tracked WOML script profile.',
+          'Use native fetch() or a managed services operation.'
+        )
+      );
+    }
+
     for (const identifier of declaredIdentifiers(node)) {
-      if (identifier.name !== undefined && reservedBindings.has(identifier.name)) {
+      if (
+        identifier.name !== undefined &&
+        reservedBindings.has(identifier.name)
+      ) {
         fail(
           issueAt(
             identifier,
@@ -420,14 +500,38 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
           );
         }
       } else if (node.name === 'fetch') {
-        usesNativeFetch = true;
+        if (isWriteTarget(node, parent)) {
+          fail(
+            issueAt(
+              node,
+              source.length,
+              'WOML_SCRIPT_FETCH_WRITE_UNSUPPORTED',
+              'The tracked native fetch binding cannot be replaced or deleted.',
+              'Call fetch() directly without modifying the runtime binding.'
+            )
+          );
+        } else {
+          usesNativeFetch = true;
+        }
       } else if (
         (node.name === 'globalThis' || node.name === 'self') &&
         parent?.type === 'MemberExpression' &&
         parent.object === node &&
         memberPropertyName(parent) === 'fetch'
       ) {
-        usesNativeFetch = true;
+        if (isWriteTarget(parent, grandparent)) {
+          fail(
+            issueAt(
+              parent,
+              source.length,
+              'WOML_SCRIPT_FETCH_WRITE_UNSUPPORTED',
+              'The tracked native fetch binding cannot be replaced or deleted.',
+              'Call fetch() directly without modifying the runtime binding.'
+            )
+          );
+        } else {
+          usesNativeFetch = true;
+        }
       }
     }
 
