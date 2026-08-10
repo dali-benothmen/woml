@@ -12,12 +12,13 @@ use napi::{Env, JsFunction, JsObject};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use woml_engine::model::ValueExpression;
 use woml_engine::{
   execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
   recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
-  resume_workflow_durable_outcome, run_notification_provider_journey,
-  settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome,
-  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
+  resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
+  run_notification_provider_journey, settle_approval_timeout_durable, ApprovalDecision,
+  ApprovalDecisionOutcome, CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
   ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter,
   NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
   NotificationJourneyError, ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError,
@@ -277,6 +278,8 @@ struct NativeWebhookRegistration {
   workflow: CompiledWorkflowDefinition,
   definition_hash: String,
   resolved_secrets: BTreeMap<String, String>,
+  #[serde(default)]
+  runtime_modules: Vec<RuntimeModuleArtifact>,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +288,19 @@ struct NativeWebhookRuntimeStarted {
   runtime_id: String,
   host: String,
   port: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeStoredRunRequirements {
+  contract: &'static str,
+  version: u32,
+  workflow_id: String,
+  definition_hash: String,
+  required_secrets: Vec<String>,
+  module_count: usize,
+  has_approval: bool,
+  has_notifications: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -731,6 +747,7 @@ pub async fn execute_woml_workflow_durable_outcome(
   script_timeout_ms: u32,
   event_store_path: String,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -742,11 +759,12 @@ pub async fn execute_woml_workflow_durable_outcome(
     workflow,
     definition_hash,
     trigger,
-    runtime_options_with_secrets(
+    runtime_options_with_modules(
       bun_executable,
       script_host_path,
       script_timeout_ms,
       resolved_secrets_json,
+      runtime_modules_json,
     )?,
     PathBuf::from(event_store_path),
   )
@@ -769,6 +787,7 @@ pub fn execute_woml_workflow_durable_outcome_with_progress(
   event_store_path: String,
   progress_callback: JsFunction,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -784,6 +803,11 @@ pub fn execute_woml_workflow_durable_outcome_with_progress(
     progress_callback,
     resolved_secrets_json,
   )?;
+  let modules: Vec<RuntimeModuleArtifact> =
+    serde_json::from_str(runtime_modules_json.as_deref().unwrap_or("[]")).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid runtime modules JSON: {error}"))
+    })?;
+  let options = options.with_runtime_modules(modules);
   env.spawn_future(async move {
     let outcome = execute_workflow_durable_outcome(
       workflow,
@@ -810,6 +834,7 @@ pub async fn resume_woml_workflow_durable_outcome(
   script_timeout_ms: u32,
   event_store_path: String,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -833,11 +858,12 @@ pub async fn resume_woml_workflow_durable_outcome(
   let outcome = resume_workflow_durable_outcome(
     PathBuf::from(event_store_path),
     &run_id,
-    runtime_options_with_secrets(
+    runtime_options_with_modules(
       bun_executable,
       script_host_path,
       script_timeout_ms,
       resolved_secrets_json,
+      runtime_modules_json,
     )?,
   )
   .await
@@ -859,6 +885,7 @@ pub fn resume_woml_workflow_durable_outcome_with_progress(
   event_store_path: String,
   progress_callback: JsFunction,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -873,9 +900,100 @@ pub fn resume_woml_workflow_durable_outcome_with_progress(
     progress_callback,
     resolved_secrets_json,
   )?;
+  let modules: Vec<RuntimeModuleArtifact> =
+    serde_json::from_str(runtime_modules_json.as_deref().unwrap_or("[]")).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid runtime modules JSON: {error}"))
+    })?;
+  let options = options.with_runtime_modules(modules);
   env.spawn_future(async move {
     let outcome =
       resume_workflow_durable_outcome(PathBuf::from(event_store_path), &run_id, options)
+        .await
+        .map_err(native_execution_error)?;
+    serde_json::to_string(&outcome).map_err(|error| {
+      napi::Error::from_reason(format!("Could not encode WOML runtime outcome: {error}"))
+    })
+  })
+}
+
+#[napi]
+pub fn inspect_woml_stored_run_requirements(
+  event_store_path: String,
+  run_id: String,
+) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  let binding = store
+    .run_binding(&run_id)
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  let workflow = store
+    .definition(&binding.definition_hash)
+    .map_err(|error| native_execution_error(RuntimeExecutionError::DurableStore(error)))?;
+  let mut required_secrets = workflow
+    .graph
+    .nodes
+    .iter()
+    .flat_map(|node| {
+      node
+        .script_runtime
+        .iter()
+        .flat_map(|runtime| runtime.required_secrets.iter().cloned())
+    })
+    .collect::<Vec<_>>();
+  required_secrets.sort();
+  required_secrets.dedup();
+  let has_approval = workflow
+    .graph
+    .nodes
+    .iter()
+    .any(|node| node.handler == "engine.approval-wait");
+  let has_notifications = workflow.graph.nodes.iter().any(|node| {
+    node.handler == "engine.approval-wait"
+      && matches!(
+        &node.inputs,
+        ValueExpression::Object { fields } if fields.contains_key("notifications")
+      )
+  });
+  let requirements = NativeStoredRunRequirements {
+    contract: "woml.stored-run-requirements",
+    version: 1,
+    workflow_id: binding.workflow_id,
+    definition_hash: binding.definition_hash,
+    required_secrets,
+    module_count: workflow
+      .module_runtime
+      .as_ref()
+      .map_or(0, |runtime| runtime.modules.len()),
+    has_approval,
+    has_notifications,
+  };
+  serde_json::to_string(&requirements).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode stored run requirements: {error}"))
+  })
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub fn resume_woml_stored_run_with_progress(
+  env: Env,
+  run_id: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  event_store_path: String,
+  progress_callback: JsFunction,
+  resolved_secrets_json: String,
+) -> napi::Result<JsObject> {
+  let options = runtime_options_with_progress(
+    &env,
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    progress_callback,
+    resolved_secrets_json,
+  )?;
+  env.spawn_future(async move {
+    let outcome =
+      resume_workflow_durable_any_outcome(PathBuf::from(event_store_path), &run_id, options)
         .await
         .map_err(native_execution_error)?;
     serde_json::to_string(&outcome).map_err(|error| {
@@ -976,6 +1094,7 @@ pub fn start_woml_webhook_runtime(
       workflow: registration.workflow,
       definition_hash: registration.definition_hash,
       resolved_secrets: registration.resolved_secrets,
+      runtime_modules: registration.runtime_modules,
     })
     .collect();
   let config = WomlWebhookServerConfig {

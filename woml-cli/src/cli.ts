@@ -36,6 +36,8 @@ import {
   RunInspectionError,
   settleApprovalTimeoutWithRust,
   inspectRunWithRust,
+  inspectStoredRunRequirementsWithRust,
+  resumeStoredRunWithRust,
   startWebhookRuntimeWithRust,
   stopWebhookRuntimeWithRust,
   submitTriggerOccurrenceWithRust,
@@ -45,6 +47,7 @@ import {
   type TriggerProgressV1,
   type RustApprovalRuntimeOutcome,
   type RustRuntimeModuleArtifact,
+  type StoredRunRequirementsV1,
 } from './rust-executor';
 import {
   ApprovalServerBindError,
@@ -706,22 +709,6 @@ function runtimeModulesFromPackage(
   });
 }
 
-function requireMs3ModuleProfile(workflow: CompiledWorkflowDefinition): void {
-  if (workflow.schemaVersion !== 9) return;
-  const manualOnly = workflow.triggers.every(
-    trigger => trigger.handler === 'trigger.manual'
-  );
-  const sequentialScriptsOnly = workflow.graph.nodes.every(
-    node => node.handler === 'runtime.script' && node.retryPolicy === undefined
-  );
-  if (!manualOnly || !sequentialScriptsOnly) {
-    throw new CliInputError(
-      'WOML_MODULE_COMPOSITION_UNAVAILABLE',
-      'MS3 executes local modules in manual sequential workflows. Module composition with production triggers, retry, branch, parallel, and approval is scheduled for MS4.'
-    );
-  }
-}
-
 async function workflowFilePaths(
   inputPath: string
 ): Promise<readonly string[]> {
@@ -772,12 +759,11 @@ async function compileWorkflowSources(
     const runtimePackage =
       inspected.modules.length > 0
         ? await buildWomlRuntimeDefinitionPackage(document, {
-        sourcePath: filePath,
-        projectRoot,
+            sourcePath: filePath,
+            projectRoot,
           })
         : undefined;
     const workflow = runtimePackage?.workflow.model ?? compileWoml(document);
-    requireMs3ModuleProfile(workflow);
     compiled.push({
       filePath,
       document,
@@ -835,7 +821,9 @@ async function runCheckCommand(
       io.stdout(`${JSON.stringify(definitionPackage, null, 2)}\n`);
       return 0;
     }
-    io.stdout(`WOML check passed for workflow "${definitionPackage.workflow.id}".\n`);
+    io.stdout(
+      `WOML check passed for workflow "${definitionPackage.workflow.id}".\n`
+    );
     io.stdout(`Definition package: ${definitionPackage.rootHash}\n`);
     io.stdout(
       `Modules: ${definitionPackage.modules.length}; dependency sources: ${Math.max(0, definitionPackage.sources.length - 1)}.\n`
@@ -903,7 +891,8 @@ async function runApprovalWorkflow(
   workflow: ReturnType<typeof compileWoml>,
   args: RunArguments,
   io: CliIo,
-  dependencies: CliDependencies
+  dependencies: CliDependencies,
+  runtimeModules: readonly RustRuntimeModuleArtifact[] = []
 ): Promise<void> {
   await mkdir(dirname(args.statePath), { recursive: true });
   const secrets = await resolvedSecrets(
@@ -915,6 +904,7 @@ async function runApprovalWorkflow(
     resolvedSecrets: secrets,
     onProgress: (progress: ExecutionProgressV1) =>
       io.stderr(`${formatExecutionProgress(progress)}\n`),
+    runtimeModules,
   };
   let outcome =
     args.resumeRunId === undefined
@@ -1042,7 +1032,8 @@ async function runNotificationWorkflow(
   workflow: CompiledWorkflowDefinition,
   args: RunArguments,
   io: CliIo,
-  dependencies: CliDependencies
+  dependencies: CliDependencies,
+  runtimeModules: readonly RustRuntimeModuleArtifact[] = []
 ): Promise<void> {
   const secrets = await resolvedSecrets(
     workflow,
@@ -1057,6 +1048,7 @@ async function runNotificationWorkflow(
           nativeCorePath: dependencies.nativeCorePath,
           onProgress: runtimeProgress,
           resolvedSecrets: secrets,
+          runtimeModules,
         })
       : await resumeApprovalWorkflowWithRust(
           workflow,
@@ -1066,6 +1058,7 @@ async function runNotificationWorkflow(
             nativeCorePath: dependencies.nativeCorePath,
             onProgress: runtimeProgress,
             resolvedSecrets: secrets,
+            runtimeModules,
           }
         );
   while (outcome.status === 'waiting') {
@@ -1089,7 +1082,95 @@ async function runNotificationWorkflow(
         nativeCorePath: dependencies.nativeCorePath,
         onProgress: runtimeProgress,
         resolvedSecrets: secrets,
+        runtimeModules,
       }
+    );
+  }
+  io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
+}
+
+async function resolvedStoredRunSecrets(
+  requirements: StoredRunRequirementsV1,
+  store: SecretStore
+): Promise<Readonly<Record<string, string>>> {
+  const values: Record<string, string> = {};
+  for (const name of requirements.requiredSecrets) {
+    const value = await store.get(name);
+    if (value === undefined || value.length === 0) {
+      throw new SecretStoreError(
+        'WOML_SECRET_NOT_FOUND',
+        `Missing required secret: ${name}.`
+      );
+    }
+    values[name] = value;
+  }
+  return values;
+}
+
+async function resumeStoredRun(
+  args: RunArguments,
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<void> {
+  const runId = args.resumeRunId!;
+  const requirements = inspectStoredRunRequirementsWithRust(
+    args.statePath,
+    runId,
+    { nativeCorePath: dependencies.nativeCorePath }
+  );
+  const secrets = await resolvedStoredRunSecrets(
+    requirements,
+    dependencies.createSecretStore()
+  );
+  const runtimeOptions = {
+    nativeCorePath: dependencies.nativeCorePath,
+    resolvedSecrets: secrets,
+    onProgress: (progress: ExecutionProgressV1) =>
+      io.stderr(`${formatExecutionProgress(progress)}\n`),
+  };
+
+  io.stderr(
+    `Recovering run ${runId} from its stored definition and ${requirements.moduleCount} immutable module artifact${requirements.moduleCount === 1 ? '' : 's'}.\n`
+  );
+  let outcome = await resumeStoredRunWithRust(
+    args.statePath,
+    runId,
+    runtimeOptions
+  );
+  while (outcome.status === 'waiting') {
+    const waiting = outcome;
+    if (requirements.hasNotifications) {
+      printSlackApproval(io, waiting, args.filePath, args.statePath);
+      const journey = await runNotificationProviderJourneyWithRust(
+        args.statePath,
+        waiting.runId,
+        {
+          notificationHostPath: dependencies.notificationHostPath,
+          nativeCorePath: dependencies.nativeCorePath,
+          interactionTimeoutMs: providerWaitMilliseconds(waiting),
+        }
+      );
+      printNotificationWarnings(io, journey.diagnostics);
+    } else {
+      await serveApprovalAndWait({
+        outcome: waiting,
+        port: args.approvalPort,
+        onDecision: (token, decision) =>
+          resolveApprovalWithRust(args.statePath, token, decision),
+        onTimeout: (waitingRunId, approvalId) =>
+          settleApprovalTimeoutWithRust(
+            args.statePath,
+            waitingRunId,
+            approvalId
+          ),
+        onListening: url =>
+          printWaitingApproval(io, waiting, url, args.filePath, args.statePath),
+      });
+    }
+    outcome = await resumeStoredRunWithRust(
+      args.statePath,
+      waiting.runId,
+      runtimeOptions
     );
   }
   io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
@@ -1102,6 +1183,11 @@ async function executeOneShot(
   dependencies: CliDependencies,
   runtimeModules: readonly RustRuntimeModuleArtifact[] = []
 ): Promise<void> {
+  if (runtimeModules.length > 0) {
+    io.stderr(
+      `WOML modules ready: ${runtimeModules.map(module => `services.${module.name}`).join(', ')}.\n`
+    );
+  }
   const hasApproval = workflowHasApproval(workflow);
   const hasNotifications = workflowHasNotifications(workflow);
   if (
@@ -1117,11 +1203,17 @@ async function executeOneShot(
     );
   }
   if (hasNotifications) {
-    await runNotificationWorkflow(workflow, args, io, dependencies);
+    await runNotificationWorkflow(
+      workflow,
+      args,
+      io,
+      dependencies,
+      runtimeModules
+    );
     return;
   }
   if (hasApproval) {
-    await runApprovalWorkflow(workflow, args, io, dependencies);
+    await runApprovalWorkflow(workflow, args, io, dependencies, runtimeModules);
     return;
   }
   if (
@@ -1573,6 +1665,13 @@ async function activateWorkflows(
     if (productionSources.length > 0) {
       await mkdir(dirname(args.statePath), { recursive: true });
       const store = dependencies.createSecretStore();
+      for (const source of productionSources) {
+        if (source.runtimeModules.length > 0) {
+          io.stderr(
+            `WOML modules ready for ${source.workflow.workflowId}: ${source.runtimeModules.map(module => `services.${module.name}`).join(', ')}.\n`
+          );
+        }
+      }
       const eventRoutes = productionSources
         .flatMap(source => eventRouteSummaries(source.workflow))
         .filter(route => route.publicEndpoint);
@@ -1581,6 +1680,7 @@ async function activateWorkflows(
           workflow: source.workflow,
           definitionHash: compiledDefinitionHash(source.workflow),
           resolvedSecrets: await resolvedSecrets(source.workflow, store),
+          runtimeModules: source.runtimeModules,
         }))
       );
       const routes = productionSources.flatMap(source =>
@@ -1988,6 +2088,19 @@ export async function runCli(
     return 2;
   }
   const { filePath } = runArguments;
+
+  if (
+    runArguments.command === 'run' &&
+    runArguments.resumeRunId !== undefined
+  ) {
+    try {
+      await resumeStoredRun(runArguments, io, dependencies);
+      return 0;
+    } catch (error) {
+      io.stderr(`${formatError(error)}\n`);
+      return 1;
+    }
+  }
 
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {

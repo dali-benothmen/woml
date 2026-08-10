@@ -33,6 +33,7 @@ use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, NotificationDeliveryStatus,
   NotificationMessageUpdateStatus, ParallelGroupStatus,
 };
+use crate::runtime::RuntimeModuleArtifact;
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
@@ -41,7 +42,7 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 7;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 8;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -49,6 +50,7 @@ const STORE_SCHEMA_VERSION_V4: &str = "4";
 const STORE_SCHEMA_VERSION_V5: &str = "5";
 const STORE_SCHEMA_VERSION_V6: &str = "6";
 const STORE_SCHEMA_VERSION_V7: &str = "7";
+const STORE_SCHEMA_VERSION_V8: &str = "8";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
@@ -296,6 +298,36 @@ CREATE TRIGGER woml_internal_event_deliveries_no_delete
 BEFORE DELETE ON woml_internal_event_deliveries
 BEGIN
   SELECT RAISE(ABORT, 'WOML internal event deliveries are immutable');
+END;
+"#;
+
+const CREATE_MODULE_ARTIFACT_SCHEMA_V8: &str = r#"
+CREATE TABLE woml_definition_module_artifacts (
+  definition_hash TEXT NOT NULL,
+  module_name TEXT NOT NULL,
+  bundle_digest TEXT NOT NULL,
+  source_map_digest TEXT NOT NULL,
+  exports_json TEXT NOT NULL,
+  bundle TEXT NOT NULL,
+  source_map TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (definition_hash, module_name),
+  FOREIGN KEY (definition_hash) REFERENCES woml_definitions(definition_hash)
+);
+
+CREATE INDEX woml_definition_module_artifacts_bundle
+  ON woml_definition_module_artifacts(bundle_digest);
+
+CREATE TRIGGER woml_definition_module_artifacts_no_update
+BEFORE UPDATE ON woml_definition_module_artifacts
+BEGIN
+  SELECT RAISE(ABORT, 'WOML definition module artifacts are immutable');
+END;
+
+CREATE TRIGGER woml_definition_module_artifacts_no_delete
+BEFORE DELETE ON woml_definition_module_artifacts
+BEGIN
+  SELECT RAISE(ABORT, 'WOML definition module artifacts are immutable');
 END;
 "#;
 
@@ -618,6 +650,64 @@ enum RunRecovery {
   Recovered { interrupted_attempts: usize },
 }
 
+pub const MAX_MODULE_ARTIFACT_BYTES: usize = 3 * 1024 * 1024;
+pub const MAX_MODULE_ARTIFACT_SET_BYTES: usize = 32 * 1024 * 1024;
+
+fn module_artifact_sha256(content: &str) -> String {
+  format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
+}
+
+fn validate_definition_module_artifacts(
+  workflow: &CompiledWorkflowDefinition,
+  artifacts: &[RuntimeModuleArtifact],
+) -> Result<(), DurableStoreError> {
+  let Some(runtime) = &workflow.module_runtime else {
+    if artifacts.is_empty() {
+      return Ok(());
+    }
+    return Err(DurableStoreError::Contract(
+      "Module artifacts cannot be attached to a definition without moduleRuntime.".to_string(),
+    ));
+  };
+  if runtime.modules.len() != artifacts.len() {
+    return Err(DurableStoreError::Contract(
+      "Stored module artifacts do not match the compiled definition.".to_string(),
+    ));
+  }
+  let mut total_bytes = 0usize;
+  for (binding, artifact) in runtime.modules.iter().zip(artifacts) {
+    let bundle_bytes = artifact.bundle.len();
+    let source_map_bytes = artifact.source_map.len();
+    total_bytes = total_bytes
+      .checked_add(bundle_bytes)
+      .and_then(|value| value.checked_add(source_map_bytes))
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Module artifact byte count overflowed.".to_string())
+      })?;
+    if binding.name != artifact.name
+      || binding.bundle_digest != artifact.bundle_digest
+      || binding.source_map_digest != artifact.source_map_digest
+      || binding.exports != artifact.exports
+      || module_artifact_sha256(&artifact.bundle) != artifact.bundle_digest
+      || module_artifact_sha256(&artifact.source_map) != artifact.source_map_digest
+      || bundle_bytes > MAX_MODULE_ARTIFACT_BYTES
+      || source_map_bytes > MAX_MODULE_ARTIFACT_BYTES
+    {
+      return Err(DurableStoreError::Contract(format!(
+        "Module artifact {:?} failed its immutable identity or size contract.",
+        binding.name
+      )));
+    }
+  }
+  if total_bytes > MAX_MODULE_ARTIFACT_SET_BYTES {
+    return Err(DurableStoreError::Contract(format!(
+      "Module artifacts exceed the {} byte definition limit.",
+      MAX_MODULE_ARTIFACT_SET_BYTES
+    )));
+  }
+  Ok(())
+}
+
 fn migrate_store_v1_to_v2(connection: &mut Connection) -> Result<(), DurableStoreError> {
   let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
   transaction.execute_batch(CREATE_APPROVAL_SCHEMA_V2)?;
@@ -708,6 +798,22 @@ fn migrate_store_v6_to_v7(connection: &mut Connection) -> Result<(), DurableStor
   if changed != 1 {
     return Err(DurableStoreError::Contract(
       "Store v6-to-v7 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
+fn migrate_store_v7_to_v8(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_MODULE_ARTIFACT_SCHEMA_V8)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V8, STORE_SCHEMA_VERSION_V7],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v7-to-v8 migration could not update the schema version atomically.".to_string(),
     ));
   }
   transaction.commit()?;
@@ -846,6 +952,28 @@ fn validate_store_v7_schema(connection: &Connection) -> Result<(), DurableStoreE
   Ok(())
 }
 
+fn validate_store_v8_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v7_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_definition_module_artifacts"),
+    ("index", "woml_definition_module_artifacts_bundle"),
+    ("trigger", "woml_definition_module_artifacts_no_update"),
+    ("trigger", "woml_definition_module_artifacts_no_delete"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v8 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -869,21 +997,28 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
-      Some(STORE_SCHEMA_VERSION_V7) => validate_store_v7_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V8) => validate_store_v8_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V7) => {
+        validate_store_v7_schema(&connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
+      }
       Some(STORE_SCHEMA_VERSION_V6) => {
         validate_store_v6_schema(&connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V5) => {
         validate_store_v5_schema(&connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V4) => {
         validate_store_v4_schema(&connection)?;
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V3) => {
         validate_store_v3_schema(&connection)?;
@@ -891,6 +1026,7 @@ impl DurableEventStore {
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V2) => {
         validate_store_v2_schema(&connection)?;
@@ -899,6 +1035,7 @@ impl DurableEventStore {
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V1) => {
         migrate_store_v1_to_v2(&mut connection)?;
@@ -908,6 +1045,7 @@ impl DurableEventStore {
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
       }
       Some(version) => {
         return Err(DurableStoreError::UnsupportedStoreVersion(
@@ -926,6 +1064,7 @@ impl DurableEventStore {
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
+        migrate_store_v7_to_v8(&mut connection)?;
       }
     }
     Ok(Self { connection })
@@ -995,6 +1134,115 @@ impl DurableEventStore {
     let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
     workflow.validate_structure()?;
     Ok(workflow)
+  }
+
+  pub fn register_definition_module_artifacts(
+    &mut self,
+    workflow: &CompiledWorkflowDefinition,
+    definition_hash: &str,
+    artifacts: &[RuntimeModuleArtifact],
+  ) -> Result<(), DurableStoreError> {
+    self.register_definition(workflow, definition_hash)?;
+    validate_definition_module_artifacts(workflow, artifacts)?;
+
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut statement = transaction.prepare(
+      "SELECT module_name, bundle_digest, source_map_digest, exports_json, bundle, source_map
+       FROM woml_definition_module_artifacts
+       WHERE definition_hash = ?1
+       ORDER BY module_name",
+    )?;
+    let stored = statement
+      .query_map([definition_hash], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, String>(4)?,
+          row.get::<_, String>(5)?,
+        ))
+      })?
+      .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    if !stored.is_empty() {
+      if stored.len() != artifacts.len() {
+        return Err(DurableStoreError::DefinitionConflict(
+          definition_hash.to_string(),
+        ));
+      }
+      for (stored, incoming) in stored.iter().zip(artifacts) {
+        let exports: Vec<String> = serde_json::from_str(&stored.3)?;
+        if stored.0 != incoming.name
+          || stored.1 != incoming.bundle_digest
+          || stored.2 != incoming.source_map_digest
+          || exports != incoming.exports
+          || stored.4 != incoming.bundle
+          || stored.5 != incoming.source_map
+        {
+          return Err(DurableStoreError::DefinitionConflict(
+            definition_hash.to_string(),
+          ));
+        }
+      }
+      transaction.commit()?;
+      return Ok(());
+    }
+
+    for artifact in artifacts {
+      transaction.execute(
+        "INSERT INTO woml_definition_module_artifacts(
+           definition_hash, module_name, bundle_digest, source_map_digest,
+           exports_json, bundle, source_map, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+          definition_hash,
+          artifact.name,
+          artifact.bundle_digest,
+          artifact.source_map_digest,
+          serde_json::to_string(&artifact.exports)?,
+          artifact.bundle,
+          artifact.source_map,
+          Utc::now().to_rfc3339(),
+        ],
+      )?;
+    }
+    transaction.commit()?;
+    Ok(())
+  }
+
+  pub fn definition_module_artifacts(
+    &self,
+    definition_hash: &str,
+  ) -> Result<Vec<RuntimeModuleArtifact>, DurableStoreError> {
+    let workflow = self.definition(definition_hash)?;
+    let mut statement = self.connection.prepare(
+      "SELECT module_name, bundle_digest, source_map_digest, exports_json, bundle, source_map
+       FROM woml_definition_module_artifacts
+       WHERE definition_hash = ?1
+       ORDER BY module_name",
+    )?;
+    let artifacts = statement
+      .query_map([definition_hash], |row| {
+        let exports_json: String = row.get(3)?;
+        let exports = serde_json::from_str(&exports_json).map_err(|error| {
+          rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
+        })?;
+        Ok(RuntimeModuleArtifact {
+          name: row.get(0)?,
+          bundle_digest: row.get(1)?,
+          source_map_digest: row.get(2)?,
+          exports,
+          bundle: row.get(4)?,
+          source_map: row.get(5)?,
+        })
+      })?
+      .collect::<Result<Vec<_>, _>>()?;
+    validate_definition_module_artifacts(&workflow, &artifacts)?;
+    Ok(artifacts)
   }
 
   pub fn run_binding(&self, run_id: &str) -> Result<RunDefinitionBinding, DurableStoreError> {

@@ -28,6 +28,8 @@ export interface ScriptWorkerModule {
   readonly bundleDigest: string;
   readonly exports: readonly string[];
   readonly bundle: string;
+  readonly sourceMapDigest?: string;
+  readonly sourceMap?: string;
 }
 
 export type ScriptWorkerResponse =
@@ -39,6 +41,7 @@ export type ScriptWorkerResponse =
         readonly name: string;
         readonly message: string;
         readonly stack?: string;
+        readonly moduleFrame?: string;
         readonly capability?: string;
         readonly operation?: string;
         readonly callId?: string;
@@ -88,14 +91,89 @@ const AsyncFunction = Object.getPrototypeOf(
   async function emptyAsyncFunction() {}
 ).constructor as AsyncFunctionConstructor;
 
-function serializeError(error: unknown): ScriptWorkerResponse {
+function redactKnownSecrets(value: string, secrets: readonly string[]): string {
+  let redacted = value;
+  for (const secret of secrets) {
+    if (secret.length > 0) redacted = redacted.split(secret).join('[REDACTED]');
+  }
+  return redacted.slice(0, 1024);
+}
+
+function safeSourceMapSources(sourceMap: string): readonly string[] {
+  try {
+    const decoded = JSON.parse(sourceMap) as { sources?: unknown };
+    if (!Array.isArray(decoded.sources)) return [];
+    return decoded.sources.filter(
+      (source): source is string =>
+        typeof source === 'string' &&
+        source.length > 0 &&
+        source.length <= 512 &&
+        !source.startsWith('/') &&
+        !source.includes('\\') &&
+        !source.split('/').includes('..')
+    );
+  } catch {
+    return [];
+  }
+}
+
+function executableModuleBundle(module: ScriptWorkerModule): string {
+  if (module.sourceMap === undefined) return module.bundle;
+  const sourceMapUrl = Buffer.from(module.sourceMap, 'utf8').toString('base64');
+  return `${module.bundle.replace(/\n?\/\/# sourceMappingURL=.*$/m, '')}\n//# sourceMappingURL=data:application/json;base64,${sourceMapUrl}`;
+}
+
+function safeModuleFrame(
+  stack: string | undefined,
+  modules: readonly ScriptWorkerModule[] | undefined
+): string | undefined {
+  if (stack === undefined || modules === undefined) return undefined;
+  const sources = new Set<string>();
+  for (const module of modules) {
+    if (module.sourceMap === undefined) continue;
+    for (const source of safeSourceMapSources(module.sourceMap))
+      sources.add(source);
+  }
+  for (const line of stack.split('\n')) {
+    for (const source of sources) {
+      const offset = line.indexOf(source);
+      if (offset < 0) continue;
+      const suffix = line.slice(offset + source.length);
+      const location = /^:(\d+):(\d+)/.exec(suffix);
+      if (location !== null) return `${source}:${location[1]}:${location[2]}`;
+    }
+  }
+  for (const module of modules) {
+    if (module.sourceMap === undefined) continue;
+    const source = safeSourceMapSources(module.sourceMap)[0];
+    if (source === undefined) continue;
+    const encoded = Buffer.from(
+      executableModuleBundle(module),
+      'utf8'
+    ).toString('base64');
+    const offset = stack.indexOf(`data:text/javascript;base64,${encoded}`);
+    if (offset < 0) continue;
+    const suffix = stack.slice(
+      offset + `data:text/javascript;base64,${encoded}`.length
+    );
+    const location = /^:(\d+):(\d+)/.exec(suffix);
+    if (location !== null) return `${source}:${location[1]}:${location[2]}`;
+  }
+  return undefined;
+}
+
+function serializeError(
+  error: unknown,
+  secrets: readonly string[] = [],
+  modules?: readonly ScriptWorkerModule[]
+): ScriptWorkerResponse {
   if (error instanceof NativeFetchTrackingError) {
     return {
       ok: false,
       error: {
         kind: 'service',
         name: error.name,
-        message: error.message,
+        message: redactKnownSecrets(error.message, secrets),
         capability: 'http',
         operation: 'fetch',
         callId: error.callId,
@@ -114,7 +192,7 @@ function serializeError(error: unknown): ScriptWorkerResponse {
         error: {
           kind: 'service',
           name: error instanceof Error ? error.name : 'Error',
-          message: nativeFetch.cause.message,
+          message: redactKnownSecrets(nativeFetch.cause.message, secrets),
           capability: 'http',
           operation: 'fetch',
           callId: nativeFetch.callId,
@@ -129,7 +207,7 @@ function serializeError(error: unknown): ScriptWorkerResponse {
       error: {
         kind: 'service',
         name: error.name,
-        message: error.message,
+        message: redactKnownSecrets(error.message, secrets),
         capability: error.capability,
         operation: error.operation,
         callId: error.callId,
@@ -143,8 +221,13 @@ function serializeError(error: unknown): ScriptWorkerResponse {
       error: {
         kind: 'script',
         name: error.name,
-        message: error.message,
-        ...(error.stack === undefined ? {} : { stack: error.stack }),
+        message: redactKnownSecrets(error.message, secrets),
+        ...(error.stack === undefined
+          ? {}
+          : { stack: redactKnownSecrets(error.stack, secrets) }),
+        ...(safeModuleFrame(error.stack, modules) === undefined
+          ? {}
+          : { moduleFrame: safeModuleFrame(error.stack, modules) }),
       },
     };
   }
@@ -153,7 +236,7 @@ function serializeError(error: unknown): ScriptWorkerResponse {
     error: {
       kind: 'script',
       name: 'Error',
-      message: String(error),
+      message: redactKnownSecrets(String(error), secrets),
     },
   };
 }
@@ -1247,7 +1330,9 @@ function guardedModuleServices(
       if (!invocationActive()) throw new ModuleInitializationEffectError();
       const value = servicePath(currentServices(), path);
       if (typeof value !== 'function') {
-        throw new TypeError(`services.${path.map(String).join('.')} is not callable.`);
+        throw new TypeError(
+          `services.${path.map(String).join('.')} is not callable.`
+        );
       }
       return Reflect.apply(value, thisArgument, argumentsList);
     },
@@ -1287,7 +1372,9 @@ async function loadRuntimeModules(
     () => activeServices,
     invocationActive
   );
-  const moduleFetch: typeof globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+  const moduleFetch: typeof globalThis.fetch = ((
+    ...args: Parameters<typeof fetch>
+  ) => {
     if (!invocationActive()) throw new ModuleInitializationEffectError();
     return trackedFetch(...args);
   }) as typeof globalThis.fetch;
@@ -1311,7 +1398,18 @@ async function loadRuntimeModules(
     if (actualDigest !== module.bundleDigest) {
       throw new Error(`Module ${module.name} failed its Worker digest check.`);
     }
-    const encoded = Buffer.from(module.bundle, 'utf8').toString('base64');
+    if (module.sourceMap !== undefined) {
+      const actualSourceMapDigest = `sha256:${new Bun.CryptoHasher('sha256')
+        .update(module.sourceMap)
+        .digest('hex')}`;
+      if (actualSourceMapDigest !== module.sourceMapDigest) {
+        throw new Error(
+          `Module ${module.name} failed its source-map digest check.`
+        );
+      }
+    }
+    const executableBundle = executableModuleBundle(module);
+    const encoded = Buffer.from(executableBundle, 'utf8').toString('base64');
     const namespace = (await import(
       `data:text/javascript;base64,${encoded}`
     )) as Record<string, unknown>;
@@ -1358,6 +1456,7 @@ async function loadRuntimeModules(
 }
 
 async function execute(request: ScriptWorkerRequest): Promise<void> {
+  let secretValues: readonly string[] = [];
   try {
     operationSequences.clear();
     automaticEffectfulCalls.clear();
@@ -1367,6 +1466,7 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
         ? undefined
         : deepFreezeJson(request.attempt);
     const secrets = deepFreezeJson(request.bindings?.secrets ?? {});
+    secretValues = Object.values(request.bindings?.secrets ?? {});
     const builtInServices = deeplyReadonlyServiceFacade(request);
     const nativeFetch = trackedNativeFetch(request);
     const services =
@@ -1420,7 +1520,7 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
   } catch (error) {
     self.postMessage({
       messageType: 'completed',
-      response: serializeError(error),
+      response: serializeError(error, secretValues, request.modules),
     } satisfies ScriptWorkerOutbound);
   }
 }

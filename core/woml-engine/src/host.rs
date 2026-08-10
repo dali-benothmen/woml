@@ -40,6 +40,8 @@ pub struct ScriptHostProcessOptions {
 pub struct ScriptHostModuleArtifact {
   pub bundle_digest: String,
   pub bundle: String,
+  pub source_map_digest: String,
+  pub source_map: String,
 }
 
 impl ScriptHostProcessOptions {
@@ -152,7 +154,12 @@ impl ScriptHostClient {
     for artifact in &options.module_artifacts {
       write_json_frame(
         &mut stdin,
-        &RegisterModuleMessage::new(&artifact.bundle_digest, &artifact.bundle),
+        &RegisterModuleMessage::new(
+          &artifact.bundle_digest,
+          &artifact.bundle,
+          &artifact.source_map_digest,
+          &artifact.source_map,
+        ),
       )
       .await?;
       let registered = timeout(
@@ -171,7 +178,7 @@ impl ScriptHostClient {
         )
       })?;
       registered
-        .validate(&artifact.bundle_digest)
+        .validate(&artifact.bundle_digest, &artifact.source_map_digest)
         .map_err(ScriptHostClientError::Protocol)?;
       if !registered.accepted {
         let message = registered
@@ -552,7 +559,7 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
         fail_all(
           &shared,
           ScriptHostClientError::Protocol(
-            "received an unsupported Bun-to-Rust script-host v5 message".to_string(),
+            "received an unsupported Bun-to-Rust script-host v6 message".to_string(),
           ),
         )
         .await;

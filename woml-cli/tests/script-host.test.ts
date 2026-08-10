@@ -15,6 +15,7 @@ import type {
   CompletedMessage,
   ExecuteMessage,
   ExecuteMessageV4,
+  ExecuteMessageV6,
   FetchObservationMessage,
   ScriptAttempt,
   ScriptHostMessage,
@@ -105,6 +106,21 @@ function executeV5(
   return {
     ...base,
     protocolVersion: 5,
+    modules: [{ name: 'utility', bundleDigest, exports }],
+  };
+}
+
+function executeV6(
+  invocationId: string,
+  source: string,
+  bundleDigest: string,
+  exports: readonly string[],
+  secrets: Readonly<Record<string, string>> = {}
+): ExecuteMessageV6 {
+  const base = executeV4(invocationId, source, secrets) as ExecuteMessageV4;
+  return {
+    ...base,
+    protocolVersion: 6,
     modules: [{ name: 'utility', bundleDigest, exports }],
   };
 }
@@ -1725,10 +1741,14 @@ export async function asyncValue() { calls += 1; return calls; }`;
       bundleDigest: digest,
       accepted: true,
     });
-    expect(byInvocation(result.messages).get('inv_module_first')).toMatchObject({
-      outcome: { kind: 'success', value: { sync: 1, async: 2 } },
-    });
-    expect(byInvocation(result.messages).get('inv_module_second')).toMatchObject({
+    expect(byInvocation(result.messages).get('inv_module_first')).toMatchObject(
+      {
+        outcome: { kind: 'success', value: { sync: 1, async: 2 } },
+      }
+    );
+    expect(
+      byInvocation(result.messages).get('inv_module_second')
+    ).toMatchObject({
       outcome: { kind: 'success', value: { sync: 1, async: 2 } },
     });
   });
@@ -1770,16 +1790,22 @@ export function value() { return 1; }`;
       ],
       { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '5' }
     );
-    expect(byInvocation(result.messages).get('inv_module_initialization')).toMatchObject({
+    expect(
+      byInvocation(result.messages).get('inv_module_initialization')
+    ).toMatchObject({
       outcome: {
         kind: 'failure',
         error: {
           kind: 'script_threw',
-          message: expect.stringContaining('cannot be used while a WOML module is initializing'),
+          message: expect.stringContaining(
+            'cannot be used while a WOML module is initializing'
+          ),
         },
       },
     });
-    expect(byInvocation(result.messages).get('inv_module_readonly')).toMatchObject({
+    expect(
+      byInvocation(result.messages).get('inv_module_readonly')
+    ).toMatchObject({
       outcome: { kind: 'failure', error: { kind: 'script_threw' } },
     });
   });
@@ -1823,8 +1849,157 @@ export function value() { return 1; }`;
       message:
         'The registered module bundle does not match its SHA-256 identity.',
     });
-    expect(byInvocation(result.messages).get('inv_module_timeout')).toMatchObject({
+    expect(
+      byInvocation(result.messages).get('inv_module_timeout')
+    ).toMatchObject({
       outcome: { kind: 'failure', error: { kind: 'script_timed_out' } },
     });
+  });
+});
+
+describe('MS4 Script Host v6 recoverability and diagnostics', () => {
+  test('re-registers immutable artifacts after a host restart', async () => {
+    const bundle = `export function value() { return { recovered: true }; }`;
+    const sourceMap = JSON.stringify({
+      version: 3,
+      sources: ['modules/utility.ts'],
+      sourcesContent: ['export function value() {}'],
+      names: [],
+      mappings: '',
+    });
+    const digest = moduleDigest(bundle);
+    const sourceMapDigest = moduleDigest(sourceMap);
+    const messages = [
+      {
+        protocol: 'woml.script-host',
+        protocolVersion: 6,
+        messageType: 'register_module',
+        bundleDigest: digest,
+        bundle,
+        sourceMapDigest,
+        sourceMap,
+      },
+      executeV6(
+        'inv_ms4_recovered',
+        'return services.utility.value();',
+        digest,
+        ['value']
+      ),
+    ] as const;
+
+    for (let restart = 0; restart < 2; restart += 1) {
+      const result = await runHost(messages, {
+        WOML_SCRIPT_HOST_PROTOCOL_VERSION: '6',
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.messages[1]).toEqual({
+        protocol: 'woml.script-host',
+        protocolVersion: 6,
+        messageType: 'module_registered',
+        bundleDigest: digest,
+        sourceMapDigest,
+        accepted: true,
+      });
+      expect(
+        byInvocation(result.messages).get('inv_ms4_recovered')
+      ).toMatchObject({
+        outcome: { kind: 'success', value: { recovered: true } },
+      });
+    }
+  });
+
+  test('reports a safe module location and redacts resolved secrets', async () => {
+    const secret = 'ms4-super-secret';
+    const bundle = `export function fail(value) {
+  throw new Error('failed with ' + value);
+}
+//# sourceURL=modules/utility.ts`;
+    const sourceMap = JSON.stringify({
+      version: 3,
+      sources: ['modules/utility.ts'],
+      sourcesContent: [
+        `export function fail(value: string) {
+  throw new Error('failed with ' + value);
+}`,
+      ],
+      names: [],
+      mappings: 'AAAA;AACA;AACA',
+    });
+    const digest = moduleDigest(bundle);
+    const sourceMapDigest = moduleDigest(sourceMap);
+    const result = await runHost(
+      [
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 6,
+          messageType: 'register_module',
+          bundleDigest: digest,
+          bundle,
+          sourceMapDigest,
+          sourceMap,
+        },
+        executeV6(
+          'inv_ms4_diagnostic',
+          'return services.utility.fail(secrets.API_TOKEN);',
+          digest,
+          ['fail'],
+          { API_TOKEN: secret }
+        ),
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '6' }
+    );
+    const completion = byInvocation(result.messages).get('inv_ms4_diagnostic');
+    const diagnostic = JSON.stringify(completion);
+    expect(completion).toMatchObject({
+      outcome: {
+        kind: 'failure',
+        error: {
+          kind: 'script_threw',
+          message: expect.stringContaining('[REDACTED]'),
+        },
+      },
+    });
+    expect(JSON.stringify(result.messages)).not.toContain(secret);
+    expect(diagnostic).toContain('modules/utility.ts:');
+  });
+
+  test('rejects a tampered source map and an oversized artifact before execution', async () => {
+    const bundle = `export function value() { return true; }`;
+    const digest = moduleDigest(bundle);
+    const result = await runHost(
+      [
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 6,
+          messageType: 'register_module',
+          bundleDigest: digest,
+          bundle,
+          sourceMapDigest: defaultEffectKey,
+          sourceMap: '{}',
+        },
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '6' }
+    );
+    expect(result.messages[1]).toMatchObject({
+      accepted: false,
+      code: 'WOML_MODULE_DIGEST_MISMATCH',
+    });
+    const directHost = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 6,
+      send: async () => {},
+    });
+    const oversized = 'x'.repeat(3 * 1024 * 1024 + 1);
+    expect(() =>
+      directHost.accept({
+        protocol: 'woml.script-host',
+        protocolVersion: 6,
+        messageType: 'register_module',
+        bundleDigest: moduleDigest(oversized),
+        bundle: oversized,
+        sourceMapDigest: moduleDigest('{}'),
+        sourceMap: '{}',
+      })
+    ).toThrow('protocol v6');
   });
 });

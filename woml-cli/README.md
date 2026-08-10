@@ -16,7 +16,7 @@ woml check path/to/workflow.woml
 woml check path/to/workflow.woml --json
 ```
 
-For imported modules, the JSON form is the deterministic MS3 Definition Package
+For imported modules, the JSON form is the deterministic Definition Package
 v3 containing Model v9, exact ESM bundles, canonical source maps, and generated
 declarations. It is marked `runtimeReady: true`; `woml run` and `woml test`
 register those immutable bundles with Rust and expose their named functions at
@@ -25,6 +25,18 @@ register those immutable bundles with Rust and expose their named functions at
 ```bash
 woml test examples/moduleWorkflow.woml
 ```
+
+Module artifacts are copied into durable state under their immutable definition
+hash. Explicit recovery therefore does not read the current WOML or module
+files, and it still works after either file is moved or deleted:
+
+```bash
+woml run missing-or-moved.woml --state .woml/state.sqlite --resume run_...
+```
+
+At activation the CLI prints module aliases only. Failures may show one safe
+project-relative module location; artifact bytes, full stacks, absolute paths,
+digests, and secret values are never printed.
 
 ## Activate an automation
 

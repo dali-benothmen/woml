@@ -1,11 +1,13 @@
 # WOML Module System Implementation Plan
 
-Status: MS0, MS1, MS2, and MS3 completed on 2026-08-10. The canonical `<woml>`
+Status: MS0 through MS4 completed on 2026-08-10. The canonical `<woml>`
 document, local-module source profile, diagnostics, resolver, deterministic ESM
 bundles/source maps, generated declarations, Definition Package v2, Model v9,
 `woml check`, Package v3, Script Host v5, isolated module execution, and
-reviewed fixtures are frozen and implemented. MS4 recovery and observability
-hardening is next.
+reviewed fixtures are frozen and implemented. Durable artifact recovery, Script
+Host v6 re-registration/source maps, bounded caches, safe progress, secret
+redaction, and control-flow/trigger composition are implemented. MS5 locked
+package dependencies are next.
 
 ## 1. Product Outcome
 
@@ -653,7 +655,7 @@ The vertical slice proves sync/async functions, multiple exports/steps, Fetch,
 managed services, no shared state, initialization rejection, timeout,
 cancellation, host/worker crash distinction, and exact output.
 
-### MS4 — Make local modules recoverable and observable
+### MS4 — Make local modules recoverable and observable — completed
 
 Changes:
 

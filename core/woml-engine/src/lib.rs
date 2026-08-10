@@ -114,13 +114,13 @@ pub use projection::{
 pub use runtime::{
   execute_admitted_trigger_run_durable, execute_workflow, execute_workflow_durable,
   execute_workflow_durable_outcome, recover_durable_runs, resolve_human_approval_durable,
-  resume_workflow_durable, resume_workflow_durable_outcome, settle_approval_timeout_durable,
-  BranchFailureSite, EngineClock, ExecutionProgress, ExecutionProgressReporter,
-  FailedApprovalDetails, FailedNotificationDetails, FailedParallelDetails, FixedEngineClock,
-  RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact, SystemEngineClock,
-  WaitingWorkflowApproval, WorkflowExecutionResult, WorkflowRuntimeOutcome,
-  EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION, RUNTIME_OUTCOME_CONTRACT,
-  RUNTIME_OUTCOME_VERSION,
+  resume_workflow_durable, resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
+  settle_approval_timeout_durable, BranchFailureSite, EngineClock, ExecutionProgress,
+  ExecutionProgressReporter, FailedApprovalDetails, FailedNotificationDetails,
+  FailedParallelDetails, FixedEngineClock, RuntimeExecutionError, RuntimeExecutionOptions,
+  RuntimeModuleArtifact, SystemEngineClock, WaitingWorkflowApproval, WorkflowExecutionResult,
+  WorkflowRuntimeOutcome, EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION,
+  RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
 };
 pub use schedule::{
   ScheduleClock, ScheduleError, ScheduleMisfirePolicy, ScheduleProgress, ScheduleProgressReason,

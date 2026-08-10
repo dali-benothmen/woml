@@ -44,6 +44,44 @@ type WorkerOutcome =
   | { readonly kind: 'cancelled'; readonly reason: CancelMessage['reason'] }
   | { readonly kind: 'crashed'; readonly message: string };
 
+const MAX_MODULE_ARTIFACT_BYTES = 3 * 1024 * 1024;
+const MAX_MODULE_CACHE_BYTES = 32 * 1024 * 1024;
+const MAX_MODULE_CACHE_ENTRIES = 64;
+
+interface CachedModuleArtifact {
+  readonly bundle: string;
+  readonly sourceMap?: string;
+  readonly sourceMapDigest?: string;
+  readonly bytes: number;
+}
+
+function moduleRegisteredMessage(
+  request: RegisterModuleMessage,
+  outcome:
+    | { readonly accepted: true }
+    | {
+        readonly accepted: false;
+        readonly code:
+          | 'WOML_MODULE_DIGEST_MISMATCH'
+          | 'WOML_MODULE_CACHE_LIMIT_EXCEEDED';
+        readonly message: string;
+      }
+): ModuleRegisteredMessage {
+  const base = {
+    protocol: 'woml.script-host' as const,
+    messageType: 'module_registered' as const,
+    bundleDigest: request.bundleDigest,
+    ...outcome,
+  };
+  return request.protocolVersion === 6
+    ? {
+        ...base,
+        protocolVersion: 6,
+        sourceMapDigest: request.sourceMapDigest,
+      }
+    : { ...base, protocolVersion: 5 };
+}
+
 function elapsedMilliseconds(startedAt: number): number {
   return Math.max(0, performance.now() - startedAt);
 }
@@ -107,7 +145,8 @@ export class ScriptHost {
   >();
   readonly #activeFetches = new Map<string, Set<string>>();
   readonly #closedFetchAcks = new Set<string>();
-  readonly #moduleBundles = new Map<string, string>();
+  readonly #moduleBundles = new Map<string, CachedModuleArtifact>();
+  #moduleCacheBytes = 0;
   #aborted = false;
 
   constructor(options: ScriptHostOptions) {
@@ -155,33 +194,78 @@ export class ScriptHost {
     const actualDigest = `sha256:${new Bun.CryptoHasher('sha256')
       .update(message.bundle)
       .digest('hex')}`;
-    if (actualDigest !== message.bundleDigest) {
-      void this.#send({
-        protocol: 'woml.script-host',
-        protocolVersion: 5,
-        messageType: 'module_registered',
-        bundleDigest: message.bundleDigest,
-        accepted: false,
-        code: 'WOML_MODULE_DIGEST_MISMATCH',
-        message:
-          'The registered module bundle does not match its SHA-256 identity.',
-      });
+    const sourceMapDigest =
+      message.protocolVersion === 6
+        ? `sha256:${new Bun.CryptoHasher('sha256')
+            .update(message.sourceMap)
+            .digest('hex')}`
+        : undefined;
+    const digestMismatch =
+      actualDigest !== message.bundleDigest ||
+      (message.protocolVersion === 6 &&
+        sourceMapDigest !== message.sourceMapDigest);
+    if (digestMismatch) {
+      void this.#send(
+        moduleRegisteredMessage(message, {
+          accepted: false,
+          code: 'WOML_MODULE_DIGEST_MISMATCH',
+          message:
+            'The registered module bundle does not match its SHA-256 identity.',
+        })
+      );
       return;
     }
     const existing = this.#moduleBundles.get(message.bundleDigest);
-    if (existing !== undefined && existing !== message.bundle) {
+    if (
+      existing !== undefined &&
+      (existing.bundle !== message.bundle ||
+        (message.protocolVersion === 6 &&
+          (existing.sourceMap !== message.sourceMap ||
+            existing.sourceMapDigest !== message.sourceMapDigest)))
+    ) {
       throw new MessageProtocolError(
         'One module digest was registered with different immutable bytes.'
       );
     }
-    this.#moduleBundles.set(message.bundleDigest, message.bundle);
-    void this.#send({
-      protocol: 'woml.script-host',
-      protocolVersion: 5,
-      messageType: 'module_registered',
-      bundleDigest: message.bundleDigest,
-      accepted: true,
-    });
+    const bytes =
+      Buffer.byteLength(message.bundle, 'utf8') +
+      (message.protocolVersion === 6
+        ? Buffer.byteLength(message.sourceMap, 'utf8')
+        : 0);
+    const individualLimitExceeded =
+      Buffer.byteLength(message.bundle, 'utf8') > MAX_MODULE_ARTIFACT_BYTES ||
+      (message.protocolVersion === 6 &&
+        Buffer.byteLength(message.sourceMap, 'utf8') >
+          MAX_MODULE_ARTIFACT_BYTES);
+    if (
+      existing === undefined &&
+      (individualLimitExceeded ||
+        this.#moduleBundles.size >= MAX_MODULE_CACHE_ENTRIES ||
+        this.#moduleCacheBytes + bytes > MAX_MODULE_CACHE_BYTES)
+    ) {
+      void this.#send(
+        moduleRegisteredMessage(message, {
+          accepted: false,
+          code: 'WOML_MODULE_CACHE_LIMIT_EXCEEDED',
+          message: 'The immutable module cache limit was exceeded.',
+        })
+      );
+      return;
+    }
+    if (existing === undefined) {
+      this.#moduleBundles.set(message.bundleDigest, {
+        bundle: message.bundle,
+        ...(message.protocolVersion === 6
+          ? {
+              sourceMap: message.sourceMap,
+              sourceMapDigest: message.sourceMapDigest,
+            }
+          : {}),
+        bytes,
+      });
+      this.#moduleCacheBytes += bytes;
+    }
+    void this.#send(moduleRegisteredMessage(message, { accepted: true }));
   }
 
   async drain(): Promise<void> {
@@ -201,6 +285,7 @@ export class ScriptHost {
     this.#activeFetches.clear();
     this.#closedFetchAcks.clear();
     this.#moduleBundles.clear();
+    this.#moduleCacheBytes = 0;
   }
 
   #cancel(message: CancelMessage): void {
@@ -349,7 +434,10 @@ export class ScriptHost {
                   response.error.kind === 'non-json'
                     ? ('WOML_SCRIPT_NON_JSON_RESULT' as const)
                     : ('WOML_SCRIPT_THROWN' as const),
-                message: response.error.message,
+                message:
+                  response.error.moduleFrame === undefined
+                    ? response.error.message
+                    : `${response.error.message} (${response.error.moduleFrame})`,
               }),
         })
       );
@@ -369,7 +457,9 @@ export class ScriptHost {
     }
 
     if (
-      (request.protocolVersion === 4 || request.protocolVersion === 5) &&
+      (request.protocolVersion === 4 ||
+        request.protocolVersion === 5 ||
+        request.protocolVersion === 6) &&
       containsKnownSecret(
         response.result,
         Object.values(request.bindings.secrets)
@@ -490,7 +580,9 @@ export class ScriptHost {
         if (message.messageType === 'fetch_observation') {
           const observation = message.observation;
           if (
-            (request.protocolVersion !== 4 && request.protocolVersion !== 5) ||
+            (request.protocolVersion !== 4 &&
+              request.protocolVersion !== 5 &&
+              request.protocolVersion !== 6) ||
             observation.invocationId !== request.invocationId
           ) {
             finish({
@@ -536,7 +628,9 @@ export class ScriptHost {
         }
         const call = message.call;
         if (
-          (request.protocolVersion !== 4 && request.protocolVersion !== 5) ||
+          (request.protocolVersion !== 4 &&
+            request.protocolVersion !== 5 &&
+            request.protocolVersion !== 6) ||
           call.invocationId !== request.invocationId ||
           call.runId !== request.runId ||
           call.nodeId !== request.nodeId ||
@@ -596,7 +690,8 @@ export class ScriptHost {
         const attempt: ScriptAttempt | undefined =
           request.protocolVersion === 3 ||
           request.protocolVersion === 4 ||
-          request.protocolVersion === 5
+          request.protocolVersion === 5 ||
+          request.protocolVersion === 6
             ? request.attempt
             : undefined;
         worker.postMessage({
@@ -608,21 +703,32 @@ export class ScriptHost {
             source: request.source,
             context: request.context,
             attempt,
-            ...(request.protocolVersion === 4 || request.protocolVersion === 5
+            ...(request.protocolVersion === 4 ||
+            request.protocolVersion === 5 ||
+            request.protocolVersion === 6
               ? { bindings: request.bindings }
               : {}),
-            ...(request.protocolVersion === 5
+            ...(request.protocolVersion === 5 || request.protocolVersion === 6
               ? {
                   modules: request.modules.map(module => {
-                    const bundle = this.#moduleBundles.get(
+                    const artifact = this.#moduleBundles.get(
                       module.bundleDigest
                     );
-                    if (bundle === undefined) {
+                    if (artifact === undefined) {
                       throw new MessageProtocolError(
                         `Module bundle ${module.bundleDigest} was not registered.`
                       );
                     }
-                    return { ...module, bundle };
+                    return {
+                      ...module,
+                      bundle: artifact.bundle,
+                      ...(request.protocolVersion === 6
+                        ? {
+                            sourceMap: artifact.sourceMap,
+                            sourceMapDigest: artifact.sourceMapDigest,
+                          }
+                        : {}),
+                    };
                   }),
                 }
               : {}),

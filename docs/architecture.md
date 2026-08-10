@@ -40,7 +40,10 @@ during module initialization are rejected. Neither Rust nor Model v9 understands
 read-only compilation boundary. The frozen contracts are
 `docs/protocols/module-system-v1.md` and
 `docs/protocols/module-compilation-v1.md`, with activation frozen in
-`docs/protocols/module-runtime-v1.md`.
+`docs/protocols/module-runtime-v1.md`. Durable Store v8 owns the exact bundle,
+source map, exports, and identities for each compiled-definition hash. Script
+Host v6 re-registers those artifacts after restart, so run recovery never reads
+the current WOML document or project module sources.
 
 The Rust core is the execution authority. It validates the compiled model,
 selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends

@@ -252,6 +252,8 @@ impl RuntimeExecutionOptions {
       .map(|module| ScriptHostModuleArtifact {
         bundle_digest: module.bundle_digest.clone(),
         bundle: module.bundle.clone(),
+        source_map_digest: module.source_map_digest.clone(),
+        source_map: module.source_map.clone(),
       })
       .collect();
     self.runtime_modules = Arc::new(modules);
@@ -583,6 +585,11 @@ async fn execute_workflow_durable_internal(
   let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
+  store.register_definition_module_artifacts(
+    &workflow,
+    &definition_hash,
+    options.runtime_modules.as_ref(),
+  )?;
   let engine = DurableDagEngine::new(workflow, definition_hash, store)?;
   execute_with_engine(engine, trigger, options).await
 }
@@ -593,7 +600,7 @@ pub async fn resume_workflow_durable(
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
   succeeded_execution(
-    resume_workflow_durable_internal(database_path, run_id, options, false).await?,
+    resume_workflow_durable_internal(database_path, run_id, options, Some(false)).await?,
   )
 }
 
@@ -602,7 +609,15 @@ pub async fn resume_workflow_durable_outcome(
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
-  resume_workflow_durable_internal(database_path, run_id, options, true).await
+  resume_workflow_durable_internal(database_path, run_id, options, Some(true)).await
+}
+
+pub async fn resume_workflow_durable_any_outcome(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  resume_workflow_durable_internal(database_path, run_id, options, None).await
 }
 
 /// Continues one run that was already atomically admitted by a production
@@ -617,6 +632,8 @@ pub async fn execute_admitted_trigger_run_durable(
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let options = attach_durable_capability_authority(options, &database_path)?;
   let store = DurableEventStore::open(database_path)?;
+  let binding = store.run_binding(run_id)?;
+  let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
   let engine = DurableDagEngine::resume(store, run_id)?;
   resume_with_engine(engine, run_id, options).await
 }
@@ -625,19 +642,21 @@ async fn resume_workflow_durable_internal(
   database_path: PathBuf,
   run_id: &str,
   options: RuntimeExecutionOptions,
-  approval_outcome_api: bool,
+  approval_outcome_api: Option<bool>,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path)?;
   store.recover_interrupted_runs()?;
+  let binding = store.run_binding(run_id)?;
+  let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
   let engine = DurableDagEngine::resume(store, run_id)?;
   let has_approval = workflow_has_approval(engine.workflow());
-  if approval_outcome_api && !has_approval {
+  if approval_outcome_api == Some(true) && !has_approval {
     return Err(RuntimeExecutionError::InvalidConfiguration(
       "the approval runtime outcome API requires a model-v4 approval workflow".to_string(),
     ));
   }
-  if !approval_outcome_api && has_approval {
+  if approval_outcome_api == Some(false) && has_approval {
     return Err(RuntimeExecutionError::InvalidConfiguration(
       "durable approval workflows require resume_workflow_durable_outcome".to_string(),
     ));
@@ -676,6 +695,23 @@ fn attach_durable_capability_authority(
     Arc::clone(&options.capability_registry),
     Arc::new(tokio::sync::Mutex::new(store)),
   )));
+  Ok(options)
+}
+
+fn runtime_modules_from_store(
+  options: RuntimeExecutionOptions,
+  store: &DurableEventStore,
+  definition_hash: &str,
+) -> Result<RuntimeExecutionOptions, RuntimeExecutionError> {
+  let stored = store.definition_module_artifacts(definition_hash)?;
+  if options.runtime_modules.is_empty() {
+    return Ok(options.with_runtime_modules(stored));
+  }
+  if options.runtime_modules.as_ref() != &stored {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "supplied module artifacts do not match the durable definition artifacts".to_string(),
+    ));
+  }
   Ok(options)
 }
 
@@ -779,7 +815,6 @@ fn validate_runtime_modules(
   workflow: &CompiledWorkflowDefinition,
   options: &RuntimeExecutionOptions,
 ) -> Result<(), RuntimeExecutionError> {
-  const MAX_ARTIFACT_BYTES: usize = 3 * 1024 * 1024;
   let Some(runtime) = &workflow.module_runtime else {
     if options.runtime_modules.is_empty() {
       return Ok(());
@@ -793,21 +828,44 @@ fn validate_runtime_modules(
       "the runtime module artifacts do not match Model v9".to_string(),
     ));
   }
+  let mut total_bytes = 0usize;
   for (binding, artifact) in runtime.modules.iter().zip(options.runtime_modules.iter()) {
+    total_bytes = total_bytes
+      .checked_add(artifact.bundle.len())
+      .and_then(|value| value.checked_add(artifact.source_map.len()))
+      .ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(
+          "runtime module artifact byte count overflowed".to_string(),
+        )
+      })?;
     let matches = binding.name == artifact.name
       && binding.bundle_digest == artifact.bundle_digest
       && binding.source_map_digest == artifact.source_map_digest
       && binding.exports == artifact.exports
       && sha256_identity(&artifact.bundle) == artifact.bundle_digest
       && sha256_identity(&artifact.source_map) == artifact.source_map_digest
-      && artifact.bundle.len() <= MAX_ARTIFACT_BYTES
-      && artifact.source_map.len() <= MAX_ARTIFACT_BYTES;
+      && artifact.bundle.len() <= crate::durable::MAX_MODULE_ARTIFACT_BYTES
+      && artifact.source_map.len() <= crate::durable::MAX_MODULE_ARTIFACT_BYTES;
     if !matches {
       return Err(RuntimeExecutionError::InvalidConfiguration(format!(
         "runtime module artifact {:?} failed its Model v9 identity or size check",
         binding.name
       )));
     }
+    if options.resolved_secrets.values().any(|secret| {
+      !secret.is_empty()
+        && (artifact.bundle.contains(secret) || artifact.source_map.contains(secret))
+    }) {
+      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+        "runtime module artifact {:?} contains a resolved secret value",
+        binding.name
+      )));
+    }
+  }
+  if total_bytes > crate::durable::MAX_MODULE_ARTIFACT_SET_BYTES {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "runtime module artifacts exceed the per-definition cache limit".to_string(),
+    ));
   }
   Ok(())
 }

@@ -71,7 +71,7 @@ includes conditional branches and bounded parallel groups:
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
 | Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC14 completed and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, workflow-scoped Cache v1, and internal Events Service v1 are executable and publishable; queue is postponed |
-| `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS3 completed | Canonical documents, safe local resolution, deterministic ESM bundles/maps, Definition Package v3, Model v9, Script Host v5, and isolated execution through `services.<alias>` are implemented |
+| `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS4 completed | Canonical documents, safe local resolution, deterministic ESM bundles/maps, Definition Package v3, Model v9, isolated execution, durable artifact recovery, Script Host v6 restart registration, and safe source diagnostics are implemented |
 | Queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
 
@@ -439,10 +439,12 @@ diagnostics, and `woml check` output are frozen in
 `docs/protocols/module-system-v1.md` and
 `docs/protocols/module-compilation-v1.md`. MS3 promotes the exact compilation to
 Definition Package v3 and executes named exports as
-`services.<alias>.<function>()` through Script Host v5. Each step receives fresh
+`services.<alias>.<function>()` through Script Host v6. Each step receives fresh
 module state; initialization effects are rejected; calls to Fetch and built-in
 services retain their tracked runtime boundaries. See
-`docs/protocols/module-runtime-v1.md`.
+`docs/protocols/module-runtime-v1.md`. Durable Store v8 binds exact artifacts to
+the compiled definition, allowing recovery after source files change or
+disappear without reading the current project tree.
 
 This is a structural grammar. Identifier and raw-content tokenization are fixed
 by Sections 2 and 5. Attribute-reference tokenization is defined in Section 15.

@@ -29,8 +29,8 @@ use crate::schedule::{
 use crate::{
   execute_admitted_trigger_run_durable, CompiledWorkflowDefinition, DurableEventStore,
   DurableStoreError, EventServiceAcceptedRun, EventServiceSubscriber, IntervalCursorRegistration,
-  ManagedEventsHandler, ModelValidationError, RuntimeExecutionOptions, ScheduleCursorRegistration,
-  TriggerAdmissionRequest,
+  ManagedEventsHandler, ModelValidationError, RuntimeExecutionOptions, RuntimeModuleArtifact,
+  ScheduleCursorRegistration, TriggerAdmissionRequest,
 };
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -103,6 +103,7 @@ pub struct WebhookDefinitionRegistration {
   pub workflow: CompiledWorkflowDefinition,
   pub definition_hash: String,
   pub resolved_secrets: BTreeMap<String, String>,
+  pub runtime_modules: Vec<RuntimeModuleArtifact>,
 }
 
 impl WebhookDefinitionRegistration {
@@ -111,11 +112,17 @@ impl WebhookDefinitionRegistration {
       workflow,
       definition_hash: definition_hash.into(),
       resolved_secrets: BTreeMap::new(),
+      runtime_modules: Vec::new(),
     }
   }
 
   pub fn with_secret(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
     self.resolved_secrets.insert(name.into(), value.into());
+    self
+  }
+
+  pub fn with_runtime_modules(mut self, modules: Vec<RuntimeModuleArtifact>) -> Self {
+    self.runtime_modules = modules;
     self
   }
 }
@@ -572,13 +579,17 @@ fn prepare_state(
         subscribers.push(subscriber);
       }
     }
-    definitions.push((registration.workflow, registration.definition_hash));
+    definitions.push((
+      registration.workflow,
+      registration.definition_hash,
+      registration.runtime_modules,
+    ));
   }
 
   for workflow_id in config.startup_manual_triggers.keys() {
     if !definitions
       .iter()
-      .any(|(workflow, _)| &workflow.workflow_id == workflow_id)
+      .any(|(workflow, _, _)| &workflow.workflow_id == workflow_id)
     {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
         "startup manual trigger names unknown workflow {workflow_id:?}"
@@ -588,8 +599,8 @@ fn prepare_state(
 
   let mut store = DurableEventStore::open(&config.database_path)?;
   store.recover_interrupted_runs()?;
-  for (workflow, definition_hash) in &definitions {
-    store.register_definition(workflow, definition_hash)?;
+  for (workflow, definition_hash, runtime_modules) in &definitions {
+    store.register_definition_module_artifacts(workflow, definition_hash, runtime_modules)?;
   }
   let recovery_runs = store
     .recover_undispatched_trigger_runs()?

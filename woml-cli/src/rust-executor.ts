@@ -84,6 +84,17 @@ export interface RustRecoveryReport {
   readonly resumableRuns: number;
 }
 
+export interface StoredRunRequirementsV1 {
+  readonly contract: 'woml.stored-run-requirements';
+  readonly version: 1;
+  readonly workflowId: string;
+  readonly definitionHash: string;
+  readonly requiredSecrets: readonly string[];
+  readonly moduleCount: number;
+  readonly hasApproval: boolean;
+  readonly hasNotifications: boolean;
+}
+
 export type TriggerProgressV1 =
   | {
       readonly contract: 'woml.trigger-progress';
@@ -199,6 +210,7 @@ export interface WebhookRuntimeRegistration {
   readonly workflow: CompiledWorkflowDefinition;
   readonly definitionHash: string;
   readonly resolvedSecrets: Readonly<Record<string, string>>;
+  readonly runtimeModules?: readonly RustRuntimeModuleArtifact[];
 }
 
 export interface WebhookRuntimeOptions extends RustExecutorOptions {
@@ -436,6 +448,19 @@ interface NativeCore {
     ingressJson: string
   ) => Promise<string>;
   readonly inspectWomlRun: (eventStorePath: string, runId: string) => string;
+  readonly inspectWomlStoredRunRequirements: (
+    eventStorePath: string,
+    runId: string
+  ) => string;
+  readonly resumeWomlStoredRunWithProgress: (
+    runId: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    eventStorePath: string,
+    progressCallback: (message: string) => void,
+    resolvedSecretsJson: string
+  ) => Promise<string>;
   readonly executeWomlWorkflowDurableOutcome: (
     compiledModelJson: string,
     definitionHash: string,
@@ -444,7 +469,8 @@ interface NativeCore {
     scriptHostPath: string,
     scriptTimeoutMs: number,
     eventStorePath: string,
-    resolvedSecretsJson: string
+    resolvedSecretsJson: string,
+    runtimeModulesJson?: string
   ) => Promise<string>;
   readonly executeWomlWorkflowDurableOutcomeWithProgress: (
     compiledModelJson: string,
@@ -455,7 +481,8 @@ interface NativeCore {
     scriptTimeoutMs: number,
     eventStorePath: string,
     progressCallback: (message: string) => void,
-    resolvedSecretsJson: string
+    resolvedSecretsJson: string,
+    runtimeModulesJson?: string
   ) => Promise<string>;
   readonly resumeWomlWorkflowDurableOutcome: (
     compiledModelJson: string,
@@ -465,7 +492,8 @@ interface NativeCore {
     scriptHostPath: string,
     scriptTimeoutMs: number,
     eventStorePath: string,
-    resolvedSecretsJson: string
+    resolvedSecretsJson: string,
+    runtimeModulesJson?: string
   ) => Promise<string>;
   readonly resumeWomlWorkflowDurableOutcomeWithProgress: (
     compiledModelJson: string,
@@ -476,7 +504,8 @@ interface NativeCore {
     scriptTimeoutMs: number,
     eventStorePath: string,
     progressCallback: (message: string) => void,
-    resolvedSecretsJson: string
+    resolvedSecretsJson: string,
+    runtimeModulesJson?: string
   ) => Promise<string>;
   readonly resolveWomlApproval: (
     eventStorePath: string,
@@ -1070,7 +1099,7 @@ function executionResult(value: unknown): value is RustWorkflowExecutionResult {
       ]) &&
       Number.isSafeInteger(event.eventSchemaVersion) &&
       Number(event.eventSchemaVersion) >= 1 &&
-      Number(event.eventSchemaVersion) <= 6 &&
+      Number(event.eventSchemaVersion) <= 8 &&
       typeof event.eventId === 'string' &&
       typeof event.runId === 'string' &&
       Number.isSafeInteger(event.sequence) &&
@@ -1476,12 +1505,14 @@ export async function executeApprovalWorkflowWithRust(
     options.onProgress === undefined
       ? native.executeWomlWorkflowDurableOutcome(
           ...arguments_,
-          JSON.stringify(options.resolvedSecrets ?? {})
+          JSON.stringify(options.resolvedSecrets ?? {}),
+          JSON.stringify(options.runtimeModules ?? [])
         )
       : native.executeWomlWorkflowDurableOutcomeWithProgress(
           ...arguments_,
           message => options.onProgress?.(parseExecutionProgress(message)),
-          JSON.stringify(options.resolvedSecrets ?? {})
+          JSON.stringify(options.resolvedSecrets ?? {}),
+          JSON.stringify(options.runtimeModules ?? [])
         )
   ).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
@@ -1511,12 +1542,14 @@ export async function resumeApprovalWorkflowWithRust(
     options.onProgress === undefined
       ? native.resumeWomlWorkflowDurableOutcome(
           ...arguments_,
-          JSON.stringify(options.resolvedSecrets ?? {})
+          JSON.stringify(options.resolvedSecrets ?? {}),
+          JSON.stringify(options.runtimeModules ?? [])
         )
       : native.resumeWomlWorkflowDurableOutcomeWithProgress(
           ...arguments_,
           message => options.onProgress?.(parseExecutionProgress(message)),
-          JSON.stringify(options.resolvedSecrets ?? {})
+          JSON.stringify(options.resolvedSecrets ?? {}),
+          JSON.stringify(options.runtimeModules ?? [])
         )
   ).catch(decodeNativeExecutionError);
   return parseApprovalRuntimeOutcome(resultJson);
@@ -1827,6 +1860,83 @@ export function inspectRunWithRust(
     throw new Error('The native core returned invalid run inspection data.');
   }
   return value as unknown as RustRunInspection;
+}
+
+export function inspectStoredRunRequirementsWithRust(
+  eventStorePath: string,
+  runId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): StoredRunRequirementsV1 {
+  const path = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(path);
+  if (typeof native.inspectWomlStoredRunRequirements !== 'function') {
+    throw new Error(
+      `Native core at "${path}" does not expose inspectWomlStoredRunRequirements; rebuild the Rust addon.`
+    );
+  }
+  const decoded = JSON.parse(
+    native.inspectWomlStoredRunRequirements(eventStorePath, runId)
+  ) as StoredRunRequirementsV1;
+  if (
+    !record(decoded) ||
+    !exactKeys(decoded, [
+      'contract',
+      'version',
+      'workflowId',
+      'definitionHash',
+      'requiredSecrets',
+      'moduleCount',
+      'hasApproval',
+      'hasNotifications',
+    ]) ||
+    decoded.contract !== 'woml.stored-run-requirements' ||
+    decoded.version !== 1 ||
+    typeof decoded.workflowId !== 'string' ||
+    decoded.workflowId.length === 0 ||
+    typeof decoded.definitionHash !== 'string' ||
+    !/^sha256:[0-9a-f]{64}$/.test(decoded.definitionHash) ||
+    !Array.isArray(decoded.requiredSecrets) ||
+    !decoded.requiredSecrets.every(
+      secret => typeof secret === 'string' && /^[A-Z][A-Z0-9_]*$/.test(secret)
+    ) ||
+    !Number.isSafeInteger(decoded.moduleCount) ||
+    decoded.moduleCount < 0 ||
+    decoded.moduleCount > 64 ||
+    typeof decoded.hasApproval !== 'boolean' ||
+    typeof decoded.hasNotifications !== 'boolean'
+  ) {
+    throw new Error(
+      'The native core returned invalid stored-run requirements.'
+    );
+  }
+  return decoded;
+}
+
+export async function resumeStoredRunWithRust(
+  eventStorePath: string,
+  runId: string,
+  options: RustExecutorOptions = {}
+): Promise<RustApprovalRuntimeOutcome> {
+  const path = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(path);
+  if (typeof native.resumeWomlStoredRunWithProgress !== 'function') {
+    throw new Error(
+      `Native core at "${path}" does not expose resumeWomlStoredRunWithProgress; rebuild the Rust addon.`
+    );
+  }
+  const runtime = approvalRuntimeArguments(options);
+  const json = await native
+    .resumeWomlStoredRunWithProgress(
+      runId,
+      runtime.bunExecutable,
+      runtime.scriptHostPath,
+      runtime.timeoutMs,
+      eventStorePath,
+      message => options.onProgress?.(parseExecutionProgress(message)),
+      JSON.stringify(options.resolvedSecrets ?? {})
+    )
+    .catch(decodeNativeExecutionError);
+  return parseApprovalRuntimeOutcome(json);
 }
 
 function parseNotificationJourney(

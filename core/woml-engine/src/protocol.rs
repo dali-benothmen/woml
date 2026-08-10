@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 5;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,7 +28,7 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v5 ready message.".to_string());
+      return Err("The child did not send a valid script-host v6 ready message.".to_string());
     }
     Ok(())
   }
@@ -90,16 +90,25 @@ pub struct RegisterModuleMessage<'a> {
   pub message_type: &'static str,
   pub bundle_digest: &'a str,
   pub bundle: &'a str,
+  pub source_map_digest: &'a str,
+  pub source_map: &'a str,
 }
 
 impl<'a> RegisterModuleMessage<'a> {
-  pub fn new(bundle_digest: &'a str, bundle: &'a str) -> Self {
+  pub fn new(
+    bundle_digest: &'a str,
+    bundle: &'a str,
+    source_map_digest: &'a str,
+    source_map: &'a str,
+  ) -> Self {
     Self {
       protocol: SCRIPT_HOST_PROTOCOL,
       protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
       message_type: "register_module",
       bundle_digest,
       bundle,
+      source_map_digest,
+      source_map,
     }
   }
 }
@@ -111,6 +120,7 @@ pub struct ModuleRegisteredMessage {
   pub protocol_version: u32,
   pub message_type: String,
   pub bundle_digest: String,
+  pub source_map_digest: String,
   pub accepted: bool,
   #[serde(default)]
   pub code: Option<String>,
@@ -119,24 +129,31 @@ pub struct ModuleRegisteredMessage {
 }
 
 impl ModuleRegisteredMessage {
-  pub fn validate(&self, expected_digest: &str) -> Result<(), String> {
+  pub fn validate(
+    &self,
+    expected_digest: &str,
+    expected_source_map_digest: &str,
+  ) -> Result<(), String> {
     let envelope = self.protocol == SCRIPT_HOST_PROTOCOL
       && self.protocol_version == SCRIPT_HOST_PROTOCOL_VERSION
       && self.message_type == "module_registered"
-      && self.bundle_digest == expected_digest;
+      && self.bundle_digest == expected_digest
+      && self.source_map_digest == expected_source_map_digest;
     let outcome = if self.accepted {
       self.code.is_none() && self.message.is_none()
     } else {
-      self.code.as_deref() == Some("WOML_MODULE_DIGEST_MISMATCH")
-        && self
-          .message
-          .as_ref()
-          .is_some_and(|message| !message.is_empty())
+      matches!(
+        self.code.as_deref(),
+        Some("WOML_MODULE_DIGEST_MISMATCH" | "WOML_MODULE_CACHE_LIMIT_EXCEEDED")
+      ) && self
+        .message
+        .as_ref()
+        .is_some_and(|message| !message.is_empty())
     };
     if envelope && outcome {
       Ok(())
     } else {
-      Err("The child sent an invalid script-host v5 module registration response.".to_string())
+      Err("The child sent an invalid script-host v6 module registration response.".to_string())
     }
   }
 }
@@ -277,7 +294,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v5 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v6 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;
