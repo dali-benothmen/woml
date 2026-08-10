@@ -49,6 +49,7 @@ async function validators() {
     'managed-http.v1.schema.json',
     'database.v1.schema.json',
     'storage.v1.schema.json',
+    'cache.v1.schema.json',
     'script-host-protocol.v4.schema.json',
   ];
   for (const name of schemaNames)
@@ -67,6 +68,7 @@ async function validators() {
     http: get('https://cronflow.dev/schemas/managed-http/v1'),
     database: get('https://cronflow.dev/schemas/database/v1'),
     storage: get('https://cronflow.dev/schemas/storage/v1'),
+    cache: get('https://cronflow.dev/schemas/cache/v1'),
     host: get('https://cronflow.dev/schemas/script-host-protocol/v4'),
   };
 }
@@ -160,7 +162,7 @@ describe('SC0 frozen service and capability contracts', () => {
     const names = (await readdir(fixtureDirectory))
       .filter(name => name.endsWith('.json'))
       .sort();
-    expect(names.length).toBe(21);
+    expect(names.length).toBe(23);
     for (const name of names) {
       const fixture = await json(join(fixtureDirectory, name));
       if (name === 'script-host-messages.v4.json') {
@@ -204,8 +206,10 @@ describe('SC0 frozen service and capability contracts', () => {
             ? schemas.fetch
             : name.startsWith('database-')
               ? schemas.database
-              : name.startsWith('storage-')
-                ? schemas.storage
+            : name.startsWith('storage-')
+              ? schemas.storage
+              : name.startsWith('cache-')
+                ? schemas.cache
                 : schemas.http;
       expect(
         validator(fixture),
@@ -245,6 +249,54 @@ describe('SC0 frozen service and capability contracts', () => {
       );
     }
     expect(inspectOperationHistory(failedEvents)).toEqual([]);
+  });
+
+  test('freezes Cache v1 wire names, TTL bounds, and explicit misses', () => {
+    expect(
+      schemas.cache({
+        contract: 'woml.cache',
+        contractVersion: 1,
+        kind: 'result',
+        operation: 'get',
+        data: { hit: false },
+      }),
+      JSON.stringify(schemas.cache.errors)
+    ).toBe(true);
+    expect(
+      schemas.cache({
+        contract: 'woml.cache',
+        contractVersion: 1,
+        kind: 'request',
+        operation: 'set_if_absent',
+        input: { key: 'key', value: null, ttlMs: 1 },
+      }),
+      JSON.stringify(schemas.cache.errors)
+    ).toBe(true);
+    for (const invalid of [
+      {
+        contract: 'woml.cache',
+        contractVersion: 1,
+        kind: 'request',
+        operation: 'setIfAbsent',
+        input: { key: 'key', value: null, ttlMs: 1 },
+      },
+      {
+        contract: 'woml.cache',
+        contractVersion: 1,
+        kind: 'request',
+        operation: 'set',
+        input: { key: 'key', value: 1, ttlMs: 0 },
+      },
+      {
+        contract: 'woml.cache',
+        contractVersion: 1,
+        kind: 'request',
+        operation: 'get',
+        input: { key: 'key', value: 'unexpected' },
+      },
+    ]) {
+      expect(schemas.cache(invalid)).toBe(false);
+    }
   });
 
   test('rejects malformed, cross-run, duplicate, and unclosed managed histories', async () => {

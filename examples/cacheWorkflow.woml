@@ -1,0 +1,30 @@
+<workflow version="0.1" id="cache-demo" name="Workflow Cache">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="cacheCustomer" name="Reuse an expensive customer lookup">
+      <script>
+        const initialized = await services.cache.setIfAbsent(
+          "customer:42",
+          { name: "Ada", source: "expensive-api" },
+          { ttl: "15m", name: "initialize-customer" }
+        );
+
+        const visits = await services.cache.increment(
+          "customer:42:visits",
+          1,
+          { ttl: "15m", name: "count-visit" }
+        );
+        const cached = await services.cache.get("customer:42");
+
+        return {
+          customer: cached.value.name,
+          loadedFromCache: !initialized.stored,
+          visits: visits.value
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>

@@ -42,8 +42,8 @@ const language = await Bun.file(
   resolve(projectRoot, 'docs/woml-v0.1.md')
 ).text();
 if (
-  !architecture.includes('durable Storage v1\nare active through SC9') ||
-  !language.includes('SC0–SC9 implemented and hardened')
+  !architecture.includes('workflow-scoped Cache v1 are active through SC10') ||
+  !language.includes('SC0–SC10 implemented and hardened')
 ) {
   throw new Error('SC7 architecture or language status is stale.');
 }

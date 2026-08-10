@@ -4,6 +4,7 @@
 //! paths and from N-API. It consumes the versioned Compiled Workflow Model and
 //! derives all run state by folding versioned events.
 
+pub mod cache;
 pub mod capability;
 pub mod database;
 mod database_postgres;
@@ -25,6 +26,12 @@ pub mod storage;
 pub mod store;
 pub mod webhook;
 
+pub use cache::{
+  CacheClock, CacheLimits, FixedCacheClock, ManagedCacheHandler, ManagedCacheStore,
+  SystemCacheClock, CACHE_CONTRACT, CACHE_CONTRACT_VERSION, DEFAULT_CACHE_MAX_BYTES,
+  DEFAULT_CACHE_MAX_ENTRIES, DEFAULT_CACHE_TTL_MS, MAX_CACHE_KEY_BYTES, MAX_CACHE_TTL_MS,
+  MAX_CACHE_VALUE_BYTES,
+};
 pub use capability::{
   capability_transport_failure, derive_operation_key, CapabilityCallIdentity, CapabilityCallLimits,
   CapabilityCallRequest, CapabilityCallResult, CapabilityCancellationToken, CapabilityDescriptor,

@@ -647,6 +647,22 @@ function publicDatabaseResult(result: JsonValue, operation: string): JsonValue {
 }
 
 const storageOperations = new Set(['put', 'get', 'head', 'list', 'delete']);
+const cacheOperations = new Set([
+  'get',
+  'set',
+  'delete',
+  'has',
+  'increment',
+  'setIfAbsent',
+]);
+const cacheWireOperations = new Set([
+  'get',
+  'set',
+  'delete',
+  'has',
+  'increment',
+  'set_if_absent',
+]);
 
 function normalizeStorageInput(
   operation: string,
@@ -718,6 +734,142 @@ function publicStorageResult(result: JsonValue, operation: string): JsonValue {
   return object.data;
 }
 
+function cacheTtlMilliseconds(value: JsonValue | undefined): number {
+  if (value === undefined) return 300_000;
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    if (value >= 1 && value <= 2_592_000_000) return value;
+  } else if (typeof value === 'string') {
+    const match = value.match(/^(\d+)(ms|s|m|h|d)$/);
+    if (match !== null) {
+      const multiplier =
+        match[2] === 'ms'
+          ? 1
+          : match[2] === 's'
+            ? 1_000
+            : match[2] === 'm'
+              ? 60_000
+              : match[2] === 'h'
+                ? 3_600_000
+                : 86_400_000;
+      const ttl = Number(match[1]) * multiplier;
+      if (Number.isSafeInteger(ttl) && ttl >= 1 && ttl <= 2_592_000_000) {
+        return ttl;
+      }
+    }
+  }
+  throw new TypeError(
+    'Cache ttl must be milliseconds or a whole duration from 1ms through 30d.'
+  );
+}
+
+function normalizeCacheOptions(
+  value: unknown,
+  acceptsTtl: boolean
+): { readonly ttlMs: number; readonly callOptions?: JsonObject } {
+  if (value === undefined) {
+    return { ttlMs: 300_000 };
+  }
+  const object = plainObject(value);
+  const allowed = acceptsTtl ? ['ttl', 'name'] : ['name'];
+  if (
+    object === undefined ||
+    Object.keys(object).some(key => !allowed.includes(key)) ||
+    (object.name !== undefined && typeof object.name !== 'string')
+  ) {
+    throw new TypeError(
+      acceptsTtl
+        ? 'Cache options accept only ttl and a stable name.'
+        : 'Cache options accept only a stable name.'
+    );
+  }
+  return {
+    ttlMs: cacheTtlMilliseconds(object.ttl),
+    ...(object.name === undefined
+      ? {}
+      : { callOptions: { name: object.name } }),
+  };
+}
+
+function normalizeCacheRequest(
+  operation: string,
+  args: readonly unknown[]
+): { readonly request: JsonObject; readonly callOptions?: JsonObject } {
+  if (!cacheOperations.has(operation)) {
+    throw new TypeError(`Unknown Cache v1 operation "${operation}".`);
+  }
+  const key = args[0];
+  if (typeof key !== 'string') {
+    throw new TypeError(`services.cache.${operation}() requires a string key.`);
+  }
+  let input: JsonObject;
+  let callOptions: JsonObject | undefined;
+  const wireOperation =
+    operation === 'setIfAbsent' ? 'set_if_absent' : operation;
+  if (operation === 'get' || operation === 'has') {
+    if (args.length !== 1) {
+      throw new TypeError(`services.cache.${operation}() accepts only a key.`);
+    }
+    input = { key };
+  } else if (operation === 'delete') {
+    if (args.length > 2) {
+      throw new TypeError('services.cache.delete() accepts key and options.');
+    }
+    const normalized = normalizeCacheOptions(args[1], false);
+    input = { key };
+    callOptions = normalized.callOptions;
+  } else if (operation === 'set' || operation === 'setIfAbsent') {
+    if (args.length < 2 || args.length > 3) {
+      throw new TypeError(
+        `services.cache.${operation}() requires key, value, and optional options.`
+      );
+    }
+    const normalized = normalizeCacheOptions(args[2], true);
+    input = { key, value: args[1] as JsonValue, ttlMs: normalized.ttlMs };
+    callOptions = normalized.callOptions;
+  } else {
+    if (args.length > 3) {
+      throw new TypeError(
+        'services.cache.increment() accepts key, optional amount, and options.'
+      );
+    }
+    const secondIsOptions = plainObject(args[1]) !== undefined;
+    const amount = args[1] === undefined || secondIsOptions ? 1 : args[1];
+    if (typeof amount !== 'number' || !Number.isSafeInteger(amount)) {
+      throw new TypeError('Cache increment amount must be a safe integer.');
+    }
+    const normalized = normalizeCacheOptions(
+      secondIsOptions ? args[1] : args[2],
+      true
+    );
+    input = { key, amount, ttlMs: normalized.ttlMs };
+    callOptions = normalized.callOptions;
+  }
+  return {
+    request: {
+      contract: 'woml.cache',
+      contractVersion: 1,
+      kind: 'request',
+      operation: wireOperation,
+      input,
+    },
+    ...(callOptions === undefined ? {} : { callOptions }),
+  };
+}
+
+function publicCacheResult(result: JsonValue, operation: string): JsonValue {
+  const object = plainObject(result);
+  if (
+    object?.contract !== 'woml.cache' ||
+    object.contractVersion !== 1 ||
+    object.kind !== 'result' ||
+    object.operation !== operation ||
+    object.data === undefined
+  ) {
+    throw new TypeError('Rust returned an invalid Cache v1 result.');
+  }
+  return object.data;
+}
+
 function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
   if (request.attempt === undefined || request.bindings === undefined) {
     return Object.freeze({});
@@ -735,10 +887,13 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
       capability === 'db' && databaseOperations.has(operation);
     const managedStorage =
       capability === 'storage' && storageOperations.has(operation);
+    const managedCache =
+      capability === 'cache' && cacheWireOperations.has(operation);
     if (
       !managedHttp &&
       !managedDatabase &&
       !managedStorage &&
+      !managedCache &&
       callOptions !== undefined
     ) {
       throw new TypeError(
@@ -771,7 +926,9 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
       : managedDatabase
         ? operation !== 'query' && operation !== 'read'
         : managedStorage && (operation === 'put' || operation === 'delete');
-    if (effectful && identity.mode === 'automatic') {
+    const cacheEffectful =
+      managedCache && operation !== 'get' && operation !== 'has';
+    if ((effectful || cacheEffectful) && identity.mode === 'automatic') {
       const key = `${capability}.${operation}`;
       const count = (automaticEffectfulCalls.get(key) ?? 0) + 1;
       automaticEffectfulCalls.set(key, count);
@@ -834,6 +991,8 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         ? publicDatabaseResult(result, operation)
         : managedStorage
           ? publicStorageResult(result, operation)
+          : managedCache
+            ? publicCacheResult(result, operation)
           : result;
   };
   return new Proxy(Object.freeze({}), {
@@ -904,6 +1063,35 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         });
         capabilityCache.set(capabilityProperty, storage);
         return storage;
+      }
+      if (capabilityProperty === 'cache') {
+        const operationCache = new Map<string, unknown>();
+        const cache = new Proxy(Object.freeze({}), {
+          get(_cacheTarget, operationProperty) {
+            if (typeof operationProperty !== 'string') return undefined;
+            const known = operationCache.get(operationProperty);
+            if (known !== undefined) return known;
+            if (!cacheOperations.has(operationProperty)) return undefined;
+            const invoke = async (...args: unknown[]): Promise<JsonValue> => {
+              const normalized = normalizeCacheRequest(operationProperty, args);
+              const wireOperation = String(normalized.request.operation);
+              return invokeCapability(
+                'cache',
+                wireOperation,
+                normalized.request,
+                normalized.callOptions
+              );
+            };
+            Object.freeze(invoke);
+            operationCache.set(operationProperty, invoke);
+            return invoke;
+          },
+          set: () => false,
+          defineProperty: () => false,
+          deleteProperty: () => false,
+        });
+        capabilityCache.set(capabilityProperty, cache);
+        return cache;
       }
       const operationCache = new Map<string, unknown>();
       const capability = new Proxy(Object.freeze({}), {

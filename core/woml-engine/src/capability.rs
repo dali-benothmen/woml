@@ -318,6 +318,18 @@ pub trait CapabilityHandler: Send + Sync + 'static {
     input: Value,
     cancellation: CapabilityCancellationToken,
   ) -> BoxFuture<'static, Result<Value, CapabilityFailure>>;
+
+  /// Executes with engine-owned identity that is deliberately absent from the
+  /// frozen Capability Call v1 wire protocol. Most handlers do not need it.
+  fn execute_scoped(
+    &self,
+    input: Value,
+    workflow_scope: Option<String>,
+    cancellation: CapabilityCancellationToken,
+  ) -> BoxFuture<'static, Result<Value, CapabilityFailure>> {
+    let _ = workflow_scope;
+    self.execute(input, cancellation)
+  }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -545,7 +557,7 @@ impl DurableCapabilityAuthority {
     request: CapabilityCallRequest,
     cancellation: CapabilityCancellationToken,
   ) -> Result<CapabilityCallResult, DurableCapabilityAuthorityError> {
-    {
+    let workflow_scope = {
       let store = self.store.lock().await;
       let projection = store.projection(&request.run_id)?;
       let attempt = projection.attempts.iter().find(|attempt| {
@@ -564,7 +576,8 @@ impl DurableCapabilityAuthority {
           .into(),
         );
       }
-    }
+      store.run_binding(&request.run_id)?.workflow_id
+    };
     let metadata = match self.registry.safe_metadata(&request) {
       Ok(metadata) => metadata,
       Err(error) => {
@@ -596,7 +609,10 @@ impl DurableCapabilityAuthority {
       )?;
     }
 
-    let result = self.registry.execute(request.clone(), cancellation).await;
+    let result = self
+      .registry
+      .execute_scoped(request.clone(), Some(workflow_scope), cancellation)
+      .await;
     let payload = match &result {
       CapabilityCallResult::Succeeded(success) => {
         let encoded = serde_json::to_vec(&success.result).unwrap_or_default();
@@ -970,6 +986,15 @@ impl CapabilityRegistry {
     request: CapabilityCallRequest,
     cancellation: CapabilityCancellationToken,
   ) -> CapabilityCallResult {
+    self.execute_scoped(request, None, cancellation).await
+  }
+
+  pub(crate) async fn execute_scoped(
+    &self,
+    request: CapabilityCallRequest,
+    workflow_scope: Option<String>,
+    cancellation: CapabilityCancellationToken,
+  ) -> CapabilityCallResult {
     let started = Instant::now();
     let handler = match self.lookup_and_validate(&request) {
       Ok(handler) => handler,
@@ -1010,8 +1035,12 @@ impl CapabilityRegistry {
     let may_have_effect = effect != CapabilityEffect::Read;
     let safe_to_retry = effect != CapabilityEffect::UnsafeWrite;
 
-    let handler_future =
-      AssertUnwindSafe(handler.execute(request.input.clone(), cancellation.clone())).catch_unwind();
+    let handler_future = AssertUnwindSafe(handler.execute_scoped(
+      request.input.clone(),
+      workflow_scope,
+      cancellation.clone(),
+    ))
+    .catch_unwind();
     let timeout = time::sleep(time::Duration::from_millis(request.limits.timeout_ms));
     tokio::pin!(handler_future);
     tokio::pin!(timeout);

@@ -1168,6 +1168,124 @@ return {
     });
   });
 
+  test('protocol v4 lowers positional services.cache calls to Cache v1', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const data =
+          message.call.operation === 'set'
+            ? { stored: true, expiresAt: '2026-08-10T12:00:00.000Z' }
+            : message.call.operation === 'get'
+              ? {
+                  hit: true,
+                  value: { name: 'Ada' },
+                  expiresAt: '2026-08-10T12:00:00.000Z',
+                }
+              : {
+                  stored: false,
+                  value: { name: 'Ada' },
+                  expiresAt: '2026-08-10T12:00:00.000Z',
+                };
+        const cacheResult = {
+          contract: 'woml.cache',
+          contractVersion: 1,
+          kind: 'result',
+          operation: message.call.operation,
+          data,
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(cacheResult)),
+            durationMs: 1,
+            result: cacheResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_cache',
+        `const stored = await services.cache.set('customer:42', { name: 'Ada' }, {
+          ttl: '15m', name: 'cache-customer'
+        });
+        const loaded = await services.cache.get('customer:42');
+        const existing = await services.cache.setIfAbsent('customer:42', { name: 'Grace' }, {
+          ttl: '1h', name: 'initialize-customer'
+        });
+        return { stored, loaded, existing, frozen: Object.isFrozen(services.cache) };`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.call).toMatchObject({
+      capability: 'cache',
+      operation: 'set',
+      identity: {
+        mode: 'named',
+        operationName: 'cache.set.cache-customer',
+      },
+      input: {
+        contract: 'woml.cache',
+        contractVersion: 1,
+        kind: 'request',
+        operation: 'set',
+        input: {
+          key: 'customer:42',
+          value: { name: 'Ada' },
+          ttlMs: 900_000,
+        },
+      },
+    });
+    expect(calls[1]?.call).toMatchObject({
+      capability: 'cache',
+      operation: 'get',
+      input: { operation: 'get', input: { key: 'customer:42' } },
+    });
+    expect(calls[2]?.call).toMatchObject({
+      capability: 'cache',
+      operation: 'set_if_absent',
+      identity: {
+        mode: 'named',
+        operationName: 'cache.set_if_absent.initialize-customer',
+      },
+      input: {
+        operation: 'set_if_absent',
+        input: { ttlMs: 3_600_000 },
+      },
+    });
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'success',
+      value: {
+        loaded: { hit: true, value: { name: 'Ada' } },
+        existing: { stored: false, value: { name: 'Ada' } },
+        frozen: true,
+      },
+    });
+  });
+
   test('protocol v4 bindings are deeply read-only and reject a known secret in results', async () => {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({

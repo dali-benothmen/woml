@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/cache/v1",
+  "title": "WOML Cache v1",
+  "description": "Workflow-scoped, expiring JSON cache contract for services.cache.",
+  "x-status": "cache-contract-frozen-sc10",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "ttlMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2592000000
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "operation", "input"],
+      "properties": {
+        "contract": { "const": "woml.cache" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "request" },
+        "operation": { "enum": ["get", "set", "delete", "has", "increment", "set_if_absent"] },
+        "input": {}
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "enum": ["get", "delete", "has"] } } },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["key"],
+                "properties": { "key": { "$ref": "#/$defs/key" } }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "enum": ["set", "set_if_absent"] } } },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["key", "value", "ttlMs"],
+                "properties": {
+                  "key": { "$ref": "#/$defs/key" },
+                  "value": {},
+                  "ttlMs": { "$ref": "#/$defs/ttlMs" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "increment" } } },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["key", "amount", "ttlMs"],
+                "properties": {
+                  "key": { "$ref": "#/$defs/key" },
+                  "amount": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+                  "ttlMs": { "$ref": "#/$defs/ttlMs" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "miss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hit"],
+      "properties": { "hit": { "const": false } }
+    },
+    "hit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hit", "value", "expiresAt"],
+      "properties": {
+        "hit": { "const": true },
+        "value": {},
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "operation", "data"],
+      "properties": {
+        "contract": { "const": "woml.cache" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "result" },
+        "operation": { "enum": ["get", "set", "delete", "has", "increment", "set_if_absent"] },
+        "data": {}
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "get" } } },
+          "then": { "properties": { "data": { "oneOf": [{ "$ref": "#/$defs/miss" }, { "$ref": "#/$defs/hit" }] } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "set" } } },
+          "then": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stored", "expiresAt"],
+                "properties": {
+                  "stored": { "const": true },
+                  "expiresAt": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "delete" } } },
+          "then": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["deleted"],
+                "properties": { "deleted": { "type": "boolean" } }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "has" } } },
+          "then": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["present"],
+                "properties": { "present": { "type": "boolean" } }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "increment" } } },
+          "then": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["value", "expiresAt"],
+                "properties": {
+                  "value": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+                  "expiresAt": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "set_if_absent" } } },
+          "then": {
+            "properties": {
+              "data": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["stored", "value", "expiresAt"],
+                    "properties": {
+                      "stored": { "const": true },
+                      "value": {},
+                      "expiresAt": { "type": "string", "format": "date-time" }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["stored", "value", "expiresAt"],
+                    "properties": {
+                      "stored": { "const": false },
+                      "value": {},
+                      "expiresAt": { "type": "string", "format": "date-time" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

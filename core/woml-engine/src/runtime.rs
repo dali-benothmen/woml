@@ -130,6 +130,7 @@ pub struct RuntimeExecutionOptions {
   capability_authority: Option<Arc<DurableCapabilityAuthority>>,
   managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
   managed_storage_store: Option<Arc<crate::ManagedStorageStore>>,
+  managed_cache_store: Option<Arc<crate::ManagedCacheStore>>,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -185,6 +186,12 @@ impl RuntimeExecutionOptions {
         .register(handler)
         .expect("each production storage operation is registered exactly once");
     }
+    let managed_cache_store = Arc::new(crate::ManagedCacheStore::default());
+    for handler in crate::ManagedCacheHandler::handlers(Arc::clone(&managed_cache_store)) {
+      capability_registry
+        .register(handler)
+        .expect("each production cache operation is registered exactly once");
+    }
     Self {
       script_host,
       script_timeout_ms,
@@ -199,6 +206,7 @@ impl RuntimeExecutionOptions {
       capability_authority: None,
       managed_database_pool: Some(managed_database_pool),
       managed_storage_store: Some(managed_storage_store),
+      managed_cache_store: Some(managed_cache_store),
     }
   }
 
@@ -226,6 +234,7 @@ impl RuntimeExecutionOptions {
     self.capability_registry = registry;
     self.managed_database_pool = None;
     self.managed_storage_store = None;
+    self.managed_cache_store = None;
     self
   }
 
@@ -614,6 +623,11 @@ fn attach_durable_capability_authority(
 ) -> Result<RuntimeExecutionOptions, RuntimeExecutionError> {
   if let Some(storage) = &options.managed_storage_store {
     storage
+      .configure_for_state(database_path)
+      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
+  }
+  if let Some(cache) = &options.managed_cache_store {
+    cache
       .configure_for_state(database_path)
       .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
   }

@@ -1,6 +1,6 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0 through SC9 completed on 2026-08-10. The cross-layer
+Status: active. SC0 through SC10 completed on 2026-08-10. The cross-layer
 contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
 Script Bindings v1 and symbolic secret dependencies, and a real WOML script can
 now call from an isolated Bun Worker through the durable Rust capability
@@ -13,7 +13,10 @@ Rust-owned SQLite and PostgreSQL pools, prepared SQL and CRUD, atomic
 transaction batches, bounded/redacted results, cancellation, recovery, and
 strict separation from WOML runtime state. Storage v1 now adds Rust-owned,
 checksummed durable objects and managed HTTP direct-to-storage streaming without
-copying large bodies through Bun or context. SC10 is next: local expiring cache.
+copying large bodies through Bun or context. Cache v1 now adds a bounded,
+workflow-scoped local SQLite cache with exact expiry, atomic mutations, LRU
+eviction, restart survival, and redacted events. SC11 is next: internal named
+events from workflows.
 
 ## 1. Product Outcome
 
@@ -405,6 +408,7 @@ Cache provides best-effort, workflow-scoped JSON values:
 ```js
 await services.cache.set('customer:42', customer, { ttl: '15m' });
 const cached = await services.cache.get('customer:42');
+if (cached.hit) return cached.value;
 ```
 
 V1 includes `get`, `set`, `delete`, `has`, `increment`, and `setIfAbsent` with
@@ -931,6 +935,8 @@ writes, conditional conflict, restart, deletion, limits, and HTTP-to-storage
 without a large Bun/context copy.
 
 ### SC10 — Build the local expiring cache
+
+Status: completed on 2026-08-10.
 
 Changes:
 
