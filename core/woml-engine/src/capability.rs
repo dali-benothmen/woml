@@ -309,6 +309,16 @@ pub trait CapabilityHandler: Send + Sync + 'static {
     Map::new()
   }
 
+  /// Produces safe start metadata with the verified engine call identity.
+  /// Existing handlers remain input-only; identity-sensitive handlers such as
+  /// Workflow Calls can bind a deterministic child before dispatch.
+  fn safe_request_metadata(
+    &self,
+    request: &CapabilityCallRequest,
+  ) -> Result<Map<String, Value>, CapabilityFailure> {
+    Ok(self.safe_metadata(&request.input))
+  }
+
   fn safe_result_metadata(&self, _result: &Value) -> Map<String, Value> {
     Map::new()
   }
@@ -982,7 +992,7 @@ impl CapabilityRegistry {
       ));
     }
     let handler = self.lookup_and_validate(request)?;
-    let metadata = handler.safe_metadata(&request.input);
+    let metadata = handler.safe_request_metadata(request)?;
     validate_safe_metadata(&metadata).map_err(|message| {
       failure(
         CapabilityFailureKind::InvalidInput,

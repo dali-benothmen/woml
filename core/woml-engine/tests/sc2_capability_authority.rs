@@ -127,6 +127,7 @@ fn active_store(run_id: &str, invocation_id: &str) -> DurableEventStore {
         trigger_id: Some("start".to_string()),
         trigger_handler: Some("trigger.manual".to_string()),
         trigger_occurrence_id: Some(format!("occurrence-{run_id}")),
+        ingress: None,
         trigger: Map::new(),
       }),
     )

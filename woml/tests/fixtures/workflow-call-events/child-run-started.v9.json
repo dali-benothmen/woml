@@ -1,0 +1,19 @@
+{
+  "eventSchemaVersion": 9,
+  "eventId": "event_workflow_call_started_01",
+  "runId": "run_call_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "sequence": 1,
+  "occurredAt": "2026-08-10T12:00:00Z",
+  "type": "run_started",
+  "data": {
+    "workflowId": "calculate-risk",
+    "definitionHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ingress": {
+      "kind": "workflow_call",
+      "callKey": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "trigger": {
+      "customerId": "customer-42"
+    }
+  }
+}

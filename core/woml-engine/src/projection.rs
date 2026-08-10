@@ -226,6 +226,7 @@ pub struct RunProjection {
   pub trigger_id: Option<String>,
   pub trigger_handler: Option<String>,
   pub trigger_occurrence_id: Option<String>,
+  pub ingress: Option<crate::RunIngress>,
   pub status: RunStatus,
   pub context: WorkflowContext,
   pub attempts: Vec<AttemptProjection>,
@@ -415,6 +416,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         projection.trigger_id = data.trigger_id.clone();
         projection.trigger_handler = data.trigger_handler.clone();
         projection.trigger_occurrence_id = data.trigger_occurrence_id.clone();
+        projection.ingress = data.ingress.clone();
         projection.context.trigger = data.trigger.clone();
         projection.status = RunStatus::Running;
       }

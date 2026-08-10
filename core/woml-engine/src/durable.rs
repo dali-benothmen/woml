@@ -26,7 +26,7 @@ use crate::event::{
   NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure,
   OperationFailedData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
   ParallelGroupOutcome, ProviderMessageIdentity, RunFailedData, RunFailedDataV1, RunFailedDataV2,
-  RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunStartedData, RunSucceededData,
+  RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunIngress, RunStartedData, RunSucceededData,
   StepAttemptFailedData, StepRetryScheduledData,
 };
 use crate::projection::{
@@ -34,15 +34,20 @@ use crate::projection::{
   NotificationMessageUpdateStatus, ParallelGroupStatus,
 };
 use crate::runtime::RuntimeModuleArtifact;
+use crate::workflow_calls::{
+  WorkflowCallAdmission, WorkflowCallAdmissionOutcome, WorkflowCallAdmissionRequest,
+  WorkflowCallIndexState, MAX_WORKFLOW_CALL_DEPTH,
+};
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
   RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
   RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
+  RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 8;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 9;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -51,6 +56,7 @@ const STORE_SCHEMA_VERSION_V5: &str = "5";
 const STORE_SCHEMA_VERSION_V6: &str = "6";
 const STORE_SCHEMA_VERSION_V7: &str = "7";
 const STORE_SCHEMA_VERSION_V8: &str = "8";
+const STORE_SCHEMA_VERSION_V9: &str = "9";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
@@ -328,6 +334,53 @@ CREATE TRIGGER woml_definition_module_artifacts_no_delete
 BEFORE DELETE ON woml_definition_module_artifacts
 BEGIN
   SELECT RAISE(ABORT, 'WOML definition module artifacts are immutable');
+END;
+"#;
+
+const CREATE_WORKFLOW_CALL_SCHEMA_V9: &str = r#"
+CREATE TABLE woml_workflow_calls (
+  call_key TEXT PRIMARY KEY,
+  parent_run_id TEXT NOT NULL,
+  parent_node_id TEXT NOT NULL,
+  parent_attempt INTEGER NOT NULL CHECK (parent_attempt BETWEEN 1 AND 10),
+  target_workflow_id TEXT NOT NULL,
+  target_definition_hash TEXT NOT NULL,
+  child_run_id TEXT NOT NULL UNIQUE,
+  payload_digest TEXT NOT NULL,
+  depth INTEGER NOT NULL CHECK (depth BETWEEN 1 AND 32),
+  state TEXT NOT NULL CHECK (state IN ('admitted', 'running', 'succeeded', 'failed')),
+  admitted_at TEXT NOT NULL,
+  FOREIGN KEY (parent_run_id) REFERENCES woml_runs(run_id),
+  FOREIGN KEY (child_run_id) REFERENCES woml_runs(run_id),
+  FOREIGN KEY (target_definition_hash) REFERENCES woml_definitions(definition_hash)
+);
+
+CREATE INDEX woml_workflow_calls_parent
+  ON woml_workflow_calls(parent_run_id, parent_node_id, parent_attempt);
+
+CREATE INDEX woml_workflow_calls_target
+  ON woml_workflow_calls(target_workflow_id, target_definition_hash);
+
+CREATE TRIGGER woml_workflow_calls_identity_no_update
+BEFORE UPDATE ON woml_workflow_calls
+WHEN OLD.call_key != NEW.call_key
+  OR OLD.parent_run_id != NEW.parent_run_id
+  OR OLD.parent_node_id != NEW.parent_node_id
+  OR OLD.parent_attempt != NEW.parent_attempt
+  OR OLD.target_workflow_id != NEW.target_workflow_id
+  OR OLD.target_definition_hash != NEW.target_definition_hash
+  OR OLD.child_run_id != NEW.child_run_id
+  OR OLD.payload_digest != NEW.payload_digest
+  OR OLD.depth != NEW.depth
+  OR OLD.admitted_at != NEW.admitted_at
+BEGIN
+  SELECT RAISE(ABORT, 'WOML workflow call identity is immutable');
+END;
+
+CREATE TRIGGER woml_workflow_calls_no_delete
+BEFORE DELETE ON woml_workflow_calls
+BEGIN
+  SELECT RAISE(ABORT, 'WOML workflow calls are durable');
 END;
 "#;
 
@@ -617,6 +670,14 @@ pub enum DurableStoreError {
   InternalEventCycle,
   #[error("the internal event exceeds the maximum lineage depth")]
   InternalEventDepthExceeded,
+  #[error("the workflow call identity is already bound to different input")]
+  WorkflowCallIdempotencyConflict,
+  #[error("the workflow call exceeds the maximum lineage depth")]
+  WorkflowCallDepthExceeded,
+  #[error("the workflow call target does not match its registered definition")]
+  WorkflowCallDefinitionMismatch,
+  #[error("stored workflow call history is contradictory: {0}")]
+  WorkflowCallHistoryInvalid(String),
   #[error("the durable schedule cursor changed before this operation could commit")]
   ScheduleCursorConflict,
   #[error("the durable interval cursor changed before this operation could commit")]
@@ -820,6 +881,22 @@ fn migrate_store_v7_to_v8(connection: &mut Connection) -> Result<(), DurableStor
   Ok(())
 }
 
+fn migrate_store_v8_to_v9(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_WORKFLOW_CALL_SCHEMA_V9)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V9, STORE_SCHEMA_VERSION_V8],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v8-to-v9 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
 fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
   for (object_type, name) in [
     ("table", "woml_approval_tokens"),
@@ -974,6 +1051,29 @@ fn validate_store_v8_schema(connection: &Connection) -> Result<(), DurableStoreE
   Ok(())
 }
 
+fn validate_store_v9_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v8_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_workflow_calls"),
+    ("index", "woml_workflow_calls_parent"),
+    ("index", "woml_workflow_calls_target"),
+    ("trigger", "woml_workflow_calls_identity_no_update"),
+    ("trigger", "woml_workflow_calls_no_delete"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v9 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -997,21 +1097,28 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
-      Some(STORE_SCHEMA_VERSION_V8) => validate_store_v8_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V9) => validate_store_v9_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V8) => {
+        validate_store_v8_schema(&connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
+      }
       Some(STORE_SCHEMA_VERSION_V7) => {
         validate_store_v7_schema(&connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V6) => {
         validate_store_v6_schema(&connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V5) => {
         validate_store_v5_schema(&connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V4) => {
         validate_store_v4_schema(&connection)?;
@@ -1019,6 +1126,7 @@ impl DurableEventStore {
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V3) => {
         validate_store_v3_schema(&connection)?;
@@ -1027,6 +1135,7 @@ impl DurableEventStore {
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V2) => {
         validate_store_v2_schema(&connection)?;
@@ -1036,6 +1145,7 @@ impl DurableEventStore {
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V1) => {
         migrate_store_v1_to_v2(&mut connection)?;
@@ -1046,6 +1156,7 @@ impl DurableEventStore {
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
       Some(version) => {
         return Err(DurableStoreError::UnsupportedStoreVersion(
@@ -1065,6 +1176,7 @@ impl DurableEventStore {
         migrate_store_v5_to_v6(&mut connection)?;
         migrate_store_v6_to_v7(&mut connection)?;
         migrate_store_v7_to_v8(&mut connection)?;
+        migrate_store_v8_to_v9(&mut connection)?;
       }
     }
     Ok(Self { connection })
@@ -1134,6 +1246,178 @@ impl DurableEventStore {
     let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
     workflow.validate_structure()?;
     Ok(workflow)
+  }
+
+  /// Returns the durable lineage depth of a run. Top-level trigger runs have
+  /// depth zero; an admitted workflow-call child stores its assigned depth.
+  pub fn workflow_call_depth_for_parent(&self, run_id: &str) -> Result<u32, DurableStoreError> {
+    ensure_run_exists(&self.connection, run_id)?;
+    let depth: Option<i64> = self
+      .connection
+      .query_row(
+        "SELECT depth FROM woml_workflow_calls WHERE child_run_id = ?1",
+        [run_id],
+        |row| row.get(0),
+      )
+      .optional()?;
+    match depth {
+      None => Ok(0),
+      Some(depth) if (1..=i64::from(MAX_WORKFLOW_CALL_DEPTH)).contains(&depth) => Ok(depth as u32),
+      Some(_) => Err(DurableStoreError::WorkflowCallHistoryInvalid(
+        "stored lineage depth is invalid".to_string(),
+      )),
+    }
+  }
+
+  pub fn workflow_call(
+    &self,
+    call_key: &str,
+  ) -> Result<Option<WorkflowCallAdmission>, DurableStoreError> {
+    load_workflow_call(&self.connection, call_key)
+  }
+
+  /// Atomically binds one stable parent call identity to exactly one child run.
+  /// Repeating the same request returns the existing child; changing any
+  /// identity-bearing input fails closed.
+  pub fn admit_workflow_call(
+    &mut self,
+    request: WorkflowCallAdmissionRequest,
+  ) -> Result<WorkflowCallAdmissionOutcome, DurableStoreError> {
+    validate_workflow_call_admission_request(&request)?;
+    let payload_digest = durable_workflow_call_payload_digest(&request.payload)?;
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, &request.parent_run_id)?;
+    let parent_workflow = definition_for_run(&transaction, &request.parent_run_id)?;
+    if parent_workflow.node(&request.parent_node_id).is_none() {
+      return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+        "parent node is not present in its bound definition".to_string(),
+      ));
+    }
+    let parent_events = load_events(&transaction, &request.parent_run_id)?;
+    let parent_projection = fold_events(&parent_events)?;
+    let active_parent_attempt = parent_projection
+      .latest_attempt(&request.parent_node_id)
+      .is_some_and(|attempt| {
+        attempt.identity.attempt == request.parent_attempt
+          && attempt.status == AttemptStatus::Started
+      });
+    if !active_parent_attempt {
+      return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+        "parent step attempt is not active".to_string(),
+      ));
+    }
+
+    let workflow = definition_by_hash(&transaction, &request.target_definition_hash)?;
+    if workflow.workflow_id != request.target_workflow_id {
+      return Err(DurableStoreError::WorkflowCallDefinitionMismatch);
+    }
+
+    let parent_depth: Option<i64> = transaction
+      .query_row(
+        "SELECT depth FROM woml_workflow_calls WHERE child_run_id = ?1",
+        [&request.parent_run_id],
+        |row| row.get(0),
+      )
+      .optional()?;
+    let parent_depth = parent_depth.unwrap_or(0);
+    let depth = parent_depth
+      .checked_add(1)
+      .ok_or(DurableStoreError::WorkflowCallDepthExceeded)?;
+    if !(1..=i64::from(MAX_WORKFLOW_CALL_DEPTH)).contains(&depth) {
+      return Err(DurableStoreError::WorkflowCallDepthExceeded);
+    }
+
+    if let Some(existing) = load_workflow_call(&transaction, &request.call_key)? {
+      let identical = existing.parent_run_id == request.parent_run_id
+        && existing.parent_node_id == request.parent_node_id
+        && existing.parent_attempt == request.parent_attempt
+        && existing.target_workflow_id == request.target_workflow_id
+        && existing.target_definition_hash == request.target_definition_hash
+        && existing.child_run_id == request.child_run_id
+        && existing.payload_digest == payload_digest
+        && existing.depth == depth as u32;
+      if !identical {
+        return Err(DurableStoreError::WorkflowCallIdempotencyConflict);
+      }
+      validate_workflow_call_child(&transaction, &existing, &request.payload)?;
+      transaction.commit()?;
+      return Ok(WorkflowCallAdmissionOutcome {
+        admission: existing,
+        duplicate: true,
+      });
+    }
+
+    if load_run_binding_optional(&transaction, &request.child_run_id)?.is_some() {
+      return Err(DurableStoreError::WorkflowCallIdempotencyConflict);
+    }
+
+    transaction.execute(
+      "INSERT INTO woml_runs(run_id, workflow_id, definition_hash, created_at)
+       VALUES (?1, ?2, ?3, ?4)",
+      params![
+        request.child_run_id,
+        request.target_workflow_id,
+        request.target_definition_hash,
+        request.admitted_at.to_rfc3339(),
+      ],
+    )?;
+    let payload = RunEventPayload::RunStarted(RunStartedData {
+      workflow_id: request.target_workflow_id.clone(),
+      definition_hash: request.target_definition_hash.clone(),
+      trigger_id: None,
+      trigger_handler: None,
+      trigger_occurrence_id: None,
+      ingress: Some(RunIngress::WorkflowCall {
+        call_key: request.call_key.clone(),
+      }),
+      trigger: request.payload.clone(),
+    });
+    validate_payload_against_definition(&workflow, &request.target_definition_hash, &payload)
+      .map_err(DurableStoreError::Contract)?;
+    let mut events = Vec::new();
+    append_to_history(
+      &transaction,
+      &mut events,
+      &request.child_run_id,
+      generated_event_id(),
+      request.admitted_at,
+      RUN_EVENT_SCHEMA_VERSION_V9,
+      payload,
+    )?;
+    validate_event_history_against_definition(&workflow, &request.target_definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+
+    transaction.execute(
+      "INSERT INTO woml_workflow_calls(
+         call_key, parent_run_id, parent_node_id, parent_attempt,
+         target_workflow_id, target_definition_hash, child_run_id,
+         payload_digest, depth, state, admitted_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'admitted', ?10)",
+      params![
+        request.call_key,
+        request.parent_run_id,
+        request.parent_node_id,
+        i64::from(request.parent_attempt),
+        request.target_workflow_id,
+        request.target_definition_hash,
+        request.child_run_id,
+        payload_digest,
+        depth,
+        request.admitted_at.to_rfc3339(),
+      ],
+    )?;
+    let admission = load_workflow_call(&transaction, &request.call_key)?.ok_or_else(|| {
+      DurableStoreError::WorkflowCallHistoryInvalid(
+        "new admission disappeared before commit".to_string(),
+      )
+    })?;
+    transaction.commit()?;
+    Ok(WorkflowCallAdmissionOutcome {
+      admission,
+      duplicate: false,
+    })
   }
 
   pub fn register_definition_module_artifacts(
@@ -1759,6 +2043,7 @@ impl DurableEventStore {
         trigger_id: None,
         trigger_handler: None,
         trigger_occurrence_id: None,
+        ingress: None,
         trigger,
       }),
     )
@@ -3842,6 +4127,213 @@ fn parse_stored_timestamp(value: &str) -> Result<DateTime<Utc>, DurableStoreErro
     })
 }
 
+fn validate_workflow_call_admission_request(
+  request: &WorkflowCallAdmissionRequest,
+) -> Result<(), DurableStoreError> {
+  let expected_child = format!(
+    "run_call_{}",
+    request
+      .call_key
+      .strip_prefix("sha256:")
+      .unwrap_or(&request.call_key)
+  );
+  if !is_definition_hash(&request.call_key)
+    || !is_definition_hash(&request.target_definition_hash)
+    || request.child_run_id != expected_child
+    || request.parent_run_id.is_empty()
+    || request.parent_run_id.len() > 256
+    || request.parent_node_id.is_empty()
+    || request.parent_node_id.len() > 256
+    || !(1..=10).contains(&request.parent_attempt)
+    || request.target_workflow_id.is_empty()
+    || request.target_workflow_id.len() > 256
+  {
+    return Err(DurableStoreError::Contract(
+      "Workflow call admission identity is invalid.".to_string(),
+    ));
+  }
+  durable_workflow_call_payload_digest(&request.payload)?;
+  Ok(())
+}
+
+fn durable_workflow_call_payload_digest(
+  payload: &Map<String, Value>,
+) -> Result<String, DurableStoreError> {
+  let encoded = canonical_json(payload).map_err(|_| {
+    DurableStoreError::Contract("Workflow call payload is not canonical JSON.".to_string())
+  })?;
+  if encoded.len() > 1_048_576 {
+    return Err(DurableStoreError::Contract(
+      "Workflow call payload exceeds the 1 MiB durable admission limit.".to_string(),
+    ));
+  }
+  Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+}
+
+fn definition_by_hash(
+  connection: &Connection,
+  definition_hash: &str,
+) -> Result<CompiledWorkflowDefinition, DurableStoreError> {
+  let model_json: String = connection
+    .query_row(
+      "SELECT model_json FROM woml_definitions WHERE definition_hash = ?1",
+      [definition_hash],
+      |row| row.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| DurableStoreError::DefinitionNotFound(definition_hash.to_string()))?;
+  let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
+  workflow.validate_structure()?;
+  Ok(workflow)
+}
+
+fn load_run_binding_optional(
+  connection: &Connection,
+  run_id: &str,
+) -> Result<Option<RunDefinitionBinding>, DurableStoreError> {
+  connection
+    .query_row(
+      "SELECT run_id, workflow_id, definition_hash FROM woml_runs WHERE run_id = ?1",
+      [run_id],
+      |row| {
+        Ok(RunDefinitionBinding {
+          run_id: row.get(0)?,
+          workflow_id: row.get(1)?,
+          definition_hash: row.get(2)?,
+        })
+      },
+    )
+    .optional()
+    .map_err(DurableStoreError::from)
+}
+
+fn load_workflow_call(
+  connection: &Connection,
+  call_key: &str,
+) -> Result<Option<WorkflowCallAdmission>, DurableStoreError> {
+  let stored: Option<(
+    String,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    String,
+  )> = connection
+    .query_row(
+      "SELECT parent_run_id, parent_node_id, parent_attempt,
+                target_workflow_id, target_definition_hash, child_run_id,
+                payload_digest, depth, state, admitted_at
+         FROM woml_workflow_calls WHERE call_key = ?1",
+      [call_key],
+      |row| {
+        Ok((
+          row.get(0)?,
+          row.get(1)?,
+          row.get(2)?,
+          row.get(3)?,
+          row.get(4)?,
+          row.get(5)?,
+          row.get(6)?,
+          row.get(7)?,
+          row.get(8)?,
+          row.get(9)?,
+        ))
+      },
+    )
+    .optional()?;
+  let Some(stored) = stored else {
+    return Ok(None);
+  };
+  let parent_attempt = u32::try_from(stored.2).map_err(|_| {
+    DurableStoreError::WorkflowCallHistoryInvalid("stored parent attempt is invalid".to_string())
+  })?;
+  let depth = u32::try_from(stored.7).map_err(|_| {
+    DurableStoreError::WorkflowCallHistoryInvalid("stored lineage depth is invalid".to_string())
+  })?;
+  let state = match stored.8.as_str() {
+    "admitted" => WorkflowCallIndexState::Admitted,
+    "running" => WorkflowCallIndexState::Running,
+    "succeeded" => WorkflowCallIndexState::Succeeded,
+    "failed" => WorkflowCallIndexState::Failed,
+    _ => {
+      return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+        "stored call state is invalid".to_string(),
+      ))
+    }
+  };
+  let admitted_at = DateTime::parse_from_rfc3339(&stored.9)
+    .map_err(|_| {
+      DurableStoreError::WorkflowCallHistoryInvalid(
+        "stored admission timestamp is invalid".to_string(),
+      )
+    })?
+    .with_timezone(&Utc);
+  Ok(Some(WorkflowCallAdmission {
+    call_key: call_key.to_string(),
+    parent_run_id: stored.0,
+    parent_node_id: stored.1,
+    parent_attempt,
+    target_workflow_id: stored.3,
+    target_definition_hash: stored.4,
+    child_run_id: stored.5,
+    payload_digest: stored.6,
+    depth,
+    state,
+    admitted_at,
+  }))
+}
+
+fn validate_workflow_call_child(
+  connection: &Connection,
+  admission: &WorkflowCallAdmission,
+  expected_trigger: &Map<String, Value>,
+) -> Result<(), DurableStoreError> {
+  let binding =
+    load_run_binding_optional(connection, &admission.child_run_id)?.ok_or_else(|| {
+      DurableStoreError::WorkflowCallHistoryInvalid("child run is missing".to_string())
+    })?;
+  if binding.workflow_id != admission.target_workflow_id
+    || binding.definition_hash != admission.target_definition_hash
+  {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "child run binding differs from its call index".to_string(),
+    ));
+  }
+  let workflow = definition_by_hash(connection, &binding.definition_hash)?;
+  let events = load_events(connection, &binding.run_id)?;
+  let Some(first) = events.first() else {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "child run has no run_started event".to_string(),
+    ));
+  };
+  let RunEventPayload::RunStarted(started) = &first.payload else {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "child history does not start with run_started".to_string(),
+    ));
+  };
+  let valid_ingress = matches!(
+    started.ingress.as_ref(),
+    Some(RunIngress::WorkflowCall { call_key }) if call_key == &admission.call_key
+  );
+  if first.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V9
+    || started.trigger != *expected_trigger
+    || started.trigger_id.is_some()
+    || started.trigger_handler.is_some()
+    || started.trigger_occurrence_id.is_some()
+    || !valid_ingress
+  {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "child run_started identity differs from its call index".to_string(),
+    ));
+  }
+  validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+    .map_err(DurableStoreError::WorkflowCallHistoryInvalid)
+}
+
 fn ensure_run_exists(connection: &Connection, run_id: &str) -> Result<(), DurableStoreError> {
   let exists: bool = connection.query_row(
     "SELECT EXISTS(SELECT 1 FROM woml_runs WHERE run_id = ?1)",
@@ -3936,6 +4428,7 @@ fn admit_trigger_occurrence_in_transaction(
     trigger_id: Some(request.trigger_id.clone()),
     trigger_handler: Some(request.trigger_handler.clone()),
     trigger_occurrence_id: Some(occurrence_id.clone()),
+    ingress: None,
     trigger: request.payload.clone(),
   });
   validate_payload_against_definition(&workflow, &request.definition_hash, &payload)
@@ -4591,7 +5084,8 @@ fn attempt_run_failed_data(
     | RUN_EVENT_SCHEMA_VERSION_V5
     | RUN_EVENT_SCHEMA_VERSION_V6
     | RUN_EVENT_SCHEMA_VERSION_V7
-    | RUN_EVENT_SCHEMA_VERSION_V8 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | RUN_EVENT_SCHEMA_VERSION_V8
+    | RUN_EVENT_SCHEMA_VERSION_V9 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,

@@ -41,11 +41,12 @@
     "test:ms4": "bun run build:native && bun run build:js && bun test ../woml/tests/modules.test.ts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test ms2_modules --test ms4_modules && bun test tests/script-host.test.ts --test-name-pattern 'MS3 Script Host v5|MS4 Script Host v6' && bun test tests/modules-cli.test.ts && bun scripts/verify-ms4.ts",
     "test:ms6-local": "bun test ../woml/tests/module-dx.test.ts ../woml/tests/modules.test.ts ../woml/tests/public-api.test.ts && bun test tests/modules-cli.test.ts --test-name-pattern 'essential MS6' && bun scripts/verify-ms6-local.ts",
     "test:wc1": "bun test ../woml/tests/workflow-calls-contracts.test.ts ../woml/tests/compiler.test.ts ../woml/tests/module-dx.test.ts ../woml/tests/public-api.test.ts && bun test tests/workflow-calls-cli.test.ts && bun scripts/verify-wc1.ts",
+    "test:wc2": "bun run test:wc1 && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test wc2_workflow_calls --test t3_webhook_runtime",
     "test:storage": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc9_storage",
     "test:cache": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine cache::tests --lib && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc10_cache",
     "test:events": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc11_events --test t12_event_runtime",
     "test:postgres": "cargo test --manifest-path ../core/Cargo.toml -p woml-engine --test sc8_postgres",
-    "test:release": "bun run test:sc14 && bun run test:ms2 && bun run test:ms3 && bun run test:ms4 && bun run test:ms6-local && bun run test:wc1",
+    "test:release": "bun run test:sc14 && bun run test:ms2 && bun run test:ms3 && bun run test:ms4 && bun run test:ms6-local && bun run test:wc2",
     "benchmark:http": "bun scripts/benchmark-sc6-http.ts",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"

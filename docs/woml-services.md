@@ -11,10 +11,10 @@ services.cache
 services.events
 ```
 
-The WC1 frontend also reserves and type-checks `services.workflows.call()` for
-durable workflow-to-workflow calls. Its Rust execution path begins in WC2, so
-`woml run` currently reports a clear availability error instead of pretending
-the call can execute.
+The frontend also reserves and type-checks `services.workflows.call()` for
+durable workflow-to-workflow calls. WC2 implements exact Rust target lookup and
+idempotent child admission. `woml run` still reports a clear availability error
+until WC3 adds child execution, terminal waiting, and result delivery.
 
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies

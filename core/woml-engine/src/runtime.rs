@@ -2249,7 +2249,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V5
     | crate::RUN_EVENT_SCHEMA_VERSION_V6
     | crate::RUN_EVENT_SCHEMA_VERSION_V7
-    | crate::RUN_EVENT_SCHEMA_VERSION_V8 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V8
+    | crate::RUN_EVENT_SCHEMA_VERSION_V9 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -2403,6 +2404,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
           trigger_id: Some(trigger_definition.id.clone()),
           trigger_handler: Some(trigger_definition.handler.clone()),
           trigger_occurrence_id: Some(generated_id("occ")),
+          ingress: None,
           trigger,
         }),
       })?;
@@ -2478,6 +2480,7 @@ impl RuntimeDagEngine for DurableDagEngine {
           trigger_id: Some(trigger_definition.id.clone()),
           trigger_handler: Some(trigger_definition.handler.clone()),
           trigger_occurrence_id: Some(generated_id("occ")),
+          ingress: None,
           trigger,
         }),
       )?;

@@ -1,8 +1,8 @@
 # WOML Workflow Calls v1
 
-Status: frozen by WC0 on 2026-08-10. Execution begins in WC2; WC1 implements
-only source validation, Model v10 lowering, packaging, diagnostics, and editor
-types.
+Status: frozen by WC0 on 2026-08-10. WC1 compiled the source contract and WC2
+implemented Rust target registration plus durable child admission. Child
+dispatch and result waiting begin in WC3.
 
 ## Author contract
 
@@ -43,7 +43,7 @@ Compiled Workflow Model v10 represents call-only activation with exactly
 `triggers: []`. It may retain unchanged Module Runtime v1 bindings. Models
 v1-v9 remain immutable.
 
-## Existing hot-path and event contracts
+## Hot-path and event contracts
 
 Workflow Calls use unchanged Capability Call v1 with:
 
@@ -52,13 +52,16 @@ capability = workflows
 operation  = call
 ```
 
-They use unchanged Run Event v8 managed-operation events. Safe metadata may
+Parent managed-operation history continues using unchanged Run Event v8. Safe metadata may
 contain target workflow ID, target definition hash, child run ID, payload
 digest, and lineage depth. It never contains payload or result values.
 
-The child's existing `run_started` event stores the payload as its trigger. The
-child's `run_succeeded.result` or `run_failed` event is the terminal authority.
-No workflow-call-specific Run Event v9 is introduced.
+Run Event v9 adds one narrow, truthful `workflow_call` ingress for a called
+child. Its `run_started` event stores the payload as the complete trigger value,
+but stores the call key separately as engine metadata. It never invents a
+manual, event, or other source trigger. All later event payloads retain their
+Run Event v8 shapes. The child's eventual `run_succeeded.result` or
+`run_failed` event remains the terminal authority.
 
 ## Identity and recovery
 
@@ -108,6 +111,7 @@ Controls work.
 - `docs/schemas/workflow-call-index.v1.schema.json`
 - `docs/schemas/workflow-call-routing.v1.schema.json`
 - `docs/schemas/compiled-workflow-model.v10.schema.json`
+- `docs/schemas/run-event.v9.schema.json`
 - `docs/schemas/woml-definition-package.v4.schema.json`
 - `docs/schemas/woml-definition-package.v5.schema.json`
 - `woml/tests/fixtures/workflow-calls/*`

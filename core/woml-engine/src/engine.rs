@@ -100,6 +100,7 @@ impl InMemoryDagEngine {
         trigger_id: None,
         trigger_handler: None,
         trigger_occurrence_id: None,
+        ingress: None,
         trigger,
       }),
     };
@@ -495,7 +496,19 @@ pub(crate) fn validate_payload_against_definition(
           "run_started does not match the engine's workflow ID and definition hash.".to_string(),
         );
       }
-      if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V7 {
+      if matches!(
+        data.ingress.as_ref(),
+        Some(crate::RunIngress::WorkflowCall { .. })
+      ) {
+        if data.trigger_id.is_some()
+          || data.trigger_handler.is_some()
+          || data.trigger_occurrence_id.is_some()
+        {
+          return Err("Workflow-call run_started requires no source trigger identity.".to_string());
+        }
+      } else if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V10 {
+        return Err("Call-only Model v10 requires workflow_call ingress.".to_string());
+      } else if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V7 {
         let trigger_id = data
           .trigger_id
           .as_deref()
@@ -510,9 +523,15 @@ pub(crate) fn validate_payload_against_definition(
             "run_started trigger identity does not match the compiled definition.".to_string(),
           );
         }
+        if data.ingress.is_some() {
+          return Err(
+            "Source-triggered run_started cannot carry workflow-call ingress.".to_string(),
+          );
+        }
       } else if data.trigger_id.is_some()
         || data.trigger_handler.is_some()
         || data.trigger_occurrence_id.is_some()
+        || data.ingress.is_some()
       {
         return Err("Pre-v7 run_started cannot carry production-trigger identity.".to_string());
       }

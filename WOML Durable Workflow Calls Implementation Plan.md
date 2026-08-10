@@ -1,9 +1,9 @@
 # WOML Durable Workflow Calls Implementation Plan
 
-Status: WC0 and WC1 completed on 2026-08-10. The versioned Workflow Call
-contracts are frozen, and call-only WOML plus `services.workflows.call()` now
-validate, lower, and receive editor support. Durable Rust execution intentionally
-begins in WC2.
+Status: WC0 and WC1 completed on 2026-08-10; WC2 completed on 2026-08-11. The
+versioned Workflow Call contracts are frozen, call-only WOML validates and
+lowers, and Rust now owns exact target registration plus idempotent durable
+child admission. WC3 is the next phase and adds child execution and waiting.
 
 ## 1. Product Outcome
 
@@ -247,7 +247,7 @@ Layer ownership remains unchanged:
 
 ## 6. Persistence and Event Contracts
 
-Workflow Calls reuse Run Event v8's generic managed-operation vocabulary:
+Parent calls reuse Run Event v8's generic managed-operation vocabulary:
 
 ```text
 operation_started
@@ -260,13 +260,14 @@ metadata records the target workflow ID, accepted definition hash, child run
 ID, payload digest, and lineage depth. Payload and result values never enter
 operation metadata.
 
-The child's existing `run_started` event stores its trigger payload and uses a
-reserved engine handler identity for workflow-call ingress. Its existing
-`run_succeeded` or `run_failed` event remains the authority for the result.
+Run Event v9 adds only a truthful `workflow_call` ingress for a called child.
+The child's `run_started` stores its payload as the complete
+`context.trigger`, while its call key remains hidden engine metadata. It does
+not manufacture a source trigger. All later payloads retain the Run Event v8
+shapes, and `run_succeeded` or `run_failed` remains the result authority.
 
-No service-specific Run Event v9 is added merely to repeat information that
-Run Event v8 already expresses. WC0 still produces a separate Workflow Call v1
-schema for request/result behavior and a versioned durable call-index contract.
+The separate Workflow Call v1 schema defines request/result behavior and the
+versioned durable call-index contract defines the admission binding.
 The call index is a transactional uniqueness/routing index reconstructible from
 the authoritative histories, not a second mutable context or competing result
 authority.
@@ -467,6 +468,8 @@ payload/result typings, static diagnostics, and `.js`/`.ts` module usage.
 
 ### WC2 — Build the Rust target registry and durable child admission
 
+Status: **completed on 2026-08-11.**
+
 Changes:
 
 - Register all loaded definitions before startup manual triggers execute.
@@ -475,17 +478,21 @@ Changes:
 - Derive stable call identity and atomically admit one child run.
 - Put payload in the child's existing `context.trigger` and preserve hidden
   lineage outside user context.
+- Add narrow Run Event v9 `workflow_call` ingress so a called child never
+  pretends that a source trigger fired.
+- Add durable store v9 with an immutable call-identity index.
 
 Result:
 
-Rust can admit and execute one child fixture by workflow ID and recover the
-same child for a duplicate request.
+Rust can resolve and durably admit one child fixture by workflow ID, and a
+duplicate request recovers that exact child. WC2 deliberately stops before
+executing or waiting for the child; that is WC3.
 
 Gate:
 
 Rust tests prove atomic admission, definition binding, exact trigger context,
 unique ownership, duplicate return, payload conflict, and no child creation on
-pre-admission failure.
+pre-admission failure. Concurrent duplicate admissions create one child.
 
 ### WC3 — Execute the first same-runtime WOML call end to end
 
@@ -689,6 +696,7 @@ admission.
 7. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-The next implementation action is WC2. WC0's schemas, fixtures, identities,
-and v1 limitation on approval-waiting children are frozen; WC1 stops cleanly at
-the frontend boundary without pretending Rust can execute calls yet.
+The next implementation action is WC3. WC2 stops at truthful, durable child
+admission: it does not pretend the child has executed or produced a result.
+WC3 connects the Bun facade to the Rust handler, dispatches the child through
+the normal engine, and returns its terminal result to the parent.

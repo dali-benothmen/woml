@@ -802,10 +802,15 @@ async fn slow_clients_malformed_framing_and_streamed_oversize_bodies_do_not_bloc
 #[actix_web::test]
 async fn route_and_port_conflicts_fail_before_a_second_runtime_becomes_ready() {
   let route_database = TemporaryDatabase::new("route-conflict");
+  let mut second_route_owner = model();
+  second_route_owner.workflow_id = "other-orders".to_string();
   let duplicate_route = WomlWebhookServer::start(WomlWebhookServerConfig {
     bind_address: "127.0.0.1:0".parse().unwrap(),
     database_path: route_database.path().to_path_buf(),
-    registrations: vec![registration(model(), '1'), registration(model(), '2')],
+    registrations: vec![
+      registration(model(), '1'),
+      registration(second_route_owner, '2'),
+    ],
     startup_manual_triggers: BTreeMap::new(),
     execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
     progress_reporter: None,

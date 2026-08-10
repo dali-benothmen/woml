@@ -5,11 +5,11 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::{
-  COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V2,
-  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
-  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
-  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
-  COMPILED_MODEL_SCHEMA_VERSION_V9,
+  COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V10,
+  COMPILED_MODEL_SCHEMA_VERSION_V2, COMPILED_MODEL_SCHEMA_VERSION_V3,
+  COMPILED_MODEL_SCHEMA_VERSION_V4, COMPILED_MODEL_SCHEMA_VERSION_V5,
+  COMPILED_MODEL_SCHEMA_VERSION_V6, COMPILED_MODEL_SCHEMA_VERSION_V7,
+  COMPILED_MODEL_SCHEMA_VERSION_V8, COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1522,6 +1522,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V7
         | COMPILED_MODEL_SCHEMA_VERSION_V8
         | COMPILED_MODEL_SCHEMA_VERSION_V9
+        | COMPILED_MODEL_SCHEMA_VERSION_V10
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1553,7 +1554,7 @@ impl CompiledWorkflowDefinition {
     }
 
     match (self.schema_version, &self.module_runtime) {
-      (COMPILED_MODEL_SCHEMA_VERSION_V9, Some(runtime)) => {
+      (COMPILED_MODEL_SCHEMA_VERSION_V9 | COMPILED_MODEL_SCHEMA_VERSION_V10, Some(runtime)) => {
         let reserved = [
           "http",
           "db",
@@ -1606,10 +1607,16 @@ impl CompiledWorkflowDefinition {
       _ => {}
     }
 
-    if self.triggers.is_empty() {
+    if self.triggers.is_empty() && self.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V10 {
       issues.push(issue(
         ModelIssueCode::MissingTrigger,
         "A compiled workflow requires at least one trigger.",
+      ));
+    }
+    if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V10 && !self.triggers.is_empty() {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedTrigger,
+        "Compiled Model v10 is the call-only profile and requires an empty triggers array.",
       ));
     }
     let mut trigger_ids = HashSet::new();

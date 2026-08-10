@@ -29,8 +29,9 @@ use crate::schedule::{
 use crate::{
   execute_admitted_trigger_run_durable, CompiledWorkflowDefinition, DurableEventStore,
   DurableStoreError, EventServiceAcceptedRun, EventServiceSubscriber, IntervalCursorRegistration,
-  ManagedEventsHandler, ModelValidationError, RuntimeExecutionOptions, RuntimeModuleArtifact,
-  ScheduleCursorRegistration, TriggerAdmissionRequest,
+  ManagedEventsHandler, ManagedWorkflowCallsHandler, ModelValidationError, RuntimeExecutionOptions,
+  RuntimeModuleArtifact, ScheduleCursorRegistration, TriggerAdmissionRequest,
+  WorkflowTargetRegistry,
 };
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -485,17 +486,27 @@ fn prepare_state(
   let mut event_subscribers = BTreeMap::<String, Vec<EventSubscriber>>::new();
   let mut event_token_digests = BTreeMap::<String, [u8; 32]>::new();
   let mut registration_count = 0;
+  let workflow_targets = Arc::new(
+    WorkflowTargetRegistry::new(format!("runtime_{}", Uuid::new_v4().simple()))
+      .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?,
+  );
   for registration in config.registrations {
     registration.workflow.validate_for_durable_execution()?;
     if !matches!(
       registration.workflow.schema_version,
-      crate::COMPILED_MODEL_SCHEMA_VERSION_V7 | crate::COMPILED_MODEL_SCHEMA_VERSION_V8
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V7
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V8
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V9
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V10
     ) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} must use compiled Model v7 or v8",
+        "workflow {:?} must use compiled Model v7, v8, v9, or v10",
         registration.workflow.workflow_id
       )));
     }
+    workflow_targets
+      .register(&registration.workflow, &registration.definition_hash)
+      .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
     if registration.workflow.triggers.iter().any(|trigger| {
       !matches!(
         trigger.handler.as_str(),
@@ -585,6 +596,7 @@ fn prepare_state(
       registration.runtime_modules,
     ));
   }
+  workflow_targets.seal();
 
   for workflow_id in config.startup_manual_triggers.keys() {
     if !definitions
@@ -625,6 +637,14 @@ fn prepare_state(
       config.database_path.clone(),
       event_subscribers.clone(),
       dispatcher,
+    )))
+    .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
+  config
+    .execution
+    .capability_registry
+    .register(Arc::new(ManagedWorkflowCallsHandler::new(
+      config.database_path.clone(),
+      workflow_targets,
     )))
     .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
 

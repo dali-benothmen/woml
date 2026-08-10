@@ -34,6 +34,10 @@ async function validators() {
     validateFormats: false,
   });
   for (const name of [
+    'attempt-failure.v1.schema.json',
+    'attempt-failure.v2.schema.json',
+    'attempt-failure.v3.schema.json',
+    'capability-call.v1.schema.json',
     ...Array.from(
       { length: 10 },
       (_, index) => `compiled-workflow-model.v${index + 1}.schema.json`
@@ -41,6 +45,10 @@ async function validators() {
     ...Array.from(
       { length: 5 },
       (_, index) => `woml-definition-package.v${index + 1}.schema.json`
+    ),
+    ...Array.from(
+      { length: 9 },
+      (_, index) => `run-event.v${index + 1}.schema.json`
     ),
     'workflow-call.v1.schema.json',
     'workflow-call-index.v1.schema.json',
@@ -65,6 +73,7 @@ async function validators() {
     routing: ajv.getSchema(
       'https://woml.dev/schemas/workflow-call-routing/v1'
     )!,
+    event: ajv.getSchema('https://cronflow.dev/schemas/run-event/v9')!,
   };
 }
 
@@ -161,6 +170,21 @@ describe('WC0 frozen Workflow Call contracts', () => {
       resolve(contractDirectory, 'missing-result.invalid.json')
     ).json();
     expect(schemas.call(missingResult)).toBe(false);
+  });
+
+  test('validates truthful workflow-call ingress without a fake trigger', async () => {
+    const fixture = await Bun.file(
+      resolve(
+        import.meta.dir,
+        'fixtures/workflow-call-events/child-run-started.v9.json'
+      )
+    ).json();
+    expect(
+      schemas.event(fixture),
+      JSON.stringify(schemas.event.errors)
+    ).toBe(true);
+    expect(fixture.data.triggerId).toBeUndefined();
+    expect(fixture.data.ingress.kind).toBe('workflow_call');
   });
 
   test('freezes call-only module packages as Definition Package v4 and v5', async () => {
