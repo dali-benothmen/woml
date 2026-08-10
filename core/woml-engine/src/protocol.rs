@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 4;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,7 +28,7 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v4 ready message.".to_string());
+      return Err("The child did not send a valid script-host v5 ready message.".to_string());
     }
     Ok(())
   }
@@ -71,6 +71,74 @@ pub struct ExecuteMessage<'a> {
   pub source: &'a str,
   pub context: &'a WorkflowContext,
   pub bindings: ScriptBindings<'a>,
+  pub modules: &'a [RuntimeModuleBinding],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeModuleBinding {
+  pub name: String,
+  pub bundle_digest: String,
+  pub exports: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterModuleMessage<'a> {
+  pub protocol: &'static str,
+  pub protocol_version: u32,
+  pub message_type: &'static str,
+  pub bundle_digest: &'a str,
+  pub bundle: &'a str,
+}
+
+impl<'a> RegisterModuleMessage<'a> {
+  pub fn new(bundle_digest: &'a str, bundle: &'a str) -> Self {
+    Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "register_module",
+      bundle_digest,
+      bundle,
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModuleRegisteredMessage {
+  pub protocol: String,
+  pub protocol_version: u32,
+  pub message_type: String,
+  pub bundle_digest: String,
+  pub accepted: bool,
+  #[serde(default)]
+  pub code: Option<String>,
+  #[serde(default)]
+  pub message: Option<String>,
+}
+
+impl ModuleRegisteredMessage {
+  pub fn validate(&self, expected_digest: &str) -> Result<(), String> {
+    let envelope = self.protocol == SCRIPT_HOST_PROTOCOL
+      && self.protocol_version == SCRIPT_HOST_PROTOCOL_VERSION
+      && self.message_type == "module_registered"
+      && self.bundle_digest == expected_digest;
+    let outcome = if self.accepted {
+      self.code.is_none() && self.message.is_none()
+    } else {
+      self.code.as_deref() == Some("WOML_MODULE_DIGEST_MISMATCH")
+        && self
+          .message
+          .as_ref()
+          .is_some_and(|message| !message.is_empty())
+    };
+    if envelope && outcome {
+      Ok(())
+    } else {
+      Err("The child sent an invalid script-host v5 module registration response.".to_string())
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -141,6 +209,31 @@ impl<'a> ExecuteMessage<'a> {
     context: &'a WorkflowContext,
     secrets: &'a BTreeMap<String, String>,
   ) -> Self {
+    Self::runtime_script_with_modules(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      secrets,
+      &[],
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn runtime_script_with_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+  ) -> Self {
     Self {
       protocol: SCRIPT_HOST_PROTOCOL,
       protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
@@ -158,6 +251,7 @@ impl<'a> ExecuteMessage<'a> {
         services_version: 1,
         secrets,
       },
+      modules,
     }
   }
 }
@@ -183,7 +277,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v4 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v5 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;

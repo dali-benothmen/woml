@@ -8,6 +8,7 @@ import Ajv2020 from 'ajv/dist/2020';
 import {
   buildWomlDefinitionPackage,
   buildWomlExecutableDefinitionPackage,
+  buildWomlRuntimeDefinitionPackage,
   canonicalizeWomlDefinitionPackage,
   compileWoml,
   parseWoml,
@@ -372,5 +373,74 @@ describe('MS2 deterministic module compilation', () => {
     } finally {
       rmSync(temporary, { recursive: true, force: true });
     }
+  });
+});
+
+describe('MS3 runtime definition package', () => {
+  test('promotes unchanged compilation artifacts into a deterministic runtime-ready package', async () => {
+    const actual = await buildWomlRuntimeDefinitionPackage(sourceDocument(), {
+      sourcePath: workflowPath,
+      projectRoot: fixtureRoot,
+    });
+    const repeated = await buildWomlRuntimeDefinitionPackage(sourceDocument(), {
+      sourcePath: workflowPath,
+      projectRoot: fixtureRoot,
+    });
+    const schemaPaths = [
+      'compiled-workflow-model.v1.schema.json',
+      'compiled-workflow-model.v2.schema.json',
+      'compiled-workflow-model.v3.schema.json',
+      'compiled-workflow-model.v4.schema.json',
+      'compiled-workflow-model.v5.schema.json',
+      'compiled-workflow-model.v6.schema.json',
+      'compiled-workflow-model.v7.schema.json',
+      'compiled-workflow-model.v8.schema.json',
+      'compiled-workflow-model.v9.schema.json',
+      'woml-definition-package.v1.schema.json',
+      'woml-definition-package.v3.schema.json',
+    ];
+    const ajv = new Ajv2020({ strict: false });
+    for (const schemaPath of schemaPaths) {
+      ajv.addSchema(
+        JSON.parse(
+          readFileSync(
+            resolve(import.meta.dir, '../../docs/schemas', schemaPath),
+            'utf8'
+          )
+        )
+      );
+    }
+    const validate = ajv.getSchema(
+      'https://woml.dev/schemas/woml-definition-package.v3.schema.json'
+    );
+    expect(validate?.(actual), JSON.stringify(validate?.errors)).toBe(true);
+    expect(repeated).toEqual(actual);
+    expect(actual).toMatchObject({
+      schemaVersion: 3,
+      profile: 'woml.definition-package/v3',
+      executable: true,
+      runtimeReady: true,
+    });
+    expect(actual.compilationRootHash).not.toBe(actual.rootHash);
+    expect({
+      schemaVersion: actual.schemaVersion,
+      profile: actual.profile,
+      runtimeReady: actual.runtimeReady,
+      compilationRootHash: actual.compilationRootHash,
+      rootHash: actual.rootHash,
+      workflowModelDigest: actual.workflow.modelDigest,
+      modules: actual.modules.map(module => ({
+        name: module.name,
+        bundle: module.bundle,
+        sourceMap: module.sourceMap,
+      })),
+    }).toEqual(
+      JSON.parse(
+        readFileSync(
+          resolve(fixtureRoot, 'customer-import.package.v3.identity.json'),
+          'utf8'
+        )
+      )
+    );
   });
 });

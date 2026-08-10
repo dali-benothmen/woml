@@ -20,6 +20,14 @@ export interface ScriptWorkerRequest {
   readonly context: ScriptContext;
   readonly attempt?: ScriptAttempt;
   readonly bindings?: ScriptBindingsV1;
+  readonly modules?: readonly ScriptWorkerModule[];
+}
+
+export interface ScriptWorkerModule {
+  readonly name: string;
+  readonly bundleDigest: string;
+  readonly exports: readonly string[];
+  readonly bundle: string;
 }
 
 export type ScriptWorkerResponse =
@@ -69,7 +77,8 @@ type AsyncFunction = (
   context: ScriptContext,
   attempt: ScriptAttempt | undefined,
   services: unknown,
-  secrets: Readonly<Record<string, string>>
+  secrets: Readonly<Record<string, string>>,
+  fetch: typeof globalThis.fetch
 ) => Promise<unknown>;
 type AsyncFunctionConstructor = new (
   ...parametersAndBody: string[]
@@ -1206,6 +1215,148 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
   });
 }
 
+class ModuleInitializationEffectError extends Error {
+  constructor() {
+    super(
+      'Fetch and managed services cannot be used while a WOML module is initializing.'
+    );
+    this.name = 'ModuleInitializationEffectError';
+  }
+}
+
+function servicePath(root: unknown, path: readonly PropertyKey[]): unknown {
+  let value = root;
+  for (const part of path) value = Reflect.get(value as object, part);
+  return value;
+}
+
+function guardedModuleServices(
+  currentServices: () => unknown,
+  invocationActive: () => boolean,
+  path: readonly PropertyKey[] = []
+): unknown {
+  const callable = function guardedWomlModuleService() {};
+  return new Proxy(callable, {
+    get(_target, property) {
+      return guardedModuleServices(currentServices, invocationActive, [
+        ...path,
+        property,
+      ]);
+    },
+    apply(_target, thisArgument, argumentsList) {
+      if (!invocationActive()) throw new ModuleInitializationEffectError();
+      const value = servicePath(currentServices(), path);
+      if (typeof value !== 'function') {
+        throw new TypeError(`services.${path.map(String).join('.')} is not callable.`);
+      }
+      return Reflect.apply(value, thisArgument, argumentsList);
+    },
+    set: () => false,
+    defineProperty: () => false,
+    deleteProperty: () => false,
+  });
+}
+
+function mergedServiceFacade(
+  builtIns: unknown,
+  modules: Readonly<Record<string, Readonly<Record<string, Function>>>>
+): unknown {
+  return new Proxy(Object.freeze({}), {
+    get(_target, property) {
+      if (typeof property === 'string' && Object.hasOwn(modules, property)) {
+        return modules[property];
+      }
+      return Reflect.get(builtIns as object, property);
+    },
+    set: () => false,
+    defineProperty: () => false,
+    deleteProperty: () => false,
+  });
+}
+
+async function loadRuntimeModules(
+  request: ScriptWorkerRequest,
+  builtIns: unknown,
+  trackedFetch: typeof globalThis.fetch
+): Promise<unknown> {
+  const imported: Record<string, Readonly<Record<string, Function>>> = {};
+  let moduleInvocationDepth = 0;
+  let activeServices: unknown = builtIns;
+  const invocationActive = () => moduleInvocationDepth > 0;
+  const moduleServices = guardedModuleServices(
+    () => activeServices,
+    invocationActive
+  );
+  const moduleFetch: typeof globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    if (!invocationActive()) throw new ModuleInitializationEffectError();
+    return trackedFetch(...args);
+  }) as typeof globalThis.fetch;
+  Object.defineProperty(globalThis, 'services', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: moduleServices,
+  });
+  Object.defineProperty(globalThis, 'fetch', {
+    configurable: false,
+    enumerable: true,
+    writable: false,
+    value: moduleFetch,
+  });
+
+  for (const module of request.modules ?? []) {
+    const actualDigest = `sha256:${new Bun.CryptoHasher('sha256')
+      .update(module.bundle)
+      .digest('hex')}`;
+    if (actualDigest !== module.bundleDigest) {
+      throw new Error(`Module ${module.name} failed its Worker digest check.`);
+    }
+    const encoded = Buffer.from(module.bundle, 'utf8').toString('base64');
+    const namespace = (await import(
+      `data:text/javascript;base64,${encoded}`
+    )) as Record<string, unknown>;
+    const exposed: Record<string, Function> = {};
+    for (const exportName of module.exports) {
+      const implementation = namespace[exportName];
+      if (typeof implementation !== 'function') {
+        throw new TypeError(
+          `Module ${module.name} export ${exportName} is not a function.`
+        );
+      }
+      const wrapped = function womlImportedModuleFunction(
+        this: unknown,
+        ...args: unknown[]
+      ): unknown {
+        moduleInvocationDepth += 1;
+        try {
+          const result = Reflect.apply(implementation, undefined, args);
+          if (
+            (typeof result === 'object' && result !== null) ||
+            typeof result === 'function'
+          ) {
+            const then = Reflect.get(result, 'then');
+            if (typeof then === 'function') {
+              return Promise.resolve(result).finally(() => {
+                moduleInvocationDepth -= 1;
+              });
+            }
+          }
+          moduleInvocationDepth -= 1;
+          return result;
+        } catch (error) {
+          moduleInvocationDepth -= 1;
+          throw error;
+        }
+      };
+      Object.freeze(wrapped);
+      exposed[exportName] = wrapped;
+    }
+    imported[module.name] = Object.freeze(exposed);
+  }
+  activeServices = mergedServiceFacade(builtIns, imported);
+  return activeServices;
+}
+
 async function execute(request: ScriptWorkerRequest): Promise<void> {
   try {
     operationSequences.clear();
@@ -1216,13 +1367,18 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
         ? undefined
         : deepFreezeJson(request.attempt);
     const secrets = deepFreezeJson(request.bindings?.secrets ?? {});
-    const services = deeplyReadonlyServiceFacade(request);
-    if (request.bindings !== undefined) {
+    const builtInServices = deeplyReadonlyServiceFacade(request);
+    const nativeFetch = trackedNativeFetch(request);
+    const services =
+      request.modules === undefined
+        ? builtInServices
+        : await loadRuntimeModules(request, builtInServices, nativeFetch);
+    if (request.bindings !== undefined && request.modules === undefined) {
       Object.defineProperty(globalThis, 'fetch', {
         configurable: false,
         enumerable: true,
         writable: false,
-        value: trackedNativeFetch(request),
+        value: nativeFetch,
       });
     }
     const safeNodeId = request.nodeId.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -1230,11 +1386,18 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
     const script =
       request.bindings === undefined
         ? new AsyncFunction('context', 'attempt', body)
-        : new AsyncFunction('context', 'attempt', 'services', 'secrets', body);
+        : new AsyncFunction(
+            'context',
+            'attempt',
+            'services',
+            'secrets',
+            'fetch',
+            body
+          );
     const result =
       request.bindings === undefined
-        ? await script(context, attempt, undefined, {})
-        : await script(context, attempt, services, secrets);
+        ? await script(context, attempt, undefined, {}, globalThis.fetch)
+        : await script(context, attempt, services, secrets, nativeFetch);
     const violation = findJsonViolation(result);
     if (violation !== undefined) {
       self.postMessage({

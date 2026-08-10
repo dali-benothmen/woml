@@ -7,11 +7,15 @@ describe('WOML frontend public API', () => {
     expect(woml.validateWoml).toBeFunction();
   });
 
-  test('exports deterministic module inspection and compilation without a runtime loader', () => {
+  test('exports deterministic module packaging without moving execution into the frontend', () => {
     expect(woml.buildWomlDefinitionPackage).toBeFunction();
     expect(woml.buildWomlExecutableDefinitionPackage).toBeFunction();
     expect(woml.WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE).toBe(
       'woml.definition-package/v2'
+    );
+    expect(woml.buildWomlRuntimeDefinitionPackage).toBeFunction();
+    expect(woml.WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE).toBe(
+      'woml.definition-package/v3'
     );
     expect(woml).not.toHaveProperty('loadWomlModuleArtifacts');
   });

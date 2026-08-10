@@ -9,6 +9,7 @@ use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
   COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
   COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
+  COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +21,24 @@ pub struct CompiledWorkflowDefinition {
   pub metadata: Option<CompiledWorkflowMetadata>,
   pub triggers: Vec<CompiledTrigger>,
   pub graph: CompiledWorkflowGraph,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub module_runtime: Option<CompiledModuleRuntime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledModuleRuntime {
+  pub profile_version: u32,
+  pub modules: Vec<CompiledModuleBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledModuleBinding {
+  pub name: String,
+  pub bundle_digest: String,
+  pub source_map_digest: String,
+  pub exports: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,6 +268,7 @@ pub enum ModelIssueCode {
   InvalidApprovalGroup,
   InvalidNotificationGroup,
   InvalidScriptRuntime,
+  InvalidModuleRuntime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1501,6 +1521,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V6
         | COMPILED_MODEL_SCHEMA_VERSION_V7
         | COMPILED_MODEL_SCHEMA_VERSION_V8
+        | COMPILED_MODEL_SCHEMA_VERSION_V9
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1529,6 +1550,60 @@ impl CompiledWorkflowDefinition {
           "metadata.version must not be empty when present.",
         ));
       }
+    }
+
+    match (self.schema_version, &self.module_runtime) {
+      (COMPILED_MODEL_SCHEMA_VERSION_V9, Some(runtime)) => {
+        let reserved = [
+          "http",
+          "db",
+          "storage",
+          "cache",
+          "events",
+          "queue",
+          "workflows",
+        ];
+        let valid = runtime.profile_version == 1
+          && (1..=64).contains(&runtime.modules.len())
+          && runtime.modules.windows(2).all(|pair| pair[0].name < pair[1].name)
+          && runtime.modules.iter().all(|module| {
+            let mut alias = module.name.chars();
+            let valid_alias = matches!(alias.next(), Some(first) if first.is_ascii_lowercase())
+              && alias.all(|character| character.is_ascii_alphanumeric())
+              && module.name.len() <= 128
+              && !reserved.contains(&module.name.as_str());
+            let valid_digest = |value: &str| {
+              value.len() == 71
+                && value.starts_with("sha256:")
+                && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            };
+            valid_alias
+              && valid_digest(&module.bundle_digest)
+              && valid_digest(&module.source_map_digest)
+              && !module.exports.is_empty()
+              && module.exports.windows(2).all(|pair| pair[0] < pair[1])
+              && module.exports.iter().all(|name| {
+                let mut characters = name.chars();
+                matches!(characters.next(), Some(first) if first == '_' || first == '$' || first.is_ascii_alphabetic())
+                  && characters.all(|character| character == '_' || character == '$' || character.is_ascii_alphanumeric())
+              })
+          });
+        if !valid {
+          issues.push(issue(
+            ModelIssueCode::InvalidModuleRuntime,
+            "Model v9 moduleRuntime does not match the frozen Module Runtime v1 contract.",
+          ));
+        }
+      }
+      (COMPILED_MODEL_SCHEMA_VERSION_V9, None) => issues.push(issue(
+        ModelIssueCode::InvalidModuleRuntime,
+        "Model v9 requires moduleRuntime.",
+      )),
+      (version, Some(_)) if version < COMPILED_MODEL_SCHEMA_VERSION_V9 => issues.push(issue(
+        ModelIssueCode::InvalidModuleRuntime,
+        "moduleRuntime is unavailable before Model v9.",
+      )),
+      _ => {}
     }
 
     if self.triggers.is_empty() {
@@ -1600,7 +1675,7 @@ impl CompiledWorkflowDefinition {
           format!("Node {:?} has an invalid zero timeout.", node.id),
         ));
       }
-      if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V8 && node.timeout_ms.is_some() {
+      if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V8 && node.timeout_ms.is_some() {
         issues.push(issue(
           ModelIssueCode::UnsupportedTimeout,
           format!(
@@ -1653,7 +1728,9 @@ impl CompiledWorkflowDefinition {
         node.handler.as_str(),
         &node.script_runtime,
       ) {
-        (COMPILED_MODEL_SCHEMA_VERSION_V8, "runtime.script", Some(runtime)) => {
+        (version, "runtime.script", Some(runtime))
+          if version >= COMPILED_MODEL_SCHEMA_VERSION_V8 =>
+        {
           let expected = ["context", "attempt", "services", "secrets"];
           let valid_secrets = runtime.required_secrets.len() <= 64
             && runtime
@@ -1681,14 +1758,15 @@ impl CompiledWorkflowDefinition {
             ));
           }
         }
-        (COMPILED_MODEL_SCHEMA_VERSION_V8, "runtime.script", None) => issues.push(issue(
-          ModelIssueCode::InvalidScriptRuntime,
-          format!(
-            "Model v8 runtime.script node {:?} requires scriptRuntime.",
-            node.id
-          ),
-        )),
-        (COMPILED_MODEL_SCHEMA_VERSION_V8, _, Some(_)) => issues.push(issue(
+        (version, "runtime.script", None) if version >= COMPILED_MODEL_SCHEMA_VERSION_V8 => issues
+          .push(issue(
+            ModelIssueCode::InvalidScriptRuntime,
+            format!(
+              "Model v8 runtime.script node {:?} requires scriptRuntime.",
+              node.id
+            ),
+          )),
+        (version, _, Some(_)) if version >= COMPILED_MODEL_SCHEMA_VERSION_V8 => issues.push(issue(
           ModelIssueCode::InvalidScriptRuntime,
           format!(
             "Only Model v8 runtime.script nodes may carry scriptRuntime (node {:?}).",

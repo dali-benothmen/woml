@@ -11,6 +11,8 @@ import type {
   FetchObservationMessage,
   HostReportedFailure,
   JsonValue,
+  ModuleRegisteredMessage,
+  RegisterModuleMessage,
   ScriptAttempt,
   ScriptHostLimits,
   ScriptHostProtocolVersion,
@@ -27,7 +29,11 @@ export interface ScriptHostOptions {
   readonly workerUrl: URL;
   readonly limits?: ScriptHostLimits;
   readonly send: (
-    message: CompletedMessage | CapabilityCallMessage | FetchObservationMessage
+    message:
+      | CompletedMessage
+      | CapabilityCallMessage
+      | FetchObservationMessage
+      | ModuleRegisteredMessage
   ) => Promise<void>;
   readonly protocolVersion?: ScriptHostProtocolVersion;
 }
@@ -80,7 +86,11 @@ export class ScriptHost {
   readonly #workerUrl: URL;
   readonly #limits: ScriptHostLimits;
   readonly #send: (
-    message: CompletedMessage | CapabilityCallMessage | FetchObservationMessage
+    message:
+      | CompletedMessage
+      | CapabilityCallMessage
+      | FetchObservationMessage
+      | ModuleRegisteredMessage
   ) => Promise<void>;
   readonly #protocolVersion: ScriptHostProtocolVersion;
   readonly #tasks = new Map<string, Promise<void>>();
@@ -97,6 +107,7 @@ export class ScriptHost {
   >();
   readonly #activeFetches = new Map<string, Set<string>>();
   readonly #closedFetchAcks = new Set<string>();
+  readonly #moduleBundles = new Map<string, string>();
   #aborted = false;
 
   constructor(options: ScriptHostOptions) {
@@ -111,6 +122,10 @@ export class ScriptHost {
       throw new MessageProtocolError('The script host is shutting down.');
     }
     assertInboundMessage(message, this.#protocolVersion);
+    if (message.messageType === 'register_module') {
+      this.#registerModule(message);
+      return;
+    }
     if (message.messageType === 'cancel') {
       this.#cancel(message);
       return;
@@ -136,6 +151,39 @@ export class ScriptHost {
     this.#tasks.set(message.invocationId, task);
   }
 
+  #registerModule(message: RegisterModuleMessage): void {
+    const actualDigest = `sha256:${new Bun.CryptoHasher('sha256')
+      .update(message.bundle)
+      .digest('hex')}`;
+    if (actualDigest !== message.bundleDigest) {
+      void this.#send({
+        protocol: 'woml.script-host',
+        protocolVersion: 5,
+        messageType: 'module_registered',
+        bundleDigest: message.bundleDigest,
+        accepted: false,
+        code: 'WOML_MODULE_DIGEST_MISMATCH',
+        message:
+          'The registered module bundle does not match its SHA-256 identity.',
+      });
+      return;
+    }
+    const existing = this.#moduleBundles.get(message.bundleDigest);
+    if (existing !== undefined && existing !== message.bundle) {
+      throw new MessageProtocolError(
+        'One module digest was registered with different immutable bytes.'
+      );
+    }
+    this.#moduleBundles.set(message.bundleDigest, message.bundle);
+    void this.#send({
+      protocol: 'woml.script-host',
+      protocolVersion: 5,
+      messageType: 'module_registered',
+      bundleDigest: message.bundleDigest,
+      accepted: true,
+    });
+  }
+
   async drain(): Promise<void> {
     while (this.#tasks.size > 0) {
       await Promise.all([...this.#tasks.values()]);
@@ -152,6 +200,7 @@ export class ScriptHost {
     this.#pendingFetchAcks.clear();
     this.#activeFetches.clear();
     this.#closedFetchAcks.clear();
+    this.#moduleBundles.clear();
   }
 
   #cancel(message: CancelMessage): void {
@@ -320,7 +369,7 @@ export class ScriptHost {
     }
 
     if (
-      request.protocolVersion === 4 &&
+      (request.protocolVersion === 4 || request.protocolVersion === 5) &&
       containsKnownSecret(
         response.result,
         Object.values(request.bindings.secrets)
@@ -441,7 +490,7 @@ export class ScriptHost {
         if (message.messageType === 'fetch_observation') {
           const observation = message.observation;
           if (
-            request.protocolVersion !== 4 ||
+            (request.protocolVersion !== 4 && request.protocolVersion !== 5) ||
             observation.invocationId !== request.invocationId
           ) {
             finish({
@@ -471,7 +520,7 @@ export class ScriptHost {
           pending.set(observation.requestId, phase);
           void this.#send({
             protocol: 'woml.script-host',
-            protocolVersion: 4,
+            protocolVersion: request.protocolVersion,
             messageType: 'fetch_observation',
             invocationId: request.invocationId,
             requestId: observation.requestId,
@@ -487,7 +536,7 @@ export class ScriptHost {
         }
         const call = message.call;
         if (
-          request.protocolVersion !== 4 ||
+          (request.protocolVersion !== 4 && request.protocolVersion !== 5) ||
           call.invocationId !== request.invocationId ||
           call.runId !== request.runId ||
           call.nodeId !== request.nodeId ||
@@ -511,7 +560,7 @@ export class ScriptHost {
         calls.add(call.callId);
         void this.#send({
           protocol: 'woml.script-host',
-          protocolVersion: 4,
+          protocolVersion: request.protocolVersion,
           messageType: 'capability_call',
           invocationId: request.invocationId,
           callId: call.callId,
@@ -545,7 +594,9 @@ export class ScriptHost {
 
       try {
         const attempt: ScriptAttempt | undefined =
-          request.protocolVersion === 3 || request.protocolVersion === 4
+          request.protocolVersion === 3 ||
+          request.protocolVersion === 4 ||
+          request.protocolVersion === 5
             ? request.attempt
             : undefined;
         worker.postMessage({
@@ -557,8 +608,23 @@ export class ScriptHost {
             source: request.source,
             context: request.context,
             attempt,
-            ...(request.protocolVersion === 4
+            ...(request.protocolVersion === 4 || request.protocolVersion === 5
               ? { bindings: request.bindings }
+              : {}),
+            ...(request.protocolVersion === 5
+              ? {
+                  modules: request.modules.map(module => {
+                    const bundle = this.#moduleBundles.get(
+                      module.bundleDigest
+                    );
+                    if (bundle === undefined) {
+                      throw new MessageProtocolError(
+                        `Module bundle ${module.bundleDigest} was not registered.`
+                      );
+                    }
+                    return { ...module, bundle };
+                  }),
+                }
               : {}),
           } satisfies ScriptWorkerRequest,
         } satisfies ScriptWorkerInbound);

@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -16,7 +16,7 @@ use tokio::time::timeout;
 use crate::protocol::{
   CancelMessage, CapabilityCallMessage, CapabilityResultMessage, CompletedMessage, ExecuteMessage,
   FetchObservationAckMessage, FetchObservationMessage, HostOutcome, HostReportedFailureKind,
-  ReadyMessage,
+  ModuleRegisteredMessage, ReadyMessage, RegisterModuleMessage,
 };
 use crate::{
   capability_transport_failure, CapabilityCancellationToken, CapabilityFailure,
@@ -33,6 +33,13 @@ pub struct ScriptHostProcessOptions {
   pub startup_timeout: Duration,
   pub shutdown_timeout: Duration,
   pub max_frame_bytes: Option<usize>,
+  pub module_artifacts: Vec<ScriptHostModuleArtifact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptHostModuleArtifact {
+  pub bundle_digest: String,
+  pub bundle: String,
 }
 
 impl ScriptHostProcessOptions {
@@ -43,6 +50,7 @@ impl ScriptHostProcessOptions {
       startup_timeout: Duration::from_secs(5),
       shutdown_timeout: Duration::from_secs(2),
       max_frame_bytes: Some(crate::DEFAULT_CAPABILITY_FRAME_BYTES as usize),
+      module_artifacts: Vec::new(),
     }
   }
 }
@@ -107,7 +115,7 @@ impl ScriptHostClient {
       .spawn()
       .map_err(|error| ScriptHostClientError::Startup(error.to_string()))?;
 
-    let stdin = child
+    let mut stdin = child
       .stdin
       .take()
       .ok_or_else(|| ScriptHostClientError::Startup("child stdin was not available".to_string()))?;
@@ -140,6 +148,38 @@ impl ScriptHostClient {
       Ok(Ok(Some(ready))) => ready,
     };
     ready.validate().map_err(ScriptHostClientError::Protocol)?;
+
+    for artifact in &options.module_artifacts {
+      write_json_frame(
+        &mut stdin,
+        &RegisterModuleMessage::new(&artifact.bundle_digest, &artifact.bundle),
+      )
+      .await?;
+      let registered = timeout(
+        options.startup_timeout,
+        read_json_frame::<_, ModuleRegisteredMessage>(&mut reader, options.max_frame_bytes),
+      )
+      .await
+      .map_err(|_| {
+        ScriptHostClientError::Startup(
+          "the host did not register a module before its startup deadline".to_string(),
+        )
+      })??
+      .ok_or_else(|| {
+        ScriptHostClientError::Startup(
+          "the host exited while registering an immutable module".to_string(),
+        )
+      })?;
+      registered
+        .validate(&artifact.bundle_digest)
+        .map_err(ScriptHostClientError::Protocol)?;
+      if !registered.accepted {
+        let message = registered
+          .message
+          .unwrap_or_else(|| "The module bundle was rejected.".to_string());
+        return Err(ScriptHostClientError::Startup(message));
+      }
+    }
 
     let stdin = Arc::new(Mutex::new(Some(stdin)));
     let shared = Arc::new(Mutex::new(SharedState::default()));
@@ -255,6 +295,27 @@ impl ScriptHostClient {
     }
     let _ = self.reader_task.await;
   }
+}
+
+async fn write_json_frame<W: AsyncWrite + Unpin, T: Serialize>(
+  writer: &mut W,
+  message: &T,
+) -> Result<(), ScriptHostClientError> {
+  let body = serde_json::to_vec(message)
+    .map_err(|error| ScriptHostClientError::Protocol(error.to_string()))?;
+  let header = format!("Content-Length: {}\r\n\r\n", body.len());
+  writer
+    .write_all(header.as_bytes())
+    .await
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
+  writer
+    .write_all(&body)
+    .await
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
+  writer
+    .flush()
+    .await
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))
 }
 
 async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
@@ -491,7 +552,7 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
         fail_all(
           &shared,
           ScriptHostClientError::Protocol(
-            "received an unsupported Bun-to-Rust script-host v4 message".to_string(),
+            "received an unsupported Bun-to-Rust script-host v5 message".to_string(),
           ),
         )
         .await;

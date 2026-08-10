@@ -21,9 +21,10 @@ use woml_engine::{
   ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter,
   NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
   NotificationJourneyError, ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError,
-  RuntimeExecutionOptions, ScheduleProgress, ScheduleProgressReporter, ScriptHostProcessOptions,
-  SystemEngineClock, TriggerAdmissionRequest, TriggerProgress, TriggerProgressReporter,
-  WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig,
+  RuntimeExecutionOptions, RuntimeModuleArtifact, ScheduleProgress, ScheduleProgressReporter,
+  ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest, TriggerProgress,
+  TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
+  WomlWebhookServerConfig,
 };
 
 #[derive(Serialize)]
@@ -488,6 +489,28 @@ fn runtime_options_with_secrets(
   )
 }
 
+fn runtime_options_with_modules(
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
+) -> napi::Result<RuntimeExecutionOptions> {
+  let modules: Vec<RuntimeModuleArtifact> =
+    serde_json::from_str(runtime_modules_json.as_deref().unwrap_or("[]")).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid runtime modules JSON: {error}"))
+    })?;
+  Ok(
+    runtime_options_with_secrets(
+      bun_executable,
+      script_host_path,
+      script_timeout_ms,
+      resolved_secrets_json,
+    )?
+    .with_runtime_modules(modules),
+  )
+}
+
 fn runtime_options_with_progress(
   env: &Env,
   bun_executable: String,
@@ -525,6 +548,7 @@ pub async fn execute_woml_workflow(
   script_host_path: String,
   script_timeout_ms: u32,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -532,11 +556,12 @@ pub async fn execute_woml_workflow(
     })?;
   let trigger: Map<String, Value> = serde_json::from_str(&trigger_json)
     .map_err(|error| napi::Error::from_reason(format!("Invalid trigger JSON: {error}")))?;
-  let options = runtime_options_with_secrets(
+  let options = runtime_options_with_modules(
     bun_executable,
     script_host_path,
     script_timeout_ms,
     resolved_secrets_json,
+    runtime_modules_json,
   )?;
   let result = execute_workflow(workflow, definition_hash, trigger, options)
     .await
@@ -555,6 +580,7 @@ pub async fn execute_woml_workflow_durable(
   script_timeout_ms: u32,
   event_store_path: String,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<String> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -562,11 +588,12 @@ pub async fn execute_woml_workflow_durable(
     })?;
   let trigger: Map<String, Value> = serde_json::from_str(&trigger_json)
     .map_err(|error| napi::Error::from_reason(format!("Invalid trigger JSON: {error}")))?;
-  let options = runtime_options_with_secrets(
+  let options = runtime_options_with_modules(
     bun_executable,
     script_host_path,
     script_timeout_ms,
     resolved_secrets_json,
+    runtime_modules_json,
   )?;
   let result = execute_workflow_durable(
     workflow,
@@ -593,6 +620,7 @@ pub fn execute_woml_workflow_durable_with_progress(
   event_store_path: String,
   progress_callback: JsFunction,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -608,6 +636,11 @@ pub fn execute_woml_workflow_durable_with_progress(
     progress_callback,
     resolved_secrets_json,
   )?;
+  let modules: Vec<RuntimeModuleArtifact> =
+    serde_json::from_str(runtime_modules_json.as_deref().unwrap_or("[]")).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid runtime modules JSON: {error}"))
+    })?;
+  let options = options.with_runtime_modules(modules);
   env.spawn_future(async move {
     let result = execute_workflow_durable(
       workflow,
@@ -659,6 +692,7 @@ pub fn resume_woml_workflow_durable_with_progress(
   event_store_path: String,
   progress_callback: JsFunction,
   resolved_secrets_json: String,
+  runtime_modules_json: Option<String>,
 ) -> napi::Result<JsObject> {
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
@@ -673,6 +707,11 @@ pub fn resume_woml_workflow_durable_with_progress(
     progress_callback,
     resolved_secrets_json,
   )?;
+  let modules: Vec<RuntimeModuleArtifact> =
+    serde_json::from_str(runtime_modules_json.as_deref().unwrap_or("[]")).map_err(|error| {
+      napi::Error::from_reason(format!("Invalid runtime modules JSON: {error}"))
+    })?;
+  let options = options.with_runtime_modules(modules);
   env.spawn_future(async move {
     let result = resume_workflow_durable(PathBuf::from(event_store_path), &run_id, options)
       .await

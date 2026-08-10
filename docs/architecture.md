@@ -30,12 +30,17 @@ immutable Definition Package v1 manifest. MS2 deterministically bundles each
 entry point as ESM, canonicalizes source maps, generates the imported `services`
 declarations, and emits Definition Package v2 plus compiled Model v9. Model v9
 contains artifact digests and public exports only; executable bytes stay in the
-package. `runtimeReady: false` and an explicit Rust rejection keep module
-activation fail-closed until MS3. Neither Rust nor Model v9 understands
+package. MS3 promotes those unchanged bytes into runtime-ready Definition
+Package v3. Script Host v5 lets Rust register bundles by digest, and every
+isolated Worker verifies and instantiates fresh module state under the deeply
+read-only `services.<alias>` namespace. Native Fetch and built-in services used
+inside exported functions retain the SC14 tracking boundary, while effects
+during module initialization are rejected. Neither Rust nor Model v9 understands
 `<woml>`, module paths, ESM syntax, or export grammar. `woml check` is the
 read-only compilation boundary. The frozen contracts are
 `docs/protocols/module-system-v1.md` and
-`docs/protocols/module-compilation-v1.md`.
+`docs/protocols/module-compilation-v1.md`, with activation frozen in
+`docs/protocols/module-runtime-v1.md`.
 
 The Rust core is the execution authority. It validates the compiled model,
 selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends

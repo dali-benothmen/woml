@@ -1,10 +1,11 @@
 # WOML Module System Implementation Plan
 
-Status: MS0, MS1, and MS2 completed on 2026-08-10. The canonical `<woml>`
+Status: MS0, MS1, MS2, and MS3 completed on 2026-08-10. The canonical `<woml>`
 document, local-module source profile, diagnostics, resolver, deterministic ESM
 bundles/source maps, generated declarations, Definition Package v2, Model v9,
-`woml check`, and reviewed fixtures are frozen and implemented. Imported code
-remains deliberately non-executable until MS3, which is next.
+`woml check`, Package v3, Script Host v5, isolated module execution, and
+reviewed fixtures are frozen and implemented. MS4 recovery and observability
+hardening is next.
 
 ## 1. Product Outcome
 
@@ -629,7 +630,7 @@ Gate:
 Source, model, bundle, map, and package fixtures match exactly; syntax, export,
 collision, dynamic import, cycle, and TypeScript failures point to their source.
 
-### MS3 — Execute local modules under `services.*`
+### MS3 — Execute local modules under `services.*` — completed
 
 Changes:
 

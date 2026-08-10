@@ -77,15 +77,17 @@ pub use events_service::{
   EventServiceAcceptedRun, EventServiceRunDispatcher, EventServiceSubscriber, ManagedEventsHandler,
   EVENTS_SERVICE_CONTRACT, EVENTS_SERVICE_CONTRACT_VERSION, MAX_INTERNAL_EVENT_DEPTH,
 };
-pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions};
+pub use host::{
+  ScriptHostClient, ScriptHostClientError, ScriptHostModuleArtifact, ScriptHostProcessOptions,
+};
 pub use http::ManagedHttpHandler;
 pub use interval::{
   IntervalError, IntervalProgress, IntervalProgressReason, IntervalProgressReporter, WomlInterval,
   INTERVAL_PROGRESS_CONTRACT, INTERVAL_PROGRESS_CONTRACT_VERSION, MAX_INTERVAL_MS, MIN_INTERVAL_MS,
 };
 pub use model::{
-  CompiledWorkflowDefinition, ModelIssue, ModelIssueCode, ModelValidationError,
-  NotificationDefinition, ScriptRuntimeBindings,
+  CompiledModuleBinding, CompiledModuleRuntime, CompiledWorkflowDefinition, ModelIssue,
+  ModelIssueCode, ModelValidationError, NotificationDefinition, ScriptRuntimeBindings,
 };
 pub use notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
@@ -115,9 +117,10 @@ pub use runtime::{
   resume_workflow_durable, resume_workflow_durable_outcome, settle_approval_timeout_durable,
   BranchFailureSite, EngineClock, ExecutionProgress, ExecutionProgressReporter,
   FailedApprovalDetails, FailedNotificationDetails, FailedParallelDetails, FixedEngineClock,
-  RuntimeExecutionError, RuntimeExecutionOptions, SystemEngineClock, WaitingWorkflowApproval,
-  WorkflowExecutionResult, WorkflowRuntimeOutcome, EXECUTION_PROGRESS_CONTRACT,
-  EXECUTION_PROGRESS_VERSION, RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
+  RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact, SystemEngineClock,
+  WaitingWorkflowApproval, WorkflowExecutionResult, WorkflowRuntimeOutcome,
+  EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION, RUNTIME_OUTCOME_CONTRACT,
+  RUNTIME_OUTCOME_VERSION,
 };
 pub use schedule::{
   ScheduleClock, ScheduleError, ScheduleMisfirePolicy, ScheduleProgress, ScheduleProgressReason,
@@ -141,7 +144,8 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V5: u32 = 5;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V6: u32 = 6;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V7: u32 = 7;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V8: u32 = 8;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V8;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V9: u32 = 9;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V9;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;

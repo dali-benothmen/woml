@@ -6,7 +6,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   buildWomlDefinitionPackage,
-  buildWomlExecutableDefinitionPackage,
+  buildWomlRuntimeDefinitionPackage,
   compileWoml,
   isWomlElement,
   parseWoml,
@@ -18,6 +18,7 @@ import {
   type ValueExpression,
   type WomlSourceDocument,
   type WomlSourceElement,
+  type WomlDefinitionPackageV3,
 } from 'woml';
 import {
   compiledDefinitionHash,
@@ -43,6 +44,7 @@ import {
   type ScheduleProgressV1,
   type TriggerProgressV1,
   type RustApprovalRuntimeOutcome,
+  type RustRuntimeModuleArtifact,
 } from './rust-executor';
 import {
   ApprovalServerBindError,
@@ -675,6 +677,49 @@ interface CompiledWorkflowSource {
   readonly filePath: string;
   readonly document: WomlSourceDocument;
   readonly workflow: CompiledWorkflowDefinition;
+  readonly runtimeModules: readonly RustRuntimeModuleArtifact[];
+}
+
+function runtimeModulesFromPackage(
+  definitionPackage: WomlDefinitionPackageV3
+): readonly RustRuntimeModuleArtifact[] {
+  return definitionPackage.modules.map(module => {
+    const bundle = definitionPackage.artifacts.find(
+      artifact => artifact.path === module.bundle.path
+    );
+    const sourceMap = definitionPackage.artifacts.find(
+      artifact => artifact.path === module.sourceMap.path
+    );
+    if (bundle?.kind !== 'module-bundle' || sourceMap?.kind !== 'source-map') {
+      throw new Error(
+        `Runtime artifacts are incomplete for module "${module.name}".`
+      );
+    }
+    return {
+      name: module.name,
+      bundleDigest: module.bundle.digest,
+      sourceMapDigest: module.sourceMap.digest,
+      exports: module.exports,
+      bundle: bundle.content,
+      sourceMap: sourceMap.content,
+    };
+  });
+}
+
+function requireMs3ModuleProfile(workflow: CompiledWorkflowDefinition): void {
+  if (workflow.schemaVersion !== 9) return;
+  const manualOnly = workflow.triggers.every(
+    trigger => trigger.handler === 'trigger.manual'
+  );
+  const sequentialScriptsOnly = workflow.graph.nodes.every(
+    node => node.handler === 'runtime.script' && node.retryPolicy === undefined
+  );
+  if (!manualOnly || !sequentialScriptsOnly) {
+    throw new CliInputError(
+      'WOML_MODULE_COMPOSITION_UNAVAILABLE',
+      'MS3 executes local modules in manual sequential workflows. Module composition with production triggers, retry, branch, parallel, and approval is scheduled for MS4.'
+    );
+  }
 }
 
 async function workflowFilePaths(
@@ -724,13 +769,24 @@ async function compileWorkflowSources(
       sourcePath: filePath,
       projectRoot,
     });
-    if (inspected.modules.length > 0) {
-      await buildWomlExecutableDefinitionPackage(document, {
+    const runtimePackage =
+      inspected.modules.length > 0
+        ? await buildWomlRuntimeDefinitionPackage(document, {
         sourcePath: filePath,
         projectRoot,
-      });
-    }
-    compiled.push({ filePath, document, workflow: compileWoml(document) });
+          })
+        : undefined;
+    const workflow = runtimePackage?.workflow.model ?? compileWoml(document);
+    requireMs3ModuleProfile(workflow);
+    compiled.push({
+      filePath,
+      document,
+      workflow,
+      runtimeModules:
+        runtimePackage === undefined
+          ? []
+          : runtimeModulesFromPackage(runtimePackage),
+    });
   }
   const workflowIds = new Set<string>();
   for (const item of compiled) {
@@ -771,7 +827,7 @@ async function runCheckCommand(
     const definitionPackage =
       inspectionPackage.modules.length === 0
         ? inspectionPackage
-        : await buildWomlExecutableDefinitionPackage(document, {
+        : await buildWomlRuntimeDefinitionPackage(document, {
             sourcePath: filePath,
             projectRoot: moduleProjectRoot(filePath),
           });
@@ -792,7 +848,7 @@ async function runCheckCommand(
     io.stdout(
       definitionPackage.modules.length === 0
         ? 'Execution: module-free workflow; woml run is available.\n'
-        : 'Compilation: executable module package ready; runtime loading begins in MS3.\n'
+        : 'Execution: local modules are compiled and ready for woml run.\n'
     );
     return 0;
   } catch (error) {
@@ -1043,7 +1099,8 @@ async function executeOneShot(
   workflow: CompiledWorkflowDefinition,
   args: RunArguments,
   io: CliIo,
-  dependencies: CliDependencies
+  dependencies: CliDependencies,
+  runtimeModules: readonly RustRuntimeModuleArtifact[] = []
 ): Promise<void> {
   const hasApproval = workflowHasApproval(workflow);
   const hasNotifications = workflowHasNotifications(workflow);
@@ -1051,7 +1108,8 @@ async function executeOneShot(
     args.resumeRunId !== undefined &&
     !hasApproval &&
     workflow.schemaVersion !== 6 &&
-    workflow.schemaVersion !== 8
+    workflow.schemaVersion !== 8 &&
+    workflow.schemaVersion !== 9
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -1066,7 +1124,11 @@ async function executeOneShot(
     await runApprovalWorkflow(workflow, args, io, dependencies);
     return;
   }
-  if (workflow.schemaVersion === 6 || workflow.schemaVersion === 8) {
+  if (
+    workflow.schemaVersion === 6 ||
+    workflow.schemaVersion === 8 ||
+    workflow.schemaVersion === 9
+  ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);
     const secrets = await resolvedSecrets(
@@ -1079,6 +1141,7 @@ async function executeOneShot(
             nativeCorePath: dependencies.nativeCorePath,
             onProgress,
             resolvedSecrets: secrets,
+            runtimeModules,
           })
         : await resumeWorkflowWithRustDurable(
             workflow,
@@ -1088,6 +1151,7 @@ async function executeOneShot(
               nativeCorePath: dependencies.nativeCorePath,
               onProgress,
               resolvedSecrets: secrets,
+              runtimeModules,
             }
           );
     io.stdout(`${JSON.stringify(execution.result)}\n`);
@@ -1095,6 +1159,7 @@ async function executeOneShot(
   }
   const execution = await executeWorkflowWithRust(workflow, {
     nativeCorePath: dependencies.nativeCorePath,
+    runtimeModules,
   });
   io.stdout(`${JSON.stringify(execution.result)}\n`);
 }
@@ -1496,7 +1561,8 @@ async function activateWorkflows(
       source.workflow,
       { ...args, filePath: source.filePath },
       io,
-      dependencies
+      dependencies,
+      source.runtimeModules
     );
   }
 
@@ -1943,7 +2009,13 @@ export async function runCli(
           'woml test requires the workflow to declare a <manual> trigger.'
         );
       }
-      await executeOneShot(source.workflow, runArguments, io, dependencies);
+      await executeOneShot(
+        source.workflow,
+        runArguments,
+        io,
+        dependencies,
+        source.runtimeModules
+      );
       return 0;
     }
     await activateWorkflows(sources, runArguments, io, dependencies);

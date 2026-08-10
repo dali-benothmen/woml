@@ -12,6 +12,7 @@ import scriptHostProtocolV1Schema from '../../../docs/schemas/script-host-protoc
 import scriptHostProtocolV2Schema from '../../../docs/schemas/script-host-protocol.v2.schema.json';
 import scriptHostProtocolV3Schema from '../../../docs/schemas/script-host-protocol.v3.schema.json';
 import scriptHostProtocolV4Schema from '../../../docs/schemas/script-host-protocol.v4.schema.json';
+import scriptHostProtocolV5Schema from '../../../docs/schemas/script-host-protocol.v5.schema.json';
 import type {
   CancelMessage,
   ExecuteMessage,
@@ -28,6 +29,7 @@ const validateV1 = ajv.compile(scriptHostProtocolV1Schema) as ValidateFunction;
 const validateV2 = ajv.compile(scriptHostProtocolV2Schema) as ValidateFunction;
 const validateV3 = ajv.compile(scriptHostProtocolV3Schema) as ValidateFunction;
 const validateV4 = ajv.compile(scriptHostProtocolV4Schema) as ValidateFunction;
+const validateV5 = ajv.compile(scriptHostProtocolV5Schema) as ValidateFunction;
 
 export class MessageProtocolError extends Error {
   constructor(message: string) {
@@ -41,13 +43,15 @@ export function isScriptHostMessage(message: unknown): boolean {
     validateV1(message) ||
     validateV2(message) ||
     validateV3(message) ||
-    validateV4(message)
+    validateV4(message) ||
+    validateV5(message)
   );
 }
 
 function validatorFor(message: unknown): ValidateFunction {
   if (typeof message !== 'object' || message === null) return validateV1;
   if (!('protocolVersion' in message)) return validateV1;
+  if (message.protocolVersion === 5) return validateV5;
   if (message.protocolVersion === 4) return validateV4;
   if (message.protocolVersion === 3) return validateV3;
   if (message.protocolVersion === 2) return validateV2;
@@ -56,7 +60,9 @@ function validatorFor(message: unknown): ValidateFunction {
 
 function validateAttemptSemantics(message: ExecuteMessage): void {
   if (
-    (message.protocolVersion === 3 || message.protocolVersion === 4) &&
+    (message.protocolVersion === 3 ||
+      message.protocolVersion === 4 ||
+      message.protocolVersion === 5) &&
     message.attempt.number > message.attempt.maxAttempts
   ) {
     throw new MessageProtocolError(
@@ -105,10 +111,13 @@ export function assertInboundMessage(
 ): asserts message is
   | ExecuteMessage
   | CancelMessage
+  | import('./types').RegisterModuleMessage
   | import('./types').CapabilityResultMessage
   | import('./types').FetchObservationAckMessage {
   const validator =
-    protocolVersion === 4
+    protocolVersion === 5
+      ? validateV5
+      : protocolVersion === 4
       ? validateV4
       : protocolVersion === 3
         ? validateV3
@@ -127,6 +136,7 @@ export function assertInboundMessage(
     message.protocolVersion !== protocolVersion ||
     !('messageType' in message) ||
     (message.messageType !== 'execute' &&
+      message.messageType !== 'register_module' &&
       message.messageType !== 'cancel' &&
       message.messageType !== 'capability_result' &&
       message.messageType !== 'fetch_observation_ack')

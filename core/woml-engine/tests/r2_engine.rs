@@ -4,7 +4,7 @@ use woml_engine::event::{RunEventPayload, StepAttemptFailedData};
 use woml_engine::model::{BackoffPolicy, EdgeCondition, ModelIssueCode, RetryPolicy};
 use woml_engine::{
   fold_events, AttemptFailureKind, CompiledWorkflowDefinition, InMemoryDagEngine,
-  InMemoryEventStore, RunEvent, RunStatus,
+  InMemoryEventStore, RunEvent, RunStatus, COMPILED_MODEL_SCHEMA_VERSION,
 };
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
@@ -325,7 +325,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
 #[test]
 fn independently_rejects_bad_versions_missing_nodes_and_cycles() {
   let mut bad_version = hello_model();
-  bad_version.schema_version = 9;
+  bad_version.schema_version = COMPILED_MODEL_SCHEMA_VERSION + 1;
   let codes: Vec<_> = bad_version
     .validate_for_execution()
     .unwrap_err()

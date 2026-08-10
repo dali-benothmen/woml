@@ -2,9 +2,11 @@ export { compileWoml, compileWomlWithModules, validateWoml } from './compiler';
 export {
   buildWomlDefinitionPackage,
   buildWomlExecutableDefinitionPackage,
+  buildWomlRuntimeDefinitionPackage,
   canonicalizeWomlDefinitionPackage,
   WOML_DEFINITION_PACKAGE_PROFILE,
   WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
+  WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE,
   WOML_MODULE_RESOLVER_PROFILE,
   type WomlDefinitionPackageModuleV1,
   type WomlDefinitionPackageModuleV2,
@@ -12,6 +14,7 @@ export {
   type WomlDefinitionPackageArtifactV2,
   type WomlDefinitionPackageV1,
   type WomlDefinitionPackageV2,
+  type WomlDefinitionPackageV3,
   type WomlModuleResolverOptions,
 } from './modules';
 export {

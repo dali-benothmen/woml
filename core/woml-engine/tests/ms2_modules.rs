@@ -4,10 +4,11 @@ const MODEL_V9: &str =
   include_str!("../../../woml/tests/fixtures/modules/customer-import.compiled.v9.json");
 
 #[test]
-fn ms2_model_v9_remains_fail_closed_until_artifact_registration_exists() {
-  let error = serde_json::from_str::<CompiledWorkflowDefinition>(MODEL_V9).unwrap_err();
-  assert!(
-    error.to_string().contains("moduleRuntime"),
-    "Rust must reject the new module field instead of silently executing Model v9: {error}"
-  );
+fn ms3_rust_accepts_the_frozen_model_v9_module_identity_contract() {
+  let workflow = serde_json::from_str::<CompiledWorkflowDefinition>(MODEL_V9).unwrap();
+  workflow.validate_for_durable_execution().unwrap();
+  let runtime = workflow.module_runtime.expect("Model v9 moduleRuntime");
+  assert_eq!(runtime.profile_version, 1);
+  assert_eq!(runtime.modules[0].name, "spreadsheet");
+  assert_eq!(runtime.modules[0].exports, ["read", "removeEmptyRows"]);
 }

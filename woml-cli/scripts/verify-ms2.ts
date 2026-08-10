@@ -48,5 +48,5 @@ for (const forbidden of [repositoryRoot, '/tmp/', 'SLACK_BOT_TOKEN', 'xoxb-']) {
 }
 
 console.log(
-  '[MS2] deterministic ESM bundle, source map, declarations, Model v9, and Definition Package v2 are pinned; runtime remains closed until MS3'
+  '[MS2] deterministic ESM bundle, source map, declarations, Model v9, and Definition Package v2 remain pinned'
 );

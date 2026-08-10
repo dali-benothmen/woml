@@ -14,6 +14,7 @@ import type {
   CancelMessage,
   CompletedMessage,
   ExecuteMessage,
+  ExecuteMessageV4,
   FetchObservationMessage,
   ScriptAttempt,
   ScriptHostMessage,
@@ -85,6 +86,26 @@ function executeV4(
     source,
     context: { trigger: {}, steps: {} },
     bindings: { bindingVersion: 1, servicesVersion: 1, secrets },
+  };
+}
+
+function moduleDigest(bundle: string): string {
+  return `sha256:${new Bun.CryptoHasher('sha256')
+    .update(bundle)
+    .digest('hex')}`;
+}
+
+function executeV5(
+  invocationId: string,
+  source: string,
+  bundleDigest: string,
+  exports: readonly string[]
+): ExecuteMessage {
+  const base = executeV4(invocationId, source) as ExecuteMessageV4;
+  return {
+    ...base,
+    protocolVersion: 5,
+    modules: [{ name: 'utility', bundleDigest, exports }],
   };
 }
 
@@ -1669,5 +1690,141 @@ return {
         },
       })
     ).toThrow('unknown call ID');
+  });
+});
+
+describe('MS3 Script Host v5 module runtime', () => {
+  test('registers one immutable bundle and creates fresh sync/async module state per Worker', async () => {
+    const bundle = `let calls = 0;
+export function sync() { calls += 1; return calls; }
+export async function asyncValue() { calls += 1; return calls; }`;
+    const digest = moduleDigest(bundle);
+    const source = `return {
+      sync: services.utility.sync(),
+      async: await services.utility.asyncValue()
+    };`;
+    const result = await runHost(
+      [
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 5,
+          messageType: 'register_module',
+          bundleDigest: digest,
+          bundle,
+        },
+        executeV5('inv_module_first', source, digest, ['asyncValue', 'sync']),
+        executeV5('inv_module_second', source, digest, ['asyncValue', 'sync']),
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '5' }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.messages[1]).toEqual({
+      protocol: 'woml.script-host',
+      protocolVersion: 5,
+      messageType: 'module_registered',
+      bundleDigest: digest,
+      accepted: true,
+    });
+    expect(byInvocation(result.messages).get('inv_module_first')).toMatchObject({
+      outcome: { kind: 'success', value: { sync: 1, async: 2 } },
+    });
+    expect(byInvocation(result.messages).get('inv_module_second')).toMatchObject({
+      outcome: { kind: 'success', value: { sync: 1, async: 2 } },
+    });
+  });
+
+  test('rejects effects during initialization and keeps imported namespaces read-only', async () => {
+    const effectBundle = `await fetch('https://example.invalid');
+export function value() { return 1; }`;
+    const effectDigest = moduleDigest(effectBundle);
+    const readonlyBundle = `export function value() { return 1; }`;
+    const readonlyDigest = moduleDigest(readonlyBundle);
+    const result = await runHost(
+      [
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 5,
+          messageType: 'register_module',
+          bundleDigest: effectDigest,
+          bundle: effectBundle,
+        },
+        executeV5(
+          'inv_module_initialization',
+          'return services.utility.value();',
+          effectDigest,
+          ['value']
+        ),
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 5,
+          messageType: 'register_module',
+          bundleDigest: readonlyDigest,
+          bundle: readonlyBundle,
+        },
+        executeV5(
+          'inv_module_readonly',
+          'services.utility.value = () => 2; return true;',
+          readonlyDigest,
+          ['value']
+        ),
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '5' }
+    );
+    expect(byInvocation(result.messages).get('inv_module_initialization')).toMatchObject({
+      outcome: {
+        kind: 'failure',
+        error: {
+          kind: 'script_threw',
+          message: expect.stringContaining('cannot be used while a WOML module is initializing'),
+        },
+      },
+    });
+    expect(byInvocation(result.messages).get('inv_module_readonly')).toMatchObject({
+      outcome: { kind: 'failure', error: { kind: 'script_threw' } },
+    });
+  });
+
+  test('rejects tampered registration and applies the existing step timeout to module calls', async () => {
+    const bundle = `export function never() { while (true) {} }`;
+    const digest = moduleDigest(bundle);
+    const timed = executeV5(
+      'inv_module_timeout',
+      'return services.utility.never();',
+      digest,
+      ['never']
+    );
+    const result = await runHost(
+      [
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 5,
+          messageType: 'register_module',
+          bundleDigest: defaultEffectKey,
+          bundle: 'export function tampered() {}',
+        },
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 5,
+          messageType: 'register_module',
+          bundleDigest: digest,
+          bundle,
+        },
+        { ...timed, timeoutMs: 25 },
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '5' }
+    );
+    expect(result.messages).toContainEqual({
+      protocol: 'woml.script-host',
+      protocolVersion: 5,
+      messageType: 'module_registered',
+      bundleDigest: defaultEffectKey,
+      accepted: false,
+      code: 'WOML_MODULE_DIGEST_MISMATCH',
+      message:
+        'The registered module bundle does not match its SHA-256 identity.',
+    });
+    expect(byInvocation(result.messages).get('inv_module_timeout')).toMatchObject({
+      outcome: { kind: 'failure', error: { kind: 'script_timed_out' } },
+    });
   });
 });

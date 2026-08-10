@@ -5,8 +5,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -23,7 +24,7 @@ use crate::event::{
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{ApprovalDefinition, ParallelGroupDefinition, ValueExpression};
 use crate::projection::{ApprovalRequestStatus, AttemptStatus};
-use crate::protocol::{ExecuteMessage, HostOutcome, ScriptAttempt};
+use crate::protocol::{ExecuteMessage, HostOutcome, RuntimeModuleBinding, ScriptAttempt};
 use crate::schedule::{
   ScheduleClock, ScheduleProgress, ScheduleProgressReporter, SystemScheduleClock,
 };
@@ -33,8 +34,9 @@ use crate::{
   CompiledWorkflowDefinition, DurableCapabilityAuthority, DurableDagEngine, DurableEngineError,
   DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine, IssuedApprovalToken,
   RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection, RunStatus,
-  ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions, StepFailureDisposition,
-  WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
+  ScriptHostClient, ScriptHostClientError, ScriptHostModuleArtifact, ScriptHostProcessOptions,
+  StepFailureDisposition, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
+  RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
 pub trait EngineClock: Send + Sync {
@@ -89,6 +91,17 @@ pub enum ExecutionProgress {
 
 pub type ExecutionProgressReporter = Arc<dyn Fn(ExecutionProgress) + Send + Sync>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeModuleArtifact {
+  pub name: String,
+  pub bundle_digest: String,
+  pub source_map_digest: String,
+  pub exports: Vec<String>,
+  pub bundle: String,
+  pub source_map: String,
+}
+
 #[derive(Debug, Default)]
 pub struct SystemEngineClock;
 
@@ -127,6 +140,7 @@ pub struct RuntimeExecutionOptions {
   pub interval_progress_reporter: Option<IntervalProgressReporter>,
   pub resolved_secrets: Arc<BTreeMap<String, String>>,
   pub capability_registry: Arc<CapabilityRegistry>,
+  pub runtime_modules: Arc<Vec<RuntimeModuleArtifact>>,
   capability_authority: Option<Arc<DurableCapabilityAuthority>>,
   managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
   managed_storage_store: Option<Arc<crate::ManagedStorageStore>>,
@@ -144,6 +158,7 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
       .field("schedule_clock", &"dyn ScheduleClock")
       .field("resolved_secret_count", &self.resolved_secrets.len())
       .field("capability_registry", &"CapabilityRegistry")
+      .field("runtime_module_count", &self.runtime_modules.len())
       .field(
         "progress_reporter",
         &self.progress_reporter.as_ref().map(|_| "configured"),
@@ -203,6 +218,7 @@ impl RuntimeExecutionOptions {
       interval_progress_reporter: None,
       resolved_secrets: Arc::new(BTreeMap::new()),
       capability_registry,
+      runtime_modules: Arc::new(Vec::new()),
       capability_authority: None,
       managed_database_pool: Some(managed_database_pool),
       managed_storage_store: Some(managed_storage_store),
@@ -227,6 +243,18 @@ impl RuntimeExecutionOptions {
 
   pub fn with_resolved_secrets(mut self, secrets: BTreeMap<String, String>) -> Self {
     self.resolved_secrets = Arc::new(secrets);
+    self
+  }
+
+  pub fn with_runtime_modules(mut self, modules: Vec<RuntimeModuleArtifact>) -> Self {
+    self.script_host.module_artifacts = modules
+      .iter()
+      .map(|module| ScriptHostModuleArtifact {
+        bundle_digest: module.bundle_digest.clone(),
+        bundle: module.bundle.clone(),
+      })
+      .collect();
+    self.runtime_modules = Arc::new(modules);
     self
   }
 
@@ -738,8 +766,50 @@ async fn execute_with_engine<E: RuntimeDagEngine>(
       "script_timeout_ms must be greater than zero".to_string(),
     ));
   }
+  validate_runtime_modules(engine.workflow(), &options)?;
 
   execute_runtime(&mut engine, trigger, &options).await
+}
+
+fn sha256_identity(content: &str) -> String {
+  format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
+}
+
+fn validate_runtime_modules(
+  workflow: &CompiledWorkflowDefinition,
+  options: &RuntimeExecutionOptions,
+) -> Result<(), RuntimeExecutionError> {
+  const MAX_ARTIFACT_BYTES: usize = 3 * 1024 * 1024;
+  let Some(runtime) = &workflow.module_runtime else {
+    if options.runtime_modules.is_empty() {
+      return Ok(());
+    }
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "module artifacts were supplied for a workflow without moduleRuntime".to_string(),
+    ));
+  };
+  if runtime.modules.len() != options.runtime_modules.len() {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "the runtime module artifacts do not match Model v9".to_string(),
+    ));
+  }
+  for (binding, artifact) in runtime.modules.iter().zip(options.runtime_modules.iter()) {
+    let matches = binding.name == artifact.name
+      && binding.bundle_digest == artifact.bundle_digest
+      && binding.source_map_digest == artifact.source_map_digest
+      && binding.exports == artifact.exports
+      && sha256_identity(&artifact.bundle) == artifact.bundle_digest
+      && sha256_identity(&artifact.source_map) == artifact.source_map_digest
+      && artifact.bundle.len() <= MAX_ARTIFACT_BYTES
+      && artifact.source_map.len() <= MAX_ARTIFACT_BYTES;
+    if !matches {
+      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+        "runtime module artifact {:?} failed its Model v9 identity or size check",
+        binding.name
+      )));
+    }
+  }
+  Ok(())
 }
 
 async fn resume_with_engine<E: RuntimeDagEngine>(
@@ -752,6 +822,7 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
       "script_timeout_ms must be greater than zero".to_string(),
     ));
   }
+  validate_runtime_modules(engine.workflow(), &options)?;
   let projection = engine.projection(run_id)?;
   let execution_order = recorded_execution_order(&engine.events(run_id)?);
   match projection.status {
@@ -1185,6 +1256,7 @@ struct ParallelInvocationRequest {
   max_attempts: u32,
   idempotency_key: String,
   secrets: BTreeMap<String, String>,
+  module_bindings: Vec<RuntimeModuleBinding>,
 }
 
 async fn next_parallel_completion(
@@ -1258,7 +1330,7 @@ async fn execute_parallel_request(
     details: None,
     ..AttemptFailure::legacy_defaults()
   })?;
-  let request = ExecuteMessage::runtime_script_with_secrets(
+  let request = ExecuteMessage::runtime_script_with_modules(
     &invocation.invocation_id,
     &invocation.run_id,
     &invocation.node_id,
@@ -1267,6 +1339,7 @@ async fn execute_parallel_request(
     &invocation.source,
     &invocation.context,
     &invocation.secrets,
+    &invocation.module_bindings,
   );
   match host.execute(&request).await {
     Ok(completed) => match completed.outcome {
@@ -1379,6 +1452,15 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             max_attempts,
             idempotency_key,
             secrets,
+            module_bindings: options
+              .runtime_modules
+              .iter()
+              .map(|module| RuntimeModuleBinding {
+                name: module.name.clone(),
+                bundle_digest: module.bundle_digest.clone(),
+                exports: module.exports.clone(),
+              })
+              .collect(),
           },
         )),
       });
@@ -1688,7 +1770,16 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     }
   }
 
-  let request = ExecuteMessage::runtime_script_with_secrets(
+  let module_bindings = options
+    .runtime_modules
+    .iter()
+    .map(|module| RuntimeModuleBinding {
+      name: module.name.clone(),
+      bundle_digest: module.bundle_digest.clone(),
+      exports: module.exports.clone(),
+    })
+    .collect::<Vec<_>>();
+  let request = ExecuteMessage::runtime_script_with_modules(
     &invocation_id,
     run_id,
     node_id,
@@ -1698,6 +1789,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     source,
     &context,
     &secrets,
+    &module_bindings,
   );
   let outcome = match host
     .as_ref()

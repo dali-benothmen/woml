@@ -27,6 +27,8 @@ export const WOML_MODULE_RESOLVER_PROFILE =
   'woml.module-resolver/v1' as const;
 export const WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v2' as const;
+export const WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v3' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -126,6 +128,18 @@ export interface WomlDefinitionPackageV2 {
     readonly secrets: readonly string[];
     readonly networkOrigins: readonly string[];
   };
+  readonly rootHash: string;
+}
+
+export interface WomlDefinitionPackageV3
+  extends Omit<
+    WomlDefinitionPackageV2,
+    'schemaVersion' | 'profile' | 'runtimeReady' | 'rootHash'
+  > {
+  readonly schemaVersion: 3;
+  readonly profile: typeof WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE;
+  readonly runtimeReady: true;
+  readonly compilationRootHash: string;
   readonly rootHash: string;
 }
 
@@ -1006,8 +1020,37 @@ export async function buildWomlExecutableDefinitionPackage(
   return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
 }
 
+/**
+ * Promotes the frozen MS2 compilation package into the MS3 runtime profile.
+ * The executable bytes and Model v9 remain unchanged; the new identity records
+ * that a runtime is allowed to register those exact bytes.
+ */
+export async function buildWomlRuntimeDefinitionPackage(
+  document: WomlSourceDocument,
+  options: WomlModuleResolverOptions = {}
+): Promise<WomlDefinitionPackageV3> {
+  const compiled = await buildWomlExecutableDefinitionPackage(document, options);
+  const unsigned = {
+    schemaVersion: 3 as const,
+    profile: WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE,
+    executable: compiled.executable,
+    runtimeReady: true as const,
+    compilationRootHash: compiled.rootHash,
+    workflow: compiled.workflow,
+    modules: compiled.modules,
+    sources: compiled.sources,
+    artifacts: compiled.artifacts,
+    compiler: compiled.compiler,
+    permissions: compiled.permissions,
+  };
+  return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+}
+
 export function canonicalizeWomlDefinitionPackage(
-  definitionPackage: WomlDefinitionPackageV1 | WomlDefinitionPackageV2
+  definitionPackage:
+    | WomlDefinitionPackageV1
+    | WomlDefinitionPackageV2
+    | WomlDefinitionPackageV3
 ): string {
   return canonicalJson(definitionPackage);
 }

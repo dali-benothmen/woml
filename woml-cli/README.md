@@ -16,10 +16,15 @@ woml check path/to/workflow.woml
 woml check path/to/workflow.woml --json
 ```
 
-For imported modules, the JSON form is the deterministic MS2 Definition Package
-v2 containing Model v9, exact ESM bundles, canonical source maps, and generated
-declarations. The package is executable but marked `runtimeReady: false`;
-loading remains fail-closed until Module System MS3.
+For imported modules, the JSON form is the deterministic MS3 Definition Package
+v3 containing Model v9, exact ESM bundles, canonical source maps, and generated
+declarations. It is marked `runtimeReady: true`; `woml run` and `woml test`
+register those immutable bundles with Rust and expose their named functions at
+`services.<alias>` inside isolated Bun Workers.
+
+```bash
+woml test examples/moduleWorkflow.woml
+```
 
 ## Activate an automation
 

@@ -40,8 +40,9 @@ inputs. Source maps are canonical JSON and every retained source body must
 match its MS1 digest.
 
 Definition Package v2 uses `executable: true` to mean that executable ESM bytes
-exist. `runtimeReady: false` means the current Rust/Bun runtime must still reject
-activation until MS3.
+exist. `runtimeReady: false` permanently identifies this as the compilation-only
+profile. MS3 promotes the unchanged artifacts into Definition Package v3 before
+activation; Package v2 itself is never reinterpreted or widened.
 
 ## 3. Model v9
 
