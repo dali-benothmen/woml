@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v9",
+  "title": "WOML Compiled Workflow Model v9",
+  "description": "Language-neutral DAG contract adding immutable local-module artifact bindings.",
+  "x-status": "module-system-ms2-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v8",
+  "x-invariants": [
+    "Module bindings contain identities and public export names only, never source or executable bytes.",
+    "Module aliases are sorted, unique, and match the source document declarations exactly.",
+    "Every module bundle and source map is addressed by a canonical SHA-256 digest.",
+    "All graph, trigger, Script Bindings v1, and control-flow semantics remain unchanged from Model v8."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "moduleRuntime"],
+  "properties": {
+    "schemaVersion": { "const": 9 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": { "type": "array", "minItems": 1, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" } },
+    "graph": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowGraph" },
+    "moduleRuntime": { "$ref": "#/$defs/moduleRuntime" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "moduleRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileVersion", "modules"],
+      "properties": {
+        "profileVersion": { "const": 1 },
+        "modules": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/moduleBinding" }
+        }
+      }
+    },
+    "moduleBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "bundleDigest", "sourceMapDigest", "exports"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 128 },
+        "bundleDigest": { "$ref": "#/$defs/sha256" },
+        "sourceMapDigest": { "$ref": "#/$defs/sha256" },
+        "exports": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$" }
+        }
+      }
+    }
+  }
+}

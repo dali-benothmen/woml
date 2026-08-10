@@ -11,7 +11,10 @@
     <steps>
       <step id="cleanRows">
         <script>
-          return { ready: true };
+          const rows = context.trigger.rows ?? [];
+          return {
+            rows: await services.spreadsheet.removeEmptyRows(rows)
+          };
         </script>
       </step>
     </steps>

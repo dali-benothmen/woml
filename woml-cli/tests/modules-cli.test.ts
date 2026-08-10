@@ -23,26 +23,27 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('MS1 module inspection CLI', () => {
-  test('checks and explains a deterministic local module graph', async () => {
+describe('MS2 module compilation CLI', () => {
+  test('checks, compiles, and explains a deterministic local module graph', async () => {
     const result = await invoke(['check', workflowPath]);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('WOML check passed');
     expect(result.stdout).toContain('services.spreadsheet');
     expect(result.stdout).toContain('(read, removeEmptyRows)');
-    expect(result.stdout).toContain('unavailable for imported modules until MS3');
+    expect(result.stdout).toContain('executable module package ready');
   });
 
-  test('prints the reviewed manifest as JSON without activating code', async () => {
+  test('prints the reviewed executable package as JSON without activating code', async () => {
     const result = await invoke(['check', workflowPath, '--json']);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     const manifest = JSON.parse(result.stdout);
     expect(manifest).toMatchObject({
-      schemaVersion: 1,
-      profile: 'woml.definition-package/v1',
-      executable: false,
+      schemaVersion: 2,
+      profile: 'woml.definition-package/v2',
+      executable: true,
+      runtimeReady: false,
       workflow: { id: 'customer-import' },
       modules: [
         {

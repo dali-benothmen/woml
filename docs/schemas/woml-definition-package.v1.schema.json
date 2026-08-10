@@ -84,6 +84,26 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secrets", "networkOrigins"],
+      "properties": {
+        "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "networkOrigins": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mediaType", "digest", "dependencies"],
+      "properties": {
+        "path": { "$ref": "#/$defs/portablePath" },
+        "mediaType": { "enum": ["application/woml+xml", "text/javascript", "text/typescript"] },
+        "digest": { "$ref": "#/$defs/sha256" },
+        "dependencies": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/portablePath" } }
+      }
     }
   }
 }

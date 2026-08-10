@@ -1,12 +1,18 @@
-import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { parse } from 'acorn';
 
 import {
+  compileWomlWithModules,
   inspectValidatedWomlDocument,
   type ValidatedModuleDeclaration,
 } from './compiler';
+import type {
+  CompiledModuleBindingV1,
+  CompiledWorkflowDefinitionV9,
+} from './model';
 import {
   SourceFile,
   WomlCompileError,
@@ -19,6 +25,8 @@ export const WOML_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v1' as const;
 export const WOML_MODULE_RESOLVER_PROFILE =
   'woml.module-resolver/v1' as const;
+export const WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v2' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -57,6 +65,62 @@ export interface WomlDefinitionPackageV1 {
     readonly name: 'woml';
     readonly version: '0.1.0';
     readonly resolverProfile: typeof WOML_MODULE_RESOLVER_PROFILE;
+  };
+  readonly permissions: {
+    readonly secrets: readonly string[];
+    readonly networkOrigins: readonly string[];
+  };
+  readonly rootHash: string;
+}
+
+export interface WomlDefinitionPackageArtifactV2 {
+  readonly path: string;
+  readonly kind:
+    | 'workflow-model'
+    | 'module-bundle'
+    | 'source-map'
+    | 'type-declarations';
+  readonly mediaType:
+    | 'application/json'
+    | 'text/javascript'
+    | 'application/source-map+json'
+    | 'text/typescript';
+  readonly digest: string;
+  readonly content: string;
+}
+
+export interface WomlDefinitionPackageModuleV2
+  extends WomlDefinitionPackageModuleV1 {
+  readonly bundle: { readonly path: string; readonly digest: string };
+  readonly sourceMap: { readonly path: string; readonly digest: string };
+}
+
+export interface WomlDefinitionPackageV2 {
+  readonly schemaVersion: 2;
+  readonly profile: typeof WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE;
+  /** The package contains executable ESM, even though the MS2 runtime cannot load it yet. */
+  readonly executable: true;
+  readonly runtimeReady: false;
+  readonly workflow: {
+    readonly id: string;
+    readonly source: string;
+    readonly modelDigest: string;
+    readonly model: CompiledWorkflowDefinitionV9;
+  };
+  readonly modules: readonly WomlDefinitionPackageModuleV2[];
+  readonly sources: readonly WomlDefinitionPackageSourceV1[];
+  readonly artifacts: readonly WomlDefinitionPackageArtifactV2[];
+  readonly compiler: {
+    readonly name: 'woml';
+    readonly version: '0.1.0';
+    readonly resolverProfile: typeof WOML_MODULE_RESOLVER_PROFILE;
+    readonly bundler: {
+      readonly name: 'bun';
+      readonly version: string;
+      readonly target: 'bun';
+      readonly format: 'esm';
+      readonly sourceMap: 'external';
+    };
   };
   readonly permissions: {
     readonly secrets: readonly string[];
@@ -621,8 +685,329 @@ export function buildWomlDefinitionPackage(
   return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
 }
 
+function canonicalBundleSourceLabels(
+  content: string,
+  projectRoot: string,
+  sources: readonly WomlDefinitionPackageSourceV1[]
+): string {
+  const labels = new Map<string, string>();
+  for (const source of sources) {
+    if (source.mediaType === 'application/woml+xml') continue;
+    const absolutePath = resolve(projectRoot, source.path);
+    for (const label of [
+      absolutePath,
+      relative(process.cwd(), absolutePath),
+      source.path,
+    ]) {
+      labels.set(label.split(sep).join('/'), source.path);
+    }
+  }
+  return content
+    .replace(/^\/\/ (.+)$/gm, (line, rawLabel: string) => {
+      const canonical = labels.get(rawLabel.replaceAll('\\', '/'));
+      return canonical === undefined ? line : `// ${canonical}`;
+    })
+    .replace(/^\/\/# debugId=.*(?:\n|$)/gm, '')
+    .replace(/\n+$/, '\n');
+}
+
+function canonicalSourceMap(
+  rawContent: string,
+  outputPath: string,
+  projectRoot: string,
+  sources: readonly WomlDefinitionPackageSourceV1[]
+): string {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(rawContent) as Record<string, unknown>;
+  } catch {
+    throw compileDiagnostic(
+      'module-source-map',
+      'WOML_MODULE_SOURCE_MAP_INVALID',
+      'Bun produced an invalid JSON source map.',
+      new SourceFile('module-source-map', rawContent).span(0, 1)
+    );
+  }
+  const rawSources = parsed.sources;
+  const rawSourcesContent = parsed.sourcesContent;
+  if (!Array.isArray(rawSources) || !Array.isArray(rawSourcesContent)) {
+    throw compileDiagnostic(
+      'module-source-map',
+      'WOML_MODULE_SOURCE_MAP_INVALID',
+      'The module source map must retain source names and source content.',
+      new SourceFile('module-source-map', rawContent).span(0, 1)
+    );
+  }
+  const expected = new Map(sources.map(source => [source.path, source]));
+  const canonicalSources: string[] = [];
+  for (let index = 0; index < rawSources.length; index += 1) {
+    const rawSource = rawSources[index];
+    const sourceContent = rawSourcesContent[index];
+    if (typeof rawSource !== 'string' || typeof sourceContent !== 'string') {
+      throw compileDiagnostic(
+        'module-source-map',
+        'WOML_MODULE_SOURCE_MAP_INVALID',
+        'The module source map contains a non-text source entry.',
+        new SourceFile('module-source-map', rawContent).span(0, 1)
+      );
+    }
+    let absolutePath: string;
+    try {
+      absolutePath = realpathSync(resolve(dirname(outputPath), rawSource));
+    } catch {
+      throw compileDiagnostic(
+        'module-source-map',
+        'WOML_MODULE_SOURCE_MAP_SOURCE_UNKNOWN',
+        `The module source map references an unknown source "${rawSource}".`,
+        new SourceFile('module-source-map', rawContent).span(0, 1)
+      );
+    }
+    if (!isWithin(projectRoot, absolutePath)) {
+      throw compileDiagnostic(
+        'module-source-map',
+        'WOML_MODULE_SOURCE_MAP_ESCAPE',
+        'The module source map references a file outside the project boundary.',
+        new SourceFile('module-source-map', rawContent).span(0, 1)
+      );
+    }
+    const portable = portablePath(projectRoot, absolutePath);
+    const expectedSource = expected.get(portable);
+    if (expectedSource === undefined || expectedSource.digest !== sha256(sourceContent)) {
+      throw compileDiagnostic(
+        portable,
+        'WOML_MODULE_SOURCE_CHANGED_DURING_BUILD',
+        `Module source "${portable}" changed while its immutable bundle was being built.`,
+        new SourceFile(portable, sourceContent).span(0, 1),
+        'Run the build again after the source editor has finished writing.'
+      );
+    }
+    canonicalSources.push(portable);
+  }
+  parsed.sources = canonicalSources;
+  delete parsed.debugId;
+  delete parsed.sourceRoot;
+  delete parsed.file;
+  return canonicalJson(parsed);
+}
+
+function moduleBuildError(
+  module: WomlDefinitionPackageModuleV1,
+  logs: readonly (BuildMessage | ResolveMessage)[]
+): WomlCompileError {
+  const first = logs[0];
+  const message = first?.message ?? 'Bun could not compile the module.';
+  const rawFile = first?.position?.file;
+  const file = rawFile === undefined ? module.entrypoint : rawFile;
+  let source = '';
+  try {
+    source = readFileSync(file, 'utf8');
+  } catch {
+    // The source may be a portable diagnostic identity instead of an absolute path.
+  }
+  const sourceFile = new SourceFile(file, source);
+  const line = Math.max(1, first?.position?.line ?? 1);
+  const column = Math.max(1, first?.position?.column ?? 1);
+  const offset = sourceFile.offsetAt(line, column);
+  return compileDiagnostic(
+    file,
+    'WOML_MODULE_BUILD_FAILED',
+    `Cannot compile module "${module.name}": ${message}`,
+    sourceFile.span(offset, Math.min(source.length, offset + 1))
+  );
+}
+
+function generatedServiceDeclarations(
+  modules: readonly WomlDefinitionPackageModuleV1[]
+): string {
+  const lines = [
+    '// Generated by WOML Module System MS2. Do not edit.',
+    'export interface WomlImportedServices {',
+  ];
+  for (const module of modules) {
+    lines.push(`  readonly ${JSON.stringify(module.name)}: Readonly<{`);
+    for (const exported of module.exports) {
+      lines.push(
+        `    readonly ${JSON.stringify(exported)}: (...args: readonly unknown[]) => unknown | Promise<unknown>;`
+      );
+    }
+    lines.push('  }>;');
+  }
+  lines.push(
+    '}',
+    '',
+    'declare const services: WomlImportedServices;',
+    ''
+  );
+  return lines.join('\n');
+}
+
+export async function buildWomlExecutableDefinitionPackage(
+  document: WomlSourceDocument,
+  options: WomlModuleResolverOptions = {}
+): Promise<WomlDefinitionPackageV2> {
+  const resolved = buildWomlDefinitionPackage(document, options);
+  if (resolved.modules.length === 0) {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_MODULES_REQUIRED',
+      'Definition Package v2 is reserved for workflows that declare at least one module.',
+      document.root.openTagSpan
+    );
+  }
+  const sourcePath = resolve(options.sourcePath ?? document.file);
+  const projectRoot = realpathSync(resolve(options.projectRoot ?? dirname(sourcePath)));
+  const temporaryRoot = mkdtempSync(join(tmpdir(), 'woml-ms2-build-'));
+  const artifacts: WomlDefinitionPackageArtifactV2[] = [];
+  const compiledModules: WomlDefinitionPackageModuleV2[] = [];
+  try {
+    for (const module of resolved.modules) {
+      const outputDirectory = join(temporaryRoot, module.name);
+      const result = await Bun.build({
+        entrypoints: [resolve(projectRoot, module.entrypoint)],
+        root: projectRoot,
+        outdir: outputDirectory,
+        naming: '[name].[ext]',
+        target: 'bun',
+        format: 'esm',
+        splitting: false,
+        sourcemap: 'external',
+        packages: 'bundle',
+        allowUnresolved: [],
+        env: 'disable',
+        minify: false,
+      });
+      if (!result.success) throw moduleBuildError(module, result.logs);
+      const bundleOutput = result.outputs.find(output => output.kind === 'entry-point');
+      const sourceMapOutput = result.outputs.find(output => output.kind === 'sourcemap');
+      if (bundleOutput === undefined || sourceMapOutput === undefined) {
+        throw compileDiagnostic(
+          module.entrypoint,
+          'WOML_MODULE_BUILD_OUTPUT_MISSING',
+          `Bun did not produce both an ESM bundle and source map for module "${module.name}".`,
+          new SourceFile(module.entrypoint, '').span(0, 0)
+        );
+      }
+      const bundleContent = canonicalBundleSourceLabels(
+        await bundleOutput.text(),
+        projectRoot,
+        resolved.sources
+      );
+      const sourceMapContent = canonicalSourceMap(
+        await sourceMapOutput.text(),
+        sourceMapOutput.path,
+        projectRoot,
+        resolved.sources
+      );
+      if (bundleContent.includes(projectRoot) || sourceMapContent.includes(projectRoot)) {
+        throw compileDiagnostic(
+          module.entrypoint,
+          'WOML_MODULE_ARTIFACT_PATH_LEAK',
+          'A compiled module artifact contains an absolute developer-machine path.',
+          new SourceFile(module.entrypoint, '').span(0, 0)
+        );
+      }
+      const bundlePath = `modules/${module.name}.mjs`;
+      const sourceMapPath = `modules/${module.name}.mjs.map`;
+      const bundleDigest = sha256(bundleContent);
+      const sourceMapDigest = sha256(sourceMapContent);
+      artifacts.push(
+        {
+          path: bundlePath,
+          kind: 'module-bundle',
+          mediaType: 'text/javascript',
+          digest: bundleDigest,
+          content: bundleContent,
+        },
+        {
+          path: sourceMapPath,
+          kind: 'source-map',
+          mediaType: 'application/source-map+json',
+          digest: sourceMapDigest,
+          content: sourceMapContent,
+        }
+      );
+      compiledModules.push({
+        ...module,
+        bundle: { path: bundlePath, digest: bundleDigest },
+        sourceMap: { path: sourceMapPath, digest: sourceMapDigest },
+      });
+    }
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+
+  const afterBuild = buildWomlDefinitionPackage(document, options);
+  if (afterBuild.rootHash !== resolved.rootHash) {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_MODULE_SOURCE_CHANGED_DURING_BUILD',
+      'The WOML source or module graph changed while the immutable package was being built.',
+      document.root.openTagSpan,
+      'Run the build again after the source editor has finished writing.'
+    );
+  }
+
+  const bindings: CompiledModuleBindingV1[] = compiledModules.map(module => ({
+    name: module.name,
+    bundleDigest: module.bundle.digest,
+    sourceMapDigest: module.sourceMap.digest,
+    exports: module.exports,
+  }));
+  const model = compileWomlWithModules(document, {
+    profileVersion: 1,
+    modules: bindings,
+  });
+  const modelContent = canonicalJson(model);
+  const modelDigest = sha256(modelContent);
+  const declarations = generatedServiceDeclarations(resolved.modules);
+  artifacts.unshift({
+    path: 'workflow.compiled.v9.json',
+    kind: 'workflow-model',
+    mediaType: 'application/json',
+    digest: modelDigest,
+    content: modelContent,
+  });
+  artifacts.push({
+    path: 'types/services.generated.d.ts',
+    kind: 'type-declarations',
+    mediaType: 'text/typescript',
+    digest: sha256(declarations),
+    content: declarations,
+  });
+
+  const unsigned = {
+    schemaVersion: 2 as const,
+    profile: WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
+    executable: true as const,
+    runtimeReady: false as const,
+    workflow: {
+      id: resolved.workflow.id,
+      source: resolved.workflow.source,
+      modelDigest,
+      model,
+    },
+    modules: compiledModules,
+    sources: resolved.sources,
+    artifacts,
+    compiler: {
+      name: 'woml' as const,
+      version: '0.1.0' as const,
+      resolverProfile: WOML_MODULE_RESOLVER_PROFILE,
+      bundler: {
+        name: 'bun' as const,
+        version: Bun.version,
+        target: 'bun' as const,
+        format: 'esm' as const,
+        sourceMap: 'external' as const,
+      },
+    },
+    permissions: resolved.permissions,
+  };
+  return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+}
+
 export function canonicalizeWomlDefinitionPackage(
-  definitionPackage: WomlDefinitionPackageV1
+  definitionPackage: WomlDefinitionPackageV1 | WomlDefinitionPackageV2
 ): string {
   return canonicalJson(definitionPackage);
 }

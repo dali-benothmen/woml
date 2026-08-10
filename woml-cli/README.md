@@ -16,8 +16,10 @@ woml check path/to/workflow.woml
 woml check path/to/workflow.woml --json
 ```
 
-The JSON form is the deterministic MS1 definition-package manifest. Local
-`.js` and `.ts` module execution remains fail-closed until Module System MS3.
+For imported modules, the JSON form is the deterministic MS2 Definition Package
+v2 containing Model v9, exact ESM bundles, canonical source maps, and generated
+declarations. The package is executable but marked `runtimeReady: false`;
+loading remains fail-closed until Module System MS3.
 
 ## Activate an automation
 

@@ -129,6 +129,18 @@ export interface ScriptRuntimeBindingsV1 {
   readonly requiredSecrets: readonly string[];
 }
 
+export interface CompiledModuleBindingV1 {
+  readonly name: string;
+  readonly bundleDigest: string;
+  readonly sourceMapDigest: string;
+  readonly exports: readonly string[];
+}
+
+export interface CompiledModuleRuntimeV1 {
+  readonly profileVersion: 1;
+  readonly modules: readonly CompiledModuleBindingV1[];
+}
+
 export interface CompiledWorkflowEdge {
   readonly id: string;
   readonly from: string;
@@ -192,6 +204,12 @@ export interface CompiledWorkflowDefinitionV8
   readonly schemaVersion: 8;
 }
 
+export interface CompiledWorkflowDefinitionV9
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 9;
+  readonly moduleRuntime: CompiledModuleRuntimeV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -200,7 +218,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV5
   | CompiledWorkflowDefinitionV6
   | CompiledWorkflowDefinitionV7
-  | CompiledWorkflowDefinitionV8;
+  | CompiledWorkflowDefinitionV8
+  | CompiledWorkflowDefinitionV9;
 
 export interface CompiledGraphIssue {
   readonly code:

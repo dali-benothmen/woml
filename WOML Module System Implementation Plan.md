@@ -1,9 +1,10 @@
 # WOML Module System Implementation Plan
 
-Status: MS0 and MS1 completed on 2026-08-10. The canonical `<woml>` document,
-local-module source profile, diagnostics, immutable Definition Package v1,
-resolver, `woml check`, and reviewed fixtures are frozen and implemented.
-Imported code remains deliberately non-executable until MS3; MS2 is next.
+Status: MS0, MS1, and MS2 completed on 2026-08-10. The canonical `<woml>`
+document, local-module source profile, diagnostics, resolver, deterministic ESM
+bundles/source maps, generated declarations, Definition Package v2, Model v9,
+`woml check`, and reviewed fixtures are frozen and implemented. Imported code
+remains deliberately non-executable until MS3, which is next.
 
 ## 1. Product Outcome
 
@@ -607,7 +608,7 @@ Reviewed sources deep-equal their parser/graph/package fixtures. Content changes
 alter the root hash; timestamps, discovery order, cache location, and irrelevant
 filesystem metadata do not.
 
-### MS2 — Compile local JavaScript and TypeScript modules
+### MS2 — Compile local JavaScript and TypeScript modules — completed
 
 Changes:
 

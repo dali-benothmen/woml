@@ -3,7 +3,9 @@ import Ajv2020 from 'ajv/dist/2020';
 import {
   inspectCompiledWorkflowGraph,
   type CompiledTrigger,
+  type CompiledModuleRuntimeV1,
   type CompiledWorkflowDefinition,
+  type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,
@@ -298,6 +300,8 @@ const webhookPathPattern = /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?$/;
 const eventNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
 const moduleAliasPattern = /^[a-z][A-Za-z0-9]*$/;
 const moduleSourcePattern = /^(?:\.\/|\.\.\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:js|ts)$/;
+const artifactDigestPattern = /^sha256:[0-9a-f]{64}$/;
+const runtimeExportPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const reservedModuleAliases = new Set([
   'http',
   'db',
@@ -2831,8 +2835,9 @@ export function validateWoml(document: WomlSourceDocument): void {
   validateDocument(document);
 }
 
-export function compileWoml(
-  document: WomlSourceDocument
+function compileValidatedWoml(
+  document: WomlSourceDocument,
+  moduleRuntime?: CompiledModuleRuntimeV1
 ): CompiledWorkflowDefinition {
   const {
     element: workflow,
@@ -2842,18 +2847,69 @@ export function compileWoml(
     triggers,
     flow,
   } = validateDocument(document);
-  if (modules.length > 0) {
+  if (modules.length > 0 && moduleRuntime === undefined) {
     failCompile(
       document,
       'WOML_MODULE_EXECUTION_UNAVAILABLE',
-      'This MS1 frontend can inspect and package modules, but module execution begins in MS3.',
+      'The MS2 frontend can compile imported modules, but runtime module loading begins in MS3.',
       modules[0].element.openTagSpan,
       'Use `woml check <file>` to inspect the immutable module graph without running it.'
     );
   }
+  if (modules.length === 0 && moduleRuntime !== undefined) {
+    failCompile(
+      document,
+      'WOML_MODULE_RUNTIME_UNEXPECTED',
+      'A module runtime profile cannot be attached to a workflow with no <module> declarations.',
+      workflow.openTagSpan
+    );
+  }
+  if (moduleRuntime !== undefined) {
+    const declaredNames = modules.map(module => module.name).sort();
+    const runtimeNames = moduleRuntime.modules.map(module => module.name);
+    if (
+      moduleRuntime.profileVersion !== 1 ||
+      moduleRuntime.modules.length === 0 ||
+      JSON.stringify(runtimeNames) !== JSON.stringify(declaredNames)
+    ) {
+      failCompile(
+        document,
+        'WOML_MODULE_RUNTIME_MISMATCH',
+        'Compiled module bindings must match every declared module alias exactly.',
+        workflow.openTagSpan
+      );
+    }
+    for (const binding of moduleRuntime.modules) {
+      const declaration = modules.find(module => module.name === binding.name)!;
+      if (
+        !artifactDigestPattern.test(binding.bundleDigest) ||
+        !artifactDigestPattern.test(binding.sourceMapDigest)
+      ) {
+        failCompile(
+          document,
+          'WOML_MODULE_ARTIFACT_DIGEST_INVALID',
+          `Compiled module "${binding.name}" requires canonical bundle and source-map SHA-256 identities.`,
+          declaration.element.openTagSpan
+        );
+      }
+      if (
+        binding.exports.length === 0 ||
+        new Set(binding.exports).size !== binding.exports.length ||
+        [...binding.exports].sort().join('\0') !== binding.exports.join('\0') ||
+        binding.exports.some(name => !runtimeExportPattern.test(name))
+      ) {
+        failCompile(
+          document,
+          'WOML_MODULE_RUNTIME_EXPORTS_INVALID',
+          `Compiled module "${binding.name}" requires sorted, unique JavaScript-safe function exports.`,
+          declaration.element.openTagSpan
+        );
+      }
+    }
+  }
   const lowered = lowerFlowItems(flow.items);
   const scriptAnalyses = collectScriptAnalyses(flow.items);
-  const usesScriptRuntimeV1 = [...scriptAnalyses.values()].some(
+  const usesScriptRuntimeV1 = moduleRuntime !== undefined || [...scriptAnalyses.values()].some(
     analysis =>
       analysis.requiredSecrets.length > 0 ||
       analysis.usesServices ||
@@ -2872,8 +2928,10 @@ export function compileWoml(
       edges: lowered.edges,
     } satisfies CompiledWorkflowGraph,
   };
-  const compiled: CompiledWorkflowDefinition = usesScriptRuntimeV1
-    ? { schemaVersion: 8, ...definition }
+  const compiled: CompiledWorkflowDefinition = moduleRuntime !== undefined
+    ? { schemaVersion: 9, ...definition, moduleRuntime }
+    : usesScriptRuntimeV1
+      ? { schemaVersion: 8, ...definition }
     : triggers.length > 1 || triggers.some(trigger => trigger.kind !== 'manual')
       ? { schemaVersion: 7, ...definition }
       : lowered.nodes.some(node => node.retryPolicy !== undefined)
@@ -2900,5 +2958,22 @@ export function compileWoml(
     );
   }
 
+  return compiled;
+}
+
+export function compileWoml(
+  document: WomlSourceDocument
+): CompiledWorkflowDefinition {
+  return compileValidatedWoml(document);
+}
+
+export function compileWomlWithModules(
+  document: WomlSourceDocument,
+  moduleRuntime: CompiledModuleRuntimeV1
+): CompiledWorkflowDefinitionV9 {
+  const compiled = compileValidatedWoml(document, moduleRuntime);
+  if (compiled.schemaVersion !== 9) {
+    throw new Error('module compilation did not produce Model v9');
+  }
   return compiled;
 }

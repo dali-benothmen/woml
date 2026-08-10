@@ -1,12 +1,17 @@
-export { compileWoml, validateWoml } from './compiler';
+export { compileWoml, compileWomlWithModules, validateWoml } from './compiler';
 export {
   buildWomlDefinitionPackage,
+  buildWomlExecutableDefinitionPackage,
   canonicalizeWomlDefinitionPackage,
   WOML_DEFINITION_PACKAGE_PROFILE,
+  WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
   WOML_MODULE_RESOLVER_PROFILE,
   type WomlDefinitionPackageModuleV1,
+  type WomlDefinitionPackageModuleV2,
   type WomlDefinitionPackageSourceV1,
+  type WomlDefinitionPackageArtifactV2,
   type WomlDefinitionPackageV1,
+  type WomlDefinitionPackageV2,
   type WomlModuleResolverOptions,
 } from './modules';
 export {
@@ -16,6 +21,8 @@ export {
   type BooleanEdgeCondition,
   type CompiledGraphIssue,
   type CompiledTrigger,
+  type CompiledModuleBindingV1,
+  type CompiledModuleRuntimeV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV1,
   type CompiledWorkflowDefinitionV2,
@@ -25,6 +32,7 @@ export {
   type CompiledWorkflowDefinitionV6,
   type CompiledWorkflowDefinitionV7,
   type CompiledWorkflowDefinitionV8,
+  type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,

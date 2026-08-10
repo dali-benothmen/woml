@@ -26,11 +26,16 @@ Module System MS1 makes `<woml>` the canonical document root. The frontend may
 resolve `<imports><module name="..." from="..." /></imports>` before lowering:
 it validates the direct named-function ESM surface, follows only safe static
 local `.js`/`.ts` edges, assigns project-relative identities, and emits an
-immutable Definition Package v1 manifest. The MS1 manifest is explicitly
-non-executable, and `woml run` fails closed for imported modules until MS3.
-Neither the Rust core nor the compiled Model v8 understands `<woml>`, module
-paths, ESM syntax, or export grammar. `woml check` is the read-only inspection
-boundary. The frozen contract is `docs/protocols/module-system-v1.md`.
+immutable Definition Package v1 manifest. MS2 deterministically bundles each
+entry point as ESM, canonicalizes source maps, generates the imported `services`
+declarations, and emits Definition Package v2 plus compiled Model v9. Model v9
+contains artifact digests and public exports only; executable bytes stay in the
+package. `runtimeReady: false` and an explicit Rust rejection keep module
+activation fail-closed until MS3. Neither Rust nor Model v9 understands
+`<woml>`, module paths, ESM syntax, or export grammar. `woml check` is the
+read-only compilation boundary. The frozen contracts are
+`docs/protocols/module-system-v1.md` and
+`docs/protocols/module-compilation-v1.md`.
 
 The Rust core is the execution authority. It validates the compiled model,
 selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends

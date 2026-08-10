@@ -17,7 +17,7 @@
     {
       "path": "customer-import.woml",
       "mediaType": "application/woml+xml",
-      "digest": "sha256:ef829ab930663ed799e76f8bc0381ae6a1d45771e2162ecf65a33cca7ad76e78",
+      "digest": "sha256:ae534825f10c032648d5c12875ef559b37abdcfea7907203acfae4edfa94ee03",
       "dependencies": ["spreadsheet.ts"]
     },
     {
@@ -42,5 +42,5 @@
     "secrets": [],
     "networkOrigins": []
   },
-  "rootHash": "sha256:e8af508bfe07297e9d04d0b0b6373e0eb7f50b295c29e7e29a2f860ebb3328b4"
+  "rootHash": "sha256:430ed538212e3c1efff520f917c3cf201f091f0e65ff141299cc876f2d3df0a7"
 }

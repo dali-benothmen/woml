@@ -6,6 +6,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   buildWomlDefinitionPackage,
+  buildWomlExecutableDefinitionPackage,
   compileWoml,
   isWomlElement,
   parseWoml,
@@ -718,10 +719,17 @@ async function compileWorkflowSources(
   for (const filePath of await workflowFilePaths(inputPath)) {
     const source = await readWorkflow(filePath);
     const document = parseWoml(source, { file: filePath });
-    buildWomlDefinitionPackage(document, {
+    const projectRoot = moduleProjectRoot(filePath);
+    const inspected = buildWomlDefinitionPackage(document, {
       sourcePath: filePath,
-      projectRoot: moduleProjectRoot(filePath),
+      projectRoot,
     });
+    if (inspected.modules.length > 0) {
+      await buildWomlExecutableDefinitionPackage(document, {
+        sourcePath: filePath,
+        projectRoot,
+      });
+    }
     compiled.push({ filePath, document, workflow: compileWoml(document) });
   }
   const workflowIds = new Set<string>();
@@ -756,10 +764,17 @@ async function runCheckCommand(
   try {
     const source = await readWorkflow(filePath);
     document = parseWoml(source, { file: filePath });
-    const definitionPackage = buildWomlDefinitionPackage(document, {
+    const inspectionPackage = buildWomlDefinitionPackage(document, {
       sourcePath: filePath,
       projectRoot: moduleProjectRoot(filePath),
     });
+    const definitionPackage =
+      inspectionPackage.modules.length === 0
+        ? inspectionPackage
+        : await buildWomlExecutableDefinitionPackage(document, {
+            sourcePath: filePath,
+            projectRoot: moduleProjectRoot(filePath),
+          });
     if (options[0] === '--json') {
       io.stdout(`${JSON.stringify(definitionPackage, null, 2)}\n`);
       return 0;
@@ -777,7 +792,7 @@ async function runCheckCommand(
     io.stdout(
       definitionPackage.modules.length === 0
         ? 'Execution: module-free workflow; woml run is available.\n'
-        : 'Execution: unavailable for imported modules until MS3.\n'
+        : 'Compilation: executable module package ready; runtime loading begins in MS3.\n'
     );
     return 0;
   } catch (error) {

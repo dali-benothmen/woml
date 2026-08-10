@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -7,6 +7,7 @@ import Ajv2020 from 'ajv/dist/2020';
 
 import {
   buildWomlDefinitionPackage,
+  buildWomlExecutableDefinitionPackage,
   canonicalizeWomlDefinitionPackage,
   compileWoml,
   parseWoml,
@@ -236,6 +237,140 @@ describe('MS0 and MS1 Module System', () => {
         expect(error).toBeInstanceOf(WomlCompileError);
         expect((error as WomlCompileError).diagnostic.code).toBe(code);
       }
+    }
+  });
+});
+
+describe('MS2 deterministic module compilation', () => {
+  test('pins Model v9, bundle, source map, declarations, and package identity', async () => {
+    const actual = await buildWomlExecutableDefinitionPackage(sourceDocument(), {
+      sourcePath: workflowPath,
+      projectRoot: fixtureRoot,
+    });
+    const expectedModel = JSON.parse(
+      readFileSync(resolve(fixtureRoot, 'customer-import.compiled.v9.json'), 'utf8')
+    );
+    const expectedIdentity = JSON.parse(
+      readFileSync(
+        resolve(fixtureRoot, 'customer-import.package.v2.identity.json'),
+        'utf8'
+      )
+    );
+    const artifact = (path: string) => {
+      const found = actual.artifacts.find(item => item.path === path);
+      if (found === undefined) throw new Error(`Missing artifact ${path}.`);
+      return found;
+    };
+
+    expect(actual.workflow.model).toEqual(expectedModel);
+    expect(artifact('modules/spreadsheet.mjs').content).toBe(
+      readFileSync(resolve(fixtureRoot, 'spreadsheet.bundle.v1.mjs'), 'utf8')
+    );
+    expect(artifact('modules/spreadsheet.mjs.map').content).toBe(
+      readFileSync(
+        resolve(fixtureRoot, 'spreadsheet.bundle.v1.mjs.map'),
+        'utf8'
+      ).trimEnd()
+    );
+    expect(artifact('types/services.generated.d.ts').content).toBe(
+      readFileSync(resolve(fixtureRoot, 'services.generated.v1.d.ts'), 'utf8')
+    );
+
+    const identity = {
+      schemaVersion: actual.schemaVersion,
+      profile: actual.profile,
+      rootHash: actual.rootHash,
+      workflowModelDigest: actual.workflow.modelDigest,
+      modules: actual.modules.map(module => ({
+        name: module.name,
+        bundle: module.bundle,
+        sourceMap: module.sourceMap,
+      })),
+      artifacts: actual.artifacts.map(item => ({
+        path: item.path,
+        digest: item.digest,
+      })),
+      bundler: actual.compiler.bundler,
+    };
+    expect(identity).toEqual(expectedIdentity);
+    expect(actual.executable).toBe(true);
+    expect(actual.runtimeReady).toBe(false);
+  });
+
+  test('validates Definition Package v2 and Model v9 against frozen schemas', async () => {
+    const actual = await buildWomlExecutableDefinitionPackage(sourceDocument(), {
+      sourcePath: workflowPath,
+      projectRoot: fixtureRoot,
+    });
+    const schemaPaths = [
+      'compiled-workflow-model.v1.schema.json',
+      'compiled-workflow-model.v2.schema.json',
+      'compiled-workflow-model.v3.schema.json',
+      'compiled-workflow-model.v4.schema.json',
+      'compiled-workflow-model.v5.schema.json',
+      'compiled-workflow-model.v6.schema.json',
+      'compiled-workflow-model.v7.schema.json',
+      'compiled-workflow-model.v8.schema.json',
+      'compiled-workflow-model.v9.schema.json',
+      'woml-definition-package.v1.schema.json',
+      'woml-definition-package.v2.schema.json',
+    ];
+    const ajv = new Ajv2020({ strict: false });
+    for (const schemaPath of schemaPaths) {
+      ajv.addSchema(
+        JSON.parse(
+          readFileSync(resolve(import.meta.dir, '../../docs/schemas', schemaPath), 'utf8')
+        )
+      );
+    }
+    const validatePackage = ajv.getSchema(
+      'https://woml.dev/schemas/woml-definition-package.v2.schema.json'
+    );
+    const validateModel = ajv.getSchema(
+      'https://cronflow.dev/schemas/compiled-workflow-model/v9'
+    );
+    expect(validatePackage?.(actual), JSON.stringify(validatePackage?.errors)).toBe(true);
+    expect(validateModel?.(actual.workflow.model), JSON.stringify(validateModel?.errors)).toBe(
+      true
+    );
+  });
+
+  test('reproduces byte-identical artifacts across clean build directories', async () => {
+    const first = await buildWomlExecutableDefinitionPackage(sourceDocument(), {
+      sourcePath: workflowPath,
+      projectRoot: fixtureRoot,
+    });
+    const second = await buildWomlExecutableDefinitionPackage(sourceDocument(), {
+      sourcePath: workflowPath,
+      projectRoot: fixtureRoot,
+    });
+    expect(second).toEqual(first);
+    expect(JSON.stringify(first)).not.toContain(fixtureRoot);
+    expect(JSON.stringify(first)).not.toContain(tmpdir());
+  });
+
+  test('preserves package identity when the same project moves directories', async () => {
+    const temporary = mkdtempSync(join(tmpdir(), 'woml-ms2-portable-'));
+    const createProject = (name: string) => {
+      const root = join(temporary, name);
+      mkdirSync(root);
+      for (const file of ['customer-import.woml', 'spreadsheet.ts', 'values.ts']) {
+        writeFileSync(join(root, file), readFileSync(resolve(fixtureRoot, file)));
+      }
+      const sourcePath = join(root, 'customer-import.woml');
+      return { root, sourcePath };
+    };
+    try {
+      const left = createProject('left');
+      const right = createProject('right');
+      const build = async ({ root, sourcePath }: ReturnType<typeof createProject>) =>
+        await buildWomlExecutableDefinitionPackage(sourceDocument(sourcePath), {
+          sourcePath,
+          projectRoot: root,
+        });
+      expect(await build(right)).toEqual(await build(left));
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
     }
   });
 });
