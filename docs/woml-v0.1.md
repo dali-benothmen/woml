@@ -70,8 +70,9 @@ includes conditional branches and bounded parallel groups:
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
-| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC10 implemented and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, and workflow-scoped Cache v1 are executable and publishable |
-| Service events, queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
+| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC14 completed and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, workflow-scoped Cache v1, and internal Events Service v1 are executable and publishable; queue is postponed |
+| `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS1 completed | The canonical document root, safe local JS/TS resolver, deterministic graph, package manifest, and `woml check` are publishable; imported code remains fail-closed until MS3 |
+| Queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
 
 The complete example in Section 3 demonstrates the design catalog; it is not a
@@ -133,6 +134,7 @@ Outside raw-content elements:
 ## 3. Complete Example
 
 ```xml
+<woml>
 <workflow
   id="content-moderator"
   name="AI Content Moderator"
@@ -319,13 +321,17 @@ Outside raw-content elements:
     </branch>
   </steps>
 </workflow>
+</woml>
 ```
 
 ## 4. Document Structure
 
-A WOML file contains exactly one `<workflow>` root.
+A WOML file contains exactly one `<woml>` root. It contains an optional
+`<imports>` block followed by exactly one `<workflow>`. The wrapper remains
+required when there are no imports, so tools never need to guess between two
+document shapes.
 
-The root children appear in this order:
+The `<workflow>` children appear in this order:
 
 1. Optional `<config>`.
 2. Optional `<lifecycle>`.
@@ -338,7 +344,10 @@ points, and entry points are declared before executable steps.
 The structural grammar is:
 
 ```text
-document       := workflow
+document       := <woml> imports? workflow </woml>
+
+imports        := <imports> module+ </imports>
+module         := <module name=module-alias from=relative-module-source />
 
 workflow       := <workflow workflow-attributes>
                     config?
@@ -422,6 +431,13 @@ when-rejected  := <when-rejected>
                     steps-item*
                   </when-rejected>
 ```
+
+MS1 accepts local `.js` and `.ts` module graphs for validation and immutable
+packaging only. The alias/path/export grammar, project boundary, stable
+diagnostics, and `woml check` output are frozen in
+`docs/protocols/module-system-v1.md`. Imported functions become executable as
+`services.<alias>.<function>()` in MS3; `woml run` rejects imported modules
+until then.
 
 This is a structural grammar. Identifier and raw-content tokenization are fixed
 by Sections 2 and 5. Attribute-reference tokenization is defined in Section 15.
@@ -792,7 +808,7 @@ cron expression if doing so would change its semantics.
 ### 9.6 `<event>`
 
 ```xml
-<event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
+<event id="orderCreated" name="order.created">
   <schema>
     { "type": "object", "required": ["orderId"] }
   </schema>
@@ -803,28 +819,34 @@ cron expression if doing so would change its semantics.
 |---|---:|---|---|
 | `id` | Yes | Trigger ID | Stable trigger identity. |
 | `name` | Yes | Non-empty string | Event name consumed by the workflow. |
-| `secret` | Yes | Secret reference | Publisher bearer credential, written as `{{secrets.NAME}}`. |
+| `secret` | No | Secret reference | Optional public HTTP publisher bearer credential, written as `{{secrets.NAME}}`. Omit it for internal-only publication. |
 
 `<event>` may contain at most one inline Draft 2020-12 `<schema>` using the
 same source rules as webhook schemas.
 
-The frontend compiles this trigger to `trigger.event` with literal `name`, a
-symbolic `secret` reference, and optional literal `schema` fields. The name is
+The frontend compiles this trigger to `trigger.event` with literal `name`, an
+optional symbolic `secret` reference, and optional literal `schema` fields. The name is
 256 characters or fewer, begins with a
 lowercase letter, and contains at least two lowercase alphanumeric segments
 separated by one `.`, `_`, or `-`. Examples are `order.created`,
 `payment_failed`, and `agent-response`.
 
-Event Publication v1 freezes authenticated publishing at
+When `secret` is present, Event Publication v1 freezes authenticated publishing at
 `POST /_woml/events/{eventName}` with a required `Event-ID`, a bearer control
 credential, and one top-level JSON object of at most 1 MiB. Publication fans
 out in loaded workflow and trigger order. Each matching subscriber validates
 and admits independently, so the response may be `accepted`, `partial`, or
 `rejected`. The T12 Rust runtime serves this endpoint, and `woml emit` provides
-the built-in secret-store-backed publisher client.
+the built-in secret-store-backed publisher client. Without `secret`, no public
+publisher route is opened for that event name.
 
-At startup, `woml run` resolves only the symbolic secrets referenced by loaded
-event triggers. The secret value is held in memory for authentication and is
+SC11 also exposes `services.events.emit(name, payload, options?)`. It publishes
+directly through Rust without HTTP or a control token, derives stable
+idempotency from the managed operation identity, returns safe per-subscriber
+run results, and stores bounded hidden lineage for cycle/depth protection.
+
+At startup, `woml run` resolves only the optional symbolic secrets referenced by loaded
+event triggers. A resolved secret value is held in memory for authentication and is
 never written into WOML, Model v7, runtime events, or durable state.
 
 ## 10. `<steps>` and Sequential Execution
@@ -970,10 +992,14 @@ Script Bindings v1 provides the capability profile:
 - `secrets` exposes only literal `secrets.NAME` values proven necessary by the
   frontend; the Model v8 definition records names only.
 
-Using either binding, or native `fetch`, selects Model v8. SC2–SC10 implement
+Using either binding, or native `fetch`, selects Model v8. SC2–SC14 implement
 its event authority, Script Host v4, observed native Fetch, Rust-managed HTTP,
-and SQLite/PostgreSQL Database v1. There is no fallback that runs an untracked service call. Service clients
-and secret values never become context or persisted step output.
+SQLite/PostgreSQL Database v1, Storage v1, Cache v1, and internal Events
+Service v1, composition coverage, documentation, packaging, and a unified
+release gate. Queue remains unavailable until its producer-and-consumer product
+contract is justified. There is no fallback that runs an untracked service
+call. Service clients and secret values never become context or persisted step
+output. The author-facing entry point is `docs/woml-services.md`.
 
 Native `fetch()` preserves Bun's standard `Request`/`Response` behavior.
 `services.http.request()` returns `{ status, ok, headers, data, url,
@@ -1002,6 +1028,12 @@ TTL enforcement, atomic mutations, bounds, LRU eviction, and the namespace.
 Unexpired entries survive local restarts, but cache misses and eviction are
 normal and cache must never be used as durable business state. The complete
 contract and example are documented in `docs/woml-cache.md`.
+
+`services.events.emit(name, payload, options?)` directly fans out a named event
+to loaded `<event>` subscribers without HTTP or a publisher credential. Rust
+derives a stable publication identity, durably admits child runs, and protects
+against duplicate retry, cycles, and unbounded lineage. The complete contract
+and internal-only example are documented in `docs/woml-events-service.md`.
 
 The complete v0.1 context paths are:
 
@@ -1785,6 +1817,7 @@ The walking-skeleton workflow exercises raw script execution and direct context
 threading between two sequential script steps:
 
 ```xml
+<woml>
 <workflow version="0.1" id="hello" name="Hello WOML">
   <triggers>
     <manual id="start" />
@@ -1813,6 +1846,7 @@ threading between two sequential script steps:
     </step>
   </steps>
 </workflow>
+</woml>
 ```
 
 For `woml run hello.woml` or one-shot `woml test hello.woml`, the manual trigger

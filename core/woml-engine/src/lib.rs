@@ -11,6 +11,7 @@ mod database_postgres;
 pub mod durable;
 pub mod engine;
 pub mod event;
+pub mod events_service;
 pub mod host;
 pub mod http;
 pub mod interval;
@@ -47,7 +48,8 @@ pub use database::{ManagedDatabaseHandler, ManagedDatabasePool};
 pub use durable::{
   ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,
   ApprovalTimeoutSettlementStatus, ApprovalTokenBinding, DurableDagEngine, DurableEngineError,
-  DurableEventStore, DurableStoreError, IntervalCursor, IntervalCursorRegistration,
+  DurableEventStore, DurableStoreError, InternalEventAdmissionOutcome,
+  InternalEventAdmissionRequest, IntervalCursor, IntervalCursorRegistration,
   IntervalCursorRegistrationOutcome, IssuedApprovalToken, NotificationDeliveryWork,
   NotificationDispatchReport, NotificationProviderAdapter, NotificationProviderDeliveryResult,
   NotificationProviderUpdateResult, NotificationUpdateWork, RecoveryReport, RunDefinitionBinding,
@@ -70,6 +72,10 @@ pub use event::{
   ParallelGroupOutcome, ParallelGroupStartedData, ProviderMessageIdentity, RunEvent,
   RunEventPayload, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
   RunFailedDataV4, RunFailedDataV5, RunStartedData, StepRetryScheduledData,
+};
+pub use events_service::{
+  EventServiceAcceptedRun, EventServiceRunDispatcher, EventServiceSubscriber, ManagedEventsHandler,
+  EVENTS_SERVICE_CONTRACT, EVENTS_SERVICE_CONTRACT_VERSION, MAX_INTERNAL_EVENT_DEPTH,
 };
 pub use host::{ScriptHostClient, ScriptHostClientError, ScriptHostProcessOptions};
 pub use http::ManagedHttpHandler;

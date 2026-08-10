@@ -3,6 +3,22 @@
 The WOML CLI compiles `.woml` workflows, activates their triggers through the
 Rust core, and runs embedded JavaScript in isolated Bun Workers.
 
+Every source now uses `<woml>` as its document root, with optional `<imports>`
+before the one `<workflow>` definition. Direct `<workflow>` roots are rejected
+with a migration hint.
+
+## Check a workflow or local module graph
+
+Validate and inspect a source without activating triggers or executing code:
+
+```bash
+woml check path/to/workflow.woml
+woml check path/to/workflow.woml --json
+```
+
+The JSON form is the deterministic MS1 definition-package manifest. Local
+`.js` and `.ts` module execution remains fail-closed until Module System MS3.
+
 ## Activate an automation
 
 `woml run` executes a selected manual trigger once at startup, activates every

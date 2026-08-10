@@ -1,3 +1,4 @@
+<woml>
 <workflow id="webhook-trigger-contract">
   <triggers>
     <manual id="manualStart" />
@@ -28,3 +29,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

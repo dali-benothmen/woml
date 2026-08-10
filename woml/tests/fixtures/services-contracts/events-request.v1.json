@@ -1,0 +1,10 @@
+{
+  "contract": "woml.events",
+  "contractVersion": 1,
+  "kind": "request",
+  "operation": "emit",
+  "input": {
+    "name": "customer.updated",
+    "payload": { "customerId": "customer-42" }
+  }
+}

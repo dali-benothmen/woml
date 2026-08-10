@@ -1,126 +1,116 @@
 # WOML Module System Implementation Plan
 
-Status: directional plan created on 2026-08-09. Implementation begins only
-after Services and Capabilities reaches SC14. All source examples in this
-document are illustrative until MS0 reviews and freezes the language contract.
+Status: MS0 and MS1 completed on 2026-08-10. The canonical `<woml>` document,
+local-module source profile, diagnostics, immutable Definition Package v1,
+resolver, `woml check`, and reviewed fixtures are frozen and implemented.
+Imported code remains deliberately non-executable until MS3; MS2 is next.
 
 ## 1. Product Outcome
 
-The WOML Module System lets an author write reusable code once and use it across
-many steps and workflows without copying files or installing the legacy
-JavaScript chaining SDK.
+The WOML Module System lets an author write reusable JavaScript or TypeScript
+once and call it from any workflow step without copying functions or installing
+the legacy JavaScript chaining SDK.
 
-It delivers two related products:
-
-1. **JavaScript/TypeScript code modules** — reusable functions that appear under
-   the existing `services` namespace.
-2. **WOML components** — reusable workflow graphs that can be embedded and
-   composed inside another `.woml` workflow with explicit inputs and one
-   predictable output.
-
-The desired local code-module journey is conceptually:
+The canonical authoring journey is:
 
 ```xml
-<!-- Illustrative only; exact import grammar is an MS0 decision. -->
+<woml>
+  <imports>
+    <module name="spreadsheet" from="./modules/spreadsheet.ts" />
+  </imports>
+
+  <workflow id="customer-import" name="Customer import" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="cleanRows" name="Clean spreadsheet rows">
+        <script>
+          const rows = await services.spreadsheet.read(context.trigger.file);
+          return services.spreadsheet.removeEmptyRows(rows);
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
+```
+
+The imported module uses ordinary named ESM exports:
+
+```ts
+export async function read(file: string) {
+  // Read and parse the supplied file.
+}
+
+export function removeEmptyRows(rows: unknown[][]) {
+  return rows.filter(row => row.some(value => value !== null && value !== ''));
+}
+```
+
+The module is declared once and appears beneath one deeply read-only
+`services.<moduleName>` namespace in every script in that workflow. Authors do
+not declare whether a module is pure, effectful, Bun-backed, or Rust-backed.
+WOML observes actual calls to native Fetch and managed built-ins at the runtime
+boundaries that already exist.
+
+This milestone imports code, not workflows. A `.woml` workflow remains an
+independently activated definition and cannot be inserted into `<steps>` through
+`<module>`. Independent workflows communicate through events today. Durable
+call-and-return workflow communication is the next roadmap milestone through
+`services.workflows.call()`.
+
+## 2. Frozen Product Direction for MS0
+
+These product choices are no longer open alternatives. MS0 freezes their exact
+contracts and rejects competing spellings or shapes.
+
+### 2.1 Canonical WOML document
+
+Every WOML source uses `<woml>` as its document root:
+
+```xml
+<woml>
+  <imports>...</imports>
+  <workflow ...>...</workflow>
+</woml>
+```
+
+Rules:
+
+- `<woml>` has no attributes in the first profile.
+- `<imports>` is optional and, when present, appears before `<workflow>`.
+- Exactly one `<workflow>` is required.
+- The workflow keeps its `version` attribute as business metadata.
+- `<woml>` does not introduce a competing language or document `version`.
+- Direct `<workflow>` roots are migrated while WOML is pre-release rather than
+  becoming a permanent second document grammar.
+- The wrapper is used even when a document has no imports, so authors and tools
+  do not need to understand two source shapes.
+
+### 2.2 Canonical module declaration
+
+Imports use exactly:
+
+```xml
 <imports>
   <module name="spreadsheet" from="./modules/spreadsheet.ts" />
 </imports>
 ```
 
-followed by normal JavaScript in any step:
+Rules:
 
-```js
-const rows = await services.spreadsheet.read(file);
-const valid = services.spreadsheet.removeEmptyRows(rows);
+- `<module>` is empty and accepts exactly `name` and `from` in v1.
+- `name` is a JavaScript-safe alias and must be unique in the document.
+- `from` initially resolves a local `.js` or `.ts` source.
+- Paths are static and relative to the importing WOML source.
+- Absolute paths, home-relative paths, remote URLs, runtime-computed paths, and
+  paths escaping the reviewed project boundary are rejected.
+- `<require>`, `<import>`, and a workflow-owned `<imports>` container are not
+  aliases.
+- `.woml` files are not accepted by `<module>`.
 
-return { valid };
-```
-
-The module is declared once for the workflow and is available in every script.
-The author does not classify it as pure, effectful, Bun-backed, or Rust-backed.
-WOML tracks actual calls to native Fetch and the built-in managed services, as
-defined by Services and Capabilities.
-
-The desired WOML-composition journey is conceptually:
-
-```xml
-<!-- One possible direction, not frozen syntax. -->
-<customer.load
-  id="customer"
-  customer-id="{{context.trigger.customerId}}" />
-```
-
-The imported component's internal steps execute through the same Rust DAG and
-publish one public result at:
-
-```js
-context.steps.customer
-```
-
-Internal step IDs remain private to that component instance. The calling
-workflow depends only on its declared inputs and output.
-
-## 2. What “Module” Means
-
-WOML must keep three concepts distinct even if one package can contain all of
-them later.
-
-### 2.1 Code module
-
-A local or packaged JavaScript/TypeScript module exports reusable functions.
-Its code executes inside an isolated Bun Worker.
-
-Examples:
-
-- spreadsheet and CSV helpers;
-- data validation and transformation;
-- templates and date utilities;
-- a company-specific CRM client built using `fetch()`;
-- a business abstraction composed from `services.http`, `services.db`, or
-  other built-ins.
-
-### 2.2 WOML component
-
-A WOML component is a triggerless reusable DAG fragment with declared inputs
-and a declared output. The frontend instantiates it into the caller's compiled
-DAG. Rust executes ordinary compiled nodes and does not parse or interpret
-module markup.
-
-Examples:
-
-- load and normalize a customer;
-- request approval and handle both decisions;
-- enrich an order in parallel;
-- validate, transform, and store an uploaded dataset.
-
-### 2.3 WOML workflow
-
-A workflow remains an independently activated definition with triggers. Running
-a directory may activate several workflows, as it does today. Importing a
-component does not automatically activate another workflow.
-
-Starting a child workflow as a separate durable run is a different product
-contract from compile-time component embedding. That child-run/subworkflow
-feature is explicitly deferred unless MS0 determines it is required for the
-first module release.
-
-## 3. Product Principles
-
-### 3.1 No engine terminology in ordinary authoring
-
-The user does not write `kind="capability"`, execution backend names, event
-types, handler names, or Rust tracking metadata. WOML handles those concerns.
-
-### 3.2 One declaration, one stable namespace
-
-A code module receives a local alias and appears as:
-
-```js
-services.<alias>.<exportedFunction>()
-```
-
-Aliases use the reviewed JavaScript-safe identifier grammar. The six built-in
-service names are reserved:
+The five published built-in service names cannot be used as module aliases:
 
 ```text
 http
@@ -128,278 +118,289 @@ db
 storage
 cache
 events
-queue
 ```
 
-An import cannot shadow a built-in, another import, a runtime binding, or a
-component instance.
+`queue` and `workflows` are also reserved for future WOML-owned services. They
+are not custom-module aliases.
 
-### 3.3 Track operations, not module categories
+### 2.3 Export surface
 
-Pure module functions remain local Bun calls. A module's native `fetch()` is
-instrumented. A module's `services.*` call crosses Capability Call v1. A module
-may contain both kinds of function without declaring a type.
-
-The surrounding script attempt remains the durable unit for arbitrary local
-JavaScript. Rust does not record every `trim()`, CSV parse, or spreadsheet cell
-read.
-
-### 3.4 Imports are build-time dependencies, not runtime path lookups
-
-`woml run` must never resume an old run by reopening whatever code currently
-exists at `./modules/spreadsheet.ts`.
-
-The frontend resolves, compiles, hashes, and packages the complete dependency
-graph. The immutable workflow definition references content-addressed module
-artifacts. A changed file produces a new definition hash; an existing run keeps
-the exact code it started with.
-
-### 3.5 Load code once; share no mutable run state
-
-WOML may parse, bundle, transpile, and cache a module artifact once. Each
-isolated invocation receives a fresh module instance or equivalent isolated
-state. A module-level variable from one run cannot affect another run.
-
-### 3.6 No effects during module initialization
-
-Module top-level code may define functions and perform bounded pure
-initialization. It may not call Fetch, a managed service, or another external
-effect while the module is being loaded.
-
-This is invalid behavior even though the exact diagnostic is an MS0 decision:
+The first profile exposes named function exports only:
 
 ```js
-const customer = await fetch("https://example.com/customer");
+export function parse(input) { ... }
+export async function write(output) { ... }
 ```
 
-Effects become legal only after a workflow step invokes an exported function.
+The following are rejected in v1 with source-located diagnostics:
 
-### 3.7 Explicit component boundaries
+- `export default`;
+- exported mutable values or arbitrary JSON constants;
+- classes and constructors;
+- nested namespace objects;
+- generators, symbols, or callable proxies; and
+- CommonJS `module.exports` or `exports.*` surfaces.
 
-A WOML component cannot silently capture the caller's trigger, steps, secrets,
-or sibling component internals. The caller passes declared inputs. The component
-publishes a declared output. This is what makes the component reusable and
-reviewable.
+Type-only TypeScript exports are allowed in source but do not become runtime
+members of `services.<moduleName>`. A module with no accepted runtime function
+exports is invalid.
 
-### 3.8 Local-first, reproducible production later in the same milestone
+### 2.4 Calling a module
 
-The first vertical slice imports one local `.ts` file. Later phases add package
-dependencies, deterministic bundles, permissions, and deployable module
-packages. A public marketplace is not required to make local modules useful.
-
-## 4. Dependency on Services and Capabilities
-
-The Module System begins after SC14 because it reuses these completed contracts:
-
-- read-only `services` and `secrets` runtime bindings;
-- native Bun Fetch instrumentation;
-- Capability Call v1;
-- Script Host v4 full-duplex nested calls;
-- generic operation events and errors;
-- capability cancellation, limits, redaction, and idempotency metadata;
-- the Rust capability registry; and
-- built-in HTTP, database, storage, cache, events, and queue services.
-
-Services and Capabilities must keep its protocol generic, but it must not guess
-module syntax or package semantics. MS0 audits the implemented SC14 boundary.
-If a new protocol field is required, the Module System creates a new version
-rather than mutating a frozen Services artifact.
-
-The intended runtime direction is:
-
-```text
-.woml + local/package dependencies
-  -> TypeScript module resolver and WOML compiler
-  -> immutable definition package + content-addressed bundles + source maps
-  -> Rust stores/validates the exact artifact identities
-  -> long-lived Bun host caches immutable bundles by digest
-  -> isolated Worker instantiates modules for one script attempt
-  -> module exports appear under services.<alias>
-  -> native Fetch / built-in service effects use the SC capability boundary
-  -> final script result returns to the existing Rust DAG
-```
-
-## 5. What “Done” Means
-
-The Module System is complete when:
-
-1. A workflow can declare a local `.js` or `.ts` dependency once and call its
-   named exports through `services.<alias>` from multiple steps.
-2. The exact import document shape, alias grammar, resolution rules, and export
-   rules are frozen and source-located.
-3. Pure module functions run locally in Bun without unnecessary Rust RPC.
-4. Fetch and built-in service calls made inside a module use the same tracked
-   operation boundaries as calls written directly in a `<script>`.
-5. Module initialization cannot create external effects.
-6. Module errors and stacks point to the original module path, line, and column.
-7. The complete transitive dependency graph is hashed, locked, bundled, and
-   stored as part of an immutable workflow definition package.
-8. Restart recovery uses stored artifacts and never current filesystem code.
-9. Package dependencies work without production runtime access to the npm
-   registry or the author's `node_modules` directory.
-10. Native addons, install scripts, remote imports, dynamic imports, and other
-    unsupported dependency shapes fail with actionable diagnostics.
-11. Third-party packages cannot silently enumerate every project secret or
-    bypass reviewed capability/network policy.
-12. A reusable `.woml` component declares inputs and one output, compiles into
-    the caller's DAG, and publishes one predictable caller-visible result.
-13. Component internal IDs are collision-free and private; nested components
-    compose without reference leakage or DAG cycles.
-14. Branch, parallel, approval, retry, triggers, service calls, storage
-    references, and queue/event operations work inside component instances.
-15. Definition hashes change when any transitive code or WOML dependency
-    changes and remain stable when only irrelevant filesystem metadata changes.
-16. CLI commands can check, inspect, bundle, test, and explain the dependency
-    graph without executing a production workflow.
-17. Older workflows with no imports compile and execute unchanged.
-18. Local code modules and WOML components pass clean-package deployment and
-    recovery journeys.
-
-## 6. Scope
-
-### Included
-
-- Local JavaScript and TypeScript code modules.
-- Named export discovery and one `services.<alias>` namespace per import.
-- Static relative dependency resolution.
-- Deterministic TypeScript/JavaScript compilation and source maps.
-- A content-addressed immutable module artifact store.
-- Module graph validation, cycle detection, collision detection, hashing, and
-  lock data.
-- Package dependencies that can be deterministically bundled without native
-  addons or install scripts.
-- Runtime bundle caching with per-invocation state isolation.
-- Top-level effect prevention.
-- Secret/capability permission and supply-chain rules for installed packages.
-- Type declarations and editor autocomplete for imported services.
-- Triggerless WOML components with explicit inputs and one output.
-- Compile-time component instantiation into the caller's DAG.
-- Nested component composition and mixed code/WOML packages.
-- CLI inspection, validation, testing, packaging, documentation, and migration
-  guidance.
-
-### Not included
-
-- A public hosted WOML marketplace in the first module release.
-- Automatically trusting arbitrary npm lifecycle scripts.
-- Node native addons, arbitrary executable binaries, child processes, or FFI.
-- Remote `http://` or `https://` source imports.
-- Runtime dependency installation or registry access while a workflow runs.
-- Unpinned semver ranges in an activated production definition.
-- Shared mutable JavaScript singletons across runs.
-- Arbitrary raw filesystem, environment, or socket access.
-- A user-facing `kind="pure"` or `kind="capability"` declaration.
-- Allowing imported code to overwrite WOML built-ins.
-- Implicit access from a component to caller context.
-- A component that declares its own production trigger.
-- A separate child workflow run, parent/child cancellation tree, or distributed
-  subworkflow orchestration unless separately reviewed after component
-  embedding works.
-- Hot reloading a running definition. A future `--watch` still creates a new
-  immutable definition while existing runs retain their old artifacts.
-- General production multi-tenant OS isolation. This milestone creates the
-  package permission contract; Production Runtime owns tenant sandboxing.
-
-## 7. Provisional Authoring Directions
-
-This section frames the choices MS0 must review. It does not amend the current
-WOML grammar. Today, one `.woml` document still has exactly one `<workflow>`
-root containing its existing ordered children.
-
-### 7.1 Where imports live
-
-MS0 must choose one canonical document shape from directions such as:
-
-**Workflow-owned imports:**
-
-```xml
-<workflow ...>
-  <imports>...</imports>
-  <triggers>...</triggers>
-  <steps>...</steps>
-</workflow>
-```
-
-**Package document:**
-
-```xml
-<woml ...>
-  <imports>...</imports>
-  <workflow ...>...</workflow>
-</woml>
-```
-
-**External project manifest:** imports stay outside the workflow source.
-
-The choice affects one-workflow-per-file behavior, shared imports, component
-exports, editor tooling, and future packages. No implementation phase may
-quietly choose a shape because it is easiest to parse.
-
-### 7.2 Import element naming
-
-Possible directions include:
-
-```xml
-<import name="spreadsheet" from="./spreadsheet.ts" />
-```
-
-or:
-
-```xml
-<module name="spreadsheet" from="./spreadsheet.ts" />
-```
-
-`<require>` is not assumed: it carries CommonJS meaning while WOML modules use
-modern ESM/TypeScript semantics. MS0 freezes the one canonical spelling and
-rejects aliases.
-
-### 7.3 Calling a code module
-
-The agreed public direction is:
+An alias is available only through `services`:
 
 ```js
 const rows = await services.spreadsheet.read(file);
 ```
 
-Direct globals such as `spreadsheet.read()` are not the default because they
-collide easily and make runtime bindings harder to discover. Named function
-exports are the likely v1 contract. MS0 decides whether JSON constants, nested
-namespaces, default exports, classes, generators, and symbol exports are
-supported or rejected.
+Direct globals such as `spreadsheet.read()` are not injected. Imported
+namespaces are deeply read-only and cannot shadow built-ins, `context`,
+`attempt`, `secrets`, another alias, or a future reserved binding.
 
-### 7.4 Module implementation
+### 2.5 Workflow boundary
 
-An ordinary local module should look like ordinary JavaScript:
+A `.woml` file describes an independently activatable workflow definition. A
+trigger occurrence creates a durable run instance; the source file itself is
+not a run instance.
+
+The Module System does not import or inline runnable workflows. That avoids
+confusing three different operations:
+
+- importing reusable code;
+- publishing an event that starts zero, one, or many independent workflows;
+  and
+- calling exactly one workflow and durably waiting for its result.
+
+`services.events.emit()` uses the fast direct-Rust path for subscribers loaded
+in the same runtime, passes its payload through each subscriber's
+`context.trigger`, and does not wait for subscriber results. Separate runtime
+processes can currently receive events through their authenticated public event
+endpoints, but internal emit does not discover them automatically.
+
+The final operation belongs to the Durable Workflow Calls milestone after this
+plan. It adds automatic same-runtime and cross-process routing without treating
+a workflow as an imported file.
+
+## 3. Product Principles
+
+### 3.1 Imports are build-time dependencies
+
+`woml run` must never recover an old run by reopening whatever currently exists
+at `./modules/spreadsheet.ts`. The frontend resolves, compiles, hashes, and
+packages the complete dependency graph before activation.
+
+A changed source produces a new definition package and definition hash. An
+existing run stays bound to the exact module artifact it started with.
+
+### 3.2 One namespace, no engine vocabulary
+
+Authors use `services.<moduleName>.<function>()`. They never write
+`kind="capability"`, an execution backend, handler name, event type, or Rust
+tracking field.
+
+### 3.3 Track operations, not module categories
+
+Pure module functions remain local Bun calls. A module's native `fetch()` is
+instrumented. Calls from a module to a built-in `services.*` capability cross
+the existing managed-operation boundary. A module may contain both without a
+user-authored classification.
+
+The surrounding script attempt remains the durable unit for arbitrary local
+JavaScript. Rust does not record every string transform, CSV cell, or helper
+function call.
+
+### 3.4 Load artifacts once; share no mutable run state
+
+WOML may compile and cache an immutable module artifact once. Every isolated
+script invocation receives fresh module state or an equivalent isolation
+guarantee. A module-level variable from one attempt or run cannot affect
+another.
+
+### 3.5 No effects during initialization
+
+Top-level module code may define functions and perform bounded pure
+initialization. It may not call Fetch, a managed service, or another external
+effect while the module loads.
+
+This is invalid:
 
 ```js
-export function removeEmptyRows(rows) {
-  return rows.filter(row => row.some(value => value !== null && value !== ""));
-}
-
-export async function loadExchangeRates(base) {
-  const response = await fetch(
-    `https://rates.example.com/latest?base=${encodeURIComponent(base)}`
-  );
-
-  if (!response.ok) {
-    throw new Error(`Rates API returned ${response.status}`);
-  }
-
-  return response.json();
-}
+const customer = await fetch('https://example.com/customer');
 ```
 
-No WOML npm package is required merely to define functions. The runtime installs
-native Fetch instrumentation and the built-in `services` binding before an
-exported function is invoked.
+Effects become available only while an exported function is invoked from an
+active script attempt.
 
-For reuse and security, module functions should normally receive workflow data
-and credential values as arguments instead of silently reading `context`:
+### 3.6 Local first, reproducible packages later
+
+The vertical slice imports one local `.ts` file. Later phases add transitive
+dependencies, deterministic bundles, permissions, offline deployment
+artifacts, and package inspection. A public marketplace is not required for
+local modules to become useful.
+
+### 3.7 Useful compatibility, not arbitrary npm compatibility
+
+WOML supports a deterministic ESM-oriented JavaScript/TypeScript subset.
+Packages that require install scripts, native addons, unrestricted processes,
+or runtime registry access fail before workflow activation.
+
+## 4. Baseline Entering This Milestone
+
+SC14 provides the runtime boundaries reused by modules:
+
+- read-only `services` and source-proven `secrets` bindings;
+- native Bun Fetch instrumentation;
+- Capability Call v1 and Script Host v4 full-duplex calls;
+- durable generic operation events and `WomlServiceError`;
+- cancellation, limits, redaction, and stable operation identity;
+- the Rust capability registry; and
+- built-in HTTP, database, storage, cache, and internal events services.
+
+The intended direction is:
+
+```text
+.woml + local/package JS/TS dependencies
+  -> TypeScript resolver and WOML compiler
+  -> immutable definition package + bundles + source maps
+  -> Rust stores and validates exact artifact identities
+  -> long-lived Bun host caches immutable bundles by digest
+  -> isolated Worker instantiates modules for one script attempt
+  -> named exports appear under services.<alias>
+  -> native Fetch / built-in effects reuse the SC14 boundaries
+  -> final script result returns to the existing Rust DAG
+```
+
+If modules require a protocol shape that SC14 cannot express, this milestone
+creates a new version. It does not mutate a frozen Services artifact.
+
+## 5. What “Done” Means
+
+The Module System is complete when:
+
+1. Every WOML source uses the canonical `<woml>` document root.
+2. A workflow can declare a local `.js` or `.ts` module once and call its named
+   functions through `services.<alias>` from multiple steps.
+3. Parser, alias, path, export, and source-location rules are frozen and
+   conformance-tested.
+4. Pure module functions execute locally in Bun without unnecessary Rust RPC.
+5. Fetch and built-in service calls inside modules use the same tracked
+   boundaries as inline script calls.
+6. Module initialization cannot create external effects.
+7. Every invocation has isolated mutable module state.
+8. Module failures and stacks point to the original module path, line, and
+   column.
+9. The complete transitive dependency graph is hashed, locked, bundled, and
+   stored in an immutable definition package.
+10. Recovery uses stored artifacts and never current filesystem code.
+11. Supported package dependencies execute without production access to the npm
+    registry or the author's `node_modules` directory.
+12. Native addons, install scripts, remote/dynamic imports, default exports, and
+    unsupported package shapes fail with actionable diagnostics.
+13. Installed packages cannot silently enumerate project secrets or bypass
+    reviewed capability and network policy.
+14. CLI commands can check, inspect, bundle, test, and explain the dependency
+    graph without activating a production workflow.
+15. Workflows with no imports preserve their existing compiled execution
+    semantics after the document-root migration.
+16. Local and package-backed modules pass clean-package deployment, crash,
+    recovery, compatibility, and secret/artifact scans.
+
+## 6. Scope
+
+### Included
+
+- The canonical `<woml>` document wrapper.
+- `<imports><module name="..." from="..." /></imports>`.
+- Local JavaScript and TypeScript modules.
+- Named function export discovery.
+- One deeply read-only `services.<alias>` namespace per module.
+- Static relative dependency resolution.
+- Deterministic TypeScript/JavaScript compilation and source maps.
+- Module graph validation, cycle/collision detection, hashing, and lock data.
+- A content-addressed immutable artifact store and runtime bundle cache.
+- Per-invocation module-state isolation.
+- Top-level effect prevention.
+- Package dependencies that can be deterministically bundled without native
+  addons or install scripts.
+- Secret, capability, network, storage, and supply-chain permissions for
+  installed packages.
+- Type declarations and autocomplete for imported namespaces.
+- CLI validation, inspection, testing, bundling, packaging, documentation, and
+  migration guidance.
+
+### Not included
+
+- Importing `.woml` files.
+- Reusable WOML components or custom workflow tags.
+- Inline DAG expansion from another workflow definition.
+- `services.workflows.call()` or parent/child workflow runs; that is the next
+  milestone.
+- A public hosted WOML package marketplace.
+- Arbitrary npm lifecycle scripts or unreviewed CommonJS compatibility.
+- Native addons, executable binaries, child processes, raw FFI, or unrestricted
+  filesystem/environment/socket access.
+- Remote `http://` or `https://` module sources.
+- Runtime dependency installation or registry access.
+- Unpinned semver ranges in an activated definition.
+- Shared mutable module singletons across runs.
+- Default exports, classes, runtime namespace objects, or dynamic imports.
+- A user-facing pure/capability module classification.
+- Hot replacement of an active definition. A future watch experience still
+  produces a new immutable definition while existing runs keep old artifacts.
+- General multi-tenant OS isolation; Production Runtime owns that boundary.
+
+## 7. Code Module Runtime Contract
+
+### 7.1 Export discovery
+
+The frontend parses the complete ESM graph and records accepted named runtime
+functions. Export discovery is static and deterministic. Module profile v1
+rejects star re-exports, renamed re-exports, export lists, default exports, and
+package export maps; public functions use direct declarations only.
+
+Runtime namespaces are frozen:
+
+```js
+services.spreadsheet.parse;
+services.spreadsheet.write;
+```
+
+They cannot be mutated, extended, reassigned, or returned as JSON workflow
+data.
+
+### 7.2 Initialization and invocation
+
+For each script attempt, the Worker:
+
+1. verifies the artifact digest;
+2. creates fresh isolated module state;
+3. evaluates bounded top-level initialization with effects disabled;
+4. creates the read-only namespace from accepted exports;
+5. invokes functions when the script calls them;
+6. enables Fetch and built-in capabilities only during active invocation; and
+7. destroys invocation-local state when the attempt ends.
+
+Module initialization and function execution share the script attempt's
+timeout, cancellation, memory, and host-crash boundary. A module cannot keep
+background work alive after the attempt completes.
+
+### 7.3 Arguments, results, and bindings
+
+Local module calls may temporarily use ordinary in-memory JavaScript values.
+JSON constraints apply when data crosses an existing durable boundary:
+
+- the final script return;
+- native Fetch observations;
+- managed `services.*` inputs and results; and
+- durable workflow context.
+
+Module functions should receive workflow data and secrets as explicit
+arguments:
 
 ```js
 export async function loadCustomer(customerId, token) {
   return fetch(`https://crm.example.com/customers/${customerId}`, {
-    headers: { authorization: `Bearer ${token}` }
+    headers: { authorization: `Bearer ${token}` },
   }).then(response => response.json());
 }
 ```
@@ -413,773 +414,499 @@ const customer = await services.crm.loadCustomer(
 );
 ```
 
-MS0 must decide whether local modules may use the `secrets` global directly,
-whether installed packages must declare secret inputs, and how editor types
-represent those choices. A package must never enumerate the whole project
-secret store.
+Modules do not automatically receive `context`, `attempt`, an enumerable
+`secrets` object, or a hidden runtime helper in v1. Callers pass values and
+individual secrets explicitly. Installed packages must never enumerate the
+project secret store.
 
-### 7.5 Instantiating a WOML component
+### 7.4 Errors and source maps
 
-Possible invocation directions include a React-like custom element:
+A module failure is still a failure of the invoking step attempt. Diagnostics
+must identify:
 
-```xml
-<customer.load
-  id="customer"
-  customer-id="{{context.trigger.customerId}}" />
-```
+- importing WOML file and `<module>` declaration;
+- module path and original line/column;
+- exported function;
+- caller workflow and step; and
+- safe cause/code without source, secret, or body leakage.
 
-or an explicit neutral element:
+Bundling and TypeScript transpilation retain deterministic source maps. Rust
+stores safe artifact identity; Bun maps runtime frames back to original source.
 
-```xml
-<use
-  id="customer"
-  module="customer"
-  component="load">
-  <input name="customerId" value="{{context.trigger.customerId}}" />
-</use>
-```
+## 8. Resolution, Hashing, and Immutable Artifacts
 
-The custom-element form is concise and visually component-like. The explicit
-form is easier for XML tooling and makes dynamic names impossible. MS0 reviews
-both against parser behavior, errors, schemas, autocomplete, and AI-generated
-WOML before selecting one.
+### 8.1 Static dependency graph
 
-## 8. Code Module Runtime Contract
+The resolver begins at the WOML document and follows only reviewed static
+edges. It rejects missing files, unsafe paths, case collisions, symlink escapes,
+unsupported extensions, ambiguous aliases, graph cycles, and configured graph
+or byte-limit violations.
 
-### 8.1 Export surface
+Absolute developer-machine paths never become portable artifact identity.
 
-The first profile should favor named function exports:
+### 8.2 Definition package
 
-```js
-export function parse(...) { ... }
-export async function write(...) { ... }
-```
+Before activation, the frontend creates a deterministic package containing:
 
-The build stage validates the public names. At runtime, WOML constructs one
-deeply read-only namespace:
+- canonical compiled workflow model;
+- canonical module graph and aliases;
+- source and bundle content digests;
+- immutable executable bundles;
+- source maps and safe source identities;
+- compiler/Bun compatibility metadata;
+- lock and package integrity data; and
+- reviewed permission requirements.
 
-```js
-services.spreadsheet.parse
-services.spreadsheet.write
-```
+Rust validates and stores this package with the workflow definition. Existing
+runs remain bound to it after source files change or disappear.
 
-The namespace cannot be mutated, extended by user code, or reassigned.
+### 8.3 Runtime artifact cache
 
-### 8.2 Initialization and invocation
+The Bun host may cache verified immutable bundles by digest. Cache eviction may
+affect performance but not correctness. Rust or durable definition storage can
+re-register the exact artifact without consulting current project files.
 
-The Bun host may cache a compiled bundle by content hash. Each isolated Worker:
+Cache size, artifact size, graph size, compile time, initialization time, and
+memory are bounded before publication.
 
-1. installs the restricted initialization environment;
-2. instantiates the bundle with effects disabled;
-3. validates the expected named exports;
-4. attaches callable exports under the imported alias;
-5. enables invocation-scoped Fetch/capability calls;
-6. executes the authored script; and
-7. destroys all module state with the Worker.
+### 8.4 Package dependencies
 
-An effect attempted during steps 1-4 fails before the workflow operation is
-sent. Pure top-level initialization must be bounded by the same worker startup
-and memory limits.
+Supported packages resolve to exact versions and integrity hashes. Production
+execution uses prebuilt artifacts and performs no registry lookup or install.
 
-### 8.3 Local values versus protocol values
+Local-only MS1 has no package lock input. MS5 consumes exact package resolution
+from `bun.lock` and copies the resolved versions and integrity into the
+immutable definition package; it does not introduce a second author-maintained
+lockfile in the first package profile. Unpinned, tampered, script-requiring,
+native-addon, or unsupported dependency graphs fail before activation.
 
-A pure module function may return an in-memory object, class instance, typed
-array, or library value for further local processing. It does not cross Rust
-merely because it was returned by a module function.
+## 9. Permissions, Secrets, and Supply Chain
 
-Only these boundaries require the frozen wire types:
+Local author code and installed packages may use different trust defaults, but
+authors never declare an engine category.
 
-- arguments/results of a managed `services.*` capability call;
-- operation metadata;
-- the final `<script>` result; and
-- stored component inputs/outputs.
+The permission contract must cover controlled access to:
 
-The final step result remains JSON-only unless Services and Capabilities
-provides an explicit portable storage reference.
+- native Fetch/network origins;
+- managed HTTP;
+- database connections or connection classes;
+- storage namespaces;
+- cache namespaces;
+- internal event names; and
+- specifically named secrets.
 
-### 8.4 Errors and source maps
+Requirements:
 
-An exception must preserve:
+- packages cannot enumerate secrets;
+- declared secret names and permission requirements may be stored, values may
+  not;
+- dependency updates cannot silently widen permissions;
+- denied permissions fail before or at the controlled doorway;
+- module errors, source maps, bundles, locks, logs, and events are scanned for
+  credential leakage; and
+- package provenance and integrity are inspectable before activation.
 
-- original module path or package identity;
-- original TypeScript/JavaScript line and column;
-- exported function name;
-- calling WOML step ID and source location; and
-- a secret-safe stack/cause chain.
+Permissions reduce accidental and supply-chain access. They do not make trusted
+JavaScript a complete multi-tenant sandbox; hosted isolation remains a
+Production Runtime responsibility.
 
-The CLI should show the shortest useful error first and offer verbose dependency
-and stack information without printing generated bundle internals by default.
+## 10. CLI and Developer Experience
 
-## 9. Resolution, Hashing, and Immutable Artifacts
-
-### 9.1 Static graph
-
-The initial resolver accepts static imports only. It rejects:
-
-- missing files;
-- paths outside reviewed project/package boundaries;
-- ambiguous case/symlink identities;
-- import cycles in the first profile;
-- dynamic `import()`;
-- CommonJS runtime `require()` unless explicitly added later;
-- remote URL imports;
-- native addons and executable binaries; and
-- packages that require install/postinstall scripts.
-
-Relative paths resolve from the importing source file, not the terminal's
-current working directory.
-
-### 9.2 Definition package
-
-An activated definition package contains or addresses immutable copies of:
-
-- compiled workflow Model;
-- compiled JavaScript bundles;
-- source maps;
-- original source identity and safe display paths;
-- transitive dependency manifest;
-- package versions and integrity digests;
-- compiler/Bun compatibility version;
-- imported WOML component source/model artifacts; and
-- a root definition hash over the canonical package manifest.
-
-Filesystem timestamps, absolute machine-specific paths, and dependency cache
-locations do not affect the canonical hash.
-
-### 9.3 Runtime cache
-
-The long-lived Bun host may retain compiled artifacts keyed by digest. Rust
-registers/validates the artifact identity and can resend it after a host crash.
-Cache eviction affects performance only; the durable definition package remains
-the recovery authority.
-
-### 9.4 Locking and package dependencies
-
-MS0/MS5 must decide whether WOML consumes an existing `bun.lock`, emits a
-WOML-specific lock artifact, or records both. Regardless of filename:
-
-- activated versions are exact;
-- integrity hashes are mandatory;
-- resolution never changes during a run;
-- production execution does not access a package registry; and
-- bundle output plus toolchain compatibility is part of the immutable
-  definition.
-
-## 10. WOML Component Contract
-
-The exact markup remains MS7 work, but these semantics are required.
-
-### 10.1 Triggerless reusable graph
-
-A component may contain supported executable structures such as steps,
-branches, parallels, approvals, and nested components. It does not own manual,
-webhook, Slack, schedule, interval, event, or queue triggers.
-
-### 10.2 Declared inputs
-
-Inputs have stable names and may eventually declare:
-
-- required/optional status;
-- JSON Schema or primitive type;
-- default JSON value;
-- ordinary data versus secret/capability input; and
-- source documentation.
-
-The first profile must choose a clear JavaScript binding such as `inputs` or an
-explicit component-local context field. It must not smuggle inputs into
-`context.trigger`, silently expose caller context, or resolve an undefined
-`context.run` contract.
-
-References at the call site may depend only on values legally available before
-the component instance in the caller DAG.
-
-### 10.3 One public output
-
-A component declares one output expression/schema. After successful execution,
-the caller sees that output at:
-
-```js
-context.steps.<instanceId>
-```
-
-Internal outputs remain component-private unless explicitly included in the
-declared output. A component with no meaningful data may return `null`, but the
-behavior must be explicit.
-
-### 10.4 ID namespaces
-
-The frontend creates deterministic compiled IDs from the import identity,
-component identity, instance ID, nesting path, and internal node ID. Two
-instances of the same component never collide.
-
-Author-facing diagnostics use readable component paths. Rust validates the
-flattened DAG IDs but does not need to understand XML alias syntax.
-
-### 10.5 Compile-time instantiation
-
-Component embedding is compile-time composition in v1:
-
-```text
-component source
-  -> validate its local DAG and interface
-  -> bind caller inputs
-  -> instantiate/prefix internal nodes
-  -> connect caller predecessor/component entry edges
-  -> connect component exit/output/caller successor edges
-  -> validate the complete DAG
-```
-
-The result is one durable run and one event log. A component is not a hidden
-second executor or mutable context object.
-
-### 10.6 Observability
-
-Compiled nodes retain safe source/module/instance metadata so the CLI and a
-future UI can group them by component. The first implementation should avoid a
-new durable module-event vocabulary unless execution semantics genuinely need
-it; visual grouping can usually be derived from the immutable Model.
-
-## 11. Permissions, Secrets, and Supply Chain
-
-The module system does not ask the user to label code as a capability. That does
-not remove the need for permissions when installing third-party code.
-
-The product distinction is:
-
-- **module kind** is an internal implementation concern and is not authored;
-- **requested permission** is a security decision and must be visible before
-  third-party code receives access.
-
-MS0/MS6 must freeze:
-
-- whether local project modules are treated as trusted authored code;
-- how installed packages request native Fetch origins and built-in services;
-- how secret values are passed or explicitly granted;
-- whether package permissions are recorded in the lockfile/definition package;
-- what happens when a dependency update requests new permissions;
-- how filesystem/storage scopes are expressed;
-- how transitive dependency permissions are summarized; and
-- how CI/non-interactive builds approve an exact reviewed permission set.
-
-Guardrails:
-
-1. A package cannot enumerate the secret store.
-2. A package update cannot silently gain a new permission.
-3. Only the exact locked artifact executes.
-4. Runtime registry access and install scripts are forbidden.
-5. Raw environment, child process, FFI, and native addon access remain denied.
-6. Known secrets are rejected from final results, logs, events, source maps, and
-   bundled artifacts.
-7. A package's generated code and source maps are scanned for embedded
-   credentials before activation.
-8. Hosted multi-tenant enforcement requires the later Production Runtime
-   sandbox; local permissions are still useful product policy, not a false OS
-   boundary.
-
-## 12. CLI and Developer Experience
-
-The exact command names are an MS0 decision, but the product must support these
-journeys:
-
-- validate a workflow and its full module graph without executing it;
-- show resolved aliases, paths/packages, versions, hashes, exports, component
-  interfaces, and permissions;
-- explain why a module or export cannot be resolved;
-- build an immutable deployable definition package;
-- reproduce a build from its lock data;
-- test a code module export with mocked built-in services;
-- test a WOML component with supplied inputs and inspect its single output;
-- identify unused imports and dependency cycles;
-- show which transitive file caused a definition hash to change; and
-- print source-mapped errors from installed packages safely.
-
-Potential commands such as `woml check`, `woml inspect`, `woml bundle`, or
-`woml modules` remain provisional. The module system should reuse existing
-`woml run` and `woml test` rather than invent a second runtime.
-
-Editor support should generate or expose TypeScript declarations so this works
-with autocomplete:
+MS0 freezes `woml check <file> [--json]`; later phases may add dedicated build,
+test, and dependency commands without changing that read-only contract. The
+completed module experience must support:
+
+- checking WOML/module syntax without executing a workflow;
+- explaining aliases, paths, exports, transitive dependencies, digests, and
+  permissions;
+- building a deterministic deployment artifact;
+- testing an exported module function with mocked built-ins;
+- updating and reviewing locked dependencies;
+- showing why a package or export is unsupported;
+- identifying unused module declarations; and
+- mapping runtime errors to original TypeScript/JavaScript source.
+
+Editor support should generate declarations similar to:
 
 ```ts
-services.spreadsheet.read
-services.crm.loadCustomer
+services.spreadsheet.read;
+services.crm.loadCustomer;
 ```
 
-WOML component schemas should provide attribute/input autocomplete and
-source-located missing/unknown input diagnostics.
+AI-generated WOML receives the same source-located diagnostics as human-authored
+files. Unknown elements, attributes, aliases, and exports are never guessed.
 
-## 13. Versioned Artifacts to Review in MS0
+## 11. Versioned Artifacts to Review in MS0
 
-MS0 determines the exact version numbers after auditing SC14. At minimum the
-Module System needs reviewed artifacts for:
+At minimum, MS0 reviews and pins:
 
-1. module import/document syntax;
-2. code module manifest and named-export contract;
-3. module resolution and canonical identity;
-4. immutable definition-package manifest;
-5. dependency lock and integrity data;
-6. Bun bundle/runtime compatibility;
-7. Script Host module registration/cache/invocation messages, using a new host
-   protocol version if SC14's frozen version cannot express them;
-8. package permission and secret-grant contract;
-9. WOML component definition, input, output, and invocation syntax;
-10. compiled Model module/component metadata and flattened-node identity;
-11. module/component diagnostics and source-location schema;
-12. representative source, bundle, source-map, model, package, nested graph,
-    recovery, and invalid-cycle fixtures.
+1. canonical `<woml>/<imports>/<module>/<workflow>` document schema;
+2. module alias, path, and extension grammar;
+3. accepted ESM/named-function export surface;
+4. module graph identity, limits, and cycle rules;
+5. definition-package manifest and canonical hash inputs;
+6. artifact, source-map, and cache identity;
+7. dependency lock and integrity data;
+8. Bun compiler/runtime compatibility contract;
+9. Script Host artifact registration/cache/invocation messages, using a new
+   protocol version when necessary;
+10. package permission and secret-grant contract;
+11. module diagnostics/source-location schema; and
+12. representative source, bundle, source-map, model, package, recovery, and
+    invalid-graph fixtures.
 
-Run Event changes are not assumed. If the compiled DAG and existing generic
-operation events are sufficient, module provenance remains immutable Model
-metadata. Any new durable event requires its own explicit review and version.
+Run Event changes are not assumed. If existing generic operation events are
+sufficient, module provenance stays immutable definition metadata. Any new
+durable event receives its own versioned review.
 
-## 14. Implementation Phases
+## 12. Implementation Phases
 
-### MS0 — Freeze the Module System contracts after SC14
+### MS0 — Freeze the Module System contracts — completed
 
 Changes:
 
-- Audit the completed capability registry, Script Host, secrets, Fetch, and
-  artifact persistence boundaries.
-- Select the WOML document/import shape and canonical import element syntax.
-- Freeze alias/export rules, path/package resolution, graph/cycle rules,
-  definition-package hashing, lock data, runtime artifact registration, and
-  compatibility versions.
-- Freeze the local-versus-installed permission and secret contract.
-- Choose the component invocation syntax, input binding, output contract, and
-  flattened ID algorithm.
-- Add reviewed code-module and WOML-component fixtures before runtime code.
-- Keep child runs, public registry UX, hot reload, and multi-node ownership
-  explicitly deferred.
+- Audit SC14's model, Script Host, capability, secrets, Fetch, and artifact
+  persistence boundaries.
+- Freeze the canonical document, module declaration, named-export, alias, path,
+  resolution, hashing, locking, permission, error, and limit contracts.
+- Freeze the migration from direct `<workflow>` roots to `<woml>` documents.
+- Add reviewed valid and invalid fixtures before runtime code.
+- Keep `.woml` imports and Durable Workflow Calls explicitly outside scope.
 
 Result:
 
-Every layer agrees on what a module is and how it remains reproducible, but no
-module is executable yet.
+Every layer agrees on exactly what a module is and how it remains reproducible,
+but modules are not executable yet.
 
 Gate:
 
-Schemas and fixtures resolve every syntax/protocol/hash/permission shape listed
-in Sections 7-13, reject ambiguous alternatives, and do not modify any frozen
-SC artifact in place.
+Schemas and fixtures resolve every syntax/protocol/hash/permission shape in
+Sections 2–11, reject competing alternatives, and do not mutate frozen SC14
+artifacts.
 
-### MS1 — Build the static resolver and immutable definition package
+### MS1 — Activate the document grammar and immutable resolver — completed
 
 Changes:
 
-- Resolve local files from the importing source with canonical safe identities.
+- Parse and validate the canonical `<woml>` root, optional ordered `<imports>`,
+  `<module>` declarations, and one `<workflow>`.
+- Migrate project examples and fixtures from direct workflow roots.
+- Resolve local files from their importing source with safe portable identity.
 - Build a deterministic acyclic dependency graph.
-- Validate aliases, extensions, paths, missing files, collisions, and exports.
-- Canonicalize and hash sources, manifests, compiler version, and graph edges.
-- Create/store a definition package containing module artifacts and source
-  maps rather than runtime filesystem paths.
-- Add cache reuse by content digest.
+- Validate aliases, extensions, paths, files, collisions, and exports.
+- Canonicalize and hash source, compiler, graph, and permission inputs.
+- Produce the reviewed definition-package manifest without executing code.
 
 Result:
 
-WOML can explain and package a module graph without executing its code.
+WOML can validate, explain, and package a local module graph.
 
 Gate:
 
-Same content in different safe project locations produces the reviewed
-portable identities; content changes alter the root hash; timestamps, graph
-discovery order, and cache paths do not.
+Reviewed sources deep-equal their parser/graph/package fixtures. Content changes
+alter the root hash; timestamps, discovery order, cache location, and irrelevant
+filesystem metadata do not.
 
-### MS2 — Compile local JavaScript and TypeScript imports
+### MS2 — Compile local JavaScript and TypeScript modules
 
 Changes:
 
-- Activate the frozen import syntax for local `.js` and `.ts` files.
-- Parse ESM imports/exports and accept the reviewed named-function surface.
-- Transpile/bundle TypeScript deterministically and retain source maps.
+- Parse the reviewed ESM subset and named function exports.
+- Reject default/CommonJS/dynamic/unsupported exports precisely.
+- Transpile and bundle TypeScript deterministically.
+- Retain verified source maps.
 - Lower aliases and artifact digests into the new compiled Model profile.
-- Generate TypeScript declarations for `services.<alias>`.
-- Keep frontend errors attached to exact WOML/import/module locations.
+- Generate declarations for `services.<alias>`.
 
 Result:
 
-A WOML workflow with a local code module compiles into a complete immutable
-definition package, but Rust may still reject module execution.
+A WOML document with a local module compiles into an immutable executable
+definition package, while Rust still rejects module execution until MS3.
 
 Gate:
 
-Reviewed source deep-equals the Model/package fixtures; syntax, export,
-collision, dynamic import, cycle, and TypeScript error cases are source-mapped.
+Source, model, bundle, map, and package fixtures match exactly; syntax, export,
+collision, dynamic import, cycle, and TypeScript failures point to their source.
 
 ### MS3 — Execute local modules under `services.*`
 
 Changes:
 
 - Register immutable bundles with the long-lived Bun host by digest.
-- Instantiate a fresh module environment in each isolated Worker.
-- Attach named exports to a deeply read-only `services.<alias>` namespace.
-- Disable Fetch/capability calls during module initialization and enable them
-  during exported-function invocation.
-- Let module-internal Fetch and built-in service calls reuse SC contracts.
-- Preserve local in-memory values until the final script JSON boundary.
+- Instantiate fresh module state in each isolated Worker.
+- Attach named exports to a deeply read-only alias namespace.
+- Disable effects during initialization and enable tracked Fetch/built-ins only
+  during function invocation.
+- Preserve local JavaScript values until an existing JSON boundary.
+- Apply script timeout, cancellation, crash, input/result, and memory limits.
 
 Result:
 
-One local TypeScript file is declared once and used from two sequential WOML
-steps through `services.<alias>`.
+One local TypeScript module is declared once and called from two sequential
+workflow steps through `services.<alias>`.
 
 Gate:
 
-The vertical slice proves pure sync/async functions, Fetch, managed services,
-multiple exports, multiple steps, no shared mutable state, top-level effect
-rejection, Worker timeout, and exact final output.
+The vertical slice proves sync/async functions, multiple exports/steps, Fetch,
+managed services, no shared state, initialization rejection, timeout,
+cancellation, host/worker crash distinction, and exact output.
 
-### MS4 — Make local module execution recoverable and observable
+### MS4 — Make local modules recoverable and observable
 
 Changes:
 
-- Recover using stored definition artifacts after original files are changed or
-  removed.
+- Recover using stored artifacts after original sources change or disappear.
 - Re-register bundles after Bun host restart and verify every digest.
-- Add source-mapped module stacks and safe CLI progress.
-- Enforce artifact/frame/memory/startup limits and cache eviction.
-- Test branch, parallel, approval, retry, all triggers, and every built-in
-  service from imported functions.
-- Prevent module artifacts, maps, errors, and logs from containing secrets.
+- Add source-mapped failures and safe CLI progress.
+- Enforce graph/artifact/frame/memory/startup/cache bounds.
+- Compose imported functions with sequential, branch, parallel, approval,
+  retry, every production trigger, and all five published services.
+- Scan artifacts, maps, failures, logs, and history for secrets.
 
 Result:
 
-Local code modules have the same restart, isolation, composition, and diagnostic
-quality as inline WOML scripts.
+Local modules have the same recovery, isolation, composition, and diagnostic
+quality as inline scripts.
 
 Gate:
 
-Crash tests cover before/after artifact registration, during initialization,
-during pure code, during Fetch/service calls, and after script success; recovery
-never reads current project files.
+Crash tests cover registration, initialization, pure execution, Fetch/service
+calls, and post-script completion. Recovery never reads current project files.
 
-### MS5 — Add locked package dependencies and deterministic bundles
+### MS5 — Add locked package dependencies
 
 Changes:
 
-- Freeze and implement the reviewed package/lockfile integration.
+- Implement the reviewed package-manager and lock integration.
 - Resolve exact versions and integrity digests before activation.
-- Bundle dependencies into immutable artifacts for offline production runtime.
-- Reject install scripts, native addons, executable binaries, dynamic/remote
-  imports, and unsupported CommonJS edges.
-- Add dependency license/provenance metadata without making it workflow context.
-- Build the spreadsheet acceptance fixture using a real locked library.
+- Bundle supported dependencies for offline production execution.
+- Reject install scripts, native addons, binaries, remote/dynamic imports, and
+  unsupported CommonJS edges.
+- Record safe license/provenance metadata.
+- Build a spreadsheet acceptance module backed by a real locked package.
 
 Result:
 
-A user can write a small local spreadsheet module backed by a package dependency
-and deploy it without `npm install` on the production runtime.
+A local module can use a supported package dependency and deploy without
+running `npm install` in production.
 
 Gate:
 
-Offline clean-package execution succeeds; tampered integrity, missing lock,
-range drift, lifecycle scripts, native addons, registry outage, and transitive
-cycle cases fail before activation.
+Offline execution succeeds; tampering, missing lock data, range drift,
+lifecycle scripts, native addons, registry outage, and transitive cycles fail
+before activation.
 
-### MS6 — Enforce module permissions and complete code-module DX
+### MS6 — Enforce permissions and complete module DX
 
 Changes:
 
-- Implement the reviewed permission/grant contract for installed packages.
-- Prevent secret enumeration and require reviewed secret flow.
-- Enforce capability/network/storage policy at controlled runtime doorways.
-- Detect permission expansion after a dependency update.
-- Add module graph inspection, build/check output, unit testing with mocked
-  built-ins, autocomplete, unused-import diagnostics, and documentation.
-- Add local and package code-module examples to clean-package smoke tests.
+- Implement installed-package permission and secret grants.
+- Prevent secret enumeration and detect permission expansion after updates.
+- Enforce capability/network/storage policies at controlled doorways.
+- Add graph inspection, build/check output, module unit testing with mocked
+  built-ins, autocomplete, unused-import diagnostics, and guidance.
+- Add local and package-backed examples to clean-package smoke tests.
 
 Result:
 
-JavaScript/TypeScript code modules become independently publishable and pleasant
-to author, inspect, test, and deploy.
+Modules are safe to inspect and pleasant to author, test, review, and deploy.
 
 Gate:
 
-Permission denial/grant/update, secret leakage, malicious dependency, type
-generation, mocked service, packaging, offline, and compatibility tests pass.
+Permission, secret, malicious dependency, type-generation, mocked-service,
+packaging, offline, and backwards-compatibility suites pass.
 
-### MS7 — Freeze the WOML component language and fixtures
-
-Changes:
-
-- Freeze the component document/export and invocation syntax selected in MS0.
-- Freeze input names, required/default/schema behavior, the script binding for
-  inputs, and secret input behavior.
-- Freeze the one-output contract and caller `context.steps.<instanceId>` shape.
-- Freeze local/private IDs, instance identity, nested identity, and source maps.
-- Define allowed component structures and explicitly forbid triggers/caller
-  context capture.
-- Add simple, branch, parallel, approval, nested, and invalid-cycle fixtures.
-
-Result:
-
-A reusable WOML graph has one precise public interface before it is expanded
-into a caller DAG.
-
-Gate:
-
-Every fixture has an exact interface and expanded-ID expectation; missing,
-unknown, forward, secret, collision, empty-output, and recursive cases produce
-source-located errors with no unresolved defaults.
-
-### MS8 — Compile component instances into the caller DAG
-
-Changes:
-
-- Resolve imported WOML component definitions through the MS1 graph.
-- Validate component-local DAGs independently.
-- Bind caller values to declared inputs and insert reviewed boundary nodes or
-  metadata.
-- Prefix/instantiate internal nodes deterministically.
-- Connect entry, exit, output, and downstream edges.
-- Revalidate the complete expanded DAG and reference legality.
-- Store component/interface/source provenance in the immutable Model/package.
-
-Result:
-
-A caller using one component compiles into the exact reviewed flat DAG while
-retaining enough metadata for component-level diagnostics and visualization.
-
-Gate:
-
-Expanded models deep-equal fixtures for one/two/nested instances, branches,
-parallels, approvals, repeated imports, and mixed code-module dependencies;
-cycles, ID collisions, and reference leaks are rejected.
-
-### MS9 — Execute and recover WOML components end to end
-
-Changes:
-
-- Execute expanded components through the existing Rust DAG without a second
-  executor or persistence authority.
-- Publish exactly one instance result at the caller-visible step ID.
-- Keep internal outputs private outside component diagnostics.
-- Compose retries, branch selection, parallel cancellation, approval waiting,
-  service calls, events, queues, storage references, and process recovery.
-- Group CLI progress by component instance using immutable Model metadata.
-
-Result:
-
-A reusable `.woml` component works like a native workflow building block and
-survives every existing durable pause/restart boundary.
-
-Gate:
-
-End-to-end and crash-boundary tests prove exact output, private internals,
-single event authority, approval resume, retry safety, and compatibility with
-non-module workflows.
-
-### MS10 — Compose nested and mixed local module packages
-
-Changes:
-
-- Support packages containing code modules, WOML components, or both.
-- Resolve nested components and code dependencies through one acyclic graph.
-- Deduplicate identical artifacts by digest while preserving aliases/interfaces.
-- Enforce package export maps so private files/components cannot be imported.
-- Add package-level documentation, types, component schemas, and provenance.
-
-Result:
-
-A team can maintain a reusable local WOML package containing a component and
-the TypeScript services that implement its domain logic.
-
-Gate:
-
-Mixed/nested/re-export/private-export/duplicate-version tests prove deterministic
-resolution, isolation, hashing, permission aggregation, and source diagnostics.
-
-### MS11 — Complete packaging, inspection, and distribution boundaries
+### MS7 — Complete packaging and distribution boundaries
 
 Changes:
 
 - Finalize CLI check/inspect/build/test journeys and machine-readable output.
-- Produce portable definition/module bundles for deployment and CI artifacts.
+- Produce portable definition/module bundles for CI and deployment.
 - Support reviewed local path and packaged archive dependencies.
-- Define, but do not require, the future registry identity/signature boundary.
-- Document versioning, upgrades, lock updates, permission changes, cache cleanup,
-  and incident response for a compromised dependency.
-- Add migration guidance from copied scripts and the legacy SDK service pattern.
+- Define, without requiring, a future registry signature/identity boundary.
+- Document versions, upgrades, lock updates, permission changes, cache cleanup,
+  incident response, and migration from copied scripts/legacy SDK services.
 
 Result:
 
-Modules can move from a developer project to CI and production reproducibly,
-without a public marketplace.
+Modules move reproducibly from a developer project to CI and production without
+a public marketplace.
 
 Gate:
 
 Builds reproduce offline across clean directories; inspection explains every
-artifact/version/permission; corrupted/tampered archives fail before execution.
+artifact, version, export, and permission; corruption fails before execution.
 
-### MS12 — Harden and publish the WOML Module System
+### MS8 — Harden and publish the Module System
 
 Changes:
 
 - Run adversarial graph, bundle, source-map, permission, secret, resource,
   cache, crash, and recovery suites.
-- Benchmark bundle build, cold/warm Worker startup, cache reuse, pure function
-  calls, nested components, and large graphs.
-- Update the WOML language, architecture, CLI, security, deployment, recovery,
+- Benchmark build, cold/warm Worker startup, cache reuse, pure calls, and large
+  dependency graphs.
+- Update language, architecture, CLI, security, deployment, recovery,
   migration, and AI-authoring documentation.
-- Add local code, package-backed spreadsheet, simple component, nested
-  component, and mixed package examples to the release suite.
-- Run the entire pre-module WOML compatibility suite unchanged.
+- Add local TypeScript and package-backed spreadsheet examples to the release
+  suite.
+- Run the entire pre-module WOML compatibility suite unchanged after source
+  fixtures are migrated to the canonical wrapper.
 
 Result:
 
-Local/package JavaScript and TypeScript modules plus reusable WOML components
-are supported, documented, reproducible, and publishable.
+Local and package-backed JavaScript/TypeScript modules are supported,
+documented, reproducible, and publishable.
 
 Gate:
 
 Frontend, Rust, Bun host, schemas/protocols, typecheck, Clippy, package,
-permission, offline, source-map, compatibility, performance-regression, and
+permission, offline, source-map, compatibility, benchmark-regression, and
 secret/artifact scans pass from a clean installation.
 
-## 15. Expected File Areas
+## 13. Expected File Areas
 
-| Area | Expected locations |
-|---|---|
-| WOML document/import grammar | `woml/src/parser.ts`, `compiler.ts`, new module syntax helpers |
-| Module graph/resolution | new `woml/src/modules/*` resolver, identity, graph, lock, diagnostics |
-| Model/package artifacts | `woml/src/model.ts`, new schemas/manifests and artifact builders |
-| JS/TS analysis/bundling | new frontend/CLI bundler integration, source maps, type generation |
-| Bun module runtime | `woml-cli/src/script-host/*`, new module loader/cache/runtime helpers |
-| Rust artifact authority | `core/woml-engine` definition/artifact storage and host registration |
-| Permissions/secrets | frontend dependency analysis, CLI grants, runtime capability policy |
-| WOML components | new component interface/lowering/instantiation modules and fixtures |
-| CLI DX | `woml-cli/src/cli.ts`, module check/inspect/build/test commands |
-| Versioned contracts | `docs/schemas/*`, `docs/protocols/*`, model/package/module fixtures |
-| Examples | local TS module, spreadsheet package, simple/nested WOML components |
+| Area                         | Expected locations                                                    |
+| ---------------------------- | --------------------------------------------------------------------- |
+| WOML document/import grammar | `woml/src/parser.ts`, `compiler.ts`, module syntax helpers            |
+| Module graph/resolution      | new `woml/src/modules/*` resolver, identity, graph, lock, diagnostics |
+| Model/package artifacts      | `woml/src/model.ts`, schemas/manifests and artifact builders          |
+| JS/TS analysis/bundling      | frontend/CLI bundler integration, source maps, type generation        |
+| Bun module runtime           | `woml-cli/src/script-host/*`, module loader/cache/runtime helpers     |
+| Rust artifact authority      | `core/woml-engine` definition/artifact storage and host registration  |
+| Permissions/secrets          | frontend analysis, CLI grants, runtime capability policy              |
+| CLI DX                       | `woml-cli/src/cli.ts`, module check/inspect/build/test commands       |
+| Versioned contracts          | `docs/schemas/*`, `docs/protocols/*`, model/package/module fixtures   |
+| Examples                     | local TS module and package-backed spreadsheet module                 |
 
-Exact files depend on the SC14 implementation. The ownership boundary remains:
-the TypeScript frontend understands module syntax and builds immutable artifacts,
-Rust validates/stores definitions and executes the DAG, and Bun evaluates
-JavaScript/TypeScript bundles in isolated invocation state.
+The TypeScript frontend understands module syntax and creates immutable
+artifacts. Rust validates and stores definitions and orchestrates attempts. Bun
+loads and evaluates JavaScript/TypeScript bundles in isolated invocation state.
 
-## 16. Verification Matrix
+## 14. Verification Matrix
 
-| Area | Required proof |
-|---|---|
-| Syntax | One canonical import/component grammar; alternatives and misplaced declarations fail clearly. |
-| Resolution | Relative/package identities are deterministic, bounded, acyclic, and source-located. |
-| Hashing | Every transitive content change changes the definition; timestamps/absolute paths do not. |
-| Recovery | Stored artifacts execute after source deletion/change; current filesystem code is never substituted. |
-| Isolation | No mutable module state crosses invocation/run boundaries. |
-| Initialization | Fetch and managed effects are impossible before exported-function invocation. |
-| Namespace | Built-ins, aliases, exports, instances, and internal IDs cannot collide. |
-| Operations | Module Fetch/services calls use the SC operation protocol; pure calls avoid RPC. |
-| Secrets | Packages cannot enumerate secrets; grants and values never leak into artifacts/history. |
-| Permissions | Dependency updates cannot silently gain network/service/storage access. |
-| Packages | Exact offline bundles reproduce; scripts/native addons/remote imports are rejected. |
-| Errors | Stacks map to original module/component line and call-site step. |
-| Components | Inputs are explicit, internals private, output singular, expanded DAG acyclic. |
-| Composition | Branch, parallel, approval, retry, triggers, services, events, and queue work inside instances. |
-| Compatibility | Workflows without imports compile and execute unchanged. |
-| Packaging | Every reviewed example works from a clean offline artifact. |
+| Area           | Required proof                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| Document       | One canonical root/order; legacy and competing shapes fail with migration guidance.         |
+| Syntax         | One `<module>` grammar; misplaced declarations and unsupported attributes fail clearly.     |
+| Resolution     | Relative/package identities are deterministic, bounded, acyclic, and source-located.        |
+| Exports        | Named functions work; default/CommonJS/dynamic/unsupported exports fail before activation.  |
+| Hashing        | Every transitive content change changes the definition; timestamps/absolute paths do not.   |
+| Recovery       | Stored artifacts execute after source deletion/change; current files are never substituted. |
+| Isolation      | No mutable module state crosses invocation or run boundaries.                               |
+| Initialization | Fetch and managed effects are impossible before exported-function invocation.               |
+| Namespace      | Built-ins, reserved names, aliases, and exports cannot collide or be mutated.               |
+| Operations     | Module Fetch/service calls reuse SC14; pure function calls avoid Rust RPC.                  |
+| Secrets        | Packages cannot enumerate secrets; values never leak into artifacts or history.             |
+| Permissions    | Dependency updates cannot silently gain network/service/storage access.                     |
+| Packages       | Offline bundles reproduce; scripts, native addons, and remote imports are rejected.         |
+| Errors         | Stacks map to original module line and importing/caller WOML step.                          |
+| Composition    | Modules work through branch, parallel, approval, retry, all triggers, and five services.    |
+| Compatibility  | Workflows without imports preserve execution semantics after wrapper migration.             |
+| Packaging      | Every reviewed example runs from a clean offline artifact.                                  |
 
-## 17. Risks and Guardrails
+## 15. Risks and Guardrails
 
-### “React-like” must not mean hidden state
+### A familiar namespace can hide different execution costs
 
-The desired similarity is readable composition, explicit props/inputs, stable
-components, and good tooling. WOML components must not inherit React's mutable
-client-state assumptions or introduce a virtual DOM-style runtime.
-
-### One `services` namespace contains different execution costs
-
-A pure `services.spreadsheet.parse()` may be a local function while
-`services.db.query()` crosses Rust. Editor documentation and inspection should
-show effect/cost information where known without requiring author-written
-module kinds.
+A pure `services.spreadsheet.parse()` stays in Bun while
+`services.db().query()` crosses Rust. Documentation and inspection should show
+known effect and cost information without requiring module kinds.
 
 ### Arbitrary npm compatibility would destroy reliability
 
-Many packages assume unrestricted filesystem, environment, sockets, native
-addons, or install scripts. WOML v1 intentionally supports a reproducible safe
-subset and produces helpful incompatibility errors instead of claiming every
-npm package works.
+Many packages assume unrestricted files, environment, sockets, native addons,
+or install scripts. WOML supports a reproducible subset and gives actionable
+incompatibility errors instead of pretending every package works.
 
-### Bundles are part of durable workflow history
+### Bundles are durable workflow dependencies
 
 Storing only a path or package version is insufficient. Artifact retention,
-size, cleanup, and integrity must be designed with run retention so old active
-runs do not lose executable code.
+size, cleanup, and integrity must align with run retention so an active old run
+never loses its executable code.
 
-### Component inlining can create enormous DAGs
+### Top-level module execution can hide effects
 
-The frontend needs maximum graph depth/node/artifact limits, source-preserving
-diagnostics, and expansion summaries. Nested components cannot expand
-recursively without bound.
+The runtime must disable controlled effect doorways during initialization, not
+merely document a convention. Initialization also needs strict time and memory
+bounds.
 
 ### Secrets passed as strings can be exfiltrated
 
-Native Fetch requires real values in Bun. Permissions and explicit argument
-flow reduce accidental exposure but cannot stop deliberately authored trusted
-code. Hosted untrusted-code guarantees wait for OS isolation.
+Native Fetch needs real values in Bun. Explicit argument flow and permissions
+reduce accidental exposure but cannot stop deliberately authored trusted code.
+Hosted untrusted-code guarantees require OS isolation.
 
-### Package permissions must not become `kind="capability"` in disguise
+### Package permissions must stay product-oriented
 
-The user should approve concrete access such as a network origin or named
-secret, not explain the engine's execution category. Local authored modules and
-third-party packages may receive different trust defaults, but the behavior
-must be transparent.
+Authors approve concrete access such as a network origin or named secret, not
+an internal capability classification. Dependency updates that expand access
+must require visible review.
 
-### Component output is an interface, not an internal step shortcut
+### The wrapper migration is intentionally breaking
 
-Downstream callers depend on the declared component result only. Allowing
-references into internal node IDs would permanently prevent safe refactoring.
+WOML is pre-release, so adopting one clean `<woml>` grammar now is cheaper than
+supporting two roots forever. Migration diagnostics and mechanical tooling must
+make the change straightforward.
 
-## 18. Global Roadmap After the Module System
+## 16. Global Roadmap After the Module System
 
-1. **Retries and idempotency** — completed in RI7.
-2. **Production triggers** — completed in T13.
-3. **Services and capabilities** — SC0-SC14, built before this milestone.
-4. **WOML Module System** — this MS0-MS12 milestone: local/package JS/TS
-   modules, reusable WOML components, immutable bundles, permissions, and
-   deployment packaging.
-5. **Lifecycle and engine controls** — workflow cancellation, lifecycle hooks,
-   workflow-level concurrency/rate limits/timeouts, durable user state,
-   advanced queue controls, and any separately reviewed child-workflow runs.
-6. **Production runtime and operations** — hosting, deployment, multi-node
+1. **Durable Workflow Calls** — add
+   `services.workflows.call(workflowId, payload, options?)` so one workflow can
+   target exactly one activated workflow by ID, create an independent durable
+   child run, pass payload through the child's `context.trigger`, wait durably,
+   and receive its final JSON result. No `<call>` trigger tag is required.
+   Same-runtime calls use a direct Rust path; cross-process calls require
+   authenticated runtime discovery/routing, unique target ownership, stable
+   call identity, accepted definition hashes, timeouts, cancellation,
+   idempotency, cycle/depth protection, and crash recovery. Explicit
+   `return null` represents intentional no-result success; missing
+   return/`undefined` fails the child call.
+2. **Lifecycle and engine controls** — workflow cancellation, lifecycle hooks,
+   workflow-level concurrency/rate limits/timeouts, and durable user state.
+3. **Production runtime and operations** — hosting, deployment, multi-node
    ownership, OS-level isolation, observability, retention, administration,
-   scaling, and artifact lifecycle management.
-7. **WOML package registry/community ecosystem** — signed publication,
-   discovery, trust/provenance, moderation, compatibility, and deprecation once
+   scaling, artifact lifecycle, and the production workflow-call router.
+4. **WOML package registry/community ecosystem** — signed publication,
+   discovery, trust/provenance, moderation, compatibility, and deprecation after
    local/package artifacts are proven.
-8. **Additional infrastructure and communication providers** — external
-   database/storage/cache/broker adapters plus Discord, WhatsApp, and Telegram
-   according to demand.
-9. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
+5. **Additional infrastructure adapters** — the postponed durable queue and
+   external broker profile, document databases, external object storage, and
+   distributed caches according to demand.
+6. **Additional communication providers** — Discord, WhatsApp, and Telegram
+   triggers, notifications, and messaging capabilities when justified.
+7. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-After MS12, the next architecture milestone is Lifecycle and Engine Controls.
+After MS8, Durable Workflow Calls is the next product milestone.
 
-## 19. MS0 Review Gate
+## 17. MS0 Review Gate — passed 2026-08-10
 
-Implementation must not begin until MS0 explicitly resolves:
+MS0 froze the author-facing and MS1 package boundary in
+`docs/protocols/module-system-v1.md`,
+`docs/schemas/woml-definition-package.v1.schema.json`, and the reviewed module
+fixtures. Runtime-only shapes that cannot exist before bundling retain explicit
+version gates in MS2–MS5 rather than changing any frozen SC14 artifact.
 
-- workflow-owned imports versus a `<woml>` package root versus an external
-  manifest;
-- canonical `<import>`/`<module>` spelling and ordering;
-- alias and named-export grammar;
-- JavaScript/TypeScript ESM subset and CommonJS decision;
-- local path, symlink, case, project-root, and cycle rules;
-- canonical module graph, definition package, hash, lock, and artifact retention;
+The review covered:
+
+- exact `<woml>`, `<imports>`, `<module>`, and `<workflow>` schema/order rules;
+- migration behavior and diagnostics for direct `<workflow>` roots;
+- module alias and named-function export grammar;
+- JavaScript/TypeScript ESM subset and CommonJS rejection boundary;
+- local path, symlink, case, project-root, extension, and cycle rules;
+- canonical graph, definition package, hash, lock, and retention inputs;
 - Bun compiler/runtime compatibility and source-map format;
 - host artifact registration/cache protocol version;
-- top-level initialization restrictions and timeout/memory limits;
-- local authored-code trust versus installed-package permissions;
-- secret access/passing/grant behavior;
-- npm/package manager and lockfile integration;
-- component definition and invocation syntax;
-- component input binding without abusing `context.trigger` or defining
-  `context.run`;
-- component output, private IDs, nested instances, and flattened DAG identity;
-- whether compile-time components are sufficient for v1 or child runs require
-  a later separate contract; and
-- exact errors, CLI journeys, limits, and clean-package fixtures.
+- top-level initialization restrictions and resource limits;
+- local-code trust versus installed-package permissions;
+- explicit secret argument/grant behavior;
+- package-manager and lockfile integration;
+- namespace/reserved-name collision rules;
+- error shape and source locations; and
+- all size, graph, compile, initialization, cache, and invocation limits.
 
-The following remain explicitly deferred unless the user later expands scope:
-a public hosted registry, marketplace economics, remote source imports,
-arbitrary npm compatibility, hot reload semantics, distributed artifact
-ownership, OS-level tenant isolation, and JavaScript SDK retirement.
+Runtime artifacts reserved for MS2–MS5 receive a reviewed new version before
+their phase writes code; they cannot silently widen Definition Package v1 or a
+frozen SC14 protocol. `.woml` imports and Durable Workflow Calls remain
+separate milestones and cannot be introduced by convenience while the Module
+System is being built.

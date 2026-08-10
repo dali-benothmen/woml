@@ -1,0 +1,19 @@
+<woml>
+  <imports>
+    <module name="spreadsheet" from="./spreadsheet.ts" />
+  </imports>
+
+  <workflow id="customer-import" name="Customer import" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="cleanRows">
+        <script>
+          return { ready: true };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

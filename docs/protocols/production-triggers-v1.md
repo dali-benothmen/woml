@@ -326,8 +326,10 @@ A successful response names every matching workflow and trigger and returns
 its original or new `runId`, `duplicate` flag, or safe rejection. It never
 waits for those workflow runs to finish.
 
-Each event trigger declares `secret="{{secrets.NAME}}"`. When triggers are
-loaded, `woml run` automatically resolves only those symbolic names; a missing
+An event trigger declares `secret="{{secrets.NAME}}"` when it enables the
+public HTTP publisher. Internal-only event triggers omit it. When triggers are
+loaded, `woml run` automatically resolves only the symbolic names that are
+present; a missing
 value fails before the listener binds. Subscribers to one event name must
 resolve to the same value, while separate event names may use separate values.
 Resolved values are compared through fixed-width digests and never enter WOML
@@ -335,11 +337,10 @@ source, Model v7, event payloads, state, or diagnostics. Because `woml emit`
 does not load a workflow file, its publisher secret name is explicitly selected
 with the required `--token-secret <NAME>` option.
 
-Model v7 definitions persisted before authored event credentials existed may
-omit the symbolic `secret` field and remain readable for event folding and run
-recovery. Such a historical definition cannot register a new publisher route;
-active ingress always requires a current compiled trigger with a resolved
-symbolic secret.
+Model v7 definitions may omit the symbolic `secret` field and remain readable
+for folding, recovery, and SC11 internal publication. They do not register a
+public publisher route. Public HTTP ingress always requires a current compiled
+trigger with a resolved symbolic secret.
 
 ## Progress boundary
 

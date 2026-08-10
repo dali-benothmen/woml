@@ -439,7 +439,7 @@ not silently move the grid. Missed-run behavior matches schedule.
 |---|---:|---|
 | `id` | Yes | Stable trigger identity. |
 | `name` | Yes | Dot-separated event name such as `order.created`. |
-| `secret` | Yes | Symbolic publisher credential, written as `{{secrets.NAME}}`. |
+| `secret` | No | Optional public HTTP publisher credential, written as `{{secrets.NAME}}`. SC11 allows omission for internal-only events. |
 
 `<event>` may contain at most one inline Draft 2020-12 `<schema>`. One published
 event carries a required publisher event ID and a top-level JSON object. Every
@@ -447,8 +447,8 @@ matching trigger receives the same immutable payload and creates its own run.
 One workflow's validation or execution failure does not roll back another
 workflow's accepted occurrence.
 
-The first built-in publisher uses a versioned authenticated engine API and a
-CLI client:
+The first built-in public publisher uses a versioned authenticated engine API
+and a CLI client:
 
 ```bash
 woml secrets set EVENT_CONTROL_TOKEN
@@ -460,8 +460,9 @@ woml emit order.created \
   --token-secret EVENT_CONTROL_TOKEN
 ```
 
-`woml run` reads the symbolic reference from each `<event>` and resolves only
-that named value from the existing WOML secret store. No secret value enters
+`woml run` reads each present symbolic reference and resolves only that named
+value from the existing WOML secret store. An event without `secret` opens no
+public endpoint and remains available to `services.events.emit()`. No secret value enters
 the source or compiled model. Future broker adapters call the same Rust ingress
 operation and must not bypass occurrence deduplication.
 

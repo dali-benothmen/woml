@@ -28,8 +28,9 @@ use crate::schedule::{
 };
 use crate::{
   execute_admitted_trigger_run_durable, CompiledWorkflowDefinition, DurableEventStore,
-  DurableStoreError, IntervalCursorRegistration, ModelValidationError, RuntimeExecutionOptions,
-  ScheduleCursorRegistration, TriggerAdmissionRequest,
+  DurableStoreError, EventServiceAcceptedRun, EventServiceSubscriber, IntervalCursorRegistration,
+  ManagedEventsHandler, ModelValidationError, RuntimeExecutionOptions, ScheduleCursorRegistration,
+  TriggerAdmissionRequest,
 };
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -151,8 +152,9 @@ impl WomlWebhookServer {
     config: WomlWebhookServerConfig,
     external_ingress: Option<ExternalTriggerAdmissionReceiver>,
   ) -> Result<Self, WebhookRuntimeError> {
-    let (state, recovery_runs, startup_manual_runs) = prepare_state(config)?;
-    let listener = if state.routes.is_empty() && state.event_subscribers.is_empty() {
+    let (state, recovery_runs, startup_manual_runs, internal_event_dispatch) =
+      prepare_state(config)?;
+    let listener = if state.routes.is_empty() && state.event_token_digests.is_empty() {
       None
     } else {
       Some(TcpListener::bind(state.bind_address)?)
@@ -187,6 +189,11 @@ impl WomlWebhookServer {
       let external_state = recovery_state.clone();
       actix_web::rt::spawn(run_external_ingress(external_state, receiver));
     }
+    let internal_state = recovery_state.clone();
+    actix_web::rt::spawn(run_internal_event_dispatch(
+      internal_state,
+      internal_event_dispatch,
+    ));
 
     recovery_state.report(TriggerProgress::Ready {
       contract: TRIGGER_PROGRESS_CONTRACT,
@@ -260,7 +267,7 @@ struct WebhookRuntimeState {
   bind_address: SocketAddr,
   database_path: PathBuf,
   routes: HashMap<String, Arc<WebhookRoute>>,
-  event_subscribers: BTreeMap<String, Vec<Arc<EventSubscriber>>>,
+  event_subscribers: BTreeMap<String, Vec<EventServiceSubscriber>>,
   event_token_digests: BTreeMap<String, [u8; 32]>,
   registration_count: usize,
   execution: RuntimeExecutionOptions,
@@ -295,12 +302,7 @@ struct WebhookRoute {
   schema: Option<Arc<Validator>>,
 }
 
-struct EventSubscriber {
-  workflow_id: String,
-  definition_hash: String,
-  trigger_id: String,
-  schema: Option<Arc<Validator>>,
-}
+type EventSubscriber = EventServiceSubscriber;
 
 #[derive(Clone)]
 struct RunProgressIdentity {
@@ -458,6 +460,7 @@ fn prepare_state(
     WebhookRuntimeState,
     Vec<RunProgressIdentity>,
     Vec<StartupManualTrigger>,
+    tokio_mpsc::UnboundedReceiver<EventServiceAcceptedRun>,
   ),
   WebhookRuntimeError,
 > {
@@ -472,14 +475,17 @@ fn prepare_state(
   let mut startup_manual_runs = Vec::new();
   let mut schedules = Vec::new();
   let mut intervals = Vec::new();
-  let mut event_subscribers = BTreeMap::<String, Vec<Arc<EventSubscriber>>>::new();
+  let mut event_subscribers = BTreeMap::<String, Vec<EventSubscriber>>::new();
   let mut event_token_digests = BTreeMap::<String, [u8; 32]>::new();
   let mut registration_count = 0;
   for registration in config.registrations {
     registration.workflow.validate_for_durable_execution()?;
-    if registration.workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V7 {
+    if !matches!(
+      registration.workflow.schema_version,
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V7 | crate::COMPILED_MODEL_SCHEMA_VERSION_V8
+    ) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} must use compiled Model v7",
+        "workflow {:?} must use compiled Model v7 or v8",
         registration.workflow.workflow_id
       )));
     }
@@ -546,22 +552,24 @@ fn prepare_state(
       if trigger.handler == "trigger.event" {
         let (event_name, subscriber, token_digest) =
           compile_event_subscriber(&registration, trigger)?;
-        if event_token_digests
-          .get(&event_name)
-          .is_some_and(|existing| existing != &token_digest)
-        {
-          return Err(WebhookRuntimeError::InvalidRegistration(format!(
-            "all subscribers to event {event_name:?} must resolve to the same secret"
-          )));
+        if let Some(token_digest) = token_digest {
+          if event_token_digests
+            .get(&event_name)
+            .is_some_and(|existing| existing != &token_digest)
+          {
+            return Err(WebhookRuntimeError::InvalidRegistration(format!(
+              "all subscribers to event {event_name:?} must resolve to the same secret"
+            )));
+          }
+          event_token_digests.insert(event_name.clone(), token_digest);
         }
-        event_token_digests.insert(event_name.clone(), token_digest);
         let subscribers = event_subscribers.entry(event_name).or_default();
         if subscribers.len() >= EVENT_MAX_SUBSCRIBERS {
           return Err(WebhookRuntimeError::InvalidRegistration(format!(
             "an event name cannot have more than {EVENT_MAX_SUBSCRIBERS} subscribers"
           )));
         }
-        subscribers.push(Arc::new(subscriber));
+        subscribers.push(subscriber);
       }
     }
     definitions.push((registration.workflow, registration.definition_hash));
@@ -595,6 +603,20 @@ fn prepare_state(
     })
     .collect();
 
+  let (internal_event_sender, internal_event_receiver) = tokio_mpsc::unbounded_channel();
+  let dispatcher = Arc::new(move |accepted: EventServiceAcceptedRun| {
+    let _ = internal_event_sender.send(accepted);
+  });
+  config
+    .execution
+    .capability_registry
+    .register(Arc::new(ManagedEventsHandler::new(
+      config.database_path.clone(),
+      event_subscribers.clone(),
+      dispatcher,
+    )))
+    .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
+
   Ok((
     WebhookRuntimeState {
       bind_address: config.bind_address,
@@ -610,13 +632,14 @@ fn prepare_state(
     },
     recovery_runs,
     startup_manual_runs,
+    internal_event_receiver,
   ))
 }
 
 fn compile_event_subscriber(
   registration: &WebhookDefinitionRegistration,
   trigger: &crate::model::CompiledTrigger,
-) -> Result<(String, EventSubscriber, [u8; 32]), WebhookRuntimeError> {
+) -> Result<(String, EventSubscriber, Option<[u8; 32]>), WebhookRuntimeError> {
   let fields = object_fields(&trigger.config).ok_or_else(|| {
     WebhookRuntimeError::InvalidRegistration(format!(
       "event trigger {:?} config must be an object",
@@ -632,18 +655,23 @@ fn compile_event_subscriber(
       ))
     })?
     .to_string();
-  let Some(ValueExpression::SecretReference { name }) = fields.get("secret") else {
-    return Err(WebhookRuntimeError::InvalidRegistration(format!(
-      "event trigger {:?} requires a symbolic secret",
-      trigger.id
-    )));
+  let token_digest = match fields.get("secret") {
+    None => None,
+    Some(ValueExpression::SecretReference { name }) => {
+      let token = registration
+        .resolved_secrets
+        .get(name)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| WebhookRuntimeError::SecretMissing(name.clone()))?;
+      Some(Sha256::digest(token.as_bytes()).into())
+    }
+    Some(_) => {
+      return Err(WebhookRuntimeError::InvalidRegistration(format!(
+        "event trigger {:?} publisher secret must be symbolic",
+        trigger.id
+      )))
+    }
   };
-  let token = registration
-    .resolved_secrets
-    .get(name)
-    .filter(|value| !value.is_empty())
-    .ok_or_else(|| WebhookRuntimeError::SecretMissing(name.clone()))?;
-  let token_digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
   let schema = match fields.get("schema") {
     None => None,
     Some(ValueExpression::Literal { value }) => {
@@ -1931,7 +1959,7 @@ async fn handle_event_publication(
         });
         let code = "WOML_TRIGGER_SCHEMA_INVALID";
         let message = "Event payload does not match this subscriber schema.";
-        state.report_event_rejected(Some(subscriber.as_ref()), code, message);
+        state.report_event_rejected(Some(&subscriber), code, message);
         deliveries.push(EventDeliveryResponse::Rejected {
           workflow_id: subscriber.workflow_id.clone(),
           trigger_id: subscriber.trigger_id.clone(),
@@ -1986,7 +2014,7 @@ async fn handle_event_publication(
       }
       Ok(Err(error)) => {
         let (code, message, retryable) = event_admission_failure(&error);
-        state.report_event_rejected(Some(subscriber.as_ref()), code, message);
+        state.report_event_rejected(Some(&subscriber), code, message);
         deliveries.push(EventDeliveryResponse::Rejected {
           workflow_id: subscriber.workflow_id.clone(),
           trigger_id: subscriber.trigger_id.clone(),
@@ -1999,7 +2027,7 @@ async fn handle_event_publication(
       Err(_) => {
         let code = "WOML_TRIGGER_UNAVAILABLE";
         let message = "The durable WOML trigger authority is unavailable.";
-        state.report_event_rejected(Some(subscriber.as_ref()), code, message);
+        state.report_event_rejected(Some(&subscriber), code, message);
         deliveries.push(EventDeliveryResponse::Rejected {
           workflow_id: subscriber.workflow_id.clone(),
           trigger_id: subscriber.trigger_id.clone(),
@@ -2192,6 +2220,26 @@ async fn run_external_ingress(
       dispatch_run(state.get_ref(), identity);
     }
     let _ = command.response.send(Ok(outcome));
+  }
+}
+
+async fn run_internal_event_dispatch(
+  state: web::Data<WebhookRuntimeState>,
+  mut receiver: tokio_mpsc::UnboundedReceiver<EventServiceAcceptedRun>,
+) {
+  while let Some(accepted) = receiver.recv().await {
+    let identity = RunProgressIdentity {
+      workflow_id: accepted.workflow_id,
+      trigger_id: accepted.trigger_id,
+      trigger_handler: "trigger.event".to_string(),
+      occurrence_id: accepted.occurrence_id,
+      run_id: accepted.run_id,
+    };
+    state.report_accepted(&identity, accepted.duplicate);
+    if !accepted.duplicate {
+      state.report_run_started(&identity);
+      dispatch_run(state.get_ref(), identity);
+    }
   }
 }
 

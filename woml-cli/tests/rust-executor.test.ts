@@ -182,7 +182,8 @@ function compileSource(source: string, file = 'branch-hardening.woml') {
   return compileWoml(parseWoml(source, { file }));
 }
 
-const branchAtBeginningSource = `<workflow version="0.1" id="branch-first">
+const branchAtBeginningSource = `<woml>
+<workflow version="0.1" id="branch-first">
   <triggers><manual id="start" /></triggers>
   <steps>
     <branch id="route">
@@ -197,9 +198,11 @@ const branchAtBeginningSource = `<workflow version="0.1" id="branch-first">
     </branch>
     <step id="finish"><script>return { selected: context.steps.route.selected };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const branchAtEndSource = `<workflow version="0.1" id="branch-last">
+const branchAtEndSource = `<woml>
+<workflow version="0.1" id="branch-last">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="choice"><script>return { primary: true };</script></step>
@@ -214,9 +217,11 @@ const branchAtEndSource = `<workflow version="0.1" id="branch-last">
       </otherwise>
     </branch>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const nestedBranchSource = `<workflow version="0.1" id="nested-branches">
+const nestedBranchSource = `<woml>
+<workflow version="0.1" id="nested-branches">
   <triggers><manual id="start" /></triggers>
   <steps>
     <branch id="outer">
@@ -240,9 +245,11 @@ const nestedBranchSource = `<workflow version="0.1" id="nested-branches">
     </branch>
     <step id="finish"><script>return { selected: context.steps.outer.selected };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const multipleTrueSource = `<workflow version="0.1" id="first-match">
+const multipleTrueSource = `<woml>
+<workflow version="0.1" id="first-match">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="flags"><script>return { first: true, second: true };</script></step>
@@ -261,9 +268,11 @@ const multipleTrueSource = `<workflow version="0.1" id="first-match">
       </otherwise>
     </branch>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const largeBranchResultSource = `<workflow version="0.1" id="large-branch-result">
+const largeBranchResultSource = `<woml>
+<workflow version="0.1" id="large-branch-result">
   <triggers><manual id="start" /></triggers>
   <steps>
     <branch id="route">
@@ -278,9 +287,11 @@ const largeBranchResultSource = `<workflow version="0.1" id="large-branch-result
     </branch>
     <step id="finish"><script>return { length: context.steps.route.payload.length };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const parallelAtBeginningSource = `<workflow version="0.1" id="parallel-first">
+const parallelAtBeginningSource = `<woml>
+<workflow version="0.1" id="parallel-first">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="load" concurrency="2" on-error="wait-all">
@@ -289,9 +300,11 @@ const parallelAtBeginningSource = `<workflow version="0.1" id="parallel-first">
     </parallel>
     <step id="finish"><script>return { value: context.steps.left.value + context.steps.right.value };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const parallelBranchCompositionSource = `<workflow version="0.1" id="parallel-branch-composition">
+const parallelBranchCompositionSource = `<woml>
+<workflow version="0.1" id="parallel-branch-composition">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="flags"><script>return { selected: true };</script></step>
@@ -313,9 +326,11 @@ const parallelBranchCompositionSource = `<workflow version="0.1" id="parallel-br
     </branch>
     <step id="finish"><script>return { value: context.steps.route.value };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const parallelBeforeBranchSource = `<workflow version="0.1" id="parallel-before-branch">
+const parallelBeforeBranchSource = `<woml>
+<workflow version="0.1" id="parallel-before-branch">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="checks" concurrency="2" on-error="wait-all">
@@ -333,9 +348,11 @@ const parallelBeforeBranchSource = `<workflow version="0.1" id="parallel-before-
       </otherwise>
     </branch>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const manyParallelChildrenSource = `<workflow version="0.1" id="many-parallel-children">
+const manyParallelChildrenSource = `<woml>
+<workflow version="0.1" id="many-parallel-children">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="jobs" concurrency="2" on-error="wait-all">
@@ -346,9 +363,11 @@ const manyParallelChildrenSource = `<workflow version="0.1" id="many-parallel-ch
     </parallel>
     <step id="finish"><script>return { count: 4 };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const largeParallelContextSource = `<workflow version="0.1" id="large-parallel-context">
+const largeParallelContextSource = `<woml>
+<workflow version="0.1" id="large-parallel-context">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="seed"><script>return { payload: "x".repeat(8192) };</script></step>
@@ -358,9 +377,11 @@ const largeParallelContextSource = `<workflow version="0.1" id="large-parallel-c
     </parallel>
     <step id="finish"><script>return { length: context.steps.readLength.length };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
-const largeParallelResultSource = `<workflow version="0.1" id="large-parallel-result">
+const largeParallelResultSource = `<woml>
+<workflow version="0.1" id="large-parallel-result">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="builders" concurrency="2" on-error="wait-all">
@@ -369,7 +390,8 @@ const largeParallelResultSource = `<workflow version="0.1" id="large-parallel-re
     </parallel>
     <step id="finish"><script>return { length: context.steps.largeResult.payload.length };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
 function replaceFirstScript(
   workflow: CompiledWorkflowDefinition,

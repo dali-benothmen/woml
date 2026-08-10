@@ -1,3 +1,4 @@
+<woml>
 <workflow id="schedule-trigger-contract">
   <triggers>
     <schedule
@@ -15,3 +16,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

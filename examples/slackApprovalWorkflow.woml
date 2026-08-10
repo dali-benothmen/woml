@@ -1,3 +1,4 @@
+<woml>
 <workflow version="0.1" id="slack-approval-demo" name="Slack Approval Demo">
   <triggers>
     <manual id="start" />
@@ -45,3 +46,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

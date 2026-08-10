@@ -24,6 +24,10 @@ sufficient parity and the relevant production features have migration paths.
 | Human-in-the-loop callback | `<approval>` with a durable HTTP/provider decision |
 | Native SDK/Bun Fetch | Native `fetch()` inside `<script>` with durable redacted observation |
 | Supervised HTTP helper | `services.http.request()` inside `<script>` |
+| SDK database service | `services.db()` with a SQLite or PostgreSQL driver |
+| Durable files/large values | `services.storage` and portable object references |
+| Temporary reusable values | `services.cache` with an explicit TTL |
+| Internal workflow fan-out | `services.events.emit()` plus an `<event>` trigger |
 
 WOML makes every downstream dependency explicit. Give each step a stable ID and
 replace positional or “last result” access with the producing step's path:
@@ -70,8 +74,9 @@ Sequential scripts, branch, parallel, Human Approval, Slack approval
 notifications, secrets, durable retry, and manual, webhook, Slack, schedule,
 interval, and named-event triggers are available through `woml run`.
 
-Native Fetch and Rust-managed outbound HTTP are now available. Database,
-storage, cache, queue, additional messaging services, the module system,
-lifecycle controls, and the hosted production runtime remain roadmap items.
-Keep an SDK workflow in place when it depends on those unavailable
-capabilities. The SDK is not retired merely because managed HTTP is complete.
+Native Fetch and the Rust-managed HTTP, database, storage, cache, and internal
+event services are available. Queue is explicitly postponed; additional
+messaging services, the module system, lifecycle controls, and the hosted
+production runtime remain roadmap items. Keep an SDK workflow in place when it
+depends on those unavailable capabilities. The SDK is not retired merely
+because the first services milestone is complete.

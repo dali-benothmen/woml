@@ -38,10 +38,12 @@ function compileError(source: string): WomlCompileError {
 function validWorkflow(
   stepMarkup = '<step id="a"><script>return { ok: true };</script></step>'
 ) {
-  return `<workflow version="1.0.0" id="test-workflow">
+  return `<woml>
+<workflow version="1.0.0" id="test-workflow">
   <triggers><manual id="start" /></triggers>
   <steps>${stepMarkup}</steps>
-</workflow>`;
+</workflow>
+</woml>`;
 }
 
 describe('compileWoml', () => {
@@ -1165,9 +1167,11 @@ describe('compileWoml', () => {
   });
 
   test('rejects missing required children and attributes', () => {
-    const missingTriggers = `<workflow version="1.0.0" id="test-workflow">
+    const missingTriggers = `<woml>
+<workflow version="1.0.0" id="test-workflow">
   <steps><step id="a"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     expect(validationError(missingTriggers).diagnostic.code).toBe(
       'WOML_TRIGGER_CONTAINER_COUNT'
     );
@@ -1181,10 +1185,12 @@ describe('compileWoml', () => {
   });
 
   test('T1 accepts multiple manual triggers and keeps canonical container order', () => {
-    const multipleManual = `<workflow version="1.0.0" id="test-workflow">
+    const multipleManual = `<woml>
+<workflow version="1.0.0" id="test-workflow">
   <triggers><manual id="first" /><manual id="second" /></triggers>
   <steps><step id="a"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     const compiled = compile(multipleManual);
     expect(compiled.schemaVersion).toBe(7);
     expect(compiled.triggers.map(trigger => trigger.id)).toEqual([
@@ -1192,10 +1198,12 @@ describe('compileWoml', () => {
       'second',
     ]);
 
-    const wrongOrder = `<workflow version="1.0.0" id="test-workflow">
+    const wrongOrder = `<woml>
+<workflow version="1.0.0" id="test-workflow">
   <steps><step id="a"><script>return 1;</script></step></steps>
   <triggers><manual id="start" /></triggers>
-</workflow>`;
+</workflow>
+</woml>`;
     expect(validationError(wrongOrder).diagnostic.code).toBe(
       'WOML_INVALID_STRUCTURE'
     );
@@ -1226,12 +1234,14 @@ describe('compileWoml', () => {
   });
 
   test('T1 applies webhook defaults and explicit unauthenticated intent', () => {
-    const source = `<workflow id="public-hook">
+    const source = `<woml>
+<workflow id="public-hook">
   <triggers>
     <webhook id="incoming" path="/incoming" auth="none" />
   </triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     const compiled = compile(source);
     expect(compiled.schemaVersion).toBe(7);
     expect(compiled.triggers).toEqual([
@@ -1254,10 +1264,12 @@ describe('compileWoml', () => {
   });
 
   test('T1 reports webhook path, method, auth, and duplicate IDs at their source', () => {
-    const webhookWorkflow = (markup: string) => `<workflow id="hook-errors">
+    const webhookWorkflow = (markup: string) => `<woml>
+<workflow id="hook-errors">
   <triggers>${markup}</triggers>
   <steps><step id="capture"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     const cases = [
       {
         markup: '<webhook id="hook" path="relative" auth="none" />',
@@ -1265,8 +1277,7 @@ describe('compileWoml', () => {
         token: 'relative',
       },
       {
-        markup:
-          '<webhook id="hook" path="/orders" method="GET" auth="none" />',
+        markup: '<webhook id="hook" path="/orders" method="GET" auth="none" />',
         code: 'WOML_WEBHOOK_METHOD_UNSUPPORTED',
         token: 'GET',
       },
@@ -1295,21 +1306,21 @@ describe('compileWoml', () => {
       '<manual id="same" /><webhook id="same" path="/orders" auth="none" />'
     );
     const duplicateError = validationError(duplicate);
-    expect(duplicateError.diagnostic.code).toBe(
-      'WOML_TRIGGER_ID_DUPLICATE'
-    );
+    expect(duplicateError.diagnostic.code).toBe('WOML_TRIGGER_ID_DUPLICATE');
     expect(duplicateError.diagnostic.location.start.offset).toBe(
       duplicate.lastIndexOf('same')
     );
   });
 
   test('T1 validates inline webhook JSON Schema without guessing bad input', () => {
-    const withSchema = (schema: string) => `<workflow id="schema-hook">
+    const withSchema = (schema: string) => `<woml>
+<workflow id="schema-hook">
   <triggers>
     <webhook id="hook" path="/orders" auth="none"><schema>${schema}</schema></webhook>
   </triggers>
   <steps><step id="capture"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
     const malformed = withSchema('{ "type": "object", }');
     expect(validationError(malformed).diagnostic.code).toBe(
@@ -1326,14 +1337,13 @@ describe('compileWoml', () => {
       'WOML_WEBHOOK_SCHEMA_INVALID'
     );
 
-    const invalidPattern = withSchema(
-      '{ "type": "string", "pattern": "[" }'
-    );
+    const invalidPattern = withSchema('{ "type": "string", "pattern": "[" }');
     expect(validationError(invalidPattern).diagnostic.code).toBe(
       'WOML_WEBHOOK_SCHEMA_INVALID'
     );
 
-    const duplicateSchema = `<workflow id="schema-hook">
+    const duplicateSchema = `<woml>
+<workflow id="schema-hook">
   <triggers>
     <webhook id="hook" path="/orders" auth="none">
       <schema>{"type":"object"}</schema>
@@ -1341,7 +1351,8 @@ describe('compileWoml', () => {
     </webhook>
   </triggers>
   <steps><step id="capture"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     expect(validationError(duplicateSchema).diagnostic.code).toBe(
       'WOML_WEBHOOK_STRUCTURE_INVALID'
     );
@@ -1365,12 +1376,14 @@ describe('compileWoml', () => {
   });
 
   test('T6 accepts an omitted Slack channel filter as all visible channels', () => {
-    const source = `<workflow id="slack-all-channels">
+    const source = `<woml>
+<workflow id="slack-all-channels">
   <triggers>
     <slack id="mention" events="app-mention" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />
   </triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     const compiled = compile(source);
     expect(compiled.triggers[0]).toMatchObject({
       id: 'mention',
@@ -1387,10 +1400,12 @@ describe('compileWoml', () => {
   });
 
   test('T6 reports malformed Slack events and channel filters at their source', () => {
-    const slackWorkflow = (attributes: string) => `<workflow id="slack-errors">
+    const slackWorkflow = (attributes: string) => `<woml>
+<workflow id="slack-errors">
   <triggers><slack id="message" ${attributes} bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" /></triggers>
   <steps><step id="capture"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     const cases = [
       {
         attributes: 'events="channel-message"',
@@ -1435,10 +1450,12 @@ describe('compileWoml', () => {
       }
     }
 
-    const plainCredential = `<workflow id="slack-errors">
+    const plainCredential = `<woml>
+<workflow id="slack-errors">
   <triggers><slack id="message" events="app-mention" bot-token="plain-text" app-token="{{secrets.SLACK_APP_TOKEN}}" /></triggers>
   <steps><step id="capture"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     expect(validationError(plainCredential).diagnostic.code).toBe(
       'WOML_SECRET_LITERAL_FORBIDDEN'
     );
@@ -1473,10 +1490,12 @@ describe('compileWoml', () => {
   });
 
   test('T8 applies UTC, skip, and cron-step defaults deterministically', () => {
-    const source = `<workflow id="schedule-defaults">
+    const source = `<woml>
+<workflow id="schedule-defaults">
   <triggers><schedule id="everySixHours" cron="0 */6 * * *" /></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
 
     expect(compile(source).triggers[0]).toEqual({
       id: 'everySixHours',
@@ -1494,10 +1513,12 @@ describe('compileWoml', () => {
 
   test('T8 reports cron, timezone, misfire, and structure errors at their source', () => {
     const scheduleWorkflow = (attributes: string, body = '') =>
-      `<workflow id="schedule-errors">
+      `<woml>
+<workflow id="schedule-errors">
   <triggers><schedule id="daily" ${attributes}>${body}</schedule></triggers>
   <steps><step id="capture"><script>return 1;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     const cases = [
       {
         attributes: 'cron="0 9 * *"',
@@ -1551,10 +1572,12 @@ describe('compileWoml', () => {
   });
 
   test('T10 validates the fixed-rate duration bounds and defaults', () => {
-    const interval = (attributes: string) => `<workflow id="interval-errors">
+    const interval = (attributes: string) => `<woml>
+<workflow id="interval-errors">
   <triggers><interval id="refresh" ${attributes} /></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     expect(compile(interval('every="1s"')).triggers[0]).toEqual({
       id: 'refresh',
       handler: 'trigger.interval',
@@ -1587,10 +1610,7 @@ describe('compileWoml', () => {
     );
     const expected = JSON.parse(
       readFileSync(
-        new URL(
-          './fixtures/triggers-event.compiled.v7.json',
-          import.meta.url
-        ),
+        new URL('./fixtures/triggers-event.compiled.v7.json', import.meta.url),
         'utf8'
       )
     );
@@ -1598,10 +1618,12 @@ describe('compileWoml', () => {
   });
 
   test('T11 accepts an event without a schema and pins the name grammar', () => {
-    const event = (name: string) => `<workflow id="event-errors">
+    const event = (name: string) => `<woml>
+<workflow id="event-errors">
   <triggers><event id="message" name="${name}" secret="{{secrets.EVENT_CONTROL_TOKEN}}" /></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     expect(compile(event('agent.response-requested')).triggers[0]).toEqual({
       id: 'message',
       handler: 'trigger.event',
@@ -1628,17 +1650,17 @@ describe('compileWoml', () => {
       const source = event(name);
       const error = validationError(source);
       expect(error.diagnostic.code).toBe('WOML_EVENT_NAME_INVALID');
-      expect(error.diagnostic.location.start.offset).toBe(
-        source.indexOf(name)
-      );
+      expect(error.diagnostic.location.start.offset).toBe(source.indexOf(name));
     }
   });
 
   test('T11 validates event schema JSON, Draft 2020-12, and structure', () => {
-    const event = (children: string) => `<workflow id="event-schema-errors">
+    const event = (children: string) => `<woml>
+<workflow id="event-schema-errors">
   <triggers><event id="message" name="message.received" secret="{{secrets.EVENT_CONTROL_TOKEN}}">${children}</event></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     expect(
       validationError(event('<schema>{ nope }</schema>')).diagnostic.code
     ).toBe('WOML_EVENT_SCHEMA_JSON_INVALID');
@@ -1647,23 +1669,31 @@ describe('compileWoml', () => {
         .diagnostic.code
     ).toBe('WOML_EVENT_SCHEMA_INVALID');
     expect(
-      validationError(
-        event('<schema>{}</schema><schema>{}</schema>')
-      ).diagnostic.code
+      validationError(event('<schema>{}</schema><schema>{}</schema>'))
+        .diagnostic.code
     ).toBe('WOML_EVENT_STRUCTURE_INVALID');
-    expect(
-      validationError(event('<step id="bad" />')).diagnostic.code
-    ).toBe('WOML_EVENT_STRUCTURE_INVALID');
+    expect(validationError(event('<step id="bad" />')).diagnostic.code).toBe(
+      'WOML_EVENT_STRUCTURE_INVALID'
+    );
   });
 
-  test('T11 requires an explicit symbolic publisher secret on every event', () => {
-    const source = (secret: string) => `<workflow id="event-secret-errors">
+  test('SC11 allows internal-only events and validates optional public publisher secrets', () => {
+    const source = (secret: string) => `<woml>
+<workflow id="event-secret-errors">
   <triggers><event id="message" name="message.received"${secret} /></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
-    expect(validationError(source('')).diagnostic.code).toBe(
-      'WOML_MISSING_ATTRIBUTE'
-    );
+</workflow>
+</woml>`;
+    expect(compile(source('')).triggers[0]).toEqual({
+      id: 'message',
+      handler: 'trigger.event',
+      config: {
+        kind: 'object',
+        fields: {
+          name: { kind: 'literal', value: 'message.received' },
+        },
+      },
+    });
     expect(
       validationError(source(' secret="literal-token"')).diagnostic.code
     ).toBe('WOML_SECRET_LITERAL_FORBIDDEN');
@@ -1672,11 +1702,11 @@ describe('compileWoml', () => {
     ).toBe('WOML_SECRET_REFERENCE_INVALID');
   });
 
-  test('requires the workflow root and validates trigger IDs', () => {
+  test('requires the WOML document root and validates trigger IDs', () => {
     const wrongRoot =
       '<steps><step id="a"><script>return 1;</script></step></steps>';
     expect(validationError(wrongRoot).diagnostic.code).toBe(
-      'WOML_EXPECTED_WORKFLOW_ROOT'
+      'WOML_EXPECTED_DOCUMENT_ROOT'
     );
 
     const invalidTrigger = validWorkflow().replace(

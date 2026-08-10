@@ -1,5 +1,15 @@
 export { compileWoml, validateWoml } from './compiler';
 export {
+  buildWomlDefinitionPackage,
+  canonicalizeWomlDefinitionPackage,
+  WOML_DEFINITION_PACKAGE_PROFILE,
+  WOML_MODULE_RESOLVER_PROFILE,
+  type WomlDefinitionPackageModuleV1,
+  type WomlDefinitionPackageSourceV1,
+  type WomlDefinitionPackageV1,
+  type WomlModuleResolverOptions,
+} from './modules';
+export {
   inspectCompiledWorkflowGraph,
   type ArrayExpression,
   type BackoffPolicy,

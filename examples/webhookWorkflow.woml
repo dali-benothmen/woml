@@ -1,3 +1,4 @@
+<woml>
 <workflow id="webhook-demo" name="Webhook Demo" version="1.0.0">
   <triggers>
     <webhook
@@ -27,3 +28,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

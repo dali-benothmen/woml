@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/events-service/v1",
+  "title": "WOML Events Service v1",
+  "description": "Workflow-originated named-event publication contract for services.events.emit().",
+  "x-status": "events-service-contract-frozen-sc11",
+  "x-limits": {
+    "payloadBytes": 1048576,
+    "subscribersPerEventName": 1000,
+    "lineageDepth": 32,
+    "schemaIssuesPerSubscriber": 100
+  },
+  "x-invariants": [
+    "The publication identity is derived from the durable capability operation identity.",
+    "Payloads never enter operation metadata or diagnostics.",
+    "Each accepted subscriber run is durable before it appears in the result.",
+    "Zero matching subscribers is a successful no-op.",
+    "A lineage cannot repeat the same workflow and event-trigger pair."
+  ],
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "eventName": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$"
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "message"],
+      "properties": {
+        "path": { "type": "string", "maxLength": 2048 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "acceptedDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowId", "triggerId", "status", "runId", "duplicate"],
+      "properties": {
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "const": "accepted" },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "duplicate": { "type": "boolean" }
+      }
+    },
+    "rejectedDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowId", "triggerId", "status", "code", "message", "retryable"],
+      "properties": {
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "const": "rejected" },
+        "code": {
+          "enum": [
+            "WOML_TRIGGER_SCHEMA_INVALID",
+            "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+            "WOML_TRIGGER_DEFINITION_MISMATCH",
+            "WOML_TRIGGER_HISTORY_INVALID",
+            "WOML_TRIGGER_UNAVAILABLE",
+            "WOML_EVENT_CYCLE",
+            "WOML_EVENT_DEPTH_EXCEEDED"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retryable": { "type": "boolean" },
+        "issues": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/issue" }
+        }
+      }
+    },
+    "delivery": {
+      "oneOf": [
+        { "$ref": "#/$defs/acceptedDelivery" },
+        { "$ref": "#/$defs/rejectedDelivery" }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "operation", "input"],
+      "properties": {
+        "contract": { "const": "woml.events" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "request" },
+        "operation": { "const": "emit" },
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "payload"],
+          "properties": {
+            "name": { "$ref": "#/$defs/eventName" },
+            "payload": { "type": "object" }
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "operation", "data"],
+      "properties": {
+        "contract": { "const": "woml.events" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "result" },
+        "operation": { "const": "emit" },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "publicationId", "eventName", "status", "depth", "acceptedCount",
+            "duplicateCount", "rejectedCount", "deliveries"
+          ],
+          "properties": {
+            "publicationId": {
+              "type": "string",
+              "pattern": "^internal:v1:sha256:[a-f0-9]{64}$"
+            },
+            "eventName": { "$ref": "#/$defs/eventName" },
+            "status": { "enum": ["accepted", "partial", "rejected"] },
+            "depth": { "type": "integer", "minimum": 0, "maximum": 32 },
+            "acceptedCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "duplicateCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "rejectedCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "deliveries": {
+              "type": "array",
+              "maxItems": 1000,
+              "items": { "$ref": "#/$defs/delivery" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

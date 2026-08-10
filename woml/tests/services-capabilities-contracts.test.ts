@@ -50,6 +50,7 @@ async function validators() {
     'database.v1.schema.json',
     'storage.v1.schema.json',
     'cache.v1.schema.json',
+    'events-service.v1.schema.json',
     'script-host-protocol.v4.schema.json',
   ];
   for (const name of schemaNames)
@@ -69,6 +70,7 @@ async function validators() {
     database: get('https://cronflow.dev/schemas/database/v1'),
     storage: get('https://cronflow.dev/schemas/storage/v1'),
     cache: get('https://cronflow.dev/schemas/cache/v1'),
+    events: get('https://cronflow.dev/schemas/events-service/v1'),
     host: get('https://cronflow.dev/schemas/script-host-protocol/v4'),
   };
 }
@@ -76,10 +78,12 @@ async function validators() {
 const schemas = await validators();
 
 function workflow(script: string): string {
-  return `<workflow id="analysis-contract" version="1.0.0">
+  return `<woml>
+<workflow id="analysis-contract" version="1.0.0">
   <triggers><manual id="start" /></triggers>
   <steps><step id="operation"><script>${script}</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
 }
 
 interface OperationState {
@@ -162,7 +166,7 @@ describe('SC0 frozen service and capability contracts', () => {
     const names = (await readdir(fixtureDirectory))
       .filter(name => name.endsWith('.json'))
       .sort();
-    expect(names.length).toBe(23);
+    expect(names.length).toBe(25);
     for (const name of names) {
       const fixture = await json(join(fixtureDirectory, name));
       if (name === 'script-host-messages.v4.json') {
@@ -206,11 +210,13 @@ describe('SC0 frozen service and capability contracts', () => {
             ? schemas.fetch
             : name.startsWith('database-')
               ? schemas.database
-            : name.startsWith('storage-')
-              ? schemas.storage
-              : name.startsWith('cache-')
-                ? schemas.cache
-                : schemas.http;
+              : name.startsWith('storage-')
+                ? schemas.storage
+                : name.startsWith('cache-')
+                  ? schemas.cache
+                  : name.startsWith('events-')
+                    ? schemas.events
+                    : schemas.http;
       expect(
         validator(fixture),
         `${name}: ${JSON.stringify(validator.errors)}`

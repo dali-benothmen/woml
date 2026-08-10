@@ -13,6 +13,12 @@ function elementChildren(element: WomlSourceElement): WomlSourceElement[] {
   return element.children.filter(isWomlElement);
 }
 
+function workflowElement(root: WomlSourceElement): WomlSourceElement {
+  const workflow = elementChildren(root).find(child => child.name === 'workflow');
+  if (workflow === undefined) throw new Error('Missing fixture workflow.');
+  return workflow;
+}
+
 function parseError(source: string): WomlParseError {
   try {
     parseWoml(source, { file: 'broken.woml' });
@@ -31,16 +37,17 @@ describe('parseWoml', () => {
     );
     const document = parseWoml(source, { file: 'hello.woml' });
 
-    expect(document.root.name).toBe('workflow');
-    expect(document.root.attributes.id.value).toBe('hello');
-    expect(document.root.attributes.name.value).toBe('Hello WOML');
+    expect(document.root.name).toBe('woml');
     expect(document.root.span.start).toEqual({ line: 1, column: 1, offset: 0 });
     expect(document.root.span.end.offset).toBe(
-      source.lastIndexOf('</workflow>') + '</workflow>'.length
+      source.lastIndexOf('</woml>') + '</woml>'.length
     );
     expect(document.span.end.offset).toBe(source.length);
 
-    const [triggers, steps] = elementChildren(document.root);
+    const workflow = workflowElement(document.root);
+    expect(workflow.attributes.id.value).toBe('hello');
+    expect(workflow.attributes.name.value).toBe('Hello WOML');
+    const [triggers, steps] = elementChildren(workflow);
     expect([triggers.name, steps.name]).toEqual(['triggers', 'steps']);
     expect(elementChildren(triggers)[0].attributes.id.value).toBe('start');
 
@@ -105,7 +112,7 @@ describe('parseWoml', () => {
       'utf8'
     );
     const document = parseWoml(source, { file: 'branch.woml' });
-    const [, steps] = elementChildren(document.root);
+    const [, steps] = elementChildren(workflowElement(document.root));
     const branch = elementChildren(steps)[1];
     const [when, otherwise] = elementChildren(branch);
     const whenResult = elementChildren(when).at(-1);
@@ -132,7 +139,7 @@ describe('parseWoml', () => {
       'utf8'
     );
     const document = parseWoml(source, { file: 'parallel.woml' });
-    const [, steps] = elementChildren(document.root);
+    const [, steps] = elementChildren(workflowElement(document.root));
     const parallel = elementChildren(steps)[1];
     const [weather, soil] = elementChildren(parallel);
     const weatherScript = elementChildren(weather)[0].children[0];

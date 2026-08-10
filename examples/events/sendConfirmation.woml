@@ -1,3 +1,4 @@
+<woml>
 <workflow id="send-confirmation" name="Send order confirmation">
   <triggers>
     <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
@@ -23,3 +24,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

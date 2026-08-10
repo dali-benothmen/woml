@@ -11,10 +11,12 @@ import {
 } from '../src';
 
 function workflow(item: string): string {
-  return `<workflow id="notification-test">
+  return `<woml>
+<workflow id="notification-test">
   <triggers><manual id="start" /></triggers>
   <steps>${item}</steps>
-</workflow>`;
+</workflow>
+</woml>`;
 }
 
 function approval(notify: string, id = 'review'): string {

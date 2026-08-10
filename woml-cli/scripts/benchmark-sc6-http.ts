@@ -55,7 +55,8 @@ function workflow(mode: 'native' | 'managed'): string {
     mode === 'native'
       ? `fetch(${JSON.stringify(url)}).then(response => response.json())`
       : `services.http.request({ url: ${JSON.stringify(url)} })`;
-  return `<workflow version="0.1" id="sc6-${mode}-benchmark" name="SC6 ${mode} benchmark">
+  return `<woml>
+<workflow version="0.1" id="sc6-${mode}-benchmark" name="SC6 ${mode} benchmark">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="benchmark">
@@ -71,7 +72,8 @@ function workflow(mode: 'native' | 'managed'): string {
       </script>
     </step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
 }
 
 async function run(mode: 'native' | 'managed'): Promise<ProfileResult> {

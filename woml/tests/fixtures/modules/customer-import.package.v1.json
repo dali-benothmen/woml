@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "profile": "woml.definition-package/v1",
+  "executable": false,
+  "workflow": {
+    "id": "customer-import",
+    "source": "customer-import.woml"
+  },
+  "modules": [
+    {
+      "name": "spreadsheet",
+      "entrypoint": "spreadsheet.ts",
+      "exports": ["read", "removeEmptyRows"]
+    }
+  ],
+  "sources": [
+    {
+      "path": "customer-import.woml",
+      "mediaType": "application/woml+xml",
+      "digest": "sha256:ef829ab930663ed799e76f8bc0381ae6a1d45771e2162ecf65a33cca7ad76e78",
+      "dependencies": ["spreadsheet.ts"]
+    },
+    {
+      "path": "spreadsheet.ts",
+      "mediaType": "text/typescript",
+      "digest": "sha256:4c9e09d22a2cd866f6ede8cbae052d14f482e80d3864f8e3d4c14864d3eb9dad",
+      "dependencies": ["values.ts"]
+    },
+    {
+      "path": "values.ts",
+      "mediaType": "text/typescript",
+      "digest": "sha256:04dd382d1bb1fb3201b3695904a889d32a772b4ba6596f5d2c5b95827e875d51",
+      "dependencies": []
+    }
+  ],
+  "compiler": {
+    "name": "woml",
+    "version": "0.1.0",
+    "resolverProfile": "woml.module-resolver/v1"
+  },
+  "permissions": {
+    "secrets": [],
+    "networkOrigins": []
+  },
+  "rootHash": "sha256:e8af508bfe07297e9d04d0b0b6373e0eb7f50b295c29e7e29a2f860ebb3328b4"
+}

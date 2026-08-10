@@ -216,7 +216,8 @@ describe('woml test one-shot compatibility', () => {
     const statePath = join(temporaryDirectory, 'sc4-native-fetch.sqlite');
     await writeFile(
       workflowPath,
-      `<workflow id="sc4-cli-fetch" version="1.0.0" name="SC4 CLI Fetch">
+      `<woml>
+<workflow id="sc4-cli-fetch" version="1.0.0" name="SC4 CLI Fetch">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="request">
@@ -226,7 +227,8 @@ describe('woml test one-shot compatibility', () => {
       </script>
     </step>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
     try {
       const result = await runCli('test', workflowPath, '--state', statePath);
@@ -265,7 +267,8 @@ describe('woml test one-shot compatibility', () => {
     const workflowPath = join(temporaryDirectory, 'sc6-http-composition.woml');
     await writeFile(
       workflowPath,
-      `<workflow id="sc6-http-composition" version="1.0.0" name="SC6 HTTP Composition">
+      `<woml>
+<workflow id="sc6-http-composition" version="1.0.0" name="SC6 HTTP Composition">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="choose"><script>return { useHttp: true };</script></step>
@@ -295,7 +298,8 @@ describe('woml test one-shot compatibility', () => {
       <script>return { managedStatus: context.steps.route.status, managedPath: context.steps.route.data.path };</script>
     </step>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
     try {
       const result = await runCli('test', workflowPath);
@@ -531,7 +535,8 @@ describe('woml test one-shot compatibility', () => {
     const workflowPath = join(temporaryDirectory, 'parallel-one-child.woml');
     await writeFile(
       workflowPath,
-      `<workflow version="0.1" id="one-child-parallel">
+      `<woml>
+<workflow version="0.1" id="one-child-parallel">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="checks" concurrency="1" on-error="wait-all">
@@ -539,7 +544,8 @@ describe('woml test one-shot compatibility', () => {
     </parallel>
     <step id="finish"><script>return { value: context.steps.onlyCheck.value };</script></step>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
 
     expect(await runCli('run', workflowPath)).toEqual({
@@ -553,7 +559,8 @@ describe('woml test one-shot compatibility', () => {
     const workflowPath = join(temporaryDirectory, 'parallel-snapshot.woml');
     await writeFile(
       workflowPath,
-      `<workflow version="0.1" id="parallel-snapshot">
+      `<woml>
+<workflow version="0.1" id="parallel-snapshot">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="checks" concurrency="2" on-error="wait-all">
@@ -562,7 +569,8 @@ describe('woml test one-shot compatibility', () => {
     </parallel>
     <step id="finish"><script>return { sawSibling: context.steps.probe.sawSibling };</script></step>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
 
     expect(await runCli('run', workflowPath)).toEqual({
@@ -592,7 +600,7 @@ describe('woml test one-shot compatibility', () => {
       expect(result.stderr).toContain(
         'WOML runtime error [WOML_PARALLEL_CHILD_FAILED]'
       );
-      expect(result.stderr).toContain(`${workflowPath}:15:`);
+      expect(result.stderr).toContain(`${workflowPath}:16:`);
       expect(result.stderr).toContain(
         'step "loadWeather" in parallel "fieldData"'
       );
@@ -617,7 +625,7 @@ describe('woml test one-shot compatibility', () => {
     expect(result.stderr).toContain(
       'WOML validation error [WOML_PARALLEL_INVALID_CONCURRENCY]'
     );
-    expect(result.stderr).toContain(`${workflowPath}:13:`);
+    expect(result.stderr).toContain(`${workflowPath}:14:`);
     expect(result.exitCode).toBe(1);
   });
 
@@ -625,14 +633,16 @@ describe('woml test one-shot compatibility', () => {
     const workflowPath = join(temporaryDirectory, 'parallel-terminal.woml');
     await writeFile(
       workflowPath,
-      `<workflow version="0.1" id="terminal-parallel">
+      `<woml>
+<workflow version="0.1" id="terminal-parallel">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="checks">
       <step id="check"><script>return { ok: true };</script></step>
     </parallel>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
 
     const result = await runCli('run', workflowPath);
@@ -641,7 +651,7 @@ describe('woml test one-shot compatibility', () => {
     expect(result.stderr).toContain(
       'WOML validation error [WOML_PARALLEL_TERMINAL_UNSUPPORTED]'
     );
-    expect(result.stderr).toContain(`${workflowPath}:4:`);
+    expect(result.stderr).toContain(`${workflowPath}:5:`);
     expect(result.exitCode).toBe(1);
   });
 
@@ -666,7 +676,7 @@ describe('woml test one-shot compatibility', () => {
 
   test('reports source diagnostics with phase, file, line, and column', async () => {
     const workflowPath = join(temporaryDirectory, 'invalid.woml');
-    await writeFile(workflowPath, '<workflow>');
+    await writeFile(workflowPath, '<woml>\n<workflow>');
 
     const result = await runCli('run', workflowPath);
 
@@ -680,17 +690,19 @@ describe('woml test one-shot compatibility', () => {
     const workflowPath = join(temporaryDirectory, 'failure.woml');
     await writeFile(
       workflowPath,
-      `<workflow version="1.0.0" id="failure">
+      `<woml>
+<workflow version="1.0.0" id="failure">
   <triggers><manual id="start" /></triggers>
   <steps><step id="broken"><script>throw new Error("boom");</script></step></steps>
-</workflow>`
+</workflow>
+</woml>`
     );
 
     const result = await runCli('run', workflowPath);
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('WOML runtime error [WOML_SCRIPT_FAILED]');
-    expect(result.stderr).toContain(`${workflowPath}:3:`);
+    expect(result.stderr).toContain(`${workflowPath}:4:`);
     expect(result.stderr).toContain('step "broken"');
     expect(result.stderr).toContain('boom');
     expect(result.exitCode).toBe(1);
@@ -710,7 +722,7 @@ describe('woml test one-shot compatibility', () => {
     expect(result.stderr).toContain(
       'WOML runtime error [WOML_BRANCH_TEST_NOT_BOOLEAN]'
     );
-    expect(result.stderr).toContain(`${workflowPath}:19:`);
+    expect(result.stderr).toContain(`${workflowPath}:20:`);
     expect(result.stderr).toContain('<when test> in branch "decision"');
     expect(result.stderr).toContain('must resolve to a JSON boolean');
     expect(result.exitCode).toBe(1);
@@ -730,7 +742,7 @@ describe('woml test one-shot compatibility', () => {
     expect(result.stderr).toContain(
       'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]'
     );
-    expect(result.stderr).toContain(`${workflowPath}:19:`);
+    expect(result.stderr).toContain(`${workflowPath}:20:`);
     expect(result.stderr).toContain('<when test> in branch "decision"');
     expect(result.stderr).toContain('context.steps.checkContent.needsReview');
     expect(result.exitCode).toBe(1);
@@ -750,7 +762,7 @@ describe('woml test one-shot compatibility', () => {
     expect(result.stderr).toContain(
       'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]'
     );
-    expect(result.stderr).toContain(`${workflowPath}:29:`);
+    expect(result.stderr).toContain(`${workflowPath}:30:`);
     expect(result.stderr).toContain('<result value> in branch "decision"');
     expect(result.stderr).toContain('context.steps.reviewContent.missing');
     expect(result.exitCode).toBe(1);

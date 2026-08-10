@@ -1,3 +1,4 @@
+<woml>
 <workflow id="interval-trigger-contract">
   <triggers>
     <interval id="refreshCache" every="5m" on-missed="run-once" />
@@ -10,3 +11,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

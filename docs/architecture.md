@@ -22,6 +22,16 @@ attributes, raw `<script>` bodies, and `{{context...}}` references. Its output i
 a versioned, language-neutral compiled workflow model whose nodes and edges form
 a DAG. It does not execute the workflow.
 
+Module System MS1 makes `<woml>` the canonical document root. The frontend may
+resolve `<imports><module name="..." from="..." /></imports>` before lowering:
+it validates the direct named-function ESM surface, follows only safe static
+local `.js`/`.ts` edges, assigns project-relative identities, and emits an
+immutable Definition Package v1 manifest. The MS1 manifest is explicitly
+non-executable, and `woml run` fails closed for imported modules until MS3.
+Neither the Rust core nor the compiled Model v8 understands `<woml>`, module
+paths, ESM syntax, or export grammar. `woml check` is the read-only inspection
+boundary. The frozen contract is `docs/protocols/module-system-v1.md`.
+
 The Rust core is the execution authority. It validates the compiled model,
 selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends
 versioned events to SQLite, and rebuilds run context by folding those events. It
@@ -32,8 +42,10 @@ authoring experience. Each invocation runs in an isolated Worker with a real
 timeout boundary and receives only the versioned bindings approved for its
 model. Model v8 and Script Bindings v1 inject exactly `context`, `attempt`,
 `services`, and source-proven `secrets` into capability scripts. Native Fetch,
-managed HTTP, the SQLite/PostgreSQL Database v1 facade, durable Storage v1, and
-workflow-scoped Cache v1 are active through SC10. Bun reports
+managed HTTP, the SQLite/PostgreSQL Database v1 facade, durable Storage v1,
+workflow-scoped Cache v1, and internal named Events Service v1 are active.
+SC14 completes their shared documentation, composition coverage, packaging,
+and release gate. Queue remains intentionally postponed. Bun reports
 outcomes; it never decides whether to retry or how the graph advances.
 
 ### Services and capability boundary
@@ -47,7 +59,7 @@ JavaScript facades and isolated execution.
 
 Native Fetch stays Bun's real Fetch implementation and uses redacted observed
 events. `services.http.request()`, `services.db()`, `services.storage`,
-`services.cache`, and future `services.*`
+`services.cache`, `services.events.emit()`, and future `services.*`
 operations use Rust-managed calls. All converge on the generic `operation_started`,
 `operation_succeeded`, and `operation_failed` vocabulary. Compiled models keep
 only sorted secret names; resolved values exist only in the invocation-memory
@@ -60,9 +72,11 @@ Bun or context. Cache v1 uses a bounded local SQLite store beside WOML state;
 Rust derives its workflow-ID namespace from the durable run binding without
 exposing `context.run` or changing Capability Call v1. SQLite user
 connections cannot open WOML's internal state database; PostgreSQL connection
-strings and credentials never become safe event metadata. Other `services.*` capabilities remain
-unavailable until their individual milestones. The authoritative Database v1
-guide is `docs/woml-database.md`; Storage v1 is documented in
+strings and credentials never become safe event metadata. Internal Events v1
+reuses the durable named-event fan-out authority without an HTTP loopback.
+Other `services.*` capabilities remain unavailable until their individual
+milestones. The services entry point is `docs/woml-services.md`; the
+authoritative Database v1 guide is `docs/woml-database.md`; Storage v1 is documented in
 `docs/woml-storage.md`; Cache v1 is documented in `docs/woml-cache.md`.
 
 The local outbound-HTTP profile permits reachable HTTP(S) destinations and is

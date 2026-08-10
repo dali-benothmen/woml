@@ -1,6 +1,7 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0 through SC10 completed on 2026-08-10. The cross-layer
+Status: completed through SC14 on 2026-08-10; SC12 and SC13 are explicitly
+postponed queue work. The cross-layer
 contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
 Script Bindings v1 and symbolic secret dependencies, and a real WOML script can
 now call from an isolated Bun Worker through the durable Rust capability
@@ -15,8 +16,13 @@ strict separation from WOML runtime state. Storage v1 now adds Rust-owned,
 checksummed durable objects and managed HTTP direct-to-storage streaming without
 copying large bodies through Bun or context. Cache v1 now adds a bounded,
 workflow-scoped local SQLite cache with exact expiry, atomic mutations, LRU
-eviction, restart survival, and redacted events. SC11 is next: internal named
-events from workflows.
+eviction, restart survival, and redacted events. Events Service v1 now lets a
+workflow durably fan out to named-event subscribers without HTTP or a publisher
+token, using stable operation identity, hidden lineage, duplicate suppression,
+cycle/depth protection, and safe per-subscriber results. SC14 adds the unified
+guide, local composition journey, cross-service integration coverage, and one
+release gate. Queue work is explicitly postponed until WOML needs distributed
+workload buffering.
 
 ## 1. Product Outcome
 
@@ -31,8 +37,11 @@ services.db
 services.storage
 services.cache
 services.events
-services.queue
 ```
+
+`services.queue` remains a future service. It will not be exposed as a partial
+producer API before WOML has a complete producer, consumer-trigger, recovery,
+and operational inspection experience.
 
 The author writes normal JavaScript. WOML carries the operational complexity:
 connection reuse, cancellation, timeouts, retries where safe, idempotency,
@@ -82,7 +91,8 @@ control over the operation.
 ### 2.1 One simple namespace
 
 Every WOML-owned capability lives under the reserved `services` binding. The
-six built-in names are reserved and cannot be replaced.
+five published built-in names cannot be replaced. `queue` is reserved as a
+future built-in name but is not exposed by the current runtime.
 
 The user never declares whether code is pure, effectful, Rust-backed, or
 Bun-backed. WOML observes controlled operations when they occur.
@@ -93,8 +103,9 @@ HTTP already has a universal JavaScript API, so WOML keeps native `fetch()`.
 WOML instruments Bun's implementation rather than replacing it with a partial
 Fetch clone.
 
-There is no equivalent standard API for databases, storage, cache, events, or
-queues, so those use `services.*`.
+There is no equivalent standard API for databases, storage, cache, or events,
+so those use `services.*`. A future durable queue will use the same namespace
+only after its complete producer-and-consumer contract is approved.
 
 ### 2.3 Rust supervises managed effects
 
@@ -110,10 +121,10 @@ No module will need `kind="capability"`. Pure functions stay in Bun; calls to
 native Fetch or a managed capability reach the same operation boundary defined
 by this milestone.
 
-This plan deliberately defines no `<modules>`, `<require>`, or `<import>`
-syntax. Module loading, dependency resolution, packaging, permissions, and
-reusable `.woml` composition belong to the separate WOML Module System
-milestone.
+This plan deliberately defines no module document syntax. The following Module
+System milestone owns the canonical `<woml><imports><module ... /></imports>`
+shape, JavaScript/TypeScript dependency resolution, packaging, and permissions.
+Runnable `.woml` workflows are not module imports.
 
 ### 2.5 No false exactly-once promise
 
@@ -186,19 +197,17 @@ Services and Capabilities are complete when:
    operations without pretending cache data is authoritative workflow state.
 8. `services.events.emit()` directly reuses the named-event fan-out authority
    without an HTTP loopback or publisher token.
-9. `services.queue` has a complete producer-and-consumer journey; it is not
-   advertised as a producer API with no usable consumer.
-10. Rust durably records managed operation state and never persists secret
-    values, authorization headers, raw database values, or unbounded bodies.
-11. A capability failure reaches JavaScript as one catchable, documented error
+9. Rust durably records managed operation state and never persists secret
+   values, authorization headers, raw database values, or unbounded bodies.
+10. A capability failure reaches JavaScript as one catchable, documented error
     shape and maps safely into the existing step retry/failure model.
-12. Interrupted or ambiguous calls fail closed, cancellation reaches active
+11. Interrupted or ambiguous calls fail closed, cancellation reaches active
     handlers, and completed service calls never manufacture a step output on
     their own.
-13. Branch, parallel, approval, retry, and every production trigger compose
+12. Branch, parallel, approval, retry, and every production trigger compose
     with service calls through the same DAG execution loop.
-14. Older workflows that do not use services behave exactly as before.
-15. Each published service passes a clean-package manual journey and the full
+13. Older workflows that do not use services behave exactly as before.
+14. Each published service passes a clean-package manual journey and the full
     WOML release gate.
 
 ## 5. Scope
@@ -213,7 +222,7 @@ Services and Capabilities are complete when:
 - A versioned generic operation-event vocabulary.
 - Instrumentation around Bun's native global `fetch()`.
 - Managed HTTP, SQL database, local durable object storage, local expiring
-  cache, internal named-event publication, and a usable durable queue profile.
+  cache, and internal named-event publication.
 - Rust-owned limits, cancellation, error classification, safe metadata,
   idempotency information, and connection/resource reuse.
 - Source-aware diagnostics, terminal progress, fixtures, recovery tests,
@@ -232,9 +241,9 @@ Services and Capabilities are complete when:
 - Unrestricted filesystem, environment, child-process, or raw-socket access.
 - A claim that the local trusted-code Worker is already a multi-tenant security
   sandbox. OS-level tenant isolation belongs to Production Runtime.
-- Automatic replay of ambiguous HTTP, database, or queue effects.
+- Automatic replay of ambiguous HTTP or database effects.
 - Distributed connection pools, distributed cache coherence, broker clusters,
-  multi-node queue leases, or active-active operation ownership.
+  durable queue execution, or active-active operation ownership.
 - Lifecycle hooks, workflow cancellation UI/API, workflow-level rate limits,
   and durable user state. Service-call cancellation needed by the existing
   engine is included; the larger product controls remain later work.
@@ -438,7 +447,7 @@ The engine adds internal causation/lineage and bounded depth/fan-out protection
 so workflows cannot create an unbounded event cycle. That metadata remains
 engine control data and does not silently expand `context.run`.
 
-### 6.8 `services.queue`
+### 6.8 Future `services.queue` (postponed)
 
 Events fan out to every matching subscriber. A queue delivers one message to
 one consumer. WOML must preserve that distinction.
@@ -959,6 +968,8 @@ restart behavior, limits, and isolation tests pass.
 
 ### SC11 — Publish internal named events from workflows
 
+Status: completed on 2026-08-10.
+
 Changes:
 
 - Freeze Events Service v1 input/result/error contracts.
@@ -980,6 +991,10 @@ recovery, schema mismatch, cycles, maximum depth/fan-out, concurrent emission,
 and coexistence with the public event HTTP endpoint.
 
 ### SC12 — Freeze the usable queue contract
+
+Status: postponed on 2026-08-10. Queue is not required to complete the current
+services milestone. Resume this phase when WOML needs explicit workload
+buffering beyond durable triggers, events, retries, and workflow concurrency.
 
 Changes:
 
@@ -1003,6 +1018,9 @@ boundaries, redelivery/dead-letter rules, and contain no unresolved defaults.
 
 ### SC13 — Execute and publish the durable local queue
 
+Status: postponed with SC12. No `services.queue` facade or queue trigger is
+published in the current language/runtime.
+
 Changes:
 
 - Implement `services.queue.send()` and the Rust durable local queue.
@@ -1025,13 +1043,16 @@ shutdown, and no message loss at transactional boundaries.
 
 ### SC14 — Complete Services and Capabilities
 
+Status: completed on 2026-08-10. This phase completes the five published
+built-ins and native Fetch; it does not claim that the postponed queue exists.
+
 Changes:
 
-- Run cross-service compositions, including parallel HTTP/DB calls, event-to-
-  queue flows, storage references, cache misses, approvals, and retries.
+- Run cross-service compositions, including parallel HTTP/DB calls, storage
+  references, cache misses, internal events, approvals, and retries.
 - Test resource exhaustion, shutdown, recovery, corrupt histories, version
   compatibility, and secret leakage across every capability.
-- Add examples and manual instructions for all six built-ins and native Fetch.
+- Add examples and manual instructions for all five built-ins and native Fetch.
 - Update architecture, language, CLI, security, deployment, recovery, and SDK
   migration documentation.
 - Add clean-package smoke journeys and a single Services release gate.
@@ -1040,8 +1061,9 @@ Changes:
 
 Result:
 
-All six built-in services and tracked native Fetch are supported, documented,
-packaged, and ready for the next WOML milestone.
+All five current built-in services and tracked native Fetch are supported,
+documented, packaged, and ready for the next WOML milestone. Queue remains a
+named, unapologetically unavailable roadmap item.
 
 Gate:
 
@@ -1061,8 +1083,8 @@ from a clean installation.
 | Events/folding/store         | `event.rs`, `projection.rs`, `durable.rs`, SQLite migrations             |
 | Native Fetch facade          | new Bun Worker runtime/fetch modules and conformance tests               |
 | Service JavaScript facades   | new `woml-cli/src/services/*` modules and public typings                 |
-| Rust service handlers        | HTTP, database, storage, cache, events, and queue capability modules     |
-| Trigger/runtime bridge       | Rust runtime and frontend changes for the queue consumer profile         |
+| Rust service handlers        | HTTP, database, storage, cache, and events capability modules            |
+| Trigger/runtime bridge       | Rust runtime and frontend changes for internal event publication         |
 | CLI/secrets/progress         | `woml-cli/src/cli.ts`, secret store/resolution, `rust-executor.ts`       |
 | Versioned artifacts          | `docs/schemas/*`, `docs/protocols/*`, compiled/event fixtures            |
 | Examples                     | new native Fetch and one example per built-in service                    |
@@ -1144,26 +1166,34 @@ fan-out without exposing an undefined `context.run` contract.
 
 ## 17. Global Roadmap After Services and Capabilities
 
-1. **Retries and idempotency** — completed in RI7.
-2. **Production triggers** — completed in T13: manual, webhook, Slack,
-   schedule, interval, and named event.
-3. **Services and capabilities** — this SC0-SC14 milestone: native Fetch plus
-   HTTP, database, storage, cache, events, and queue built-ins.
-4. **WOML Module System** — import local JavaScript/TypeScript modules, expose
-   user-built operations under `services.*`, import reusable `.woml` files,
-   bundle dependencies, pin hashes/versions, and add a React-like composition
-   experience. Exact `<import>` syntax remains deliberately unfrozen.
-5. **Lifecycle and engine controls** — workflow cancellation, lifecycle hooks,
-   workflow-level concurrency/rate limits/timeouts, advanced queue controls,
-   and durable user state.
-6. **Production runtime and operations** — hosting, deployment, multi-node
+1. **WOML Module System** — use the canonical `<woml>` document and
+   `<imports><module name="..." from="..." /></imports>` to load reproducible
+   JavaScript/TypeScript named exports under `services.*`; bundle dependencies,
+   pin artifacts, enforce permissions, and preserve recovery. Runnable `.woml`
+   workflows are not imports.
+2. **Durable Workflow Calls** — add
+   `services.workflows.call(workflowId, payload, options?)` to target exactly one
+   activated workflow by ID, pass payload through `context.trigger`, wait
+   durably for its independent child run, and receive its final JSON result.
+   No `<call>` trigger tag is required. Same-runtime calls use direct Rust
+   routing; cross-process calls require authenticated discovery, stable call
+   identity, unique ownership, timeouts, cancellation, idempotency, cycle/depth
+   protection, and crash recovery. Explicit `return null` is an intentional
+   no-result success; missing return/`undefined` fails the child call.
+3. **Lifecycle and engine controls** — workflow cancellation, lifecycle hooks,
+   workflow-level concurrency/rate limits/timeouts, and durable user state.
+4. **Production runtime and operations** — hosting, deployment, multi-node
    ownership, OS-level isolation, observability, retention, administration,
-   distributed storage/cache/queue adapters, and scaling.
-7. **Additional infrastructure adapters** — document databases, external
-   object storage, distributed caches, and external brokers according to demand.
-8. **Additional communication providers** — Discord, WhatsApp, and Telegram
+   workflow-call routing, distributed storage/cache adapters, and scaling.
+5. **WOML package registry/community ecosystem** — signed publication,
+   discovery, trust/provenance, moderation, compatibility, and deprecation once
+   local/package artifacts are proven.
+6. **Additional infrastructure adapters** — document databases, external
+   object storage, distributed caches, and the postponed durable queue/external
+   broker profile according to demand.
+7. **Additional communication providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when justified.
-9. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
+8. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
 After SC14, the next design milestone is the WOML Module System. It reuses the

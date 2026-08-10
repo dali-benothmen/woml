@@ -1,3 +1,4 @@
+<woml>
 <workflow id="slack-trigger-contract">
   <triggers>
     <slack
@@ -16,3 +17,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

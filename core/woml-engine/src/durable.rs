@@ -41,13 +41,14 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 6;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 7;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
 const STORE_SCHEMA_VERSION_V4: &str = "4";
 const STORE_SCHEMA_VERSION_V5: &str = "5";
 const STORE_SCHEMA_VERSION_V6: &str = "6";
+const STORE_SCHEMA_VERSION_V7: &str = "7";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
@@ -249,6 +250,55 @@ CREATE INDEX woml_interval_cursors_definition
   ON woml_interval_cursors(definition_hash);
 "#;
 
+const CREATE_INTERNAL_EVENT_SCHEMA_V7: &str = r#"
+CREATE TABLE woml_internal_event_publications (
+  publication_id TEXT PRIMARY KEY,
+  parent_run_id TEXT NOT NULL,
+  event_name TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  depth INTEGER NOT NULL CHECK (depth BETWEEN 1 AND 32),
+  emitted_at TEXT NOT NULL,
+  FOREIGN KEY (parent_run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE TABLE woml_internal_event_deliveries (
+  publication_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  trigger_id TEXT NOT NULL,
+  run_id TEXT NOT NULL UNIQUE,
+  PRIMARY KEY (publication_id, workflow_id, trigger_id),
+  FOREIGN KEY (publication_id) REFERENCES woml_internal_event_publications(publication_id),
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_internal_event_deliveries_run
+  ON woml_internal_event_deliveries(run_id);
+
+CREATE TRIGGER woml_internal_event_publications_no_update
+BEFORE UPDATE ON woml_internal_event_publications
+BEGIN
+  SELECT RAISE(ABORT, 'WOML internal event publications are immutable');
+END;
+
+CREATE TRIGGER woml_internal_event_publications_no_delete
+BEFORE DELETE ON woml_internal_event_publications
+BEGIN
+  SELECT RAISE(ABORT, 'WOML internal event publications are immutable');
+END;
+
+CREATE TRIGGER woml_internal_event_deliveries_no_update
+BEFORE UPDATE ON woml_internal_event_deliveries
+BEGIN
+  SELECT RAISE(ABORT, 'WOML internal event deliveries are immutable');
+END;
+
+CREATE TRIGGER woml_internal_event_deliveries_no_delete
+BEFORE DELETE ON woml_internal_event_deliveries
+BEGIN
+  SELECT RAISE(ABORT, 'WOML internal event deliveries are immutable');
+END;
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDefinitionBinding {
   pub run_id: String,
@@ -353,6 +403,21 @@ pub struct IntervalCursorRegistrationOutcome {
 pub struct TriggerRecoveryWork {
   pub occurrence: TriggerOccurrence,
   pub trigger: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InternalEventAdmissionRequest {
+  pub publication_id: String,
+  pub parent_run_id: String,
+  pub event_name: String,
+  pub trigger: TriggerAdmissionRequest,
+  pub emitted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InternalEventAdmissionOutcome {
+  pub depth: u32,
+  pub occurrence: TriggerAdmissionOutcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -514,6 +579,12 @@ pub enum DurableStoreError {
   TriggerHandlerMismatch,
   #[error("the trigger source identity is already bound to a different payload")]
   TriggerIdempotencyConflict,
+  #[error("the internal event publication identity is already bound to different data")]
+  InternalEventIdempotencyConflict,
+  #[error("the internal event would repeat a subscriber already present in its lineage")]
+  InternalEventCycle,
+  #[error("the internal event exceeds the maximum lineage depth")]
+  InternalEventDepthExceeded,
   #[error("the durable schedule cursor changed before this operation could commit")]
   ScheduleCursorConflict,
   #[error("the durable interval cursor changed before this operation could commit")]
@@ -627,6 +698,22 @@ fn migrate_store_v5_to_v6(connection: &mut Connection) -> Result<(), DurableStor
   Ok(())
 }
 
+fn migrate_store_v6_to_v7(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_INTERNAL_EVENT_SCHEMA_V7)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V7, STORE_SCHEMA_VERSION_V6],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v6-to-v7 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
 fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
   for (object_type, name) in [
     ("table", "woml_approval_tokens"),
@@ -734,6 +821,31 @@ fn validate_store_v6_schema(connection: &Connection) -> Result<(), DurableStoreE
   Ok(())
 }
 
+fn validate_store_v7_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v6_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_internal_event_publications"),
+    ("table", "woml_internal_event_deliveries"),
+    ("index", "woml_internal_event_deliveries_run"),
+    ("trigger", "woml_internal_event_publications_no_update"),
+    ("trigger", "woml_internal_event_publications_no_delete"),
+    ("trigger", "woml_internal_event_deliveries_no_update"),
+    ("trigger", "woml_internal_event_deliveries_no_delete"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v7 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -757,21 +869,28 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
-      Some(STORE_SCHEMA_VERSION_V6) => validate_store_v6_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V7) => validate_store_v7_schema(&connection)?,
+      Some(STORE_SCHEMA_VERSION_V6) => {
+        validate_store_v6_schema(&connection)?;
+        migrate_store_v6_to_v7(&mut connection)?;
+      }
       Some(STORE_SCHEMA_VERSION_V5) => {
         validate_store_v5_schema(&connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
+        migrate_store_v6_to_v7(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V4) => {
         validate_store_v4_schema(&connection)?;
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
+        migrate_store_v6_to_v7(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V3) => {
         validate_store_v3_schema(&connection)?;
         migrate_store_v3_to_v4(&mut connection)?;
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
+        migrate_store_v6_to_v7(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V2) => {
         validate_store_v2_schema(&connection)?;
@@ -779,6 +898,7 @@ impl DurableEventStore {
         migrate_store_v3_to_v4(&mut connection)?;
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
+        migrate_store_v6_to_v7(&mut connection)?;
       }
       Some(STORE_SCHEMA_VERSION_V1) => {
         migrate_store_v1_to_v2(&mut connection)?;
@@ -787,6 +907,7 @@ impl DurableEventStore {
         migrate_store_v3_to_v4(&mut connection)?;
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
+        migrate_store_v6_to_v7(&mut connection)?;
       }
       Some(version) => {
         return Err(DurableStoreError::UnsupportedStoreVersion(
@@ -804,6 +925,7 @@ impl DurableEventStore {
         migrate_store_v3_to_v4(&mut connection)?;
         migrate_store_v4_to_v5(&mut connection)?;
         migrate_store_v5_to_v6(&mut connection)?;
+        migrate_store_v6_to_v7(&mut connection)?;
       }
     }
     Ok(Self { connection })
@@ -915,6 +1037,152 @@ impl DurableEventStore {
     let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request)?;
     transaction.commit()?;
     Ok(outcome)
+  }
+
+  /// Admits one subscriber delivery for a workflow-originated named event and
+  /// stores its hidden lineage in the same transaction. Repeating the stable
+  /// publication identity safely returns the original child run.
+  pub fn admit_internal_event_occurrence(
+    &mut self,
+    request: InternalEventAdmissionRequest,
+  ) -> Result<InternalEventAdmissionOutcome, DurableStoreError> {
+    validate_trigger_admission_request(&request.trigger)?;
+    if request.trigger.trigger_handler != "trigger.event"
+      || !request.publication_id.starts_with("internal:v1:sha256:")
+      || request.publication_id.len() != 83
+      || request.event_name.is_empty()
+      || request.event_name.len() > 256
+    {
+      return Err(DurableStoreError::Contract(
+        "Internal event admission identity is invalid.".to_string(),
+      ));
+    }
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, &request.parent_run_id)?;
+    let payload_hash = canonical_payload_hash(&request.trigger.payload)?;
+    let parent_depth: Option<u32> = transaction
+      .query_row(
+        "SELECT publications.depth
+         FROM woml_internal_event_deliveries AS deliveries
+         JOIN woml_internal_event_publications AS publications
+           ON publications.publication_id = deliveries.publication_id
+         WHERE deliveries.run_id = ?1",
+        [&request.parent_run_id],
+        |row| row.get(0),
+      )
+      .optional()?;
+    let depth = parent_depth.unwrap_or(0).saturating_add(1);
+    if depth > 32 {
+      return Err(DurableStoreError::InternalEventDepthExceeded);
+    }
+
+    let mut ancestor_run = Some(request.parent_run_id.clone());
+    let mut inspected = 0;
+    while let Some(run_id) = ancestor_run {
+      inspected += 1;
+      if inspected > 32 {
+        return Err(DurableStoreError::InternalEventDepthExceeded);
+      }
+      let source: Option<(String, String)> = transaction
+        .query_row(
+          "SELECT workflow_id, trigger_id FROM woml_trigger_occurrences WHERE run_id = ?1",
+          [&run_id],
+          |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+      if source.as_ref()
+        == Some(&(
+          request.trigger.workflow_id.clone(),
+          request.trigger.trigger_id.clone(),
+        ))
+      {
+        return Err(DurableStoreError::InternalEventCycle);
+      }
+      ancestor_run = transaction
+        .query_row(
+          "SELECT publications.parent_run_id
+           FROM woml_internal_event_deliveries AS deliveries
+           JOIN woml_internal_event_publications AS publications
+             ON publications.publication_id = deliveries.publication_id
+           WHERE deliveries.run_id = ?1",
+          [&run_id],
+          |row| row.get(0),
+        )
+        .optional()?;
+    }
+
+    let existing: Option<(String, String, String, u32)> = transaction
+      .query_row(
+        "SELECT parent_run_id, event_name, payload_hash, depth
+         FROM woml_internal_event_publications WHERE publication_id = ?1",
+        [&request.publication_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+      )
+      .optional()?;
+    if let Some(existing) = existing {
+      if existing
+        != (
+          request.parent_run_id.clone(),
+          request.event_name.clone(),
+          payload_hash.clone(),
+          depth,
+        )
+      {
+        return Err(DurableStoreError::InternalEventIdempotencyConflict);
+      }
+    } else {
+      transaction.execute(
+        "INSERT INTO woml_internal_event_publications(
+           publication_id, parent_run_id, event_name, payload_hash, depth, emitted_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+          request.publication_id,
+          request.parent_run_id,
+          request.event_name,
+          payload_hash,
+          depth,
+          request.emitted_at.to_rfc3339(),
+        ],
+      )?;
+    }
+
+    let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request.trigger)?;
+    let existing_delivery: Option<String> = transaction
+      .query_row(
+        "SELECT run_id FROM woml_internal_event_deliveries
+         WHERE publication_id = ?1 AND workflow_id = ?2 AND trigger_id = ?3",
+        params![
+          request.publication_id,
+          request.trigger.workflow_id,
+          request.trigger.trigger_id,
+        ],
+        |row| row.get(0),
+      )
+      .optional()?;
+    if let Some(run_id) = existing_delivery {
+      if run_id != outcome.run_id {
+        return Err(DurableStoreError::InternalEventIdempotencyConflict);
+      }
+    } else {
+      transaction.execute(
+        "INSERT INTO woml_internal_event_deliveries(
+           publication_id, workflow_id, trigger_id, run_id
+         ) VALUES (?1, ?2, ?3, ?4)",
+        params![
+          request.publication_id,
+          request.trigger.workflow_id,
+          request.trigger.trigger_id,
+          outcome.run_id,
+        ],
+      )?;
+    }
+    transaction.commit()?;
+    Ok(InternalEventAdmissionOutcome {
+      depth,
+      occurrence: outcome,
+    })
   }
 
   pub fn register_schedule_cursor(

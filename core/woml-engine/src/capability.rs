@@ -330,6 +330,20 @@ pub trait CapabilityHandler: Send + Sync + 'static {
     let _ = workflow_scope;
     self.execute(input, cancellation)
   }
+
+  /// Executes with the complete engine-verified call identity. This remains an
+  /// internal Rust boundary: it does not add fields to Capability Call v1.
+  /// Handlers whose correctness depends on the originating run or stable
+  /// operation identity may override it; all other handlers keep the scoped
+  /// behavior above.
+  fn execute_request_scoped(
+    &self,
+    request: &CapabilityCallRequest,
+    workflow_scope: Option<String>,
+    cancellation: CapabilityCancellationToken,
+  ) -> BoxFuture<'static, Result<Value, CapabilityFailure>> {
+    self.execute_scoped(request.input.clone(), workflow_scope, cancellation)
+  }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -1035,8 +1049,8 @@ impl CapabilityRegistry {
     let may_have_effect = effect != CapabilityEffect::Read;
     let safe_to_retry = effect != CapabilityEffect::UnsafeWrite;
 
-    let handler_future = AssertUnwindSafe(handler.execute_scoped(
-      request.input.clone(),
+    let handler_future = AssertUnwindSafe(handler.execute_request_scoped(
+      &request,
       workflow_scope,
       cancellation.clone(),
     ))

@@ -115,10 +115,20 @@ interface ValidatedFlow {
 }
 
 interface ValidatedWorkflow {
+  readonly element: WomlSourceElement;
+  readonly modules: readonly ValidatedModuleDeclaration[];
   readonly workflowId: string;
   readonly metadata?: CompiledWorkflowMetadata;
   readonly triggers: readonly ValidatedTrigger[];
   readonly flow: ValidatedFlow;
+}
+
+export interface ValidatedModuleDeclaration {
+  readonly name: string;
+  readonly from: string;
+  readonly element: WomlSourceElement;
+  readonly nameAttribute: WomlSourceAttribute;
+  readonly fromAttribute: WomlSourceAttribute;
 }
 
 interface ValidatedManualTrigger {
@@ -170,7 +180,7 @@ interface ValidatedEventTrigger {
   readonly kind: 'event';
   readonly id: string;
   readonly name: string;
-  readonly secret: SecretReferenceExpression;
+  readonly secret?: SecretReferenceExpression;
   readonly schema?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -190,6 +200,9 @@ interface LoweredFlowFragment {
 }
 
 const supportedElements = new Set([
+  'woml',
+  'imports',
+  'module',
   'workflow',
   'triggers',
   'manual',
@@ -221,6 +234,9 @@ const stagedElements = new Set([
 ]);
 
 const elementProfiles: Readonly<Record<string, ElementProfile>> = {
+  woml: { attributes: new Set() },
+  imports: { attributes: new Set() },
+  module: { attributes: new Set(['name', 'from']) },
   workflow: {
     attributes: new Set(['id', 'name', 'description', 'version']),
     stagedAttributes: new Set(['tags']),
@@ -263,13 +279,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   notify: { attributes: new Set() },
   slack: {
-    attributes: new Set([
-      'id',
-      'events',
-      'channels',
-      'bot-token',
-      'app-token',
-    ]),
+    attributes: new Set(['id', 'events', 'channels', 'bot-token', 'app-token']),
   },
   schedule: {
     attributes: new Set(['id', 'cron', 'timezone', 'on-missed']),
@@ -286,6 +296,21 @@ const workflowIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const javascriptSafeIdPattern = /^[a-z][A-Za-z0-9]*$/;
 const webhookPathPattern = /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?$/;
 const eventNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
+const moduleAliasPattern = /^[a-z][A-Za-z0-9]*$/;
+const moduleSourcePattern = /^(?:\.\/|\.\.\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:js|ts)$/;
+const reservedModuleAliases = new Set([
+  'http',
+  'db',
+  'storage',
+  'cache',
+  'events',
+  'queue',
+  'workflows',
+  'context',
+  'attempt',
+  'services',
+  'secrets',
+]);
 
 function diagnostic(
   document: WomlSourceDocument,
@@ -321,10 +346,11 @@ function failCompile(
   document: WomlSourceDocument,
   code: string,
   message: string,
-  span: SourceSpan
+  span: SourceSpan,
+  hint?: string
 ): never {
   throw new WomlCompileError(
-    diagnostic(document, 'compile', code, message, span)
+    diagnostic(document, 'compile', code, message, span, hint)
   );
 }
 
@@ -662,11 +688,7 @@ function schemaBody(
       source.span(start, Math.min(start + 1, span.end.offset))
     );
   }
-  if (
-    parsed === null ||
-    typeof parsed !== 'object' ||
-    Array.isArray(parsed)
-  ) {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     failValidation(
       document,
       `${codePrefix}_SCHEMA_INVALID`,
@@ -773,9 +795,10 @@ function validateWebhookTrigger(
       offender?.openTagSpan ?? webhook.openTagSpan
     );
   }
-  const schema = children[0] === undefined
-    ? undefined
-    : schemaBody(document, children[0], 'webhook');
+  const schema =
+    children[0] === undefined
+      ? undefined
+      : schemaBody(document, children[0], 'webhook');
   return {
     kind: 'webhook',
     id,
@@ -892,10 +915,11 @@ function validateEventTrigger(
     'trigger'
   );
   const name = requiredAttribute(document, event, 'name');
-  const secret = requireSecretReference(
-    document,
-    requiredAttribute(document, event, 'secret')
-  );
+  const secretAttribute = event.attributes.secret;
+  const secret =
+    secretAttribute === undefined
+      ? undefined
+      : requireSecretReference(document, secretAttribute);
   if (name.value.length > 256 || !eventNamePattern.test(name.value)) {
     failValidation(
       document,
@@ -927,7 +951,7 @@ function validateEventTrigger(
     kind: 'event',
     id,
     name: name.value,
-    secret,
+    ...(secret === undefined ? {} : { secret }),
     ...(schema === undefined ? {} : { schema }),
   };
 }
@@ -943,6 +967,14 @@ function validateTriggers(
       'WOML_TRIGGER_REQUIRED',
       '<triggers> requires at least one executable trigger.',
       triggers.openTagSpan
+    );
+  }
+  if (children.length > 64) {
+    failValidation(
+      document,
+      'WOML_MODULE_ALIAS_LIMIT_EXCEEDED',
+      `<imports> declares ${children.length} modules; Module profile v1 allows at most 64.`,
+      children[64].openTagSpan
     );
   }
   const validated = children.map((child): ValidatedTrigger => {
@@ -2568,7 +2600,7 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
         kind: 'object',
         fields: {
           name: { kind: 'literal', value: trigger.name },
-          secret: trigger.secret,
+          ...(trigger.secret === undefined ? {} : { secret: trigger.secret }),
           ...(trigger.schema === undefined
             ? {}
             : { schema: { kind: 'literal' as const, value: trigger.schema } }),
@@ -2608,19 +2640,164 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
   };
 }
 
-function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
-  const workflow = document.root;
-  if (workflow.name !== 'workflow') {
+function validateModuleDeclarations(
+  document: WomlSourceDocument,
+  importsElement: WomlSourceElement
+): readonly ValidatedModuleDeclaration[] {
+  const children = elementChildren(document, importsElement);
+  if (children.length === 0) {
     failValidation(
       document,
-      'WOML_EXPECTED_WORKFLOW_ROOT',
-      `Expected <workflow> as the document root, found <${workflow.name}>.`,
-      workflow.openTagSpan
+      'WOML_IMPORTS_EMPTY',
+      '<imports> requires at least one <module> declaration.',
+      importsElement.openTagSpan,
+      'Remove the empty <imports> container when the workflow has no modules.'
     );
   }
 
-  validateSecretReferenceSinks(document, workflow);
-  visitProfile(document, workflow);
+  const declarations: ValidatedModuleDeclaration[] = [];
+  const aliases = new Set<string>();
+  const sources = new Set<string>();
+  for (const child of children) {
+    if (child.name !== 'module') {
+      failValidation(
+        document,
+        'WOML_IMPORTS_INVALID_CHILD',
+        `<imports> accepts <module> declarations only; found <${child.name}>.`,
+        child.openTagSpan
+      );
+    }
+    ensureEmptyElement(document, child);
+    const nameAttribute = requiredAttribute(document, child, 'name');
+    const fromAttribute = requiredAttribute(document, child, 'from');
+    const name = nameAttribute.value;
+    const from = fromAttribute.value;
+
+    if (name.length > 128 || !moduleAliasPattern.test(name)) {
+      failValidation(
+        document,
+        'WOML_MODULE_ALIAS_INVALID',
+        `Module name "${name}" must be a JavaScript-safe lower-camel alias.`,
+        nameAttribute.valueSpan,
+        'Example: spreadsheet or customerTools'
+      );
+    }
+    if (reservedModuleAliases.has(name)) {
+      failValidation(
+        document,
+        'WOML_MODULE_ALIAS_RESERVED',
+        `Module name "${name}" is reserved by WOML.`,
+        nameAttribute.valueSpan,
+        'Choose a workflow-specific module name.'
+      );
+    }
+    if (aliases.has(name)) {
+      failValidation(
+        document,
+        'WOML_MODULE_ALIAS_DUPLICATE',
+        `Module name "${name}" is declared more than once.`,
+        nameAttribute.valueSpan
+      );
+    }
+    aliases.add(name);
+
+    if (from.endsWith('.woml')) {
+      failValidation(
+        document,
+        'WOML_MODULE_WORKFLOW_UNSUPPORTED',
+        '<module> imports JavaScript or TypeScript code, not .woml workflows.',
+        fromAttribute.valueSpan,
+        'Use services.events.emit() for one-to-many workflow triggers. Durable services.workflows.call() is the next roadmap milestone.'
+      );
+    }
+    if (
+      from.includes('\\') ||
+      from.includes('\0') ||
+      from.includes('?') ||
+      from.includes('#') ||
+      !moduleSourcePattern.test(from)
+    ) {
+      failValidation(
+        document,
+        'WOML_MODULE_PATH_INVALID',
+        `Module source "${from}" must be an explicit relative POSIX path ending in .js or .ts.`,
+        fromAttribute.valueSpan,
+        'Example: ./modules/spreadsheet.ts'
+      );
+    }
+    if (sources.has(from)) {
+      failValidation(
+        document,
+        'WOML_MODULE_SOURCE_DUPLICATE',
+        `Module source "${from}" is already declared under another name.`,
+        fromAttribute.valueSpan,
+        'Declare one stable services alias for each module entry point.'
+      );
+    }
+    sources.add(from);
+
+    declarations.push({
+      name,
+      from,
+      element: child,
+      nameAttribute,
+      fromAttribute,
+    });
+  }
+  return declarations;
+}
+
+function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
+  const root = document.root;
+  if (root.name !== 'woml') {
+    failValidation(
+      document,
+      'WOML_EXPECTED_DOCUMENT_ROOT',
+      `Expected <woml> as the document root, found <${root.name}>.`,
+      root.openTagSpan,
+      root.name === 'workflow'
+        ? 'Wrap the existing <workflow> with <woml>...</woml>.'
+        : 'A WOML document contains optional <imports> followed by exactly one <workflow>.'
+    );
+  }
+
+  validateSecretReferenceSinks(document, root);
+  visitProfile(document, root);
+
+  const documentChildren = elementChildren(document, root);
+  let importsElement: WomlSourceElement | undefined;
+  let workflow: WomlSourceElement | undefined;
+  if (documentChildren.length === 1 && documentChildren[0].name === 'workflow') {
+    workflow = documentChildren[0];
+  } else if (
+    documentChildren.length === 2 &&
+    documentChildren[0].name === 'imports' &&
+    documentChildren[1].name === 'workflow'
+  ) {
+    importsElement = documentChildren[0];
+    workflow = documentChildren[1];
+  } else {
+    const misplaced =
+      documentChildren.find(child => child.name !== 'imports' && child.name !== 'workflow') ??
+      documentChildren[0] ??
+      root;
+    failValidation(
+      document,
+      'WOML_DOCUMENT_STRUCTURE_INVALID',
+      '<woml> requires optional <imports> followed by exactly one <workflow>.',
+      misplaced.openTagSpan,
+      'Use <woml><imports>...</imports><workflow ...>...</workflow></woml>.'
+    );
+  }
+
+  const modules =
+    importsElement === undefined
+      ? []
+      : validateModuleDeclarations(document, importsElement);
+
+  if (workflow === undefined) {
+    throw new Error('validated WOML document did not contain a workflow');
+  }
 
   const workflowId = validateWorkflowId(
     document,
@@ -2635,11 +2812,19 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
   const flow = validateSteps(document, stepsElement);
 
   return {
+    element: workflow,
+    modules,
     workflowId,
     ...(metadata === undefined ? {} : { metadata }),
     triggers,
     flow,
   };
+}
+
+export function inspectValidatedWomlDocument(
+  document: WomlSourceDocument
+): ValidatedWorkflow {
+  return validateDocument(document);
 }
 
 export function validateWoml(document: WomlSourceDocument): void {
@@ -2649,8 +2834,23 @@ export function validateWoml(document: WomlSourceDocument): void {
 export function compileWoml(
   document: WomlSourceDocument
 ): CompiledWorkflowDefinition {
-  const workflow = document.root;
-  const { workflowId, metadata, triggers, flow } = validateDocument(document);
+  const {
+    element: workflow,
+    modules,
+    workflowId,
+    metadata,
+    triggers,
+    flow,
+  } = validateDocument(document);
+  if (modules.length > 0) {
+    failCompile(
+      document,
+      'WOML_MODULE_EXECUTION_UNAVAILABLE',
+      'This MS1 frontend can inspect and package modules, but module execution begins in MS3.',
+      modules[0].element.openTagSpan,
+      'Use `woml check <file>` to inspect the immutable module graph without running it.'
+    );
+  }
   const lowered = lowerFlowItems(flow.items);
   const scriptAnalyses = collectScriptAnalyses(flow.items);
   const usesScriptRuntimeV1 = [...scriptAnalyses.values()].some(
@@ -2672,10 +2872,9 @@ export function compileWoml(
       edges: lowered.edges,
     } satisfies CompiledWorkflowGraph,
   };
-  const compiled: CompiledWorkflowDefinition =
-    usesScriptRuntimeV1
-      ? { schemaVersion: 8, ...definition }
-      : triggers.length > 1 || triggers.some(trigger => trigger.kind !== 'manual')
+  const compiled: CompiledWorkflowDefinition = usesScriptRuntimeV1
+    ? { schemaVersion: 8, ...definition }
+    : triggers.length > 1 || triggers.some(trigger => trigger.kind !== 'manual')
       ? { schemaVersion: 7, ...definition }
       : lowered.nodes.some(node => node.retryPolicy !== undefined)
         ? { schemaVersion: 6, ...definition }

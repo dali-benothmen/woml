@@ -2,7 +2,8 @@
 
 Status: frozen by SC0 on 2026-08-09 and hardened for independent publication
 by SC6 on 2026-08-10. Native Fetch observation shipped in SC4; Managed HTTP v1
-became executable in SC5.
+became executable in SC5. Database, Storage, Cache, and internal Events are
+executable through SC11.
 
 ## Public boundary
 
@@ -45,6 +46,8 @@ calls must give them stable logical names. Read-only calls may be multiplexed.
 Managed HTTP freezes the author-facing naming shape as the optional second
 argument `services.http.request(request, { name: "stable-name" })`. WOML
 prefixes that name with `http.request.` before deriving the operation key.
+Events uses the same stable-name rule through the optional third argument to
+`services.events.emit(name, payload, { name: "stable-name" })`.
 
 Default v1 limits are 1 MiB input, 4 MiB result, 8 MiB protocol frame, 30
 seconds, 32 calls in flight per invocation, and 256 calls in flight across one
@@ -116,6 +119,37 @@ Retry classification is conservative: reads and a write carrying a reviewed
 external idempotency key can be retryable for failures known to occur before a
 response; unsafe or ambiguous writes are not automatically replayed.
 
+## Events Service v1
+
+`services.events.emit(name, payload, options?)` publishes one top-level JSON
+object directly through Rust's existing Event Publication and Trigger Ingress
+authority. It never performs an HTTP loopback and never receives a public
+publisher token. The exact request/result schema is
+`docs/schemas/events-service.v1.schema.json`.
+
+The capability operation key becomes
+`internal:v1:{operationKey}` and therefore remains stable across a safe step
+retry. Every subscriber derives its existing Event Publication v1 source
+identity from that publication ID, workflow ID, and trigger ID. A repeated
+publication and payload returns the original child `runId` with
+`duplicate: true`; it does not create another run.
+
+Each subscriber keeps its own optional Draft 2020-12 schema. Valid subscriber
+admissions are durable before the result is released to Bun. Schema and
+admission failures are reported per subscriber, so the overall status is
+`accepted`, `partial`, or `rejected`. No matching subscribers is an accepted
+no-op with an empty delivery list.
+
+An `<event>` without `secret` is internal-only and does not open a public HTTP
+publisher route. Adding `secret="{{secrets.NAME}}"` also exposes that event
+name through the existing authenticated public endpoint. Both ingress paths
+converge on the same subscriber definitions and run dispatcher.
+
+Rust stores hidden publication lineage beside trigger occurrences. A chain is
+limited to 32 publications and may not repeat the same workflow/trigger pair.
+Lineage and payloads do not expand `context.run`; payload data appears only as
+the child workflow's existing `context.trigger`.
+
 ## Safe diagnostics
 
 Service Progress v1 is ephemeral. Run Event v8 is durable. Both use bounded,
@@ -125,7 +159,7 @@ payloads, cache values, storage bodies, or arbitrary provider responses.
 
 ## Deferred decisions
 
-SC0 does not resolve `context.run`, imported JavaScript/WOML modules, service
-tags, durable user state, workflow cancellation APIs, database/storage/cache/
-event/queue method contracts, or multi-tenant OS isolation. Those remain
-separate, versioned milestones.
+SC11 does not resolve `context.run`, imported JavaScript/WOML modules, service
+tags, durable user state, workflow cancellation APIs, the queue method/trigger
+contract, or multi-tenant OS isolation. Those remain separate, versioned
+milestones.

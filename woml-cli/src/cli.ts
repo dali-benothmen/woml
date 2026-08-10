@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
 import {
+  buildWomlDefinitionPackage,
   compileWoml,
   isWomlElement,
   parseWoml,
@@ -110,8 +112,12 @@ function emitUsage(): string {
   return 'Usage: woml emit <eventName> --id <publisherEventId> --data @<jsonFile> --server <url> --token-secret <NAME>';
 }
 
+function checkUsage(): string {
+  return 'Usage: woml check <workflow.woml> [--json]';
+}
+
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${runsUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${runsUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -712,6 +718,10 @@ async function compileWorkflowSources(
   for (const filePath of await workflowFilePaths(inputPath)) {
     const source = await readWorkflow(filePath);
     const document = parseWoml(source, { file: filePath });
+    buildWomlDefinitionPackage(document, {
+      sourcePath: filePath,
+      projectRoot: moduleProjectRoot(filePath),
+    });
     compiled.push({ filePath, document, workflow: compileWoml(document) });
   }
   const workflowIds = new Set<string>();
@@ -725,6 +735,70 @@ async function compileWorkflowSources(
     workflowIds.add(item.workflow.workflowId);
   }
   return compiled;
+}
+
+async function runCheckCommand(
+  args: readonly string[],
+  io: CliIo
+): Promise<number> {
+  const [, rawFilePath, ...options] = args;
+  if (
+    rawFilePath === undefined ||
+    rawFilePath.startsWith('--') ||
+    options.length > 1 ||
+    (options.length === 1 && options[0] !== '--json')
+  ) {
+    io.stderr(`${checkUsage()}\n`);
+    return 2;
+  }
+  const filePath = resolve(rawFilePath);
+  let document: WomlSourceDocument | undefined;
+  try {
+    const source = await readWorkflow(filePath);
+    document = parseWoml(source, { file: filePath });
+    const definitionPackage = buildWomlDefinitionPackage(document, {
+      sourcePath: filePath,
+      projectRoot: moduleProjectRoot(filePath),
+    });
+    if (options[0] === '--json') {
+      io.stdout(`${JSON.stringify(definitionPackage, null, 2)}\n`);
+      return 0;
+    }
+    io.stdout(`WOML check passed for workflow "${definitionPackage.workflow.id}".\n`);
+    io.stdout(`Definition package: ${definitionPackage.rootHash}\n`);
+    io.stdout(
+      `Modules: ${definitionPackage.modules.length}; dependency sources: ${Math.max(0, definitionPackage.sources.length - 1)}.\n`
+    );
+    for (const module of definitionPackage.modules) {
+      io.stdout(
+        `services.${module.name} -> ${module.entrypoint} (${module.exports.join(', ')})\n`
+      );
+    }
+    io.stdout(
+      definitionPackage.modules.length === 0
+        ? 'Execution: module-free workflow; woml run is available.\n'
+        : 'Execution: unavailable for imported modules until MS3.\n'
+    );
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error, filePath, document)}\n`);
+    return 1;
+  }
+}
+
+function moduleProjectRoot(sourcePath: string): string {
+  let directory = dirname(sourcePath);
+  while (true) {
+    if (
+      existsSync(join(directory, 'woml.json')) ||
+      existsSync(join(directory, 'package.json'))
+    ) {
+      return directory;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return dirname(sourcePath);
+    directory = parent;
+  }
 }
 
 function printWaitingApproval(
@@ -1067,6 +1141,7 @@ interface WebhookRouteSummary {
 
 interface EventRouteSummary {
   readonly eventName: string;
+  readonly publicEndpoint: boolean;
   readonly schema?: JsonValue;
 }
 
@@ -1100,6 +1175,7 @@ function eventRouteSummaries(
       const fields = objectFields(trigger.config);
       return {
         eventName: literalString(fields?.name) ?? '',
+        publicEndpoint: fields?.secret?.kind === 'secretReference',
         ...(fields?.schema?.kind === 'literal'
           ? { schema: fields.schema.value }
           : {}),
@@ -1371,7 +1447,7 @@ async function activateWorkflows(
     );
   }
 
-  const productionSources = sources.filter(source =>
+  const hasProductionTrigger = sources.some(source =>
     source.workflow.triggers.some(
       trigger =>
         trigger.handler === 'trigger.webhook' ||
@@ -1381,6 +1457,10 @@ async function activateWorkflows(
         trigger.handler === 'trigger.event'
     )
   );
+  // A loaded automation directory is one runtime unit. Manual workflows in
+  // that directory must share its services/event registry instead of running
+  // prematurely as isolated one-shot processes.
+  const productionSources = hasProductionTrigger ? sources : [];
   const oneShotSources = sources.filter(
     source => !productionSources.includes(source)
   );
@@ -1412,9 +1492,9 @@ async function activateWorkflows(
     if (productionSources.length > 0) {
       await mkdir(dirname(args.statePath), { recursive: true });
       const store = dependencies.createSecretStore();
-      const eventRoutes = productionSources.flatMap(source =>
-        eventRouteSummaries(source.workflow)
-      );
+      const eventRoutes = productionSources
+        .flatMap(source => eventRouteSummaries(source.workflow))
+        .filter(route => route.publicEndpoint);
       const registrations = await Promise.all(
         productionSources.map(async source => ({
           workflow: source.workflow,
@@ -1782,6 +1862,10 @@ export async function runCli(
   io: CliIo = processIo,
   dependencies: CliDependencies = defaultDependencies
 ): Promise<number> {
+  if (args[0] === 'check') {
+    return await runCheckCommand(args, io);
+  }
+
   if (args[0] === 'secrets') {
     return await runSecretsCommand(args, io, dependencies);
   }

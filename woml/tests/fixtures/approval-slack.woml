@@ -1,3 +1,4 @@
+<woml>
 <workflow version="0.1" id="release-article" name="Release Article">
   <triggers>
     <manual id="start" />
@@ -32,3 +33,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

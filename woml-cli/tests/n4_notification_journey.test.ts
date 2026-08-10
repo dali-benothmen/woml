@@ -79,7 +79,8 @@ async function workflow() {
 }
 
 function routedWorkflow() {
-  const source = `<workflow version="0.1" id="n4-routed-approval" name="N4 Routed Approval">
+  const source = `<woml>
+<workflow version="0.1" id="n4-routed-approval" name="N4 Routed Approval">
   <triggers><manual id="start" /></triggers>
   <steps>
     <approval id="review" name="Review" timeout="24h" on-timeout="reject">
@@ -97,12 +98,14 @@ function routedWorkflow() {
       <script>return { decision: context.steps.review.decision };</script>
     </step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
   return compileWoml(parseWoml(source, { file: 'n4-routed-approval.woml' }));
 }
 
 function timeoutWorkflow() {
-  const source = `<workflow version="0.1" id="n5-timeout" name="N5 Timeout">
+  const source = `<woml>
+<workflow version="0.1" id="n5-timeout" name="N5 Timeout">
   <triggers><manual id="start" /></triggers>
   <steps>
     <approval id="review" name="Review" timeout="500ms" on-timeout="reject">
@@ -114,12 +117,14 @@ function timeoutWorkflow() {
     </approval>
     <step id="finalStatus"><script>return { decision: context.steps.review.decision };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
   return compileWoml(parseWoml(source, { file: 'n5-timeout.woml' }));
 }
 
 function multiWorkspaceWorkflow() {
-  const source = `<workflow version="0.1" id="n6-multi-workspace" name="N6 Multi Workspace">
+  const source = `<woml>
+<workflow version="0.1" id="n6-multi-workspace" name="N6 Multi Workspace">
   <triggers><manual id="start" /></triggers>
   <steps>
     <approval id="review" name="Review" timeout="24h" on-timeout="reject">
@@ -136,7 +141,8 @@ function multiWorkspaceWorkflow() {
     </approval>
     <step id="finalStatus"><script>return { decision: context.steps.review.decision };</script></step>
   </steps>
-</workflow>`;
+</workflow>
+</woml>`;
   return compileWoml(parseWoml(source, { file: 'n6-multi-workspace.woml' }));
 }
 

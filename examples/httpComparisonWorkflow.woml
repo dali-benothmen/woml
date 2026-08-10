@@ -1,3 +1,4 @@
+<woml>
 <workflow version="0.1" id="http-comparison" name="Native Fetch and Managed HTTP">
   <triggers>
     <manual id="start" />
@@ -24,3 +25,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

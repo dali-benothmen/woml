@@ -663,6 +663,7 @@ const cacheWireOperations = new Set([
   'increment',
   'set_if_absent',
 ]);
+const eventOperations = new Set(['emit']);
 
 function normalizeStorageInput(
   operation: string,
@@ -870,6 +871,60 @@ function publicCacheResult(result: JsonValue, operation: string): JsonValue {
   return object.data;
 }
 
+function normalizeEventEmit(args: readonly unknown[]): {
+  readonly request: JsonObject;
+  readonly callOptions?: JsonObject;
+} {
+  if (args.length < 1 || args.length > 3) {
+    throw new TypeError(
+      'services.events.emit() requires an event name, optional payload, and optional options.'
+    );
+  }
+  const name = args[0];
+  if (
+    typeof name !== 'string' ||
+    !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/.test(name) ||
+    Buffer.byteLength(name, 'utf8') > 256
+  ) {
+    throw new TypeError(
+      'services.events.emit() requires a valid lowercase dotted event name.'
+    );
+  }
+  const payload = args[1] ?? {};
+  if (plainObject(payload) === undefined) {
+    throw new TypeError('Event payload must be a top-level JSON object.');
+  }
+  const options = args[2];
+  if (options !== undefined) {
+    // namedOperation performs the authoritative options validation.
+    namedOperation('events', 'emit', options as JsonValue);
+  }
+  return {
+    request: {
+      contract: 'woml.events',
+      contractVersion: 1,
+      kind: 'request',
+      operation: 'emit',
+      input: { name, payload: payload as JsonValue },
+    },
+    ...(options === undefined ? {} : { callOptions: options as JsonObject }),
+  };
+}
+
+function publicEventResult(result: JsonValue): JsonValue {
+  const object = plainObject(result);
+  if (
+    object?.contract !== 'woml.events' ||
+    object.contractVersion !== 1 ||
+    object.kind !== 'result' ||
+    object.operation !== 'emit' ||
+    object.data === undefined
+  ) {
+    throw new TypeError('Rust returned an invalid Events Service v1 result.');
+  }
+  return object.data;
+}
+
 function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
   if (request.attempt === undefined || request.bindings === undefined) {
     return Object.freeze({});
@@ -889,11 +944,14 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
       capability === 'storage' && storageOperations.has(operation);
     const managedCache =
       capability === 'cache' && cacheWireOperations.has(operation);
+    const managedEvents =
+      capability === 'events' && eventOperations.has(operation);
     if (
       !managedHttp &&
       !managedDatabase &&
       !managedStorage &&
       !managedCache &&
+      !managedEvents &&
       callOptions !== undefined
     ) {
       throw new TypeError(
@@ -928,7 +986,10 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         : managedStorage && (operation === 'put' || operation === 'delete');
     const cacheEffectful =
       managedCache && operation !== 'get' && operation !== 'has';
-    if ((effectful || cacheEffectful) && identity.mode === 'automatic') {
+    if (
+      (effectful || cacheEffectful || managedEvents) &&
+      identity.mode === 'automatic'
+    ) {
       const key = `${capability}.${operation}`;
       const count = (automaticEffectfulCalls.get(key) ?? 0) + 1;
       automaticEffectfulCalls.set(key, count);
@@ -993,7 +1054,9 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
           ? publicStorageResult(result, operation)
           : managedCache
             ? publicCacheResult(result, operation)
-          : result;
+            : managedEvents
+              ? publicEventResult(result)
+              : result;
   };
   return new Proxy(Object.freeze({}), {
     get(_target, capabilityProperty) {
@@ -1092,6 +1155,21 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         });
         capabilityCache.set(capabilityProperty, cache);
         return cache;
+      }
+      if (capabilityProperty === 'events') {
+        const emit = async (...args: unknown[]): Promise<JsonValue> => {
+          const normalized = normalizeEventEmit(args);
+          return invokeCapability(
+            'events',
+            'emit',
+            normalized.request,
+            normalized.callOptions
+          );
+        };
+        Object.freeze(emit);
+        const events = Object.freeze({ emit });
+        capabilityCache.set(capabilityProperty, events);
+        return events;
       }
       const operationCache = new Map<string, unknown>();
       const capability = new Proxy(Object.freeze({}), {

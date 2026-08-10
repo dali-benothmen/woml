@@ -1,3 +1,4 @@
+<woml>
 <workflow id="services-bindings-contract" version="1.0.0" name="Services bindings contract">
   <triggers>
     <manual id="start" />
@@ -31,3 +32,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

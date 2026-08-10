@@ -201,7 +201,8 @@ describe('woml test Human Approval', () => {
     const statePath = join(temporaryDirectory, 'approval-retry-model-v6.sqlite');
     await writeFile(
       workflowPath,
-      `<workflow version="0.1" id="approval-retry-model-v6">
+      `<woml>
+<workflow version="0.1" id="approval-retry-model-v6">
   <triggers><manual id="start" /></triggers>
   <steps>
     <approval id="review">
@@ -224,7 +225,8 @@ describe('woml test Human Approval', () => {
       </script>
     </step>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
 
     const running = spawnApproval([
@@ -330,24 +332,28 @@ describe('woml test Human Approval', () => {
     const cases = [
       {
         name: 'beginning',
-        source: `<workflow version="0.1" id="approval-beginning">
+        source: `<woml>
+<workflow version="0.1" id="approval-beginning">
   <triggers><manual id="start" /></triggers>
   <steps>
     <approval id="review"><when-approved /><when-rejected /></approval>
     <step id="finish"><script>return { decision: context.steps.review.decision, position: "beginning" };</script></step>
   </steps>
-</workflow>`,
+</workflow>
+</woml>`,
         expected: { decision: 'approved', position: 'beginning' },
       },
       {
         name: 'terminal',
-        source: `<workflow version="0.1" id="approval-terminal">
+        source: `<woml>
+<workflow version="0.1" id="approval-terminal">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="prepare"><script>return { ready: true };</script></step>
     <approval id="review"><when-approved /><when-rejected /></approval>
   </steps>
-</workflow>`,
+</workflow>
+</woml>`,
         expected: { decision: 'approved', source: 'human' },
       },
     ] as const;
@@ -382,7 +388,8 @@ describe('woml test Human Approval', () => {
     const workflowPath = join(temporaryDirectory, 'approval-composition.woml');
     await writeFile(
       workflowPath,
-      `<workflow version="0.1" id="approval-composition">
+      `<woml>
+<workflow version="0.1" id="approval-composition">
   <triggers><manual id="start" /></triggers>
   <steps>
     <parallel id="prepare" concurrency="2" on-error="wait-all">
@@ -410,7 +417,8 @@ describe('woml test Human Approval', () => {
     </parallel>
     <step id="finish"><script>return { decision: context.steps.route.decision, total: context.steps.addOne.value + context.steps.addTwo.value };</script></step>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
     const running = spawnApproval([
       'run',
@@ -438,7 +446,8 @@ describe('woml test Human Approval', () => {
     const workflowPath = join(temporaryDirectory, 'nested-approvals.woml');
     await writeFile(
       workflowPath,
-      `<workflow version="0.1" id="nested-approvals">
+      `<woml>
+<workflow version="0.1" id="nested-approvals">
   <triggers><manual id="start" /></triggers>
   <steps>
     <approval id="editorial" name="Editorial approval">
@@ -456,7 +465,8 @@ describe('woml test Human Approval', () => {
     </approval>
     <step id="finish"><script>return { editorial: context.steps.editorial.decision, legal: context.steps.legal.decision, actions: context.steps.legalRecorded.count };</script></step>
   </steps>
-</workflow>`
+</workflow>
+</woml>`
     );
     const running = spawnApproval([
       'run',

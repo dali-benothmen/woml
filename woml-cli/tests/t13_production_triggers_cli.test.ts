@@ -125,7 +125,8 @@ describe('T13 complete Production Triggers runtime', () => {
       const statePath = join(temporaryDirectory, 'all-triggers.sqlite');
       await writeFile(
         workflowPath,
-        `<workflow id="all-production-triggers" name="All production triggers">
+        `<woml>
+<workflow id="all-production-triggers" name="All production triggers">
   <triggers>
     <webhook id="incoming" path="/t13/incoming" auth="none">
       <schema>{"type":"object","required":["source"],"properties":{"source":{"type":"string"}}}</schema>
@@ -142,7 +143,8 @@ describe('T13 complete Production Triggers runtime', () => {
       <script>return { source: context.trigger.source };</script>
     </step>
   </steps>
-</workflow>`,
+</workflow>
+</woml>`,
         'utf8'
       );
 

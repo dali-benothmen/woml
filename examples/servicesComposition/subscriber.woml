@@ -1,0 +1,32 @@
+<woml>
+<workflow id="services-order-subscriber" name="Services order subscriber" version="1.0.0">
+  <triggers>
+    <event id="orderPrepared" name="order.prepared">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId", "customer", "total", "storageKey"],
+          "properties": {
+            "orderId": { "type": "string" },
+            "customer": { "type": "string" },
+            "total": { "type": "number" },
+            "storageKey": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+
+  <steps>
+    <step id="recordNotification" name="Record the notification">
+      <script>
+        return {
+          notified: true,
+          message: `Order ${context.trigger.orderId} is ready for ${context.trigger.customer}`,
+          storageKey: context.trigger.storageKey
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

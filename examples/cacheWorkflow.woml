@@ -1,3 +1,4 @@
+<woml>
 <workflow version="0.1" id="cache-demo" name="Workflow Cache">
   <triggers>
     <manual id="start" />
@@ -28,3 +29,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

@@ -1,3 +1,4 @@
+<woml>
 <workflow version="0.1" id="field-report" name="Build Field Report">
   <triggers>
     <manual id="start" />
@@ -39,3 +40,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

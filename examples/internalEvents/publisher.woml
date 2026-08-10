@@ -1,0 +1,20 @@
+<woml>
+<workflow id="customer-updater" name="Customer updater" version="1.0.0">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="publishUpdate" name="Publish customer update">
+      <script>
+        const publication = await services.events.emit('customer.updated', {
+          customerId: 'customer-42',
+          displayName: 'Dali'
+        });
+
+        return publication;
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

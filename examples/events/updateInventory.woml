@@ -1,3 +1,4 @@
+<woml>
 <workflow id="update-inventory" name="Update order inventory">
   <triggers>
     <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
@@ -23,3 +24,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

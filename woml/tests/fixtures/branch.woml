@@ -1,3 +1,4 @@
+<woml>
 <workflow version="0.1" id="review-content" name="Review Content">
   <triggers>
     <manual id="start" />
@@ -52,3 +53,4 @@
     </step>
   </steps>
 </workflow>
+</woml>

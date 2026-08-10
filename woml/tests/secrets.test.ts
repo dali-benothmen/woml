@@ -10,10 +10,12 @@ import {
 } from '../src';
 
 function workflow(item: string): string {
-  return `<workflow id="secret-test">
+  return `<woml>
+<workflow id="secret-test">
   <triggers><manual id="start" /></triggers>
   <steps>${item}</steps>
-</workflow>`;
+</workflow>
+</woml>`;
 }
 
 describe('WOML secret references', () => {
@@ -94,10 +96,12 @@ describe('WOML secret references', () => {
     const compiled = compileWoml(parseWoml(valid, { file: 'workflow.woml' }));
     expect(compiled.schemaVersion).toBe(5);
 
-    const eventSource = `<workflow id="event-secret-test">
+    const eventSource = `<woml>
+<workflow id="event-secret-test">
   <triggers><event id="message" name="message.received" secret="{{secrets.EVENT_TOKEN}}" /></triggers>
   <steps><step id="capture"><script>return context.trigger;</script></step></steps>
-</workflow>`;
+</workflow>
+</woml>`;
     const event = compileWoml(
       parseWoml(eventSource, { file: 'event.woml' })
     );
