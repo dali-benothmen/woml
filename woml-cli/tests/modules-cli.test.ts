@@ -1,7 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -22,6 +22,14 @@ const verticalWorkflowPath = resolve(
   projectRoot,
   'examples/moduleWorkflow.woml'
 );
+const generatedTypePaths = [
+  resolve(workflowPath, '..', 'woml-env.d.ts'),
+  resolve(verticalWorkflowPath, '..', 'woml-env.d.ts'),
+];
+
+afterAll(async () => {
+  await Promise.all(generatedTypePaths.map(path => rm(path, { force: true })));
+});
 
 function nativeDependencies() {
   return {
@@ -405,6 +413,119 @@ export function retry(attempt) {
 });
 
 describe('essential MS6 module authoring DX', () => {
+  nativeTest('normal woml run refreshes editor types automatically', async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'woml-ms6-run-types-'));
+    const womlPath = resolve(directory, 'workflow.woml');
+    await writeFile(
+      resolve(directory, 'math.js'),
+      'export function add(left, right) { return left + right; }\n'
+    );
+    await writeFile(
+      womlPath,
+      `<woml>
+  <imports><module name="math" from="./math.js" /></imports>
+  <workflow id="ms6-run-types">
+    <triggers><manual id="start" /></triggers>
+    <steps><step id="calculate"><script>
+      return { answer: services.math.add(20, 22) };
+    </script></step></steps>
+  </workflow>
+</woml>
+`
+    );
+    let stdout = '';
+    let stderr = '';
+    try {
+      const exitCode = await runCli(
+        ['run', womlPath, '--state', resolve(directory, 'state.sqlite')],
+        {
+          stdout: text => {
+            stdout += text;
+          },
+          stderr: text => {
+            stderr += text;
+          },
+        },
+        { ...nativeDependencies(), waitForShutdown: async () => {} }
+      );
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain('WOML_EDITOR_TYPES_WRITE_FAILED');
+      expect(JSON.parse(stdout)).toEqual({ answer: 42 });
+      const declarations = await readFile(
+        resolve(directory, 'woml-env.d.ts'),
+        'utf8'
+      );
+      expect(declarations).toContain('readonly "math"');
+      expect(declarations).toContain('readonly "add"');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('woml check refreshes types without a separate command', async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'woml-ms6-check-types-'));
+    const womlPath = resolve(directory, 'workflow.woml');
+    await writeFile(
+      resolve(directory, 'math.js'),
+      'export function add(left, right) { return left + right; }\n'
+    );
+    await writeFile(
+      womlPath,
+      `<woml>
+  <imports><module name="math" from="./math.js" /></imports>
+  <workflow id="ms6-check-types">
+    <triggers><manual id="start" /></triggers>
+    <steps><step id="calculate"><script>
+      return services.math.add(20, 22);
+    </script></step></steps>
+  </workflow>
+</woml>
+`
+    );
+    try {
+      const result = await invoke(['check', womlPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(
+        await readFile(resolve(directory, 'woml-env.d.ts'), 'utf8')
+      ).toContain('readonly "math"');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('editor type write failures warn without failing validation', async () => {
+    const directory = await mkdtemp(
+      resolve(tmpdir(), 'woml-ms6-types-warning-')
+    );
+    const womlPath = resolve(directory, 'workflow.woml');
+    await writeFile(
+      resolve(directory, 'math.js'),
+      'export function add(left, right) { return left + right; }\n'
+    );
+    await writeFile(
+      womlPath,
+      `<woml>
+  <imports><module name="math" from="./math.js" /></imports>
+  <workflow id="ms6-types-warning">
+    <triggers><manual id="start" /></triggers>
+    <steps><step id="calculate"><script>return services.math.add(1, 1);</script></step></steps>
+  </workflow>
+</woml>
+`
+    );
+    await mkdir(resolve(directory, 'woml-env.d.ts'));
+    try {
+      const result = await invoke(['check', womlPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('WOML check passed');
+      expect(result.stderr).toContain('WOML_EDITOR_TYPES_WRITE_FAILED');
+      expect(result.stderr).toContain('Workflow execution can continue');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test('writes a self-contained woml-env.d.ts that removes editor errors', async () => {
     const directory = await mkdtemp(resolve(tmpdir(), 'woml-ms6-types-'));
     const modulePath = resolve(directory, 'openai.ts');

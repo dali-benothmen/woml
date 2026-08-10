@@ -63,7 +63,8 @@ const guide = readFileSync(
 if (
   !plan.includes('essential local-authoring portion of MS6') ||
   !plan.includes('MS5 — Add locked package dependencies — postponed') ||
-  !guide.includes('## Enable editor autocomplete') ||
+  !guide.includes('## Editor autocomplete is automatic') ||
+  !guide.includes('`woml run` refreshes `woml-env.d.ts`') ||
   !guide.includes('## Unit-test a module')
 ) {
   throw new Error('Essential MS6 plan or authoring guide is incomplete.');

@@ -41,24 +41,31 @@ Default exports, CommonJS, dynamic imports, npm package imports, and module
 installation effects remain unsupported. Static relative `.js` and `.ts`
 imports are supported.
 
-## Enable editor autocomplete
+## Editor autocomplete is automatic
 
-Run this whenever module declarations or exported function names change:
-
-```bash
-woml types path/to/workflow.woml
-```
-
-For a directory of workflows:
+The normal workflow is one command:
 
 ```bash
-woml types path/to/workflows
+woml run path/to/workflow.woml
 ```
 
-WOML writes `woml-env.d.ts` beside the workflow or inside the supplied
-directory. It contains the five built-in service contracts and every imported
-alias/function found in that scope. The file is self-contained: the project
-does not need a runtime import merely to satisfy the editor.
+`woml run` refreshes `woml-env.d.ts` before activating the workflow. `woml check`
+also refreshes it, so checking a workflow is enough to prepare editor
+autocomplete before the first run. Type generation is editor support only and
+never controls whether JavaScript executes. This applies to both `.js` and `.ts`
+modules, but JavaScript authors do not need to think about or invoke it.
+
+`woml types` remains an optional advanced command for refreshing declarations
+without checking or running a workflow, or for choosing another output path:
+
+```bash
+woml types path/to/workflow.woml --output generated/woml-env.d.ts
+```
+
+The generated file contains the five built-in service contracts and every
+imported alias/function found in that scope. It is self-contained: the project
+does not need a runtime import merely to satisfy the editor. If WOML cannot
+write the declaration file, it prints a warning but still runs the workflow.
 
 Most TypeScript projects discover the file automatically. If a restrictive
 `include` list hides it, add it explicitly:

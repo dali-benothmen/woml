@@ -73,6 +73,7 @@ jspm_packages/
 # Cronflow data directory (contains workflow state and execution history)
 .cronflow/
 .woml/
+woml-env.d.ts
 
 # Database files
 *.db

@@ -707,8 +707,9 @@ before activation.
 
 Essential local-module DX completed on 2026-08-10:
 
-- `woml types <workflow-or-directory>` generates a self-contained
-  `woml-env.d.ts` for built-ins and imported aliases.
+- `woml run` and `woml check` automatically refresh a self-contained
+  `woml-env.d.ts` for built-ins and imported aliases; `woml types` remains an
+  optional explicit/custom-output command.
 - Modules receive `services` only; context, attempt data, and individual
   secrets remain explicit function arguments.
 - `woml check` reports unused aliases without blocking execution.

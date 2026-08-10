@@ -793,6 +793,37 @@ async function compileWorkflowSources(
   return compiled;
 }
 
+function editorTypesPath(inputPath: string, inputIsDirectory: boolean): string {
+  return join(
+    inputIsDirectory ? inputPath : dirname(inputPath),
+    'woml-env.d.ts'
+  );
+}
+
+async function refreshEditorTypes(
+  inputPath: string,
+  modules: readonly {
+    readonly name: string;
+    readonly exports: readonly string[];
+  }[],
+  io: CliIo
+): Promise<void> {
+  if (modules.length === 0) return;
+  let outputPath = join(dirname(inputPath), 'woml-env.d.ts');
+  try {
+    outputPath = editorTypesPath(
+      inputPath,
+      (await stat(inputPath)).isDirectory()
+    );
+    await writeFile(outputPath, generateWomlEditorDeclarations(modules), 'utf8');
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    io.stderr(
+      `Warning [WOML_EDITOR_TYPES_WRITE_FAILED]: Could not refresh ${outputPath}: ${reason}\nWorkflow execution can continue; use woml types <workflow> --output <path> to choose a writable location.\n`
+    );
+  }
+}
+
 async function runCheckCommand(
   args: readonly string[],
   io: CliIo
@@ -823,6 +854,7 @@ async function runCheckCommand(
             sourcePath: filePath,
             projectRoot: moduleProjectRoot(filePath),
           });
+    await refreshEditorTypes(filePath, definitionPackage.modules, io);
     if (options[0] === '--json') {
       io.stdout(`${JSON.stringify(definitionPackage, null, 2)}\n`);
       return 0;
@@ -880,11 +912,8 @@ async function runTypesCommand(
         ? workflow.workflow.moduleRuntime.modules
         : []
     );
-    const defaultDirectory = sourceStat.isDirectory()
-      ? sourcePath
-      : dirname(sourcePath);
     const outputPath = resolve(
-      options[1] ?? join(defaultDirectory, 'woml-env.d.ts')
+      options[1] ?? editorTypesPath(sourcePath, sourceStat.isDirectory())
     );
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(
@@ -2193,6 +2222,11 @@ export async function runCli(
       );
       return 0;
     }
+    await refreshEditorTypes(
+      filePath,
+      sources.flatMap(source => source.runtimeModules),
+      io
+    );
     await activateWorkflows(sources, runArguments, io, dependencies);
     return 0;
   } catch (error) {

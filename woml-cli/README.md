@@ -23,17 +23,21 @@ register those immutable bundles with Rust and expose their named functions at
 `services.<alias>` inside isolated Bun Workers.
 
 ```bash
-woml test examples/moduleWorkflow.woml
+woml run examples/moduleWorkflow.woml
 ```
 
-Generate self-contained editor types for built-in services and local module
-aliases:
+`woml test` remains available for automated tests and CI; it is not required
+for the normal authoring journey.
+
+`woml run` and `woml check` automatically refresh self-contained editor types
+for built-in services and local module aliases. The explicit command is
+available only when a custom output path or manual refresh is useful:
 
 ```bash
-woml types examples/moduleWorkflow.woml
+woml types examples/moduleWorkflow.woml --output generated/woml-env.d.ts
 ```
 
-This writes `woml-env.d.ts` beside the workflow. See
+The default automatic file is `woml-env.d.ts` beside the workflow. See
 [Authoring Local WOML Modules](../docs/woml-modules.md) for editor setup,
 explicit context/secret arguments, diagnostics, and mocked Bun unit tests.
 
