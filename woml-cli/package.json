@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "bun run build:native && bun run build:js",
-    "build:native": "cargo build --manifest-path ../core/Cargo.toml --lib --release && bun scripts/stage-native.ts",
+    "build:native": "cargo build -j 1 --manifest-path ../core/Cargo.toml --lib --release && bun scripts/stage-native.ts",
     "build:js": "bun build src/cli.ts --outfile dist/cli.js --target bun && bun build src/script-host.ts --outfile dist/script-host.js --target bun && bun build src/script-host-worker.ts --outfile dist/script-host-worker.js --target bun && bun build src/notification-provider-host.ts --outfile dist/notification-provider-host.js --target bun",
     "test": "bun test",
     "test:n6": "bun scripts/verify-n6.ts",
@@ -32,8 +32,10 @@
     "test:sc6": "bun scripts/verify-sc6.ts",
     "test:sc7": "bun scripts/verify-sc7.ts",
     "test:sc8": "bun scripts/verify-sc8.ts",
+    "test:sc9": "bun scripts/verify-sc9.ts",
+    "test:storage": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc9_storage",
     "test:postgres": "cargo test --manifest-path ../core/Cargo.toml -p woml-engine --test sc8_postgres",
-    "test:release": "bun scripts/verify-sc8.ts",
+    "test:release": "bun scripts/verify-sc9.ts",
     "benchmark:http": "bun scripts/benchmark-sc6-http.ts",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"

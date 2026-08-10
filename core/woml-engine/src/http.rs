@@ -1,11 +1,15 @@
 //! Managed HTTP v1 capability executed by Rust.
 
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{
+  collections::HashMap,
+  sync::{Arc, Mutex},
+  time::Duration,
+};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::future::BoxFuture;
 use reqwest::{
-  header::{HeaderMap, HeaderName, HeaderValue},
+  header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE},
   redirect::Policy,
   Client, Method, Url,
 };
@@ -34,6 +38,19 @@ enum ResponseType {
   Json,
   Text,
   Bytes,
+  Storage,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HttpStorageTarget {
+  key: String,
+  #[serde(default)]
+  content_type: Option<String>,
+  #[serde(default)]
+  overwrite: bool,
+  #[serde(default)]
+  if_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -69,6 +86,8 @@ struct ManagedHttpRequest {
   #[serde(default)]
   bytes_base64: Option<String>,
   response_type: ResponseType,
+  #[serde(default)]
+  storage: Option<HttpStorageTarget>,
   timeout_ms: u64,
   accepted_status: AcceptedStatus,
   redirect: RedirectMode,
@@ -79,6 +98,7 @@ struct ManagedHttpRequest {
 
 pub struct ManagedHttpHandler {
   clients: Mutex<HashMap<(RedirectMode, usize), Client>>,
+  storage: Option<Arc<crate::ManagedStorageStore>>,
 }
 
 impl std::fmt::Debug for ManagedHttpHandler {
@@ -91,11 +111,19 @@ impl Default for ManagedHttpHandler {
   fn default() -> Self {
     Self {
       clients: Mutex::new(HashMap::new()),
+      storage: None,
     }
   }
 }
 
 impl ManagedHttpHandler {
+  pub fn with_storage(storage: Arc<crate::ManagedStorageStore>) -> Self {
+    Self {
+      clients: Mutex::new(HashMap::new()),
+      storage: Some(storage),
+    }
+  }
+
   fn client(&self, mode: RedirectMode, maximum: usize) -> Result<Client, CapabilityFailure> {
     let key = (mode, maximum);
     let mut clients = self.clients.lock().expect("managed HTTP client cache");
@@ -156,7 +184,9 @@ impl CapabilityHandler for ManagedHttpHandler {
     let Ok(request) = parse_request(input) else {
       return CapabilityEffect::UnsafeWrite;
     };
-    if is_read_method(&request.method) {
+    if request.response_type == ResponseType::Storage {
+      CapabilityEffect::IdempotentWrite
+    } else if is_read_method(&request.method) {
       CapabilityEffect::Read
     } else if request.idempotency.is_some() {
       CapabilityEffect::IdempotentWrite
@@ -203,7 +233,10 @@ impl CapabilityHandler for ManagedHttpHandler {
       Ok(client) => client,
       Err(error) => return Box::pin(async move { Err(error) }),
     };
-    Box::pin(async move { execute_request(client, request, json_body, cancellation).await })
+    let storage = self.storage.clone();
+    Box::pin(
+      async move { execute_request(client, request, json_body, cancellation, storage).await },
+    )
   }
 }
 
@@ -280,6 +313,27 @@ fn parse_request(input: &Value) -> Result<ManagedHttpRequest, CapabilityFailure>
       .decode(encoded)
       .map_err(|_| invalid_input("Managed HTTP bytesBase64 is not valid base64."))?;
   }
+  match (request.response_type, request.storage.as_ref()) {
+    (ResponseType::Storage, Some(target)) => {
+      crate::ManagedStorageStore::validate_upload_target(
+        &target.key,
+        target.content_type.as_deref(),
+        target.overwrite,
+        target.if_version.as_deref(),
+      )?;
+    }
+    (ResponseType::Storage, None) => {
+      return Err(invalid_input(
+        "Managed HTTP storage response mode requires a storage target.",
+      ));
+    }
+    (_, Some(_)) => {
+      return Err(invalid_input(
+        "Managed HTTP storage is valid only with responseType storage.",
+      ));
+    }
+    (_, None) => {}
+  }
   Ok(request)
 }
 
@@ -288,6 +342,7 @@ async fn execute_request(
   request: ManagedHttpRequest,
   json_body: Option<Value>,
   cancellation: CapabilityCancellationToken,
+  storage: Option<Arc<crate::ManagedStorageStore>>,
 ) -> Result<Value, CapabilityFailure> {
   let method = request.method.parse::<Method>().expect("validated method");
   let read = is_read_method(&request.method);
@@ -372,6 +427,64 @@ async fn execute_request(
   }
 
   let result_headers = response_headers(response.headers())?;
+  if request.response_type == ResponseType::Storage {
+    let target = request.storage.expect("validated HTTP storage target");
+    let store = storage.ok_or_else(|| {
+      failure(
+        CapabilityFailureKind::HandlerCrashed,
+        "WOML_HTTP_STORAGE_UNAVAILABLE",
+        "Managed HTTP storage mode is unavailable in this runtime.",
+        false,
+        false,
+      )
+    })?;
+    let content_type = target.content_type.unwrap_or_else(|| {
+      response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string()
+    });
+    let mut upload = store.begin_upload(
+      target.key,
+      content_type,
+      target.overwrite,
+      target.if_version,
+    )?;
+    loop {
+      let chunk = tokio::select! {
+        _ = cancellation.cancelled() => return Err(failure(
+          CapabilityFailureKind::Cancelled,
+          "WOML_HTTP_CANCELLED",
+          "The managed HTTP response was cancelled while storing its body.",
+          false,
+          !read,
+        )),
+        chunk = response.chunk() => chunk.map_err(|_| failure(
+          CapabilityFailureKind::TransportFailed,
+          "WOML_HTTP_RESPONSE_FAILED",
+          "The managed HTTP response body could not be stored.",
+          false,
+          !read,
+        ))?,
+      };
+      let Some(chunk) = chunk else { break };
+      upload.write_chunk(&chunk, &cancellation)?;
+    }
+    let object = upload.finish(&cancellation)?;
+    return Ok(json!({
+      "contract": MANAGED_HTTP_CONTRACT,
+      "contractVersion": MANAGED_HTTP_CONTRACT_VERSION,
+      "kind": "result",
+      "status": status,
+      "ok": (200..=299).contains(&status),
+      "headers": result_headers,
+      "data": object,
+      "url": final_url.to_string(),
+      "redirected": redirected,
+    }));
+  }
   let mut body = Vec::new();
   loop {
     let chunk = tokio::select! {
@@ -423,6 +536,7 @@ async fn execute_request(
       )
     })?),
     ResponseType::Bytes => Value::String(BASE64.encode(body)),
+    ResponseType::Storage => unreachable!("storage responses return while streaming"),
   };
   Ok(json!({
     "contract": MANAGED_HTTP_CONTRACT,

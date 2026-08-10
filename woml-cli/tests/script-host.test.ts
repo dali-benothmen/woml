@@ -1006,6 +1006,168 @@ return {
     });
   });
 
+  test('protocol v4 lowers services.storage operations and exposes only Storage v1 data', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const reference = {
+          contract: 'woml.storage-object',
+          contractVersion: 1,
+          key: 'reports/today.json',
+          version: `v1:${'a'.repeat(64)}`,
+          checksum: { algorithm: 'sha256', value: 'b'.repeat(64) },
+          size: 11,
+          contentType: 'application/json',
+        } as const;
+        const storageResult = {
+          contract: 'woml.storage',
+          contractVersion: 1,
+          kind: 'result',
+          operation: message.call.operation,
+          data: reference,
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(storageResult)),
+            durationMs: 1,
+            result: storageResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_storage',
+        `const stored = await services.storage.put({
+          key: 'reports/today.json', value: { total: 3 }
+        }, { name: 'daily-report' });
+        const head = await services.storage.head({ key: stored.key });
+        return { stored, head, frozen: Object.isFrozen(services.storage) };`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.call).toMatchObject({
+      capability: 'storage',
+      operation: 'put',
+      identity: {
+        mode: 'named',
+        operationName: 'storage.put.daily-report',
+      },
+      input: {
+        contract: 'woml.storage',
+        contractVersion: 1,
+        kind: 'request',
+        operation: 'put',
+        input: { key: 'reports/today.json', value: { total: 3 } },
+      },
+    });
+    expect(calls[1]?.call).toMatchObject({
+      capability: 'storage',
+      operation: 'head',
+      identity: { mode: 'automatic', operationName: 'storage.head' },
+    });
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'success',
+      value: {
+        stored: { key: 'reports/today.json' },
+        head: { size: 11 },
+        frozen: true,
+      },
+    });
+  });
+
+  test('protocol v4 normalizes managed HTTP direct-to-storage requests', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const managedResult = {
+          contract: 'woml.managed-http',
+          contractVersion: 1,
+          kind: 'result',
+          status: 200,
+          ok: true,
+          headers: { 'content-type': 'text/csv' },
+          data: { key: 'imports/export.csv', size: 5_000_000 },
+          url: 'https://files.example.test/export.csv',
+          redirected: false,
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(managedResult)),
+            durationMs: 1,
+            result: managedResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_http_storage',
+        `return await services.http.request({
+          url: 'https://files.example.test/export.csv',
+          responseType: 'storage',
+          storage: { key: 'imports/export.csv', overwrite: true }
+        });`
+      )
+    );
+    await host.drain();
+
+    expect(calls[0]?.call.input).toMatchObject({
+      responseType: 'storage',
+      storage: { key: 'imports/export.csv', overwrite: true },
+    });
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'success',
+      value: { data: { key: 'imports/export.csv', size: 5_000_000 } },
+    });
+  });
+
   test('protocol v4 bindings are deeply read-only and reject a known secret in results', async () => {
     const sent: CompletedMessage[] = [];
     const host = new ScriptHost({

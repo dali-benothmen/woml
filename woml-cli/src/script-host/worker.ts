@@ -433,6 +433,7 @@ function normalizeHttpRequest(input: JsonValue): JsonObject {
     'text',
     'bytesBase64',
     'responseType',
+    'storage',
     'timeout',
     'timeoutMs',
     'acceptedStatus',
@@ -465,6 +466,53 @@ function normalizeHttpRequest(input: JsonValue): JsonObject {
       'Managed HTTP timeout must be between 1 ms and 24 hours.'
     );
   }
+  const responseType = object.responseType ?? 'json';
+  const storage = plainObject(object.storage);
+  if (responseType === 'storage') {
+    if (storage === undefined) {
+      throw new TypeError(
+        'Managed HTTP responseType "storage" requires a storage target.'
+      );
+    }
+    const unknownStorageOption = Object.keys(storage).find(
+      key => !['key', 'contentType', 'overwrite', 'ifVersion'].includes(key)
+    );
+    if (unknownStorageOption !== undefined) {
+      throw new TypeError(
+        `Unknown managed HTTP storage option "${unknownStorageOption}".`
+      );
+    }
+    if (typeof storage.key !== 'string' || storage.key.length === 0) {
+      throw new TypeError('Managed HTTP storage requires a key string.');
+    }
+    if (
+      storage.contentType !== undefined &&
+      typeof storage.contentType !== 'string'
+    ) {
+      throw new TypeError('Managed HTTP storage contentType must be a string.');
+    }
+    if (
+      storage.overwrite !== undefined &&
+      typeof storage.overwrite !== 'boolean'
+    ) {
+      throw new TypeError('Managed HTTP storage overwrite must be a Boolean.');
+    }
+    if (
+      storage.ifVersion !== undefined &&
+      typeof storage.ifVersion !== 'string'
+    ) {
+      throw new TypeError('Managed HTTP storage ifVersion must be a string.');
+    }
+    if (storage.overwrite !== undefined && storage.ifVersion !== undefined) {
+      throw new TypeError(
+        'Managed HTTP storage overwrite and ifVersion are mutually exclusive.'
+      );
+    }
+  } else if (object.storage !== undefined) {
+    throw new TypeError(
+      'Managed HTTP storage is valid only with responseType "storage".'
+    );
+  }
   const normalized: Record<string, JsonValue> = {
     contract: 'woml.managed-http',
     contractVersion: 1,
@@ -472,7 +520,7 @@ function normalizeHttpRequest(input: JsonValue): JsonObject {
     method,
     url: object.url,
     headers,
-    responseType: object.responseType ?? 'json',
+    responseType,
     timeoutMs,
     acceptedStatus: object.acceptedStatus ?? { minimum: 200, maximum: 299 },
     redirect: object.redirect ?? 'follow',
@@ -484,6 +532,7 @@ function normalizeHttpRequest(input: JsonValue): JsonObject {
     'text',
     'bytesBase64',
     'idempotency',
+    'storage',
   ] as const) {
     if (object[field] !== undefined) normalized[field] = object[field];
   }
@@ -597,6 +646,78 @@ function publicDatabaseResult(result: JsonValue, operation: string): JsonValue {
   return object.data;
 }
 
+const storageOperations = new Set(['put', 'get', 'head', 'list', 'delete']);
+
+function normalizeStorageInput(
+  operation: string,
+  rawInput: JsonValue
+): JsonObject {
+  const object = plainObject(rawInput);
+  if (object === undefined) {
+    throw new TypeError(`services.storage.${operation}() requires an object.`);
+  }
+  const allowedByOperation: Readonly<Record<string, readonly string[]>> = {
+    put: [
+      'key',
+      'value',
+      'text',
+      'bytesBase64',
+      'contentType',
+      'overwrite',
+      'ifVersion',
+    ],
+    get: ['key', 'responseType', 'ifVersion'],
+    head: ['key'],
+    list: ['prefix', 'limit', 'cursor'],
+    delete: ['key', 'ifVersion'],
+  };
+  const allowed = allowedByOperation[operation];
+  if (allowed === undefined) {
+    throw new TypeError(`Unknown Storage v1 operation "${operation}".`);
+  }
+  const unknown = Object.keys(object).find(key => !allowed.includes(key));
+  if (unknown !== undefined) {
+    throw new TypeError(`Unknown Storage v1 ${operation} option "${unknown}".`);
+  }
+  if (operation === 'get') {
+    return { ...object, responseType: object.responseType ?? 'json' };
+  }
+  if (operation === 'list') {
+    return { prefix: '', limit: 100, ...object };
+  }
+  return object;
+}
+
+function normalizeStorageRequest(
+  operation: string,
+  input: JsonValue
+): JsonObject {
+  if (!storageOperations.has(operation)) {
+    throw new TypeError(`Unknown Storage v1 operation "${operation}".`);
+  }
+  return {
+    contract: 'woml.storage',
+    contractVersion: 1,
+    kind: 'request',
+    operation,
+    input: normalizeStorageInput(operation, input),
+  };
+}
+
+function publicStorageResult(result: JsonValue, operation: string): JsonValue {
+  const object = plainObject(result);
+  if (
+    object?.contract !== 'woml.storage' ||
+    object.contractVersion !== 1 ||
+    object.kind !== 'result' ||
+    object.operation !== operation ||
+    object.data === undefined
+  ) {
+    throw new TypeError('Rust returned an invalid Storage v1 result.');
+  }
+  return object.data;
+}
+
 function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
   if (request.attempt === undefined || request.bindings === undefined) {
     return Object.freeze({});
@@ -612,7 +733,14 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
     const managedHttp = capability === 'http' && operation === 'request';
     const managedDatabase =
       capability === 'db' && databaseOperations.has(operation);
-    if (!managedHttp && !managedDatabase && callOptions !== undefined) {
+    const managedStorage =
+      capability === 'storage' && storageOperations.has(operation);
+    if (
+      !managedHttp &&
+      !managedDatabase &&
+      !managedStorage &&
+      callOptions !== undefined
+    ) {
       throw new TypeError(
         'Named service-call options are supported by managed WOML services only.'
       );
@@ -638,8 +766,11 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
       ? String((input as JsonObject).method)
       : undefined;
     const effectful = managedHttp
-      ? method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
-      : managedDatabase && operation !== 'query' && operation !== 'read';
+      ? (input as JsonObject).responseType === 'storage' ||
+        (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS')
+      : managedDatabase
+        ? operation !== 'query' && operation !== 'read'
+        : managedStorage && (operation === 'put' || operation === 'delete');
     if (effectful && identity.mode === 'automatic') {
       const key = `${capability}.${operation}`;
       const count = (automaticEffectfulCalls.get(key) ?? 0) + 1;
@@ -678,10 +809,7 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         mode: identity.mode,
         stepIdempotencyKey: attempt.idempotencyKey,
         operationName: identity.name,
-        operationKey: await operationKey(
-          attempt.idempotencyKey,
-          identity.name
-        ),
+        operationKey: await operationKey(attempt.idempotencyKey, identity.name),
         ...(providerIdempotencyKey === undefined
           ? {}
           : { providerIdempotencyKey }),
@@ -704,7 +832,9 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
       ? publicHttpResult(result)
       : managedDatabase
         ? publicDatabaseResult(result, operation)
-        : result;
+        : managedStorage
+          ? publicStorageResult(result, operation)
+          : result;
   };
   return new Proxy(Object.freeze({}), {
     get(_target, capabilityProperty) {
@@ -745,6 +875,35 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         Object.freeze(database);
         capabilityCache.set(capabilityProperty, database);
         return database;
+      }
+      if (capabilityProperty === 'storage') {
+        const operationCache = new Map<string, unknown>();
+        const storage = new Proxy(Object.freeze({}), {
+          get(_storageTarget, operationProperty) {
+            if (typeof operationProperty !== 'string') return undefined;
+            const known = operationCache.get(operationProperty);
+            if (known !== undefined) return known;
+            if (!storageOperations.has(operationProperty)) return undefined;
+            const invoke = async (
+              rawInput: JsonValue = {},
+              callOptions?: JsonValue
+            ): Promise<JsonValue> =>
+              invokeCapability(
+                'storage',
+                operationProperty,
+                normalizeStorageRequest(operationProperty, rawInput),
+                callOptions
+              );
+            Object.freeze(invoke);
+            operationCache.set(operationProperty, invoke);
+            return invoke;
+          },
+          set: () => false,
+          defineProperty: () => false,
+          deleteProperty: () => false,
+        });
+        capabilityCache.set(capabilityProperty, storage);
+        return storage;
       }
       const operationCache = new Map<string, unknown>();
       const capability = new Proxy(Object.freeze({}), {

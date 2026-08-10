@@ -48,6 +48,7 @@ async function validators() {
     'native-fetch-observation.v1.schema.json',
     'managed-http.v1.schema.json',
     'database.v1.schema.json',
+    'storage.v1.schema.json',
     'script-host-protocol.v4.schema.json',
   ];
   for (const name of schemaNames)
@@ -65,6 +66,7 @@ async function validators() {
     fetch: get('https://cronflow.dev/schemas/native-fetch-observation/v1'),
     http: get('https://cronflow.dev/schemas/managed-http/v1'),
     database: get('https://cronflow.dev/schemas/database/v1'),
+    storage: get('https://cronflow.dev/schemas/storage/v1'),
     host: get('https://cronflow.dev/schemas/script-host-protocol/v4'),
   };
 }
@@ -158,7 +160,7 @@ describe('SC0 frozen service and capability contracts', () => {
     const names = (await readdir(fixtureDirectory))
       .filter(name => name.endsWith('.json'))
       .sort();
-    expect(names.length).toBe(17);
+    expect(names.length).toBe(21);
     for (const name of names) {
       const fixture = await json(join(fixtureDirectory, name));
       if (name === 'script-host-messages.v4.json') {
@@ -202,7 +204,9 @@ describe('SC0 frozen service and capability contracts', () => {
             ? schemas.fetch
             : name.startsWith('database-')
               ? schemas.database
-              : schemas.http;
+              : name.startsWith('storage-')
+                ? schemas.storage
+                : schemas.http;
       expect(
         validator(fixture),
         `${name}: ${JSON.stringify(validator.errors)}`
@@ -311,6 +315,10 @@ describe('SC0 frozen service and capability contracts', () => {
       join(fixtureDirectory, 'managed-http-request.v1.json')
     );
     expect(schemas.http({ ...http, text: 'also a body' })).toBe(false);
+    expect(schemas.http({ ...http, responseType: 'storage' })).toBe(false);
+    expect(schemas.http({ ...http, storage: { key: 'files/body.bin' } })).toBe(
+      false
+    );
     const host = await json(
       join(fixtureDirectory, 'script-host-messages.v4.json')
     );

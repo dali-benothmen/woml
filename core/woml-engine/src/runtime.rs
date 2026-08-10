@@ -129,6 +129,7 @@ pub struct RuntimeExecutionOptions {
   pub capability_registry: Arc<CapabilityRegistry>,
   capability_authority: Option<Arc<DurableCapabilityAuthority>>,
   managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
+  managed_storage_store: Option<Arc<crate::ManagedStorageStore>>,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -167,14 +168,22 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
 impl RuntimeExecutionOptions {
   pub fn new(script_host: ScriptHostProcessOptions, script_timeout_ms: u64) -> Self {
     let capability_registry = Arc::new(CapabilityRegistry::default());
+    let managed_storage_store = Arc::new(crate::ManagedStorageStore::default());
     capability_registry
-      .register(Arc::new(crate::ManagedHttpHandler::default()))
+      .register(Arc::new(crate::ManagedHttpHandler::with_storage(
+        Arc::clone(&managed_storage_store),
+      )))
       .expect("the production HTTP capability is registered exactly once");
     let managed_database_pool = Arc::new(crate::ManagedDatabasePool::default());
     for handler in crate::ManagedDatabaseHandler::handlers(Arc::clone(&managed_database_pool)) {
       capability_registry
         .register(handler)
         .expect("each production database operation is registered exactly once");
+    }
+    for handler in crate::ManagedStorageHandler::handlers(Arc::clone(&managed_storage_store)) {
+      capability_registry
+        .register(handler)
+        .expect("each production storage operation is registered exactly once");
     }
     Self {
       script_host,
@@ -189,6 +198,7 @@ impl RuntimeExecutionOptions {
       capability_registry,
       capability_authority: None,
       managed_database_pool: Some(managed_database_pool),
+      managed_storage_store: Some(managed_storage_store),
     }
   }
 
@@ -215,6 +225,7 @@ impl RuntimeExecutionOptions {
   pub fn with_capability_registry(mut self, registry: Arc<CapabilityRegistry>) -> Self {
     self.capability_registry = registry;
     self.managed_database_pool = None;
+    self.managed_storage_store = None;
     self
   }
 
@@ -601,6 +612,11 @@ fn attach_durable_capability_authority(
   mut options: RuntimeExecutionOptions,
   database_path: &std::path::Path,
 ) -> Result<RuntimeExecutionOptions, RuntimeExecutionError> {
+  if let Some(storage) = &options.managed_storage_store {
+    storage
+      .configure_for_state(database_path)
+      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
+  }
   if let Some(pool) = &options.managed_database_pool {
     pool
       .protect_path(database_path)

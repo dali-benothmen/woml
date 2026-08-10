@@ -1,6 +1,6 @@
 # WOML Services and Capabilities Implementation Plan
 
-Status: active. SC0 through SC8 completed on 2026-08-10. The cross-layer
+Status: active. SC0 through SC9 completed on 2026-08-10. The cross-layer
 contracts are frozen, the TypeScript frontend emits Model v8 with source-proven
 Script Bindings v1 and symbolic secret dependencies, and a real WOML script can
 now call from an isolated Bun Worker through the durable Rust capability
@@ -11,7 +11,9 @@ operation events. The HTTP capability foundation is hardened and publishable.
 Database v1 now provides one read-only `services.db()` facade backed by
 Rust-owned SQLite and PostgreSQL pools, prepared SQL and CRUD, atomic
 transaction batches, bounded/redacted results, cancellation, recovery, and
-strict separation from WOML runtime state. SC9 is next: durable object storage.
+strict separation from WOML runtime state. Storage v1 now adds Rust-owned,
+checksummed durable objects and managed HTTP direct-to-storage streaming without
+copying large bodies through Bun or context. SC10 is next: local expiring cache.
 
 ## 1. Product Outcome
 
@@ -905,6 +907,8 @@ contract promises portability; restart, connection-loss, transaction, pool,
 retry-safety, packaging, and secret-scan tests pass.
 
 ### SC9 — Build durable object storage
+
+Status: completed on 2026-08-10.
 
 Changes:
 

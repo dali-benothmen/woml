@@ -21,6 +21,7 @@ pub mod projection;
 pub mod protocol;
 pub mod runtime;
 pub mod schedule;
+pub mod storage;
 pub mod store;
 pub mod webhook;
 
@@ -110,6 +111,7 @@ pub use schedule::{
   ScheduleProgressReporter, SystemScheduleClock, WomlSchedule, SCHEDULE_PROGRESS_CONTRACT,
   SCHEDULE_PROGRESS_CONTRACT_VERSION,
 };
+pub use storage::{ManagedStorageHandler, ManagedStorageStore, StorageObjectReference};
 pub use store::{EventStoreError, InMemoryEventStore};
 pub use webhook::{
   ExternalTriggerAdmissionCommand, ExternalTriggerAdmissionReceiver, TriggerProgress,

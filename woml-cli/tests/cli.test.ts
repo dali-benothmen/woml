@@ -66,6 +66,11 @@ const postgresExamplePath = join(
   'examples',
   'postgresWorkflow.woml'
 );
+const storageExamplePath = join(
+  projectRoot,
+  'examples',
+  'storageWorkflow.woml'
+);
 const retryCompositionFixturePath = join(
   import.meta.dir,
   '..',
@@ -808,6 +813,10 @@ describe('woml test one-shot compatibility', () => {
       join(consumerDirectory, 'postgres.woml'),
       await Bun.file(postgresExamplePath).text()
     );
+    await Bun.write(
+      join(consumerDirectory, 'storage.woml'),
+      await Bun.file(storageExamplePath).text()
+    );
 
     const packed = Bun.spawnSync(
       [
@@ -910,6 +919,18 @@ describe('woml test one-shot compatibility', () => {
       ],
       { cwd: consumerDirectory, stdout: 'pipe', stderr: 'pipe' }
     );
+    const storageState = join(
+      temporaryDirectory,
+      'packaged-storage',
+      'state.sqlite'
+    );
+    await mkdir(join(temporaryDirectory, 'packaged-storage'), {
+      recursive: true,
+    });
+    const storageResult = Bun.spawnSync(
+      [executable, 'test', 'storage.woml', '--state', storageState],
+      { cwd: consumerDirectory, stdout: 'pipe', stderr: 'pipe' }
+    );
     const postgresConnection = process.env.WOML_TEST_POSTGRES_URL;
     const postgresResult =
       postgresConnection === undefined
@@ -1005,6 +1026,18 @@ describe('woml test one-shot compatibility', () => {
       name: 'Ada',
       visits: 1,
     });
+    expect(storageResult.stderr.toString()).toBe('');
+    expect(storageResult.exitCode).toBe(0);
+    expect(JSON.parse(storageResult.stdout.toString())).toMatchObject({
+      message: 'Hello from WOML storage',
+      key: 'examples/welcome.json',
+      size: expect.any(Number),
+    });
+    expect(
+      (
+        await stat(join(temporaryDirectory, 'packaged-storage', 'objects-v1'))
+      ).isDirectory()
+    ).toBe(true);
     if (postgresResult !== undefined) {
       expect(postgresResult.stderr.toString()).toBe('');
       expect(postgresResult.exitCode).toBe(0);
@@ -1012,7 +1045,9 @@ describe('woml test one-shot compatibility', () => {
         name: 'Ada',
         visits: expect.any(Number),
       });
-      expect(postgresResult.stdout.toString()).not.toContain(postgresConnection);
+      expect(postgresResult.stdout.toString()).not.toContain(
+        postgresConnection
+      );
     }
     expect(approvalPage.status).toBe(200);
     expect(await approvalPage.text()).toContain('Editorial approval');

@@ -46,6 +46,12 @@ argument such as `{ name: "create-customer" }`. This name is part of the
 logical operation identity and must not depend on loop order or an attempt
 number.
 
+For a large download, `responseType: "storage"` and a `storage: { key, ... }`
+target stream the response directly from Rust into durable object storage. The
+returned `data` is a portable object reference rather than the body, so the
+body never crosses Bun or context. See `docs/woml-storage.md` for overwrite,
+conditional version, content-type, integrity, and size behavior.
+
 ## Failure and retry behavior
 
 A managed failure throws `WomlServiceError`. Its stable fields are `code`,

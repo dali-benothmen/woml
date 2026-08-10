@@ -1,0 +1,32 @@
+<workflow version="0.1" id="storage-demo" name="Durable Object Storage">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="saveReport" name="Save and read a report">
+      <script>
+        const object = await services.storage.put({
+          key: "examples/welcome.json",
+          value: {
+            message: "Hello from WOML storage",
+            total: 42
+          },
+          overwrite: true
+        });
+
+        const saved = await services.storage.get({
+          key: object.key,
+          responseType: "json",
+          ifVersion: object.version
+        });
+
+        return {
+          message: saved.data.message,
+          key: object.key,
+          size: object.size
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
