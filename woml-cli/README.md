@@ -26,6 +26,17 @@ register those immutable bundles with Rust and expose their named functions at
 woml test examples/moduleWorkflow.woml
 ```
 
+Generate self-contained editor types for built-in services and local module
+aliases:
+
+```bash
+woml types examples/moduleWorkflow.woml
+```
+
+This writes `woml-env.d.ts` beside the workflow. See
+[Authoring Local WOML Modules](../docs/woml-modules.md) for editor setup,
+explicit context/secret arguments, diagnostics, and mocked Bun unit tests.
+
 Module artifacts are copied into durable state under their immutable definition
 hash. Explicit recovery therefore does not read the current WOML or module
 files, and it still works after either file is moved or deleted:

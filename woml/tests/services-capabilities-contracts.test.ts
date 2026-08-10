@@ -429,6 +429,8 @@ describe('SC1 script analysis and Model v8 lowering', () => {
     `);
     expect(analysis).toEqual({
       requiredSecrets: ['ALPHA_TOKEN', 'ZETA_TOKEN'],
+      requiredServices: [],
+      serviceReferences: [],
       usesServices: false,
       usesNativeFetch: false,
     });

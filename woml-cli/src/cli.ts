@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
 
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, stat } from 'node:fs/promises';
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   buildWomlDefinitionPackage,
   buildWomlRuntimeDefinitionPackage,
   compileWoml,
+  generateWomlEditorDeclarations,
+  inspectWomlModuleUsage,
   isWomlElement,
   parseWoml,
   WomlDiagnosticError,
@@ -122,8 +124,12 @@ function checkUsage(): string {
   return 'Usage: woml check <workflow.woml> [--json]';
 }
 
+function typesUsage(): string {
+  return 'Usage: woml types <workflow.woml|directory> [--output <path>]';
+}
+
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${runsUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${runsUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -833,6 +839,12 @@ async function runCheckCommand(
         `services.${module.name} -> ${module.entrypoint} (${module.exports.join(', ')})\n`
       );
     }
+    const usage = inspectWomlModuleUsage(document);
+    for (const name of usage.unusedModules) {
+      io.stdout(
+        `Warning [WOML_MODULE_UNUSED]: services.${name} is declared but is not called by this workflow.\n`
+      );
+    }
     io.stdout(
       definitionPackage.modules.length === 0
         ? 'Execution: module-free workflow; woml run is available.\n'
@@ -841,6 +853,52 @@ async function runCheckCommand(
     return 0;
   } catch (error) {
     io.stderr(`${formatError(error, filePath, document)}\n`);
+    return 1;
+  }
+}
+
+async function runTypesCommand(
+  args: readonly string[],
+  io: CliIo
+): Promise<number> {
+  const [, rawSourcePath, ...options] = args;
+  if (
+    rawSourcePath === undefined ||
+    rawSourcePath.startsWith('--') ||
+    (options.length !== 0 &&
+      (options.length !== 2 || options[0] !== '--output' || !options[1]))
+  ) {
+    io.stderr(`${typesUsage()}\n`);
+    return 2;
+  }
+  const sourcePath = resolve(rawSourcePath);
+  try {
+    const sourceStat = await stat(sourcePath);
+    const workflows = await compileWorkflowSources(sourcePath);
+    const modules = workflows.flatMap(workflow =>
+      'moduleRuntime' in workflow.workflow
+        ? workflow.workflow.moduleRuntime.modules
+        : []
+    );
+    const defaultDirectory = sourceStat.isDirectory()
+      ? sourcePath
+      : dirname(sourcePath);
+    const outputPath = resolve(
+      options[1] ?? join(defaultDirectory, 'woml-env.d.ts')
+    );
+    await mkdir(dirname(outputPath), { recursive: true });
+    await writeFile(
+      outputPath,
+      generateWomlEditorDeclarations(modules),
+      'utf8'
+    );
+    io.stdout(`WOML editor types written to ${outputPath}.\n`);
+    io.stdout(
+      `Modules: ${modules.length}; globals: services only. Pass context, attempt, and secrets explicitly.\n`
+    );
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error, sourcePath)}\n`);
     return 1;
   }
 }
@@ -2045,6 +2103,10 @@ export async function runCli(
 ): Promise<number> {
   if (args[0] === 'check') {
     return await runCheckCommand(args, io);
+  }
+
+  if (args[0] === 'types') {
+    return await runTypesCommand(args, io);
   }
 
   if (args[0] === 'secrets') {

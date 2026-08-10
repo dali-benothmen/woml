@@ -61,7 +61,9 @@ const plan = readFileSync(
   'utf8'
 );
 if (
-  !plan.includes('Status: MS0 through MS4 completed') ||
+  !plan.includes(
+    'Status: MS0 through MS4 and the essential local-authoring portion of MS6'
+  ) ||
   !plan.includes(
     '### MS4 — Make local modules recoverable and observable — completed'
   )

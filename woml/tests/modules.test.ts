@@ -11,6 +11,7 @@ import {
   buildWomlRuntimeDefinitionPackage,
   canonicalizeWomlDefinitionPackage,
   compileWoml,
+  inspectWomlModuleUsage,
   parseWoml,
   validateWoml,
   WomlCompileError,
@@ -238,6 +239,43 @@ describe('MS0 and MS1 Module System', () => {
         expect(error).toBeInstanceOf(WomlCompileError);
         expect((error as WomlCompileError).diagnostic.code).toBe(code);
       }
+    }
+  });
+});
+
+describe('essential MS6 module diagnostics', () => {
+  test('reports referenced and unused module aliases without rejecting unused code', () => {
+    const inspection = inspectWomlModuleUsage(sourceDocument());
+    expect(inspection).toEqual({
+      referencedServices: ['spreadsheet'],
+      referencedModules: ['spreadsheet'],
+      unusedModules: [],
+    });
+
+    const unused = inspectWomlModuleUsage(
+      moduleDocument('spreadsheet', './spreadsheet.ts')
+    );
+    expect(unused.unusedModules).toEqual(['spreadsheet']);
+  });
+
+  test('rejects a misspelled service alias at its script location', () => {
+    const source = `<woml>
+  <workflow id="bad-service">
+    <triggers><manual id="start" /></triggers>
+    <steps><step id="call"><script>
+      return services.spredsheet.read([]);
+    </script></step></steps>
+  </workflow>
+</woml>`;
+    try {
+      compileWoml(parseWoml(source, { file: 'bad-service.woml' }));
+      throw new Error('Expected unknown service alias rejection.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WomlCompileError);
+      const diagnostic = (error as WomlCompileError).diagnostic;
+      expect(diagnostic.code).toBe('WOML_MODULE_SERVICE_UNKNOWN');
+      expect(diagnostic.message).toContain('spredsheet');
+      expect(diagnostic.location.start.line).toBe(5);
     }
   });
 });

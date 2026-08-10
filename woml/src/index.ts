@@ -1,4 +1,10 @@
-export { compileWoml, compileWomlWithModules, validateWoml } from './compiler';
+export {
+  compileWoml,
+  compileWomlWithModules,
+  inspectWomlModuleUsage,
+  validateWoml,
+  type WomlModuleUsageInspection,
+} from './compiler';
 export {
   buildWomlDefinitionPackage,
   buildWomlExecutableDefinitionPackage,
@@ -58,6 +64,7 @@ export {
   analyzeWomlScript,
   type ScriptAnalysis,
   type ScriptAnalysisIssue,
+  type ScriptServiceReference,
 } from './script-analysis';
 export { parseWoml, type ParseWomlOptions } from './parser';
 export {
@@ -84,3 +91,11 @@ export {
   type WomlSourceRawText,
   type WomlSourceText,
 } from './source';
+export {
+  generateWomlEditorDeclarations,
+  type WomlEditorModuleDeclaration,
+} from './editor';
+export {
+  withWomlModuleTestRuntime,
+  type WomlModuleTestRuntime,
+} from './module-testing';

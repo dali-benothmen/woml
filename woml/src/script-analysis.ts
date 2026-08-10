@@ -10,8 +10,16 @@ export interface ScriptAnalysisIssue {
   readonly hint?: string;
 }
 
+export interface ScriptServiceReference {
+  readonly name: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 export interface ScriptAnalysis {
   readonly requiredSecrets: readonly string[];
+  readonly requiredServices: readonly string[];
+  readonly serviceReferences: readonly ScriptServiceReference[];
   readonly usesServices: boolean;
   readonly usesNativeFetch: boolean;
   readonly issue?: ScriptAnalysisIssue;
@@ -241,6 +249,8 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
   } catch (error) {
     return {
       requiredSecrets: [],
+      requiredServices: [],
+      serviceReferences: [],
       usesServices: false,
       usesNativeFetch: false,
       issue: parseIssue(error as AcornSyntaxError, source.length),
@@ -255,6 +265,8 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
   if (body === undefined) {
     return {
       requiredSecrets: [],
+      requiredServices: [],
+      serviceReferences: [],
       usesServices: false,
       usesNativeFetch: false,
       issue: {
@@ -268,6 +280,7 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
   }
 
   const requiredSecrets = new Set<string>();
+  const requiredServices = new Map<string, ScriptServiceReference>();
   let usesServices = false;
   let usesNativeFetch = false;
   let firstIssue: ScriptAnalysisIssue | undefined;
@@ -487,6 +500,13 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
             );
           } else {
             usesServices = true;
+            const name = memberPropertyName(parent);
+            if (name !== undefined && !requiredServices.has(name)) {
+              requiredServices.set(name, {
+                name,
+                ...sourceRange(parent, source.length),
+              });
+            }
           }
         } else {
           fail(
@@ -555,6 +575,10 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
 
   return {
     requiredSecrets: names,
+    requiredServices: [...requiredServices.keys()].sort(),
+    serviceReferences: [...requiredServices.values()].sort((left, right) =>
+      left.name.localeCompare(right.name)
+    ),
     usesServices,
     usesNativeFetch,
     ...(firstIssue === undefined ? {} : { issue: firstIssue }),

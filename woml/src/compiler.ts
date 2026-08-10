@@ -45,6 +45,7 @@ interface ValidatedStep {
   readonly kind: 'step';
   readonly id: string;
   readonly source: string;
+  readonly scriptSpan: SourceSpan;
   readonly scriptAnalysis: ScriptAnalysis;
   readonly retryPolicy?: RetryPolicy;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
@@ -1714,6 +1715,7 @@ function validateStep(
     kind: 'step',
     id,
     source: body.source,
+    scriptSpan: body.span,
     scriptAnalysis: validateScriptAnalysis(document, body),
     retryPolicy: stepRetryPolicy(document, step),
     metadata: flowItemMetadata(document, step),
@@ -1743,6 +1745,62 @@ function collectScriptAnalyses(
     collectScriptAnalyses(item.rejectedItems, analyses);
   }
   return analyses;
+}
+
+const builtInServiceNames = new Set([
+  'http',
+  'db',
+  'storage',
+  'cache',
+  'events',
+]);
+
+function collectValidatedSteps(
+  items: readonly ValidatedFlowItem[],
+  steps: ValidatedStep[] = []
+): readonly ValidatedStep[] {
+  for (const item of items) {
+    if (item.kind === 'step') {
+      steps.push(item);
+    } else if (item.kind === 'parallel') {
+      steps.push(...item.children);
+    } else if (item.kind === 'branch') {
+      for (const arm of item.arms) collectValidatedSteps(arm.items, steps);
+    } else {
+      collectValidatedSteps(item.approvedItems, steps);
+      collectValidatedSteps(item.rejectedItems, steps);
+    }
+  }
+  return steps;
+}
+
+export interface WomlModuleUsageInspection {
+  readonly referencedServices: readonly string[];
+  readonly referencedModules: readonly string[];
+  readonly unusedModules: readonly string[];
+}
+
+export function inspectWomlModuleUsage(
+  document: WomlSourceDocument
+): WomlModuleUsageInspection {
+  const validated = validateDocument(document);
+  const referencedServices = [
+    ...new Set(
+      collectValidatedSteps(validated.flow.items).flatMap(
+        step => step.scriptAnalysis.requiredServices
+      )
+    ),
+  ].sort();
+  const moduleNames = validated.modules.map(module => module.name);
+  return {
+    referencedServices,
+    referencedModules: referencedServices.filter(name =>
+      moduleNames.includes(name)
+    ),
+    unusedModules: moduleNames.filter(
+      name => !referencedServices.includes(name)
+    ),
+  };
 }
 
 const scriptRuntimeBindings = [
@@ -2909,12 +2967,46 @@ function compileValidatedWoml(
   }
   const lowered = lowerFlowItems(flow.items);
   const scriptAnalyses = collectScriptAnalyses(flow.items);
-  const usesScriptRuntimeV1 = moduleRuntime !== undefined || [...scriptAnalyses.values()].some(
-    analysis =>
-      analysis.requiredSecrets.length > 0 ||
-      analysis.usesServices ||
-      analysis.usesNativeFetch
-  );
+  const availableServices = new Set([
+    ...builtInServiceNames,
+    ...modules.map(module => module.name),
+  ]);
+  const unknownService = collectValidatedSteps(flow.items)
+    .flatMap(step =>
+      step.scriptAnalysis.serviceReferences.map(reference => ({
+        step,
+        reference,
+      }))
+    )
+    .find(({ reference }) => !availableServices.has(reference.name));
+  if (unknownService !== undefined) {
+    const sourceFile = new SourceFile(document.file, document.source);
+    const start =
+      unknownService.step.scriptSpan.start.offset +
+      unknownService.reference.start;
+    failCompile(
+      document,
+      'WOML_MODULE_SERVICE_UNKNOWN',
+      `Unknown service alias "${unknownService.reference.name}".`,
+      sourceFile.span(
+        start,
+        start +
+          Math.max(
+            1,
+            unknownService.reference.end - unknownService.reference.start
+          )
+      ),
+      'Use a built-in service or declare the local module in <imports>.'
+    );
+  }
+  const usesScriptRuntimeV1 =
+    moduleRuntime !== undefined ||
+    [...scriptAnalyses.values()].some(
+      analysis =>
+        analysis.requiredSecrets.length > 0 ||
+        analysis.usesServices ||
+        analysis.usesNativeFetch
+    );
   const nodes = usesScriptRuntimeV1
     ? withScriptRuntimeBindings(lowered.nodes, scriptAnalyses)
     : lowered.nodes;

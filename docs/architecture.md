@@ -45,6 +45,12 @@ source map, exports, and identities for each compiled-definition hash. Script
 Host v6 re-registers those artifacts after restart, so run recovery never reads
 the current WOML document or project module sources.
 
+The local authoring layer generates a non-runtime `woml-env.d.ts` containing
+built-in and imported `services.*` names. This editor artifact never enters the
+compiled definition identity. Modules receive `services` only; workflow
+context, attempts, and individual secrets cross the boundary as explicit
+function arguments. Package permissions remain postponed with package imports.
+
 The Rust core is the execution authority. It validates the compiled model,
 selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends
 versioned events to SQLite, and rebuilds run context by folding those events. It

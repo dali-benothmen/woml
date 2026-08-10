@@ -403,3 +403,105 @@ export function retry(attempt) {
     }
   });
 });
+
+describe('essential MS6 module authoring DX', () => {
+  test('writes a self-contained woml-env.d.ts that removes editor errors', async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'woml-ms6-types-'));
+    const modulePath = resolve(directory, 'openai.ts');
+    const womlPath = resolve(directory, 'workflow.woml');
+    const typePath = resolve(directory, 'woml-env.d.ts');
+    await writeFile(
+      modulePath,
+      `export async function chat(message: string) {
+  const response = await services.http.request<{ reply: string }>({
+    url: 'https://example.test/chat',
+    method: 'POST',
+    json: { message }
+  });
+  return response.data.reply;
+}
+`
+    );
+    await writeFile(
+      womlPath,
+      `<woml>
+  <imports><module name="openai" from="./openai.ts" /></imports>
+  <workflow id="ms6-types">
+    <triggers><manual id="start" /></triggers>
+    <steps><step id="chat"><script>
+      return await services.openai.chat('hello');
+    </script></step></steps>
+  </workflow>
+</woml>
+`
+    );
+    try {
+      const result = await invoke(['types', womlPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain(typePath);
+      const declarations = await readFile(typePath, 'utf8');
+      expect(declarations).toContain('declare const services');
+      expect(declarations).toContain('readonly "openai"');
+      expect(declarations).toContain('readonly "chat"');
+
+      const compiler = Bun.spawn(
+        [
+          resolve(import.meta.dir, '../node_modules/.bin/tsc'),
+          '--ignoreConfig',
+          '--noEmit',
+          '--strict',
+          '--skipLibCheck',
+          '--target',
+          'ES2022',
+          '--module',
+          'ESNext',
+          '--moduleResolution',
+          'Bundler',
+          typePath,
+          modulePath,
+        ],
+        { stdout: 'pipe', stderr: 'pipe' }
+      );
+      const [exitCode, stdout, stderr] = await Promise.all([
+        compiler.exited,
+        new Response(compiler.stdout).text(),
+        new Response(compiler.stderr).text(),
+      ]);
+      expect({ exitCode, stdout, stderr }).toEqual({
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('prints a non-blocking diagnostic for a declared but unused module', async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'woml-ms6-unused-'));
+    const modulePath = resolve(directory, 'unused.ts');
+    const womlPath = resolve(directory, 'workflow.woml');
+    await writeFile(modulePath, 'export function value() { return true; }\n');
+    await writeFile(
+      womlPath,
+      `<woml>
+  <imports><module name="unused" from="./unused.ts" /></imports>
+  <workflow id="ms6-unused">
+    <triggers><manual id="start" /></triggers>
+    <steps><step id="done"><script>return true;</script></step></steps>
+  </workflow>
+</woml>
+`
+    );
+    try {
+      const result = await invoke(['check', womlPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('WOML_MODULE_UNUSED');
+      expect(result.stdout).toContain('services.unused');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

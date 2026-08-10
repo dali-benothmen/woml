@@ -1,13 +1,16 @@
 # WOML Module System Implementation Plan
 
-Status: MS0 through MS4 completed on 2026-08-10. The canonical `<woml>`
+Status: MS0 through MS4 and the essential local-authoring portion of MS6
+completed on 2026-08-10. The canonical `<woml>`
 document, local-module source profile, diagnostics, resolver, deterministic ESM
 bundles/source maps, generated declarations, Definition Package v2, Model v9,
 `woml check`, Package v3, Script Host v5, isolated module execution, and
 reviewed fixtures are frozen and implemented. Durable artifact recovery, Script
 Host v6 re-registration/source maps, bounded caches, safe progress, secret
-redaction, and control-flow/trigger composition are implemented. MS5 locked
-package dependencies are next.
+redaction, and control-flow/trigger composition are implemented. Editor type
+generation, service-alias diagnostics, unused-module guidance, and mocked local
+module tests are also implemented. MS5 package dependencies and package
+permissions are postponed. Durable Workflow Calls is next.
 
 ## 1. Product Outcome
 
@@ -677,7 +680,7 @@ Gate:
 Crash tests cover registration, initialization, pure execution, Fetch/service
 calls, and post-script completion. Recovery never reads current project files.
 
-### MS5 — Add locked package dependencies
+### MS5 — Add locked package dependencies — postponed
 
 Changes:
 
@@ -700,25 +703,38 @@ Offline execution succeeds; tampering, missing lock data, range drift,
 lifecycle scripts, native addons, registry outage, and transitive cycles fail
 before activation.
 
-### MS6 — Enforce permissions and complete module DX
+### MS6 — Complete module DX and package permissions — partially completed
+
+Essential local-module DX completed on 2026-08-10:
+
+- `woml types <workflow-or-directory>` generates a self-contained
+  `woml-env.d.ts` for built-ins and imported aliases.
+- Modules receive `services` only; context, attempt data, and individual
+  secrets remain explicit function arguments.
+- `woml check` reports unused aliases without blocking execution.
+- Unknown `services.<alias>` references fail with a source-located diagnostic.
+- `withWomlModuleTestRuntime()` provides read-only service mocks for Bun tests.
+- Authoring guidance and DX conformance tests are part of the release gate.
+
+Postponed with MS5 package support:
 
 Changes:
 
 - Implement installed-package permission and secret grants.
 - Prevent secret enumeration and detect permission expansion after updates.
 - Enforce capability/network/storage policies at controlled doorways.
-- Add graph inspection, build/check output, module unit testing with mocked
-  built-ins, autocomplete, unused-import diagnostics, and guidance.
-- Add local and package-backed examples to clean-package smoke tests.
+- Add package-backed examples to clean-package smoke tests.
 
 Result:
 
-Modules are safe to inspect and pleasant to author, test, review, and deploy.
+Local modules are pleasant to author and test now. Installed packages gain the
+remaining permission and supply-chain controls only when MS5 is activated.
 
 Gate:
 
-Permission, secret, malicious dependency, type-generation, mocked-service,
-packaging, offline, and backwards-compatibility suites pass.
+The local gate covers type generation, alias diagnostics, mocked services, and
+backwards compatibility. Permission, malicious-dependency, package, and offline
+suites remain explicitly postponed.
 
 ### MS7 — Complete packaging and distribution boundaries
 
@@ -881,7 +897,9 @@ make the change straightforward.
 7. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-After MS8, Durable Workflow Calls is the next product milestone.
+Durable Workflow Calls is the next product milestone. Demand-driven MS5 package
+support, remaining MS6 permissions, and MS7–MS8 package publication work can
+resume later without blocking local modules.
 
 ## 17. MS0 Review Gate — passed 2026-08-10
 

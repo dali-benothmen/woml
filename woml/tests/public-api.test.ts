@@ -14,6 +14,9 @@ describe('WOML frontend public API', () => {
       'woml.definition-package/v2'
     );
     expect(woml.buildWomlRuntimeDefinitionPackage).toBeFunction();
+    expect(woml.generateWomlEditorDeclarations).toBeFunction();
+    expect(woml.inspectWomlModuleUsage).toBeFunction();
+    expect(woml.withWomlModuleTestRuntime).toBeFunction();
     expect(woml.WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE).toBe(
       'woml.definition-package/v3'
     );
