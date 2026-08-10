@@ -1,0 +1,11 @@
+{
+  "contract": "woml.workflow-call-routing",
+  "contractVersion": 1,
+  "kind": "registration",
+  "runtimeId": "runtime_target_001",
+  "workflowId": "calculate-risk",
+  "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "endpoint": "http://127.0.0.1:43127",
+  "sessionCredentialHash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "leaseExpiresAt": "2026-08-10T12:01:00Z"
+}

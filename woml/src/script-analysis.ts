@@ -48,6 +48,17 @@ const unsupportedBunNetworkMethods = new Set([
   'serve',
   'udpSocket',
 ]);
+const workflowIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const operationNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
+const durationPattern = /^([1-9][0-9]*)(ms|s|m|h|d)$/;
+const durationMultipliers = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+} as const;
+const maximumWorkflowCallTimeoutMs = 86_400_000;
 
 function isNode(value: unknown): value is AstNode {
   return (
@@ -209,6 +220,54 @@ function memberRootIdentifier(node: unknown): AstNode | undefined {
   return isNode(current) && current.type === 'Identifier' ? current : undefined;
 }
 
+function staticMemberPath(node: unknown): readonly string[] | undefined {
+  if (!isNode(node)) return undefined;
+  if (node.type === 'Identifier' && node.name !== undefined) return [node.name];
+  if (node.type !== 'MemberExpression' || node.computed === true)
+    return undefined;
+  const object = staticMemberPath(node.object);
+  const property = node.property;
+  if (
+    object === undefined ||
+    !isNode(property) ||
+    property.type !== 'Identifier' ||
+    property.name === undefined
+  ) {
+    return undefined;
+  }
+  return [...object, property.name];
+}
+
+function literalString(node: unknown): string | undefined {
+  return isNode(node) &&
+    node.type === 'Literal' &&
+    typeof node.value === 'string'
+    ? node.value
+    : undefined;
+}
+
+function validLiteralWorkflowCallTimeout(node: AstNode): boolean {
+  if (node.type !== 'Literal') return true;
+  if (typeof node.value === 'number') {
+    return (
+      Number.isSafeInteger(node.value) &&
+      node.value > 0 &&
+      node.value <= maximumWorkflowCallTimeoutMs
+    );
+  }
+  if (typeof node.value !== 'string') return false;
+  const match = durationPattern.exec(node.value);
+  if (match === null) return false;
+  const amount = Number(match[1]);
+  const milliseconds =
+    amount * durationMultipliers[match[2] as keyof typeof durationMultipliers];
+  return (
+    Number.isSafeInteger(milliseconds) &&
+    milliseconds > 0 &&
+    milliseconds <= maximumWorkflowCallTimeoutMs
+  );
+}
+
 function isWriteTarget(node: AstNode, parent?: AstNode): boolean {
   return (
     (parent?.type === 'AssignmentExpression' && parent.left === node) ||
@@ -313,6 +372,153 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
 
     if (node.type === 'CallExpression' && isNode(node.callee)) {
       const callee = node.callee;
+      const path = staticMemberPath(callee);
+      if (path?.[0] === 'services' && path[1] === 'workflows') {
+        if (path.join('.') !== 'services.workflows.call') {
+          fail(
+            issueAt(
+              callee,
+              source.length,
+              'WOML_WORKFLOW_OPERATION_UNSUPPORTED',
+              `Workflow service operation "${path.slice(2).join('.') || ''}" is unsupported.`,
+              'Use services.workflows.call(workflowId, payload, options?).'
+            )
+          );
+        } else {
+          const args =
+            (node.arguments as readonly unknown[] | undefined) ?? [];
+          if (args.length < 2 || args.length > 3) {
+            fail(
+              issueAt(
+                node,
+                source.length,
+                'WOML_WORKFLOW_CALL_ARGUMENTS_INVALID',
+                'services.workflows.call() requires workflowId, payload, and optional options.',
+                'Use services.workflows.call("workflow-id", { ... }, { name, timeout }).'
+              )
+            );
+          } else {
+            const target = args[0];
+            const targetLiteral = literalString(target);
+            if (
+              isNode(target) &&
+              target.type === 'Literal' &&
+              (targetLiteral === undefined ||
+                targetLiteral.length > 256 ||
+                !workflowIdPattern.test(targetLiteral))
+            ) {
+              fail(
+                issueAt(
+                  target,
+                  source.length,
+                  'WOML_WORKFLOW_TARGET_INVALID',
+                  'A literal workflow target must use lowercase kebab-case.',
+                  'Example: services.workflows.call("calculate-risk", { ... }).'
+                )
+              );
+            }
+
+            const payload = args[1];
+            if (
+              isNode(payload) &&
+              (payload.type === 'Literal' || payload.type === 'ArrayExpression')
+            ) {
+              fail(
+                issueAt(
+                  payload,
+                  source.length,
+                  'WOML_WORKFLOW_PAYLOAD_INVALID',
+                  'A workflow call payload must be a top-level JSON object.',
+                  'Pass an object literal or an expression that resolves to an object.'
+                )
+              );
+            }
+
+            const options = args[2];
+            if (
+              isNode(options) &&
+              (options.type === 'Literal' || options.type === 'ArrayExpression')
+            ) {
+              fail(
+                issueAt(
+                  options,
+                  source.length,
+                  'WOML_WORKFLOW_CALL_OPTIONS_INVALID',
+                  'Workflow call options must be an object.',
+                  'Use { name: "logical-call", timeout: "30s" }.'
+                )
+              );
+            } else if (isNode(options) && options.type === 'ObjectExpression') {
+              for (const property of
+                (options.properties as readonly unknown[] | undefined) ?? []) {
+                if (!isNode(property) || property.type !== 'Property') {
+                  fail(
+                    issueAt(
+                      isNode(property) ? property : options,
+                      source.length,
+                      'WOML_WORKFLOW_CALL_OPTIONS_INVALID',
+                      'Workflow call options do not support spread or computed members.',
+                      'Use only static name and timeout properties.'
+                    )
+                  );
+                  continue;
+                }
+                const name = isNode(property.key)
+                  ? property.key.type === 'Identifier'
+                    ? property.key.name
+                    : literalString(property.key)
+                  : undefined;
+                if (name !== 'name' && name !== 'timeout') {
+                  fail(
+                    issueAt(
+                      property,
+                      source.length,
+                      'WOML_WORKFLOW_CALL_OPTION_UNKNOWN',
+                      `Unknown workflow call option "${name ?? ''}".`,
+                      'The v1 options are name and timeout.'
+                    )
+                  );
+                }
+                if (name === 'name') {
+                  const value = literalString(property.value);
+                  if (
+                    isNode(property.value) &&
+                    property.value.type === 'Literal' &&
+                    (value === undefined ||
+                      value.length > 128 ||
+                      !operationNamePattern.test(value))
+                  ) {
+                    fail(
+                      issueAt(
+                        property.value,
+                        source.length,
+                        'WOML_WORKFLOW_CALL_NAME_INVALID',
+                        'A literal workflow call name must use lowercase operation-name syntax.',
+                        'Example: primary-risk'
+                      )
+                    );
+                  }
+                }
+                if (
+                  name === 'timeout' &&
+                  isNode(property.value) &&
+                  !validLiteralWorkflowCallTimeout(property.value)
+                ) {
+                  fail(
+                    issueAt(
+                      property.value,
+                      source.length,
+                      'WOML_WORKFLOW_CALL_OPTIONS_INVALID',
+                      'A literal workflow call timeout must be a positive duration no greater than 24h.',
+                      'Use milliseconds or a whole duration such as "30s", "5m", or "24h".'
+                    )
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
       if (callee.type === 'Identifier' && callee.name === 'require') {
         fail(
           issueAt(

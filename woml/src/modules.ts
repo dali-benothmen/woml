@@ -11,6 +11,7 @@ import {
 } from './compiler';
 import type {
   CompiledModuleBindingV1,
+  CompiledWorkflowDefinitionV10,
   CompiledWorkflowDefinitionV9,
 } from './model';
 import {
@@ -29,6 +30,10 @@ export const WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v2' as const;
 export const WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v3' as const;
+export const WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v4' as const;
+export const WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v5' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -138,6 +143,33 @@ export interface WomlDefinitionPackageV3
   > {
   readonly schemaVersion: 3;
   readonly profile: typeof WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE;
+  readonly runtimeReady: true;
+  readonly compilationRootHash: string;
+  readonly rootHash: string;
+}
+
+export interface WomlDefinitionPackageV4
+  extends Omit<
+    WomlDefinitionPackageV2,
+    'schemaVersion' | 'profile' | 'workflow'
+  > {
+  readonly schemaVersion: 4;
+  readonly profile: typeof WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE;
+  readonly workflow: {
+    readonly id: string;
+    readonly source: string;
+    readonly modelDigest: string;
+    readonly model: CompiledWorkflowDefinitionV10;
+  };
+}
+
+export interface WomlDefinitionPackageV5
+  extends Omit<
+    WomlDefinitionPackageV4,
+    'schemaVersion' | 'profile' | 'runtimeReady' | 'rootHash'
+  > {
+  readonly schemaVersion: 5;
+  readonly profile: typeof WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE;
   readonly runtimeReady: true;
   readonly compilationRootHash: string;
   readonly rootHash: string;
@@ -858,7 +890,7 @@ function generatedServiceDeclarations(
 export async function buildWomlExecutableDefinitionPackage(
   document: WomlSourceDocument,
   options: WomlModuleResolverOptions = {}
-): Promise<WomlDefinitionPackageV2> {
+): Promise<WomlDefinitionPackageV2 | WomlDefinitionPackageV4> {
   const resolved = buildWomlDefinitionPackage(document, options);
   if (resolved.modules.length === 0) {
     throw compileDiagnostic(
@@ -975,7 +1007,7 @@ export async function buildWomlExecutableDefinitionPackage(
   const modelDigest = sha256(modelContent);
   const declarations = generatedServiceDeclarations(resolved.modules);
   artifacts.unshift({
-    path: 'workflow.compiled.v9.json',
+    path: `workflow.compiled.v${model.schemaVersion}.json`,
     kind: 'workflow-model',
     mediaType: 'application/json',
     digest: modelDigest,
@@ -989,9 +1021,7 @@ export async function buildWomlExecutableDefinitionPackage(
     content: declarations,
   });
 
-  const unsigned = {
-    schemaVersion: 2 as const,
-    profile: WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
+  const common = {
     executable: true as const,
     runtimeReady: false as const,
     workflow: {
@@ -1017,6 +1047,21 @@ export async function buildWomlExecutableDefinitionPackage(
     },
     permissions: resolved.permissions,
   };
+  if (model.schemaVersion === 10) {
+    const unsigned = {
+      schemaVersion: 4 as const,
+      profile: WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE,
+      ...common,
+      workflow: { ...common.workflow, model },
+    };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
+  const unsigned = {
+    schemaVersion: 2 as const,
+    profile: WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
+    ...common,
+    workflow: { ...common.workflow, model },
+  };
   return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
 }
 
@@ -1028,8 +1073,24 @@ export async function buildWomlExecutableDefinitionPackage(
 export async function buildWomlRuntimeDefinitionPackage(
   document: WomlSourceDocument,
   options: WomlModuleResolverOptions = {}
-): Promise<WomlDefinitionPackageV3> {
+): Promise<WomlDefinitionPackageV3 | WomlDefinitionPackageV5> {
   const compiled = await buildWomlExecutableDefinitionPackage(document, options);
+  if (compiled.schemaVersion === 4) {
+    const unsigned = {
+      schemaVersion: 5 as const,
+      profile: WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE,
+      executable: compiled.executable,
+      runtimeReady: true as const,
+      compilationRootHash: compiled.rootHash,
+      workflow: compiled.workflow,
+      modules: compiled.modules,
+      sources: compiled.sources,
+      artifacts: compiled.artifacts,
+      compiler: compiled.compiler,
+      permissions: compiled.permissions,
+    };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   const unsigned = {
     schemaVersion: 3 as const,
     profile: WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE,
@@ -1051,6 +1112,8 @@ export function canonicalizeWomlDefinitionPackage(
     | WomlDefinitionPackageV1
     | WomlDefinitionPackageV2
     | WomlDefinitionPackageV3
+    | WomlDefinitionPackageV4
+    | WomlDefinitionPackageV5
 ): string {
   return canonicalJson(definitionPackage);
 }

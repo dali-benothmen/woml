@@ -887,15 +887,18 @@ make the change straightforward.
 3. **Production runtime and operations** — hosting, deployment, multi-node
    ownership, OS-level isolation, observability, retention, administration,
    scaling, artifact lifecycle, and the production workflow-call router.
-4. **WOML package registry/community ecosystem** — signed publication,
+4. **Complete postponed Module System phases** — MS5 locked third-party
+   packages, remaining MS6 package permissions/security, MS7 portable
+   distribution, and MS8 final hardening/publication.
+5. **WOML package registry/community ecosystem** — signed publication,
    discovery, trust/provenance, moderation, compatibility, and deprecation after
    local/package artifacts are proven.
-5. **Additional infrastructure adapters** — the postponed durable queue and
+6. **Additional infrastructure adapters** — the postponed durable queue and
    external broker profile, document databases, external object storage, and
    distributed caches according to demand.
-6. **Additional communication providers** — Discord, WhatsApp, and Telegram
+7. **Additional communication providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when justified.
-7. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
+8. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
 Durable Workflow Calls is the next product milestone. Demand-driven MS5 package

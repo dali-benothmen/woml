@@ -18,6 +18,8 @@ describe('essential MS6 local module DX', () => {
       'readonly storage',
       'readonly cache',
       'readonly events',
+      'readonly workflows',
+      'readonly call',
       'readonly "spreadsheet"',
       'readonly "removeEmptyRows"',
       'readonly "openai"',

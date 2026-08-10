@@ -72,6 +72,7 @@ includes conditional branches and bounded parallel groups:
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
 | Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC14 completed and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, workflow-scoped Cache v1, and internal Events Service v1 are executable and publishable; queue is postponed |
 | `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS4 plus essential MS6 DX completed | Canonical documents, safe local resolution, deterministic ESM bundles/maps, Definition Package v3, Model v9, isolated execution, durable recovery, Script Host v6, editor type generation, alias diagnostics, and mocked module tests are implemented; package support remains postponed |
+| Call-only workflows and `services.workflows.call()` | Workflow Calls WC0–WC1 frozen and implemented | Omitted `<triggers>`, Model v10, Definition Packages v4/v5, static diagnostics, and editor contracts are available; durable Rust execution begins in WC2 |
 | Queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
 
@@ -335,7 +336,7 @@ The `<workflow>` children appear in this order:
 
 1. Optional `<config>`.
 2. Optional `<lifecycle>`.
-3. Required `<triggers>`.
+3. Optional `<triggers>`; omission declares a call-only workflow.
 4. Required `<steps>`.
 
 The order is deliberate. Metadata and runtime policy are declared before entry
@@ -352,7 +353,7 @@ module         := <module name=module-alias from=relative-module-source />
 workflow       := <workflow workflow-attributes>
                     config?
                     lifecycle?
-                    triggers
+                    triggers?
                     steps
                   </workflow>
 
@@ -648,7 +649,10 @@ executable model.
 
 ## 9. `<triggers>`
 
-`<triggers>` contains one or more workflow entry points.
+`<triggers>` contains one or more workflow entry points. Omitting the entire
+container declares a call-only workflow for `services.workflows.call()`.
+Writing an empty `<triggers />` container is invalid; omission is the one
+canonical call-only source shape.
 
 All triggers in one workflow start the same `<steps>`. WOML v0.1 does not expose
 an attribute that routes different triggers to different entry nodes. Workflows
@@ -656,6 +660,12 @@ with different graphs MUST be separate workflow definitions.
 
 This corrects an ambiguity in the TypeScript SDK where triggers and steps are
 stored in unrelated flat arrays.
+
+Call-only source compiles to Model v10 with an empty trigger list. WC1 validates
+and lowers this shape, but does not execute it: durable target registration and
+child-run admission begin in WC2. A call-only v1 workflow cannot contain Human
+Approval because an arbitrary Bun script continuation cannot yet be serialized
+across a long durable wait.
 
 ### 9.1 `<manual>`
 

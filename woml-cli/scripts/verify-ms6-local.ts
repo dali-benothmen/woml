@@ -34,6 +34,8 @@ for (const required of [
   'readonly storage',
   'readonly cache',
   'readonly events',
+  'readonly workflows',
+  'readonly call',
   'readonly "spreadsheet"',
 ]) {
   if (!declarations.includes(required)) {

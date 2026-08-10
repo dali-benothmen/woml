@@ -210,6 +210,12 @@ export interface CompiledWorkflowDefinitionV9
   readonly moduleRuntime: CompiledModuleRuntimeV1;
 }
 
+export interface CompiledWorkflowDefinitionV10
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 10;
+  readonly moduleRuntime?: CompiledModuleRuntimeV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -219,7 +225,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV6
   | CompiledWorkflowDefinitionV7
   | CompiledWorkflowDefinitionV8
-  | CompiledWorkflowDefinitionV9;
+  | CompiledWorkflowDefinitionV9
+  | CompiledWorkflowDefinitionV10;
 
 export interface CompiledGraphIssue {
   readonly code:

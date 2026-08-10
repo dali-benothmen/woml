@@ -1,0 +1,8 @@
+{
+  "contract": "woml.workflow-call",
+  "contractVersion": 1,
+  "kind": "succeeded",
+  "workflowId": "calculate-risk",
+  "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "childRunId": "run_child_risk_001"
+}

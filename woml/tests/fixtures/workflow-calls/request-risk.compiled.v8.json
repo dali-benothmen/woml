@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 8,
+  "workflowId": "request-risk",
+  "metadata": {
+    "name": "Request customer risk",
+    "version": "1.0.0"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": {
+        "kind": "object",
+        "fields": {}
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["requestRisk"],
+    "nodes": [
+      {
+        "id": "requestRisk",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n          const risk = await services.workflows.call('calculate-risk', {\n            customerId: 'customer-42'\n          });\n\n          return {\n            score: risk.score\n          };\n        "
+            }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      }
+    ],
+    "edges": []
+  }
+}

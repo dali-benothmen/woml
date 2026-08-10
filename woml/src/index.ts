@@ -13,6 +13,8 @@ export {
   WOML_DEFINITION_PACKAGE_PROFILE,
   WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
   WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE,
+  WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE,
+  WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE,
   WOML_MODULE_RESOLVER_PROFILE,
   type WomlDefinitionPackageModuleV1,
   type WomlDefinitionPackageModuleV2,
@@ -21,6 +23,8 @@ export {
   type WomlDefinitionPackageV1,
   type WomlDefinitionPackageV2,
   type WomlDefinitionPackageV3,
+  type WomlDefinitionPackageV4,
+  type WomlDefinitionPackageV5,
   type WomlModuleResolverOptions,
 } from './modules';
 export {
@@ -42,6 +46,7 @@ export {
   type CompiledWorkflowDefinitionV7,
   type CompiledWorkflowDefinitionV8,
   type CompiledWorkflowDefinitionV9,
+  type CompiledWorkflowDefinitionV10,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,

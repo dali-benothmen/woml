@@ -51,6 +51,16 @@ compiled definition identity. Modules receive `services` only; workflow
 context, attempts, and individual secrets cross the boundary as explicit
 function arguments. Package permissions remain postponed with package imports.
 
+Workflow Calls WC0 freezes `services.workflows.call()` as a managed capability,
+with an independent durable child run, exact workflow-ID routing, stable call
+identity, bounded JSON input/result, hidden lineage, and one versioned local
+routing protocol. WC1 adds the frontend only: omitting `<triggers>` lowers a
+call-only definition to Model v10, while existing triggered workflows retain
+Models v1-v9. Definition Packages v4/v5 carry Model v10 when local modules are
+present. The CLI deliberately refuses execution with a WC2 availability
+diagnostic until Rust owns target registration and child admission; no fake
+manual trigger or frontend executor fills that gap.
+
 The Rust core is the execution authority. It validates the compiled model,
 selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends
 versioned events to SQLite, and rebuilds run context by folding those events. It

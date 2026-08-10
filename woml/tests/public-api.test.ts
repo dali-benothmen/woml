@@ -20,6 +20,12 @@ describe('WOML frontend public API', () => {
     expect(woml.WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE).toBe(
       'woml.definition-package/v3'
     );
+    expect(woml.WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE).toBe(
+      'woml.definition-package/v4'
+    );
+    expect(woml.WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE).toBe(
+      'woml.definition-package/v5'
+    );
     expect(woml).not.toHaveProperty('loadWomlModuleArtifacts');
   });
 

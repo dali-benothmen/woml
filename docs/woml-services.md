@@ -1,6 +1,7 @@
 # WOML Services
 
-WOML scripts receive five built-in services without installing an npm package:
+WOML scripts currently execute with five built-in services without installing
+an npm package:
 
 ```js
 services.http
@@ -9,6 +10,11 @@ services.storage
 services.cache
 services.events
 ```
+
+The WC1 frontend also reserves and type-checks `services.workflows.call()` for
+durable workflow-to-workflow calls. Its Rust execution path begins in WC2, so
+`woml run` currently reports a clear availability error instead of pretending
+the call can execute.
 
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies

@@ -62,7 +62,7 @@ without checking or running a workflow, or for choosing another output path:
 woml types path/to/workflow.woml --output generated/woml-env.d.ts
 ```
 
-The generated file contains the five built-in service contracts and every
+The generated file contains the current built-in service contracts and every
 imported alias/function found in that scope. It is self-contained: the project
 does not need a runtime import merely to satisfy the editor. If WOML cannot
 write the declaration file, it prints a warning but still runs the workflow.

@@ -21,6 +21,7 @@ import {
   type WomlSourceDocument,
   type WomlSourceElement,
   type WomlDefinitionPackageV3,
+  type WomlDefinitionPackageV5,
 } from 'woml';
 import {
   compiledDefinitionHash,
@@ -689,8 +690,30 @@ interface CompiledWorkflowSource {
   readonly runtimeModules: readonly RustRuntimeModuleArtifact[];
 }
 
+function workflowCallFrontendOnlySource(
+  source: CompiledWorkflowSource
+): boolean {
+  return (
+    source.workflow.schemaVersion === 10 ||
+    inspectWomlModuleUsage(source.document).referencedServices.includes(
+      'workflows'
+    )
+  );
+}
+
+function rejectUnavailableWorkflowCallRuntime(
+  sources: readonly CompiledWorkflowSource[]
+): void {
+  const source = sources.find(workflowCallFrontendOnlySource);
+  if (source === undefined) return;
+  throw new CliInputError(
+    'WOML_WORKFLOW_CALL_RUNTIME_UNAVAILABLE',
+    `workflow "${source.workflow.workflowId}" uses the WC1 Workflow Calls frontend, but durable Rust execution begins in WC2.`
+  );
+}
+
 function runtimeModulesFromPackage(
-  definitionPackage: WomlDefinitionPackageV3
+  definitionPackage: WomlDefinitionPackageV3 | WomlDefinitionPackageV5
 ): readonly RustRuntimeModuleArtifact[] {
   return definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
@@ -854,6 +877,10 @@ async function runCheckCommand(
             sourcePath: filePath,
             projectRoot: moduleProjectRoot(filePath),
           });
+    const compiledWorkflow =
+      definitionPackage.schemaVersion === 1
+        ? compileWoml(document)
+        : definitionPackage.workflow.model;
     await refreshEditorTypes(filePath, definitionPackage.modules, io);
     if (options[0] === '--json') {
       io.stdout(`${JSON.stringify(definitionPackage, null, 2)}\n`);
@@ -877,10 +904,15 @@ async function runCheckCommand(
         `Warning [WOML_MODULE_UNUSED]: services.${name} is declared but is not called by this workflow.\n`
       );
     }
+    const workflowCallsFrontendOnly =
+      compiledWorkflow.schemaVersion === 10 ||
+      usage.referencedServices.includes('workflows');
     io.stdout(
-      definitionPackage.modules.length === 0
-        ? 'Execution: module-free workflow; woml run is available.\n'
-        : 'Execution: local modules are compiled and ready for woml run.\n'
+      workflowCallsFrontendOnly
+        ? 'Execution: Workflow Calls frontend is valid; durable Rust execution begins in WC2.\n'
+        : definitionPackage.modules.length === 0
+          ? 'Execution: module-free workflow; woml run is available.\n'
+          : 'Execution: local modules are compiled and ready for woml run.\n'
     );
     return 0;
   } catch (error) {
@@ -908,7 +940,8 @@ async function runTypesCommand(
     const sourceStat = await stat(sourcePath);
     const workflows = await compileWorkflowSources(sourcePath);
     const modules = workflows.flatMap(workflow =>
-      'moduleRuntime' in workflow.workflow
+      'moduleRuntime' in workflow.workflow &&
+      workflow.workflow.moduleRuntime !== undefined
         ? workflow.workflow.moduleRuntime.modules
         : []
     );
@@ -2196,6 +2229,7 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowSources(filePath);
+    rejectUnavailableWorkflowCallRuntime(sources);
     if (runArguments.command === 'test') {
       if ((await stat(filePath)).isDirectory()) {
         throw new CliInputError(

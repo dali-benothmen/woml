@@ -43,6 +43,11 @@ interface WomlOperationOptions {
   readonly name: string;
 }
 
+interface WomlWorkflowCallOptions {
+  readonly name?: string;
+  readonly timeout?: number | string;
+}
+
 interface WomlHttpRequest {
   readonly url: string;
   readonly method?: string;
@@ -120,6 +125,13 @@ interface WomlBuiltinServices {
   readonly cache: WomlCacheService;
   readonly events: {
     readonly emit: (name: string, payload: WomlJsonValue, options?: WomlOperationOptions) => Promise<any>;
+  };
+  readonly workflows: {
+    readonly call: <T = WomlJsonValue>(
+      workflowId: string,
+      payload: Readonly<Record<string, WomlJsonValue>>,
+      options?: WomlWorkflowCallOptions
+    ) => Promise<T>;
   };
 }
 

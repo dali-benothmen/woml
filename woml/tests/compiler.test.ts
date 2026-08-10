@@ -1166,15 +1166,15 @@ describe('compileWoml', () => {
     );
   });
 
-  test('rejects missing required children and attributes', () => {
+  test('accepts call-only workflows and rejects missing step attributes', () => {
     const missingTriggers = `<woml>
 <workflow version="1.0.0" id="test-workflow">
   <steps><step id="a"><script>return 1;</script></step></steps>
 </workflow>
 </woml>`;
-    expect(validationError(missingTriggers).diagnostic.code).toBe(
-      'WOML_TRIGGER_CONTAINER_COUNT'
-    );
+    const callOnly = compile(missingTriggers);
+    expect(callOnly.schemaVersion).toBe(10);
+    expect(callOnly.triggers).toEqual([]);
 
     const missingStepId = validWorkflow(
       '<step><script>return 1;</script></step>'

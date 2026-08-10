@@ -6,6 +6,7 @@ import {
   type CompiledModuleRuntimeV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV9,
+  type CompiledWorkflowDefinitionV10,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,
@@ -604,16 +605,16 @@ function flowItemMetadata(
 function validateWorkflowChildren(
   document: WomlSourceDocument,
   workflow: WomlSourceElement
-): readonly [WomlSourceElement, WomlSourceElement] {
+): readonly [WomlSourceElement | undefined, WomlSourceElement] {
   const children = elementChildren(document, workflow);
   const triggerContainers = children.filter(child => child.name === 'triggers');
   const stepsContainers = children.filter(child => child.name === 'steps');
 
-  if (triggerContainers.length !== 1) {
+  if (triggerContainers.length > 1) {
     failValidation(
       document,
       'WOML_TRIGGER_CONTAINER_COUNT',
-      `<workflow> requires exactly one <triggers> container; found ${triggerContainers.length}.`,
+      `<workflow> accepts at most one <triggers> container; found ${triggerContainers.length}.`,
       triggerContainers[1]?.openTagSpan ?? workflow.openTagSpan
     );
   }
@@ -625,26 +626,32 @@ function validateWorkflowChildren(
       stepsContainers[1]?.openTagSpan ?? workflow.openTagSpan
     );
   }
-  if (
-    children.length !== 2 ||
-    children[0] !== triggerContainers[0] ||
-    children[1] !== stepsContainers[0]
-  ) {
+  const triggers = triggerContainers[0];
+  const steps = stepsContainers[0];
+  const canonical =
+    triggers === undefined
+      ? children.length === 1 && children[0] === steps
+      : children.length === 2 &&
+        children[0] === triggers &&
+        children[1] === steps;
+  if (!canonical) {
     const offender = children.find(
       (child, index) =>
-        (index === 0 && child.name !== 'triggers') ||
-        (index === 1 && child.name !== 'steps') ||
-        index > 1
+        (triggers === undefined && (index !== 0 || child.name !== 'steps')) ||
+        (triggers !== undefined &&
+          ((index === 0 && child.name !== 'triggers') ||
+            (index === 1 && child.name !== 'steps') ||
+            index > 1))
     );
     failValidation(
       document,
       'WOML_INVALID_STRUCTURE',
-      '<workflow> must contain <triggers> followed by <steps>, with no other executable-profile children.',
+      '<workflow> must contain optional <triggers> followed by exactly one <steps> container.',
       offender?.openTagSpan ?? workflow.openTagSpan
     );
   }
 
-  return [triggerContainers[0], stepsContainers[0]];
+  return [triggers, steps];
 }
 
 function schemaBody(
@@ -1753,6 +1760,7 @@ const builtInServiceNames = new Set([
   'storage',
   'cache',
   'events',
+  'workflows',
 ]);
 
 function collectValidatedSteps(
@@ -2870,7 +2878,10 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     document,
     workflow
   );
-  const triggers = validateTriggers(document, triggersElement);
+  const triggers =
+    triggersElement === undefined
+      ? []
+      : validateTriggers(document, triggersElement);
   const flow = validateSteps(document, stepsElement);
 
   return {
@@ -2920,6 +2931,15 @@ function compileValidatedWoml(
       'WOML_MODULE_RUNTIME_UNEXPECTED',
       'A module runtime profile cannot be attached to a workflow with no <module> declarations.',
       workflow.openTagSpan
+    );
+  }
+  if (triggers.length === 0 && flow.firstApproval !== undefined) {
+    failCompile(
+      document,
+      'WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED',
+      'A call-only workflow cannot contain Human Approval in Workflow Calls v1.',
+      flow.firstApproval.openTagSpan,
+      'Use terminal steps, branch, parallel, retry, modules, and managed services. Long approval-waiting child calls require the future engine suspension boundary.'
     );
   }
   if (moduleRuntime !== undefined) {
@@ -3000,6 +3020,7 @@ function compileValidatedWoml(
     );
   }
   const usesScriptRuntimeV1 =
+    triggers.length === 0 ||
     moduleRuntime !== undefined ||
     [...scriptAnalyses.values()].some(
       analysis =>
@@ -3020,7 +3041,13 @@ function compileValidatedWoml(
       edges: lowered.edges,
     } satisfies CompiledWorkflowGraph,
   };
-  const compiled: CompiledWorkflowDefinition = moduleRuntime !== undefined
+  const compiled: CompiledWorkflowDefinition = triggers.length === 0
+    ? {
+        schemaVersion: 10,
+        ...definition,
+        ...(moduleRuntime === undefined ? {} : { moduleRuntime }),
+      }
+    : moduleRuntime !== undefined
     ? { schemaVersion: 9, ...definition, moduleRuntime }
     : usesScriptRuntimeV1
       ? { schemaVersion: 8, ...definition }
@@ -3062,10 +3089,10 @@ export function compileWoml(
 export function compileWomlWithModules(
   document: WomlSourceDocument,
   moduleRuntime: CompiledModuleRuntimeV1
-): CompiledWorkflowDefinitionV9 {
+): CompiledWorkflowDefinitionV9 | CompiledWorkflowDefinitionV10 {
   const compiled = compileValidatedWoml(document, moduleRuntime);
-  if (compiled.schemaVersion !== 9) {
-    throw new Error('module compilation did not produce Model v9');
+  if (compiled.schemaVersion !== 9 && compiled.schemaVersion !== 10) {
+    throw new Error('module compilation did not produce Model v9 or v10');
   }
   return compiled;
 }
