@@ -59,7 +59,7 @@ Readiness, accepted occurrences, run IDs, failures, and results are emitted by
 the process. Retrieve a run later with:
 
 ```bash
-woml runs get run_... --state /var/lib/woml/state.sqlite
+woml get run_... --state /var/lib/woml/state.sqlite
 ```
 
 SIGINT and SIGTERM stop new admission and shut down the listener gracefully.

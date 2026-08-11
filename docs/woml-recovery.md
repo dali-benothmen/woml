@@ -71,7 +71,7 @@ wake-up is repaired without another child admission. Renewable ownership leases
 expire crashed targets; graceful shutdown removes their routes immediately.
 The loopback acknowledgement is never treated as proof of child completion.
 
-Use `woml runs get <runId> --state <path>` to move between the two independent
+Use `woml get <runId> --state <path>` to move between the two independent
 runs. A parent exposes at most 50 `workflowCalls.childCalls`; a child exposes
 its optional `workflowCalls.parentCall`. The summaries intentionally omit
 payloads, results, secrets, hashes, and internal routing identity.

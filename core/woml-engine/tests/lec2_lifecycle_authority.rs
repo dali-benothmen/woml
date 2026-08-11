@@ -97,6 +97,39 @@ fn model_v11_maps_to_event_v10_and_store_v11() {
 }
 
 #[test]
+fn run_listing_applies_workflow_status_and_limit_filters_in_the_store() {
+  let store = started_store();
+  let workflow_id = store
+    .projection("run_lec2")
+    .unwrap()
+    .workflow_id
+    .unwrap();
+  assert_eq!(
+    store
+      .list_runs_filtered(20, Some(&workflow_id), Some("running"))
+      .unwrap()
+      .runs
+      .len(),
+    1
+  );
+  assert!(store
+    .list_runs_filtered(20, Some("different-workflow"), None)
+    .unwrap()
+    .runs
+    .is_empty());
+  assert!(store
+    .list_runs_filtered(20, None, Some("cancelled"))
+    .unwrap()
+    .runs
+    .is_empty());
+  assert!(store
+    .list_runs_filtered(20, None, Some("unknown"))
+    .unwrap_err()
+    .to_string()
+    .contains("status filter"));
+}
+
+#[test]
 fn lifecycle_free_v11_terminal_admission_uses_outcome_and_finalized_events() {
   let mut store = DurableEventStore::open_in_memory().unwrap();
   let workflow = lifecycle_free_model_v11();

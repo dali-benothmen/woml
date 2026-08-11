@@ -483,6 +483,24 @@ struct NativeRunInspectionError {
   message: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeRunManagementError {
+  kind: &'static str,
+  code: &'static str,
+  message: String,
+}
+
+fn native_run_management_error(code: &'static str, error: DurableStoreError) -> napi::Error {
+  let reason = serde_json::to_string(&NativeRunManagementError {
+    kind: "woml_run_management_error",
+    code,
+    message: error.to_string(),
+  })
+  .unwrap_or_else(|_| "WOML run management failed.".to_string());
+  napi::Error::from_reason(reason)
+}
+
 fn native_run_inspection_error(error: DurableStoreError) -> napi::Error {
   let code = if matches!(error, DurableStoreError::RunNotFound(_)) {
     "WOML_RUN_NOT_FOUND"
@@ -1348,6 +1366,61 @@ pub fn inspect_woml_run(event_store_path: String, run_id: String) -> napi::Resul
   };
   serde_json::to_string(&inspection)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML run: {error}")))
+}
+
+#[napi]
+pub fn list_woml_runs(
+  event_store_path: String,
+  limit: u32,
+  workflow_id: Option<String>,
+  status: Option<String>,
+) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_management_error("WOML_RUN_LIST_FAILED", error))?;
+  let list = store
+    .list_runs_filtered(
+      usize::try_from(limit).unwrap_or(usize::MAX),
+      workflow_id.as_deref(),
+      status.as_deref(),
+    )
+    .map_err(|error| native_run_management_error("WOML_RUN_LIST_FAILED", error))?;
+  serde_json::to_string(&list)
+    .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML run list: {error}")))
+}
+
+#[napi]
+pub fn inspect_woml_run_v2(event_store_path: String, run_id: String) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?;
+  let inspection = store.inspect_run_v2(&run_id).map_err(|error| {
+    let code = if matches!(error, DurableStoreError::RunNotFound(_)) {
+      "WOML_RUN_NOT_FOUND"
+    } else {
+      "WOML_RUN_INSPECTION_FAILED"
+    };
+    native_run_management_error(code, error)
+  })?;
+  serde_json::to_string(&inspection).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode WOML run inspection: {error}"))
+  })
+}
+
+#[napi]
+pub fn cancel_woml_run(
+  event_store_path: String,
+  run_id: String,
+  command_id: String,
+) -> napi::Result<String> {
+  let mut store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_management_error("WOML_RUN_CANCELLATION_FAILED", error))?;
+  let result = store
+    .request_run_cancellation(&run_id, &command_id, Utc::now())
+    .map_err(|error| native_run_management_error("WOML_RUN_CANCELLATION_FAILED", error))?;
+  serde_json::to_string(&result).map_err(|error| {
+    napi::Error::from_reason(format!(
+      "Could not encode WOML cancellation result: {error}"
+    ))
+  })
 }
 
 #[napi]

@@ -159,7 +159,7 @@ On restart:
 Inspect a run without changing it:
 
 ```bash
-woml runs get run_... --state .woml/state.sqlite
+woml get run_... --state .woml/state.sqlite
 ```
 
 ## Shutdown and single-node boundary

@@ -226,12 +226,12 @@ definitions and symbolic secrets, then starts the Rust listener through N-API
 and waits for SIGINT or SIGTERM. Rust runs Actix on a dedicated runtime thread,
 owns every occurrence and background DAG execution, and emits versioned Trigger
 Progress v1. Completing one run does not stop the activated workflow. `woml
-test` is the separate one-shot manual journey, and `woml runs get` reads a safe
+test` is the separate one-shot manual journey, and `woml get` reads a safe
 folded durable result.
 
 Progress and diagnostics are printed to stderr. A successful asynchronous run
 is then folded from durable state and its final JSON is printed with its run ID;
-`woml runs get` provides the same result later. One-shot manual results remain
+`woml get` provides the durable status later. One-shot manual results remain
 JSON on stdout. Secrets and executable capabilities never enter context,
 events, progress messages, or durable output.
 

@@ -181,7 +181,7 @@ describe('T4 long-lived WOML runtime', () => {
       expect(child.exitCode).toBeNull();
 
       const inspection = Bun.spawnSync(
-        [cliPath, 'runs', 'get', second.runId, '--state', statePath],
+        [cliPath, 'get', second.runId, '--state', statePath, '--json'],
         { cwd: projectRoot, stdout: 'pipe', stderr: 'pipe' }
       );
       expect(inspection.exitCode).toBe(0);
@@ -189,10 +189,11 @@ describe('T4 long-lived WOML runtime', () => {
         runId: second.runId,
         workflowId: 'webhook-demo',
         status: 'succeeded',
-        result: { message: 'Received order order-2' },
+        businessOutcome: 'succeeded',
+        lifecycleStatus: 'completed',
       });
       const missingInspection = Bun.spawnSync(
-        [cliPath, 'runs', 'get', 'run_missing', '--state', statePath],
+        [cliPath, 'get', 'run_missing', '--state', statePath],
         { cwd: projectRoot, stdout: 'pipe', stderr: 'pipe' }
       );
       expect(missingInspection.exitCode).toBe(1);

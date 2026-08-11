@@ -86,10 +86,10 @@ Workflow Call progress prints the parent and child run IDs without printing
 payloads or secrets. Inspect either side later with:
 
 ```bash
-woml runs get run_... --state .woml/state.sqlite
+woml get run_... --state .woml/state.sqlite
 ```
 
-The returned `workflowCalls` relationship list is capped at 50 children. See
+See
 [Calling One WOML Workflow from Another](../docs/woml-workflow-calls.md) for
 composition, inspection, Human Approval limits, and troubleshooting.
 
@@ -158,8 +158,27 @@ woml test woml/tests/fixtures/hello.woml
 Inspect an asynchronously triggered durable run with:
 
 ```bash
-woml runs get run_... --state .woml/state.sqlite
+woml get run_... --state .woml/state.sqlite
 ```
+
+## Manage durable runs
+
+Use the direct run-management commands from the project directory that owns
+`.woml/state.sqlite`, or pass the same explicit `--state` path used by
+`woml run`:
+
+```bash
+woml list
+woml list --workflow process-order --status running --limit 50
+woml get run_...
+woml cancel run_...
+```
+
+Human-readable output is the default. Add `--json` to any command for the
+versioned `woml.run-list/v1`, `woml.run-inspection/v2`, or
+`woml.run-control.result/v1` contract. Inspection is deliberately redacted: it
+does not expose workflow context, payloads, results, secrets, credentials, or
+operation keys.
 
 ## Call an HTTP API
 

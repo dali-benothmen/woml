@@ -584,7 +584,7 @@ Changes:
 - Verify nested call chains across same-process and local cross-process routes.
 - Reject Human Approval targets with an actionable v1 limitation message.
 - Show parent and child run IDs in safe CLI progress.
-- Extend `woml runs get` with bounded parent/child call summaries.
+- Extend run inspection with bounded parent/child call summaries.
 - Add generated types, source diagnostics, troubleshooting, and manual guides.
 
 Result:

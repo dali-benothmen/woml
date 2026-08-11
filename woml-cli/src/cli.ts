@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -37,6 +38,10 @@ import {
   resumeWorkflowWithRustDurable,
   RustWorkflowExecutionError,
   runNotificationProviderJourneyWithRust,
+  cancelRunWithRust,
+  inspectRunV2WithRust,
+  listRunsWithRust,
+  RunManagementError,
   RunInspectionError,
   settleApprovalTimeoutWithRust,
   inspectRunWithRust,
@@ -47,6 +52,10 @@ import {
   submitTriggerOccurrenceWithRust,
   TriggerRuntimeError,
   type IntervalProgressV1,
+  type PublicRunStatus,
+  type RustRunCancellationResultV1,
+  type RustRunInspectionV2,
+  type RustRunListV1,
   type ScheduleProgressV1,
   type TriggerProgressV1,
   type WorkflowCallProgressV1,
@@ -106,8 +115,16 @@ function testUsage(): string {
   return 'Usage: woml test <workflow.woml> [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
 }
 
-function runsUsage(): string {
-  return 'Usage: woml runs get <runId> [--state <path>]';
+function listUsage(): string {
+  return 'Usage: woml list [--workflow <workflowId>] [--status <status>] [--limit <1-200>] [--state <path>] [--json]';
+}
+
+function getUsage(): string {
+  return 'Usage: woml get <runId> [--state <path>] [--json]';
+}
+
+function cancelUsage(): string {
+  return 'Usage: woml cancel <runId> [--state <path>] [--json]';
 }
 
 function secretsUsage(): string {
@@ -132,7 +149,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${runsUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -270,9 +287,18 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   };
 }
 
-interface RunsGetArguments {
+interface RunGetArguments {
   readonly runId: string;
   readonly statePath: string;
+  readonly json: boolean;
+}
+
+interface RunListArguments {
+  readonly statePath: string;
+  readonly json: boolean;
+  readonly workflowId?: string;
+  readonly status?: PublicRunStatus;
+  readonly limit: number;
 }
 
 interface EmitArguments {
@@ -363,21 +389,109 @@ function parseEmitArguments(args: readonly string[]): EmitArguments {
   };
 }
 
-function parseRunsGetArguments(args: readonly string[]): RunsGetArguments {
-  const [, operation, runId, ...options] = args;
+const publicRunStatuses = new Set<PublicRunStatus>([
+  'not_started',
+  'running',
+  'waiting',
+  'cancelling',
+  'finalizing',
+  'succeeded',
+  'failed',
+  'cancelled',
+]);
+
+function parseRunListArguments(args: readonly string[]): RunListArguments {
+  if (args[0] !== 'list') {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', listUsage());
+  }
+  let statePath = resolve('.woml/state.sqlite');
+  let json = false;
+  let workflowId: string | undefined;
+  let status: PublicRunStatus | undefined;
+  let limit = 20;
+  const seen = new Set<string>();
+  for (let index = 1; index < args.length; index += 1) {
+    const option = args[index];
+    if (seen.has(option)) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', listUsage());
+    }
+    seen.add(option);
+    if (option === '--json') {
+      json = true;
+      continue;
+    }
+    const value = args[index + 1];
+    if (
+      value === undefined ||
+      value.startsWith('--') ||
+      !['--state', '--workflow', '--status', '--limit'].includes(option)
+    ) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', listUsage());
+    }
+    index += 1;
+    if (option === '--state') statePath = resolve(value);
+    if (option === '--workflow') workflowId = value;
+    if (option === '--status') {
+      if (!publicRunStatuses.has(value as PublicRunStatus)) {
+        throw new CliInputError(
+          'WOML_RUN_STATUS_INVALID',
+          `--status must be one of: ${[...publicRunStatuses].join(', ')}.`
+        );
+      }
+      status = value as PublicRunStatus;
+    }
+    if (option === '--limit') {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 200) {
+        throw new CliInputError(
+          'WOML_RUN_LIMIT_INVALID',
+          '--limit must be an integer from 1 through 200.'
+        );
+      }
+      limit = parsed;
+    }
+  }
+  return { statePath, json, workflowId, status, limit };
+}
+
+function parseRunGetArguments(
+  args: readonly string[],
+  command: 'get' | 'cancel'
+): RunGetArguments {
+  const [, runId, ...options] = args;
+  const commandUsage = command === 'get' ? getUsage() : cancelUsage();
   if (
-    operation !== 'get' ||
+    args[0] !== command ||
     runId === undefined ||
     runId.length === 0 ||
-    runId.startsWith('--') ||
-    (options.length !== 0 &&
-      (options.length !== 2 || options[0] !== '--state' || !options[1]))
+    runId.startsWith('--')
   ) {
-    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', runsUsage());
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', commandUsage);
+  }
+  let statePath = resolve('.woml/state.sqlite');
+  let json = false;
+  const seen = new Set<string>();
+  for (let index = 0; index < options.length; index += 1) {
+    const option = options[index];
+    if (seen.has(option)) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', commandUsage);
+    }
+    seen.add(option);
+    if (option === '--json') {
+      json = true;
+      continue;
+    }
+    const value = options[index + 1];
+    if (option !== '--state' || value === undefined || value.startsWith('--')) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', commandUsage);
+    }
+    statePath = resolve(value);
+    index += 1;
   }
   return {
     runId,
-    statePath: resolve(options[1] ?? '.woml/state.sqlite'),
+    statePath,
+    json,
   };
 }
 
@@ -385,6 +499,58 @@ function runtimeCode(code: string): string {
   if (code === 'WOML_SCRIPT_NON_JSON_RESULT') return 'WOML_NON_JSON_RESULT';
   if (code.startsWith('WOML_SCRIPT_')) return 'WOML_SCRIPT_FAILED';
   return code;
+}
+
+function formatRunList(list: RustRunListV1): string {
+  if (list.runs.length === 0) return 'No WOML runs found.\n';
+  const lines = ['RUN ID\tWORKFLOW\tSTATUS\tSTARTED\tUPDATED'];
+  for (const run of list.runs) {
+    lines.push(
+      `${run.runId}\t${run.workflowId}\t${run.status}\t${run.startedAt}\t${run.updatedAt}`
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function formatRunInspection(inspection: RustRunInspectionV2): string {
+  const lines = [
+    `Run: ${inspection.runId}`,
+    `Workflow: ${inspection.workflowId}`,
+    `Status: ${inspection.status}`,
+    `Business outcome: ${inspection.businessOutcome}`,
+    `Lifecycle: ${inspection.lifecycleStatus}`,
+    `Cancellation requested: ${inspection.cancellation.requested ? 'yes' : 'no'}`,
+  ];
+  if (inspection.hooks.length > 0) {
+    lines.push('Lifecycle hooks:');
+    for (const hook of inspection.hooks) {
+      const subject = `${hook.subjectKind} ${hook.subjectId}`;
+      const failures =
+        hook.failedActions === 0 ? '' : `, ${hook.failedActions} failed action(s)`;
+      lines.push(`  ${hook.hookId}: ${hook.status} (${subject}${failures})`);
+    }
+  }
+  if (inspection.warnings.length > 0) {
+    lines.push(
+      `Warnings: ${inspection.warnings.map(warning => warning.code).join(', ')}`
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function formatCancellation(result: RustRunCancellationResultV1): string {
+  if (result.status === 'accepted') {
+    return `Cancellation requested for run ${result.runId}.\n`;
+  }
+  if (result.status === 'already_requested') {
+    return `Cancellation was already requested for run ${result.runId}.\n`;
+  }
+  if (result.status === 'already_cancelled') {
+    return `Run ${result.runId} is already cancelled.\n`;
+  }
+  return `Cancellation was rejected for run ${result.runId}${
+    result.code === undefined ? '.' : `: ${result.code}.`
+  }\n`;
 }
 
 export function formatExecutionProgress(progress: ExecutionProgressV1): string {
@@ -622,6 +788,10 @@ function formatError(
   }
 
   if (error instanceof RunInspectionError) {
+    return `WOML run error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof RunManagementError) {
     return `WOML run error [${error.code}]: ${error.message}`;
   }
 
@@ -1762,6 +1932,9 @@ export function formatTriggerProgress(progress: TriggerProgressV1): string {
     return `Run ${progress.runId} started for workflow "${progress.workflowId}".`;
   }
   if (progress.type === 'run_terminal') {
+    if (progress.failureCode === 'WOML_RUN_CANCELLED') {
+      return `Run ${progress.runId} cancelled.`;
+    }
     return progress.status === 'succeeded'
       ? `Run ${progress.runId} succeeded.`
       : `Run ${progress.runId} failed [${progress.failureCode ?? 'WOML_TRIGGER_EXECUTION_FAILED'}].`;
@@ -1798,7 +1971,7 @@ function reportTriggerProgress(
         ? error.code
         : 'WOML_RUN_INSPECTION_FAILED';
     io.stderr(
-      `Run ${progress.runId} result is temporarily unavailable [${code}]. Inspect it with: woml runs get ${progress.runId} --state ${JSON.stringify(statePath)}\n`
+      `Run ${progress.runId} result is temporarily unavailable [${code}]. Inspect it with: woml get ${progress.runId} --state ${JSON.stringify(statePath)}\n`
     );
   }
 }
@@ -1892,13 +2065,30 @@ async function activateWorkflows(
   }
 
   for (const source of oneShotSources) {
-    await executeOneShot(
-      source.workflow,
-      { ...args, filePath: source.filePath },
-      io,
-      dependencies,
-      source.runtimeModules
-    );
+    try {
+      await executeOneShot(
+        source.workflow,
+        { ...args, filePath: source.filePath },
+        io,
+        dependencies,
+        source.runtimeModules
+      );
+    } catch (error) {
+      if (
+        args.command === 'run' &&
+        error instanceof RustWorkflowExecutionError &&
+        error.code === 'WOML_RUN_CANCELLED'
+      ) {
+        const runId = error.message.match(/^Workflow run "([^"]+)"/)?.[1];
+        io.stderr(
+          runId === undefined
+            ? 'Workflow run cancelled.\n'
+            : `Run ${runId} cancelled.\n`
+        );
+        continue;
+      }
+      throw error;
+    }
   }
 
   let runtimeId: string | undefined;
@@ -2304,25 +2494,74 @@ export async function runCli(
     return await runEmitCommand(args, io, dependencies);
   }
 
-  if (args[0] === 'runs') {
+  if (args[0] === 'list') {
     try {
-      const inspection = parseRunsGetArguments(args);
-      io.stdout(
-        `${JSON.stringify(
-          inspectRunWithRust(inspection.statePath, inspection.runId, {
-            nativeCorePath: dependencies.nativeCorePath,
-          })
-        )}\n`
+      const list = parseRunListArguments(args);
+      const result = listRunsWithRust(
+        list.statePath,
+        {
+          limit: list.limit,
+          workflowId: list.workflowId,
+          status: list.status,
+        },
+        { nativeCorePath: dependencies.nativeCorePath }
       );
+      io.stdout(list.json ? `${JSON.stringify(result)}\n` : formatRunList(result));
       return 0;
     } catch (error) {
-      if (error instanceof CliInputError && error.message === runsUsage()) {
-        io.stderr(`${runsUsage()}\n`);
+      if (error instanceof CliInputError && error.message === listUsage()) {
+        io.stderr(`${listUsage()}\n`);
         return 2;
       }
       io.stderr(`${formatError(error)}\n`);
-      return 1;
+      return error instanceof CliInputError ? 2 : 1;
     }
+  }
+
+  if (args[0] === 'get') {
+    try {
+      const get = parseRunGetArguments(args, 'get');
+      const result = inspectRunV2WithRust(get.statePath, get.runId, {
+        nativeCorePath: dependencies.nativeCorePath,
+      });
+      io.stdout(get.json ? `${JSON.stringify(result)}\n` : formatRunInspection(result));
+      return 0;
+    } catch (error) {
+      if (error instanceof CliInputError && error.message === getUsage()) {
+        io.stderr(`${getUsage()}\n`);
+        return 2;
+      }
+      io.stderr(`${formatError(error)}\n`);
+      return error instanceof CliInputError ? 2 : 1;
+    }
+  }
+
+  if (args[0] === 'cancel') {
+    try {
+      const cancel = parseRunGetArguments(args, 'cancel');
+      const result = cancelRunWithRust(
+        cancel.statePath,
+        cancel.runId,
+        `cancel_${randomUUID().replaceAll('-', '')}`,
+        { nativeCorePath: dependencies.nativeCorePath }
+      );
+      io.stdout(
+        cancel.json ? `${JSON.stringify(result)}\n` : formatCancellation(result)
+      );
+      return result.status === 'rejected' ? 1 : 0;
+    } catch (error) {
+      if (error instanceof CliInputError && error.message === cancelUsage()) {
+        io.stderr(`${cancelUsage()}\n`);
+        return 2;
+      }
+      io.stderr(`${formatError(error)}\n`);
+      return error instanceof CliInputError ? 2 : 1;
+    }
+  }
+
+  if (args[0] === 'runs') {
+    io.stderr('The "woml runs" namespace was removed. Use "woml list", "woml get", or "woml cancel".\n');
+    return 2;
   }
 
   let runArguments: RunArguments;

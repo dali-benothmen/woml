@@ -145,7 +145,7 @@ the parent ID, target ID, child ID, terminal status, and time. Its
 stable failure code, safe actionable message, and time; it has no child ID
 because rejection happens before admission.
 
-`woml runs get` returns one optional `parentCall` plus at most 50 `childCalls`
+The durable workflow-call relation query returns one optional `parentCall` plus at most 50 `childCalls`
 and a `childCallsTruncated` flag. Both surfaces forbid call keys, definition
 hashes, payload digests, payloads, results, secrets, and runtime credentials.
 

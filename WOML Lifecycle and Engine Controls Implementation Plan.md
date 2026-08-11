@@ -1,11 +1,13 @@
 # WOML Lifecycle and Engine Controls Implementation Plan
 
-Status: LEC0 through LEC5 completed on 2026-08-11. Workflow-level lifecycle
+Status: LEC0 through LEC7 completed on 2026-08-11. Workflow-level lifecycle
 scripts now run through isolated Bun workers under Rust supervision. `on-start`
 runs before the business DAG; the matching outcome hook and `on-complete` run
 after the durable business outcome; lifecycle failures remain visible warnings
 without rewriting that outcome. Step hooks are executable as of LEC4, and
-informational Slack lifecycle notifications are executable as of LEC5.
+informational Slack lifecycle notifications are executable as of LEC5. Durable
+cancellation is executable as of LEC6, and direct `list`, `get`, and `cancel`
+commands are shipped as of LEC7.
 
 ## 1. Product Outcome
 
@@ -634,18 +636,20 @@ woml get run_...
 woml get run_... --json
 ```
 
-`get` replaces the canonical `woml runs get` spelling. It exposes the existing
-safe run inspection plus:
+`get` replaces the canonical `woml runs get` spelling. Its frozen redacted v2
+inspection exposes:
 
 - business outcome;
 - lifecycle status;
 - bounded lifecycle hook/action summaries;
 - cancellation request state;
-- existing bounded workflow-call relationships; and
 - actionable failure/warning codes.
 
 Human output is readable by default. `--json` is stable for scripts and AI
-agents. The existing JSON inspection behavior is retained under `--json`.
+agents. It never includes raw context, payloads, results, or secrets. The
+existing bounded workflow-call relation query remains a separate safe engine
+surface; composing it into JSON inspection requires a future inspection schema
+version rather than mutating v2 after freeze.
 
 ### 9.3 Cancel
 
@@ -729,7 +733,7 @@ written.
 | LEC4 (complete) | Execute step lifecycle hooks across retries and control flow.                                         | Step start/success/failure/complete observers work correctly in sequential, branch, parallel, and approval workflows.                           |
 | LEC5 (complete) | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
 | LEC6 (complete) | Implement durable cancellation and propagation.                                                       | Active and waiting Event v10 runs can be cancelled safely and recovered.                                                                        |
-| LEC7            | Ship direct `list`, `get`, and `cancel` CLI commands.                                                 | Operators manage runs without the `runs` namespace or workflow source files.                                                                    |
+| LEC7 (complete) | Ship direct `list`, `get`, and `cancel` CLI commands.                                                 | Operators manage runs without the `runs` namespace or workflow source files.                                                                    |
 | LEC8            | Harden, migrate, document, benchmark, and publish.                                                    | Lifecycle and Engine Controls become a supported release feature.                                                                               |
 
 ### LEC0 — Freeze contracts and reviewed fixtures (completed)
@@ -1039,7 +1043,9 @@ The completed automated gate covers live script signalling, pre-outcome
 lifecycle action settlement, parallel child signalling, retry suppression,
 approval credential invalidation, and crash/restart continuation.
 
-### LEC7 — Ship direct run-management commands
+### LEC7 — Ship direct run-management commands (completed)
+
+Status: **completed on 2026-08-11.**
 
 Changes:
 
@@ -1060,6 +1066,12 @@ Gate:
 Packaged CLI tests cover empty stores, filters, limits, JSON schemas, unknown
 runs, already-terminal runs, repeated cancellation, shared state across two
 processes, active approval cancellation, and redaction.
+
+The completed gate combines packaged CLI coverage for a live two-process
+cancellation with the LEC6 Rust approval/cancellation suite. Long-lived
+`woml run` now treats an externally cancelled startup run as safe progress and
+keeps the automation host active instead of reporting cancellation as a host
+failure.
 
 ### LEC8 — Harden and publish Lifecycle and Engine Controls
 

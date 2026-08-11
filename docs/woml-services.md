@@ -29,8 +29,8 @@ child failure does not retroactively fail it.
 The child uses the same normal engine as any triggered workflow, so branches,
 parallel groups, retries, modules, native Fetch, and all current services keep
 their normal behavior. Human Approval targets are rejected before admission in
-v1. The CLI prints both run IDs and `woml runs get` exposes a bounded safe
-relationship summary; see `docs/woml-workflow-calls.md`.
+v1. The CLI prints both run IDs, while `woml get` exposes each run's bounded,
+redacted lifecycle status; see `docs/woml-workflow-calls.md`.
 WC7 hardens migration, corrupted-store rejection, clean packaging, benchmark
 coverage, and the documented one-machine production boundary in
 `docs/woml-workflow-calls-production.md`.

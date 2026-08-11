@@ -377,7 +377,7 @@ validates those messages and formats them for the terminal; it does not infer
 run state. After a succeeded terminal message, Bun reads the folded durable
 projection and prints the final workflow JSON; this is a presentation read and
 does not change Trigger Progress v1. Startup also prints a schema-informed
-`curl` example for each webhook. `woml runs get <runId> --state <path>` reads
+`curl` example for each webhook. `woml get <runId> --state <path>` reads
 the same folded durable projection. `woml test <workflow.woml>` retains the
 explicit one-manual-run journey and exits after printing its result.
 

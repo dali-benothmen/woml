@@ -79,18 +79,20 @@ Workflow call run_parent/calculateRisk started child run_child for "calculate-ri
 Workflow call child run_child for "calculate-risk" succeeded; parent run_parent.
 ```
 
-Inspect either run later:
+Inspect either run's durable status later:
 
 ```bash
-woml runs get run_parent --state .woml/state.sqlite
-woml runs get run_child --state .woml/state.sqlite
+woml get run_parent --state .woml/state.sqlite
+woml get run_child --state .woml/state.sqlite
 ```
 
-The JSON contains `workflowCalls.parentCall` for a child and
-`workflowCalls.childCalls` for a parent. Child lists are capped at 50 and set
-`childCallsTruncated: true` when more exist. Inspection and progress never
-include the call payload, result payload, secret values, definition hashes,
-payload digests, or internal call keys.
+The engine's separate workflow-call relation query contains `parentCall` for a
+child and `childCalls` for a parent. Child lists are capped at 50 and set
+`childCallsTruncated: true` when more exist. That relation query is not folded
+into the frozen `woml.run-inspection/v2` JSON contract; doing so requires a
+future inspection version. Inspection and progress never include the call
+payload, result payload, secret values, definition hashes, payload digests, or
+internal call keys.
 
 ## Composition
 

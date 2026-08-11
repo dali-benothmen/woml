@@ -338,6 +338,85 @@ export interface RustRunInspection {
   };
 }
 
+export type PublicRunStatus =
+  | 'not_started'
+  | 'running'
+  | 'waiting'
+  | 'cancelling'
+  | 'finalizing'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
+
+export interface RustRunSummaryV1 {
+  readonly runId: string;
+  readonly workflowId: string;
+  readonly status: PublicRunStatus;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+}
+
+export interface RustRunListV1 {
+  readonly profile: 'woml.run-list/v1';
+  readonly runs: readonly RustRunSummaryV1[];
+}
+
+export interface RustLifecycleWarning {
+  readonly hookId: string;
+  readonly actionId: string;
+  readonly stepId?: string;
+  readonly provider?: string;
+  readonly destination?: string;
+  readonly code: string;
+}
+
+export interface RustRunInspectionV2 {
+  readonly profile: 'woml.run-inspection/v2';
+  readonly runId: string;
+  readonly workflowId: string;
+  readonly status: PublicRunStatus;
+  readonly businessOutcome: 'undecided' | 'succeeded' | 'failed' | 'cancelled';
+  readonly lifecycleStatus:
+    | 'idle'
+    | 'running'
+    | 'finalizing'
+    | 'completed_with_warnings'
+    | 'completed';
+  readonly hooks: readonly {
+    readonly hookId: string;
+    readonly subjectKind: 'workflow' | 'step';
+    readonly subjectId: string;
+    readonly status:
+      | 'requested'
+      | 'running'
+      | 'completed'
+      | 'completed_with_warnings';
+    readonly failedActions: number;
+  }[];
+  readonly warnings: readonly RustLifecycleWarning[];
+  readonly cancellation: {
+    readonly requested: boolean;
+    readonly requestId?: string;
+  };
+}
+
+export interface RustRunCancellationResultV1 {
+  readonly profile: 'woml.run-control.result/v1';
+  readonly commandId: string;
+  readonly runId: string;
+  readonly status:
+    | 'accepted'
+    | 'already_requested'
+    | 'already_cancelled'
+    | 'rejected';
+  readonly code?:
+    | 'WOML_RUN_NOT_FOUND'
+    | 'WOML_RUN_OUTCOME_ALREADY_DECIDED'
+    | 'WOML_RUN_ALREADY_TERMINAL'
+    | 'WOML_RUN_CONTROL_VERSION_UNSUPPORTED'
+    | 'WOML_RUN_CANCELLATION_FAILED';
+}
+
 export interface RustWorkflowCallSummary {
   readonly parentRunId: string;
   readonly parentNodeId: string;
@@ -364,6 +443,16 @@ export class RunInspectionError extends Error {
   constructor(code: string, message: string) {
     super(message);
     this.name = 'RunInspectionError';
+    this.code = code;
+  }
+}
+
+export class RunManagementError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'RunManagementError';
     this.code = code;
   }
 }
@@ -518,6 +607,21 @@ interface NativeCore {
     ingressJson: string
   ) => Promise<string>;
   readonly inspectWomlRun: (eventStorePath: string, runId: string) => string;
+  readonly listWomlRuns: (
+    eventStorePath: string,
+    limit: number,
+    workflowId?: string,
+    status?: string
+  ) => string;
+  readonly inspectWomlRunV2: (
+    eventStorePath: string,
+    runId: string
+  ) => string;
+  readonly cancelWomlRun: (
+    eventStorePath: string,
+    runId: string,
+    commandId: string
+  ) => string;
   readonly inspectWomlStoredRunRequirements: (
     eventStorePath: string,
     runId: string
@@ -2094,6 +2198,244 @@ export function inspectRunWithRust(
     throw new Error('The native core returned invalid run inspection data.');
   }
   return value as unknown as RustRunInspection;
+}
+
+function callRunManagementNative(call: () => string): unknown {
+  try {
+    return JSON.parse(call());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      const value: unknown = JSON.parse(message);
+      if (
+        record(value) &&
+        value.kind === 'woml_run_management_error' &&
+        typeof value.code === 'string' &&
+        typeof value.message === 'string'
+      ) {
+        throw new RunManagementError(value.code, value.message);
+      }
+    } catch (decoded) {
+      if (decoded instanceof RunManagementError) throw decoded;
+    }
+    throw new RunManagementError(
+      'WOML_RUN_MANAGEMENT_FAILED',
+      'The durable WOML run store could not complete the command.'
+    );
+  }
+}
+
+const PUBLIC_RUN_STATUSES: readonly PublicRunStatus[] = [
+  'not_started',
+  'running',
+  'waiting',
+  'cancelling',
+  'finalizing',
+  'succeeded',
+  'failed',
+  'cancelled',
+];
+
+export function listRunsWithRust(
+  eventStorePath: string,
+  filters: {
+    readonly limit?: number;
+    readonly workflowId?: string;
+    readonly status?: PublicRunStatus;
+  } = {},
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRunListV1 {
+  const limit = filters.limit ?? 20;
+  if (
+    eventStorePath.length === 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 200
+  ) {
+    throw new Error('Run list requires a store path and a limit from 1 through 200.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.listWomlRuns !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose run listing; rebuild the Rust addon.`
+    );
+  }
+  const value = callRunManagementNative(() =>
+    native.listWomlRuns(
+      eventStorePath,
+      limit,
+      filters.workflowId,
+      filters.status
+    )
+  );
+  const summary = (candidate: unknown): boolean =>
+    record(candidate) &&
+    exactKeys(candidate, [
+      'runId',
+      'workflowId',
+      'status',
+      'startedAt',
+      'updatedAt',
+    ]) &&
+    typeof candidate.runId === 'string' &&
+    typeof candidate.workflowId === 'string' &&
+    PUBLIC_RUN_STATUSES.includes(candidate.status as PublicRunStatus) &&
+    dateTime(candidate.startedAt) &&
+    dateTime(candidate.updatedAt);
+  if (
+    !record(value) ||
+    !exactKeys(value, ['profile', 'runs']) ||
+    value.profile !== 'woml.run-list/v1' ||
+    !Array.isArray(value.runs) ||
+    value.runs.length > 200 ||
+    !value.runs.every(summary)
+  ) {
+    throw new Error('The native core returned invalid run-list data.');
+  }
+  return value as unknown as RustRunListV1;
+}
+
+export function inspectRunV2WithRust(
+  eventStorePath: string,
+  runId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRunInspectionV2 {
+  if (eventStorePath.length === 0 || runId.length === 0) {
+    throw new Error('Run inspection requires a store path and run ID.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.inspectWomlRunV2 !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose safe run inspection; rebuild the Rust addon.`
+    );
+  }
+  const value = callRunManagementNative(() =>
+    native.inspectWomlRunV2(eventStorePath, runId)
+  );
+  const hook = (candidate: unknown): boolean =>
+    record(candidate) &&
+    exactKeys(candidate, [
+      'hookId',
+      'subjectKind',
+      'subjectId',
+      'status',
+      'failedActions',
+    ]) &&
+    typeof candidate.hookId === 'string' &&
+    ['workflow', 'step'].includes(String(candidate.subjectKind)) &&
+    typeof candidate.subjectId === 'string' &&
+    ['requested', 'running', 'completed', 'completed_with_warnings'].includes(
+      String(candidate.status)
+    ) &&
+    Number.isSafeInteger(candidate.failedActions) &&
+    Number(candidate.failedActions) >= 0;
+  const warning = (candidate: unknown): boolean =>
+    record(candidate) &&
+    exactKeys(
+      candidate,
+      ['hookId', 'actionId', 'code'],
+      ['stepId', 'provider', 'destination']
+    ) &&
+    typeof candidate.hookId === 'string' &&
+    typeof candidate.actionId === 'string' &&
+    typeof candidate.code === 'string' &&
+    (candidate.stepId === undefined || typeof candidate.stepId === 'string') &&
+    (candidate.provider === undefined || typeof candidate.provider === 'string') &&
+    (candidate.destination === undefined ||
+      typeof candidate.destination === 'string');
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      'profile',
+      'runId',
+      'workflowId',
+      'status',
+      'businessOutcome',
+      'lifecycleStatus',
+      'hooks',
+      'warnings',
+      'cancellation',
+    ]) ||
+    value.profile !== 'woml.run-inspection/v2' ||
+    typeof value.runId !== 'string' ||
+    typeof value.workflowId !== 'string' ||
+    !PUBLIC_RUN_STATUSES.includes(value.status as PublicRunStatus) ||
+    !['undecided', 'succeeded', 'failed', 'cancelled'].includes(
+      String(value.businessOutcome)
+    ) ||
+    ![
+      'idle',
+      'running',
+      'finalizing',
+      'completed_with_warnings',
+      'completed',
+    ].includes(String(value.lifecycleStatus)) ||
+    !Array.isArray(value.hooks) ||
+    value.hooks.length > 1024 ||
+    !value.hooks.every(hook) ||
+    !Array.isArray(value.warnings) ||
+    value.warnings.length > 128 ||
+    !value.warnings.every(warning) ||
+    !record(value.cancellation) ||
+    !exactKeys(value.cancellation, ['requested'], ['requestId']) ||
+    typeof value.cancellation.requested !== 'boolean' ||
+    (value.cancellation.requestId !== undefined &&
+      typeof value.cancellation.requestId !== 'string')
+  ) {
+    throw new Error('The native core returned invalid run-inspection data.');
+  }
+  return value as unknown as RustRunInspectionV2;
+}
+
+export function cancelRunWithRust(
+  eventStorePath: string,
+  runId: string,
+  commandId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRunCancellationResultV1 {
+  if (
+    eventStorePath.length === 0 ||
+    runId.length === 0 ||
+    commandId.length === 0
+  ) {
+    throw new Error('Run cancellation requires a store path, run ID, and command ID.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.cancelWomlRun !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose run cancellation; rebuild the Rust addon.`
+    );
+  }
+  const value = callRunManagementNative(() =>
+    native.cancelWomlRun(eventStorePath, runId, commandId)
+  );
+  const codes = [
+    'WOML_RUN_NOT_FOUND',
+    'WOML_RUN_OUTCOME_ALREADY_DECIDED',
+    'WOML_RUN_ALREADY_TERMINAL',
+    'WOML_RUN_CONTROL_VERSION_UNSUPPORTED',
+    'WOML_RUN_CANCELLATION_FAILED',
+  ];
+  if (
+    !record(value) ||
+    !exactKeys(value, ['profile', 'commandId', 'runId', 'status'], ['code']) ||
+    value.profile !== 'woml.run-control.result/v1' ||
+    typeof value.commandId !== 'string' ||
+    typeof value.runId !== 'string' ||
+    ![
+      'accepted',
+      'already_requested',
+      'already_cancelled',
+      'rejected',
+    ].includes(String(value.status)) ||
+    (value.code !== undefined && !codes.includes(String(value.code)))
+  ) {
+    throw new Error('The native core returned invalid run-control data.');
+  }
+  return value as unknown as RustRunCancellationResultV1;
 }
 
 export function inspectStoredRunRequirementsWithRust(

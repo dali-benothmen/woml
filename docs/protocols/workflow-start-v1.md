@@ -41,7 +41,7 @@ fails with the existing idempotency-conflict error. Repeated starts to the same
 target in one step require distinct stable `{ name: "..." }` values.
 
 A child failure after successful admission does not retroactively fail the
-parent. Operators use the returned run ID with `woml runs get`. An interrupted
+parent. Operators use the returned run ID with `woml get`. An interrupted
 started attempt remains governed by WOML's fail-closed recovery policy.
 
 Unlike synchronous `call()`, `start()` can launch a workflow that later waits

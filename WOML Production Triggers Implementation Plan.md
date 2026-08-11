@@ -6,7 +6,7 @@ schedule, fixed-rate interval, and named event triggers are active. Rust owns at
 occurrence admission, HTTP validation, durable run creation, background DAG
 execution, the injected clock, SQLite schedule and interval cursors, bounded
 misfire recovery, and process-crash recovery. `woml run` stays alive, while
-`woml test` owns one-shot execution and `woml runs get` inspects durable
+`woml test` owns one-shot execution and `woml get` inspects durable
 results. There is no separate public `woml serve` mode.
 
 Named event syntax, Model v7 lowering, Event Publication v1, the authenticated
@@ -64,7 +64,7 @@ branch, parallel, approval, and notification runtime already used by
 The Slack acceptance journey starts the same long-lived runner with
 `examples/slackTriggerWorkflow.woml`, then a workspace member mentions `@WOML`
 or sends the bot a direct message. The CLI reports the accepted trigger/run ID,
-and `woml runs get` exposes its terminal result. This milestone makes Slack the
+and `woml get` exposes its terminal state. This milestone makes Slack the
 agent's inbound conversation channel. The outbound conversational reply is a
 separate `slack.send` capability on the next Services and Capabilities roadmap;
 keeping that effect explicit avoids hiding message sends inside trigger logic.
@@ -694,7 +694,7 @@ schedule, interval, or event listeners.
 ### 13.3 Inspect a run
 
 ```text
-woml runs get <runId> [--state <path>]
+woml get <runId> [--state <path>] [--json]
 ```
 
 This read-only command prints the folded status and, when terminal, the result
@@ -876,8 +876,8 @@ Changes:
 - Print a schema-informed, copy-pasteable `curl` example for every registered
   webhook at startup.
 - Print the final workflow JSON automatically when an asynchronous run
-  succeeds, while retaining `woml runs get` for later inspection.
-- Add `woml runs get` for asynchronous result/status inspection.
+  succeeds, while retaining `woml get` for later inspection.
+- Add `woml get` for asynchronous status inspection.
 - Add graceful signal handling without unsafe active-attempt replay.
 - Keep source reload out of plain `woml run`; reserve `--watch` for a later
   reviewed hot-reload contract.

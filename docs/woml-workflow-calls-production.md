@@ -39,7 +39,7 @@ routing key WOML creates beside that state database.
 - Payloads and results are bounded but may contain business data. They remain
   in authoritative run events; apply the same retention and backup policy as
   other workflow context.
-- Operator progress and `woml runs get` expose run IDs and workflow IDs, but
+- Operator progress and `woml get` expose run IDs and workflow IDs, but
   exclude payloads, results, secrets, definition hashes, call keys, and payload
   digests from the relationship summary.
 
@@ -69,7 +69,7 @@ than whatever source happens to be on disk at restart.
 Keep the parent and child run IDs printed by the CLI. Inspect both sides with:
 
 ```bash
-woml runs get run_... --state /var/lib/woml/state.sqlite
+woml get run_... --state /var/lib/woml/state.sqlite
 ```
 
 Monitor call admission, child terminal status, rejection code, route ownership,

@@ -2897,27 +2897,57 @@ impl DurableEventStore {
   }
 
   pub fn list_runs(&self, limit: usize) -> Result<RunListV1, DurableStoreError> {
+    self.list_runs_filtered(limit, None, None)
+  }
+
+  pub fn list_runs_filtered(
+    &self,
+    limit: usize,
+    workflow_id: Option<&str>,
+    status: Option<&str>,
+  ) -> Result<RunListV1, DurableStoreError> {
     if !(1..=200).contains(&limit) {
       return Err(DurableStoreError::Contract(
         "Run list limit must be between 1 and 200.".to_string(),
       ));
     }
+    if workflow_id.is_some_and(str::is_empty) {
+      return Err(DurableStoreError::Contract(
+        "Run list workflow filter must not be empty.".to_string(),
+      ));
+    }
+    let status = status
+      .map(|value| {
+        PublicRunStatus::parse(value).ok_or_else(|| {
+          DurableStoreError::Contract(format!("Run list status filter {value:?} is invalid."))
+        })
+      })
+      .transpose()?;
     let mut statement = self.connection.prepare(
       "SELECT run_id, workflow_id, status, started_at, updated_at
        FROM woml_run_summaries
+       WHERE (?2 IS NULL OR workflow_id = ?2)
+         AND (?3 IS NULL OR status = ?3)
        ORDER BY updated_at DESC, run_id DESC
        LIMIT ?1",
     )?;
     let rows = statement
-      .query_map([i64::try_from(limit).unwrap_or(200)], |row| {
-        Ok((
-          row.get::<_, String>(0)?,
-          row.get::<_, String>(1)?,
-          row.get::<_, String>(2)?,
-          row.get::<_, String>(3)?,
-          row.get::<_, String>(4)?,
-        ))
-      })?
+      .query_map(
+        rusqlite::params![
+          i64::try_from(limit).unwrap_or(200),
+          workflow_id,
+          status.map(PublicRunStatus::as_str),
+        ],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+          ))
+        },
+      )?
       .collect::<Result<Vec<_>, _>>()?;
     let mut runs = Vec::with_capacity(rows.len());
     for (run_id, workflow_id, status, started_at, updated_at) in rows {
