@@ -1,0 +1,87 @@
+{
+  "binding": {
+    "event": "step_failure",
+    "workflow": { "id": "lifecycle-demo" },
+    "step": { "id": "prepare", "outcome": "failed", "attempts": 3 },
+    "failure": { "code": "WOML_SCRIPT_THREW", "message": "Script failed." }
+  },
+  "progress": {
+    "profile": "woml.lifecycle-progress/v1",
+    "runId": "run_example",
+    "workflowId": "lifecycle-demo",
+    "phase": "action_failed",
+    "hookId": "lifecycle:step_failure",
+    "actionId": "lifecycle:step_failure:action:0",
+    "stepId": "prepare",
+    "code": "WOML_LIFECYCLE_ACTION_FAILED"
+  },
+  "controlRequest": {
+    "profile": "woml.run-control.request/v1",
+    "commandId": "cancel_example",
+    "runId": "run_example"
+  },
+  "controlResult": {
+    "profile": "woml.run-control.result/v1",
+    "commandId": "cancel_example",
+    "runId": "run_example",
+    "status": "accepted"
+  },
+  "list": {
+    "profile": "woml.run-list/v1",
+    "runs": [
+      {
+        "runId": "run_example",
+        "workflowId": "lifecycle-demo",
+        "status": "finalizing",
+        "startedAt": "2026-08-11T10:00:00.000Z",
+        "updatedAt": "2026-08-11T10:00:01.000Z"
+      }
+    ]
+  },
+  "inspection": {
+    "profile": "woml.run-inspection/v2",
+    "runId": "run_example",
+    "workflowId": "lifecycle-demo",
+    "status": "succeeded",
+    "businessOutcome": "succeeded",
+    "lifecycleStatus": "completed_with_warnings",
+    "hooks": [
+      {
+        "hookId": "lifecycle:run_success",
+        "subjectKind": "workflow",
+        "subjectId": "run_example",
+        "status": "completed_with_warnings",
+        "failedActions": 1
+      }
+    ],
+    "warnings": [
+      {
+        "hookId": "lifecycle:run_success",
+        "actionId": "lifecycle:run_success:action:0",
+        "provider": "slack",
+        "destination": "#woml-testing",
+        "code": "WOML_LIFECYCLE_ACTION_FAILED"
+      }
+    ],
+    "cancellation": { "requested": false }
+  },
+  "notification": {
+    "protocol": "woml.notification-provider-host",
+    "protocolVersion": 2,
+    "messageType": "deliver",
+    "mode": "informational",
+    "invocationId": "notification_invocation",
+    "runId": "run_example",
+    "hookInvocationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "actionId": "lifecycle:run_success:action:0",
+    "deliveryId": "lifecycle:5:action:0:provider:0:channel:0",
+    "provider": "slack",
+    "destination": "#woml-testing",
+    "idempotencyKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "credentials": {
+      "botToken": { "kind": "secretReference", "name": "SLACK_BOT_TOKEN" },
+      "appToken": { "kind": "secretReference", "name": "SLACK_APP_TOKEN" }
+    },
+    "message": "Workflow lifecycle-demo succeeded"
+  }
+}

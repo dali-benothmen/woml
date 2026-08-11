@@ -1,0 +1,115 @@
+[
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_1",
+    "runId": "run_example",
+    "sequence": 1,
+    "occurredAt": "2026-08-11T10:00:00.000Z",
+    "type": "run_cancellation_requested",
+    "data": { "requestId": "cancel_example" }
+  },
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_2",
+    "runId": "run_example",
+    "sequence": 2,
+    "occurredAt": "2026-08-11T10:00:00.100Z",
+    "type": "lifecycle_hook_requested",
+    "data": {
+      "hookInvocationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hookId": "lifecycle:run_cancel",
+      "event": "run_cancel",
+      "subject": { "kind": "workflow", "id": "run_example" }
+    }
+  },
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_3",
+    "runId": "run_example",
+    "sequence": 3,
+    "occurredAt": "2026-08-11T10:00:00.200Z",
+    "type": "lifecycle_action_attempt_started",
+    "data": {
+      "hookInvocationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "actionId": "lifecycle:run_cancel:action:0",
+      "attempt": 1
+    }
+  },
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_4",
+    "runId": "run_example",
+    "sequence": 4,
+    "occurredAt": "2026-08-11T10:00:00.300Z",
+    "type": "lifecycle_action_succeeded",
+    "data": {
+      "hookInvocationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "actionId": "lifecycle:run_cancel:action:0",
+      "attempt": 1
+    }
+  },
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_5",
+    "runId": "run_example",
+    "sequence": 5,
+    "occurredAt": "2026-08-11T10:00:00.400Z",
+    "type": "lifecycle_action_failed",
+    "data": {
+      "hookInvocationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "actionId": "lifecycle:run_cancel:action:1",
+      "attempt": 1,
+      "failure": {
+        "kind": "provider_failed",
+        "code": "WOML_LIFECYCLE_ACTION_FAILED",
+        "message": "Notification failed."
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_6",
+    "runId": "run_example",
+    "sequence": 6,
+    "occurredAt": "2026-08-11T10:00:00.500Z",
+    "type": "lifecycle_hook_completed",
+    "data": {
+      "hookInvocationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "completed_with_warnings",
+      "failedActions": 1
+    }
+  },
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_7",
+    "runId": "run_example",
+    "sequence": 7,
+    "occurredAt": "2026-08-11T10:00:00.600Z",
+    "type": "run_outcome_decided",
+    "data": {
+      "outcome": "cancelled",
+      "cancellationRequestId": "cancel_example"
+    }
+  },
+  {
+    "eventSchemaVersion": 10,
+    "eventId": "evt_8",
+    "runId": "run_example",
+    "sequence": 8,
+    "occurredAt": "2026-08-11T10:00:00.700Z",
+    "type": "run_finalized",
+    "data": {
+      "outcome": "cancelled",
+      "lifecycleStatus": "completed_with_warnings",
+      "warnings": [
+        {
+          "hookId": "lifecycle:run_cancel",
+          "actionId": "lifecycle:run_cancel:action:1",
+          "provider": "slack",
+          "destination": "#woml-testing",
+          "code": "WOML_LIFECYCLE_ACTION_FAILED"
+        }
+      ]
+    }
+  }
+]

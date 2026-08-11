@@ -157,3 +157,37 @@ ${importedServices.join('\n')}
 declare const services: Readonly<WomlBuiltinServices & WomlImportedServices>;
 `;
 }
+
+export function generateWomlLifecycleEditorDeclarations(): string {
+  return `// WOML Lifecycle Runtime Binding v1. Available only inside <lifecycle> scripts.
+type WomlLifecycleEvent =
+  | 'run_start'
+  | 'step_start'
+  | 'step_success'
+  | 'step_failure'
+  | 'step_complete'
+  | 'run_success'
+  | 'run_failure'
+  | 'run_cancel'
+  | 'run_complete';
+
+interface WomlLifecycleBinding {
+  readonly event: WomlLifecycleEvent;
+  readonly workflow: Readonly<{
+    id: string;
+    outcome?: 'succeeded' | 'failed' | 'cancelled';
+  }>;
+  readonly step?: Readonly<{
+    id: string;
+    outcome?: 'succeeded' | 'failed' | 'cancelled';
+    attempts: number;
+  }>;
+  readonly failure?: Readonly<{
+    code: string;
+    message: string;
+  }>;
+}
+
+declare const lifecycle: Readonly<WomlLifecycleBinding>;
+`;
+}

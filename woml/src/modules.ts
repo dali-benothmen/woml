@@ -1,6 +1,20 @@
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 
 import { parse } from 'acorn';
 
@@ -12,6 +26,7 @@ import {
 import type {
   CompiledModuleBindingV1,
   CompiledWorkflowDefinitionV10,
+  CompiledWorkflowDefinitionV11,
   CompiledWorkflowDefinitionV9,
 } from './model';
 import {
@@ -24,8 +39,7 @@ import {
 
 export const WOML_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v1' as const;
-export const WOML_MODULE_RESOLVER_PROFILE =
-  'woml.module-resolver/v1' as const;
+export const WOML_MODULE_RESOLVER_PROFILE = 'woml.module-resolver/v1' as const;
 export const WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v2' as const;
 export const WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE =
@@ -34,6 +48,8 @@ export const WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v4' as const;
 export const WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v5' as const;
+export const WOML_LIFECYCLE_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v6' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -175,6 +191,21 @@ export interface WomlDefinitionPackageV5
   readonly rootHash: string;
 }
 
+export interface WomlDefinitionPackageV6
+  extends Omit<
+    WomlDefinitionPackageV4,
+    'schemaVersion' | 'profile' | 'workflow'
+  > {
+  readonly schemaVersion: 6;
+  readonly profile: typeof WOML_LIFECYCLE_DEFINITION_PACKAGE_PROFILE;
+  readonly workflow: {
+    readonly id: string;
+    readonly source: string;
+    readonly modelDigest: string;
+    readonly model: CompiledWorkflowDefinitionV11;
+  };
+}
+
 interface AstNode {
   readonly type: string;
   readonly start: number;
@@ -225,7 +256,11 @@ function commonJsNode(root: AstNode): AstNode | undefined {
     const node = pending.pop()!;
     if (node.type === 'CallExpression') {
       const callee = node.callee;
-      if (isAstNode(callee) && callee.type === 'Identifier' && callee.name === 'require') {
+      if (
+        isAstNode(callee) &&
+        callee.type === 'Identifier' &&
+        callee.name === 'require'
+      ) {
         return node;
       }
     }
@@ -233,7 +268,9 @@ function commonJsNode(root: AstNode): AstNode | undefined {
       const object = node.object;
       const property = node.property;
       const directExports =
-        isAstNode(object) && object.type === 'Identifier' && object.name === 'exports';
+        isAstNode(object) &&
+        object.type === 'Identifier' &&
+        object.name === 'exports';
       const moduleExports =
         isAstNode(object) &&
         object.type === 'Identifier' &&
@@ -249,12 +286,18 @@ function commonJsNode(root: AstNode): AstNode | undefined {
 }
 
 function canonicalJson(value: unknown): string {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'string'
+  ) {
     return JSON.stringify(value);
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new TypeError('Canonical WOML package values must be finite JSON numbers.');
+      throw new TypeError(
+        'Canonical WOML package values must be finite JSON numbers.'
+      );
     }
     return JSON.stringify(value);
   }
@@ -282,7 +325,10 @@ function portablePath(projectRoot: string, absolutePath: string): string {
 
 function isWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
-  return path === '' || (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path));
+  return (
+    path === '' ||
+    (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path))
+  );
 }
 
 function compileDiagnostic(
@@ -319,9 +365,16 @@ function failAtDeclaration(
   );
 }
 
-function sourceSpan(sourceFile: SourceFile, source: string, needle?: string): SourceSpan {
+function sourceSpan(
+  sourceFile: SourceFile,
+  source: string,
+  needle?: string
+): SourceSpan {
   const offset = needle === undefined ? 0 : Math.max(0, source.indexOf(needle));
-  return sourceFile.span(offset, Math.min(source.length, offset + Math.max(1, needle?.length ?? 1)));
+  return sourceFile.span(
+    offset,
+    Math.min(source.length, offset + Math.max(1, needle?.length ?? 1))
+  );
 }
 
 function safeRealPath(
@@ -398,7 +451,8 @@ function parseModuleSource(
       sourceType: 'module',
       allowHashBang: true,
     });
-    if (!isAstNode(parsed)) throw new Error('module parser returned no program');
+    if (!isAstNode(parsed))
+      throw new Error('module parser returned no program');
     program = parsed;
   } catch (error) {
     throw compileDiagnostic(
@@ -433,7 +487,11 @@ function parseModuleSource(
         );
       }
       const identifier = declaration.id;
-      if (isAstNode(identifier) && identifier.type === 'Identifier' && identifier.name !== undefined) {
+      if (
+        isAstNode(identifier) &&
+        identifier.type === 'Identifier' &&
+        identifier.name !== undefined
+      ) {
         functionExports.push(identifier.name);
       }
       continue;
@@ -497,7 +555,9 @@ export function buildWomlDefinitionPackage(
 ): WomlDefinitionPackageV1 {
   const validated = inspectValidatedWomlDocument(document);
   const sourcePath = resolve(options.sourcePath ?? document.file);
-  const lexicalProjectRoot = resolve(options.projectRoot ?? dirname(sourcePath));
+  const lexicalProjectRoot = resolve(
+    options.projectRoot ?? dirname(sourcePath)
+  );
   let projectRoot: string;
   try {
     projectRoot = realpathSync(lexicalProjectRoot);
@@ -519,7 +579,10 @@ export function buildWomlDefinitionPackage(
   }
   try {
     const realSourcePath = realpathSync(sourcePath);
-    if (!statSync(realSourcePath).isFile() || !isWithin(projectRoot, realSourcePath)) {
+    if (
+      !statSync(realSourcePath).isFile() ||
+      !isWithin(projectRoot, realSourcePath)
+    ) {
       throw new Error('outside project boundary');
     }
   } catch {
@@ -540,7 +603,12 @@ export function buildWomlDefinitionPackage(
     absolutePath: string,
     declaration: ValidatedModuleDeclaration
   ): ResolvedSource => {
-    const realPath = safeRealPath(absolutePath, projectRoot, document, declaration);
+    const realPath = safeRealPath(
+      absolutePath,
+      projectRoot,
+      document,
+      declaration
+    );
     const existing = sources.get(realPath);
     if (existing !== undefined) return existing;
     const cycleStart = visiting.indexOf(realPath);
@@ -629,7 +697,10 @@ export function buildWomlDefinitionPackage(
           sourceSpan(sourceFile, source, imported.path)
         );
       }
-      const dependency = resolveSource(resolve(dirname(realPath), imported.path), declaration);
+      const dependency = resolveSource(
+        resolve(dirname(realPath), imported.path),
+        declaration
+      );
       dependencyPaths.push(dependency.portablePath);
     }
     visiting.pop();
@@ -703,7 +774,9 @@ export function buildWomlDefinitionPackage(
       dependencies: modules.map(module => module.entrypoint).sort(),
     },
     ...[...sources.values()]
-      .sort((left, right) => left.portablePath.localeCompare(right.portablePath))
+      .sort((left, right) =>
+        left.portablePath.localeCompare(right.portablePath)
+      )
       .map(source => ({
         path: source.portablePath,
         mediaType: source.mediaType,
@@ -818,7 +891,10 @@ function canonicalSourceMap(
     }
     const portable = portablePath(projectRoot, absolutePath);
     const expectedSource = expected.get(portable);
-    if (expectedSource === undefined || expectedSource.digest !== sha256(sourceContent)) {
+    if (
+      expectedSource === undefined ||
+      expectedSource.digest !== sha256(sourceContent)
+    ) {
       throw compileDiagnostic(
         portable,
         'WOML_MODULE_SOURCE_CHANGED_DURING_BUILD',
@@ -878,19 +954,16 @@ function generatedServiceDeclarations(
     }
     lines.push('  }>;');
   }
-  lines.push(
-    '}',
-    '',
-    'declare const services: WomlImportedServices;',
-    ''
-  );
+  lines.push('}', '', 'declare const services: WomlImportedServices;', '');
   return lines.join('\n');
 }
 
 export async function buildWomlExecutableDefinitionPackage(
   document: WomlSourceDocument,
   options: WomlModuleResolverOptions = {}
-): Promise<WomlDefinitionPackageV2 | WomlDefinitionPackageV4> {
+): Promise<
+  WomlDefinitionPackageV2 | WomlDefinitionPackageV4 | WomlDefinitionPackageV6
+> {
   const resolved = buildWomlDefinitionPackage(document, options);
   if (resolved.modules.length === 0) {
     throw compileDiagnostic(
@@ -901,7 +974,9 @@ export async function buildWomlExecutableDefinitionPackage(
     );
   }
   const sourcePath = resolve(options.sourcePath ?? document.file);
-  const projectRoot = realpathSync(resolve(options.projectRoot ?? dirname(sourcePath)));
+  const projectRoot = realpathSync(
+    resolve(options.projectRoot ?? dirname(sourcePath))
+  );
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'woml-ms2-build-'));
   const artifacts: WomlDefinitionPackageArtifactV2[] = [];
   const compiledModules: WomlDefinitionPackageModuleV2[] = [];
@@ -923,8 +998,12 @@ export async function buildWomlExecutableDefinitionPackage(
         minify: false,
       });
       if (!result.success) throw moduleBuildError(module, result.logs);
-      const bundleOutput = result.outputs.find(output => output.kind === 'entry-point');
-      const sourceMapOutput = result.outputs.find(output => output.kind === 'sourcemap');
+      const bundleOutput = result.outputs.find(
+        output => output.kind === 'entry-point'
+      );
+      const sourceMapOutput = result.outputs.find(
+        output => output.kind === 'sourcemap'
+      );
       if (bundleOutput === undefined || sourceMapOutput === undefined) {
         throw compileDiagnostic(
           module.entrypoint,
@@ -944,7 +1023,10 @@ export async function buildWomlExecutableDefinitionPackage(
         projectRoot,
         resolved.sources
       );
-      if (bundleContent.includes(projectRoot) || sourceMapContent.includes(projectRoot)) {
+      if (
+        bundleContent.includes(projectRoot) ||
+        sourceMapContent.includes(projectRoot)
+      ) {
         throw compileDiagnostic(
           module.entrypoint,
           'WOML_MODULE_ARTIFACT_PATH_LEAK',
@@ -1047,6 +1129,15 @@ export async function buildWomlExecutableDefinitionPackage(
     },
     permissions: resolved.permissions,
   };
+  if (model.schemaVersion === 11) {
+    const unsigned = {
+      schemaVersion: 6 as const,
+      profile: WOML_LIFECYCLE_DEFINITION_PACKAGE_PROFILE,
+      ...common,
+      workflow: { ...common.workflow, model },
+    };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   if (model.schemaVersion === 10) {
     const unsigned = {
       schemaVersion: 4 as const,
@@ -1074,7 +1165,19 @@ export async function buildWomlRuntimeDefinitionPackage(
   document: WomlSourceDocument,
   options: WomlModuleResolverOptions = {}
 ): Promise<WomlDefinitionPackageV3 | WomlDefinitionPackageV5> {
-  const compiled = await buildWomlExecutableDefinitionPackage(document, options);
+  const compiled = await buildWomlExecutableDefinitionPackage(
+    document,
+    options
+  );
+  if (compiled.schemaVersion === 6) {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_LIFECYCLE_RUNTIME_UNAVAILABLE',
+      'Lifecycle syntax compiled successfully, but durable lifecycle execution begins in LEC2 and LEC3.',
+      document.root.openTagSpan,
+      'Use `woml check` to review the Model v11 definition during LEC1.'
+    );
+  }
   if (compiled.schemaVersion === 4) {
     const unsigned = {
       schemaVersion: 5 as const,
@@ -1114,6 +1217,7 @@ export function canonicalizeWomlDefinitionPackage(
     | WomlDefinitionPackageV3
     | WomlDefinitionPackageV4
     | WomlDefinitionPackageV5
+    | WomlDefinitionPackageV6
 ): string {
   return canonicalJson(definitionPackage);
 }

@@ -15,6 +15,11 @@ export interface ContextReferenceExpression {
   readonly path: readonly string[];
 }
 
+export interface LifecycleReferenceExpression {
+  readonly kind: 'lifecycleReference';
+  readonly path: readonly string[];
+}
+
 export interface SecretReferenceExpression {
   readonly kind: 'secretReference';
   readonly name: string;
@@ -37,7 +42,11 @@ export interface TemplateTextPart {
 
 export interface TemplateExpression {
   readonly kind: 'template';
-  readonly parts: readonly (TemplateTextPart | ContextReferenceExpression)[];
+  readonly parts: readonly (
+    | TemplateTextPart
+    | ContextReferenceExpression
+    | LifecycleReferenceExpression
+  )[];
 }
 
 export type ValueExpression =
@@ -129,6 +138,58 @@ export interface ScriptRuntimeBindingsV1 {
   readonly requiredSecrets: readonly string[];
 }
 
+export interface ScriptRuntimeBindingsV2 {
+  readonly bindingVersion: 2;
+  readonly bindings: readonly [
+    'context',
+    'lifecycle',
+    'attempt',
+    'services',
+    'secrets',
+  ];
+  readonly requiredSecrets: readonly string[];
+}
+
+export type LifecycleEventName =
+  | 'run_start'
+  | 'step_start'
+  | 'step_success'
+  | 'step_failure'
+  | 'step_complete'
+  | 'run_success'
+  | 'run_failure'
+  | 'run_cancel'
+  | 'run_complete';
+
+export interface CompiledLifecycleScriptActionV1 {
+  readonly actionId: string;
+  readonly handler: 'runtime.lifecycle-script';
+  readonly inputs: ValueExpression;
+  readonly scriptRuntime: ScriptRuntimeBindingsV2;
+}
+
+export interface CompiledLifecycleNotificationActionV1 {
+  readonly actionId: string;
+  readonly handler: 'notification.informational';
+  readonly inputs: ValueExpression;
+}
+
+export type CompiledLifecycleActionV1 =
+  | CompiledLifecycleScriptActionV1
+  | CompiledLifecycleNotificationActionV1;
+
+export interface CompiledLifecycleHookV1 {
+  readonly hookId: string;
+  readonly event: LifecycleEventName;
+  readonly stepIds?: readonly string[];
+  readonly actions: readonly CompiledLifecycleActionV1[];
+}
+
+export interface CompiledLifecycleDefinitionV1 {
+  readonly profileVersion: 1;
+  readonly hooks: readonly CompiledLifecycleHookV1[];
+}
+
 export interface CompiledModuleBindingV1 {
   readonly name: string;
   readonly bundleDigest: string;
@@ -216,6 +277,13 @@ export interface CompiledWorkflowDefinitionV10
   readonly moduleRuntime?: CompiledModuleRuntimeV1;
 }
 
+export interface CompiledWorkflowDefinitionV11
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 11;
+  readonly moduleRuntime?: CompiledModuleRuntimeV1;
+  readonly lifecycle?: CompiledLifecycleDefinitionV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -226,7 +294,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV7
   | CompiledWorkflowDefinitionV8
   | CompiledWorkflowDefinitionV9
-  | CompiledWorkflowDefinitionV10;
+  | CompiledWorkflowDefinitionV10
+  | CompiledWorkflowDefinitionV11;
 
 export interface CompiledGraphIssue {
   readonly code:

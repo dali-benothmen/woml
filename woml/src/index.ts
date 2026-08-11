@@ -15,6 +15,7 @@ export {
   WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE,
   WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE,
   WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE,
+  WOML_LIFECYCLE_DEFINITION_PACKAGE_PROFILE,
   WOML_MODULE_RESOLVER_PROFILE,
   type WomlDefinitionPackageModuleV1,
   type WomlDefinitionPackageModuleV2,
@@ -25,6 +26,7 @@ export {
   type WomlDefinitionPackageV3,
   type WomlDefinitionPackageV4,
   type WomlDefinitionPackageV5,
+  type WomlDefinitionPackageV6,
   type WomlModuleResolverOptions,
 } from './modules';
 export {
@@ -36,6 +38,9 @@ export {
   type CompiledTrigger,
   type CompiledModuleBindingV1,
   type CompiledModuleRuntimeV1,
+  type CompiledLifecycleActionV1,
+  type CompiledLifecycleDefinitionV1,
+  type CompiledLifecycleHookV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV1,
   type CompiledWorkflowDefinitionV2,
@@ -47,6 +52,7 @@ export {
   type CompiledWorkflowDefinitionV8,
   type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowDefinitionV10,
+  type CompiledWorkflowDefinitionV11,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,
@@ -57,15 +63,19 @@ export {
   type JsonPrimitive,
   type JsonObject,
   type JsonValue,
+  type LifecycleEventName,
+  type LifecycleReferenceExpression,
   type LiteralExpression,
   type ObjectExpression,
   type RetryPolicy,
   type ScriptRuntimeBindingsV1,
+  type ScriptRuntimeBindingsV2,
   type SecretReferenceExpression,
   type TemplateExpression,
   type ValueExpression,
 } from './model';
 export {
+  analyzeWomlLifecycleScript,
   analyzeWomlScript,
   type ScriptAnalysis,
   type ScriptAnalysisIssue,
@@ -98,6 +108,7 @@ export {
 } from './source';
 export {
   generateWomlEditorDeclarations,
+  generateWomlLifecycleEditorDeclarations,
   type WomlEditorModuleDeclaration,
 } from './editor';
 export {

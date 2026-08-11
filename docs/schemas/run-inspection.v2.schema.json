@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-inspection/v2",
+  "title": "WOML Safe Run Inspection v2",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "x-forbiddenFields": ["context", "payload", "secret", "credentials", "messageBody", "stack", "operationKey", "idempotencyKey"],
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "runId", "workflowId", "status", "businessOutcome", "lifecycleStatus", "hooks", "warnings", "cancellation"],
+  "properties": {
+    "profile": { "const": "woml.run-inspection/v2" }, "runId": { "type": "string", "minLength": 1, "maxLength": 320 }, "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "status": { "enum": ["not_started", "running", "waiting", "cancelling", "finalizing", "succeeded", "failed", "cancelled"] },
+    "businessOutcome": { "enum": ["undecided", "succeeded", "failed", "cancelled"] },
+    "lifecycleStatus": { "enum": ["idle", "running", "finalizing", "completed_with_warnings", "completed"] },
+    "hooks": { "type": "array", "maxItems": 1024, "items": { "type": "object", "additionalProperties": false, "required": ["hookId", "subjectKind", "subjectId", "status", "failedActions"], "properties": { "hookId": { "type": "string", "maxLength": 160 }, "subjectKind": { "enum": ["workflow", "step"] }, "subjectId": { "type": "string", "maxLength": 320 }, "status": { "enum": ["requested", "running", "completed", "completed_with_warnings"] }, "failedActions": { "type": "integer", "minimum": 0, "maximum": 64 } } } },
+    "warnings": { "type": "array", "maxItems": 128, "items": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/warning" } },
+    "cancellation": { "type": "object", "additionalProperties": false, "required": ["requested"], "properties": { "requested": { "type": "boolean" }, "requestId": { "type": "string", "maxLength": 320 } } }
+  }
+}

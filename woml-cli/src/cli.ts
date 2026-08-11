@@ -6,6 +6,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 
 import {
   buildWomlDefinitionPackage,
+  buildWomlExecutableDefinitionPackage,
   buildWomlRuntimeDefinitionPackage,
   compileWoml,
   generateWomlEditorDeclarations,
@@ -873,7 +874,11 @@ async function refreshEditorTypes(
       inputPath,
       (await stat(inputPath)).isDirectory()
     );
-    await writeFile(outputPath, generateWomlEditorDeclarations(modules), 'utf8');
+    await writeFile(
+      outputPath,
+      generateWomlEditorDeclarations(modules),
+      'utf8'
+    );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     io.stderr(
@@ -905,13 +910,27 @@ async function runCheckCommand(
       sourcePath: filePath,
       projectRoot: moduleProjectRoot(filePath),
     });
+    const workflowElement = document.root.children.find(
+      (child): child is WomlSourceElement =>
+        child.kind === 'element' && child.name === 'workflow'
+    );
+    const declaresLifecycle =
+      workflowElement !== undefined &&
+      workflowElement.children.some(
+        child => child.kind === 'element' && child.name === 'lifecycle'
+      );
     const definitionPackage =
       inspectionPackage.modules.length === 0
         ? inspectionPackage
-        : await buildWomlRuntimeDefinitionPackage(document, {
-            sourcePath: filePath,
-            projectRoot: moduleProjectRoot(filePath),
-          });
+        : declaresLifecycle
+          ? await buildWomlExecutableDefinitionPackage(document, {
+              sourcePath: filePath,
+              projectRoot: moduleProjectRoot(filePath),
+            })
+          : await buildWomlRuntimeDefinitionPackage(document, {
+              sourcePath: filePath,
+              projectRoot: moduleProjectRoot(filePath),
+            });
     const compiledWorkflow =
       definitionPackage.schemaVersion === 1
         ? compileWoml(document)
@@ -939,15 +958,18 @@ async function runCheckCommand(
         `Warning [WOML_MODULE_UNUSED]: services.${name} is declared but is not called by this workflow.\n`
       );
     }
+    const lifecycleFrontendOnly = compiledWorkflow.schemaVersion === 11;
     const workflowCallsFrontendOnly =
       compiledWorkflow.schemaVersion === 10 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      workflowCallsFrontendOnly
-        ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
-        : definitionPackage.modules.length === 0
-          ? 'Execution: module-free workflow; woml run is available.\n'
-          : 'Execution: local modules are compiled and ready for woml run.\n'
+      lifecycleFrontendOnly
+        ? 'Execution: lifecycle syntax is compiled to Model v11; durable lifecycle execution begins in LEC2 and LEC3.\n'
+        : workflowCallsFrontendOnly
+          ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
+          : definitionPackage.modules.length === 0
+            ? 'Execution: module-free workflow; woml run is available.\n'
+            : 'Execution: local modules are compiled and ready for woml run.\n'
     );
     return 0;
   } catch (error) {
@@ -1796,6 +1818,15 @@ async function activateWorkflows(
         trigger.handler === 'trigger.event'
     )
   );
+  const lifecycleSource = sources.find(
+    source => source.workflow.schemaVersion === 11
+  );
+  if (lifecycleSource !== undefined) {
+    throw new CliInputError(
+      'WOML_LIFECYCLE_RUNTIME_UNAVAILABLE',
+      `workflow "${lifecycleSource.workflow.workflowId}" compiled successfully, but durable lifecycle execution begins in LEC2 and LEC3. Use woml check during LEC1.`
+    );
+  }
   const hasWorkflowCalls = sources.some(workflowCallFrontendOnlySource);
   // A loaded automation directory is one runtime unit. Production triggers
   // and Workflow Calls both require every definition to share one target and
@@ -2314,9 +2345,7 @@ export async function runCli(
       await refreshEditorTypes(
         inputPath,
         sources
-          .filter(source =>
-            resolve(source.filePath).startsWith(inputRoot)
-          )
+          .filter(source => resolve(source.filePath).startsWith(inputRoot))
           .flatMap(source => source.runtimeModules),
         io
       );

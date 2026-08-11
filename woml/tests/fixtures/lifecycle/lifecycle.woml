@@ -1,0 +1,71 @@
+<woml>
+  <workflow id="lifecycle-demo" name="Lifecycle demo" version="1.0.0">
+    <lifecycle>
+      <on-start>
+        <script>
+          console.log(`Starting ${lifecycle.workflow.id}`);
+        </script>
+      </on-start>
+      <on-step-start steps="prepare finish">
+        <script>
+          console.log(`Starting step ${lifecycle.step.id}`);
+        </script>
+      </on-step-start>
+      <on-step-success steps="prepare">
+        <script>
+          console.log(`Step ${lifecycle.step.id} succeeded`);
+        </script>
+      </on-step-success>
+      <on-step-failure>
+        <notify>
+          <slack
+            channels="#woml-testing C0123456789"
+            message="Step {{lifecycle.step.id}} failed with {{lifecycle.failure.code}} for {{context.payload.orderId}}"
+            bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+            app-token="{{secrets.SLACK_APP_TOKEN}}"
+          />
+        </notify>
+      </on-step-failure>
+      <on-step-complete>
+        <script>
+          console.log(`Completed step ${lifecycle.step.id}`);
+        </script>
+      </on-step-complete>
+      <on-success>
+        <script>
+          console.log('Workflow succeeded');
+        </script>
+      </on-success>
+      <on-failure>
+        <script>
+          console.log(`Workflow failed: ${lifecycle.failure.code}`);
+        </script>
+      </on-failure>
+      <on-cancel>
+        <script>
+          console.log('Workflow cancelled');
+        </script>
+      </on-cancel>
+      <on-complete>
+        <script>
+          console.log(`Final outcome: ${lifecycle.workflow.outcome}`);
+        </script>
+      </on-complete>
+    </lifecycle>
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="prepare">
+        <script>
+          return { ready: true, orderId: context.payload.orderId };
+        </script>
+      </step>
+      <step id="finish">
+        <script>
+          return { done: context.steps.prepare.ready };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

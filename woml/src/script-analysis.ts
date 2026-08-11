@@ -39,9 +39,9 @@ interface AcornSyntaxError extends SyntaxError {
 }
 
 const prefix =
-  'async function __woml_script(context, attempt, services, secrets) {\n';
+  'async function __woml_script(context, lifecycle, attempt, services, secrets) {\n';
 const suffix = '\n}';
-const reservedBindings = new Set(['services', 'secrets', 'fetch']);
+const reservedBindings = new Set(['lifecycle', 'services', 'secrets', 'fetch']);
 const unsupportedBunNetworkMethods = new Set([
   'connect',
   'listen',
@@ -296,7 +296,10 @@ function parseIssue(
   };
 }
 
-export function analyzeWomlScript(source: string): ScriptAnalysis {
+function analyzeScript(
+  source: string,
+  mode: 'step' | 'lifecycle'
+): ScriptAnalysis {
   let program: AstNode;
   try {
     program = parse(`${prefix}${source}${suffix}`, {
@@ -389,8 +392,7 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
             )
           );
         } else {
-          const args =
-            (node.arguments as readonly unknown[] | undefined) ?? [];
+          const args = (node.arguments as readonly unknown[] | undefined) ?? [];
           if (args.length < 2 || args.length > 3) {
             fail(
               issueAt(
@@ -455,8 +457,9 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
                 )
               );
             } else if (isNode(options) && options.type === 'ObjectExpression') {
-              for (const property of
-                (options.properties as readonly unknown[] | undefined) ?? []) {
+              for (const property of (options.properties as
+                | readonly unknown[]
+                | undefined) ?? []) {
                 if (!isNode(property) || property.type !== 'Property') {
                   fail(
                     issueAt(
@@ -631,11 +634,48 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
     }
 
     if (
+      node.type === 'MemberExpression' &&
+      memberRootIdentifier(node)?.name === 'lifecycle' &&
+      isWriteTarget(node, parent)
+    ) {
+      fail(
+        issueAt(
+          node,
+          source.length,
+          'WOML_LIFECYCLE_BINDING_READ_ONLY',
+          'The lifecycle binding is read-only.',
+          'Read lifecycle event data without replacing or deleting it.'
+        )
+      );
+    }
+
+    if (
       node.type === 'Identifier' &&
       node.name !== undefined &&
       !isNonValueIdentifier(node, parent)
     ) {
-      if (node.name === 'secrets') {
+      if (node.name === 'lifecycle') {
+        if (mode === 'step') {
+          fail(
+            issueAt(
+              node,
+              source.length,
+              'WOML_LIFECYCLE_BINDING_UNAVAILABLE',
+              'The lifecycle binding is available only inside <lifecycle> scripts.',
+              'Use context inside a normal workflow step, or move this observer into <lifecycle>.'
+            )
+          );
+        } else if (isWriteTarget(node, parent)) {
+          fail(
+            issueAt(
+              node,
+              source.length,
+              'WOML_LIFECYCLE_BINDING_READ_ONLY',
+              'The lifecycle binding is read-only.'
+            )
+          );
+        }
+      } else if (node.name === 'secrets') {
         if (parent?.type === 'MemberExpression' && parent.object === node) {
           if (isWriteTarget(parent, grandparent)) {
             fail(
@@ -801,4 +841,12 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
     usesNativeFetch,
     ...(firstIssue === undefined ? {} : { issue: firstIssue }),
   };
+}
+
+export function analyzeWomlScript(source: string): ScriptAnalysis {
+  return analyzeScript(source, 'step');
+}
+
+export function analyzeWomlLifecycleScript(source: string): ScriptAnalysis {
+  return analyzeScript(source, 'lifecycle');
 }

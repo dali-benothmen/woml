@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v10",
+  "title": "WOML Run Event v10",
+  "description": "Append-only lifecycle, business-outcome, finalization, and cancellation vocabulary.",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v9",
+  "x-invariants": [
+    "run_outcome_decided records business truth and is not terminal lifecycle finalization.",
+    "run_finalized is last and preserves the already decided outcome.",
+    "Lifecycle events contain bounded identities and summaries, never context, rendered messages, or credentials.",
+    "Cancellation is sequence-authoritative and idempotent."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 10 },
+    "eventId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": { "enum": [
+      "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled",
+      "branch_selected", "parallel_group_started", "parallel_group_completed", "approval_requested",
+      "notification_delivery_requested", "notification_delivery_attempt_started", "notification_delivery_succeeded", "notification_delivery_failed",
+      "notification_decision_accepted", "notification_message_update_requested", "notification_message_update_attempt_started", "notification_message_updated", "notification_message_update_failed",
+      "approval_resolved", "operation_started", "operation_succeeded", "operation_failed",
+      "run_cancellation_requested", "lifecycle_hook_requested", "lifecycle_action_attempt_started", "lifecycle_action_succeeded", "lifecycle_action_failed", "lifecycle_hook_completed", "run_outcome_decided", "run_finalized"
+    ] },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "run_cancellation_requested" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/cancellationRequested" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_hook_requested" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/hookRequested" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_action_attempt_started" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/actionStarted" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_action_succeeded" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/actionSucceeded" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_action_failed" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/actionFailed" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_hook_completed" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/hookCompleted" } } } },
+    { "if": { "properties": { "type": { "const": "run_outcome_decided" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/outcomeDecided" } } } },
+    { "if": { "properties": { "type": { "const": "run_finalized" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/finalized" } } } }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "outcome": { "enum": ["succeeded", "failed", "cancelled"] },
+    "subject": { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "enum": ["workflow", "step"] }, "id": { "$ref": "#/$defs/id" } } },
+    "failure": { "type": "object", "additionalProperties": false, "required": ["code", "message", "kind"], "properties": { "kind": { "enum": ["script_threw", "timed_out", "non_json", "worker_crashed", "host_crashed", "interrupted", "size_limit_exceeded", "cancelled", "provider_failed"] }, "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$", "maxLength": 128 }, "message": { "type": "string", "minLength": 1, "maxLength": 1024 } } },
+    "cancellationRequested": { "type": "object", "additionalProperties": false, "required": ["requestId"], "properties": { "requestId": { "$ref": "#/$defs/id" } } },
+    "hookRequested": { "type": "object", "additionalProperties": false, "required": ["hookInvocationId", "hookId", "event", "subject"], "properties": { "hookInvocationId": { "$ref": "#/$defs/sha256" }, "hookId": { "$ref": "#/$defs/id" }, "event": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/lifecycleEvent" }, "subject": { "$ref": "#/$defs/subject" } } },
+    "actionStarted": { "type": "object", "additionalProperties": false, "required": ["hookInvocationId", "actionId", "attempt"], "properties": { "hookInvocationId": { "$ref": "#/$defs/sha256" }, "actionId": { "$ref": "#/$defs/id" }, "attempt": { "const": 1 } } },
+    "actionSucceeded": { "type": "object", "additionalProperties": false, "required": ["hookInvocationId", "actionId", "attempt"], "properties": { "hookInvocationId": { "$ref": "#/$defs/sha256" }, "actionId": { "$ref": "#/$defs/id" }, "attempt": { "const": 1 } } },
+    "actionFailed": { "type": "object", "additionalProperties": false, "required": ["hookInvocationId", "actionId", "attempt", "failure"], "properties": { "hookInvocationId": { "$ref": "#/$defs/sha256" }, "actionId": { "$ref": "#/$defs/id" }, "attempt": { "const": 1 }, "failure": { "$ref": "#/$defs/failure" } } },
+    "hookCompleted": { "type": "object", "additionalProperties": false, "required": ["hookInvocationId", "status", "failedActions"], "properties": { "hookInvocationId": { "$ref": "#/$defs/sha256" }, "status": { "enum": ["completed", "completed_with_warnings"] }, "failedActions": { "type": "integer", "minimum": 0, "maximum": 64 } } },
+    "outcomeDecided": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["outcome", "result"], "properties": { "outcome": { "const": "succeeded" }, "result": {} } },
+        { "type": "object", "additionalProperties": false, "required": ["outcome", "failure"], "properties": { "outcome": { "const": "failed" }, "failure": { "$ref": "#/$defs/failure" } } },
+        { "type": "object", "additionalProperties": false, "required": ["outcome", "cancellationRequestId"], "properties": { "outcome": { "const": "cancelled" }, "cancellationRequestId": { "$ref": "#/$defs/id" } } }
+      ]
+    },
+    "warning": { "type": "object", "additionalProperties": false, "required": ["hookId", "actionId", "code"], "properties": { "hookId": { "$ref": "#/$defs/id" }, "actionId": { "$ref": "#/$defs/id" }, "stepId": { "$ref": "#/$defs/id" }, "provider": { "type": "string", "maxLength": 64 }, "destination": { "type": "string", "maxLength": 256 }, "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" } } },
+    "finalized": { "type": "object", "additionalProperties": false, "required": ["outcome", "lifecycleStatus", "warnings"], "properties": { "outcome": { "$ref": "#/$defs/outcome" }, "lifecycleStatus": { "enum": ["completed", "completed_with_warnings"] }, "warnings": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/warning" } } } }
+  }
+}

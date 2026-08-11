@@ -3,22 +3,33 @@ import Ajv2020 from 'ajv/dist/2020';
 import {
   inspectCompiledWorkflowGraph,
   type CompiledTrigger,
+  type CompiledLifecycleActionV1,
+  type CompiledLifecycleDefinitionV1,
+  type CompiledLifecycleHookV1,
   type CompiledModuleRuntimeV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowDefinitionV10,
+  type CompiledWorkflowDefinitionV11,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,
   type CompiledWorkflowNode,
   type ContextReferenceExpression,
   type JsonValue,
+  type LifecycleEventName,
+  type LifecycleReferenceExpression,
   type RetryPolicy,
   type ScriptRuntimeBindingsV1,
+  type ScriptRuntimeBindingsV2,
   type SecretReferenceExpression,
   type ValueExpression,
 } from './model';
-import { analyzeWomlScript, type ScriptAnalysis } from './script-analysis';
+import {
+  analyzeWomlLifecycleScript,
+  analyzeWomlScript,
+  type ScriptAnalysis,
+} from './script-analysis';
 import {
   SourceFile,
   WomlCompileError,
@@ -102,6 +113,7 @@ interface ValidatedNotificationDelivery {
   readonly destination: string;
   readonly botToken: SecretReferenceExpression;
   readonly appToken: SecretReferenceExpression;
+  readonly message?: ValueExpression;
 }
 
 type ValidatedFlowItem =
@@ -118,6 +130,32 @@ interface ValidatedFlow {
   readonly firstNotification?: WomlSourceElement;
 }
 
+interface ValidatedLifecycleScriptAction {
+  readonly kind: 'script';
+  readonly source: string;
+  readonly scriptSpan: SourceSpan;
+  readonly scriptAnalysis: ScriptAnalysis;
+}
+
+interface ValidatedInformationalNotification {
+  readonly kind: 'notify';
+  readonly deliveries: readonly ValidatedNotificationDelivery[];
+}
+
+type ValidatedLifecycleAction =
+  | ValidatedLifecycleScriptAction
+  | ValidatedInformationalNotification;
+
+interface ValidatedLifecycleHook {
+  readonly event: LifecycleEventName;
+  readonly stepIds?: readonly string[];
+  readonly actions: readonly ValidatedLifecycleAction[];
+}
+
+interface ValidatedLifecycle {
+  readonly hooks: readonly ValidatedLifecycleHook[];
+}
+
 interface ValidatedWorkflow {
   readonly element: WomlSourceElement;
   readonly modules: readonly ValidatedModuleDeclaration[];
@@ -125,6 +163,7 @@ interface ValidatedWorkflow {
   readonly metadata?: CompiledWorkflowMetadata;
   readonly triggers: readonly ValidatedTrigger[];
   readonly flow: ValidatedFlow;
+  readonly lifecycle?: ValidatedLifecycle;
 }
 
 export interface ValidatedModuleDeclaration {
@@ -208,6 +247,16 @@ const supportedElements = new Set([
   'imports',
   'module',
   'workflow',
+  'lifecycle',
+  'on-start',
+  'on-step-start',
+  'on-step-success',
+  'on-step-failure',
+  'on-step-complete',
+  'on-success',
+  'on-failure',
+  'on-cancel',
+  'on-complete',
   'triggers',
   'manual',
   'webhook',
@@ -230,12 +279,7 @@ const supportedElements = new Set([
   'when-rejected',
 ]);
 
-const stagedElements = new Set([
-  'config',
-  'lifecycle',
-  'on-success',
-  'on-failure',
-]);
+const stagedElements = new Set(['config']);
 
 const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   woml: { attributes: new Set() },
@@ -245,6 +289,16 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
     attributes: new Set(['id', 'name', 'description', 'version']),
     stagedAttributes: new Set(['tags']),
   },
+  lifecycle: { attributes: new Set() },
+  'on-start': { attributes: new Set() },
+  'on-step-start': { attributes: new Set(['steps']) },
+  'on-step-success': { attributes: new Set(['steps']) },
+  'on-step-failure': { attributes: new Set(['steps']) },
+  'on-step-complete': { attributes: new Set(['steps']) },
+  'on-success': { attributes: new Set() },
+  'on-failure': { attributes: new Set() },
+  'on-cancel': { attributes: new Set() },
+  'on-complete': { attributes: new Set() },
   triggers: { attributes: new Set() },
   manual: { attributes: new Set(['id']) },
   webhook: {
@@ -283,7 +337,14 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   notify: { attributes: new Set() },
   slack: {
-    attributes: new Set(['id', 'events', 'channels', 'bot-token', 'app-token']),
+    attributes: new Set([
+      'id',
+      'events',
+      'channels',
+      'message',
+      'bot-token',
+      'app-token',
+    ]),
   },
   schedule: {
     attributes: new Set(['id', 'cron', 'timezone', 'on-missed']),
@@ -301,7 +362,8 @@ const javascriptSafeIdPattern = /^[a-z][A-Za-z0-9]*$/;
 const webhookPathPattern = /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?$/;
 const eventNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
 const moduleAliasPattern = /^[a-z][A-Za-z0-9]*$/;
-const moduleSourcePattern = /^(?:\.\/|\.\.\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:js|ts)$/;
+const moduleSourcePattern =
+  /^(?:\.\/|\.\.\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:js|ts)$/;
 const artifactDigestPattern = /^sha256:[0-9a-f]{64}$/;
 const runtimeExportPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const reservedModuleAliases = new Set([
@@ -401,16 +463,24 @@ function visitProfile(
       );
     }
     if (!profile.attributes.has(attribute.name)) {
+      const isLifecycleStepFilterMisuse =
+        attribute.name === 'steps' &&
+        element.name.startsWith('on-') &&
+        !element.name.startsWith('on-step-');
       failValidation(
         document,
-        attribute.name === 'retry' || attribute.name.startsWith('retry-')
-          ? 'WOML_RETRY_HANDLER_UNSUPPORTED'
-          : element.name === 'slack'
-            ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
-            : 'WOML_UNKNOWN_ATTRIBUTE',
-        attribute.name === 'retry' || attribute.name.startsWith('retry-')
-          ? `Retry attributes are valid only on <step>; found "${attribute.name}" on <${element.name}>.`
-          : `Unknown attribute "${attribute.name}" on <${element.name}>.`,
+        isLifecycleStepFilterMisuse
+          ? 'WOML_LIFECYCLE_STEP_FILTER_INVALID'
+          : attribute.name === 'retry' || attribute.name.startsWith('retry-')
+            ? 'WOML_RETRY_HANDLER_UNSUPPORTED'
+            : element.name === 'slack'
+              ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
+              : 'WOML_UNKNOWN_ATTRIBUTE',
+        isLifecycleStepFilterMisuse
+          ? 'Attribute "steps" is valid only on step lifecycle hooks.'
+          : attribute.name === 'retry' || attribute.name.startsWith('retry-')
+            ? `Retry attributes are valid only on <step>; found "${attribute.name}" on <${element.name}>.`
+            : `Unknown attribute "${attribute.name}" on <${element.name}>.`,
         attribute.nameSpan,
         attribute.name === 'retry' || attribute.name.startsWith('retry-')
           ? 'Move the retry policy to a script-bearing <step>.'
@@ -605,10 +675,26 @@ function flowItemMetadata(
 function validateWorkflowChildren(
   document: WomlSourceDocument,
   workflow: WomlSourceElement
-): readonly [WomlSourceElement | undefined, WomlSourceElement] {
+): readonly [
+  WomlSourceElement | undefined,
+  WomlSourceElement | undefined,
+  WomlSourceElement,
+] {
   const children = elementChildren(document, workflow);
+  const lifecycleContainers = children.filter(
+    child => child.name === 'lifecycle'
+  );
   const triggerContainers = children.filter(child => child.name === 'triggers');
   const stepsContainers = children.filter(child => child.name === 'steps');
+
+  if (lifecycleContainers.length > 1) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_DUPLICATE',
+      `<workflow> accepts at most one <lifecycle> container; found ${lifecycleContainers.length}.`,
+      lifecycleContainers[1]?.openTagSpan ?? workflow.openTagSpan
+    );
+  }
 
   if (triggerContainers.length > 1) {
     failValidation(
@@ -627,31 +713,27 @@ function validateWorkflowChildren(
     );
   }
   const triggers = triggerContainers[0];
+  const lifecycle = lifecycleContainers[0];
   const steps = stepsContainers[0];
+  const expected = [lifecycle, triggers, steps].filter(
+    (child): child is WomlSourceElement => child !== undefined
+  );
   const canonical =
-    triggers === undefined
-      ? children.length === 1 && children[0] === steps
-      : children.length === 2 &&
-        children[0] === triggers &&
-        children[1] === steps;
+    children.length === expected.length &&
+    children.every((child, index) => child === expected[index]);
   if (!canonical) {
-    const offender = children.find(
-      (child, index) =>
-        (triggers === undefined && (index !== 0 || child.name !== 'steps')) ||
-        (triggers !== undefined &&
-          ((index === 0 && child.name !== 'triggers') ||
-            (index === 1 && child.name !== 'steps') ||
-            index > 1))
-    );
+    const offender = children.find((child, index) => child !== expected[index]);
     failValidation(
       document,
-      'WOML_INVALID_STRUCTURE',
-      '<workflow> must contain optional <triggers> followed by exactly one <steps> container.',
+      lifecycle !== undefined && children.indexOf(lifecycle) > 0
+        ? 'WOML_LIFECYCLE_ORDER_INVALID'
+        : 'WOML_INVALID_STRUCTURE',
+      '<workflow> must contain optional <lifecycle>, optional <triggers>, then exactly one <steps> container.',
       offender?.openTagSpan ?? workflow.openTagSpan
     );
   }
 
-  return [triggers, steps];
+  return [lifecycle, triggers, steps];
 }
 
 function schemaBody(
@@ -1376,7 +1458,7 @@ interface SlackChannelToken {
 function requiredSlackAttribute(
   document: WomlSourceDocument,
   slack: WomlSourceElement,
-  name: 'channels' | 'bot-token' | 'app-token'
+  name: 'channels' | 'message' | 'bot-token' | 'app-token'
 ): WomlSourceAttribute {
   const attribute = slack.attributes[name];
   if (attribute === undefined) {
@@ -1458,6 +1540,14 @@ function validateSlackTrigger(
   slack: WomlSourceElement
 ): ValidatedSlackTrigger {
   ensureEmptyElement(document, slack);
+  if (slack.attributes.message !== undefined) {
+    failValidation(
+      document,
+      'WOML_SLACK_UNKNOWN_ATTRIBUTE',
+      'Attribute "message" is valid on lifecycle notifications, not a Slack trigger.',
+      slack.attributes.message.nameSpan
+    );
+  }
   const id = validateJavaScriptSafeId(
     document,
     requiredAttribute(document, slack, 'id'),
@@ -1567,13 +1657,15 @@ function validateNotify(
       );
     }
     ensureEmptyElement(document, provider);
-    for (const triggerOnlyAttribute of ['id', 'events'] as const) {
+    for (const triggerOnlyAttribute of ['id', 'events', 'message'] as const) {
       const attribute = provider.attributes[triggerOnlyAttribute];
       if (attribute !== undefined) {
         failValidation(
           document,
           'WOML_SLACK_UNKNOWN_ATTRIBUTE',
-          `Attribute "${triggerOnlyAttribute}" is valid on a Slack trigger, not a Slack notification provider.`,
+          triggerOnlyAttribute === 'message'
+            ? 'Attribute "message" is valid on a lifecycle notification, not an approval notification.'
+            : `Attribute "${triggerOnlyAttribute}" is valid on a Slack trigger, not a Slack notification provider.`,
           attribute.nameSpan
         );
       }
@@ -1734,6 +1826,417 @@ function validateStep(
   };
 }
 
+const lifecycleHookEvents = {
+  'on-start': 'run_start',
+  'on-step-start': 'step_start',
+  'on-step-success': 'step_success',
+  'on-step-failure': 'step_failure',
+  'on-step-complete': 'step_complete',
+  'on-success': 'run_success',
+  'on-failure': 'run_failure',
+  'on-cancel': 'run_cancel',
+  'on-complete': 'run_complete',
+} as const satisfies Readonly<Record<string, LifecycleEventName>>;
+
+const lifecycleHookOrder = Object.keys(
+  lifecycleHookEvents
+) as readonly (keyof typeof lifecycleHookEvents)[];
+
+function templateReference(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute,
+  source: string,
+  relativeStart: number,
+  event: LifecycleEventName,
+  stepIds: ReadonlySet<string>
+): ContextReferenceExpression | LifecycleReferenceExpression {
+  const sourceFile = new SourceFile(document.file, document.source);
+  const span = sourceFile.span(
+    attribute.valueSpan.start.offset + relativeStart,
+    attribute.valueSpan.start.offset + relativeStart + source.length
+  );
+  const context =
+    /^context\.(payload(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+|steps\.([a-z][A-Za-z0-9]*)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)$/.exec(
+      source
+    );
+  if (context !== null) {
+    if (context[2] !== undefined && !stepIds.has(context[2])) {
+      failValidation(
+        document,
+        'WOML_LIFECYCLE_STEP_UNKNOWN',
+        `Lifecycle template references unknown executable step "${context[2]}".`,
+        span
+      );
+    }
+    return {
+      kind: 'contextReference',
+      path: context[1]
+        .split('.')
+        .map((segment, index) =>
+          index === 0 && segment === 'payload' ? 'trigger' : segment
+        ),
+    };
+  }
+
+  const lifecycle =
+    /^lifecycle\.(event|workflow\.(?:id|outcome)|step\.(?:id|outcome|attempts)|failure\.(?:code|message))$/.exec(
+      source
+    );
+  if (lifecycle === null) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_TEMPLATE_INVALID',
+      `Unsupported lifecycle template reference "${source}".`,
+      span,
+      'Use a scalar context.payload, context.steps, or reviewed lifecycle field.'
+    );
+  }
+  const path = lifecycle[1].split('.');
+  const isStepEvent = event.startsWith('step_');
+  const hasOutcome =
+    event === 'step_success' ||
+    event === 'step_failure' ||
+    event === 'step_complete' ||
+    event === 'run_success' ||
+    event === 'run_failure' ||
+    event === 'run_cancel' ||
+    event === 'run_complete';
+  if (path[0] === 'step' && !isStepEvent) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_TEMPLATE_INVALID',
+      `Reference "${source}" is unavailable for ${event}.`,
+      span
+    );
+  }
+  if (path.at(-1) === 'outcome' && !hasOutcome) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_TEMPLATE_INVALID',
+      `Reference "${source}" is unavailable before an outcome is decided.`,
+      span
+    );
+  }
+  if (
+    path[0] === 'failure' &&
+    event !== 'step_failure' &&
+    event !== 'run_failure'
+  ) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_TEMPLATE_INVALID',
+      `Reference "${source}" is available only in failure hooks.`,
+      span
+    );
+  }
+  return { kind: 'lifecycleReference', path };
+}
+
+function parseLifecycleTemplate(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute,
+  event: LifecycleEventName,
+  stepIds: ReadonlySet<string>
+): ValueExpression {
+  if (attribute.value.length === 0 || attribute.value.length > 4096) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_TEMPLATE_INVALID',
+      'Lifecycle notification messages must contain 1 through 4096 characters.',
+      attribute.valueSpan
+    );
+  }
+  const parts: (
+    | { readonly kind: 'text'; readonly text: string }
+    | ContextReferenceExpression
+    | LifecycleReferenceExpression
+  )[] = [];
+  let cursor = 0;
+  let placeholders = 0;
+  for (const match of attribute.value.matchAll(/\{\{([^{}]+)\}\}/g)) {
+    const start = match.index ?? 0;
+    const preceding = attribute.value.slice(cursor, start);
+    if (preceding.includes('{{') || preceding.includes('}}')) {
+      failValidation(
+        document,
+        'WOML_LIFECYCLE_TEMPLATE_INVALID',
+        'Lifecycle message contains an unmatched WOML template delimiter.',
+        attribute.valueSpan
+      );
+    }
+    if (preceding.length > 0) parts.push({ kind: 'text', text: preceding });
+    const reference = match[1].trim();
+    const referenceOffset = start + match[0].indexOf(reference);
+    parts.push(
+      templateReference(
+        document,
+        attribute,
+        reference,
+        referenceOffset,
+        event,
+        stepIds
+      )
+    );
+    placeholders += 1;
+    cursor = start + match[0].length;
+  }
+  const tail = attribute.value.slice(cursor);
+  if (tail.includes('{{') || tail.includes('}}')) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_TEMPLATE_INVALID',
+      'Lifecycle message contains an unmatched WOML template delimiter.',
+      attribute.valueSpan
+    );
+  }
+  if (tail.length > 0) parts.push({ kind: 'text', text: tail });
+  if (placeholders > 32) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_TEMPLATE_INVALID',
+      'Lifecycle messages may contain at most 32 placeholders.',
+      attribute.valueSpan
+    );
+  }
+  return { kind: 'template', parts };
+}
+
+function validateLifecycleNotify(
+  document: WomlSourceDocument,
+  notify: WomlSourceElement,
+  event: LifecycleEventName,
+  hookIndex: number,
+  actionIndex: number,
+  stepIds: ReadonlySet<string>
+): ValidatedInformationalNotification {
+  const providers = elementChildren(document, notify);
+  if (providers.length === 0) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_ACTION_REQUIRED',
+      '<notify> must contain at least one <slack> provider.',
+      notify.openTagSpan
+    );
+  }
+  const seenDestinations = new Set<string>();
+  const deliveries: ValidatedNotificationDelivery[] = [];
+  providers.forEach((provider, providerIndex) => {
+    if (provider.name !== 'slack') {
+      failValidation(
+        document,
+        'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
+        `<notify> supports <slack> only in this release; found <${provider.name}>.`,
+        provider.openTagSpan
+      );
+    }
+    ensureEmptyElement(document, provider);
+    for (const invalidName of ['id', 'events'] as const) {
+      const invalid = provider.attributes[invalidName];
+      if (invalid !== undefined) {
+        failValidation(
+          document,
+          'WOML_SLACK_UNKNOWN_ATTRIBUTE',
+          `Attribute "${invalidName}" is valid on a Slack trigger, not a lifecycle notification.`,
+          invalid.nameSpan
+        );
+      }
+    }
+    const message = parseLifecycleTemplate(
+      document,
+      requiredSlackAttribute(document, provider, 'message'),
+      event,
+      stepIds
+    );
+    const channels = slackChannelTokens(
+      document,
+      requiredSlackAttribute(document, provider, 'channels')
+    );
+    const botToken = requireSecretReference(
+      document,
+      requiredSlackAttribute(document, provider, 'bot-token')
+    );
+    const appToken = requireSecretReference(
+      document,
+      requiredSlackAttribute(document, provider, 'app-token')
+    );
+    channels.forEach((channel, channelIndex) => {
+      const destinationKey = `${botToken.name}\u0000${appToken.name}\u0000${channel.value}`;
+      if (seenDestinations.has(destinationKey)) {
+        failValidation(
+          document,
+          'WOML_SLACK_CHANNEL_DUPLICATE',
+          `Slack destination "${channel.value}" is duplicated for the same credential set.`,
+          channel.span
+        );
+      }
+      seenDestinations.add(destinationKey);
+      deliveries.push({
+        deliveryId: `lifecycle:${hookIndex}:action:${actionIndex}:provider:${providerIndex}:channel:${channelIndex}`,
+        provider: 'slack',
+        destination: channel.value,
+        botToken,
+        appToken,
+        message,
+      });
+    });
+  });
+  return { kind: 'notify', deliveries };
+}
+
+function validateLifecycle(
+  document: WomlSourceDocument,
+  lifecycle: WomlSourceElement,
+  flow: ValidatedFlow
+): ValidatedLifecycle {
+  const children = elementChildren(document, lifecycle);
+  if (children.length === 0) {
+    failValidation(
+      document,
+      'WOML_LIFECYCLE_ACTION_REQUIRED',
+      '<lifecycle> must contain at least one lifecycle hook.',
+      lifecycle.openTagSpan
+    );
+  }
+  const executableSteps = collectValidatedSteps(flow.items);
+  const allStepIds = new Set(executableSteps.map(step => step.id));
+  const seen = new Set<string>();
+  let lastOrder = -1;
+  const hooks = children.map((hook, hookIndex): ValidatedLifecycleHook => {
+    const order = lifecycleHookOrder.indexOf(
+      hook.name as keyof typeof lifecycleHookEvents
+    );
+    if (order === -1) {
+      failValidation(
+        document,
+        'WOML_LIFECYCLE_ACTION_INVALID',
+        `<lifecycle> cannot contain <${hook.name}>.`,
+        hook.openTagSpan
+      );
+    }
+    if (seen.has(hook.name)) {
+      failValidation(
+        document,
+        'WOML_LIFECYCLE_DUPLICATE',
+        `<${hook.name}> may appear only once in <lifecycle>.`,
+        hook.openTagSpan
+      );
+    }
+    if (order < lastOrder) {
+      failValidation(
+        document,
+        'WOML_LIFECYCLE_ORDER_INVALID',
+        `<${hook.name}> is out of canonical lifecycle order.`,
+        hook.openTagSpan,
+        `Use: ${lifecycleHookOrder.map(name => `<${name}>`).join(', ')}.`
+      );
+    }
+    seen.add(hook.name);
+    lastOrder = order;
+    const event =
+      lifecycleHookEvents[hook.name as keyof typeof lifecycleHookEvents];
+    const stepFilter = hook.attributes.steps;
+    const isStepHook = event.startsWith('step_');
+    let filteredStepIds: readonly string[] | undefined;
+    if (stepFilter !== undefined) {
+      if (!isStepHook) {
+        failValidation(
+          document,
+          'WOML_LIFECYCLE_STEP_FILTER_INVALID',
+          `Attribute "steps" is valid only on step lifecycle hooks.`,
+          stepFilter.nameSpan
+        );
+      }
+      const values = stepFilter.value.trim().split(/\s+/).filter(Boolean);
+      if (values.length === 0 || new Set(values).size !== values.length) {
+        failValidation(
+          document,
+          'WOML_LIFECYCLE_STEP_FILTER_INVALID',
+          'Lifecycle step filters must be a non-empty list of unique step IDs.',
+          stepFilter.valueSpan
+        );
+      }
+      for (const id of values) {
+        if (!javascriptSafeIdPattern.test(id)) {
+          failValidation(
+            document,
+            'WOML_LIFECYCLE_STEP_FILTER_INVALID',
+            `Lifecycle step filter "${id}" is not a valid step ID.`,
+            stepFilter.valueSpan
+          );
+        }
+        if (!allStepIds.has(id)) {
+          failValidation(
+            document,
+            'WOML_LIFECYCLE_STEP_UNKNOWN',
+            `Lifecycle step filter names unknown executable step "${id}".`,
+            stepFilter.valueSpan
+          );
+        }
+      }
+      filteredStepIds = values;
+    }
+    const actionElements = elementChildren(document, hook);
+    if (actionElements.length === 0) {
+      failValidation(
+        document,
+        'WOML_LIFECYCLE_ACTION_REQUIRED',
+        `<${hook.name}> requires at least one <script> or <notify> action.`,
+        hook.openTagSpan
+      );
+    }
+    const actions = actionElements.map(
+      (action, actionIndex): ValidatedLifecycleAction => {
+        if (action.name === 'script') {
+          const body = scriptBody(document, action);
+          const analysis = analyzeWomlLifecycleScript(body.source);
+          if (analysis.issue !== undefined) {
+            const sourceFile = new SourceFile(document.file, document.source);
+            const start = body.span.start.offset + analysis.issue.start;
+            failValidation(
+              document,
+              analysis.issue.code,
+              analysis.issue.message,
+              sourceFile.span(
+                start,
+                Math.max(start + 1, body.span.start.offset + analysis.issue.end)
+              ),
+              analysis.issue.hint
+            );
+          }
+          return {
+            kind: 'script',
+            source: body.source,
+            scriptSpan: body.span,
+            scriptAnalysis: analysis,
+          };
+        }
+        if (action.name === 'notify') {
+          return validateLifecycleNotify(
+            document,
+            action,
+            event,
+            hookIndex,
+            actionIndex,
+            allStepIds
+          );
+        }
+        failValidation(
+          document,
+          'WOML_LIFECYCLE_ACTION_INVALID',
+          `<${hook.name}> supports <script> and <notify> actions only.`,
+          action.openTagSpan
+        );
+      }
+    );
+    return {
+      event,
+      ...(filteredStepIds === undefined ? {} : { stepIds: filteredStepIds }),
+      actions,
+    };
+  });
+  return { hooks };
+}
+
 function collectScriptAnalyses(
   items: readonly ValidatedFlowItem[],
   analyses = new Map<string, ScriptAnalysis>()
@@ -1797,11 +2300,20 @@ export function inspectWomlModuleUsage(
   document: WomlSourceDocument
 ): WomlModuleUsageInspection {
   const validated = validateDocument(document);
+  const lifecycleAnalyses =
+    validated.lifecycle?.hooks.flatMap(hook =>
+      hook.actions.flatMap(action =>
+        action.kind === 'script' ? [action.scriptAnalysis] : []
+      )
+    ) ?? [];
   const referencedServices = [
     ...new Set(
-      collectValidatedSteps(validated.flow.items).flatMap(
-        step => step.scriptAnalysis.requiredServices
-      )
+      [
+        ...collectValidatedSteps(validated.flow.items).map(
+          step => step.scriptAnalysis
+        ),
+        ...lifecycleAnalyses,
+      ].flatMap(analysis => analysis.requiredServices)
     ),
   ].sort();
   const moduleNames = validated.modules.map(module => module.name);
@@ -1823,6 +2335,14 @@ const scriptRuntimeBindings = [
   'secrets',
 ] as const;
 
+const lifecycleScriptRuntimeBindings = [
+  'context',
+  'lifecycle',
+  'attempt',
+  'services',
+  'secrets',
+] as const;
+
 function withScriptRuntimeBindings(
   nodes: readonly CompiledWorkflowNode[],
   analyses: ReadonlyMap<string, ScriptAnalysis>
@@ -1836,6 +2356,84 @@ function withScriptRuntimeBindings(
     };
     return { ...node, scriptRuntime };
   });
+}
+
+function lowerLifecycle(
+  lifecycle: ValidatedLifecycle
+): CompiledLifecycleDefinitionV1 {
+  return {
+    profileVersion: 1,
+    hooks: lifecycle.hooks.map(hook => {
+      const hookId = `lifecycle:${hook.event}`;
+      const actions: CompiledLifecycleActionV1[] = hook.actions.map(
+        (action, actionIndex): CompiledLifecycleActionV1 => {
+          const actionId = `${hookId}:action:${actionIndex}`;
+          if (action.kind === 'script') {
+            const scriptRuntime: ScriptRuntimeBindingsV2 = {
+              bindingVersion: 2,
+              bindings: lifecycleScriptRuntimeBindings,
+              requiredSecrets: action.scriptAnalysis.requiredSecrets,
+            };
+            return {
+              actionId,
+              handler: 'runtime.lifecycle-script',
+              inputs: {
+                kind: 'object',
+                fields: {
+                  source: { kind: 'literal', value: action.source },
+                },
+              },
+              scriptRuntime,
+            };
+          }
+          return {
+            actionId,
+            handler: 'notification.informational',
+            inputs: {
+              kind: 'object',
+              fields: {
+                deliveries: {
+                  kind: 'array',
+                  items: action.deliveries.map(delivery => ({
+                    kind: 'object' as const,
+                    fields: {
+                      deliveryId: {
+                        kind: 'literal' as const,
+                        value: delivery.deliveryId,
+                      },
+                      provider: {
+                        kind: 'literal' as const,
+                        value: delivery.provider,
+                      },
+                      destination: {
+                        kind: 'literal' as const,
+                        value: delivery.destination,
+                      },
+                      credentials: {
+                        kind: 'object' as const,
+                        fields: {
+                          botToken: delivery.botToken,
+                          appToken: delivery.appToken,
+                        },
+                      },
+                      message: delivery.message!,
+                    },
+                  })),
+                },
+              },
+            },
+          };
+        }
+      );
+      const compiledHook: CompiledLifecycleHookV1 = {
+        hookId,
+        event: hook.event,
+        ...(hook.stepIds === undefined ? {} : { stepIds: hook.stepIds }),
+        actions,
+      };
+      return compiledHook;
+    }),
+  };
 }
 
 function validateBranchArm(
@@ -2842,7 +3440,10 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
   const documentChildren = elementChildren(document, root);
   let importsElement: WomlSourceElement | undefined;
   let workflow: WomlSourceElement | undefined;
-  if (documentChildren.length === 1 && documentChildren[0].name === 'workflow') {
+  if (
+    documentChildren.length === 1 &&
+    documentChildren[0].name === 'workflow'
+  ) {
     workflow = documentChildren[0];
   } else if (
     documentChildren.length === 2 &&
@@ -2853,7 +3454,9 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     workflow = documentChildren[1];
   } else {
     const misplaced =
-      documentChildren.find(child => child.name !== 'imports' && child.name !== 'workflow') ??
+      documentChildren.find(
+        child => child.name !== 'imports' && child.name !== 'workflow'
+      ) ??
       documentChildren[0] ??
       root;
     failValidation(
@@ -2879,15 +3482,17 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     requiredAttribute(document, workflow, 'id')
   );
   const metadata = workflowMetadata(document, workflow);
-  const [triggersElement, stepsElement] = validateWorkflowChildren(
-    document,
-    workflow
-  );
+  const [lifecycleElement, triggersElement, stepsElement] =
+    validateWorkflowChildren(document, workflow);
   const triggers =
     triggersElement === undefined
       ? []
       : validateTriggers(document, triggersElement);
   const flow = validateSteps(document, stepsElement);
+  const lifecycle =
+    lifecycleElement === undefined
+      ? undefined
+      : validateLifecycle(document, lifecycleElement, flow);
 
   return {
     element: workflow,
@@ -2896,6 +3501,7 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     ...(metadata === undefined ? {} : { metadata }),
     triggers,
     flow,
+    ...(lifecycle === undefined ? {} : { lifecycle }),
   };
 }
 
@@ -2920,6 +3526,7 @@ function compileValidatedWoml(
     metadata,
     triggers,
     flow,
+    lifecycle,
   } = validateDocument(document);
   if (modules.length > 0 && moduleRuntime === undefined) {
     failCompile(
@@ -2992,23 +3599,36 @@ function compileValidatedWoml(
   }
   const lowered = lowerFlowItems(flow.items);
   const scriptAnalyses = collectScriptAnalyses(flow.items);
+  const lifecycleScripts =
+    lifecycle?.hooks.flatMap(hook =>
+      hook.actions.flatMap(action =>
+        action.kind === 'script'
+          ? [{ analysis: action.scriptAnalysis, span: action.scriptSpan }]
+          : []
+      )
+    ) ?? [];
   const availableServices = new Set([
     ...builtInServiceNames,
     ...modules.map(module => module.name),
   ]);
-  const unknownService = collectValidatedSteps(flow.items)
-    .flatMap(step =>
+  const unknownService = [
+    ...collectValidatedSteps(flow.items).flatMap(step =>
       step.scriptAnalysis.serviceReferences.map(reference => ({
-        step,
+        span: step.scriptSpan,
         reference,
       }))
-    )
-    .find(({ reference }) => !availableServices.has(reference.name));
+    ),
+    ...lifecycleScripts.flatMap(script =>
+      script.analysis.serviceReferences.map(reference => ({
+        span: script.span,
+        reference,
+      }))
+    ),
+  ].find(({ reference }) => !availableServices.has(reference.name));
   if (unknownService !== undefined) {
     const sourceFile = new SourceFile(document.file, document.source);
     const start =
-      unknownService.step.scriptSpan.start.offset +
-      unknownService.reference.start;
+      unknownService.span.start.offset + unknownService.reference.start;
     failCompile(
       document,
       'WOML_MODULE_SERVICE_UNKNOWN',
@@ -3025,6 +3645,7 @@ function compileValidatedWoml(
     );
   }
   const usesScriptRuntimeV1 =
+    lifecycle !== undefined ||
     triggers.length === 0 ||
     moduleRuntime !== undefined ||
     [...scriptAnalyses.values()].some(
@@ -3045,30 +3666,37 @@ function compileValidatedWoml(
       nodes,
       edges: lowered.edges,
     } satisfies CompiledWorkflowGraph,
+    ...(moduleRuntime === undefined ? {} : { moduleRuntime }),
+    ...(lifecycle === undefined
+      ? {}
+      : { lifecycle: lowerLifecycle(lifecycle) }),
   };
-  const compiled: CompiledWorkflowDefinition = triggers.length === 0
-    ? {
-        schemaVersion: 10,
-        ...definition,
-        ...(moduleRuntime === undefined ? {} : { moduleRuntime }),
-      }
-    : moduleRuntime !== undefined
-    ? { schemaVersion: 9, ...definition, moduleRuntime }
-    : usesScriptRuntimeV1
-      ? { schemaVersion: 8, ...definition }
-    : triggers.length > 1 || triggers.some(trigger => trigger.kind !== 'manual')
-      ? { schemaVersion: 7, ...definition }
-      : lowered.nodes.some(node => node.retryPolicy !== undefined)
-        ? { schemaVersion: 6, ...definition }
-        : flow.firstNotification !== undefined
-          ? { schemaVersion: 5, ...definition }
-          : flow.firstApproval !== undefined
-            ? { schemaVersion: 4, ...definition }
-            : flow.firstParallel !== undefined
-              ? { schemaVersion: 3, ...definition }
-              : flow.firstBranch === undefined
-                ? { schemaVersion: 1, ...definition }
-                : { schemaVersion: 2, ...definition };
+  const compiled: CompiledWorkflowDefinition =
+    lifecycle !== undefined
+      ? { schemaVersion: 11, ...definition }
+      : triggers.length === 0
+        ? {
+            schemaVersion: 10,
+            ...definition,
+          }
+        : moduleRuntime !== undefined
+          ? { schemaVersion: 9, ...definition, moduleRuntime }
+          : usesScriptRuntimeV1
+            ? { schemaVersion: 8, ...definition }
+            : triggers.length > 1 ||
+                triggers.some(trigger => trigger.kind !== 'manual')
+              ? { schemaVersion: 7, ...definition }
+              : lowered.nodes.some(node => node.retryPolicy !== undefined)
+                ? { schemaVersion: 6, ...definition }
+                : flow.firstNotification !== undefined
+                  ? { schemaVersion: 5, ...definition }
+                  : flow.firstApproval !== undefined
+                    ? { schemaVersion: 4, ...definition }
+                    : flow.firstParallel !== undefined
+                      ? { schemaVersion: 3, ...definition }
+                      : flow.firstBranch === undefined
+                        ? { schemaVersion: 1, ...definition }
+                        : { schemaVersion: 2, ...definition };
 
   const graphIssues = inspectCompiledWorkflowGraph(compiled.graph, {
     requireSingleTerminal: true,
@@ -3094,10 +3722,17 @@ export function compileWoml(
 export function compileWomlWithModules(
   document: WomlSourceDocument,
   moduleRuntime: CompiledModuleRuntimeV1
-): CompiledWorkflowDefinitionV9 | CompiledWorkflowDefinitionV10 {
+):
+  | CompiledWorkflowDefinitionV9
+  | CompiledWorkflowDefinitionV10
+  | CompiledWorkflowDefinitionV11 {
   const compiled = compileValidatedWoml(document, moduleRuntime);
-  if (compiled.schemaVersion !== 9 && compiled.schemaVersion !== 10) {
-    throw new Error('module compilation did not produce Model v9 or v10');
+  if (
+    compiled.schemaVersion !== 9 &&
+    compiled.schemaVersion !== 10 &&
+    compiled.schemaVersion !== 11
+  ) {
+    throw new Error('module compilation did not produce Model v9, v10, or v11');
   }
   return compiled;
 }

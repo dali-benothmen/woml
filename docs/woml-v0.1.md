@@ -360,12 +360,18 @@ workflow       := <workflow workflow-attributes>
 config         := <config config-attributes />
 
 lifecycle      := <lifecycle>
+                    on-start?
+                    on-step-start?
+                    on-step-success?
+                    on-step-failure?
+                    on-step-complete?
                     on-success?
                     on-failure?
+                    on-cancel?
+                    on-complete?
                   </lifecycle>
 
-on-success     := <on-success> script </on-success>
-on-failure     := <on-failure> script </on-failure>
+lifecycle-hook := <hook steps=step-id-list?> (script | notify)+ </hook>
 
 triggers       := <triggers> trigger+ </triggers>
 
@@ -616,6 +622,23 @@ WOML frontend must not pass them to the core through WOML-specific fields.
 
 ```xml
 <lifecycle>
+  <on-start>
+    <script>
+      console.log(`Starting ${lifecycle.workflow.id}`);
+    </script>
+  </on-start>
+
+  <on-step-failure steps="chargeCustomer createInvoice">
+    <notify>
+      <slack
+        channels="#incidents"
+        message="Step {{lifecycle.step.id}} failed with {{lifecycle.failure.code}}"
+        bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+        app-token="{{secrets.SLACK_APP_TOKEN}}"
+      />
+    </notify>
+  </on-step-failure>
+
   <on-success>
     <script>
       console.log("Workflow completed");
@@ -627,25 +650,39 @@ WOML frontend must not pass them to the core through WOML-specific fields.
       console.error("Workflow failed");
     </script>
   </on-failure>
+
+  <on-complete>
+    <script>
+      console.log(`Final outcome: ${lifecycle.workflow.outcome}`);
+    </script>
+  </on-complete>
 </lifecycle>
 ```
 
 Structural rules:
 
 - `<lifecycle>` is optional and may occur at most once.
-- `<on-success>` is optional and may occur at most once.
-- `<on-failure>` is optional and may occur at most once.
-- Each lifecycle hook contains exactly one `<script>`.
+- Hooks use canonical order: `on-start`, `on-step-start`, `on-step-success`,
+  `on-step-failure`, `on-step-complete`, `on-success`, `on-failure`,
+  `on-cancel`, then `on-complete`.
+- Every hook is optional and may occur at most once.
+- A hook contains one or more source-ordered `<script>` or `<notify>` actions.
+- Step hooks accept an optional whitespace-separated `steps` filter containing
+  executable step IDs. Omission means all executable steps.
 - Lifecycle scripts do not create `context.steps` outputs.
+- Lifecycle scripts receive the read-only `lifecycle` binding. It is unavailable
+  in normal step scripts.
+- Lifecycle Slack notifications are informational and require `channels`,
+  `message`, `bot-token`, and `app-token`. They never create approval buttons or
+  decision capabilities.
+- Notification messages use WOML Template v1: bounded literal text and scalar
+  `{{context...}}` or `{{lifecycle...}}` placeholders. Secrets are forbidden in
+  message content.
 
-This draft fixes the lifecycle syntax but does not yet approve the durable event
-boundaries, retry behavior, or failure semantics of lifecycle execution. A
-runtime MUST reject unsupported lifecycle hooks rather than silently ignore
-them.
-
-The current compiled-workflow schema also has no lifecycle representation. That
-contract must be extended deliberately before lifecycle syntax can lower into an
-executable model.
+LEC1 validates this syntax and lowers it into Compiled Workflow Model v11 outside
+the business DAG. Durable Event v10 execution begins in LEC2 and LEC3. Until
+then, `woml check` accepts lifecycle source and `woml run` rejects it with
+`WOML_LIFECYCLE_RUNTIME_UNAVAILABLE` rather than silently ignoring hooks.
 
 ## 9. `<triggers>`
 

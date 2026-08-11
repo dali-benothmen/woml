@@ -1,0 +1,18 @@
+<woml>
+  <imports>
+    <module name="spreadsheet" from="../modules/spreadsheet.ts" />
+  </imports>
+  <workflow id="lifecycle-module-demo">
+    <lifecycle>
+      <on-success>
+        <script>
+          await services.spreadsheet.removeEmptyRows([[1], []]);
+        </script>
+      </on-success>
+    </lifecycle>
+    <triggers><manual id="start" /></triggers>
+    <steps>
+      <step id="finish"><script>return { ok: true };</script></step>
+    </steps>
+  </workflow>
+</woml>

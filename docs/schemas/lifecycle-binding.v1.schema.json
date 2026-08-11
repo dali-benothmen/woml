@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/lifecycle-binding/v1",
+  "title": "WOML Lifecycle Runtime Binding v1",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "x-forbiddenFields": ["secrets", "stack", "eventId", "invocationId", "operationKey", "idempotencyKey", "context.run"],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event", "workflow"],
+  "properties": {
+    "event": { "enum": ["run_start", "step_start", "step_success", "step_failure", "step_complete", "run_success", "run_failure", "run_cancel", "run_complete"] },
+    "workflow": { "$ref": "#/$defs/workflow" },
+    "step": { "$ref": "#/$defs/step" },
+    "failure": { "$ref": "#/$defs/failure" }
+  },
+  "$defs": {
+    "workflow": { "type": "object", "additionalProperties": false, "required": ["id"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 256 }, "outcome": { "enum": ["succeeded", "failed", "cancelled"] } } },
+    "step": { "type": "object", "additionalProperties": false, "required": ["id", "attempts"], "properties": { "id": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" }, "outcome": { "enum": ["succeeded", "failed", "cancelled"] }, "attempts": { "type": "integer", "minimum": 0, "maximum": 10 } } },
+    "failure": { "type": "object", "additionalProperties": false, "required": ["code", "message"], "properties": { "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$", "maxLength": 128 }, "message": { "type": "string", "minLength": 1, "maxLength": 1024 } } }
+  }
+}
