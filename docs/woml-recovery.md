@@ -65,6 +65,12 @@ step result, the child remains successful and inspectable. The ambiguous parent
 attempt still fails closed. WOML does not replay the parent script or pretend
 that receiving the child's result proves the parent finished using it.
 
+Across local processes, the child is durable before WOML sends the private
+loopback wake-up. The target periodically scans admitted children, so a lost
+wake-up is repaired without another child admission. Renewable ownership leases
+expire crashed targets; graceful shutdown removes their routes immediately.
+The loopback acknowledgement is never treated as proof of child completion.
+
 ## Operational output
 
 Attempt failures, schedules, successes, and the recovery command are written to

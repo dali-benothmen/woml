@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use actix_web::http::{header, Method, StatusCode};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
-use chrono::{SecondsFormat, Utc};
+use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
 use futures_util::StreamExt;
 use jsonschema::error::ValidationErrorKind;
 use jsonschema::Validator;
@@ -27,17 +27,23 @@ use crate::schedule::{
   SCHEDULE_PROGRESS_CONTRACT, SCHEDULE_PROGRESS_CONTRACT_VERSION,
 };
 use crate::{
-  execute_admitted_trigger_run_durable, CompiledWorkflowDefinition, DurableEventStore,
-  DurableStoreError, EventServiceAcceptedRun, EventServiceSubscriber, IntervalCursorRegistration,
-  ManagedEventsHandler, ManagedWorkflowCallsHandler, ModelValidationError, RuntimeExecutionOptions,
+  dispatch_admitted_workflow_call, execute_admitted_trigger_run_durable,
+  workflow_routing_credential_hash, workflow_routing_session_credential,
+  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError, EventServiceAcceptedRun,
+  EventServiceSubscriber, IntervalCursorRegistration, ManagedEventsHandler,
+  ManagedWorkflowCallsHandler, ModelValidationError, RuntimeExecutionOptions,
   RuntimeModuleArtifact, ScheduleCursorRegistration, TriggerAdmissionRequest,
-  WorkflowTargetRegistry,
+  WorkflowRoutingAcknowledgement, WorkflowRoutingWakeup, WorkflowTargetRegistry,
+  WORKFLOW_ROUTING_CONTRACT, WORKFLOW_ROUTING_CONTRACT_VERSION, WORKFLOW_ROUTING_WAKE_PATH,
 };
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
 pub const EVENT_MAX_SUBSCRIBERS: usize = 1_000;
 pub const TRIGGER_PROGRESS_CONTRACT: &str = "woml.trigger-progress";
 pub const TRIGGER_PROGRESS_CONTRACT_VERSION: u32 = 1;
+const WORKFLOW_RUNTIME_LEASE_SECONDS: i64 = 10;
+const WORKFLOW_RUNTIME_RENEW_SECONDS: u64 = 2;
+const WORKFLOW_PENDING_SCAN_MILLISECONDS: u64 = 250;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type")]
@@ -148,6 +154,9 @@ pub type ExternalTriggerAdmissionReceiver =
 pub struct WomlWebhookServer {
   local_address: SocketAddr,
   handle: Option<actix_web::dev::ServerHandle>,
+  internal_handle: actix_web::dev::ServerHandle,
+  database_path: PathBuf,
+  workflow_runtime_id: String,
   timed_trigger_tasks: Vec<actix_web::rt::task::JoinHandle<()>>,
 }
 
@@ -172,6 +181,19 @@ impl WomlWebhookServer {
       .map(TcpListener::local_addr)
       .transpose()?
       .unwrap_or_else(|| "127.0.0.1:0".parse().expect("valid internal address"));
+    let internal_listener = TcpListener::bind("127.0.0.1:0")?;
+    let internal_address = internal_listener.local_addr()?;
+    let workflow_runtime_id = state.workflow_targets.runtime_id().to_string();
+    let database_path = state.database_path.clone();
+    let now = Utc::now();
+    DurableEventStore::open(&database_path)?.register_workflow_runtime_routes(
+      &workflow_runtime_id,
+      &state.workflow_targets.targets(),
+      &format!("http://{internal_address}"),
+      &workflow_routing_credential_hash(&state.workflow_routing_credential),
+      now,
+      now + ChronoDuration::seconds(WORKFLOW_RUNTIME_LEASE_SECONDS),
+    )?;
     let app_state = web::Data::new(state);
     let recovery_state = app_state.clone();
     let (mut timed_trigger_tasks, recovered_schedule_runs) =
@@ -192,6 +214,25 @@ impl WomlWebhookServer {
     } else {
       None
     };
+    let internal_app_state = recovery_state.clone();
+    let internal_server = HttpServer::new(move || {
+      App::new()
+        .app_data(internal_app_state.clone())
+        .app_data(web::JsonConfig::default().limit(16 * 1024))
+        .route(
+          WORKFLOW_ROUTING_WAKE_PATH,
+          web::post().to(handle_workflow_call_wakeup),
+        )
+    })
+    .listen(internal_listener)?
+    .run();
+    let internal_handle = internal_server.handle();
+    actix_web::rt::spawn(internal_server);
+
+    let routing_state = recovery_state.clone();
+    timed_trigger_tasks.push(actix_web::rt::spawn(async move {
+      run_workflow_routing_maintenance(routing_state).await;
+    }));
 
     if let Some(receiver) = external_ingress {
       let external_state = recovery_state.clone();
@@ -235,6 +276,9 @@ impl WomlWebhookServer {
     Ok(Self {
       local_address,
       handle,
+      internal_handle,
+      database_path,
+      workflow_runtime_id,
       timed_trigger_tasks,
     })
   }
@@ -250,6 +294,12 @@ impl WomlWebhookServer {
     if let Some(handle) = self.handle {
       handle.stop(true).await;
     }
+    self.internal_handle.stop(true).await;
+    let _ = DurableEventStore::open(&self.database_path).and_then(|mut store| {
+      store
+        .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
+        .map(|_| ())
+    });
   }
 }
 
@@ -282,6 +332,139 @@ struct WebhookRuntimeState {
   progress_reporter: Option<TriggerProgressReporter>,
   schedules: Vec<ScheduleRuntimeRegistration>,
   intervals: Vec<IntervalRuntimeRegistration>,
+  workflow_targets: Arc<WorkflowTargetRegistry>,
+  workflow_routing_credential: String,
+}
+
+async fn handle_workflow_call_wakeup(
+  state: web::Data<WebhookRuntimeState>,
+  request: HttpRequest,
+  wakeup: web::Json<WorkflowRoutingWakeup>,
+) -> HttpResponse {
+  let supplied = request
+    .headers()
+    .get(header::AUTHORIZATION)
+    .and_then(|value| value.to_str().ok())
+    .and_then(|value| value.strip_prefix("Bearer "))
+    .unwrap_or_default();
+  let expected = state.workflow_routing_credential.as_bytes();
+  let authorized =
+    supplied.len() == expected.len() && bool::from(supplied.as_bytes().ct_eq(expected));
+  if !authorized {
+    return workflow_routing_acknowledgement(
+      StatusCode::UNAUTHORIZED,
+      &wakeup.child_run_id,
+      false,
+      Some("WOML_WORKFLOW_TARGET_UNAVAILABLE"),
+    );
+  }
+  if wakeup.contract != WORKFLOW_ROUTING_CONTRACT
+    || wakeup.contract_version != WORKFLOW_ROUTING_CONTRACT_VERSION
+    || wakeup.kind != "wakeup"
+    || wakeup.runtime_id != state.workflow_targets.runtime_id()
+  {
+    return workflow_routing_acknowledgement(
+      StatusCode::BAD_REQUEST,
+      &wakeup.child_run_id,
+      false,
+      Some("WOML_WORKFLOW_TARGET_UNAVAILABLE"),
+    );
+  }
+  let admission = DurableEventStore::open(&state.database_path)
+    .and_then(|store| store.workflow_call_for_child(&wakeup.child_run_id));
+  let Ok(Some(admission)) = admission else {
+    return workflow_routing_acknowledgement(
+      StatusCode::NOT_FOUND,
+      &wakeup.child_run_id,
+      false,
+      Some("WOML_WORKFLOW_TARGET_UNAVAILABLE"),
+    );
+  };
+  if admission.call_key != wakeup.call_key
+    || !state.workflow_targets.owns(
+      &admission.target_workflow_id,
+      &admission.target_definition_hash,
+    )
+  {
+    return workflow_routing_acknowledgement(
+      StatusCode::CONFLICT,
+      &wakeup.child_run_id,
+      false,
+      Some("WOML_WORKFLOW_DEFINITION_MISMATCH"),
+    );
+  }
+  if dispatch_admitted_workflow_call(
+    state.database_path.clone(),
+    admission,
+    state.execution.clone(),
+  )
+  .await
+  .is_err()
+  {
+    return workflow_routing_acknowledgement(
+      StatusCode::SERVICE_UNAVAILABLE,
+      &wakeup.child_run_id,
+      false,
+      Some("WOML_WORKFLOW_TARGET_UNAVAILABLE"),
+    );
+  }
+  workflow_routing_acknowledgement(StatusCode::OK, &wakeup.child_run_id, true, None)
+}
+
+fn workflow_routing_acknowledgement(
+  status: StatusCode,
+  child_run_id: &str,
+  accepted: bool,
+  code: Option<&str>,
+) -> HttpResponse {
+  HttpResponse::build(status).json(WorkflowRoutingAcknowledgement {
+    contract: WORKFLOW_ROUTING_CONTRACT.to_string(),
+    contract_version: WORKFLOW_ROUTING_CONTRACT_VERSION,
+    kind: "acknowledgement".to_string(),
+    child_run_id: child_run_id.to_string(),
+    accepted,
+    code: code.map(str::to_string),
+  })
+}
+
+async fn run_workflow_routing_maintenance(state: web::Data<WebhookRuntimeState>) {
+  let mut next_renewal = tokio::time::Instant::now();
+  loop {
+    let now = Utc::now();
+    let targets = state.workflow_targets.targets();
+    if tokio::time::Instant::now() >= next_renewal {
+      let renewed = DurableEventStore::open(&state.database_path).and_then(|mut store| {
+        store.renew_workflow_runtime_routes(
+          state.workflow_targets.runtime_id(),
+          now,
+          now + ChronoDuration::seconds(WORKFLOW_RUNTIME_LEASE_SECONDS),
+        )
+      });
+      if renewed.is_ok_and(|count| count != targets.len()) {
+        return;
+      }
+      next_renewal = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(WORKFLOW_RUNTIME_RENEW_SECONDS);
+    }
+    for target in targets {
+      let pending = DurableEventStore::open(&state.database_path)
+        .and_then(|store| store.admitted_workflow_calls_for_target(&target));
+      if let Ok(pending) = pending {
+        for admission in pending {
+          let _ = dispatch_admitted_workflow_call(
+            state.database_path.clone(),
+            admission,
+            state.execution.clone(),
+          )
+          .await;
+        }
+      }
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(
+      WORKFLOW_PENDING_SCAN_MILLISECONDS,
+    ))
+    .await;
+  }
 }
 
 #[derive(Clone)]
@@ -490,6 +673,8 @@ fn prepare_state(
     WorkflowTargetRegistry::new(format!("runtime_{}", Uuid::new_v4().simple()))
       .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?,
   );
+  let workflow_routing_credential =
+    workflow_routing_session_credential(&config.database_path, workflow_targets.runtime_id())?;
   for registration in config.registrations {
     registration.workflow.validate_for_durable_execution()?;
     if !matches!(
@@ -610,13 +795,25 @@ fn prepare_state(
   }
 
   let mut store = DurableEventStore::open(&config.database_path)?;
-  store.recover_interrupted_runs()?;
+  let has_live_workflow_runtime = store.has_live_workflow_runtime_routes(Utc::now())?;
+  if !has_live_workflow_runtime {
+    store.recover_interrupted_runs()?;
+  }
   for (workflow, definition_hash, runtime_modules) in &definitions {
     store.register_definition_module_artifacts(workflow, definition_hash, runtime_modules)?;
+  }
+  if has_live_workflow_runtime {
+    store.recover_workflow_call_children_for_targets(&workflow_targets.targets())?;
   }
   let recovery_runs = store
     .recover_undispatched_trigger_runs()?
     .into_iter()
+    .filter(|work| {
+      workflow_targets.owns(
+        &work.occurrence.workflow_id,
+        &work.occurrence.definition_hash,
+      )
+    })
     .map(|work| RunProgressIdentity {
       workflow_id: work.occurrence.workflow_id,
       trigger_id: work.occurrence.trigger_id,
@@ -643,7 +840,7 @@ fn prepare_state(
     .execution
     .capability_registry
     .register(Arc::new(
-      ManagedWorkflowCallsHandler::new(config.database_path.clone(), workflow_targets)
+      ManagedWorkflowCallsHandler::new(config.database_path.clone(), Arc::clone(&workflow_targets))
         .with_execution(&config.execution),
     ))
     .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
@@ -660,6 +857,8 @@ fn prepare_state(
       progress_reporter: config.progress_reporter,
       schedules,
       intervals,
+      workflow_targets,
+      workflow_routing_credential,
     },
     recovery_runs,
     startup_manual_runs,

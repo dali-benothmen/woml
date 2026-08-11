@@ -375,6 +375,9 @@ fn native_trigger_runtime_error(error: WebhookRuntimeError) -> NativeTriggerRunt
     WebhookRuntimeError::RouteConflict(_) => "WOML_WEBHOOK_ROUTE_CONFLICT",
     WebhookRuntimeError::SecretMissing(_) => "WOML_WEBHOOK_SECRET_MISSING",
     WebhookRuntimeError::InvalidSchema { .. } => "WOML_TRIGGER_SCHEMA_INVALID",
+    WebhookRuntimeError::DurableStore(DurableStoreError::WorkflowRuntimeDuplicateOwner(_)) => {
+      "WOML_WORKFLOW_TARGET_AMBIGUOUS"
+    }
     WebhookRuntimeError::DurableStore(_) => "WOML_TRIGGER_UNAVAILABLE",
     WebhookRuntimeError::Io(_) => "WOML_WEBHOOK_BIND_FAILED",
     WebhookRuntimeError::InvalidRegistration(_) | WebhookRuntimeError::Model(_) => {

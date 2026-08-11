@@ -74,6 +74,20 @@ describe('Trigger Progress v1 decoding', () => {
       )
     ).toThrow('invalid trigger progress');
   });
+
+  test('accepts readiness for a call-only runtime with zero triggers', () => {
+    const progress = parseTriggerProgress(
+      JSON.stringify({
+        contract: 'woml.trigger-progress',
+        contractVersion: 1,
+        type: 'ready',
+        registrationCount: 0,
+        occurredAt: '2026-08-11T12:00:00.000Z',
+      })
+    );
+    expect(progress.type).toBe('ready');
+    if (progress.type === 'ready') expect(progress.registrationCount).toBe(0);
+  });
 });
 
 describe('Schedule Progress v1 decoding', () => {

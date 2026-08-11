@@ -62,8 +62,9 @@ child admission through durable store v9 and truthful Run Event v9
 `workflow_call` ingress. WC3 adds the deeply read-only Bun facade and routes an
 admitted same-runtime child through the normal Rust DAG executor. The child is
 an independent durable run; only its terminal JSON result crosses back into the
-parent script. WC4 completes same-runtime crash/retry reattachment; WC5 retains
-local cross-process discovery and routing.
+parent script. WC4 completes same-runtime crash/retry reattachment. WC5 adds
+durable store v10 runtime ownership leases, authenticated private loopback
+wake-up, pending-child scans, and explicit multi-input runtime activation.
 
 WC4 makes the same-runtime boundary retry-safe. The first admitting attempt
 stores one immutable call key and child run; later attempts and duplicate

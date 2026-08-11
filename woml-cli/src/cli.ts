@@ -97,7 +97,7 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml|directory> [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+  return 'Usage: woml run <workflow.woml|directory>... [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
 }
 
 function testUsage(): string {
@@ -136,6 +136,7 @@ function usage(): string {
 interface RunArguments {
   readonly command: 'run' | 'test';
   readonly filePath: string;
+  readonly inputPaths: readonly string[];
   readonly statePath: string;
   readonly resumeRunId?: string;
   readonly approvalPort: number;
@@ -145,11 +146,22 @@ interface RunArguments {
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
-  const [command, filePath, ...options] = args;
+  const [command, ...operandsAndOptions] = args;
+  const firstOption = operandsAndOptions.findIndex(value =>
+    value.startsWith('--')
+  );
+  const inputPaths = operandsAndOptions.slice(
+    0,
+    firstOption === -1 ? operandsAndOptions.length : firstOption
+  );
+  const options =
+    firstOption === -1 ? [] : operandsAndOptions.slice(firstOption);
+  const filePath = inputPaths[0];
   if (
     (command !== 'run' && command !== 'test') ||
     filePath === undefined ||
-    filePath.startsWith('--')
+    filePath.startsWith('--') ||
+    (command === 'test' && inputPaths.length !== 1)
   ) {
     throw new CliInputError(
       'WOML_CLI_ARGUMENTS_INVALID',
@@ -237,9 +249,16 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       triggerId = value;
     }
   }
+  if (resumeRunId !== undefined && inputPaths.length !== 1) {
+    throw new CliInputError(
+      'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',
+      '--resume requires exactly one workflow file, not multiple inputs.'
+    );
+  }
   return {
     command,
     filePath,
+    inputPaths,
     statePath,
     resumeRunId,
     approvalPort,
@@ -801,6 +820,32 @@ async function compileWorkflowSources(
       );
     }
     workflowIds.add(item.workflow.workflowId);
+  }
+  return compiled;
+}
+
+async function compileWorkflowInputs(
+  inputPaths: readonly string[]
+): Promise<readonly CompiledWorkflowSource[]> {
+  const compiled: CompiledWorkflowSource[] = [];
+  const seenFiles = new Set<string>();
+  for (const inputPath of inputPaths) {
+    for (const source of await compileWorkflowSources(inputPath)) {
+      const absolutePath = resolve(source.filePath);
+      if (seenFiles.has(absolutePath)) continue;
+      seenFiles.add(absolutePath);
+      compiled.push(source);
+    }
+  }
+  const workflowIds = new Set<string>();
+  for (const source of compiled) {
+    if (workflowIds.has(source.workflow.workflowId)) {
+      throw new CliInputError(
+        'WOML_WORKFLOW_ID_DUPLICATE',
+        `workflow ID "${source.workflow.workflowId}" is declared more than once.`
+      );
+    }
+    workflowIds.add(source.workflow.workflowId);
   }
   return compiled;
 }
@@ -1718,13 +1763,13 @@ async function activateWorkflows(
   if (sources.length > 1 && args.resumeRunId !== undefined) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',
-      '--resume requires one workflow file, not a directory.'
+      '--resume requires exactly one workflow file, not multiple inputs or a directory.'
     );
   }
   if (sources.length > 1 && args.triggerId !== undefined) {
     throw new CliInputError(
       'WOML_TRIGGER_REQUIRES_SINGLE_WORKFLOW',
-      '--trigger requires one workflow file, not a directory.'
+      '--trigger requires exactly one workflow file, not multiple inputs or a directory.'
     );
   }
 
@@ -2202,7 +2247,7 @@ export async function runCli(
     io.stderr(`${args.length === 0 ? usage() : commandUsage}\n`);
     return 2;
   }
-  const { filePath } = runArguments;
+  const { filePath, inputPaths } = runArguments;
 
   if (
     runArguments.command === 'run' &&
@@ -2219,7 +2264,7 @@ export async function runCli(
 
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
-    sources = await compileWorkflowSources(filePath);
+    sources = await compileWorkflowInputs(inputPaths);
     if (runArguments.command === 'test') {
       if ((await stat(filePath)).isDirectory()) {
         throw new CliInputError(
@@ -2246,11 +2291,21 @@ export async function runCli(
       );
       return 0;
     }
-    await refreshEditorTypes(
-      filePath,
-      sources.flatMap(source => source.runtimeModules),
-      io
-    );
+    for (const inputPath of inputPaths) {
+      const inputIsDirectory = (await stat(inputPath)).isDirectory();
+      const inputRoot = inputIsDirectory
+        ? `${resolve(inputPath)}/`
+        : `${dirname(resolve(inputPath))}/`;
+      await refreshEditorTypes(
+        inputPath,
+        sources
+          .filter(source =>
+            resolve(source.filePath).startsWith(inputRoot)
+          )
+          .flatMap(source => source.runtimeModules),
+        io
+      );
+    }
     await activateWorkflows(sources, runArguments, io, dependencies);
     return 0;
   } catch (error) {

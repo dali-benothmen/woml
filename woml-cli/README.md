@@ -68,6 +68,18 @@ To choose the durable state database explicitly:
 woml run examples/retryWorkflow.woml --state .woml/state.sqlite
 ```
 
+One command may activate multiple explicit files and directories as one runtime
+unit. Direct `.woml` files in directories are loaded non-recursively:
+
+```bash
+woml run workflows/orders.woml workflows/risk.woml shared-workflows/
+```
+
+Call-only workflows remain active with zero triggers. Separate local WOML
+processes can call each other through `services.workflows.call()` when they use
+the same `--state` database. WOML handles local discovery, private wake-up
+credentials, and ownership leases automatically.
+
 To activate the webhook example:
 
 ```bash

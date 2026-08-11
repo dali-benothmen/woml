@@ -1,9 +1,10 @@
 # WOML Durable Workflow Calls Implementation Plan
 
-Status: WC0 and WC1 completed on 2026-08-10; WC2, WC3, and WC4 completed on
-2026-08-11. Same-runtime Workflow Calls now execute through Rust, reuse one
-durable child across retries and duplicate delivery, reject cycles, and recover
-fail-closed without manufacturing another child. WC5 is next.
+Status: WC0 and WC1 completed on 2026-08-10; WC2 through WC5 completed on
+2026-08-11. Workflow Calls now execute through Rust in one runtime or across
+separate local WOML processes, reuse one durable child across retries and
+duplicate delivery, reject cycles, and recover fail-closed without
+manufacturing another child. WC6 is next.
 
 ## 1. Product Outcome
 
@@ -543,8 +544,12 @@ and parent terminal commit.
 
 ### WC5 — Route calls between local WOML processes
 
+Status: **completed on 2026-08-11.**
+
 Changes:
 
+- Accept multiple explicit file and directory operands in one `woml run`
+  command and treat their deduplicated definitions as one runtime unit.
 - Implement the versioned local runtime registry and ownership leases.
 - Start an internal loopback wake-up endpoint on a random port.
 - Generate and rotate internal session credentials automatically.
@@ -556,7 +561,9 @@ Result:
 
 One terminal can keep `calculate-risk` active while a parent started in another
 terminal calls it by workflow ID and receives its result. No public URL, event,
-or user-configured secret is involved.
+or user-configured secret is involved. Authors may equivalently activate an
+explicit set with `woml run parent.woml child.woml` or a directory containing
+those files.
 
 Gate:
 
@@ -700,6 +707,7 @@ admission.
 7. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-The next implementation action is WC5. WC4 now protects same-runtime calls
-across retries, duplicate delivery, and crash boundaries. WC5 adds project-local
-routing between separate `woml run` processes without changing the author API.
+The next implementation action is WC6. WC5 now supports both explicit
+multi-file runtime units and project-local routing between separate `woml run`
+processes without changing the author API. WC6 completes composition,
+diagnostics, and inspection around that durable boundary.

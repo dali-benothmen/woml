@@ -3,7 +3,8 @@
 Status: frozen by WC0 on 2026-08-10. WC1 compiled the source contract, WC2
 implemented exact registration plus durable child admission, WC3 executed
 same-runtime children, and WC4 completed retry-safe reattachment, cycle
-rejection, single-executor claiming, and fail-closed recovery.
+rejection, single-executor claiming, and fail-closed recovery. WC5 implements
+project-local cross-process ownership, wake-up, and pending-child recovery.
 
 ## Author contract
 
@@ -103,6 +104,25 @@ Same-runtime routing is a direct Rust registry lookup. Local cross-process
 routing uses a project/state-scoped ownership lease and an authenticated
 loopback wake-up message for an already admitted child. WOML creates the
 session credential automatically; it is not a workflow secret or public API.
+
+`woml run` accepts one or more file/directory operands. Every direct `.woml`
+file selected by those operands is deduplicated and validated before the set is
+activated as one runtime unit. Directory traversal is intentionally
+non-recursive in v1. Duplicate workflow IDs fail startup.
+
+Each local process registers its workflow IDs, exact definition hashes,
+runtime ID, random loopback endpoint, session-credential hash, and renewable
+ownership lease in durable store v10. The raw credential is derived from a
+mode-`0600` project-local routing key beside the selected state database and is
+never stored in the route table, workflow metadata, or user context. A
+graceful stop releases ownership; a crash is handled by lease expiry.
+
+The caller admits the child in shared durable state before sending the wake-up.
+The target verifies the bearer credential, runtime ID, child identity, call
+key, workflow ID, and definition hash before attempting the existing atomic
+execution claim. The target scans admitted children every 250 ms, so a lost
+wake-up remains recoverable. Wake-up acknowledgement never substitutes for the
+child's durable terminal event.
 
 Exactly one live owner may register a workflow ID. The selected child is pinned
 to the owner's exact definition hash. Cross-machine routing and tenant service

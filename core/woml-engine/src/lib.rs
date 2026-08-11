@@ -137,10 +137,13 @@ pub use webhook::{
   WEBHOOK_MAX_BODY_BYTES,
 };
 pub use workflow_calls::{
-  derive_workflow_call_key, ManagedWorkflowCallsHandler, WorkflowCallAdmission,
+  derive_workflow_call_key, dispatch_admitted_workflow_call, workflow_routing_credential_hash,
+  workflow_routing_session_credential, ManagedWorkflowCallsHandler, WorkflowCallAdmission,
   WorkflowCallAdmissionOutcome, WorkflowCallAdmissionRequest, WorkflowCallIndexState,
-  WorkflowTarget, WorkflowTargetRegistry, WorkflowTargetRegistryError, MAX_WORKFLOW_CALL_DEPTH,
-  WORKFLOW_CALL_CONTRACT, WORKFLOW_CALL_CONTRACT_VERSION,
+  WorkflowRoutingAcknowledgement, WorkflowRoutingWakeup, WorkflowRuntimeRoute, WorkflowTarget,
+  WorkflowTargetRegistry, WorkflowTargetRegistryError, MAX_WORKFLOW_CALL_DEPTH,
+  WORKFLOW_CALL_CONTRACT, WORKFLOW_CALL_CONTRACT_VERSION, WORKFLOW_ROUTING_CONTRACT,
+  WORKFLOW_ROUTING_CONTRACT_VERSION, WORKFLOW_ROUTING_WAKE_PATH,
 };
 
 pub const COMPILED_MODEL_SCHEMA_VERSION_V1: u32 = 1;

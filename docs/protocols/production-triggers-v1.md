@@ -363,7 +363,8 @@ admitted, Trigger Progress v1 describes the resulting run.
 
 ### T4 CLI implementation
 
-`woml run <workflow.woml|directory>` compiles every definition, resolves
+`woml run <workflow.woml|directory>...` compiles every definition selected by
+one or more explicit file/directory operands, resolves
 symbolic secrets in memory, preflights workflow IDs and webhook routes, starts
 the Rust listener, and remains active until SIGINT or SIGTERM. A selected
 manual trigger fires once at activation; completing that run does not stop the

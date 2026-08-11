@@ -7,7 +7,8 @@ journeys.
 
 ## Start an automation
 
-Activate one workflow file or every direct `.woml` file in a directory:
+Activate one workflow file, several explicit files/directories, or every direct
+`.woml` file in a directory:
 
 ```bash
 woml run workflows/ \
@@ -15,6 +16,14 @@ woml run workflows/ \
   --port 3000 \
   --state .woml/state.sqlite
 ```
+
+```bash
+woml run workflows/orders.woml workflows/risk.woml
+```
+
+Multiple inputs are validated and activated as one runtime unit. Repeated file
+paths are deduplicated, directory loading is non-recursive, and duplicate
+workflow IDs fail before any workflow starts.
 
 `woml run` validates all definitions and required secrets before it becomes
 ready. It then keeps webhook and event endpoints, Slack Socket Mode connections,

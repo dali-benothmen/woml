@@ -145,7 +145,7 @@ fn admission_creates_one_truthfully_bound_child_and_reuses_it() {
     at,
   );
   let mut store = DurableEventStore::open(database.path()).unwrap();
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 9);
+  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 10);
 
   let first = store.admit_workflow_call(request.clone()).unwrap();
   assert!(!first.duplicate);

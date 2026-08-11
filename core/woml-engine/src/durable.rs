@@ -36,7 +36,7 @@ use crate::projection::{
 use crate::runtime::RuntimeModuleArtifact;
 use crate::workflow_calls::{
   WorkflowCallAdmission, WorkflowCallAdmissionOutcome, WorkflowCallAdmissionRequest,
-  WorkflowCallIndexState, MAX_WORKFLOW_CALL_DEPTH,
+  WorkflowCallIndexState, WorkflowRuntimeRoute, WorkflowTarget, MAX_WORKFLOW_CALL_DEPTH,
 };
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
@@ -47,7 +47,7 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 9;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 10;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -57,6 +57,7 @@ const STORE_SCHEMA_VERSION_V6: &str = "6";
 const STORE_SCHEMA_VERSION_V7: &str = "7";
 const STORE_SCHEMA_VERSION_V8: &str = "8";
 const STORE_SCHEMA_VERSION_V9: &str = "9";
+const STORE_SCHEMA_VERSION_V10: &str = "10";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_SCHEMA: &str = r#"
@@ -384,6 +385,22 @@ BEGIN
 END;
 "#;
 
+const CREATE_WORKFLOW_RUNTIME_SCHEMA_V10: &str = r#"
+CREATE TABLE woml_workflow_runtime_routes (
+  workflow_id TEXT PRIMARY KEY,
+  definition_hash TEXT NOT NULL,
+  runtime_id TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  session_credential_hash TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (definition_hash) REFERENCES woml_definitions(definition_hash)
+);
+
+CREATE INDEX woml_workflow_runtime_routes_runtime
+  ON woml_workflow_runtime_routes(runtime_id);
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDefinitionBinding {
   pub run_id: String,
@@ -680,6 +697,8 @@ pub enum DurableStoreError {
   WorkflowCallDefinitionMismatch,
   #[error("stored workflow call history is contradictory: {0}")]
   WorkflowCallHistoryInvalid(String),
+  #[error("workflow ID {0:?} already has a live local owner")]
+  WorkflowRuntimeDuplicateOwner(String),
   #[error("the durable schedule cursor changed before this operation could commit")]
   ScheduleCursorConflict,
   #[error("the durable interval cursor changed before this operation could commit")]
@@ -899,6 +918,22 @@ fn migrate_store_v8_to_v9(connection: &mut Connection) -> Result<(), DurableStor
   Ok(())
 }
 
+fn migrate_store_v9_to_v10(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_WORKFLOW_RUNTIME_SCHEMA_V10)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V10, STORE_SCHEMA_VERSION_V9],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v9-to-v10 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
 fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
   for (object_type, name) in [
     ("table", "woml_approval_tokens"),
@@ -1076,6 +1111,26 @@ fn validate_store_v9_schema(connection: &Connection) -> Result<(), DurableStoreE
   Ok(())
 }
 
+fn validate_store_v10_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v9_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_workflow_runtime_routes"),
+    ("index", "woml_workflow_runtime_routes_runtime"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v10 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -1099,6 +1154,7 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
+      Some(STORE_SCHEMA_VERSION_V10) => validate_store_v10_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V9) => validate_store_v9_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V8) => {
         validate_store_v8_schema(&connection)?;
@@ -1181,6 +1237,15 @@ impl DurableEventStore {
         migrate_store_v8_to_v9(&mut connection)?;
       }
     }
+    let current_version: String = connection.query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )?;
+    if current_version == STORE_SCHEMA_VERSION_V9 {
+      migrate_store_v9_to_v10(&mut connection)?;
+    }
+    validate_store_v10_schema(&connection)?;
     Ok(Self { connection })
   }
 
@@ -1276,6 +1341,219 @@ impl DurableEventStore {
     call_key: &str,
   ) -> Result<Option<WorkflowCallAdmission>, DurableStoreError> {
     load_workflow_call(&self.connection, call_key)
+  }
+
+  pub fn workflow_call_for_child(
+    &self,
+    child_run_id: &str,
+  ) -> Result<Option<WorkflowCallAdmission>, DurableStoreError> {
+    let call_key: Option<String> = self
+      .connection
+      .query_row(
+        "SELECT call_key FROM woml_workflow_calls WHERE child_run_id = ?1",
+        [child_run_id],
+        |row| row.get(0),
+      )
+      .optional()?;
+    call_key
+      .map(|call_key| load_workflow_call(&self.connection, &call_key))
+      .transpose()
+      .map(Option::flatten)
+  }
+
+  pub fn admitted_workflow_calls_for_target(
+    &self,
+    target: &WorkflowTarget,
+  ) -> Result<Vec<WorkflowCallAdmission>, DurableStoreError> {
+    let mut statement = self.connection.prepare(
+      "SELECT call_key FROM woml_workflow_calls
+       WHERE target_workflow_id = ?1 AND target_definition_hash = ?2 AND state = 'admitted'
+       ORDER BY admitted_at, call_key",
+    )?;
+    let call_keys = statement
+      .query_map([&target.workflow_id, &target.definition_hash], |row| {
+        row.get::<_, String>(0)
+      })?
+      .collect::<Result<Vec<_>, _>>()?;
+    call_keys
+      .into_iter()
+      .map(|call_key| {
+        load_workflow_call(&self.connection, &call_key)?.ok_or_else(|| {
+          DurableStoreError::WorkflowCallHistoryInvalid(
+            "pending workflow call disappeared during routing scan".to_string(),
+          )
+        })
+      })
+      .collect()
+  }
+
+  pub fn register_workflow_runtime_routes(
+    &mut self,
+    runtime_id: &str,
+    targets: &[WorkflowTarget],
+    endpoint: &str,
+    session_credential_hash: &str,
+    now: DateTime<Utc>,
+    lease_expires_at: DateTime<Utc>,
+  ) -> Result<(), DurableStoreError> {
+    validate_runtime_route_fields(
+      runtime_id,
+      targets,
+      endpoint,
+      session_credential_hash,
+      now,
+      lease_expires_at,
+    )?;
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for target in targets {
+      let existing: Option<(String, String)> = transaction
+        .query_row(
+          "SELECT runtime_id, lease_expires_at FROM woml_workflow_runtime_routes
+           WHERE workflow_id = ?1",
+          [&target.workflow_id],
+          |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+      if let Some((owner, expires_at)) = existing {
+        let expires_at = DateTime::parse_from_rfc3339(&expires_at)
+          .map_err(|_| {
+            DurableStoreError::Contract(
+              "A stored workflow runtime lease has an invalid timestamp.".to_string(),
+            )
+          })?
+          .with_timezone(&Utc);
+        if owner != runtime_id && expires_at > now {
+          return Err(DurableStoreError::WorkflowRuntimeDuplicateOwner(
+            target.workflow_id.clone(),
+          ));
+        }
+      }
+    }
+    for target in targets {
+      transaction.execute(
+        "INSERT INTO woml_workflow_runtime_routes(
+           workflow_id, definition_hash, runtime_id, endpoint,
+           session_credential_hash, lease_expires_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(workflow_id) DO UPDATE SET
+           definition_hash = excluded.definition_hash,
+           runtime_id = excluded.runtime_id,
+           endpoint = excluded.endpoint,
+           session_credential_hash = excluded.session_credential_hash,
+           lease_expires_at = excluded.lease_expires_at,
+           updated_at = excluded.updated_at",
+        params![
+          target.workflow_id,
+          target.definition_hash,
+          runtime_id,
+          endpoint,
+          session_credential_hash,
+          lease_expires_at.to_rfc3339(),
+          now.to_rfc3339(),
+        ],
+      )?;
+    }
+    transaction.commit()?;
+    Ok(())
+  }
+
+  pub fn renew_workflow_runtime_routes(
+    &mut self,
+    runtime_id: &str,
+    now: DateTime<Utc>,
+    lease_expires_at: DateTime<Utc>,
+  ) -> Result<usize, DurableStoreError> {
+    if runtime_id.is_empty() || lease_expires_at <= now {
+      return Err(DurableStoreError::Contract(
+        "Workflow runtime lease renewal is invalid.".to_string(),
+      ));
+    }
+    self
+      .connection
+      .execute(
+        "UPDATE woml_workflow_runtime_routes
+         SET lease_expires_at = ?1, updated_at = ?2 WHERE runtime_id = ?3",
+        params![lease_expires_at.to_rfc3339(), now.to_rfc3339(), runtime_id],
+      )
+      .map_err(DurableStoreError::from)
+  }
+
+  pub fn unregister_workflow_runtime_routes(
+    &mut self,
+    runtime_id: &str,
+  ) -> Result<usize, DurableStoreError> {
+    self
+      .connection
+      .execute(
+        "DELETE FROM woml_workflow_runtime_routes WHERE runtime_id = ?1",
+        [runtime_id],
+      )
+      .map_err(DurableStoreError::from)
+  }
+
+  pub fn workflow_runtime_route(
+    &self,
+    workflow_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<Option<WorkflowRuntimeRoute>, DurableStoreError> {
+    let stored: Option<(String, String, String, String, String)> = self
+      .connection
+      .query_row(
+        "SELECT runtime_id, definition_hash, endpoint,
+                session_credential_hash, lease_expires_at
+         FROM woml_workflow_runtime_routes
+         WHERE workflow_id = ?1 AND lease_expires_at > ?2",
+        params![workflow_id, now.to_rfc3339()],
+        |row| {
+          Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+          ))
+        },
+      )
+      .optional()?;
+    stored
+      .map(
+        |(runtime_id, definition_hash, endpoint, session_credential_hash, expires)| {
+          let lease_expires_at = DateTime::parse_from_rfc3339(&expires)
+            .map_err(|_| {
+              DurableStoreError::Contract(
+                "A stored workflow runtime lease has an invalid timestamp.".to_string(),
+              )
+            })?
+            .with_timezone(&Utc);
+          Ok(WorkflowRuntimeRoute {
+            runtime_id,
+            workflow_id: workflow_id.to_string(),
+            definition_hash,
+            endpoint,
+            session_credential_hash,
+            lease_expires_at,
+          })
+        },
+      )
+      .transpose()
+  }
+
+  pub fn has_live_workflow_runtime_routes(
+    &self,
+    now: DateTime<Utc>,
+  ) -> Result<bool, DurableStoreError> {
+    self
+      .connection
+      .query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM woml_workflow_runtime_routes WHERE lease_expires_at > ?1
+         )",
+        [now.to_rfc3339()],
+        |row| row.get(0),
+      )
+      .map_err(DurableStoreError::from)
   }
 
   /// Advances only the mutable execution state of a durable workflow call.
@@ -3527,6 +3805,51 @@ impl DurableEventStore {
     Ok(report)
   }
 
+  /// Recovers only workflow-call children owned by the supplied local target
+  /// definitions. This avoids treating runs executing in other live WOML
+  /// processes as interrupted during cross-process startup.
+  pub fn recover_workflow_call_children_for_targets(
+    &mut self,
+    targets: &[WorkflowTarget],
+  ) -> Result<RecoveryReport, DurableStoreError> {
+    let mut run_ids = Vec::new();
+    for target in targets {
+      let mut statement = self.connection.prepare(
+        "SELECT child_run_id FROM woml_workflow_calls
+         WHERE target_workflow_id = ?1 AND target_definition_hash = ?2
+           AND state IN ('admitted', 'running')
+         ORDER BY admitted_at, call_key",
+      )?;
+      run_ids.extend(
+        statement
+          .query_map([&target.workflow_id, &target.definition_hash], |row| {
+            row.get::<_, String>(0)
+          })?
+          .collect::<Result<Vec<_>, _>>()?,
+      );
+    }
+    run_ids.sort();
+    run_ids.dedup();
+    let mut report = RecoveryReport {
+      inspected_runs: run_ids.len(),
+      ..RecoveryReport::default()
+    };
+    for run_id in run_ids {
+      match self.recover_run(&run_id)? {
+        RunRecovery::Recovered {
+          interrupted_attempts,
+        } => {
+          report.recovered_runs += 1;
+          report.interrupted_attempts += interrupted_attempts;
+        }
+        RunRecovery::Resumable => report.resumable_runs += 1,
+        RunRecovery::Unchanged => {}
+      }
+    }
+    self.reconcile_workflow_call_states()?;
+    Ok(report)
+  }
+
   /// Repairs the reconstructible call index from authoritative child history
   /// after run recovery. No result value is copied into the index.
   pub fn reconcile_workflow_call_states(&mut self) -> Result<(), DurableStoreError> {
@@ -4262,6 +4585,37 @@ fn validate_workflow_call_admission_request(
     ));
   }
   durable_workflow_call_payload_digest(&request.payload)?;
+  Ok(())
+}
+
+fn validate_runtime_route_fields(
+  runtime_id: &str,
+  targets: &[WorkflowTarget],
+  endpoint: &str,
+  session_credential_hash: &str,
+  now: DateTime<Utc>,
+  lease_expires_at: DateTime<Utc>,
+) -> Result<(), DurableStoreError> {
+  let port = endpoint
+    .strip_prefix("http://127.0.0.1:")
+    .and_then(|value| value.parse::<u16>().ok())
+    .filter(|port| *port > 0);
+  if runtime_id.is_empty()
+    || runtime_id.len() > 256
+    || targets.is_empty()
+    || port.is_none()
+    || !is_definition_hash(session_credential_hash)
+    || lease_expires_at <= now
+    || targets.iter().any(|target| {
+      target.runtime_id != runtime_id
+        || target.workflow_id.is_empty()
+        || !is_definition_hash(&target.definition_hash)
+    })
+  {
+    return Err(DurableStoreError::Contract(
+      "Workflow runtime route registration is invalid.".to_string(),
+    ));
+  }
   Ok(())
 }
 

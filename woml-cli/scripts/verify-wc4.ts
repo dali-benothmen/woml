@@ -7,7 +7,7 @@ const repositoryRoot = resolve(import.meta.dir, '../..');
 for (const [file, required] of [
   [
     'WOML Durable Workflow Calls Implementation Plan.md',
-    'The next implementation action is WC5.',
+    'WC4 — Make same-runtime calls retry-safe and recoverable',
   ],
   ['docs/protocols/workflow-calls-v1.md', 'single-executor claiming'],
   ['docs/woml-recovery.md', 'The ambiguous parent'],

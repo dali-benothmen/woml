@@ -5,6 +5,9 @@
 
 use std::{
   collections::BTreeMap,
+  fs::{self, OpenOptions},
+  io::{Read, Write},
+  path::Path,
   path::PathBuf,
   sync::{
     atomic::{AtomicBool, Ordering},
@@ -35,6 +38,9 @@ pub const WORKFLOW_CALL_CONTRACT_VERSION: u32 = 1;
 pub const MAX_WORKFLOW_CALL_DEPTH: u32 = 32;
 const MAX_WORKFLOW_CALL_PAYLOAD_BYTES: usize = 1_048_576;
 const MAX_WORKFLOW_CALL_RESULT_BYTES: usize = 4_194_304;
+pub const WORKFLOW_ROUTING_CONTRACT: &str = "woml.workflow-call-routing";
+pub const WORKFLOW_ROUTING_CONTRACT_VERSION: u32 = 1;
+pub const WORKFLOW_ROUTING_WAKE_PATH: &str = "/_woml/internal/workflow-calls/wake";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +48,50 @@ pub struct WorkflowTarget {
   pub runtime_id: String,
   pub workflow_id: String,
   pub definition_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRuntimeRoute {
+  pub runtime_id: String,
+  pub workflow_id: String,
+  pub definition_hash: String,
+  pub endpoint: String,
+  pub session_credential_hash: String,
+  pub lease_expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowRoutingWakeup {
+  pub contract: String,
+  pub contract_version: u32,
+  pub kind: String,
+  pub runtime_id: String,
+  pub child_run_id: String,
+  pub call_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowRoutingAcknowledgement {
+  pub contract: String,
+  pub contract_version: u32,
+  pub kind: String,
+  pub child_run_id: String,
+  pub accepted: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub code: Option<String>,
+}
+
+impl WorkflowRuntimeRoute {
+  pub fn target(&self) -> WorkflowTarget {
+    WorkflowTarget {
+      runtime_id: self.runtime_id.clone(),
+      workflow_id: self.workflow_id.clone(),
+      definition_hash: self.definition_hash.clone(),
+    }
+  }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -109,6 +159,19 @@ impl WorkflowTargetRegistry {
 
   pub fn seal(&self) {
     self.sealed.store(true, Ordering::SeqCst);
+  }
+
+  pub fn runtime_id(&self) -> &str {
+    &self.runtime_id
+  }
+
+  pub fn owns(&self, workflow_id: &str, definition_hash: &str) -> bool {
+    self
+      .targets
+      .lock()
+      .expect("workflow target registry lock")
+      .get(workflow_id)
+      .is_some_and(|target| target.definition_hash == definition_hash)
   }
 
   pub fn resolve(&self, workflow_id: &str) -> Result<WorkflowTarget, WorkflowTargetRegistryError> {
@@ -261,6 +324,13 @@ impl WorkflowCallExecutionConfig {
 struct PreparedWorkflowCall {
   admission: WorkflowCallAdmissionRequest,
   timeout_ms: u64,
+  route: PreparedWorkflowCallRoute,
+}
+
+#[derive(Clone)]
+enum PreparedWorkflowCallRoute {
+  Local,
+  Remote(WorkflowRuntimeRoute),
 }
 
 impl ManagedWorkflowCallsHandler {
@@ -295,10 +365,22 @@ impl ManagedWorkflowCallsHandler {
         false,
       ));
     }
-    let target = self
-      .targets
-      .resolve(&request.workflow_id)
-      .map_err(target_failure)?;
+    let (target, route) = match self.targets.resolve(&request.workflow_id) {
+      Ok(target) => (target, PreparedWorkflowCallRoute::Local),
+      Err(WorkflowTargetRegistryError::TargetNotFound(_)) => {
+        let store = DurableEventStore::open(&self.database_path).map_err(store_failure)?;
+        let route = store
+          .workflow_runtime_route(&request.workflow_id, Utc::now())
+          .map_err(store_failure)?
+          .ok_or_else(|| {
+            target_failure(WorkflowTargetRegistryError::TargetNotFound(
+              request.workflow_id.clone(),
+            ))
+          })?;
+        (route.target(), PreparedWorkflowCallRoute::Remote(route))
+      }
+      Err(error) => return Err(target_failure(error)),
+    };
     let call_key = derive_workflow_call_key(
       &call.identity.step_idempotency_key,
       &target.workflow_id,
@@ -317,6 +399,7 @@ impl ManagedWorkflowCallsHandler {
         admitted_at: Utc::now(),
       },
       timeout_ms: request.options.timeout_ms.unwrap_or(30_000),
+      route,
     })
   }
 }
@@ -444,6 +527,7 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
         execution,
         prepared.timeout_ms,
         cancellation,
+        prepared.route,
       )
       .await
     })
@@ -472,25 +556,44 @@ async fn execute_child_and_wait(
   execution: WorkflowCallExecutionConfig,
   timeout_ms: u64,
   cancellation: CapabilityCancellationToken,
+  route: PreparedWorkflowCallRoute,
 ) -> Result<Value, CapabilityFailure> {
   let admission = outcome.admission;
+  match route {
+    PreparedWorkflowCallRoute::Local => {
+      dispatch_admitted_workflow_call(
+        database_path.clone(),
+        admission.clone(),
+        execution.runtime_options()?,
+      )
+      .await?;
+    }
+    PreparedWorkflowCallRoute::Remote(route) => {
+      wake_remote_workflow_call(&database_path, &route, &admission).await?;
+    }
+  }
+  observe_existing_child(&database_path, &admission, timeout_ms, &cancellation).await
+}
+
+/// Claims and starts one already-admitted child. Returning `false` means
+/// another executor already owns it or the child is terminal.
+pub async fn dispatch_admitted_workflow_call(
+  database_path: PathBuf,
+  admission: WorkflowCallAdmission,
+  runtime_options: RuntimeExecutionOptions,
+) -> Result<bool, CapabilityFailure> {
   let mut store = DurableEventStore::open(&database_path).map_err(store_failure)?;
   let claimed = store
     .claim_workflow_call_execution(&admission.call_key)
     .map_err(store_failure)?;
   drop(store);
   if !claimed {
-    return observe_existing_child(&database_path, &admission, timeout_ms, &cancellation).await;
+    return Ok(false);
   }
-
-  let child_run_id = admission.child_run_id.clone();
-  let call_key = admission.call_key.clone();
-  let task_database_path = database_path.clone();
-  let runtime_options = execution.runtime_options()?;
-  let mut task = tokio::spawn(async move {
+  tokio::spawn(async move {
     let result = execute_admitted_trigger_run_durable(
-      task_database_path.clone(),
-      &child_run_id,
+      database_path.clone(),
+      &admission.child_run_id,
       runtime_options,
     )
     .await;
@@ -499,38 +602,137 @@ async fn execute_child_and_wait(
     } else {
       WorkflowCallIndexState::Failed
     };
-    let transition = DurableEventStore::open(&task_database_path).and_then(|mut store| {
+    let _ = DurableEventStore::open(&database_path).and_then(|mut store| {
       store.transition_workflow_call_state(
-        &call_key,
+        &admission.call_key,
         WorkflowCallIndexState::Running,
         terminal_state,
       )
     });
-    (result, transition)
   });
+  Ok(true)
+}
 
-  tokio::select! {
-    _ = cancellation.cancelled() => Err(workflow_call_cancelled_after_admission(&admission)),
-    timed = tokio::time::timeout(Duration::from_millis(timeout_ms), &mut task) => {
-      match timed {
-        Err(_) => Err(workflow_call_timed_out(&admission)),
-        Ok(Err(_)) => {
-          let _ = DurableEventStore::open(&database_path).and_then(|mut store| {
-            store.transition_workflow_call_state(
-              &admission.call_key,
-              WorkflowCallIndexState::Running,
-              WorkflowCallIndexState::Failed,
-            )
-          });
-          Err(workflow_call_unavailable())
-        },
-        Ok(Ok((result, transition))) => {
-          transition.map_err(store_failure)?;
-          terminal_child_result(&admission, result)
-        }
-      }
-    }
+async fn wake_remote_workflow_call(
+  database_path: &Path,
+  route: &WorkflowRuntimeRoute,
+  admission: &WorkflowCallAdmission,
+) -> Result<(), CapabilityFailure> {
+  let credential = workflow_routing_session_credential(database_path, &route.runtime_id)
+    .map_err(|_| workflow_call_unavailable())?;
+  if workflow_routing_credential_hash(&credential) != route.session_credential_hash {
+    return Err(workflow_call_unavailable());
   }
+  let wakeup = WorkflowRoutingWakeup {
+    contract: WORKFLOW_ROUTING_CONTRACT.to_string(),
+    contract_version: WORKFLOW_ROUTING_CONTRACT_VERSION,
+    kind: "wakeup".to_string(),
+    runtime_id: route.runtime_id.clone(),
+    child_run_id: admission.child_run_id.clone(),
+    call_key: admission.call_key.clone(),
+  };
+  let response = reqwest::Client::new()
+    .post(format!("{}{}", route.endpoint, WORKFLOW_ROUTING_WAKE_PATH))
+    .bearer_auth(&credential)
+    .timeout(Duration::from_secs(2))
+    .json(&wakeup)
+    .send()
+    .await;
+  let Ok(response) = response else {
+    // The target's durable pending-call scanner is the lost-wake-up fallback.
+    return Ok(());
+  };
+  let status = response.status();
+  let acknowledgement = response
+    .json::<WorkflowRoutingAcknowledgement>()
+    .await
+    .map_err(|_| workflow_call_unavailable())?;
+  if status.is_success()
+    && acknowledgement.contract == WORKFLOW_ROUTING_CONTRACT
+    && acknowledgement.contract_version == WORKFLOW_ROUTING_CONTRACT_VERSION
+    && acknowledgement.kind == "acknowledgement"
+    && acknowledgement.child_run_id == admission.child_run_id
+    && acknowledgement.accepted
+  {
+    return Ok(());
+  }
+  let code = acknowledgement.code.as_deref().unwrap_or_default();
+  if code == "WOML_WORKFLOW_DEFINITION_MISMATCH" {
+    return Err(workflow_call_failure_with_child(
+      CapabilityFailureKind::ServiceRejected,
+      "WOML_WORKFLOW_DEFINITION_MISMATCH",
+      "The selected target no longer matches its registered definition.",
+      false,
+      admission,
+    ));
+  }
+  Err(workflow_call_unavailable())
+}
+
+pub fn workflow_routing_session_credential(
+  database_path: &Path,
+  runtime_id: &str,
+) -> std::io::Result<String> {
+  let key = load_or_create_workflow_routing_key(database_path)?;
+  let mut digest = Sha256::new();
+  digest.update(b"woml.workflow-call-routing\0v1\0");
+  digest.update(&key);
+  digest.update(b"\0");
+  digest.update(runtime_id.as_bytes());
+  Ok(hex::encode(digest.finalize()))
+}
+
+pub fn workflow_routing_credential_hash(credential: &str) -> String {
+  format!(
+    "sha256:{}",
+    hex::encode(Sha256::digest(credential.as_bytes()))
+  )
+}
+
+fn load_or_create_workflow_routing_key(database_path: &Path) -> std::io::Result<[u8; 32]> {
+  let key_path = workflow_routing_key_path(database_path);
+  if let Ok(mut file) = OpenOptions::new().read(true).open(&key_path) {
+    let mut key = [0_u8; 32];
+    file.read_exact(&mut key)?;
+    let mut extra = [0_u8; 1];
+    if file.read(&mut extra)? != 0 {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "WOML workflow routing key has an invalid size",
+      ));
+    }
+    return Ok(key);
+  }
+  if let Some(parent) = key_path.parent() {
+    fs::create_dir_all(parent)?;
+  }
+  let mut key = [0_u8; 32];
+  getrandom::getrandom(&mut key)
+    .map_err(|error| std::io::Error::other(format!("routing key generation failed: {error}")))?;
+  let mut options = OpenOptions::new();
+  options.write(true).create_new(true);
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
+  }
+  match options.open(&key_path) {
+    Ok(mut file) => {
+      file.write_all(&key)?;
+      file.sync_all()?;
+      Ok(key)
+    }
+    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+      load_or_create_workflow_routing_key(database_path)
+    }
+    Err(error) => Err(error),
+  }
+}
+
+fn workflow_routing_key_path(database_path: &Path) -> PathBuf {
+  let mut value = database_path.as_os_str().to_os_string();
+  value.push(".workflow-routing-v1.key");
+  PathBuf::from(value)
 }
 
 async fn observe_existing_child(
@@ -577,24 +779,6 @@ async fn observe_existing_child(
       }
       _ = tokio::time::sleep(Duration::from_millis(10)) => {}
     }
-  }
-}
-
-fn terminal_child_result(
-  admission: &WorkflowCallAdmission,
-  outcome: Result<WorkflowRuntimeOutcome, crate::RuntimeExecutionError>,
-) -> Result<Value, CapabilityFailure> {
-  match outcome {
-    Ok(WorkflowRuntimeOutcome::Succeeded { execution, .. }) => {
-      workflow_call_success(admission, execution.result)
-    }
-    Ok(WorkflowRuntimeOutcome::Waiting { .. }) => Err(workflow_call_wait_unsupported(admission)),
-    Err(crate::RuntimeExecutionError::RunFailed(details))
-      if details.failure.kind == AttemptFailureKind::InvalidScriptResult =>
-    {
-      Err(workflow_call_result_missing(admission))
-    }
-    Err(_) => Err(workflow_call_child_failed(admission)),
   }
 }
 

@@ -16,8 +16,10 @@ services.workflows
 passes a JSON object as its `context.trigger`, and resolves to its final JSON
 result. WC4 safely reconnects retries and duplicate delivery to that same child,
 requires stable names for repeated calls to one target in a step, rejects call
-cycles, and fails ambiguous parent attempts closed. Workflows must currently be
-loaded by the same `woml run` runtime; WC5 adds local cross-process routing.
+cycles, and fails ambiguous parent attempts closed. The target may be loaded by
+the same `woml run` runtime or owned by another local `woml run` process sharing
+the same state database. Cross-process routing is automatic; it requires no
+author-managed URL or secret.
 
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies
@@ -88,6 +90,20 @@ one runtime:
 
 ```bash
 woml run examples/workflowCalls
+```
+
+The same runtime unit can be selected explicitly:
+
+```bash
+woml run examples/workflowCalls/request-risk.woml \
+  examples/workflowCalls/calculate-risk.woml
+```
+
+For separate local processes, point both commands at the same durable state:
+
+```bash
+woml run examples/workflowCalls/calculate-risk.woml --state .woml/state.sqlite
+woml run examples/workflowCalls/request-risk.woml --state .woml/state.sqlite
 ```
 
 The parent passes a customer ID to the child, receives its risk score, and

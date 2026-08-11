@@ -840,7 +840,7 @@ export function parseTriggerProgress(json: string): TriggerProgressV1 {
       'occurredAt',
     ]) &&
     Number.isSafeInteger(value.registrationCount) &&
-    Number(value.registrationCount) >= 1
+    Number(value.registrationCount) >= 0
   ) {
     return value as TriggerProgressV1;
   }
