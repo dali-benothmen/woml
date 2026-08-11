@@ -28,6 +28,7 @@ use crate::protocol::{ExecuteMessage, HostOutcome, RuntimeModuleBinding, ScriptA
 use crate::schedule::{
   ScheduleClock, ScheduleProgress, ScheduleProgressReporter, SystemScheduleClock,
 };
+use crate::workflow_calls::WorkflowCallProgressReporter;
 use crate::{
   run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
   AttemptFailure, AttemptFailureKind, BranchFailure, CapabilityRegistry,
@@ -138,6 +139,7 @@ pub struct RuntimeExecutionOptions {
   pub schedule_clock: Arc<dyn ScheduleClock>,
   pub schedule_progress_reporter: Option<ScheduleProgressReporter>,
   pub interval_progress_reporter: Option<IntervalProgressReporter>,
+  pub workflow_call_progress_reporter: Option<WorkflowCallProgressReporter>,
   pub resolved_secrets: Arc<BTreeMap<String, String>>,
   pub capability_registry: Arc<CapabilityRegistry>,
   pub runtime_modules: Arc<Vec<RuntimeModuleArtifact>>,
@@ -174,6 +176,13 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
         "interval_progress_reporter",
         &self
           .interval_progress_reporter
+          .as_ref()
+          .map(|_| "configured"),
+      )
+      .field(
+        "workflow_call_progress_reporter",
+        &self
+          .workflow_call_progress_reporter
           .as_ref()
           .map(|_| "configured"),
       )
@@ -216,6 +225,7 @@ impl RuntimeExecutionOptions {
       schedule_clock: Arc::new(SystemScheduleClock),
       schedule_progress_reporter: None,
       interval_progress_reporter: None,
+      workflow_call_progress_reporter: None,
       resolved_secrets: Arc::new(BTreeMap::new()),
       capability_registry,
       runtime_modules: Arc::new(Vec::new()),
@@ -275,6 +285,14 @@ impl RuntimeExecutionOptions {
 
   pub fn with_interval_progress_reporter(mut self, reporter: IntervalProgressReporter) -> Self {
     self.interval_progress_reporter = Some(reporter);
+    self
+  }
+
+  pub fn with_workflow_call_progress_reporter(
+    mut self,
+    reporter: WorkflowCallProgressReporter,
+  ) -> Self {
+    self.workflow_call_progress_reporter = Some(reporter);
     self
   }
 

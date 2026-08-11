@@ -5,6 +5,8 @@ implemented exact registration plus durable child admission, WC3 executed
 same-runtime children, and WC4 completed retry-safe reattachment, cycle
 rejection, single-executor claiming, and fail-closed recovery. WC5 implements
 project-local cross-process ownership, wake-up, and pending-child recovery.
+WC6 adds a separate progress surface, bounded parent/child inspection,
+composition coverage, and pre-admission Human Approval rejection.
 
 ## Author contract
 
@@ -36,10 +38,11 @@ Omitting `<triggers>` declares a call-only workflow:
 </woml>
 ```
 
-`woml run` will eventually activate this definition without starting it. An
-empty `<triggers>` container is invalid, and a call-only v1 target cannot
-contain Human Approval because an arbitrary Bun continuation cannot be durably
-serialized across a long pause.
+`woml run` activates this definition without starting it. An empty `<triggers>`
+container is invalid. No Workflow Calls v1 target may contain Human Approval
+because an arbitrary Bun continuation cannot be durably serialized across a
+long pause. Rust checks the selected immutable definition and rejects it before
+admitting a child.
 
 Compiled Workflow Model v10 represents call-only activation with exactly
 `triggers: []`. It may retain unchanged Module Runtime v1 bindings. Models
@@ -128,6 +131,21 @@ Exactly one live owner may register a workflow ID. The selected child is pinned
 to the owner's exact definition hash. Cross-machine routing and tenant service
 identity are deferred to Production Runtime.
 
+## Progress and run inspection
+
+Workflow Call Progress v1 is a separate operator surface; it does not widen
+Capability Call v1, Trigger Progress v1, or the durable event vocabulary. Its
+`call_admitted` message contains only parent run/node IDs, target workflow ID,
+child run ID, duplicate status, and time. Its `child_terminal` message contains
+the parent ID, target ID, child ID, terminal status, and time. Its
+`call_rejected` message contains the parent run/node IDs, requested target ID,
+stable failure code, safe actionable message, and time; it has no child ID
+because rejection happens before admission.
+
+`woml runs get` returns one optional `parentCall` plus at most 50 `childCalls`
+and a `childCallsTruncated` flag. Both surfaces forbid call keys, definition
+hashes, payload digests, payloads, results, secrets, and runtime credentials.
+
 ## Limits
 
 - Request payload: 1 MiB.
@@ -146,6 +164,7 @@ Controls work.
 - `docs/schemas/workflow-call.v1.schema.json`
 - `docs/schemas/workflow-call-index.v1.schema.json`
 - `docs/schemas/workflow-call-routing.v1.schema.json`
+- `docs/schemas/workflow-call-progress.v1.schema.json`
 - `docs/schemas/compiled-workflow-model.v10.schema.json`
 - `docs/schemas/run-event.v9.schema.json`
 - `docs/schemas/woml-definition-package.v4.schema.json`

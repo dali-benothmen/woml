@@ -36,7 +36,8 @@ use crate::projection::{
 use crate::runtime::RuntimeModuleArtifact;
 use crate::workflow_calls::{
   WorkflowCallAdmission, WorkflowCallAdmissionOutcome, WorkflowCallAdmissionRequest,
-  WorkflowCallIndexState, WorkflowRuntimeRoute, WorkflowTarget, MAX_WORKFLOW_CALL_DEPTH,
+  WorkflowCallIndexState, WorkflowCallRunRelations, WorkflowCallRunSummary, WorkflowRuntimeRoute,
+  WorkflowTarget, MAX_WORKFLOW_CALL_DEPTH, MAX_WORKFLOW_CALL_INSPECTION_CHILDREN,
 };
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
@@ -1359,6 +1360,50 @@ impl DurableEventStore {
       .map(|call_key| load_workflow_call(&self.connection, &call_key))
       .transpose()
       .map(Option::flatten)
+  }
+
+  /// Returns a bounded, non-sensitive view of the parent/child relationships
+  /// for one run. Payloads, digests, definition hashes, and call keys are
+  /// deliberately excluded from this operator-facing surface.
+  pub fn workflow_call_relations_for_run(
+    &self,
+    run_id: &str,
+  ) -> Result<WorkflowCallRunRelations, DurableStoreError> {
+    ensure_run_exists(&self.connection, run_id)?;
+    let parent_call = self
+      .workflow_call_for_child(run_id)?
+      .map(WorkflowCallRunSummary::from);
+    let mut statement = self.connection.prepare(
+      "SELECT call_key FROM woml_workflow_calls
+       WHERE parent_run_id = ?1
+       ORDER BY admitted_at, call_key
+       LIMIT ?2",
+    )?;
+    let limit = i64::try_from(MAX_WORKFLOW_CALL_INSPECTION_CHILDREN + 1)
+      .expect("workflow call inspection limit fits in SQLite integer");
+    let call_keys = statement
+      .query_map(params![run_id, limit], |row| row.get::<_, String>(0))?
+      .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    let child_calls_truncated = call_keys.len() > MAX_WORKFLOW_CALL_INSPECTION_CHILDREN;
+    let child_calls = call_keys
+      .into_iter()
+      .take(MAX_WORKFLOW_CALL_INSPECTION_CHILDREN)
+      .map(|call_key| {
+        load_workflow_call(&self.connection, &call_key)?
+          .map(WorkflowCallRunSummary::from)
+          .ok_or_else(|| {
+            DurableStoreError::WorkflowCallHistoryInvalid(
+              "workflow call disappeared during run inspection".to_string(),
+            )
+          })
+      })
+      .collect::<Result<Vec<_>, _>>()?;
+    Ok(WorkflowCallRunRelations {
+      parent_call,
+      child_calls,
+      child_calls_truncated,
+    })
   }
 
   pub fn admitted_workflow_calls_for_target(

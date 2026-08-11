@@ -21,6 +21,12 @@ the same `woml run` runtime or owned by another local `woml run` process sharing
 the same state database. Cross-process routing is automatic; it requires no
 author-managed URL or secret.
 
+The child uses the same normal engine as any triggered workflow, so branches,
+parallel groups, retries, modules, native Fetch, and all current services keep
+their normal behavior. Human Approval targets are rejected before admission in
+v1. The CLI prints both run IDs and `woml runs get` exposes a bounded safe
+relationship summary; see `docs/woml-workflow-calls.md`.
+
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies
 cancellation and limits, and keeps secrets out of durable operation metadata.
@@ -118,4 +124,5 @@ stop the active runtime.
 - Cache: `docs/woml-cache.md`
 - Internal events: `docs/woml-events-service.md`
 - Workflow Calls: `docs/protocols/workflow-calls-v1.md`
+- Workflow Calls author guide: `docs/woml-workflow-calls.md`
 - SDK migration: `docs/woml-sdk-migration.md`

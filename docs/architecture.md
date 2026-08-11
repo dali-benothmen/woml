@@ -64,7 +64,10 @@ admitted same-runtime child through the normal Rust DAG executor. The child is
 an independent durable run; only its terminal JSON result crosses back into the
 parent script. WC4 completes same-runtime crash/retry reattachment. WC5 adds
 durable store v10 runtime ownership leases, authenticated private loopback
-wake-up, pending-child scans, and explicit multi-input runtime activation.
+wake-up, pending-child scans, and explicit multi-input runtime activation. WC6
+keeps child execution on that same DAG engine, rejects Human Approval targets
+before admission, and adds separate versioned call progress plus bounded safe
+parent/child inspection without widening the immutable event vocabulary.
 
 WC4 makes the same-runtime boundary retry-safe. The first admitting attempt
 stores one immutable call key and child run; later attempts and duplicate

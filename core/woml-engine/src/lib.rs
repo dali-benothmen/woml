@@ -140,9 +140,12 @@ pub use workflow_calls::{
   derive_workflow_call_key, dispatch_admitted_workflow_call, workflow_routing_credential_hash,
   workflow_routing_session_credential, ManagedWorkflowCallsHandler, WorkflowCallAdmission,
   WorkflowCallAdmissionOutcome, WorkflowCallAdmissionRequest, WorkflowCallIndexState,
-  WorkflowRoutingAcknowledgement, WorkflowRoutingWakeup, WorkflowRuntimeRoute, WorkflowTarget,
-  WorkflowTargetRegistry, WorkflowTargetRegistryError, MAX_WORKFLOW_CALL_DEPTH,
-  WORKFLOW_CALL_CONTRACT, WORKFLOW_CALL_CONTRACT_VERSION, WORKFLOW_ROUTING_CONTRACT,
+  WorkflowCallProgress, WorkflowCallProgressReporter, WorkflowCallRunRelations,
+  WorkflowCallRunSummary, WorkflowRoutingAcknowledgement, WorkflowRoutingWakeup,
+  WorkflowRuntimeRoute, WorkflowTarget, WorkflowTargetRegistry, WorkflowTargetRegistryError,
+  MAX_WORKFLOW_CALL_DEPTH, MAX_WORKFLOW_CALL_INSPECTION_CHILDREN, WORKFLOW_CALL_CONTRACT,
+  WORKFLOW_CALL_CONTRACT_VERSION, WORKFLOW_CALL_PROGRESS_CONTRACT,
+  WORKFLOW_CALL_PROGRESS_CONTRACT_VERSION, WORKFLOW_ROUTING_CONTRACT,
   WORKFLOW_ROUTING_CONTRACT_VERSION, WORKFLOW_ROUTING_WAKE_PATH,
 };
 

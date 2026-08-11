@@ -48,6 +48,7 @@ import {
   type IntervalProgressV1,
   type ScheduleProgressV1,
   type TriggerProgressV1,
+  type WorkflowCallProgressV1,
   type RustApprovalRuntimeOutcome,
   type RustRuntimeModuleArtifact,
   type StoredRunRequirementsV1,
@@ -1754,6 +1755,18 @@ export function formatIntervalProgress(progress: IntervalProgressV1): string {
   return `Interval ${progress.triggerId} every ${progress.everyMs}ms next due at ${progress.nextScheduledAt}${recovery}.`;
 }
 
+export function formatWorkflowCallProgress(
+  progress: WorkflowCallProgressV1
+): string {
+  if (progress.type === 'call_admitted') {
+    return `Workflow call ${progress.parentRunId}/${progress.parentNodeId} ${progress.duplicate ? 'reattached to' : 'started'} child ${progress.childRunId} for "${progress.targetWorkflowId}".`;
+  }
+  if (progress.type === 'call_rejected') {
+    return `Rejected workflow call ${progress.parentRunId}/${progress.parentNodeId} to "${progress.targetWorkflowId}" [${progress.code}]: ${progress.message}`;
+  }
+  return `Workflow call child ${progress.childRunId} for "${progress.targetWorkflowId}" ${progress.status}; parent ${progress.parentRunId}.`;
+}
+
 async function activateWorkflows(
   sources: readonly CompiledWorkflowSource[],
   args: RunArguments,
@@ -1887,6 +1900,8 @@ async function activateWorkflows(
             io.stderr(`${formatScheduleProgress(progress)}\n`),
           onIntervalProgress: progress =>
             io.stderr(`${formatIntervalProgress(progress)}\n`),
+          onWorkflowCallProgress: progress =>
+            io.stderr(`${formatWorkflowCallProgress(progress)}\n`),
         }
       );
       runtimeId = runtime.runtimeId;

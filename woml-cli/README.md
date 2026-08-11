@@ -80,6 +80,17 @@ processes can call each other through `services.workflows.call()` when they use
 the same `--state` database. WOML handles local discovery, private wake-up
 credentials, and ownership leases automatically.
 
+Workflow Call progress prints the parent and child run IDs without printing
+payloads or secrets. Inspect either side later with:
+
+```bash
+woml runs get run_... --state .woml/state.sqlite
+```
+
+The returned `workflowCalls` relationship list is capped at 50 children. See
+[Calling One WOML Workflow from Another](../docs/woml-workflow-calls.md) for
+composition, inspection, Human Approval limits, and troubleshooting.
+
 To activate the webhook example:
 
 ```bash

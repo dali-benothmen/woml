@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::{json, Map, Value};
@@ -14,15 +14,18 @@ use woml_engine::{
   ManagedWorkflowCallsHandler, OperationExecutionMode, OperationStartedData,
   OperationSucceededData, RunEventPayload, RunStatus, RuntimeExecutionOptions,
   ScriptHostProcessOptions, TriggerAdmissionRequest, WorkflowCallAdmissionRequest,
-  WorkflowCallIndexState, WorkflowRuntimeOutcome, WorkflowTargetRegistry,
+  WorkflowCallIndexState, WorkflowCallProgress, WorkflowRuntimeOutcome, WorkflowTargetRegistry,
 };
 
 const PARENT_MODEL: &str =
   include_str!("../../../woml/tests/fixtures/workflow-calls/request-risk.compiled.v8.json");
 const CHILD_MODEL: &str =
   include_str!("../../../woml/tests/fixtures/workflow-calls/calculate-risk.compiled.v10.json");
+const APPROVAL_MODEL: &str = include_str!("../../../woml/tests/fixtures/approval.compiled.v4.json");
 const PARENT_HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CHILD_HASH: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const APPROVAL_HASH: &str =
+  "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
 struct TemporaryDatabase(PathBuf);
 
@@ -65,6 +68,10 @@ fn parent_model(retry: bool) -> CompiledWorkflowDefinition {
 
 fn child_model() -> CompiledWorkflowDefinition {
   serde_json::from_str(CHILD_MODEL).unwrap()
+}
+
+fn approval_model() -> CompiledWorkflowDefinition {
+  serde_json::from_str(APPROVAL_MODEL).unwrap()
 }
 
 fn host_options() -> Option<ScriptHostProcessOptions> {
@@ -168,6 +175,53 @@ fn capability_request(parent_run_id: &str) -> CapabilityCallRequest {
       "options": { "timeoutMs": 2_000 }
     }),
   }
+}
+
+#[tokio::test]
+async fn human_approval_target_is_rejected_before_child_admission() {
+  let database = TemporaryDatabase::new("approval-preflight");
+  let (parent_run_id, _, _) = seed_parent(&database, false);
+  DurableEventStore::open(database.path())
+    .unwrap()
+    .register_definition(&approval_model(), APPROVAL_HASH)
+    .unwrap();
+  let targets = Arc::new(WorkflowTargetRegistry::new("runtime_wc6_approval").unwrap());
+  targets.register(&approval_model(), APPROVAL_HASH).unwrap();
+  targets.seal();
+  let progress = Arc::new(Mutex::new(Vec::new()));
+  let captured = Arc::clone(&progress);
+  let execution = RuntimeExecutionOptions::new(
+    ScriptHostProcessOptions::new("bun", "unused-script-host"),
+    2_000,
+  )
+  .with_workflow_call_progress_reporter(Arc::new(move |message| {
+    captured.lock().unwrap().push(message);
+  }));
+  let handler = ManagedWorkflowCallsHandler::new(database.path().to_path_buf(), targets)
+    .with_execution(&execution);
+  let mut request = capability_request(&parent_run_id);
+  request.input["workflowId"] = json!("publish-article");
+
+  let failure = handler.safe_request_metadata(&request).unwrap_err();
+  assert_eq!(failure.code, "WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED");
+  assert!(failure.message.contains("contains Human Approval"));
+  assert!(failure.message.contains("Run it independently"));
+  assert!(progress.lock().unwrap().iter().any(|message| matches!(
+    message,
+    WorkflowCallProgress::CallRejected {
+      code,
+      target_workflow_id,
+      ..
+    } if code == "WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED" && target_workflow_id == "publish-article"
+  )));
+
+  let connection = rusqlite::Connection::open(database.path()).unwrap();
+  let child_count: i64 = connection
+    .query_row("SELECT COUNT(*) FROM woml_workflow_calls", [], |row| {
+      row.get(0)
+    })
+    .unwrap();
+  assert_eq!(child_count, 0);
 }
 
 #[test]

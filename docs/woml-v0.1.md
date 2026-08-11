@@ -72,7 +72,7 @@ includes conditional branches and bounded parallel groups:
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
 | Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC14 completed and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, workflow-scoped Cache v1, and internal Events Service v1 are executable and publishable; queue is postponed |
 | `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS4 plus essential MS6 DX completed | Canonical documents, safe local resolution, deterministic ESM bundles/maps, Definition Package v3, Model v9, isolated execution, durable recovery, Script Host v6, editor type generation, alias diagnostics, and mocked module tests are implemented; package support remains postponed |
-| Call-only workflows and `services.workflows.call()` | Workflow Calls WC0–WC5 implemented | Model v10 call-only definitions, exact Rust targeting, durable child execution, direct JSON results, retry/duplicate reattachment, cycle rejection, fail-closed recovery, explicit multi-file activation, and automatic local cross-process routing are available |
+| Call-only workflows and `services.workflows.call()` | Workflow Calls WC0–WC6 implemented | Model v10 call-only definitions, exact Rust targeting, durable child execution, direct JSON results, retry/duplicate reattachment, cycle rejection, fail-closed recovery, explicit multi-file activation, automatic local cross-process routing, safe progress, and bounded parent/child inspection are available |
 | Queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
 
@@ -664,9 +664,10 @@ stored in unrelated flat arrays.
 Call-only source compiles to Model v10 with an empty trigger list. WC1 validates
 and lowers this shape, WC2 registers exact targets and durably admits one child,
 and WC3 executes that same-runtime child through the normal Rust DAG engine and
-returns its terminal JSON result. A call-only v1 workflow cannot contain Human
-Approval because an arbitrary Bun script continuation cannot yet be serialized
-across a long durable wait.
+returns its terminal JSON result. Workflow Calls v1 cannot target any workflow
+containing Human Approval because an arbitrary Bun script continuation cannot
+yet be serialized across a long durable wait. Rust rejects the target before
+child admission.
 
 ### 9.1 `<manual>`
 

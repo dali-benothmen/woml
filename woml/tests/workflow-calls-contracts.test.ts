@@ -52,6 +52,7 @@ async function validators() {
     ),
     'workflow-call.v1.schema.json',
     'workflow-call-index.v1.schema.json',
+    'workflow-call-progress.v1.schema.json',
     'workflow-call-routing.v1.schema.json',
   ]) {
     ajv.addSchema(await Bun.file(join(schemaDirectory, name)).json());
@@ -72,6 +73,9 @@ async function validators() {
     )!,
     routing: ajv.getSchema(
       'https://woml.dev/schemas/workflow-call-routing/v1'
+    )!,
+    progress: ajv.getSchema(
+      'https://woml.dev/schemas/workflow-call-progress.v1.schema.json'
     )!,
     event: ajv.getSchema('https://cronflow.dev/schemas/run-event/v9')!,
   };
@@ -185,6 +189,27 @@ describe('WC0 frozen Workflow Call contracts', () => {
     ).toBe(true);
     expect(fixture.data.triggerId).toBeUndefined();
     expect(fixture.data.ingress.kind).toBe('workflow_call');
+  });
+
+  test('keeps CLI call progress versioned and non-sensitive', () => {
+    const progress = {
+      contract: 'woml.workflow-call-progress',
+      contractVersion: 1,
+      type: 'call_admitted',
+      parentRunId: 'run_parent',
+      parentNodeId: 'calculateRisk',
+      targetWorkflowId: 'calculate-risk',
+      childRunId: 'run_child',
+      duplicate: false,
+      occurredAt: '2026-08-11T12:00:00.000Z',
+    };
+    expect(
+      schemas.progress(progress),
+      JSON.stringify(schemas.progress.errors)
+    ).toBe(true);
+    expect(schemas.progress({ ...progress, payload: { secret: true } })).toBe(
+      false
+    );
   });
 
   test('freezes call-only module packages as Definition Package v4 and v5', async () => {
@@ -324,5 +349,35 @@ describe('WC1 call-only frontend and workflow service analysis', () => {
 
   test('validateWoml accepts the reviewed call-only source', () => {
     expect(() => validateWoml(document('calculate-risk'))).not.toThrow();
+  });
+});
+
+describe('WC6 Workflow Call composition contracts', () => {
+  test('allows a workflow call from every current parent trigger type', () => {
+    const triggers = [
+      '<manual id="start" />',
+      `<webhook id="start" path="/wc6" method="POST" auth="none"><schema>{"type":"object"}</schema></webhook>`,
+      '<slack id="start" events="app-mention" channels="woml-testing" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" />',
+      '<schedule id="start" cron="0 9 * * *" timezone="UTC" on-missed="skip" />',
+      '<interval id="start" every="5s" on-missed="skip" />',
+      `<event id="start" name="wc6.started" secret="{{secrets.EVENT_CONTROL_TOKEN}}"><schema>{"type":"object"}</schema></event>`,
+    ];
+    const handlers = triggers.map((trigger, index) => {
+      const compiled = compile(`<woml><workflow id="caller-${index}">
+        <triggers>${trigger}</triggers>
+        <steps><step id="call"><script>
+          return services.workflows.call('calculate-risk', {});
+        </script></step></steps>
+      </workflow></woml>`);
+      return compiled.triggers[0]?.handler;
+    });
+    expect(handlers).toEqual([
+      'trigger.manual',
+      'trigger.webhook',
+      'trigger.slack',
+      'trigger.schedule',
+      'trigger.interval',
+      'trigger.event',
+    ]);
   });
 });

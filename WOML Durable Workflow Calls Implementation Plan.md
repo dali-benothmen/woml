@@ -1,10 +1,11 @@
 # WOML Durable Workflow Calls Implementation Plan
 
-Status: WC0 and WC1 completed on 2026-08-10; WC2 through WC5 completed on
+Status: WC0 and WC1 completed on 2026-08-10; WC2 through WC6 completed on
 2026-08-11. Workflow Calls now execute through Rust in one runtime or across
 separate local WOML processes, reuse one durable child across retries and
-duplicate delivery, reject cycles, and recover fail-closed without
-manufacturing another child. WC6 is next.
+duplicate delivery, reject cycles and Human Approval targets before admission,
+recover fail-closed, print safe parent/child progress, and expose bounded run
+relationships. WC7 is next.
 
 ## 1. Product Outcome
 
@@ -573,6 +574,8 @@ shared-state mismatch, and target restart with the same definition.
 
 ### WC6 — Complete composition, diagnostics, and inspection
 
+Status: **completed on 2026-08-11.**
+
 Changes:
 
 - Compose calls with branch, parallel, retry, modules, native Fetch, all five
@@ -707,7 +710,7 @@ admission.
 7. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-The next implementation action is WC6. WC5 now supports both explicit
-multi-file runtime units and project-local routing between separate `woml run`
-processes without changing the author API. WC6 completes composition,
-diagnostics, and inspection around that durable boundary.
+The next implementation action is WC7. WC6 proves that called children retain
+normal branch, parallel, retry, module, native Fetch, HTTP, database, storage,
+cache, event, and trigger composition. It also adds actionable pre-admission
+rejection, versioned safe call progress, and bounded two-way run inspection.

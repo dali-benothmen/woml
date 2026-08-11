@@ -41,6 +41,83 @@ const MAX_WORKFLOW_CALL_RESULT_BYTES: usize = 4_194_304;
 pub const WORKFLOW_ROUTING_CONTRACT: &str = "woml.workflow-call-routing";
 pub const WORKFLOW_ROUTING_CONTRACT_VERSION: u32 = 1;
 pub const WORKFLOW_ROUTING_WAKE_PATH: &str = "/_woml/internal/workflow-calls/wake";
+pub const WORKFLOW_CALL_PROGRESS_CONTRACT: &str = "woml.workflow-call-progress";
+pub const WORKFLOW_CALL_PROGRESS_CONTRACT_VERSION: u32 = 1;
+pub const MAX_WORKFLOW_CALL_INSPECTION_CHILDREN: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type")]
+pub enum WorkflowCallProgress {
+  #[serde(rename = "call_admitted", rename_all = "camelCase")]
+  CallAdmitted {
+    contract: &'static str,
+    contract_version: u32,
+    parent_run_id: String,
+    parent_node_id: String,
+    target_workflow_id: String,
+    child_run_id: String,
+    duplicate: bool,
+    occurred_at: DateTime<Utc>,
+  },
+  #[serde(rename = "child_terminal", rename_all = "camelCase")]
+  ChildTerminal {
+    contract: &'static str,
+    contract_version: u32,
+    parent_run_id: String,
+    target_workflow_id: String,
+    child_run_id: String,
+    status: &'static str,
+    occurred_at: DateTime<Utc>,
+  },
+  #[serde(rename = "call_rejected", rename_all = "camelCase")]
+  CallRejected {
+    contract: &'static str,
+    contract_version: u32,
+    parent_run_id: String,
+    parent_node_id: String,
+    target_workflow_id: String,
+    code: String,
+    message: String,
+    occurred_at: DateTime<Utc>,
+  },
+}
+
+pub type WorkflowCallProgressReporter = Arc<dyn Fn(WorkflowCallProgress) + Send + Sync>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowCallRunSummary {
+  pub parent_run_id: String,
+  pub parent_node_id: String,
+  pub target_workflow_id: String,
+  pub child_run_id: String,
+  pub depth: u32,
+  pub state: WorkflowCallIndexState,
+  pub admitted_at: DateTime<Utc>,
+}
+
+impl From<WorkflowCallAdmission> for WorkflowCallRunSummary {
+  fn from(admission: WorkflowCallAdmission) -> Self {
+    Self {
+      parent_run_id: admission.parent_run_id,
+      parent_node_id: admission.parent_node_id,
+      target_workflow_id: admission.target_workflow_id,
+      child_run_id: admission.child_run_id,
+      depth: admission.depth,
+      state: admission.state,
+      admitted_at: admission.admitted_at,
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowCallRunRelations {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub parent_call: Option<WorkflowCallRunSummary>,
+  pub child_calls: Vec<WorkflowCallRunSummary>,
+  pub child_calls_truncated: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -281,6 +358,7 @@ struct WorkflowCallExecutionConfig {
   schedule_clock: Arc<dyn ScheduleClock>,
   schedule_progress_reporter: Option<ScheduleProgressReporter>,
   interval_progress_reporter: Option<IntervalProgressReporter>,
+  workflow_call_progress_reporter: Option<WorkflowCallProgressReporter>,
   resolved_secrets: Arc<BTreeMap<String, String>>,
   capability_registry: Weak<CapabilityRegistry>,
 }
@@ -296,6 +374,7 @@ impl WorkflowCallExecutionConfig {
       schedule_clock: Arc::clone(&options.schedule_clock),
       schedule_progress_reporter: options.schedule_progress_reporter.clone(),
       interval_progress_reporter: options.interval_progress_reporter.clone(),
+      workflow_call_progress_reporter: options.workflow_call_progress_reporter.clone(),
       resolved_secrets: Arc::clone(&options.resolved_secrets),
       capability_registry: Arc::downgrade(&options.capability_registry),
     }
@@ -315,6 +394,7 @@ impl WorkflowCallExecutionConfig {
     options.schedule_clock = Arc::clone(&self.schedule_clock);
     options.schedule_progress_reporter = self.schedule_progress_reporter.clone();
     options.interval_progress_reporter = self.interval_progress_reporter.clone();
+    options.workflow_call_progress_reporter = self.workflow_call_progress_reporter.clone();
     options.resolved_secrets = Arc::clone(&self.resolved_secrets);
     Ok(options)
   }
@@ -345,6 +425,29 @@ impl ManagedWorkflowCallsHandler {
   pub fn with_execution(mut self, options: &RuntimeExecutionOptions) -> Self {
     self.execution = Some(WorkflowCallExecutionConfig::from_options(options));
     self
+  }
+
+  fn report_rejected(&self, call: &CapabilityCallRequest, failure: &CapabilityFailure) {
+    let Some(reporter) = self
+      .execution
+      .as_ref()
+      .and_then(|execution| execution.workflow_call_progress_reporter.as_ref())
+    else {
+      return;
+    };
+    let Some(target_workflow_id) = call.input.get("workflowId").and_then(Value::as_str) else {
+      return;
+    };
+    reporter(WorkflowCallProgress::CallRejected {
+      contract: WORKFLOW_CALL_PROGRESS_CONTRACT,
+      contract_version: WORKFLOW_CALL_PROGRESS_CONTRACT_VERSION,
+      parent_run_id: call.run_id.clone(),
+      parent_node_id: call.node_id.clone(),
+      target_workflow_id: target_workflow_id.to_string(),
+      code: failure.code.clone(),
+      message: failure.message.clone(),
+      occurred_at: Utc::now(),
+    });
   }
 
   fn prepare(
@@ -381,6 +484,26 @@ impl ManagedWorkflowCallsHandler {
       }
       Err(error) => return Err(target_failure(error)),
     };
+    let store = DurableEventStore::open(&self.database_path).map_err(store_failure)?;
+    let target_definition = store
+      .definition(&target.definition_hash)
+      .map_err(store_failure)?;
+    if target_definition
+      .graph
+      .nodes
+      .iter()
+      .any(|node| node.handler == "engine.approval-wait")
+    {
+      return Err(workflow_call_failure(
+        CapabilityFailureKind::ServiceRejected,
+        "WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED",
+        &format!(
+          "Workflow Calls v1 cannot call workflow {:?} because it contains Human Approval. Run it independently until durable call suspension is available.",
+          target.workflow_id
+        ),
+        false,
+      ));
+    }
     let call_key = derive_workflow_call_key(
       &call.identity.step_idempotency_key,
       &target.workflow_id,
@@ -425,7 +548,13 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
     &self,
     call: &CapabilityCallRequest,
   ) -> Result<Map<String, Value>, CapabilityFailure> {
-    let admission = self.prepare(call)?.admission;
+    let admission = match self.prepare(call) {
+      Ok(prepared) => prepared.admission,
+      Err(failure) => {
+        self.report_rejected(call, &failure);
+        return Err(failure);
+      }
+    };
     let store = DurableEventStore::open(&self.database_path).map_err(store_failure)?;
     let depth = store
       .workflow_call_depth_for_parent(&admission.parent_run_id)
@@ -502,7 +631,10 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
   ) -> BoxFuture<'static, Result<Value, CapabilityFailure>> {
     let prepared = match self.prepare(call) {
       Ok(prepared) => prepared,
-      Err(error) => return Box::pin(async move { Err(error) }),
+      Err(error) => {
+        self.report_rejected(call, &error);
+        return Box::pin(async move { Err(error) });
+      }
     };
     let database_path = self.database_path.clone();
     let execution = self.execution.clone();
@@ -521,6 +653,7 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
       let Some(execution) = execution else {
         return Ok(admission_result(&outcome));
       };
+      report_workflow_call_admitted(execution.workflow_call_progress_reporter.as_ref(), &outcome);
       execute_child_and_wait(
         database_path,
         outcome,
@@ -559,6 +692,7 @@ async fn execute_child_and_wait(
   route: PreparedWorkflowCallRoute,
 ) -> Result<Value, CapabilityFailure> {
   let admission = outcome.admission;
+  let progress_reporter = execution.workflow_call_progress_reporter.clone();
   match route {
     PreparedWorkflowCallRoute::Local => {
       dispatch_admitted_workflow_call(
@@ -572,7 +706,50 @@ async fn execute_child_and_wait(
       wake_remote_workflow_call(&database_path, &route, &admission).await?;
     }
   }
-  observe_existing_child(&database_path, &admission, timeout_ms, &cancellation).await
+  observe_existing_child(
+    &database_path,
+    &admission,
+    timeout_ms,
+    &cancellation,
+    progress_reporter.as_ref(),
+  )
+  .await
+}
+
+fn report_workflow_call_admitted(
+  reporter: Option<&WorkflowCallProgressReporter>,
+  outcome: &WorkflowCallAdmissionOutcome,
+) {
+  if let Some(reporter) = reporter {
+    reporter(WorkflowCallProgress::CallAdmitted {
+      contract: WORKFLOW_CALL_PROGRESS_CONTRACT,
+      contract_version: WORKFLOW_CALL_PROGRESS_CONTRACT_VERSION,
+      parent_run_id: outcome.admission.parent_run_id.clone(),
+      parent_node_id: outcome.admission.parent_node_id.clone(),
+      target_workflow_id: outcome.admission.target_workflow_id.clone(),
+      child_run_id: outcome.admission.child_run_id.clone(),
+      duplicate: outcome.duplicate,
+      occurred_at: Utc::now(),
+    });
+  }
+}
+
+fn report_workflow_call_terminal(
+  reporter: Option<&WorkflowCallProgressReporter>,
+  admission: &WorkflowCallAdmission,
+  status: &'static str,
+) {
+  if let Some(reporter) = reporter {
+    reporter(WorkflowCallProgress::ChildTerminal {
+      contract: WORKFLOW_CALL_PROGRESS_CONTRACT,
+      contract_version: WORKFLOW_CALL_PROGRESS_CONTRACT_VERSION,
+      parent_run_id: admission.parent_run_id.clone(),
+      target_workflow_id: admission.target_workflow_id.clone(),
+      child_run_id: admission.child_run_id.clone(),
+      status,
+      occurred_at: Utc::now(),
+    });
+  }
 }
 
 /// Claims and starts one already-admitted child. Returning `false` means
@@ -740,6 +917,7 @@ async fn observe_existing_child(
   admission: &WorkflowCallAdmission,
   timeout_ms: u64,
   cancellation: &CapabilityCancellationToken,
+  progress_reporter: Option<&WorkflowCallProgressReporter>,
 ) -> Result<Value, CapabilityFailure> {
   let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
   loop {
@@ -749,12 +927,14 @@ async fn observe_existing_child(
       .map_err(store_failure)?;
     match projection.status {
       RunStatus::Succeeded => {
+        report_workflow_call_terminal(progress_reporter, admission, "succeeded");
         let result = projection
           .result
           .ok_or_else(|| workflow_call_result_missing(admission))?;
         return workflow_call_success(admission, result);
       }
       RunStatus::Failed => {
+        report_workflow_call_terminal(progress_reporter, admission, "failed");
         return if matches!(
           projection.failure,
           Some(RunFailure::Attempt(ref failure))
@@ -912,13 +1092,13 @@ fn target_failure(error: WorkflowTargetRegistryError) -> CapabilityFailure {
     WorkflowTargetRegistryError::TargetNotFound(_) => workflow_call_failure(
       CapabilityFailureKind::ServiceRejected,
       "WOML_WORKFLOW_TARGET_NOT_FOUND",
-      "No active workflow owns the requested workflow ID.",
+      "No active workflow owns the requested workflow ID. Load the target in the same woml run command or start it with the same --state file.",
       false,
     ),
     WorkflowTargetRegistryError::DuplicateWorkflowId(_) => workflow_call_failure(
       CapabilityFailureKind::ServiceRejected,
       "WOML_WORKFLOW_TARGET_AMBIGUOUS",
-      "More than one active runtime owns the requested workflow ID.",
+      "More than one active runtime owns the requested workflow ID. Stop the duplicate owner and retry.",
       false,
     ),
     _ => workflow_call_failure(

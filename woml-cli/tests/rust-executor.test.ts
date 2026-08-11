@@ -12,6 +12,7 @@ import {
   parseIntervalProgress,
   parseScheduleProgress,
   parseTriggerProgress,
+  parseWorkflowCallProgress,
   recoverDurableRuns,
   RustWorkflowExecutionError,
 } from '../src/rust-executor';
@@ -169,6 +170,71 @@ describe('Interval Progress v1 decoding', () => {
         })
       )
     ).toThrow('invalid interval progress');
+  });
+});
+
+describe('Workflow Call Progress v1 decoding', () => {
+  test('accepts safe admission and terminal messages', () => {
+    const admitted = parseWorkflowCallProgress(
+      JSON.stringify({
+        contract: 'woml.workflow-call-progress',
+        contractVersion: 1,
+        type: 'call_admitted',
+        parentRunId: 'run_parent',
+        parentNodeId: 'calculateRisk',
+        targetWorkflowId: 'calculate-risk',
+        childRunId: 'run_child',
+        duplicate: false,
+        occurredAt: '2026-08-11T12:00:00.000Z',
+      })
+    );
+    expect(admitted.type).toBe('call_admitted');
+    const terminal = parseWorkflowCallProgress(
+      JSON.stringify({
+        contract: 'woml.workflow-call-progress',
+        contractVersion: 1,
+        type: 'child_terminal',
+        parentRunId: 'run_parent',
+        targetWorkflowId: 'calculate-risk',
+        childRunId: 'run_child',
+        status: 'succeeded',
+        occurredAt: '2026-08-11T12:00:01.000Z',
+      })
+    );
+    expect(terminal.type).toBe('child_terminal');
+    const rejected = parseWorkflowCallProgress(
+      JSON.stringify({
+        contract: 'woml.workflow-call-progress',
+        contractVersion: 1,
+        type: 'call_rejected',
+        parentRunId: 'run_parent',
+        parentNodeId: 'calculateRisk',
+        targetWorkflowId: 'approval-workflow',
+        code: 'WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED',
+        message: 'Run it independently.',
+        occurredAt: '2026-08-11T12:00:01.000Z',
+      })
+    );
+    expect(rejected.type).toBe('call_rejected');
+  });
+
+  test('rejects payloads and secrets on the progress surface', () => {
+    expect(() =>
+      parseWorkflowCallProgress(
+        JSON.stringify({
+          contract: 'woml.workflow-call-progress',
+          contractVersion: 1,
+          type: 'call_admitted',
+          parentRunId: 'run_parent',
+          parentNodeId: 'calculateRisk',
+          targetWorkflowId: 'calculate-risk',
+          childRunId: 'run_child',
+          duplicate: false,
+          occurredAt: '2026-08-11T12:00:00.000Z',
+          payload: { token: 'must-not-pass' },
+        })
+      )
+    ).toThrow('invalid workflow call progress');
   });
 });
 

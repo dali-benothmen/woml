@@ -136,6 +136,74 @@ fn target_registry_is_exact_immutable_and_rejects_duplicate_owners() {
 }
 
 #[test]
+fn run_call_inspection_is_bounded_and_excludes_internal_identity_data() {
+  let database = TemporaryDatabase::new("bounded-inspection");
+  let (parent_run_id, now) = seed_parent(database.path());
+  let mut store = DurableEventStore::open(database.path()).unwrap();
+  let mut first_child_run_id = String::new();
+  for index in 1_u64..=51 {
+    let call_key = format!("sha256:{index:064x}");
+    let child_run_id = format!("run_call_{index:064x}");
+    if index == 1 {
+      first_child_run_id.clone_from(&child_run_id);
+    }
+    store
+      .admit_workflow_call(WorkflowCallAdmissionRequest {
+        call_key,
+        child_run_id,
+        parent_run_id: parent_run_id.clone(),
+        parent_node_id: "requestRisk".to_string(),
+        parent_attempt: 1,
+        target_workflow_id: "calculate-risk".to_string(),
+        target_definition_hash: CHILD_HASH.to_string(),
+        payload: Map::from_iter([("index".to_string(), json!(index))]),
+        admitted_at: now + chrono::Duration::milliseconds(index as i64),
+      })
+      .unwrap();
+  }
+
+  let parent_relations = store
+    .workflow_call_relations_for_run(&parent_run_id)
+    .unwrap();
+  assert!(parent_relations.parent_call.is_none());
+  assert_eq!(parent_relations.child_calls.len(), 50);
+  assert!(parent_relations.child_calls_truncated);
+  let encoded = serde_json::to_string(&parent_relations).unwrap();
+  for forbidden in [
+    "callKey",
+    "payload",
+    "payloadDigest",
+    "definitionHash",
+    "customer-42",
+  ] {
+    assert!(!encoded.contains(forbidden));
+  }
+
+  let child_relations = store
+    .workflow_call_relations_for_run(&first_child_run_id)
+    .unwrap();
+  assert_eq!(
+    child_relations.parent_call.unwrap().parent_run_id,
+    parent_run_id
+  );
+  assert!(child_relations.child_calls.is_empty());
+  assert!(!child_relations.child_calls_truncated);
+}
+
+#[test]
+fn run_call_inspection_is_empty_for_an_ordinary_run() {
+  let database = TemporaryDatabase::new("empty-inspection");
+  let (run_id, _) = seed_parent(database.path());
+  let relations = DurableEventStore::open(database.path())
+    .unwrap()
+    .workflow_call_relations_for_run(&run_id)
+    .unwrap();
+  assert!(relations.parent_call.is_none());
+  assert!(relations.child_calls.is_empty());
+  assert!(!relations.child_calls_truncated);
+}
+
+#[test]
 fn admission_creates_one_truthfully_bound_child_and_reuses_it() {
   let database = TemporaryDatabase::new("admission");
   let (parent_run_id, at) = seed_parent(database.path());

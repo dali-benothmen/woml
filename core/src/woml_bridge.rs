@@ -25,7 +25,8 @@ use woml_engine::{
   RuntimeExecutionOptions, RuntimeModuleArtifact, ScheduleProgress, ScheduleProgressReporter,
   ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest, TriggerProgress,
   TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
-  WomlWebhookServerConfig,
+  WomlWebhookServerConfig, WorkflowCallProgress, WorkflowCallProgressReporter,
+  WorkflowCallRunRelations,
 };
 
 #[derive(Serialize)]
@@ -404,6 +405,7 @@ fn native_runtime_progress_reporters(
   TriggerProgressReporter,
   ScheduleProgressReporter,
   IntervalProgressReporter,
+  WorkflowCallProgressReporter,
 )> {
   let mut progress = progress_callback
     .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
@@ -414,6 +416,7 @@ fn native_runtime_progress_reporters(
   let trigger_progress = progress.clone();
   let schedule_progress = progress.clone();
   let interval_progress = progress;
+  let workflow_call_progress = interval_progress.clone();
   Ok((
     Arc::new(move |message: TriggerProgress| {
       if let Ok(json) = serde_json::to_string(&message) {
@@ -428,6 +431,11 @@ fn native_runtime_progress_reporters(
     Arc::new(move |message: IntervalProgress| {
       if let Ok(json) = serde_json::to_string(&message) {
         let _ = interval_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    }),
+    Arc::new(move |message: WorkflowCallProgress| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = workflow_call_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
       }
     }),
   ))
@@ -445,6 +453,7 @@ struct NativeRunInspection {
   result: Option<Value>,
   #[serde(skip_serializing_if = "Option::is_none")]
   failure_code: Option<String>,
+  workflow_calls: WorkflowCallRunRelations,
 }
 
 #[derive(Debug, Serialize)]
@@ -1076,8 +1085,12 @@ pub fn start_woml_webhook_runtime(
   let bind_address: SocketAddr = bind_address
     .parse()
     .map_err(|error| napi::Error::from_reason(format!("Invalid webhook bind address: {error}")))?;
-  let (progress_reporter, schedule_progress_reporter, interval_progress_reporter) =
-    native_runtime_progress_reporters(&env, progress_callback)?;
+  let (
+    progress_reporter,
+    schedule_progress_reporter,
+    interval_progress_reporter,
+    workflow_call_progress_reporter,
+  ) = native_runtime_progress_reporters(&env, progress_callback)?;
   let mut runtime_secrets = BTreeMap::new();
   for registration in &registrations {
     for (name, value) in &registration.resolved_secrets {
@@ -1108,7 +1121,8 @@ pub fn start_woml_webhook_runtime(
     execution: runtime_options(bun_executable, script_host_path, script_timeout_ms)
       .with_resolved_secrets(runtime_secrets)
       .with_schedule_progress_reporter(schedule_progress_reporter)
-      .with_interval_progress_reporter(interval_progress_reporter),
+      .with_interval_progress_reporter(interval_progress_reporter)
+      .with_workflow_call_progress_reporter(workflow_call_progress_reporter),
     progress_reporter: Some(progress_reporter),
   };
 
@@ -1286,6 +1300,9 @@ pub fn inspect_woml_run(event_store_path: String, run_id: String) -> napi::Resul
   let projection = store
     .projection(&run_id)
     .map_err(native_run_inspection_error)?;
+  let workflow_calls = store
+    .workflow_call_relations_for_run(&run_id)
+    .map_err(native_run_inspection_error)?;
   let inspection = NativeRunInspection {
     run_id: projection.run_id.unwrap_or(run_id),
     workflow_id: projection.workflow_id.unwrap_or_default(),
@@ -1293,6 +1310,7 @@ pub fn inspect_woml_run(event_store_path: String, run_id: String) -> napi::Resul
     terminal_node_id: projection.terminal_node_id,
     result: projection.result,
     failure_code: projection.failure.as_ref().map(run_failure_code),
+    workflow_calls,
   };
   serde_json::to_string(&inspection)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML run: {error}")))

@@ -206,6 +206,40 @@ export type IntervalProgressV1 =
       readonly occurredAt: string;
     };
 
+export type WorkflowCallProgressV1 =
+  | {
+      readonly contract: 'woml.workflow-call-progress';
+      readonly contractVersion: 1;
+      readonly type: 'call_admitted';
+      readonly parentRunId: string;
+      readonly parentNodeId: string;
+      readonly targetWorkflowId: string;
+      readonly childRunId: string;
+      readonly duplicate: boolean;
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.workflow-call-progress';
+      readonly contractVersion: 1;
+      readonly type: 'child_terminal';
+      readonly parentRunId: string;
+      readonly targetWorkflowId: string;
+      readonly childRunId: string;
+      readonly status: 'succeeded' | 'failed';
+      readonly occurredAt: string;
+    }
+  | {
+      readonly contract: 'woml.workflow-call-progress';
+      readonly contractVersion: 1;
+      readonly type: 'call_rejected';
+      readonly parentRunId: string;
+      readonly parentNodeId: string;
+      readonly targetWorkflowId: string;
+      readonly code: string;
+      readonly message: string;
+      readonly occurredAt: string;
+    };
+
 export interface WebhookRuntimeRegistration {
   readonly workflow: CompiledWorkflowDefinition;
   readonly definitionHash: string;
@@ -220,6 +254,7 @@ export interface WebhookRuntimeOptions extends RustExecutorOptions {
   readonly onTriggerProgress?: (progress: TriggerProgressV1) => void;
   readonly onScheduleProgress?: (progress: ScheduleProgressV1) => void;
   readonly onIntervalProgress?: (progress: IntervalProgressV1) => void;
+  readonly onWorkflowCallProgress?: (progress: WorkflowCallProgressV1) => void;
 }
 
 export interface WebhookRuntimeHandle {
@@ -276,6 +311,21 @@ export interface RustRunInspection {
   readonly terminalNodeId?: string;
   readonly result?: JsonValue;
   readonly failureCode?: string;
+  readonly workflowCalls: {
+    readonly parentCall?: RustWorkflowCallSummary;
+    readonly childCalls: readonly RustWorkflowCallSummary[];
+    readonly childCallsTruncated: boolean;
+  };
+}
+
+export interface RustWorkflowCallSummary {
+  readonly parentRunId: string;
+  readonly parentNodeId: string;
+  readonly targetWorkflowId: string;
+  readonly childRunId: string;
+  readonly depth: number;
+  readonly state: 'admitted' | 'running' | 'succeeded' | 'failed';
+  readonly admittedAt: string;
 }
 
 export class TriggerRuntimeError extends Error {
@@ -928,6 +978,84 @@ export function parseTriggerProgress(json: string): TriggerProgressV1 {
     return value as TriggerProgressV1;
   }
   throw new Error('The native core returned invalid trigger progress.');
+}
+
+export function parseWorkflowCallProgress(json: string): WorkflowCallProgressV1 {
+  const value: unknown = JSON.parse(json);
+  if (
+    !record(value) ||
+    value.contract !== 'woml.workflow-call-progress' ||
+    value.contractVersion !== 1 ||
+    !dateTime(value.occurredAt) ||
+    typeof value.parentRunId !== 'string' ||
+    value.parentRunId.length === 0 ||
+    typeof value.targetWorkflowId !== 'string' ||
+    value.targetWorkflowId.length === 0
+  ) {
+    throw new Error('The native core returned invalid workflow call progress.');
+  }
+  if (
+    value.type === 'call_admitted' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'parentRunId',
+      'parentNodeId',
+      'targetWorkflowId',
+      'childRunId',
+      'duplicate',
+      'occurredAt',
+    ]) &&
+    typeof value.parentNodeId === 'string' &&
+    value.parentNodeId.length > 0 &&
+    typeof value.childRunId === 'string' &&
+    value.childRunId.length > 0 &&
+    typeof value.duplicate === 'boolean'
+  ) {
+    return value as WorkflowCallProgressV1;
+  }
+  if (
+    value.type === 'child_terminal' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'parentRunId',
+      'targetWorkflowId',
+      'childRunId',
+      'status',
+      'occurredAt',
+    ]) &&
+    typeof value.childRunId === 'string' &&
+    value.childRunId.length > 0 &&
+    (value.status === 'succeeded' || value.status === 'failed')
+  ) {
+    return value as WorkflowCallProgressV1;
+  }
+  if (
+    value.type === 'call_rejected' &&
+    exactKeys(value, [
+      'contract',
+      'contractVersion',
+      'type',
+      'parentRunId',
+      'parentNodeId',
+      'targetWorkflowId',
+      'code',
+      'message',
+      'occurredAt',
+    ]) &&
+    typeof value.parentNodeId === 'string' &&
+    value.parentNodeId.length > 0 &&
+    typeof value.code === 'string' &&
+    value.code.startsWith('WOML_') &&
+    typeof value.message === 'string' &&
+    value.message.length > 0
+  ) {
+    return value as WorkflowCallProgressV1;
+  }
+  throw new Error('The native core returned invalid workflow call progress.');
 }
 
 export function parseScheduleProgress(json: string): ScheduleProgressV1 {
@@ -1701,6 +1829,13 @@ export async function startWebhookRuntimeWithRust(
           options.onIntervalProgress?.(parseIntervalProgress(message));
           return;
         }
+        if (
+          record(decoded) &&
+          decoded.contract === 'woml.workflow-call-progress'
+        ) {
+          options.onWorkflowCallProgress?.(parseWorkflowCallProgress(message));
+          return;
+        }
         options.onTriggerProgress?.(parseTriggerProgress(message));
       }
     )
@@ -1841,11 +1976,32 @@ export function inspectRunWithRust(
     );
   }
   const value: unknown = JSON.parse(inspectionJson);
+  const workflowCallSummary = (summary: unknown): boolean =>
+    record(summary) &&
+    exactKeys(summary, [
+      'parentRunId',
+      'parentNodeId',
+      'targetWorkflowId',
+      'childRunId',
+      'depth',
+      'state',
+      'admittedAt',
+    ]) &&
+    typeof summary.parentRunId === 'string' &&
+    typeof summary.parentNodeId === 'string' &&
+    typeof summary.targetWorkflowId === 'string' &&
+    typeof summary.childRunId === 'string' &&
+    Number.isSafeInteger(summary.depth) &&
+    Number(summary.depth) >= 1 &&
+    ['admitted', 'running', 'succeeded', 'failed'].includes(
+      String(summary.state)
+    ) &&
+    dateTime(summary.admittedAt);
   if (
     !record(value) ||
     !exactKeys(
       value,
-      ['runId', 'workflowId', 'status'],
+      ['runId', 'workflowId', 'status', 'workflowCalls'],
       ['terminalNodeId', 'result', 'failureCode']
     ) ||
     typeof value.runId !== 'string' ||
@@ -1855,7 +2011,19 @@ export function inspectRunWithRust(
     ) ||
     (value.terminalNodeId !== undefined &&
       typeof value.terminalNodeId !== 'string') ||
-    (value.failureCode !== undefined && typeof value.failureCode !== 'string')
+    (value.failureCode !== undefined && typeof value.failureCode !== 'string') ||
+    !record(value.workflowCalls) ||
+    !exactKeys(
+      value.workflowCalls,
+      ['childCalls', 'childCallsTruncated'],
+      ['parentCall']
+    ) ||
+    !Array.isArray(value.workflowCalls.childCalls) ||
+    value.workflowCalls.childCalls.length > 50 ||
+    !value.workflowCalls.childCalls.every(workflowCallSummary) ||
+    (value.workflowCalls.parentCall !== undefined &&
+      !workflowCallSummary(value.workflowCalls.parentCall)) ||
+    typeof value.workflowCalls.childCallsTruncated !== 'boolean'
   ) {
     throw new Error('The native core returned invalid run inspection data.');
   }
