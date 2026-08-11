@@ -13,7 +13,7 @@
       id="prepare"
       name="Prepare greeting">
       <script>
-        return { name: context.trigger.name ?? "World" };
+        return { name: context.payload.name ?? "World" };
       </script>
     </step>
 

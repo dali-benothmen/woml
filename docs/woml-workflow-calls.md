@@ -7,15 +7,35 @@ function result.
 
 ```js
 const risk = await services.workflows.call('calculate-risk', {
-  customerId: context.trigger.customerId
+  customerId: context.payload.customerId
 });
 
 return { score: risk.score };
 ```
 
-The payload object becomes the child's complete `context.trigger`. The value
+The payload object becomes the child's complete `context.payload`. The value
 returned by the child's last executable step becomes `risk`. A child must
 return JSON, including `null`; missing or JavaScript `undefined` is an error.
+
+Use `start()` when the parent should continue immediately after the child is
+durably admitted:
+
+```js
+const started = await services.workflows.start('calculate-risk', {
+  customerId: context.payload.customerId
+});
+
+return { childRunId: started.runId };
+```
+
+The `await` above waits only for durable admission and dispatch. The child keeps
+running independently, and its later result or failure does not change the
+already completed parent step.
+
+| Operation | Parent waits for | Returned value |
+| --- | --- | --- |
+| `services.workflows.call()` | Child terminal status | Child's final JSON result |
+| `services.workflows.start()` | Durable admission and dispatch | `{ workflowId, runId, duplicate }` |
 
 ## Activate the workflows
 
@@ -82,9 +102,10 @@ same after the run starts. Nested calls work in one runtime and across local
 processes, up to the lineage-depth limit.
 
 Human Approval is the one v1 exception. A target containing approval is
-rejected before a child run is admitted, with
-`WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED`. Start that workflow independently until
-durable suspension of a calling JavaScript continuation is available.
+rejected by synchronous `call()` before a child run is admitted, with
+`WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED`. Use the non-blocking `start()` operation
+when launching that workflow from another workflow is appropriate; the parent
+does not wait for its approval or terminal result.
 
 ## Common failures
 
@@ -105,6 +126,9 @@ durable suspension of a calling JavaScript continuation is available.
 Retries and duplicate transports reconnect to the original child when the
 logical operation identity and payload match. Repeated calls to the same target
 from one step need stable, different `{ name: "..." }` values.
+
+The frozen non-blocking contract is documented in
+`docs/protocols/workflow-start-v1.md`.
 
 For deployment, security, migration, shutdown, benchmarks, and the release
 gate, see `docs/woml-workflow-calls-production.md`.

@@ -14,7 +14,7 @@
       name="Choose greeting name"
       description="Use the trigger name or default to World">
       <script>
-        const name = context.trigger.name ?? "Mohamed Ali";
+        const name = context.payload.name ?? "Mohamed Ali";
         const age = 10 + 20
 
         return {

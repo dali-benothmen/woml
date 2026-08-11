@@ -209,7 +209,7 @@ This does not define or expose `context.run`. The existing context contract
 remains unchanged:
 
 ```text
-context.trigger
+context.payload
 context.steps
 ```
 

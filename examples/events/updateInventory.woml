@@ -18,7 +18,7 @@
       <script>
         return {
           workflow: "update-inventory",
-          message: `Inventory updated for ${context.trigger.orderId}`
+          message: `Inventory updated for ${context.payload.orderId}`
         };
       </script>
     </step>

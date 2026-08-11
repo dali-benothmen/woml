@@ -16,7 +16,7 @@ package support and run inside the existing isolated Bun Worker.
     <triggers><manual id="start" /></triggers>
     <steps>
       <step id="answer"><script>
-        return await services.openai.chat(context.trigger.message);
+        return await services.openai.chat(context.payload.message);
       </script></step>
     </steps>
   </workflow>
@@ -83,7 +83,7 @@ needs from its calling WOML step:
 ```xml
 <script>
   return services.crm.findCustomer(
-    context.trigger.customerId,
+    context.payload.customerId,
     secrets.CRM_TOKEN,
     attempt.idempotencyKey
   );

@@ -51,6 +51,7 @@ async function validators() {
       (_, index) => `run-event.v${index + 1}.schema.json`
     ),
     'workflow-call.v1.schema.json',
+    'workflow-start.v1.schema.json',
     'workflow-call-index.v1.schema.json',
     'workflow-call-progress.v1.schema.json',
     'workflow-call-routing.v1.schema.json',
@@ -68,6 +69,7 @@ async function validators() {
       'https://woml.dev/schemas/woml-definition-package.v5.schema.json'
     )!,
     call: ajv.getSchema('https://woml.dev/schemas/workflow-call/v1')!,
+    start: ajv.getSchema('https://woml.dev/schemas/workflow-start/v1')!,
     index: ajv.getSchema(
       'https://woml.dev/schemas/workflow-call-index/v1'
     )!,
@@ -156,13 +158,15 @@ describe('WC0 frozen Workflow Call contracts', () => {
     const names = (await readdir(contractDirectory))
       .filter(name => name.endsWith('.json') && !name.endsWith('.invalid.json'))
       .sort();
-    expect(names).toHaveLength(9);
+    expect(names).toHaveLength(11);
     for (const name of names) {
       const fixture = await Bun.file(resolve(contractDirectory, name)).json();
       const validator = name.startsWith('index')
         ? schemas.index
         : name.startsWith('routing')
           ? schemas.routing
+          : name.startsWith('start')
+            ? schemas.start
           : schemas.call;
       expect(
         validator(fixture),
@@ -304,12 +308,40 @@ describe('WC1 call-only frontend and workflow service analysis', () => {
     ).toBe(1);
   });
 
-  test('accepts the v1 call and rejects statically invalid call shapes', () => {
+  test('accepts context.payload while preserving the frozen internal model path', () => {
+    const compiled = compile(`<woml><workflow id="payload-context">
+      <triggers><manual id="start" /></triggers>
+      <steps><branch id="decision">
+        <when test="{{context.payload.approved}}">
+          <step id="yes"><script>return context.payload;</script></step>
+          <result value="{{context.steps.yes}}" />
+        </when>
+        <otherwise>
+          <step id="no"><script>return null;</script></step>
+          <result value="{{context.steps.no}}" />
+        </otherwise>
+      </branch></steps>
+    </workflow></woml>`);
+    const edge = compiled.graph.edges.find(
+      candidate => candidate.id === 'decision:when:0'
+    );
+    expect(edge?.condition).toEqual({
+      kind: 'boolean',
+      value: { kind: 'contextReference', path: ['trigger', 'approved'] },
+    });
+  });
+
+  test('accepts v1 call/start and rejects statically invalid workflow operations', () => {
     const accepted = analyzeWomlScript(
       `return services.workflows.call('calculate-risk', { customerId: '42' }, { name: 'risk', timeout: '30s' });`
     );
     expect(accepted.issue).toBeUndefined();
     expect(accepted.requiredServices).toContain('workflows');
+    expect(
+      analyzeWomlScript(
+        `return services.workflows.start('calculate-risk', { customerId: '42' }, { name: 'background-risk' });`
+      ).issue
+    ).toBeUndefined();
 
     for (const [source, code] of [
       ['return services.workflows.call();', 'WOML_WORKFLOW_CALL_ARGUMENTS_INVALID'],
@@ -330,8 +362,8 @@ describe('WC1 call-only frontend and workflow service analysis', () => {
         'WOML_WORKFLOW_CALL_OPTIONS_INVALID',
       ],
       [
-        `return services.workflows.start('calculate-risk', {});`,
-        'WOML_WORKFLOW_OPERATION_UNSUPPORTED',
+        `return services.workflows.start('calculate-risk', {}, { timeout: '1s' });`,
+        'WOML_WORKFLOW_CALL_OPTION_UNKNOWN',
       ],
     ] as const) {
       expect(analyzeWomlScript(source).issue?.code).toBe(code);
@@ -339,12 +371,14 @@ describe('WC1 call-only frontend and workflow service analysis', () => {
     }
   });
 
-  test('publishes workflows.call through automatic editor declarations', () => {
+  test('publishes workflows.call/start through automatic editor declarations', () => {
     const declarations = generateWomlEditorDeclarations([]);
     expect(declarations).toContain('readonly workflows');
     expect(declarations).toContain('readonly call');
+    expect(declarations).toContain('readonly start');
     expect(declarations).toContain('workflowId: string');
     expect(declarations).toContain('WomlWorkflowCallOptions');
+    expect(declarations).toContain('WomlWorkflowStartResult');
   });
 
   test('validateWoml accepts the reviewed call-only source', () => {

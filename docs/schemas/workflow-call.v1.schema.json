@@ -12,7 +12,7 @@
   },
   "x-invariants": [
     "Exactly one activated workflow ID is selected and pinned to one definition hash before child execution.",
-    "The payload is a top-level JSON object and becomes the complete child context.trigger.",
+    "The payload is a top-level JSON object and becomes the complete child author-facing context.payload.",
     "A stable call identity admits at most one child run.",
     "Null is a valid result; missing or undefined is not a result.",
     "Payloads, results, and secrets never enter safe operation metadata."

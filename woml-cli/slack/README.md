@@ -94,13 +94,13 @@ send it a direct message. A valid message starts one durable workflow run and
 is available to scripts as:
 
 ```js
-context.trigger.type
-context.trigger.text
-context.trigger.userId
-context.trigger.channelId
-context.trigger.messageTs
-context.trigger.threadTs
-context.trigger.teamId
+context.payload.type
+context.payload.text
+context.payload.userId
+context.payload.channelId
+context.payload.messageTs
+context.payload.threadTs
+context.payload.teamId
 ```
 
 Channel filters apply to app mentions; direct messages remain accepted when

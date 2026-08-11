@@ -34,7 +34,7 @@ Use `woml test workflow.woml` only for an intentional one-shot manual run.
 
 ## Supported trigger behavior
 
-| Trigger | Source | Durable duplicate identity | `context.trigger` |
+| Trigger | Source | Durable duplicate identity | `context.payload` |
 |---|---|---|---|
 | Webhook | HTTP POST | `Idempotency-Key`, or a fresh identity | Validated request body |
 | Slack | App mention or direct message | Workspace and Slack event identity | Normalized conversation fields |

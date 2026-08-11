@@ -1,0 +1,16 @@
+<woml>
+  <workflow id="background-calculator" name="Background calculation" version="1.0.0">
+    <steps>
+      <step id="calculate">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          return {
+            result:
+              context.payload.firstNumber + context.payload.secondNumber
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

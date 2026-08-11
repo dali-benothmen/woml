@@ -35,6 +35,8 @@ use crate::{
 
 pub const WORKFLOW_CALL_CONTRACT: &str = "woml.workflow-call";
 pub const WORKFLOW_CALL_CONTRACT_VERSION: u32 = 1;
+pub const WORKFLOW_START_CONTRACT: &str = "woml.workflow-start";
+pub const WORKFLOW_START_CONTRACT_VERSION: u32 = 1;
 pub const MAX_WORKFLOW_CALL_DEPTH: u32 = 32;
 const MAX_WORKFLOW_CALL_PAYLOAD_BYTES: usize = 1_048_576;
 const MAX_WORKFLOW_CALL_RESULT_BYTES: usize = 4_194_304;
@@ -341,11 +343,34 @@ struct WorkflowCallOptions {
   timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowInvocationMode {
+  Call,
+  Start,
+}
+
+impl WorkflowInvocationMode {
+  const fn operation(self) -> &'static str {
+    match self {
+      Self::Call => "call",
+      Self::Start => "start",
+    }
+  }
+
+  const fn contract(self) -> &'static str {
+    match self {
+      Self::Call => WORKFLOW_CALL_CONTRACT,
+      Self::Start => WORKFLOW_START_CONTRACT,
+    }
+  }
+}
+
 #[derive(Clone)]
 pub struct ManagedWorkflowCallsHandler {
   database_path: PathBuf,
   targets: Arc<WorkflowTargetRegistry>,
   execution: Option<WorkflowCallExecutionConfig>,
+  mode: WorkflowInvocationMode,
 }
 
 #[derive(Clone)]
@@ -419,6 +444,16 @@ impl ManagedWorkflowCallsHandler {
       database_path,
       targets,
       execution: None,
+      mode: WorkflowInvocationMode::Call,
+    }
+  }
+
+  pub fn for_start(database_path: PathBuf, targets: Arc<WorkflowTargetRegistry>) -> Self {
+    Self {
+      database_path,
+      targets,
+      execution: None,
+      mode: WorkflowInvocationMode::Start,
     }
   }
 
@@ -454,10 +489,10 @@ impl ManagedWorkflowCallsHandler {
     &self,
     call: &CapabilityCallRequest,
   ) -> Result<PreparedWorkflowCall, CapabilityFailure> {
-    let request = parse_request(&call.input)?;
+    let request = parse_request(&call.input, self.mode)?;
     let identity_matches = match (&request.options.name, call.identity.mode) {
       (Some(name), CapabilityIdentityMode::Named) => {
-        call.identity.operation_name == format!("workflows.call.{name}")
+        call.identity.operation_name == format!("workflows.{}.{name}", self.mode.operation())
       }
       (None, CapabilityIdentityMode::Automatic) => true,
       _ => false,
@@ -466,7 +501,7 @@ impl ManagedWorkflowCallsHandler {
       return Err(workflow_call_failure(
         CapabilityFailureKind::InvalidInput,
         "WOML_WORKFLOW_CALL_IDENTITY_INVALID",
-        "Workflow Call options.name does not match the engine-owned operation identity.",
+        "Workflow operation options.name does not match the engine-owned operation identity.",
         false,
       ));
     }
@@ -490,11 +525,12 @@ impl ManagedWorkflowCallsHandler {
     let target_definition = store
       .definition(&target.definition_hash)
       .map_err(store_failure)?;
-    if target_definition
-      .graph
-      .nodes
-      .iter()
-      .any(|node| node.handler == "engine.approval-wait")
+    if self.mode == WorkflowInvocationMode::Call
+      && target_definition
+        .graph
+        .nodes
+        .iter()
+        .any(|node| node.handler == "engine.approval-wait")
     {
       return Err(workflow_call_failure(
         CapabilityFailureKind::ServiceRejected,
@@ -533,9 +569,9 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
   fn descriptor(&self) -> CapabilityDescriptor {
     CapabilityDescriptor {
       capability: "workflows".to_string(),
-      operation: "call".to_string(),
-      input_contract_version: WORKFLOW_CALL_CONTRACT_VERSION,
-      result_contract_version: WORKFLOW_CALL_CONTRACT_VERSION,
+      operation: self.mode.operation().to_string(),
+      input_contract_version: 1,
+      result_contract_version: 1,
       effect: CapabilityEffect::IdempotentWrite,
       supports_cancellation: true,
       supports_provider_idempotency: false,
@@ -543,7 +579,7 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
   }
 
   fn validate_request(&self, request: &CapabilityCallRequest) -> Result<(), CapabilityFailure> {
-    parse_request(&request.input).map(|_| ())
+    parse_request(&request.input, self.mode).map(|_| ())
   }
 
   fn safe_request_metadata(
@@ -582,7 +618,11 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
   }
 
   fn safe_result_metadata(&self, result: &Value) -> Map<String, Value> {
-    let Some(child_run_id) = result.get("childRunId").and_then(Value::as_str) else {
+    let Some(child_run_id) = result
+      .get("childRunId")
+      .or_else(|| result.get("runId"))
+      .and_then(Value::as_str)
+    else {
       return Map::new();
     };
     let Some(digest) = child_run_id.strip_prefix("run_call_") else {
@@ -640,6 +680,7 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
     };
     let database_path = self.database_path.clone();
     let execution = self.execution.clone();
+    let mode = self.mode;
     Box::pin(async move {
       if cancellation.is_cancelled() {
         return Err(workflow_call_cancelled());
@@ -656,17 +697,53 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
         return Ok(admission_result(&outcome));
       };
       report_workflow_call_admitted(execution.workflow_call_progress_reporter.as_ref(), &outcome);
-      execute_child_and_wait(
-        database_path,
-        outcome,
-        execution,
-        prepared.timeout_ms,
-        cancellation,
-        prepared.route,
-      )
-      .await
+      match mode {
+        WorkflowInvocationMode::Call => {
+          execute_child_and_wait(
+            database_path,
+            outcome,
+            execution,
+            prepared.timeout_ms,
+            cancellation,
+            prepared.route,
+          )
+          .await
+        }
+        WorkflowInvocationMode::Start => {
+          start_child_and_continue(database_path, outcome, execution, prepared.route).await
+        }
+      }
     })
   }
+}
+
+async fn start_child_and_continue(
+  database_path: PathBuf,
+  outcome: WorkflowCallAdmissionOutcome,
+  execution: WorkflowCallExecutionConfig,
+  route: PreparedWorkflowCallRoute,
+) -> Result<Value, CapabilityFailure> {
+  match route {
+    PreparedWorkflowCallRoute::Local => {
+      dispatch_admitted_workflow_call(
+        database_path,
+        outcome.admission.clone(),
+        execution.runtime_options()?,
+      )
+      .await?;
+    }
+    PreparedWorkflowCallRoute::Remote(route) => {
+      wake_remote_workflow_call(&database_path, &route, &outcome.admission).await?;
+    }
+  }
+  Ok(json!({
+    "contract": WORKFLOW_START_CONTRACT,
+    "contractVersion": WORKFLOW_START_CONTRACT_VERSION,
+    "kind": "started",
+    "workflowId": outcome.admission.target_workflow_id,
+    "runId": outcome.admission.child_run_id,
+    "duplicate": outcome.duplicate,
+  }))
 }
 
 fn admission_result(outcome: &WorkflowCallAdmissionOutcome) -> Value {
@@ -1035,7 +1112,10 @@ fn child_run_id(call_key: &str) -> String {
   )
 }
 
-fn parse_request(input: &Value) -> Result<WorkflowCallRequest, CapabilityFailure> {
+fn parse_request(
+  input: &Value,
+  mode: WorkflowInvocationMode,
+) -> Result<WorkflowCallRequest, CapabilityFailure> {
   let request: WorkflowCallRequest = serde_json::from_value(input.clone()).map_err(|_| {
     workflow_call_failure(
       CapabilityFailureKind::InvalidInput,
@@ -1053,11 +1133,12 @@ fn parse_request(input: &Value) -> Result<WorkflowCallRequest, CapabilityFailure
       .options
       .timeout_ms
       .is_none_or(|value| (1..=86_400_000).contains(&value));
-  if request.contract != WORKFLOW_CALL_CONTRACT
-    || request.contract_version != WORKFLOW_CALL_CONTRACT_VERSION
+  if request.contract != mode.contract()
+    || request.contract_version != 1
     || request.kind != "request"
     || !valid_workflow_id(&request.workflow_id)
     || !valid_options
+    || (mode == WorkflowInvocationMode::Start && request.options.timeout_ms.is_some())
   {
     return Err(workflow_call_failure(
       CapabilityFailureKind::InvalidInput,

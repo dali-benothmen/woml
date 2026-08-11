@@ -55,7 +55,7 @@ includes conditional branches and bounded parallel groups:
 | Feature | Design status | Current CLI profile |
 |---|---|---|
 | Workflow `id`/`name`/`description`, manual trigger, sequential steps | Frozen | Executable and publishable |
-| `<script>` with `context.trigger` and `context.steps` | Frozen | Executable and publishable |
+| `<script>` with `context.payload` and `context.steps` | Frozen | Executable and publishable |
 | `{{context...}}` attribute-reference grammar | Frozen | Executable for branch `test` and `result` |
 | Workflow `version` | Frozen | Executable as user-defined workflow metadata |
 | Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
@@ -72,7 +72,7 @@ includes conditional branches and bounded parallel groups:
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
 | Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC14 completed and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, workflow-scoped Cache v1, and internal Events Service v1 are executable and publishable; queue is postponed |
 | `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS4 plus essential MS6 DX completed | Canonical documents, safe local resolution, deterministic ESM bundles/maps, Definition Package v3, Model v9, isolated execution, durable recovery, Script Host v6, editor type generation, alias diagnostics, and mocked module tests are implemented; package support remains postponed |
-| Call-only workflows and `services.workflows.call()` | Workflow Calls WC0–WC7 implemented and hardened | Model v10 call-only definitions, exact Rust targeting, durable child execution, direct JSON results, retry/duplicate reattachment, cycle rejection, fail-closed recovery, explicit multi-file activation, automatic local cross-process routing, safe progress, bounded inspection, migration/corruption protection, packaging, and production guidance are publishable in the local profile |
+| Call-only workflows and `services.workflows.call()` / `.start()` | Workflow Calls WC0–WC7 plus Workflow Start v1 implemented | Model v10 call-only definitions support waiting for a direct child result or continuing after durable background admission, with exact targeting, retry/duplicate reattachment, cycle protection, and local cross-process routing |
 | Queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
 
@@ -196,7 +196,7 @@ Outside raw-content elements:
       description="Normalize the submitted content before analysis"
       timeout="30s">
       <script>
-        const { content } = context.trigger;
+        const { content } = context.payload;
 
         return {
           originalContent: content,
@@ -221,7 +221,7 @@ Outside raw-content elements:
 
       <step id="analyzeImage">
         <script>
-          return analyzeImage(context.trigger.imageUrl);
+          return analyzeImage(context.payload.imageUrl);
         </script>
       </step>
 
@@ -288,7 +288,7 @@ Outside raw-content elements:
             <step id="recordHumanApproval">
               <script>
                 return {
-                  contentId: context.trigger.contentId,
+                  contentId: context.payload.contentId,
                   approved: true
                 };
               </script>
@@ -299,7 +299,7 @@ Outside raw-content elements:
             <step id="recordHumanRejection">
               <script>
                 return {
-                  contentId: context.trigger.contentId,
+                  contentId: context.payload.contentId,
                   approved: false
                 };
               </script>
@@ -511,7 +511,7 @@ MUST NOT be used as durable step identities.
   name="Generate report"
   description="Build the report returned to the publishing step">
   <script>
-    return generateReport(context.trigger);
+    return generateReport(context.payload);
   </script>
 </step>
 ```
@@ -679,7 +679,7 @@ child admission.
 |---|---:|---|---|
 | `id` | Yes | Trigger ID | Stable trigger identity. |
 
-Manual CLI input becomes `context.trigger`.
+Manual CLI input becomes `context.payload`.
 
 ### 9.2 `<webhook>`
 
@@ -717,7 +717,7 @@ Schema Draft 2020-12. The compiler MUST parse and validate the schema before the
 workflow can be registered.
 
 When a schema exists, the webhook payload MUST validate before a run is created.
-The normalized successful payload becomes `context.trigger`.
+The normalized successful payload becomes `context.payload`.
 
 When payload validation fails:
 
@@ -774,7 +774,7 @@ resolution and portability rules are designed.
 
 The normalized trigger value contains safe message, user, channel, thread, and
 workspace identifiers. Bot/self messages, edits, deletes, provider envelopes,
-and credentials never enter `context.trigger`. T6 validates this syntax and
+and credentials never enter `context.payload`. T6 validates this syntax and
 lowers it to Model v7. Slack event ingestion remains unavailable until T7, so
 the CLI must reject activation instead of pretending that the trigger is live.
 
@@ -931,7 +931,7 @@ wrapped in `<step>`.
   retry-max-delay="30s">
   <script>
     return {
-      message: `Hello ${context.trigger.name}`
+      message: `Hello ${context.payload.name}`
     };
   </script>
 </step>
@@ -1054,12 +1054,19 @@ derives a stable publication identity, durably admits child runs, and protects
 against duplicate retry, cycles, and unbounded lineage. The complete contract
 and internal-only example are documented in `docs/woml-events-service.md`.
 
-The complete v0.1 context paths are:
+The public v0.1 context paths are:
 
 ```text
-context.trigger
+context.payload
 context.steps.<stepId>
 ```
+
+`context.payload` is the author-facing input regardless of whether a webhook,
+Slack message, schedule, event, manual run, Workflow Call, or Workflow Start
+created the run. Rust retains the old `trigger` field only inside frozen event,
+projection, and Script Host transport contracts. `context.trigger` remains a
+deprecated runtime compatibility alias for already compiled scripts; new WOML
+source and documentation use `context.payload`.
 
 `context.run` is not present in WOML v0.1. A runtime MUST NOT expose internal run
 fields through that name. A future WOML version may add `context.run` only after
@@ -1068,7 +1075,7 @@ its minimal public schema and versioning policy are approved.
 The current SDK mapping is:
 
 ```text
-ctx.payload -> context.trigger
+ctx.payload -> context.payload
 ctx.last    -> explicit context.steps.<stepId>
 ```
 
@@ -1263,13 +1270,13 @@ finish.
   on-error="wait-all">
   <step id="loadWeather">
     <script>
-      return loadWeather(context.trigger.fieldId);
+      return loadWeather(context.payload.fieldId);
     </script>
   </step>
 
   <step id="loadSoil">
     <script>
-      return loadSoil(context.trigger.fieldId);
+      return loadSoil(context.payload.fieldId);
     </script>
   </step>
 </parallel>
@@ -1567,8 +1574,8 @@ whitespace:
 
 ```text
 reference       := "{{" context-path "}}"
-context-path    := trigger-path | step-path
-trigger-path    := "context.trigger" ("." property-id)*
+context-path    := payload-path | step-path
+payload-path    := "context.payload" ("." property-id)*
 step-path       := "context.steps." structural-id ("." property-id)*
 structural-id   := [a-z][A-Za-z0-9]*
 property-id     := [A-Za-z_$][A-Za-z0-9_$]*
@@ -1848,7 +1855,7 @@ threading between two sequential script steps:
       name="Choose greeting name"
       description="Use the trigger name or default to World">
       <script>
-        const name = context.trigger.name ?? "World";
+        const name = context.payload.name ?? "World";
 
         return {
           x: name

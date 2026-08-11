@@ -180,7 +180,7 @@ When the executor reaches a `<script>`, it sends the script body plus a snapshot
 of `context` to Bun. Bun executes the body with two ambient globals injected
 into scope:
 
-- **`context`** — the v0.1 run data surface contains only `context.trigger` and
+- **`context`** — the v0.1 run data surface contains only `context.payload` and
   `context.steps.<id>`. Reads are free; **mutations do not persist**. Neither
   `context.run` nor `context.env` exists in v0.1. Internal run fields and
   resolved environment/secrets MUST NOT leak through those names. A future
@@ -337,10 +337,10 @@ step (`<db.insert>`), and a `<slack.send>` notification.
    every tag and `{{context...}}` reference validated, and the workflow model
    produced and cached. The core registers the webhook route and waits.
 3. **Trigger.** A request hits `/signup`. The core opens a run: it appends
-   `run_started`, sets `context.trigger` from the request body, assigns a run
+   `run_started`, sets `context.payload` from the request body, assigns a run
    id, and persists the event log.
 4. **Step `validate` (`<script>`).** The core sends the body + context snapshot
-   to Bun. The script reads `context.trigger.email`, runs its checks, and
+   to Bun. The script reads `context.payload.email`, runs its checks, and
    returns an object. The core appends `step_completed(validate, output)` →
    folds into `context.steps.validate` → persists.
 5. **Step `create-user` (`<db.insert>`).** The core looks up `db.insert` in the

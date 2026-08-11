@@ -148,7 +148,7 @@ converge on the same subscriber definitions and run dispatcher.
 Rust stores hidden publication lineage beside trigger occurrences. A chain is
 limited to 32 publications and may not repeat the same workflow/trigger pair.
 Lineage and payloads do not expand `context.run`; payload data appears only as
-the child workflow's existing `context.trigger`.
+the child workflow's existing `context.payload`.
 
 ## Safe diagnostics
 

@@ -24,6 +24,14 @@ for (const [file, required] of [
     '## Deployment checklist',
   ],
   [
+    'docs/protocols/workflow-start-v1.md',
+    'services.workflows.start',
+  ],
+  [
+    'docs/schemas/workflow-start.v1.schema.json',
+    'woml.workflow-start',
+  ],
+  [
     'docs/woml-sdk-migration.md',
     'services.workflows.call(workflowId, payload)',
   ],
@@ -49,10 +57,15 @@ for (const [file, required] of [
 const ajv = new Ajv2020({ strict: true });
 addFormats(ajv);
 ajv.addKeyword({ keyword: 'x-status', schemaType: 'string', valid: true });
+ajv.addKeyword({ keyword: 'x-invariants', schemaType: 'array', valid: true });
 const progressSchema = await Bun.file(
   resolve(repositoryRoot, 'docs/schemas/workflow-call-progress.v1.schema.json')
 ).json();
 ajv.compile(progressSchema);
+const workflowStartSchema = await Bun.file(
+  resolve(repositoryRoot, 'docs/schemas/workflow-start.v1.schema.json')
+).json();
+ajv.compile(workflowStartSchema);
 
 const benchmark = Bun.spawn(
   [

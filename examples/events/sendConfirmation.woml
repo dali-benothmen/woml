@@ -18,7 +18,7 @@
       <script>
         return {
           workflow: "send-confirmation",
-          message: `Confirmation sent for ${context.trigger.orderId}`
+          message: `Confirmation sent for ${context.payload.orderId}`
         };
       </script>
     </step>

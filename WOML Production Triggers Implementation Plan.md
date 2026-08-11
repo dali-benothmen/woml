@@ -142,7 +142,7 @@ Production Triggers are complete when:
 2. Accepted external or time-based occurrences are durable before execution.
 3. Exactly one run is created for one deduplicated trigger occurrence.
 4. Trigger identity is recorded in the event history without changing the
-   public `context.trigger` payload shape.
+   public `context.payload` payload shape.
 5. Webhook schema validation, authentication, size limits, and helpful HTTP
    errors happen before a run is created.
 6. Slack reconnects and duplicate Socket Mode deliveries create one durable run
@@ -272,7 +272,7 @@ woml test workflow.woml --trigger manualRun
 Webhook v1 accepts an `application/json` top-level object no larger than 1 MiB.
 An empty body, array, scalar, malformed JSON, or unsupported content type is
 rejected before a run exists. Headers, query parameters, cookies, and bearer
-credentials do not enter `context.trigger`.
+credentials do not enter `context.payload`.
 
 `auth="bearer"` compares the presented token in constant time. Symbolic secret
 names may appear in the compiled registration contract, but resolved values are
@@ -466,12 +466,12 @@ public endpoint and remains available to `services.events.emit()`. No secret val
 the source or compiled model. Future broker adapters call the same Rust ingress
 operation and must not bypass occurrence deduplication.
 
-## 7. `context.trigger` Contract
+## 7. `context.payload` Contract
 
 Production triggers do not introduce `context.run` and do not wrap existing
 payloads in a new envelope.
 
-| Trigger | `context.trigger` value |
+| Trigger | `context.payload` value |
 |---|---|
 | Manual | The manual JSON input object. |
 | Webhook | The validated JSON request body object. |
@@ -482,7 +482,7 @@ payloads in a new envelope.
 
 Trigger ID, handler name, occurrence ID, authentication data, HTTP metadata,
 and scheduler cursor are engine metadata. They are recorded where required for
-durability but are not exposed through `context.trigger`.
+durability but are not exposed through `context.payload`.
 
 ## 8. Versioned Runtime Contracts
 
@@ -493,7 +493,7 @@ T0 freezes these artifacts before implementation:
    `trigger.schedule`, `trigger.interval`, and `trigger.event` configs.
 2. **Run Event v7** — extends `run_started` with `triggerId`, `triggerHandler`,
    and `triggerOccurrenceId` while retaining the direct `trigger` payload used
-   to fold `context.trigger`.
+   to fold `context.payload`.
 3. **Trigger Occurrence v1** — the durable record that binds one accepted
    occurrence to one run and supports deduplication before execution starts.
 4. **Trigger Ingress v1** — the language-neutral call from listeners,
@@ -948,7 +948,7 @@ Changes:
 
 - Activate `<slack>` trigger placement, attributes, event filters, channel
   filters, and symbolic credential sinks in the frontend and Model v7.
-- Freeze Slack Trigger Protocol v1 and the normalized `context.trigger` payload.
+- Freeze Slack Trigger Protocol v1 and the normalized `context.payload` payload.
 - Extract credential resolution, channel lookup/cache, Web API behavior, Socket
   Mode connection/reconnect, error classification, and diagnostics from the
   existing approval-specific module into a shared Slack transport.
@@ -1030,7 +1030,7 @@ Implementation notes:
   inspection authority as webhooks.
 - Bun decodes `app_mention` and `message.im`, rejects malformed or oversized
   input, ignores bot/self/unsupported subtype traffic, applies mention channel
-  filters, and emits only the reviewed seven-field `context.trigger` payload.
+  filters, and emits only the reviewed seven-field `context.payload` payload.
 - A Slack envelope is acknowledged only after Rust commits a new or duplicate
   occurrence. Workspace, Slack event ID, workflow, and trigger form the stable
   source identity; duplicate delivery returns the original run without a
@@ -1080,7 +1080,7 @@ Implementation notes:
   non-hour offsets, nonexistent DST times, and both UTC instants of a repeated
   wall time.
 - Misfire behavior, occurrence identity, and the exact two-field
-  `context.trigger` contract were frozen before Rust began driving the clock.
+  `context.payload` contract were frozen before Rust began driving the clock.
 - `examples/scheduleWorkflow.woml` is the reviewed Model v7 product fixture.
   `bun run test:t8` remains the historical T8 gate.
 
@@ -1122,7 +1122,7 @@ Implementation notes:
   Webhook definitions still bind the configured listener.
 - Schedule Progress v1 is a new strict diagnostics contract; Trigger Progress
   v1 remains unchanged and takes over after occurrence admission.
-- `context.trigger` for a schedule is exactly `{ scheduledAt, triggeredAt }` in
+- `context.payload` for a schedule is exactly `{ scheduledAt, triggeredAt }` in
   RFC 3339 UTC. Occurrence identity is stable from workflow ID, trigger ID, and
   planned UTC instant.
 - `woml run examples/scheduleWorkflow.woml` remains active and reports its next
@@ -1162,7 +1162,7 @@ Implementation notes:
   admissions.
 - Cursor advancement and occurrence/run creation commit atomically. Source
   identity includes workflow, trigger, anchor, and sequence, while
-  `context.trigger` remains exactly `{ scheduledAt, triggeredAt }`.
+  `context.payload` remains exactly `{ scheduledAt, triggeredAt }`.
 - Restart recovery is bounded: `skip` moves directly to the next future grid
   point and `run-once` admits only the latest missed occurrence.
 - Interval Progress v1 reports the durable anchor, next sequence, next planned
@@ -1455,7 +1455,7 @@ implementation began:
   keep separate versioned protocols;
 - one accepted occurrence atomically creates exactly one run and Event v7
   records its trigger identity;
-- `context.trigger` remains the direct payload rather than a new envelope;
+- `context.payload` remains the direct payload rather than a new envelope;
 - schedule uses a five-field cron dialect and IANA timezone;
 - schedule/interval missed policy is bounded to `skip` or `run-once`;
 - interval is fixed-rate from a durable anchor;

@@ -1107,7 +1107,7 @@ function parseExactReference(
   attribute: WomlSourceAttribute
 ): ValidatedReference {
   const match =
-    /^\{\{(context\.(?:trigger(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\.([a-z][A-Za-z0-9]*)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*))\}\}$/.exec(
+    /^\{\{(context\.(?:(?:payload|trigger)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\.([a-z][A-Za-z0-9]*)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*))\}\}$/.exec(
       attribute.value
     );
   if (match === null) {
@@ -1126,7 +1126,12 @@ function parseExactReference(
       ? attribute.valueSpan
       : referenceSpan(document, attribute, structuralId);
   return {
-    path: match[1].split('.').slice(1),
+    path: match[1]
+      .split('.')
+      .slice(1)
+      .map((segment, index) =>
+        index === 0 && segment === 'payload' ? 'trigger' : segment
+      ),
     ...(structuralId === undefined ? {} : { structuralId }),
     span,
   };

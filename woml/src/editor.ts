@@ -48,6 +48,16 @@ interface WomlWorkflowCallOptions {
   readonly timeout?: number | string;
 }
 
+interface WomlWorkflowStartOptions {
+  readonly name?: string;
+}
+
+interface WomlWorkflowStartResult {
+  readonly workflowId: string;
+  readonly runId: string;
+  readonly duplicate: boolean;
+}
+
 interface WomlHttpRequest {
   readonly url: string;
   readonly method?: string;
@@ -132,6 +142,11 @@ interface WomlBuiltinServices {
       payload: Readonly<Record<string, WomlJsonValue>>,
       options?: WomlWorkflowCallOptions
     ) => Promise<T>;
+    readonly start: (
+      workflowId: string,
+      payload: Readonly<Record<string, WomlJsonValue>>,
+      options?: WomlWorkflowStartOptions
+    ) => Promise<WomlWorkflowStartResult>;
   };
 }
 

@@ -844,6 +844,17 @@ fn prepare_state(
         .with_execution(&config.execution),
     ))
     .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
+  config
+    .execution
+    .capability_registry
+    .register(Arc::new(
+      ManagedWorkflowCallsHandler::for_start(
+        config.database_path.clone(),
+        Arc::clone(&workflow_targets),
+      )
+      .with_execution(&config.execution),
+    ))
+    .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
 
   Ok((
     WebhookRuntimeState {

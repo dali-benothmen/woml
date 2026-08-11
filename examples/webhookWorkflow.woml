@@ -22,7 +22,7 @@
     <step id="captureOrder" name="Capture order">
       <script>
         return {
-          message: `Received order ${context.trigger.orderId}`
+          message: `Received order ${context.payload.orderId}`
         };
       </script>
     </step>

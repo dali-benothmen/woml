@@ -183,7 +183,7 @@ the transport from blocking that later capability.
   "attempt": 1,
   "handler": "runtime.script",
   "timeoutMs": 5000,
-  "source": "return { x: context.trigger.name ?? \"World\" };",
+  "source": "return { x: context.payload.name ?? \"World\" };",
   "context": {
     "trigger": {},
     "steps": {}

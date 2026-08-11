@@ -90,7 +90,7 @@ function childWorkflow(): string {
   return `<woml>
 <workflow id="wc7-benchmark-child" name="WC7 benchmark worker" version="1.0.0">
   <steps>
-    <step id="work"><script>return { index: context.trigger.index };</script></step>
+    <step id="work"><script>return { index: context.payload.index };</script></step>
   </steps>
 </workflow>
 </woml>`;

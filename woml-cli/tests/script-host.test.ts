@@ -300,7 +300,8 @@ describe('long-lived Bun script host', () => {
         'inv_context_contract',
         `await Promise.resolve();
 return {
-  greeting: \`Hello \${context.trigger.name}\`,
+  greeting: \`Hello \${context.payload.name}\`,
+  legacyAlias: context.trigger.name,
   hasRun: "run" in context,
   hasServices: typeof services !== "undefined"
 };`,
@@ -308,7 +309,7 @@ return {
       ),
       execute(
         'inv_frozen_context',
-        'context.trigger.name = "Changed"; return { unreachable: true };',
+        'context.payload.name = "Changed"; return { unreachable: true };',
         { context: { trigger: { name: 'Original' }, steps: {} } }
       ),
     ]);
@@ -318,6 +319,7 @@ return {
       kind: 'success',
       value: {
         greeting: 'Hello Ada',
+        legacyAlias: 'Ada',
         hasRun: false,
         hasServices: false,
       },
@@ -900,18 +902,29 @@ return {
           readonly workflowId: string;
           readonly payload: { readonly customerId: string };
         };
-        const workflowResult = {
-          contract: 'woml.workflow-call',
-          contractVersion: 1,
-          kind: 'succeeded',
-          workflowId: request.workflowId,
-          definitionHash:
-            'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-          childRunId: 'run_call_test',
-          result: {
-            score: request.payload.customerId === 'customer-42' ? 90 : 20,
-          },
-        } as const;
+        const workflowResult =
+          message.call.operation === 'start'
+            ? ({
+                contract: 'woml.workflow-start',
+                contractVersion: 1,
+                kind: 'started',
+                workflowId: request.workflowId,
+                runId: 'run_start_test',
+                duplicate: false,
+              } as const)
+            : ({
+                contract: 'woml.workflow-call',
+                contractVersion: 1,
+                kind: 'succeeded',
+                workflowId: request.workflowId,
+                definitionHash:
+                  'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                childRunId: 'run_call_test',
+                result: {
+                  score:
+                    request.payload.customerId === 'customer-42' ? 90 : 20,
+                },
+              } as const);
         host.accept({
           protocol: 'woml.script-host',
           protocolVersion: 4,
@@ -933,6 +946,17 @@ return {
         });
       },
     });
+    host.accept(
+      executeV4(
+        'inv_v4_workflow_start',
+        `const started = await services.workflows.start(
+          'calculate-risk',
+          { customerId: 'customer-42' },
+          { name: 'background-risk' }
+        );
+        return { started, frozen: Object.isFrozen(started) };`
+      )
+    );
     host.accept(
       executeV4(
         'inv_v4_workflow_call',
@@ -969,7 +993,7 @@ return {
     );
     await host.drain();
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     const mainCall = calls.find(
       call => call.invocationId === 'inv_v4_workflow_call'
     );
@@ -990,11 +1014,43 @@ return {
         options: { name: 'customer-risk', timeoutMs: 1_000 },
       },
     });
+    const startCall = calls.find(
+      call => call.invocationId === 'inv_v4_workflow_start'
+    );
+    expect(startCall?.call).toMatchObject({
+      capability: 'workflows',
+      operation: 'start',
+      identity: {
+        mode: 'named',
+        operationName: 'workflows.start.background-risk',
+      },
+      input: {
+        contract: 'woml.workflow-start',
+        contractVersion: 1,
+        kind: 'request',
+        workflowId: 'calculate-risk',
+        payload: { customerId: 'customer-42' },
+        options: { name: 'background-risk' },
+      },
+    });
     expect(
       byInvocation(completed).get('inv_v4_workflow_call')?.outcome
     ).toEqual({
       kind: 'success',
       value: { risk: { score: 90 }, frozen: true },
+    });
+    expect(
+      byInvocation(completed).get('inv_v4_workflow_start')?.outcome
+    ).toEqual({
+      kind: 'success',
+      value: {
+        started: {
+          workflowId: 'calculate-risk',
+          runId: 'run_start_test',
+          duplicate: false,
+        },
+        frozen: true,
+      },
     });
     expect(
       byInvocation(completed).get('inv_v4_workflow_call_timeout_limit')?.outcome

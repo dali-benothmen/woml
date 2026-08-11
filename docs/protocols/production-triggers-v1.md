@@ -117,7 +117,7 @@ closed.
 - `triggerOccurrenceId`
 - the direct public `trigger` object
 
-Folding the final field produces `context.trigger`. Engine metadata,
+Folding the final field produces `context.payload`. Engine metadata,
 credentials, request headers, Slack envelopes, idempotency keys, and scheduler
 cursors are not added to workflow context. `context.run` remains unavailable.
 
@@ -187,7 +187,7 @@ The trigger adapter admits only normalized human app mentions and direct
 messages. Every event identifies its workflow, immutable definition, and
 workflow-local trigger, so registrations cannot collide across workflows. It
 excludes bot/self messages, edits, deletes, unsupported subtypes, tokens, outer
-provider envelopes, and unreviewed fields from `context.trigger`.
+provider envelopes, and unreviewed fields from `context.payload`.
 It acknowledges a Slack envelope only after Rust returns a durable acceptance
 or duplicate result. When Rust is unavailable, the adapter leaves the envelope
 unacknowledged so Slack can redeliver it.
@@ -206,7 +206,7 @@ dispatch again.
 App mentions honor configured channel filters. Direct messages are accepted
 independently of mention-channel filters when enabled. Bot/self messages,
 unsupported subtypes, edits, deletes, malformed events, and unreviewed outer
-Slack fields never enter `context.trigger`. Slack approval actions and trigger
+Slack fields never enter `context.payload`. Slack approval actions and trigger
 events are routed as separate protocol messages, even when their adapters
 share one Socket connection.
 
@@ -264,7 +264,7 @@ a new anchor.
 Rust atomically advances the expected sequence and planned instant while it
 admits the immutable occurrence. The source identity is workflow ID, trigger
 ID, anchor, and sequence. Anchor and sequence remain engine metadata;
-`context.trigger` is exactly `{ scheduledAt, triggeredAt }` in RFC 3339 UTC.
+`context.payload` is exactly `{ scheduledAt, triggeredAt }` in RFC 3339 UTC.
 
 On restart, `skip` advances directly to the first grid point after now.
 `run-once` admits only the latest due sequence and then advances to the first

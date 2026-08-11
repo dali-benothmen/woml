@@ -1043,7 +1043,8 @@ function workflowCallTimeoutMilliseconds(value: unknown): number {
   return Number(match[1]) * multiplier;
 }
 
-function normalizeWorkflowCall(
+function normalizeWorkflowOperation(
+  operation: 'call' | 'start',
   args: readonly unknown[],
   remainingTimeoutMs: number
 ): {
@@ -1052,7 +1053,7 @@ function normalizeWorkflowCall(
 } {
   if (args.length < 2 || args.length > 3) {
     throw new TypeError(
-      'services.workflows.call() requires workflowId, payload, and optional options.'
+      `services.workflows.${operation}() requires workflowId, payload, and optional options.`
     );
   }
   const [workflowId, payload, rawOptions] = args;
@@ -1062,23 +1063,27 @@ function normalizeWorkflowCall(
     workflowId.length > 256
   ) {
     throw new TypeError(
-      'Workflow Call workflowId must use lowercase kebab-case.'
+      `Workflow ${operation} workflowId must use lowercase kebab-case.`
     );
   }
   const payloadObject = plainObject(payload as JsonValue);
   if (payloadObject === undefined) {
-    throw new TypeError('Workflow Call payload must be a JSON object.');
+    throw new TypeError(
+      `Workflow ${operation} payload must be a JSON object.`
+    );
   }
   const options =
     rawOptions === undefined ? {} : plainObject(rawOptions as JsonValue);
   if (options === undefined) {
-    throw new TypeError('Workflow Call options must be an object.');
+    throw new TypeError(`Workflow ${operation} options must be an object.`);
   }
   const unknown = Object.keys(options).find(
-    key => key !== 'name' && key !== 'timeout'
+    key => key !== 'name' && (operation !== 'call' || key !== 'timeout')
   );
   if (unknown !== undefined) {
-    throw new TypeError(`Unknown Workflow Call option "${unknown}".`);
+    throw new TypeError(
+      `Unknown services.workflows.${operation}() option "${unknown}".`
+    );
   }
   const name = options.name;
   if (
@@ -1087,51 +1092,74 @@ function normalizeWorkflowCall(
       !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(name) ||
       name.length > 128)
   ) {
-    throw new TypeError('Workflow Call name is invalid.');
+    throw new TypeError(`Workflow ${operation} name is invalid.`);
   }
   const timeoutMs =
-    options.timeout === undefined
-      ? remainingTimeoutMs
-      : workflowCallTimeoutMilliseconds(options.timeout);
-  if (timeoutMs < 1 || timeoutMs > 86_400_000) {
-    throw new TypeError(
-      'Workflow Call timeout must be between 1 ms and 24 hours.'
-    );
+    operation === 'call'
+      ? options.timeout === undefined
+        ? remainingTimeoutMs
+        : workflowCallTimeoutMilliseconds(options.timeout)
+      : undefined;
+  if (
+    timeoutMs !== undefined &&
+    (timeoutMs < 1 || timeoutMs > 86_400_000)
+  ) {
+    throw new TypeError('Workflow Call timeout must be between 1 ms and 24 hours.');
   }
-  if (timeoutMs > remainingTimeoutMs) {
-    throw new TypeError(
-      'Workflow Call timeout cannot exceed the calling step remaining timeout.'
-    );
+  if (timeoutMs !== undefined && timeoutMs > remainingTimeoutMs) {
+    throw new TypeError('Workflow Call timeout cannot exceed the calling step remaining timeout.');
   }
   const identityMode = name === undefined ? 'automatic' : 'named';
-  const previousIdentityMode = workflowTargetIdentityModes.get(workflowId);
+  const targetIdentityKey = `${operation}:${workflowId}`;
+  const previousIdentityMode = workflowTargetIdentityModes.get(targetIdentityKey);
   if (
     previousIdentityMode !== undefined &&
     (previousIdentityMode === 'automatic' || identityMode === 'automatic')
   ) {
     throw new TypeError(
-      `Multiple calls to workflow "${workflowId}" in one step require stable names, for example { name: "primary-call" }.`
+      `Multiple services.workflows.${operation}() operations for workflow "${workflowId}" in one step require stable names, for example { name: "primary-operation" }.`
     );
   }
-  workflowTargetIdentityModes.set(workflowId, identityMode);
+  workflowTargetIdentityModes.set(targetIdentityKey, identityMode);
   return {
     request: {
-      contract: 'woml.workflow-call',
+      contract:
+        operation === 'call' ? 'woml.workflow-call' : 'woml.workflow-start',
       contractVersion: 1,
       kind: 'request',
       workflowId,
       payload: payloadObject,
       options: {
         ...(name === undefined ? {} : { name }),
-        timeoutMs,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
       },
     },
     ...(name === undefined ? {} : { callOptions: { name } }),
   };
 }
 
-function publicWorkflowCallResult(result: JsonValue): JsonValue {
+function publicWorkflowResult(
+  result: JsonValue,
+  operation: 'call' | 'start'
+): JsonValue {
   const object = plainObject(result);
+  if (operation === 'start') {
+    if (
+      object?.contract !== 'woml.workflow-start' ||
+      object.contractVersion !== 1 ||
+      object.kind !== 'started' ||
+      typeof object.workflowId !== 'string' ||
+      typeof object.runId !== 'string' ||
+      typeof object.duplicate !== 'boolean'
+    ) {
+      throw new TypeError('Rust returned an invalid Workflow Start v1 result.');
+    }
+    return Object.freeze({
+      workflowId: object.workflowId,
+      runId: object.runId,
+      duplicate: object.duplicate,
+    });
+  }
   if (
     object?.contract !== 'woml.workflow-call' ||
     object.contractVersion !== 1 ||
@@ -1170,7 +1198,8 @@ function deeplyReadonlyServiceFacade(
       capability === 'cache' && cacheWireOperations.has(operation);
     const managedEvents =
       capability === 'events' && eventOperations.has(operation);
-    const managedWorkflows = capability === 'workflows' && operation === 'call';
+    const managedWorkflows =
+      capability === 'workflows' && (operation === 'call' || operation === 'start');
     if (
       !managedHttp &&
       !managedDatabase &&
@@ -1291,7 +1320,7 @@ function deeplyReadonlyServiceFacade(
             : managedEvents
               ? publicEventResult(result)
               : managedWorkflows
-                ? publicWorkflowCallResult(result)
+                ? publicWorkflowResult(result, operation as 'call' | 'start')
                 : result;
   };
   return new Proxy(Object.freeze({}), {
@@ -1413,7 +1442,11 @@ function deeplyReadonlyServiceFacade(
             1,
             Math.floor(executionDeadline - performance.now())
           );
-          const normalized = normalizeWorkflowCall(args, remainingTimeoutMs);
+          const normalized = normalizeWorkflowOperation(
+            'call',
+            args,
+            remainingTimeoutMs
+          );
           return invokeCapability(
             'workflows',
             'call',
@@ -1421,8 +1454,26 @@ function deeplyReadonlyServiceFacade(
             normalized.callOptions
           );
         };
+        const start = async (...args: unknown[]): Promise<JsonValue> => {
+          const remainingTimeoutMs = Math.max(
+            1,
+            Math.floor(executionDeadline - performance.now())
+          );
+          const normalized = normalizeWorkflowOperation(
+            'start',
+            args,
+            remainingTimeoutMs
+          );
+          return invokeCapability(
+            'workflows',
+            'start',
+            normalized.request,
+            normalized.callOptions
+          );
+        };
         Object.freeze(call);
-        const workflows = Object.freeze({ call });
+        Object.freeze(start);
+        const workflows = Object.freeze({ call, start });
         capabilityCache.set(capabilityProperty, workflows);
         return workflows;
       }
@@ -1625,7 +1676,10 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
     operationSequences.clear();
     automaticEffectfulCalls.clear();
     workflowTargetIdentityModes.clear();
-    const context = deepFreezeJson(request.context);
+    const context = deepFreezeJson({
+      ...request.context,
+      payload: request.context.trigger,
+    });
     const attempt =
       request.attempt === undefined
         ? undefined

@@ -16,13 +16,13 @@ changing this frozen v1 protocol.
 ```js
 const result = await services.workflows.call(
   'calculate-risk',
-  { customerId: context.trigger.customerId },
+  { customerId: context.payload.customerId },
   { name: 'customer-risk', timeout: '30s' }
 );
 ```
 
 The first argument is one activated workflow ID. The second is a top-level JSON
-object that becomes the complete child `context.trigger`. The optional `name`
+object that becomes the complete child `context.payload`. The optional `name`
 participates in stable operation identity; `timeout` is normalized to
 `timeoutMs` before crossing the managed capability boundary.
 

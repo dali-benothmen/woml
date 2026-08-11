@@ -74,6 +74,15 @@ routing paths, verifies the packed native CLI, and publishes the one-machine
 deployment and security boundary. The complete operational contract is
 `docs/woml-workflow-calls-production.md`.
 
+Workflow Start v1 adds `services.workflows.start()` without adding a second
+admission engine. It reuses the same target registry, durable child identity,
+lineage, routing, and recovery authority, dispatches the admitted child, and
+returns its run ID without observing terminal status. `context.payload` is the
+public input name in scripts and WOML references. Frozen Rust projections and
+Script Host frames retain their internal `trigger` field; Bun exposes
+`payload` and keeps `trigger` only as a deprecated compatibility alias for old
+compiled scripts.
+
 WC4 makes the same-runtime boundary retry-safe. The first admitting attempt
 stores one immutable call key and child run; later attempts and duplicate
 delivery observe it instead of executing another child. One atomic index claim

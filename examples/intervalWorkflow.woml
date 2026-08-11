@@ -7,8 +7,8 @@
     <step id="report">
       <script>
         return {
-          message: `Interval fired at ${context.trigger.triggeredAt}`,
-          scheduledAt: context.trigger.scheduledAt
+          message: `Interval fired at ${context.payload.triggeredAt}`,
+          scheduledAt: context.payload.scheduledAt
         };
       </script>
     </step>

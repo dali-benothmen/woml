@@ -16,7 +16,7 @@ its final JSON result:
 
 ```js
 const risk = await services.workflows.call('calculate-risk', {
-  customerId: context.trigger.customerId
+  customerId: context.payload.customerId
 });
 
 return {
@@ -24,7 +24,7 @@ return {
 };
 ```
 
-The called workflow receives the payload directly as `context.trigger`:
+The called workflow receives the payload directly as `context.payload`:
 
 ```xml
 <woml>
@@ -37,7 +37,7 @@ The called workflow receives the payload directly as `context.trigger`:
       <step id="calculate">
         <script>
           return {
-            score: context.trigger.customerId === 'customer-42' ? 90 : 20
+            score: context.payload.customerId === 'customer-42' ? 90 : 20
           };
         </script>
       </step>
@@ -100,7 +100,7 @@ Rules:
 
 - `workflowId` identifies exactly one activated workflow.
 - `payload` must be a top-level JSON object and becomes the child's complete
-  `context.trigger`.
+  `context.payload`.
 - The promise resolves to the child's final JSON result without a wrapper.
 - `return null` is an intentional successful result.
 - A missing/`undefined` result is invalid and rejects the call.
@@ -164,12 +164,12 @@ Business `version="..."` remains metadata and is not a routing identity.
 The child sees only the supplied payload:
 
 ```js
-context.trigger
+context.payload
 ```
 
 Parent run ID, parent step ID, call identity, depth, route data, and target
 definition hash remain hidden engine metadata. Workflow Calls do not expose
-`context.run` and do not place engine metadata in `context.trigger`.
+`context.run` and do not place engine metadata in `context.payload`.
 
 ### 3.5 Result and failure behavior
 
@@ -265,7 +265,7 @@ operation metadata.
 
 Run Event v9 adds only a truthful `workflow_call` ingress for a called child.
 The child's `run_started` stores its payload as the complete
-`context.trigger`, while its call key remains hidden engine metadata. It does
+`context.payload`, while its call key remains hidden engine metadata. It does
 not manufacture a source trigger. All later payloads retain the Run Event v8
 shapes, and `run_succeeded` or `run_failed` remains the result authority.
 
@@ -401,7 +401,7 @@ second overlapping JavaScript error class.
 - Long Human Approval suspension inside a called workflow in v1.
 - Parent-to-child cancellation policy, compensation, sagas, or transactions
   across workflows.
-- `context.run` or parent metadata in `context.trigger`.
+- `context.run` or parent metadata in `context.payload`.
 
 ## 12. Versioned Artifacts to Review Before Execution Code
 
@@ -479,7 +479,7 @@ Changes:
 - Enforce one live owner per workflow ID and bind routes to definition hashes.
 - Add the Rust `workflows.call` capability handler.
 - Derive stable call identity and atomically admit one child run.
-- Put payload in the child's existing `context.trigger` and preserve hidden
+- Put payload in the child's existing `context.payload` and preserve hidden
   lineage outside user context.
 - Add narrow Run Event v9 `workflow_call` ingress so a called child never
   pretends that a source trigger fired.
@@ -517,7 +517,7 @@ prints a parent result that uses the child's answer.
 
 Gate:
 
-The manual journey proves object payload, `context.trigger`, object/scalar/null
+The manual journey proves object payload, `context.payload`, object/scalar/null
 results, child failure, missing result, timeout, and no event/HTTP workaround.
 
 ### WC4 — Make same-runtime calls retry-safe and recoverable
@@ -648,7 +648,7 @@ from a clean project.
 | --- | --- |
 | API | Direct result, null, errors, timeout, and named duplicate calls match v1. |
 | Targeting | Exactly one live workflow ID and exact definition hash are selected. |
-| Context | Payload alone becomes child `context.trigger`; lineage stays hidden. |
+| Context | Payload alone becomes child `context.payload`; lineage stays hidden. |
 | Durability | One call identity admits at most one child across retries and crashes. |
 | Results | Child terminal history is authoritative and bounded. |
 | Failures | Child errors are catchable, classified once, bounded, and redacted. |

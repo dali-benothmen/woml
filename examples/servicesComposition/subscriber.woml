@@ -22,8 +22,8 @@
       <script>
         return {
           notified: true,
-          message: `Order ${context.trigger.orderId} is ready for ${context.trigger.customer}`,
-          storageKey: context.trigger.storageKey
+          message: `Order ${context.payload.orderId} is ready for ${context.payload.customer}`,
+          storageKey: context.payload.storageKey
         };
       </script>
     </step>

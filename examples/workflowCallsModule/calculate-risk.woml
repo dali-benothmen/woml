@@ -7,7 +7,7 @@
       <step id="calculate">
         <script>
           return {
-            score: services.risk.score(context.trigger.customerId)
+            score: services.risk.score(context.payload.customerId)
           };
         </script>
       </step>

@@ -53,7 +53,7 @@ The checked-in example will be:
       name="Choose greeting name"
       description="Use the trigger name or default to World">
       <script>
-        const name = context.trigger.name ?? "World";
+        const name = context.payload.name ?? "World";
 
         return {
           x: name
@@ -252,7 +252,7 @@ script bindings are introduced only with the later capability/RAK milestone.
 
 Execution rules:
 
-- `context.trigger` is `{}` for `woml run hello.woml`.
+- `context.payload` is `{}` for `woml run hello.woml`.
 - Before node `a`, `context.steps` is empty.
 - A script receives a structured-cloned, deeply frozen snapshot.
 - A successful JSON return from node `a` is added at `context.steps.a`.
@@ -274,7 +274,7 @@ whitespace:
 
 ```text
 reference     := "{{" path "}}"
-path          := "context.trigger" ("." property-id)*
+path          := "context.payload" ("." property-id)*
                | "context.steps." step-id ("." property-id)*
 step-id       := [a-z][A-Za-z0-9]*
 property-id   := [A-Za-z_$][A-Za-z0-9_$]*
@@ -465,7 +465,7 @@ Decisions to close:
   with `WOML_FEATURE_NOT_EXECUTABLE` in this profile; it is never ignored or
   assigned weaker semantics.
 - Make `context.run` unavailable in v0.1. The injected context contains only
-  `context.trigger` and `context.steps`.
+  `context.payload` and `context.steps`.
 - Freeze package ownership: `woml/` owns the reusable WOML library and the
   vertical-slice runtime; `woml-cli/` owns only the public command and depends
   on `woml/`. Neither package makes `core/` understand WOML tags or XML.
@@ -564,7 +564,7 @@ Work:
 
 Gate:
 
-- Step `a` reads `context.trigger` and returns `{ "x": "World" }`.
+- Step `a` reads `context.payload` and returns `{ "x": "World" }`.
 - The successful result becomes `context.steps.a` before `b` starts.
 - Step `b` reads `context.steps.a.x` directly in JavaScript and returns
   `{ "message": "Hello World" }`.

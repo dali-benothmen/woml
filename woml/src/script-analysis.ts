@@ -374,14 +374,18 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
       const callee = node.callee;
       const path = staticMemberPath(callee);
       if (path?.[0] === 'services' && path[1] === 'workflows') {
-        if (path.join('.') !== 'services.workflows.call') {
+        const workflowOperation = path[2];
+        if (
+          path.length !== 3 ||
+          (workflowOperation !== 'call' && workflowOperation !== 'start')
+        ) {
           fail(
             issueAt(
               callee,
               source.length,
               'WOML_WORKFLOW_OPERATION_UNSUPPORTED',
               `Workflow service operation "${path.slice(2).join('.') || ''}" is unsupported.`,
-              'Use services.workflows.call(workflowId, payload, options?).'
+              'Use services.workflows.call() when the result is needed or services.workflows.start() to continue after durable admission.'
             )
           );
         } else {
@@ -393,8 +397,10 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
                 node,
                 source.length,
                 'WOML_WORKFLOW_CALL_ARGUMENTS_INVALID',
-                'services.workflows.call() requires workflowId, payload, and optional options.',
-                'Use services.workflows.call("workflow-id", { ... }, { name, timeout }).'
+                `services.workflows.${workflowOperation}() requires workflowId, payload, and optional options.`,
+                workflowOperation === 'call'
+                  ? 'Use services.workflows.call("workflow-id", { ... }, { name, timeout }).'
+                  : 'Use services.workflows.start("workflow-id", { ... }, { name }).'
               )
             );
           } else {
@@ -413,7 +419,7 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
                   source.length,
                   'WOML_WORKFLOW_TARGET_INVALID',
                   'A literal workflow target must use lowercase kebab-case.',
-                  'Example: services.workflows.call("calculate-risk", { ... }).'
+                  `Example: services.workflows.${workflowOperation}("calculate-risk", { ... }).`
                 )
               );
             }
@@ -468,14 +474,19 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
                     ? property.key.name
                     : literalString(property.key)
                   : undefined;
-                if (name !== 'name' && name !== 'timeout') {
+                if (
+                  name !== 'name' &&
+                  (workflowOperation !== 'call' || name !== 'timeout')
+                ) {
                   fail(
                     issueAt(
                       property,
                       source.length,
                       'WOML_WORKFLOW_CALL_OPTION_UNKNOWN',
                       `Unknown workflow call option "${name ?? ''}".`,
-                      'The v1 options are name and timeout.'
+                      workflowOperation === 'call'
+                        ? 'Workflow Call v1 options are name and timeout.'
+                        : 'Workflow Start v1 accepts only name.'
                     )
                   );
                 }
@@ -500,6 +511,7 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
                   }
                 }
                 if (
+                  workflowOperation === 'call' &&
                   name === 'timeout' &&
                   isNode(property.value) &&
                   !validLiteralWorkflowCallTimeout(property.value)

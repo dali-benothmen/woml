@@ -8,7 +8,7 @@
       <step id="calculate">
         <script>
           return {
-            score: context.trigger.customerId === 'customer-42' ? 90 : 20
+            score: context.payload.customerId === 'customer-42' ? 90 : 20
           };
         </script>
       </step>

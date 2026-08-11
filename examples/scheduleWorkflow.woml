@@ -11,7 +11,7 @@
   <steps>
     <step id="capture">
       <script>
-        return context.trigger;
+        return context.payload;
       </script>
     </step>
   </steps>

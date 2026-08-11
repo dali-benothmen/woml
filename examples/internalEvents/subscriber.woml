@@ -20,8 +20,8 @@
       <script>
         return {
           indexed: true,
-          customerId: context.trigger.customerId,
-          displayName: context.trigger.displayName
+          customerId: context.payload.customerId,
+          displayName: context.payload.displayName
         };
       </script>
     </step>

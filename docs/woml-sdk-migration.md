@@ -16,7 +16,7 @@ sufficient parity and the relevant production features have migration paths.
 | `cronflow.define({...})` | `<workflow id="..." name="..." version="...">` |
 | Trigger registration | A tag inside `<triggers>` |
 | Chained `.step(...)` | `<steps><step id="..."><script>...</script></step></steps>` |
-| `ctx.payload` | `context.trigger` |
+| `ctx.payload` | `context.payload` |
 | Implicit `ctx.last` | Explicit `context.steps.<stepId>` |
 | `.if()/.else()/.endIf()` | `<branch>`, `<when>`, and `<otherwise>` |
 | Parallel chaining | `<parallel>` with child workflow items |
@@ -30,6 +30,7 @@ sufficient parity and the relevant production features have migration paths.
 | Internal workflow fan-out | `services.events.emit()` plus an `<event>` trigger |
 | Reusable local JavaScript helper package | `<imports><module name="..." from="..." /></imports>` and `services.<name>` |
 | Call one workflow and await its answer | `services.workflows.call(workflowId, payload)` |
+| Start one workflow and continue | `services.workflows.start(workflowId, payload)` |
 
 WOML makes every downstream dependency explicit. Give each step a stable ID and
 replace positional or “last result” access with the producing step's path:
@@ -37,7 +38,7 @@ replace positional or “last result” access with the producing step's path:
 ```xml
 <step id="prepare">
   <script>
-    return { name: context.trigger.name ?? "World" };
+    return { name: context.payload.name ?? "World" };
   </script>
 </step>
 
@@ -58,7 +59,7 @@ replace positional or “last result” access with the producing step's path:
 2. Convert each chained operation to a stable `<step id="...">`.
 3. Put custom JavaScript directly inside `<script>` without CDATA or a wrapper
    function.
-4. Replace `ctx.payload` with `context.trigger` and every implicit previous
+4. Replace `ctx.payload` with `context.payload` and every implicit previous
    result with `context.steps.<id>`.
 5. Express branches and parallel work structurally, then verify every referenced
    step is reachable in the DAG.

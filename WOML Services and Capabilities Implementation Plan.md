@@ -265,7 +265,7 @@ declare const secrets: Readonly<Record<string, string>>;
 declare const services: Readonly<WomlServices>;
 ```
 
-`context` remains limited to `context.trigger` and `context.steps`.
+`context` remains limited to `context.payload` and `context.steps`.
 `context.run` remains unavailable. Service handles and secrets are executable
 capabilities and must never be copied into context or returned as step output.
 
@@ -326,7 +326,7 @@ const response = await services.http.request({
     authorization: `Bearer ${secrets.ORDER_API_TOKEN}`,
   },
   json: {
-    orderId: context.trigger.orderId,
+    orderId: context.payload.orderId,
   },
   responseType: 'json',
   timeout: '10s',
@@ -1173,7 +1173,7 @@ fan-out without exposing an undefined `context.run` contract.
    workflows are not imports.
 2. **Durable Workflow Calls** — add
    `services.workflows.call(workflowId, payload, options?)` to target exactly one
-   activated workflow by ID, pass payload through `context.trigger`, wait
+   activated workflow by ID, pass payload through `context.payload`, wait
    durably for its independent child run, and receive its final JSON result.
    No `<call>` trigger tag is required. Same-runtime calls use direct Rust
    routing; cross-process calls require authenticated discovery, stable call

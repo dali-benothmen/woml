@@ -1,0 +1,23 @@
+<woml>
+  <workflow id="background-parent" name="Start background work" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="startBackgroundWork">
+        <script>
+          const started = await services.workflows.start('background-calculator', {
+            firstNumber: 20,
+            secondNumber: 22
+          });
+
+          return {
+            message: 'The child is running and the parent continued',
+            childRunId: started.runId
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

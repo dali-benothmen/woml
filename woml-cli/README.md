@@ -76,9 +76,11 @@ woml run workflows/orders.woml workflows/risk.woml shared-workflows/
 ```
 
 Call-only workflows remain active with zero triggers. Separate local WOML
-processes can call each other through `services.workflows.call()` when they use
-the same `--state` database. WOML handles local discovery, private wake-up
-credentials, and ownership leases automatically.
+processes can use `services.workflows.call()` or `services.workflows.start()`
+when they share the same `--state` database. `call()` waits for the child's
+result; `start()` returns its durable run ID and lets the parent continue. WOML
+handles local discovery, private wake-up credentials, and ownership leases
+automatically.
 
 Workflow Call progress prints the parent and child run IDs without printing
 payloads or secrets. Inspect either side later with:
@@ -96,6 +98,13 @@ is in [Operating Durable Workflow Calls](../docs/woml-workflow-calls-production.
 After building, `bun run benchmark:workflow-calls` prints a same-runtime versus
 local cross-process baseline. `bun run test:wc7` is the complete Workflow Calls
 publication gate.
+
+Try both workflow-to-workflow behaviors from the repository root:
+
+```bash
+woml run examples/workflowCallManual/workflow1.woml examples/workflowCallManual/workflow2.woml
+woml run examples/workflowStartManual/workflow1.woml examples/workflowStartManual/workflow2.woml
+```
 
 To activate the webhook example:
 

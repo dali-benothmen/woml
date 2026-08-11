@@ -13,13 +13,18 @@ services.workflows
 ```
 
 `services.workflows.call()` starts exactly one activated child workflow by ID,
-passes a JSON object as its `context.trigger`, and resolves to its final JSON
+passes a JSON object as its `context.payload`, and resolves to its final JSON
 result. WC4 safely reconnects retries and duplicate delivery to that same child,
 requires stable names for repeated calls to one target in a step, rejects call
 cycles, and fails ambiguous parent attempts closed. The target may be loaded by
 the same `woml run` runtime or owned by another local `woml run` process sharing
 the same state database. Cross-process routing is automatic; it requires no
 author-managed URL or secret.
+
+`services.workflows.start()` uses the same exact targeting and durable child
+admission, but returns `{ workflowId, runId, duplicate }` after dispatch rather
+than waiting for completion. The parent continues while the child runs; a later
+child failure does not retroactively fail it.
 
 The child uses the same normal engine as any triggered workflow, so branches,
 parallel groups, retries, modules, native Fetch, and all current services keep
@@ -45,6 +50,7 @@ cancellation and limits, and keeps secrets out of durable operation metadata.
 | Reusable but disposable values | `services.cache` | Workflow-scoped expiring optimization data |
 | Start every workflow interested in a fact | `services.events.emit()` | Durable internal named-event fan-out |
 | Delegate work and use one workflow's answer | `services.workflows.call()` | One independently durable child run and direct JSON result |
+| Start exact background workflow work | `services.workflows.start()` | Durable child run ID without waiting for completion |
 
 Queue is deliberately unavailable. Durable triggers already create runs safely,
 and internal events cover fan-out. A queue will be added only when WOML has a

@@ -34,7 +34,7 @@ The canonical authoring journey is:
     <steps>
       <step id="cleanRows" name="Clean spreadsheet rows">
         <script>
-          const rows = await services.spreadsheet.read(context.trigger.file);
+          const rows = await services.spreadsheet.read(context.payload.file);
           return services.spreadsheet.removeEmptyRows(rows);
         </script>
       </step>
@@ -180,7 +180,7 @@ confusing three different operations:
 
 `services.events.emit()` uses the fast direct-Rust path for subscribers loaded
 in the same runtime, passes its payload through each subscriber's
-`context.trigger`, and does not wait for subscriber results. Separate runtime
+`context.payload`, and does not wait for subscriber results. Separate runtime
 processes can currently receive events through their authenticated public event
 endpoints, but internal emit does not discover them automatically.
 
@@ -416,7 +416,7 @@ Caller:
 
 ```js
 const customer = await services.crm.loadCustomer(
-  context.trigger.customerId,
+  context.payload.customerId,
   secrets.CRM_TOKEN
 );
 ```
@@ -874,7 +874,7 @@ make the change straightforward.
 1. **Durable Workflow Calls** — add
    `services.workflows.call(workflowId, payload, options?)` so one workflow can
    target exactly one activated workflow by ID, create an independent durable
-   child run, pass payload through the child's `context.trigger`, wait durably,
+   child run, pass payload through the child's `context.payload`, wait durably,
    and receive its final JSON result. No `<call>` trigger tag is required.
    Same-runtime calls use a direct Rust path; cross-process calls require
    authenticated runtime discovery/routing, unique target ownership, stable

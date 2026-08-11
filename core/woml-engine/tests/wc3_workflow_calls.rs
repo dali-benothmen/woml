@@ -140,7 +140,7 @@ async fn same_runtime_call_executes_child_with_payload_and_returns_object_result
   let Some((database, parent_run_id, server, call_progress)) = run_case(
     "object",
     "const risk = await services.workflows.call('calculate-risk', { customerId: 'customer-42' }); return { score: risk.score };",
-    "return { score: context.trigger.customerId === 'customer-42' ? 90 : 20 };",
+    "return { score: context.payload.customerId === 'customer-42' ? 90 : 20 };",
   )
   .await
   else {
@@ -185,6 +185,46 @@ async fn same_runtime_call_executes_child_with_payload_and_returns_object_result
     } if progress_child == &child_run_id
   )));
   drop(progress);
+  server.stop().await;
+}
+
+#[actix_web::test]
+async fn workflow_start_returns_after_admission_while_the_child_keeps_running() {
+  let Some((database, parent_run_id, server, _)) = run_case(
+    "start",
+    "const started = await services.workflows.start('calculate-risk', { customerId: 'customer-42' }); return { childRunId: started.runId };",
+    "await new Promise(resolve => setTimeout(resolve, 750)); return { score: context.payload.customerId === 'customer-42' ? 90 : 20 };",
+  )
+  .await
+  else {
+    return;
+  };
+  assert_eq!(
+    wait_for_terminal(&database, &parent_run_id).await,
+    RunStatus::Succeeded
+  );
+  let store = DurableEventStore::open(database.path()).unwrap();
+  let parent = store.projection(&parent_run_id).unwrap();
+  let child_run_id = parent
+    .result
+    .as_ref()
+    .and_then(|result| result.get("childRunId"))
+    .and_then(Value::as_str)
+    .unwrap()
+    .to_string();
+  assert_eq!(store.projection(&child_run_id).unwrap().status, RunStatus::Running);
+  assert_eq!(
+    wait_for_terminal(&database, &child_run_id).await,
+    RunStatus::Succeeded
+  );
+  assert_eq!(
+    DurableEventStore::open(database.path())
+      .unwrap()
+      .projection(&child_run_id)
+      .unwrap()
+      .result,
+    Some(json!({ "score": 90 }))
+  );
   server.stop().await;
 }
 

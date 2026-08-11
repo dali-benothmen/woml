@@ -1,0 +1,19 @@
+<woml>
+  <imports>
+    <module name="math" from="./invoice-math.ts" />
+  </imports>
+
+  <workflow id="invoice-calculator" name="Calculate an invoice" version="1.0.0">
+    <steps>
+      <step id="calculate">
+        <script>
+          return services.math.calculateInvoice(
+            context.payload.price,
+            context.payload.quantity,
+            context.payload.taxRate
+          );
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
