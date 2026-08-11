@@ -67,9 +67,22 @@ An occurrence committed before a process crash is recovered from the same run
 identity at startup. A started effect with no terminal record remains
 ambiguous and fails closed; WOML never guesses that it is safe to replay.
 
+Use `woml list --state /var/lib/woml/state.sqlite` for bounded local discovery,
+`woml get <runId> --json` for redacted lifecycle/cancellation state, and
+`woml cancel <runId>` to request durable cancellation. These are local
+state-file controls, not authenticated remote administration endpoints. Lock
+down the state directory and see
+[Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md) before
+placing cancellation behind an operator tool.
+
 ## Release gate
 
 Run `bun run test:t13` from `woml-cli` before publishing. It rebuilds the native
 package, runs frontend, Rust, and CLI suites, exercises the webhook example,
 checks concurrency and failure boundaries, and scans public/durable artifacts
 for configured WOML secrets.
+
+When the deployment uses lifecycle hooks or local run control, also run
+`bun run test:lec8`. That gate adds cancellation/recovery races, notification
+separation, clean installation, schema compatibility, package auditing, and
+the lifecycle/run-control performance budgets.

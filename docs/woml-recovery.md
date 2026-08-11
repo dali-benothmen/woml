@@ -72,13 +72,27 @@ expire crashed targets; graceful shutdown removes their routes immediately.
 The loopback acknowledgement is never treated as proof of child completion.
 
 Use `woml get <runId> --state <path>` to move between the two independent
-runs. A parent exposes at most 50 `workflowCalls.childCalls`; a child exposes
-its optional `workflowCalls.parentCall`. The summaries intentionally omit
-payloads, results, secrets, hashes, and internal routing identity.
+runs. The frozen inspection v2 surface deliberately omits raw results and the
+separate workflow-call relation query. Runtime progress still prints both run
+IDs without payloads, results, secrets, hashes, or internal routing identity.
 
 Workflow Calls v1 rejects a selected definition containing Human Approval
 before child admission. Approval workflows must be triggered independently
 until a calling JavaScript continuation can be suspended durably.
+
+## Lifecycle and cancellation recovery
+
+For Model v11 runs, a cancellation request and every lifecycle action are
+durable Event v10 facts. Restart recovery continues a cancellation request,
+invalidates waiting approval credentials, settles supported active work, runs
+`on-cancel` and `on-complete`, and finalizes the same cancelled outcome. An
+action recorded as started without a terminal event is ambiguous and fails
+closed without automatic replay.
+
+`woml list --status cancelling --state <path>` discovers unsettled requests.
+`woml get <runId> --json` reports cancellation and lifecycle state without
+exposing context, payloads, results, messages, or secrets. See
+[Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
 
 ## Operational output
 

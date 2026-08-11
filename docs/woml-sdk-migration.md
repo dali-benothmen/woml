@@ -31,6 +31,8 @@ sufficient parity and the relevant production features have migration paths.
 | Reusable local JavaScript helper package | `<imports><module name="..." from="..." /></imports>` and `services.<name>` |
 | Call one workflow and await its answer | `services.workflows.call(workflowId, payload)` |
 | Start one workflow and continue | `services.workflows.start(workflowId, payload)` |
+| SDK workflow callbacks/hooks | Workflow-owned `<lifecycle>` hooks |
+| SDK run cancellation | `woml cancel <runId>` against durable local state |
 
 WOML makes every downstream dependency explicit. Give each step a stable ID and
 replace positional or “last result” access with the producing step's path:
@@ -75,6 +77,10 @@ replace positional or “last result” access with the producing step's path:
 10. Split reusable durable workflow work into a call-only workflow and activate
     it with its parent, then use `services.workflows.call()` when the parent
     needs its terminal JSON result.
+11. Move observational logging, notifications, metrics, and best-effort cleanup
+    into `<lifecycle>`. Keep business-critical work as explicit steps.
+12. Replace custom local run administration with `woml list`, `woml get`, and
+    `woml cancel`; use `--json` for the versioned redacted contracts.
 
 ## Current parity boundary
 
@@ -83,9 +89,13 @@ notifications, secrets, durable retry, and manual, webhook, Slack, schedule,
 interval, and named-event triggers are available through `woml run`.
 
 Native Fetch; the Rust-managed HTTP, database, storage, cache, and internal
-event services; local JavaScript/TypeScript modules; and durable local Workflow
-Calls are available. Queue, package modules, additional messaging services,
-lifecycle controls, cross-machine workflow routing, and the hosted production
-runtime remain roadmap items. Keep an SDK workflow in place when it depends on
-those unavailable capabilities. The SDK is not retired merely because the
-local Workflow Calls milestone is complete.
+event services; local JavaScript/TypeScript modules; durable local Workflow
+Calls; workflow and step lifecycle hooks; informational Slack lifecycle
+notifications; and durable local cancellation are available. Queue, package
+modules, additional messaging services, cross-machine workflow routing, remote
+run control, and the hosted production runtime remain roadmap items. Keep an
+SDK workflow in place when it depends on those unavailable capabilities. The
+SDK is not retired merely because local lifecycle and control parity exists.
+
+See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md) for
+hook ordering, warning semantics, cancellation races, and deployment guidance.

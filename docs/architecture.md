@@ -239,6 +239,15 @@ The contracts between these layers are versioned artifacts under
 `docs/schemas/` and `docs/protocols/`. Neither side may infer or silently add a
 field that is absent from the negotiated version.
 
+Model v11 keeps workflow-owned lifecycle hooks outside the business DAG.
+Event v10 separates the durable business outcome from lifecycle finalization,
+and Store v11 maintains the rebuildable summaries used by `woml list`. Rust
+admits deterministic hook/action identities, executes lifecycle scripts through
+isolated Bun workers, records notification failures as warnings, and owns
+cancellation races. Direct `woml list`, `woml get`, and `woml cancel` commands
+operate on local durable state without reopening workflow source. See
+[Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
+
 ## Legacy Cronflow Architecture (Migration Context)
 
 The remainder of this document describes the original JavaScript-chaining SDK.

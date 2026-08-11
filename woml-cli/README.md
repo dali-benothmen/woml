@@ -188,6 +188,12 @@ versioned `woml.run-list/v1`, `woml.run-inspection/v2`, or
 does not expose workflow context, payloads, results, secrets, credentials, or
 operation keys.
 
+Lifecycle syntax, cancellation races, recovery, security boundaries, and the
+production checklist are documented in
+[Lifecycle and Local Run Control](../docs/woml-lifecycle-and-run-control.md).
+Slack approval and informational lifecycle delivery are compared in
+[WOML Notifications](../docs/woml-notifications.md).
+
 ## Call an HTTP API
 
 Use native Fetch when you need the complete Bun `Request`/`Response` API. Use

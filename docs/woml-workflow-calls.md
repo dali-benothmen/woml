@@ -109,6 +109,13 @@ rejected by synchronous `call()` before a child run is admitted, with
 when launching that workflow from another workflow is appropriate; the parent
 does not wait for its approval or terminal result.
 
+Cancelling a parent waiting in `services.workflows.call()` stops the parent
+wait but does not silently cancel the independently admitted child. Runs
+created by `services.workflows.start()` are independent too. Inspect the child
+using the run ID printed in Workflow Call progress. Propagating cancellation
+requires a future explicit parent/child control contract; see
+[Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
+
 ## Common failures
 
 - `WOML_WORKFLOW_TARGET_NOT_FOUND`: no active runtime currently owns that

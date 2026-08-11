@@ -38,6 +38,10 @@ coverage, and the documented one-machine production boundary in
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies
 cancellation and limits, and keeps secrets out of durable operation metadata.
+Lifecycle hooks can call the same services for observational work, but a hook
+failure becomes a lifecycle warning and never rewrites the business outcome.
+Keep any service operation required for correctness as an ordinary workflow
+step. See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
 
 ## Choose the smallest useful service
 

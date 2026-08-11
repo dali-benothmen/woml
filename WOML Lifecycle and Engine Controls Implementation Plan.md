@@ -1,6 +1,6 @@
 # WOML Lifecycle and Engine Controls Implementation Plan
 
-Status: LEC0 through LEC7 completed on 2026-08-11. Workflow-level lifecycle
+Status: LEC0 through LEC8 completed on 2026-08-11. Workflow-level lifecycle
 scripts now run through isolated Bun workers under Rust supervision. `on-start`
 runs before the business DAG; the matching outcome hook and `on-complete` run
 after the durable business outcome; lifecycle failures remain visible warnings
@@ -8,6 +8,12 @@ without rewriting that outcome. Step hooks are executable as of LEC4, and
 informational Slack lifecycle notifications are executable as of LEC5. Durable
 cancellation is executable as of LEC6, and direct `list`, `get`, and `cancel`
 commands are shipped as of LEC7.
+
+LEC8 completed the clean-package journey, adversarial release matrix, schema
+compatibility audit, migration/recovery gate, secret/package scan, performance
+budgets, operator documentation, and the unified `bun run test:lec8`
+publication command. Lifecycle and local run control are now supported WOML
+features rather than staged syntax.
 
 ## 1. Product Outcome
 
@@ -734,7 +740,7 @@ written.
 | LEC5 (complete) | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
 | LEC6 (complete) | Implement durable cancellation and propagation.                                                       | Active and waiting Event v10 runs can be cancelled safely and recovered.                                                                        |
 | LEC7 (complete) | Ship direct `list`, `get`, and `cancel` CLI commands.                                                 | Operators manage runs without the `runs` namespace or workflow source files.                                                                    |
-| LEC8            | Harden, migrate, document, benchmark, and publish.                                                    | Lifecycle and Engine Controls become a supported release feature.                                                                               |
+| LEC8 (complete) | Harden, migrate, document, benchmark, and publish.                                                    | Lifecycle and Engine Controls become a supported release feature.                                                                               |
 
 ### LEC0 — Freeze contracts and reviewed fixtures (completed)
 
@@ -1073,7 +1079,9 @@ cancellation with the LEC6 Rust approval/cancellation suite. Long-lived
 keeps the automation host active instead of reporting cancellation as a host
 failure.
 
-### LEC8 — Harden and publish Lifecycle and Engine Controls
+### LEC8 — Harden and publish Lifecycle and Engine Controls (completed)
+
+Status: **completed on 2026-08-11.**
 
 Changes:
 
@@ -1098,6 +1106,16 @@ Gate:
 Frontend, Rust, Bun, protocol/schema, TypeScript, Clippy, integration,
 cross-process, approval, notification, crash, migration, packaging, benchmark,
 and secret scans pass from a clean project.
+
+The completed `bun run test:lec8` gate builds the release package, runs the
+frontend lifecycle contracts, Script Host v7, Notification Provider Host v2,
+Rust LEC2-LEC6 authority/runtime suites, direct CLI management, and a clean
+consumer install that executes, inspects, cancels, and shuts down. It compiles
+all 73 repository schemas together, audits package contents, scans public
+artifacts for configured WOML secrets, runs TypeScript and Clippy with warnings
+denied for `woml-engine`, and enforces the versioned local benchmark budgets for
+lifecycle-disabled overhead, lifecycle finalization, list/get, cancellation
+request, and cancellation detection.
 
 ## 13. Expected File Areas
 
