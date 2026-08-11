@@ -711,11 +711,49 @@ interface CompiledWorkflowSource {
   readonly runtimeModules: readonly RustRuntimeModuleArtifact[];
 }
 
+function promoteForLifecycleAuthority(
+  workflow: CompiledWorkflowDefinition
+): CompiledWorkflowDefinition {
+  if (workflow.schemaVersion === 11) return workflow;
+  return {
+    schemaVersion: 11,
+    workflowId: workflow.workflowId,
+    ...(workflow.metadata === undefined
+      ? {}
+      : { metadata: workflow.metadata }),
+    triggers: workflow.triggers,
+    graph: {
+      entryNodeIds: workflow.graph.entryNodeIds,
+      nodes: workflow.graph.nodes.map(node =>
+        node.handler !== 'runtime.script' || node.scriptRuntime !== undefined
+          ? node
+          : {
+              ...node,
+              scriptRuntime: {
+                bindingVersion: 1 as const,
+                bindings: [
+                  'context',
+                  'attempt',
+                  'services',
+                  'secrets',
+                ] as const,
+                requiredSecrets: [],
+              },
+            }
+      ),
+      edges: workflow.graph.edges,
+    },
+    ...('moduleRuntime' in workflow && workflow.moduleRuntime !== undefined
+      ? { moduleRuntime: workflow.moduleRuntime }
+      : {}),
+  };
+}
+
 function workflowCallFrontendOnlySource(
   source: CompiledWorkflowSource
 ): boolean {
   return (
-    source.workflow.schemaVersion === 10 ||
+    source.workflow.triggers.length === 0 ||
     inspectWomlModuleUsage(source.document).referencedServices.includes(
       'workflows'
     )
@@ -802,7 +840,9 @@ async function compileWorkflowSources(
             projectRoot,
           })
         : undefined;
-    const workflow = runtimePackage?.workflow.model ?? compileWoml(document);
+    const workflow = promoteForLifecycleAuthority(
+      runtimePackage?.workflow.model ?? compileWoml(document)
+    );
     compiled.push({
       filePath,
       document,
@@ -958,13 +998,15 @@ async function runCheckCommand(
         `Warning [WOML_MODULE_UNUSED]: services.${name} is declared but is not called by this workflow.\n`
       );
     }
-    const lifecycleFrontendOnly = compiledWorkflow.schemaVersion === 11;
+    const lifecycleFrontendOnly =
+      compiledWorkflow.schemaVersion === 11 &&
+      compiledWorkflow.lifecycle !== undefined;
     const workflowCallsFrontendOnly =
-      compiledWorkflow.schemaVersion === 10 ||
+      compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
       lifecycleFrontendOnly
-        ? 'Execution: lifecycle syntax is compiled to Model v11; durable lifecycle execution begins in LEC2 and LEC3.\n'
+        ? 'Execution: lifecycle syntax is compiled to Model v11; lifecycle action execution begins in LEC3.\n'
         : workflowCallsFrontendOnly
           ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
           : definitionPackage.modules.length === 0
@@ -1372,7 +1414,8 @@ async function executeOneShot(
     !hasApproval &&
     workflow.schemaVersion !== 6 &&
     workflow.schemaVersion !== 8 &&
-    workflow.schemaVersion !== 9
+    workflow.schemaVersion !== 9 &&
+    workflow.schemaVersion !== 11
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -1396,7 +1439,8 @@ async function executeOneShot(
   if (
     workflow.schemaVersion === 6 ||
     workflow.schemaVersion === 8 ||
-    workflow.schemaVersion === 9
+    workflow.schemaVersion === 9 ||
+    workflow.schemaVersion === 11
   ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);
@@ -1819,12 +1863,14 @@ async function activateWorkflows(
     )
   );
   const lifecycleSource = sources.find(
-    source => source.workflow.schemaVersion === 11
+    source =>
+      source.workflow.schemaVersion === 11 &&
+      source.workflow.lifecycle !== undefined
   );
   if (lifecycleSource !== undefined) {
     throw new CliInputError(
       'WOML_LIFECYCLE_RUNTIME_UNAVAILABLE',
-      `workflow "${lifecycleSource.workflow.workflowId}" compiled successfully, but durable lifecycle execution begins in LEC2 and LEC3. Use woml check during LEC1.`
+      `workflow "${lifecycleSource.workflow.workflowId}" compiled successfully, but lifecycle action execution begins in LEC3. Use woml check until LEC3.`
     );
   }
   const hasWorkflowCalls = sources.some(workflowCallFrontendOnlySource);

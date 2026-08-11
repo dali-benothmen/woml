@@ -7,11 +7,12 @@ use thiserror::Error;
 
 use crate::event::{
   ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalResolution,
-  ApprovalTimeoutPolicy, AttemptFailure, BranchFailure, EventValidationError,
-  NotificationResolution, NotificationSafeFailure, OperationExecutionMode, ParallelFailure,
-  ParallelFailurePolicy, ParallelGroupOutcome, ProviderMessageIdentity, RunEvent, RunEventPayload,
-  RunFailedData, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5,
-  StepAttemptStartedData,
+  ApprovalTimeoutPolicy, AttemptFailure, BranchFailure, BusinessOutcome, EventValidationError,
+  FinalLifecycleStatus, LifecycleFailure, LifecycleHookCompletionStatus, LifecycleSubject,
+  LifecycleWarning, NotificationResolution, NotificationSafeFailure, OperationExecutionMode,
+  ParallelFailure, ParallelFailurePolicy, ParallelGroupOutcome, ProviderMessageIdentity, RunEvent,
+  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4,
+  RunFailedDataV5, RunOutcomeDecidedData, StepAttemptStartedData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -21,8 +22,57 @@ pub enum RunStatus {
   NotStarted,
   Running,
   Waiting,
+  Cancelling,
+  Finalizing,
   Succeeded,
   Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleStatus {
+  #[default]
+  Idle,
+  Running,
+  Finalizing,
+  CompletedWithWarnings,
+  Completed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleActionStatus {
+  Started,
+  Succeeded,
+  Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleActionProjection {
+  pub action_id: String,
+  pub attempt: u32,
+  pub status: LifecycleActionStatus,
+  pub failure: Option<LifecycleFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleHookStatus {
+  Requested,
+  Running,
+  Completed,
+  CompletedWithWarnings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleHookProjection {
+  pub hook_invocation_id: String,
+  pub hook_id: String,
+  pub event: crate::model::LifecycleEventName,
+  pub subject: LifecycleSubject,
+  pub status: LifecycleHookStatus,
+  pub actions: BTreeMap<String, LifecycleActionProjection>,
+  pub failed_actions: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -228,6 +278,11 @@ pub struct RunProjection {
   pub trigger_occurrence_id: Option<String>,
   pub ingress: Option<crate::RunIngress>,
   pub status: RunStatus,
+  pub business_outcome: Option<BusinessOutcome>,
+  pub lifecycle_status: LifecycleStatus,
+  pub cancellation_request_id: Option<String>,
+  pub lifecycle_hooks: BTreeMap<String, LifecycleHookProjection>,
+  pub lifecycle_warnings: Vec<LifecycleWarning>,
   pub context: WorkflowContext,
   pub attempts: Vec<AttemptProjection>,
   pub operations: BTreeMap<OperationIdentity, OperationProjection>,
@@ -241,6 +296,7 @@ pub struct RunProjection {
   pub terminal_node_id: Option<String>,
   pub result: Option<Value>,
   pub failure: Option<RunFailure>,
+  pub lifecycle_failure: Option<LifecycleFailure>,
   pub last_sequence: u64,
 }
 
@@ -396,7 +452,10 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         )));
       }
     }
-    if matches!(projection.status, RunStatus::Succeeded | RunStatus::Failed) {
+    if matches!(
+      projection.status,
+      RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled
+    ) {
       return Err(FoldError::InvalidHistory(
         "A terminal run event must be the final event.".to_string(),
       ));
@@ -1131,6 +1190,237 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           failure: data.failure.clone(),
         };
       }
+      RunEventPayload::RunCancellationRequested(data) => {
+        if !matches!(projection.status, RunStatus::Running | RunStatus::Waiting) {
+          return Err(FoldError::InvalidHistory(
+            "Cancellation may only be requested before business outcome is decided.".to_string(),
+          ));
+        }
+        if projection.cancellation_request_id.is_some() {
+          return Err(FoldError::InvalidHistory(
+            "A run may contain only one durable cancellation request.".to_string(),
+          ));
+        }
+        projection.cancellation_request_id = Some(data.request_id.clone());
+        projection.status = RunStatus::Cancelling;
+      }
+      RunEventPayload::LifecycleHookRequested(data) => {
+        if projection.run_id.is_none()
+          || matches!(
+            projection.status,
+            RunStatus::NotStarted | RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled
+          )
+          || projection
+            .lifecycle_hooks
+            .contains_key(&data.hook_invocation_id)
+          || projection
+            .lifecycle_hooks
+            .values()
+            .any(|hook| hook.hook_id == data.hook_id && hook.subject == data.subject)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Lifecycle hook request is duplicated or belongs to an inactive run.".to_string(),
+          ));
+        }
+        projection.lifecycle_hooks.insert(
+          data.hook_invocation_id.clone(),
+          LifecycleHookProjection {
+            hook_invocation_id: data.hook_invocation_id.clone(),
+            hook_id: data.hook_id.clone(),
+            event: data.event,
+            subject: data.subject.clone(),
+            status: LifecycleHookStatus::Requested,
+            actions: BTreeMap::new(),
+            failed_actions: 0,
+          },
+        );
+        projection.lifecycle_status = LifecycleStatus::Running;
+      }
+      RunEventPayload::LifecycleActionAttemptStarted(data) => {
+        let hook = projection
+          .lifecycle_hooks
+          .get_mut(&data.hook_invocation_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(
+              "Lifecycle action started before its hook was requested.".to_string(),
+            )
+          })?;
+        if matches!(
+          hook.status,
+          LifecycleHookStatus::Completed | LifecycleHookStatus::CompletedWithWarnings
+        ) || hook.actions.contains_key(&data.action_id)
+          || hook
+            .actions
+            .values()
+            .any(|action| action.status == LifecycleActionStatus::Started)
+        {
+          return Err(FoldError::InvalidHistory(
+            "A lifecycle hook may have only one active, uniquely identified action attempt."
+              .to_string(),
+          ));
+        }
+        hook.actions.insert(
+          data.action_id.clone(),
+          LifecycleActionProjection {
+            action_id: data.action_id.clone(),
+            attempt: data.attempt,
+            status: LifecycleActionStatus::Started,
+            failure: None,
+          },
+        );
+        hook.status = LifecycleHookStatus::Running;
+      }
+      RunEventPayload::LifecycleActionSucceeded(data) => {
+        let hook = projection
+          .lifecycle_hooks
+          .get_mut(&data.hook_invocation_id)
+          .ok_or_else(|| FoldError::InvalidHistory("Unknown lifecycle hook.".to_string()))?;
+        let action = hook.actions.get_mut(&data.action_id).ok_or_else(|| {
+          FoldError::InvalidHistory("Lifecycle action succeeded before it started.".to_string())
+        })?;
+        if action.status != LifecycleActionStatus::Started || action.attempt != data.attempt {
+          return Err(FoldError::InvalidHistory(
+            "Lifecycle action success does not close its active attempt.".to_string(),
+          ));
+        }
+        action.status = LifecycleActionStatus::Succeeded;
+      }
+      RunEventPayload::LifecycleActionFailed(data) => {
+        let hook = projection
+          .lifecycle_hooks
+          .get_mut(&data.hook_invocation_id)
+          .ok_or_else(|| FoldError::InvalidHistory("Unknown lifecycle hook.".to_string()))?;
+        let action = hook.actions.get_mut(&data.action_id).ok_or_else(|| {
+          FoldError::InvalidHistory("Lifecycle action failed before it started.".to_string())
+        })?;
+        if action.status != LifecycleActionStatus::Started || action.attempt != data.attempt {
+          return Err(FoldError::InvalidHistory(
+            "Lifecycle action failure does not close its active attempt.".to_string(),
+          ));
+        }
+        action.status = LifecycleActionStatus::Failed;
+        action.failure = Some(data.failure.clone());
+        hook.failed_actions += 1;
+      }
+      RunEventPayload::LifecycleHookCompleted(data) => {
+        let hook = projection
+          .lifecycle_hooks
+          .get_mut(&data.hook_invocation_id)
+          .ok_or_else(|| FoldError::InvalidHistory("Unknown lifecycle hook.".to_string()))?;
+        if matches!(
+          hook.status,
+          LifecycleHookStatus::Completed | LifecycleHookStatus::CompletedWithWarnings
+        ) || hook
+          .actions
+          .values()
+          .any(|action| action.status == LifecycleActionStatus::Started)
+          || hook.failed_actions != data.failed_actions
+        {
+          return Err(FoldError::InvalidHistory(
+            "Lifecycle hook completion does not match its action outcomes.".to_string(),
+          ));
+        }
+        hook.status = match data.status {
+          LifecycleHookCompletionStatus::Completed => LifecycleHookStatus::Completed,
+          LifecycleHookCompletionStatus::CompletedWithWarnings => {
+            LifecycleHookStatus::CompletedWithWarnings
+          }
+        };
+      }
+      RunEventPayload::RunOutcomeDecided(data) => {
+        if projection.business_outcome.is_some()
+          || !matches!(
+            projection.status,
+            RunStatus::Running | RunStatus::Waiting | RunStatus::Cancelling
+          )
+        {
+          return Err(FoldError::InvalidHistory(
+            "A run business outcome may be decided exactly once.".to_string(),
+          ));
+        }
+        match data {
+          RunOutcomeDecidedData::Succeeded { result } => {
+            if projection.status != RunStatus::Running {
+              return Err(FoldError::InvalidHistory(
+                "A successful outcome requires a running workflow.".to_string(),
+              ));
+            }
+            projection.result = Some(result.clone());
+          }
+          RunOutcomeDecidedData::Failed { failure } => {
+            projection.lifecycle_failure = Some(failure.clone());
+          }
+          RunOutcomeDecidedData::Cancelled {
+            cancellation_request_id,
+          } => {
+            if projection.cancellation_request_id.as_deref()
+              != Some(cancellation_request_id.as_str())
+            {
+              return Err(FoldError::InvalidHistory(
+                "Cancelled outcome does not match the durable cancellation request.".to_string(),
+              ));
+            }
+          }
+        }
+        projection.business_outcome = Some(data.outcome());
+        projection.lifecycle_status = LifecycleStatus::Finalizing;
+        projection.status = RunStatus::Finalizing;
+      }
+      RunEventPayload::RunFinalized(data) => {
+        let failed_actions = projection
+          .lifecycle_hooks
+          .values()
+          .flat_map(|hook| {
+            hook.actions.values().filter_map(|action| {
+              action.failure.as_ref().map(|failure| {
+                (
+                  hook.hook_id.as_str(),
+                  action.action_id.as_str(),
+                  matches!(hook.subject.kind, crate::event::LifecycleSubjectKind::Step)
+                    .then_some(hook.subject.id.as_str()),
+                  failure.code.as_str(),
+                )
+              })
+            })
+          })
+          .collect::<Vec<_>>();
+        let warnings_match = failed_actions.len() == data.warnings.len()
+          && failed_actions
+            .iter()
+            .all(|(hook_id, action_id, step_id, code)| {
+              data.warnings.iter().any(|warning| {
+                warning.hook_id == *hook_id
+                  && warning.action_id == *action_id
+                  && warning.step_id.as_deref() == *step_id
+                  && warning.code == *code
+              })
+            });
+        if projection.status != RunStatus::Finalizing
+          || projection.business_outcome != Some(data.outcome)
+          || !warnings_match
+          || projection.lifecycle_hooks.values().any(|hook| {
+            matches!(
+              hook.status,
+              LifecycleHookStatus::Requested | LifecycleHookStatus::Running
+            )
+          })
+        {
+          return Err(FoldError::InvalidHistory(
+            "run_finalized requires the decided outcome and no unfinished lifecycle hook."
+              .to_string(),
+          ));
+        }
+        projection.lifecycle_warnings = data.warnings.clone();
+        projection.lifecycle_status = match data.lifecycle_status {
+          FinalLifecycleStatus::Completed => LifecycleStatus::Completed,
+          FinalLifecycleStatus::CompletedWithWarnings => LifecycleStatus::CompletedWithWarnings,
+        };
+        projection.status = match data.outcome {
+          BusinessOutcome::Succeeded => RunStatus::Succeeded,
+          BusinessOutcome::Failed => RunStatus::Failed,
+          BusinessOutcome::Cancelled => RunStatus::Cancelled,
+        };
+      }
       RunEventPayload::RunSucceeded(data) => {
         require_running(&projection)?;
         if projection.operations.values().any(|operation| {
@@ -1162,6 +1452,8 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           )));
         }
         projection.status = RunStatus::Succeeded;
+        projection.business_outcome = Some(BusinessOutcome::Succeeded);
+        projection.lifecycle_status = LifecycleStatus::Completed;
         projection.terminal_node_id = Some(data.terminal_node_id.clone());
         projection.result = Some(data.result.clone());
       }
@@ -1337,6 +1629,8 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         };
         projection.pending_retries.clear();
         projection.status = RunStatus::Failed;
+        projection.business_outcome = Some(BusinessOutcome::Failed);
+        projection.lifecycle_status = LifecycleStatus::Completed;
         projection.failure = Some(failure);
       }
     }

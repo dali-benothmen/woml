@@ -6,10 +6,11 @@ use thiserror::Error;
 
 use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V10,
-  COMPILED_MODEL_SCHEMA_VERSION_V2, COMPILED_MODEL_SCHEMA_VERSION_V3,
-  COMPILED_MODEL_SCHEMA_VERSION_V4, COMPILED_MODEL_SCHEMA_VERSION_V5,
-  COMPILED_MODEL_SCHEMA_VERSION_V6, COMPILED_MODEL_SCHEMA_VERSION_V7,
-  COMPILED_MODEL_SCHEMA_VERSION_V8, COMPILED_MODEL_SCHEMA_VERSION_V9,
+  COMPILED_MODEL_SCHEMA_VERSION_V11, COMPILED_MODEL_SCHEMA_VERSION_V2,
+  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
+  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
+  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
+  COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,6 +24,58 @@ pub struct CompiledWorkflowDefinition {
   pub graph: CompiledWorkflowGraph,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub module_runtime: Option<CompiledModuleRuntime>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub lifecycle: Option<CompiledLifecycleDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledLifecycleDefinition {
+  pub profile_version: u32,
+  pub hooks: Vec<CompiledLifecycleHook>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledLifecycleHook {
+  pub hook_id: String,
+  pub event: LifecycleEventName,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub step_ids: Option<Vec<String>>,
+  pub actions: Vec<CompiledLifecycleAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleEventName {
+  RunStart,
+  StepStart,
+  StepSuccess,
+  StepFailure,
+  StepComplete,
+  RunSuccess,
+  RunFailure,
+  RunCancel,
+  RunComplete,
+}
+
+impl LifecycleEventName {
+  pub const fn is_step(self) -> bool {
+    matches!(
+      self,
+      Self::StepStart | Self::StepSuccess | Self::StepFailure | Self::StepComplete
+    )
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledLifecycleAction {
+  pub action_id: String,
+  pub handler: String,
+  pub inputs: ValueExpression,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub script_runtime: Option<ScriptRuntimeBindings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +169,8 @@ pub enum ValueExpression {
   Literal { value: Value },
   #[serde(rename = "contextReference")]
   ContextReference { path: Vec<String> },
+  #[serde(rename = "lifecycleReference")]
+  LifecycleReference { path: Vec<String> },
   #[serde(rename = "secretReference")]
   SecretReference { name: String },
   #[serde(rename = "object")]
@@ -135,6 +190,8 @@ pub enum TemplatePart {
   Text { text: String },
   #[serde(rename = "contextReference")]
   ContextReference { path: Vec<String> },
+  #[serde(rename = "lifecycleReference")]
+  LifecycleReference { path: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -269,6 +326,7 @@ pub enum ModelIssueCode {
   InvalidNotificationGroup,
   InvalidScriptRuntime,
   InvalidModuleRuntime,
+  InvalidLifecycle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -603,6 +661,14 @@ fn inspect_expression(expression: &ValueExpression, at: &str, issues: &mut Vec<M
         ));
       }
     }
+    ValueExpression::LifecycleReference { path } => {
+      if path.is_empty() || path.len() > 32 || path.iter().any(|part| part.is_empty()) {
+        issues.push(issue(
+          ModelIssueCode::InvalidValueExpression,
+          format!("Lifecycle reference at {at} must contain 1 to 32 non-empty path segments."),
+        ));
+      }
+    }
     ValueExpression::SecretReference { name } => {
       if !valid_secret_name(name) {
         issues.push(issue(
@@ -629,18 +695,34 @@ fn inspect_expression(expression: &ValueExpression, at: &str, issues: &mut Vec<M
         ));
       }
       for (index, part) in parts.iter().enumerate() {
-        if let TemplatePart::ContextReference { path } = part {
-          if path.is_empty() || path.iter().any(|segment| segment.is_empty()) {
+        if let TemplatePart::ContextReference { path } | TemplatePart::LifecycleReference { path } =
+          part
+        {
+          if path.is_empty() || path.len() > 32 || path.iter().any(|segment| segment.is_empty()) {
             issues.push(issue(
               ModelIssueCode::InvalidValueExpression,
               format!(
-                "Context reference at {at}.parts[{index}] must contain non-empty path segments."
+                "Reference at {at}.parts[{index}] must contain 1 to 32 non-empty path segments."
               ),
             ));
           }
         }
       }
     }
+  }
+}
+
+fn contains_lifecycle_reference(expression: &ValueExpression) -> bool {
+  match expression {
+    ValueExpression::LifecycleReference { .. } => true,
+    ValueExpression::Object { fields } => fields.values().any(contains_lifecycle_reference),
+    ValueExpression::Array { items } => items.iter().any(contains_lifecycle_reference),
+    ValueExpression::Template { parts } => parts
+      .iter()
+      .any(|part| matches!(part, TemplatePart::LifecycleReference { .. })),
+    ValueExpression::Literal { .. }
+    | ValueExpression::ContextReference { .. }
+    | ValueExpression::SecretReference { .. } => false,
   }
 }
 
@@ -860,6 +942,149 @@ fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut V
         ModelIssueCode::InvalidBranchResult,
         format!("Branch result {:?} has no matching edge group.", node.id),
       ));
+    }
+  }
+}
+
+fn lifecycle_hook_id(event: LifecycleEventName) -> &'static str {
+  match event {
+    LifecycleEventName::RunStart => "lifecycle:run_start",
+    LifecycleEventName::StepStart => "lifecycle:step_start",
+    LifecycleEventName::StepSuccess => "lifecycle:step_success",
+    LifecycleEventName::StepFailure => "lifecycle:step_failure",
+    LifecycleEventName::StepComplete => "lifecycle:step_complete",
+    LifecycleEventName::RunSuccess => "lifecycle:run_success",
+    LifecycleEventName::RunFailure => "lifecycle:run_failure",
+    LifecycleEventName::RunCancel => "lifecycle:run_cancel",
+    LifecycleEventName::RunComplete => "lifecycle:run_complete",
+  }
+}
+
+fn valid_lifecycle_script_inputs(inputs: &ValueExpression) -> bool {
+  matches!(
+    inputs,
+    ValueExpression::Object { fields }
+      if fields.len() == 1
+        && matches!(fields.get("source"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|source| source.len() <= 1_048_576))
+  )
+}
+
+fn valid_lifecycle_notification_inputs(inputs: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(inputs) else {
+    return false;
+  };
+  let Some(ValueExpression::Array { items }) = fields.get("deliveries") else {
+    return false;
+  };
+  fields.len() == 1
+    && (1..=256).contains(&items.len())
+    && items.iter().all(|delivery| {
+      let Some(fields) = object_fields(delivery) else {
+        return false;
+      };
+      let credentials = fields.get("credentials").and_then(object_fields);
+      fields.len() == 5
+        && matches!(fields.get("deliveryId"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
+        && matches!(fields.get("provider"), Some(ValueExpression::Literal { value }) if value.as_str() == Some("slack"))
+        && matches!(fields.get("destination"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
+        && credentials.is_some_and(|credentials| {
+          credentials.len() == 2
+            && matches!(credentials.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+            && matches!(credentials.get("appToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+        })
+        && matches!(fields.get("message"), Some(ValueExpression::Template { parts }) if (1..=65).contains(&parts.len()) && parts.iter().all(|part| !matches!(part, TemplatePart::Text { text } if text.len() > 4096)))
+    })
+}
+
+fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec<ModelIssue>) {
+  let Some(lifecycle) = &workflow.lifecycle else {
+    return;
+  };
+  if workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V11 {
+    issues.push(issue(
+      ModelIssueCode::InvalidLifecycle,
+      "lifecycle is unavailable before compiled Model v11.",
+    ));
+    return;
+  }
+  if lifecycle.profile_version != 1 || lifecycle.hooks.is_empty() || lifecycle.hooks.len() > 9 {
+    issues.push(issue(
+      ModelIssueCode::InvalidLifecycle,
+      "Model v11 lifecycle must use profileVersion 1 and contain 1 to 9 hooks.",
+    ));
+    return;
+  }
+  let node_ids = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| node.id.as_str())
+    .collect::<HashSet<_>>();
+  let mut events = HashSet::new();
+  let mut action_ids = HashSet::new();
+  for hook in &lifecycle.hooks {
+    let valid_steps = match (&hook.step_ids, hook.event.is_step()) {
+      (None, true) => true,
+      (Some(step_ids), true) => {
+        !step_ids.is_empty()
+          && step_ids.iter().all(|id| node_ids.contains(id.as_str()))
+          && step_ids.iter().collect::<HashSet<_>>().len() == step_ids.len()
+      }
+      (None, false) => true,
+      (Some(_), false) => false,
+    };
+    if hook.hook_id != lifecycle_hook_id(hook.event)
+      || !events.insert(hook.event)
+      || !valid_steps
+      || hook.actions.is_empty()
+      || hook.actions.len() > 64
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidLifecycle,
+        format!(
+          "Lifecycle hook {:?} does not match the frozen Lifecycle Binding v1 contract.",
+          hook.hook_id
+        ),
+      ));
+      continue;
+    }
+    for (index, action) in hook.actions.iter().enumerate() {
+      let expected_id = format!("{}:action:{index}", hook.hook_id);
+      let valid_handler = match (action.handler.as_str(), &action.script_runtime) {
+        ("runtime.lifecycle-script", Some(runtime)) => {
+          runtime.binding_version == 2
+            && runtime.bindings == ["context", "lifecycle", "attempt", "services", "secrets"]
+            && runtime.required_secrets.len() <= 64
+            && runtime
+              .required_secrets
+              .windows(2)
+              .all(|pair| pair[0] < pair[1])
+            && runtime
+              .required_secrets
+              .iter()
+              .all(|name| valid_secret_name(name))
+            && valid_lifecycle_script_inputs(&action.inputs)
+        }
+        ("notification.informational", None) => valid_lifecycle_notification_inputs(&action.inputs),
+        _ => false,
+      };
+      if action.action_id != expected_id
+        || !action_ids.insert(action.action_id.as_str())
+        || !valid_handler
+      {
+        issues.push(issue(
+          ModelIssueCode::InvalidLifecycle,
+          format!(
+            "Lifecycle action {:?} does not match the frozen Lifecycle Binding v1 contract.",
+            action.action_id
+          ),
+        ));
+      }
+      inspect_expression(
+        &action.inputs,
+        &format!("lifecycle[{}].action[{index}].inputs", hook.hook_id),
+        issues,
+      );
     }
   }
 }
@@ -1364,6 +1589,27 @@ impl CompiledWorkflowDefinition {
       .find(|trigger| trigger.id == trigger_id)
   }
 
+  pub fn lifecycle_hook(&self, hook_id: &str) -> Option<&CompiledLifecycleHook> {
+    self
+      .lifecycle
+      .as_ref()?
+      .hooks
+      .iter()
+      .find(|hook| hook.hook_id == hook_id)
+  }
+
+  pub fn lifecycle_hook_for_event(
+    &self,
+    event: LifecycleEventName,
+  ) -> Option<&CompiledLifecycleHook> {
+    self
+      .lifecycle
+      .as_ref()?
+      .hooks
+      .iter()
+      .find(|hook| hook.event == event)
+  }
+
   pub(crate) fn approval(&self, approval_id: &str) -> Option<ApprovalDefinition> {
     let wait = self.node(approval_id)?;
     if wait.handler != "engine.approval-wait" {
@@ -1523,6 +1769,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V8
         | COMPILED_MODEL_SCHEMA_VERSION_V9
         | COMPILED_MODEL_SCHEMA_VERSION_V10
+        | COMPILED_MODEL_SCHEMA_VERSION_V11
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1554,7 +1801,12 @@ impl CompiledWorkflowDefinition {
     }
 
     match (self.schema_version, &self.module_runtime) {
-      (COMPILED_MODEL_SCHEMA_VERSION_V9 | COMPILED_MODEL_SCHEMA_VERSION_V10, Some(runtime)) => {
+      (
+        COMPILED_MODEL_SCHEMA_VERSION_V9
+        | COMPILED_MODEL_SCHEMA_VERSION_V10
+        | COMPILED_MODEL_SCHEMA_VERSION_V11,
+        Some(runtime),
+      ) => {
         let reserved = [
           "http",
           "db",
@@ -1607,7 +1859,12 @@ impl CompiledWorkflowDefinition {
       _ => {}
     }
 
-    if self.triggers.is_empty() && self.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V10 {
+    if self.triggers.is_empty()
+      && !matches!(
+        self.schema_version,
+        COMPILED_MODEL_SCHEMA_VERSION_V10 | COMPILED_MODEL_SCHEMA_VERSION_V11
+      )
+    {
       issues.push(issue(
         ModelIssueCode::MissingTrigger,
         "A compiled workflow requires at least one trigger.",
@@ -1619,6 +1876,7 @@ impl CompiledWorkflowDefinition {
         "Compiled Model v10 is the call-only profile and requires an empty triggers array.",
       ));
     }
+    inspect_lifecycle_contract(self, &mut issues);
     let mut trigger_ids = HashSet::new();
     for trigger in &self.triggers {
       if !valid_id(&trigger.id)
@@ -1637,6 +1895,15 @@ impl CompiledWorkflowDefinition {
         ));
       }
       inspect_expression(&trigger.config, "trigger.config", &mut issues);
+      if contains_lifecycle_reference(&trigger.config) {
+        issues.push(issue(
+          ModelIssueCode::InvalidLifecycle,
+          format!(
+            "Trigger {:?} cannot read lifecycle; the binding exists only inside lifecycle actions.",
+            trigger.id
+          ),
+        ));
+      }
       if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V7 && !valid_model_v7_trigger(trigger)
       {
         issues.push(issue(
@@ -1794,6 +2061,15 @@ impl CompiledWorkflowDefinition {
         &format!("node[{}].inputs", node.id),
         &mut issues,
       );
+      if contains_lifecycle_reference(&node.inputs) {
+        issues.push(issue(
+          ModelIssueCode::InvalidLifecycle,
+          format!(
+            "Business node {:?} cannot read lifecycle; lifecycle outputs never enter the DAG.",
+            node.id
+          ),
+        ));
+      }
     }
 
     let mut adjacency: HashMap<&str, Vec<&str>> = self

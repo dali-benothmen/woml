@@ -910,6 +910,16 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
       )?));
     }
     RunStatus::Failed => return Err(resumed_failure(&engine, run_id, projection)?),
+    RunStatus::Cancelled => {
+      return Err(RuntimeExecutionError::Stalled(
+        "stored run was cancelled".to_string(),
+      ));
+    }
+    RunStatus::Cancelling | RunStatus::Finalizing => {
+      return Err(RuntimeExecutionError::Stalled(
+        "stored run requires lifecycle continuation, which is introduced in LEC3".to_string(),
+      ));
+    }
     RunStatus::Running => {}
     RunStatus::Waiting => {
       return engine.reissue_waiting_outcome(run_id, options.clock.now());
@@ -1941,6 +1951,37 @@ fn resumed_failure<E: RuntimeDagEngine>(
   projection: RunProjection,
 ) -> Result<RuntimeExecutionError, RuntimeExecutionError> {
   let events = engine.events(run_id)?;
+  if let Some(lifecycle_failure) = projection.lifecycle_failure.clone() {
+    let kind = match lifecycle_failure.kind {
+      crate::LifecycleFailureKind::TimedOut => AttemptFailureKind::ScriptTimedOut,
+      crate::LifecycleFailureKind::NonJson => AttemptFailureKind::InvalidScriptResult,
+      crate::LifecycleFailureKind::WorkerCrashed => AttemptFailureKind::WorkerCrashed,
+      crate::LifecycleFailureKind::HostCrashed => AttemptFailureKind::HostCrashed,
+      crate::LifecycleFailureKind::Interrupted => AttemptFailureKind::Interrupted,
+      crate::LifecycleFailureKind::SizeLimitExceeded => AttemptFailureKind::ResultTooLarge,
+      crate::LifecycleFailureKind::Cancelled => AttemptFailureKind::InvocationCancelled,
+      crate::LifecycleFailureKind::ProviderFailed => AttemptFailureKind::ServiceFailed,
+      crate::LifecycleFailureKind::ScriptThrew => AttemptFailureKind::ScriptThrew,
+    };
+    let failure = AttemptFailure {
+      kind,
+      code: lifecycle_failure.code.clone(),
+      message: lifecycle_failure.message.clone(),
+      details: None,
+      ..AttemptFailure::legacy_defaults()
+    };
+    return Ok(RuntimeExecutionError::RunFailed(Box::new(
+      FailedRunDetails {
+        code: lifecycle_failure.code,
+        message: lifecycle_failure.message,
+        node_id: None,
+        attempt: None,
+        max_attempts: None,
+        failure,
+        events,
+      },
+    )));
+  }
   let failure = projection.failure.ok_or_else(|| {
     RuntimeExecutionError::Stalled("failed run has no folded failure".to_string())
   })?;
@@ -2091,9 +2132,12 @@ fn final_result<E: RuntimeDagEngine>(
   execution_order: Vec<String>,
 ) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
   let projection = engine.projection(run_id)?;
-  let terminal_node_id = projection.terminal_node_id.ok_or_else(|| {
-    RuntimeExecutionError::Stalled("successful run has no terminal node".to_string())
-  })?;
+  let terminal_node_id = projection
+    .terminal_node_id
+    .or_else(|| engine.workflow().terminal_node_id().map(str::to_string))
+    .ok_or_else(|| {
+      RuntimeExecutionError::Stalled("successful run has no terminal node".to_string())
+    })?;
   let result = projection
     .result
     .ok_or_else(|| RuntimeExecutionError::Stalled("successful run has no result".to_string()))?;
@@ -2268,7 +2312,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V6
     | crate::RUN_EVENT_SCHEMA_VERSION_V7
     | crate::RUN_EVENT_SCHEMA_VERSION_V8
-    | crate::RUN_EVENT_SCHEMA_VERSION_V9 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V9
+    | crate::RUN_EVENT_SCHEMA_VERSION_V10 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -2437,15 +2482,24 @@ impl RuntimeDagEngine for InMemoryDagEngine {
     run_id: &str,
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError> {
-    let sequence = self.events(run_id).len() as u64 + 1;
-    self.append_event(RunEvent {
-      event_schema_version: self.event_schema_version(),
-      event_id: generated_id("evt"),
-      run_id: run_id.to_string(),
-      sequence,
-      occurred_at: chrono::Utc::now(),
-      payload,
-    })?;
+    let event_schema_version = self.event_schema_version();
+    let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+      crate::durable::translate_legacy_terminal_v10(payload)?
+    } else {
+      vec![payload]
+    };
+    let occurred_at = chrono::Utc::now();
+    for payload in payloads {
+      let sequence = self.events(run_id).len() as u64 + 1;
+      self.append_event(RunEvent {
+        event_schema_version,
+        event_id: generated_id("evt"),
+        run_id: run_id.to_string(),
+        sequence,
+        occurred_at,
+        payload,
+      })?;
+    }
     Ok(())
   }
 

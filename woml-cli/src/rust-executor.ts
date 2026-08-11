@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
 
 export interface RustRunEvent {
-  readonly eventSchemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  readonly eventSchemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
@@ -306,8 +306,11 @@ export interface RustRunInspection {
     | 'not_started'
     | 'running'
     | 'waiting'
+    | 'cancelling'
+    | 'finalizing'
     | 'succeeded'
-    | 'failed';
+    | 'failed'
+    | 'cancelled';
   readonly terminalNodeId?: string;
   readonly result?: JsonValue;
   readonly failureCode?: string;
@@ -1227,7 +1230,7 @@ function executionResult(value: unknown): value is RustWorkflowExecutionResult {
       ]) &&
       Number.isSafeInteger(event.eventSchemaVersion) &&
       Number(event.eventSchemaVersion) >= 1 &&
-      Number(event.eventSchemaVersion) <= 8 &&
+      Number(event.eventSchemaVersion) <= 10 &&
       typeof event.eventId === 'string' &&
       typeof event.runId === 'string' &&
       Number.isSafeInteger(event.sequence) &&
@@ -2006,9 +2009,16 @@ export function inspectRunWithRust(
     ) ||
     typeof value.runId !== 'string' ||
     typeof value.workflowId !== 'string' ||
-    !['not_started', 'running', 'waiting', 'succeeded', 'failed'].includes(
-      String(value.status)
-    ) ||
+    ![
+      'not_started',
+      'running',
+      'waiting',
+      'cancelling',
+      'finalizing',
+      'succeeded',
+      'failed',
+      'cancelled',
+    ].includes(String(value.status)) ||
     (value.terminalNodeId !== undefined &&
       typeof value.terminalNodeId !== 'string') ||
     (value.failureCode !== undefined && typeof value.failureCode !== 'string') ||

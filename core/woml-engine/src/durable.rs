@@ -20,14 +20,15 @@ use crate::engine::{
 use crate::event::{
   is_definition_hash, ApprovalDecision, ApprovalDecisionSource, ApprovalFailure,
   ApprovalRequestedData, ApprovalResolution, ApprovalResolvedData, ApprovalTimeoutPolicy,
+  LifecycleHookRequestedData, LifecycleSubject, LifecycleSubjectKind,
   NotificationDeliveryAttemptStartedData, NotificationDeliveryFailedData,
   NotificationDeliveryRequestedData, NotificationDeliverySucceededData,
   NotificationMessageUpdateAttemptStartedData, NotificationMessageUpdateFailedData,
   NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure,
   OperationFailedData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
-  ParallelGroupOutcome, ProviderMessageIdentity, RunFailedData, RunFailedDataV1, RunFailedDataV2,
-  RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunIngress, RunStartedData, RunSucceededData,
-  StepAttemptFailedData, StepRetryScheduledData,
+  ParallelGroupOutcome, ProviderMessageIdentity, RunCancellationRequestedData, RunFailedData,
+  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunIngress,
+  RunStartedData, RunSucceededData, StepAttemptFailedData, StepRetryScheduledData,
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, NotificationDeliveryStatus,
@@ -48,7 +49,7 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 10;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 11;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -59,7 +60,22 @@ const STORE_SCHEMA_VERSION_V7: &str = "7";
 const STORE_SCHEMA_VERSION_V8: &str = "8";
 const STORE_SCHEMA_VERSION_V9: &str = "9";
 const STORE_SCHEMA_VERSION_V10: &str = "10";
+const STORE_SCHEMA_VERSION_V11: &str = "11";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
+
+const CREATE_RUN_SUMMARY_SCHEMA_V11: &str = r#"
+CREATE TABLE IF NOT EXISTS woml_run_summaries (
+  run_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX IF NOT EXISTS woml_run_summaries_updated
+  ON woml_run_summaries(updated_at DESC, run_id DESC);
+"#;
 
 const CREATE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS woml_store_metadata (
@@ -651,6 +667,162 @@ pub struct RecoveryReport {
   pub resumable_runs: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicRunStatus {
+  NotStarted,
+  Running,
+  Waiting,
+  Cancelling,
+  Finalizing,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+impl PublicRunStatus {
+  const fn as_str(self) -> &'static str {
+    match self {
+      Self::NotStarted => "not_started",
+      Self::Running => "running",
+      Self::Waiting => "waiting",
+      Self::Cancelling => "cancelling",
+      Self::Finalizing => "finalizing",
+      Self::Succeeded => "succeeded",
+      Self::Failed => "failed",
+      Self::Cancelled => "cancelled",
+    }
+  }
+
+  fn parse(value: &str) -> Option<Self> {
+    Some(match value {
+      "not_started" => Self::NotStarted,
+      "running" => Self::Running,
+      "waiting" => Self::Waiting,
+      "cancelling" => Self::Cancelling,
+      "finalizing" => Self::Finalizing,
+      "succeeded" => Self::Succeeded,
+      "failed" => Self::Failed,
+      "cancelled" => Self::Cancelled,
+      _ => return None,
+    })
+  }
+}
+
+impl From<RunStatus> for PublicRunStatus {
+  fn from(value: RunStatus) -> Self {
+    match value {
+      RunStatus::NotStarted => Self::NotStarted,
+      RunStatus::Running => Self::Running,
+      RunStatus::Waiting => Self::Waiting,
+      RunStatus::Cancelling => Self::Cancelling,
+      RunStatus::Finalizing => Self::Finalizing,
+      RunStatus::Succeeded => Self::Succeeded,
+      RunStatus::Failed => Self::Failed,
+      RunStatus::Cancelled => Self::Cancelled,
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummaryV1 {
+  pub run_id: String,
+  pub workflow_id: String,
+  pub status: PublicRunStatus,
+  pub started_at: DateTime<Utc>,
+  pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunListV1 {
+  pub profile: &'static str,
+  pub runs: Vec<RunSummaryV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionHookV2 {
+  pub hook_id: String,
+  pub subject_kind: crate::event::LifecycleSubjectKind,
+  pub subject_id: String,
+  pub status: crate::projection::LifecycleHookStatus,
+  pub failed_actions: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionCancellationV2 {
+  pub requested: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionV2 {
+  pub profile: &'static str,
+  pub run_id: String,
+  pub workflow_id: String,
+  pub status: PublicRunStatus,
+  pub business_outcome: InspectedBusinessOutcome,
+  pub lifecycle_status: crate::projection::LifecycleStatus,
+  pub hooks: Vec<RunInspectionHookV2>,
+  pub warnings: Vec<crate::event::LifecycleWarning>,
+  pub cancellation: RunInspectionCancellationV2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectedBusinessOutcome {
+  Undecided,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+impl From<Option<crate::event::BusinessOutcome>> for InspectedBusinessOutcome {
+  fn from(value: Option<crate::event::BusinessOutcome>) -> Self {
+    match value {
+      None => Self::Undecided,
+      Some(crate::event::BusinessOutcome::Succeeded) => Self::Succeeded,
+      Some(crate::event::BusinessOutcome::Failed) => Self::Failed,
+      Some(crate::event::BusinessOutcome::Cancelled) => Self::Cancelled,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunCancellationStatus {
+  Accepted,
+  AlreadyRequested,
+  AlreadyCancelled,
+  Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RunCancellationCode {
+  WomlRunNotFound,
+  WomlRunOutcomeAlreadyDecided,
+  WomlRunAlreadyTerminal,
+  WomlRunControlVersionUnsupported,
+  WomlRunCancellationFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCancellationResult {
+  pub profile: &'static str,
+  pub command_id: String,
+  pub run_id: String,
+  pub status: RunCancellationStatus,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub code: Option<RunCancellationCode>,
+}
+
 #[derive(Debug, Error)]
 pub enum DurableStoreError {
   #[error(transparent)]
@@ -735,6 +907,24 @@ enum RunRecovery {
 
 pub const MAX_MODULE_ARTIFACT_BYTES: usize = 3 * 1024 * 1024;
 pub const MAX_MODULE_ARTIFACT_SET_BYTES: usize = 32 * 1024 * 1024;
+
+pub fn derive_lifecycle_hook_invocation_id(
+  run_id: &str,
+  hook_id: &str,
+  subject_kind: crate::event::LifecycleSubjectKind,
+  subject_id: &str,
+) -> String {
+  let subject_kind = match subject_kind {
+    crate::event::LifecycleSubjectKind::Workflow => "workflow",
+    crate::event::LifecycleSubjectKind::Step => "step",
+  };
+  let canonical = [run_id, hook_id, subject_kind, subject_id]
+    .into_iter()
+    .map(|part| format!("{}:{part}", part.len()))
+    .collect::<Vec<_>>()
+    .join("|");
+  format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+}
 
 fn module_artifact_sha256(content: &str) -> String {
   format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
@@ -929,6 +1119,23 @@ fn migrate_store_v9_to_v10(connection: &mut Connection) -> Result<(), DurableSto
   if changed != 1 {
     return Err(DurableStoreError::Contract(
       "Store v9-to-v10 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
+fn migrate_store_v10_to_v11(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_RUN_SUMMARY_SCHEMA_V11)?;
+  rebuild_run_summary_index(&transaction)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V11, STORE_SCHEMA_VERSION_V10],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v10-to-v11 migration could not update the schema version atomically.".to_string(),
     ));
   }
   transaction.commit()?;
@@ -1132,6 +1339,43 @@ fn validate_store_v10_schema(connection: &Connection) -> Result<(), DurableStore
   Ok(())
 }
 
+fn validate_store_v11_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v10_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_run_summaries"),
+    ("index", "woml_run_summaries_updated"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v11 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+
+  let mut statement = connection.prepare("PRAGMA table_info(woml_run_summaries)")?;
+  let actual_columns = statement
+    .query_map([], |row| row.get::<_, String>(1))?
+    .collect::<Result<Vec<_>, _>>()?;
+  let expected_columns = [
+    "run_id",
+    "workflow_id",
+    "status",
+    "started_at",
+    "updated_at",
+  ];
+  if actual_columns != expected_columns {
+    return Err(DurableStoreError::Contract(format!(
+      "Store v11 woml_run_summaries columns do not match the frozen schema: expected {expected_columns:?}, found {actual_columns:?}."
+    )));
+  }
+  Ok(())
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -1155,6 +1399,7 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
+      Some(STORE_SCHEMA_VERSION_V11) => validate_store_v11_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V10) => validate_store_v10_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V9) => validate_store_v9_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V8) => {
@@ -1246,7 +1491,15 @@ impl DurableEventStore {
     if current_version == STORE_SCHEMA_VERSION_V9 {
       migrate_store_v9_to_v10(&mut connection)?;
     }
-    validate_store_v10_schema(&connection)?;
+    let current_version: String = connection.query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )?;
+    if current_version == STORE_SCHEMA_VERSION_V10 {
+      migrate_store_v10_to_v11(&mut connection)?;
+    }
+    validate_store_v11_schema(&connection)?;
     Ok(Self { connection })
   }
 
@@ -1777,7 +2030,7 @@ impl DurableEventStore {
       &request.child_run_id,
       generated_event_id(),
       request.admitted_at,
-      RUN_EVENT_SCHEMA_VERSION_V9,
+      run_event_schema_version_for_model(workflow.schema_version),
       payload,
     )?;
     validate_event_history_against_definition(&workflow, &request.target_definition_hash, &events)
@@ -2516,39 +2769,52 @@ impl DurableEventStore {
     let mut events = load_events(&transaction, &run_id)?;
     let workflow = definition_for_run(&transaction, &run_id)?;
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
-    validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
-      .map_err(DurableStoreError::Contract)?;
-    if let RunEventPayload::BranchSelected(data) = &payload {
-      let projection = fold_events(&events)?;
-      if projection.branch_selections.contains_key(&data.branch_id) {
-        return Err(DurableStoreError::Contract(format!(
-          "Branch {:?} already has an immutable selection.",
-          data.branch_id
-        )));
-      }
-      let selector_id = format!("__woml_branch__{}__select", data.branch_id);
-      let ready = ready_node_ids_for_projection(&workflow, &binding.definition_hash, &projection)
+    let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+      translate_legacy_terminal_v10(payload)?
+    } else {
+      vec![payload]
+    };
+    let mut first_event = None;
+    for (index, payload) in payloads.into_iter().enumerate() {
+      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
         .map_err(DurableStoreError::Contract)?;
-      if !ready.iter().any(|node_id| node_id == &selector_id) {
-        return Err(DurableStoreError::Contract(format!(
-          "Branch selector {selector_id:?} is not ready for selection."
-        )));
+      if let RunEventPayload::BranchSelected(data) = &payload {
+        let projection = fold_events(&events)?;
+        if projection.branch_selections.contains_key(&data.branch_id) {
+          return Err(DurableStoreError::Contract(format!(
+            "Branch {:?} already has an immutable selection.",
+            data.branch_id
+          )));
+        }
+        let selector_id = format!("__woml_branch__{}__select", data.branch_id);
+        let ready = ready_node_ids_for_projection(&workflow, &binding.definition_hash, &projection)
+          .map_err(DurableStoreError::Contract)?;
+        if !ready.iter().any(|node_id| node_id == &selector_id) {
+          return Err(DurableStoreError::Contract(format!(
+            "Branch selector {selector_id:?} is not ready for selection."
+          )));
+        }
       }
+      let event = append_to_history(
+        &transaction,
+        &mut events,
+        &run_id,
+        if index == 0 {
+          event_id.clone()
+        } else {
+          generated_event_id()
+        },
+        occurred_at,
+        event_schema_version,
+        payload,
+      )?;
+      first_event.get_or_insert(event);
     }
-    let event = append_to_history(
-      &transaction,
-      &mut events,
-      &run_id,
-      event_id,
-      occurred_at,
-      event_schema_version,
-      payload,
-    )?;
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
     transaction.commit()?;
-    Ok((event, projection))
+    Ok((first_event.unwrap(), projection))
   }
 
   pub(crate) fn append_payloads_atomically(
@@ -2577,17 +2843,28 @@ impl DurableEventStore {
     let workflow = definition_for_run(&transaction, run_id)?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
     for (event_id, occurred_at, payload) in payloads {
-      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
-        .map_err(DurableStoreError::Contract)?;
-      append_to_history(
-        &transaction,
-        &mut events,
-        run_id,
-        event_id,
-        occurred_at,
-        event_schema_version,
-        payload,
-      )?;
+      let translated = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+        translate_legacy_terminal_v10(payload)?
+      } else {
+        vec![payload]
+      };
+      for (index, payload) in translated.into_iter().enumerate() {
+        validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+          .map_err(DurableStoreError::Contract)?;
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          if index == 0 {
+            event_id.clone()
+          } else {
+            generated_event_id()
+          },
+          occurred_at,
+          event_schema_version,
+          payload,
+        )?;
+      }
     }
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
@@ -2608,6 +2885,337 @@ impl DurableEventStore {
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     Ok(fold_events(&events)?)
+  }
+
+  pub fn rebuild_run_summaries(&mut self) -> Result<(), DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    rebuild_run_summary_index(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+  }
+
+  pub fn list_runs(&self, limit: usize) -> Result<RunListV1, DurableStoreError> {
+    if !(1..=200).contains(&limit) {
+      return Err(DurableStoreError::Contract(
+        "Run list limit must be between 1 and 200.".to_string(),
+      ));
+    }
+    let mut statement = self.connection.prepare(
+      "SELECT run_id, workflow_id, status, started_at, updated_at
+       FROM woml_run_summaries
+       ORDER BY updated_at DESC, run_id DESC
+       LIMIT ?1",
+    )?;
+    let rows = statement
+      .query_map([i64::try_from(limit).unwrap_or(200)], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, String>(4)?,
+        ))
+      })?
+      .collect::<Result<Vec<_>, _>>()?;
+    let mut runs = Vec::with_capacity(rows.len());
+    for (run_id, workflow_id, status, started_at, updated_at) in rows {
+      runs.push(RunSummaryV1 {
+        run_id,
+        workflow_id,
+        status: PublicRunStatus::parse(&status).ok_or_else(|| {
+          DurableStoreError::Contract("Stored run summary status is invalid.".to_string())
+        })?,
+        started_at: parse_stored_timestamp(&started_at)?,
+        updated_at: parse_stored_timestamp(&updated_at)?,
+      });
+    }
+    Ok(RunListV1 {
+      profile: "woml.run-list/v1",
+      runs,
+    })
+  }
+
+  pub fn inspect_run_v2(&self, run_id: &str) -> Result<RunInspectionV2, DurableStoreError> {
+    let projection = self.projection(run_id)?;
+    let run_id = projection.run_id.clone().ok_or_else(|| {
+      DurableStoreError::Contract("Run inspection requires run_started.".to_string())
+    })?;
+    let workflow_id = projection.workflow_id.clone().ok_or_else(|| {
+      DurableStoreError::Contract("Run inspection requires a workflow identity.".to_string())
+    })?;
+    let hooks = projection
+      .lifecycle_hooks
+      .values()
+      .map(|hook| RunInspectionHookV2 {
+        hook_id: hook.hook_id.clone(),
+        subject_kind: hook.subject.kind,
+        subject_id: hook.subject.id.clone(),
+        status: hook.status,
+        failed_actions: hook.failed_actions,
+      })
+      .collect();
+    Ok(RunInspectionV2 {
+      profile: "woml.run-inspection/v2",
+      run_id,
+      workflow_id,
+      status: projection.status.into(),
+      business_outcome: projection.business_outcome.into(),
+      lifecycle_status: projection.lifecycle_status,
+      hooks,
+      warnings: projection.lifecycle_warnings,
+      cancellation: RunInspectionCancellationV2 {
+        requested: projection.cancellation_request_id.is_some(),
+        request_id: projection.cancellation_request_id,
+      },
+    })
+  }
+
+  pub fn request_run_cancellation(
+    &mut self,
+    run_id: &str,
+    command_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<RunCancellationResult, DurableStoreError> {
+    if run_id.is_empty() || run_id.len() > 320 || command_id.is_empty() || command_id.len() > 320 {
+      return Err(DurableStoreError::Contract(
+        "Run cancellation requires bounded run and command identities.".to_string(),
+      ));
+    }
+    let result = |status, code| RunCancellationResult {
+      profile: "woml.run-control.result/v1",
+      command_id: command_id.to_string(),
+      run_id: run_id.to_string(),
+      status,
+      code,
+    };
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let Some(binding) = load_run_binding_optional(&transaction, run_id)? else {
+      return Ok(result(
+        RunCancellationStatus::Rejected,
+        Some(RunCancellationCode::WomlRunNotFound),
+      ));
+    };
+    let workflow = definition_by_hash(&transaction, &binding.definition_hash)?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+      return Ok(result(
+        RunCancellationStatus::Rejected,
+        Some(RunCancellationCode::WomlRunControlVersionUnsupported),
+      ));
+    }
+    let mut events = load_events(&transaction, run_id)?;
+    let projection = fold_events(&events)?;
+    if projection.business_outcome == Some(crate::event::BusinessOutcome::Cancelled) {
+      return Ok(result(RunCancellationStatus::AlreadyCancelled, None));
+    }
+    if projection.cancellation_request_id.is_some() {
+      return Ok(result(RunCancellationStatus::AlreadyRequested, None));
+    }
+    if projection.business_outcome.is_some() {
+      return Ok(result(
+        RunCancellationStatus::Rejected,
+        Some(RunCancellationCode::WomlRunOutcomeAlreadyDecided),
+      ));
+    }
+    if matches!(
+      projection.status,
+      RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled
+    ) {
+      return Ok(result(
+        RunCancellationStatus::Rejected,
+        Some(RunCancellationCode::WomlRunAlreadyTerminal),
+      ));
+    }
+    let event_schema_version = projection.event_schema_version.ok_or_else(|| {
+      DurableStoreError::Contract("A run cancellation requires run_started.".to_string())
+    })?;
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      generated_event_id(),
+      now,
+      event_schema_version,
+      RunEventPayload::RunCancellationRequested(RunCancellationRequestedData {
+        request_id: command_id.to_string(),
+      }),
+    )?;
+    if let Some(hook) =
+      workflow.lifecycle_hook_for_event(crate::model::LifecycleEventName::RunCancel)
+    {
+      let subject = LifecycleSubject {
+        kind: LifecycleSubjectKind::Workflow,
+        id: run_id.to_string(),
+      };
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        now,
+        event_schema_version,
+        RunEventPayload::LifecycleHookRequested(LifecycleHookRequestedData {
+          hook_invocation_id: derive_lifecycle_hook_invocation_id(
+            run_id,
+            &hook.hook_id,
+            subject.kind,
+            &subject.id,
+          ),
+          hook_id: hook.hook_id.clone(),
+          event: hook.event,
+          subject,
+        }),
+      )?;
+    }
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    transaction.commit()?;
+    Ok(result(RunCancellationStatus::Accepted, None))
+  }
+
+  pub fn decide_run_outcome(
+    &mut self,
+    run_id: &str,
+    outcome: crate::event::RunOutcomeDecidedData,
+    now: DateTime<Utc>,
+  ) -> Result<RunProjection, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+      return Err(DurableStoreError::Contract(
+        "Business-outcome authority requires compiled Model v11.".to_string(),
+      ));
+    }
+    let mut events = load_events(&transaction, run_id)?;
+    let projection = fold_events(&events)?;
+    if projection.business_outcome.is_some() {
+      return Err(DurableStoreError::Contract(
+        "A run business outcome is already durable.".to_string(),
+      ));
+    }
+    let event_schema_version = projection.event_schema_version.ok_or_else(|| {
+      DurableStoreError::Contract("Business outcome requires run_started.".to_string())
+    })?;
+    let lifecycle_event = match outcome.outcome() {
+      crate::event::BusinessOutcome::Succeeded => crate::model::LifecycleEventName::RunSuccess,
+      crate::event::BusinessOutcome::Failed => crate::model::LifecycleEventName::RunFailure,
+      crate::event::BusinessOutcome::Cancelled => crate::model::LifecycleEventName::RunCancel,
+    };
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      generated_event_id(),
+      now,
+      event_schema_version,
+      RunEventPayload::RunOutcomeDecided(outcome),
+    )?;
+    if let Some(hook) = workflow.lifecycle_hook_for_event(lifecycle_event) {
+      let already_requested = fold_events(&events)?
+        .lifecycle_hooks
+        .values()
+        .any(|candidate| {
+          candidate.hook_id == hook.hook_id
+            && candidate.subject.kind == LifecycleSubjectKind::Workflow
+            && candidate.subject.id == run_id
+        });
+      if !already_requested {
+        let subject = LifecycleSubject {
+          kind: LifecycleSubjectKind::Workflow,
+          id: run_id.to_string(),
+        };
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          now,
+          event_schema_version,
+          RunEventPayload::LifecycleHookRequested(LifecycleHookRequestedData {
+            hook_invocation_id: derive_lifecycle_hook_invocation_id(
+              run_id,
+              &hook.hook_id,
+              subject.kind,
+              &subject.id,
+            ),
+            hook_id: hook.hook_id.clone(),
+            event: hook.event,
+            subject,
+          }),
+        )?;
+      }
+    }
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    transaction.commit()?;
+    Ok(projection)
+  }
+
+  pub fn finalize_run_v11(
+    &mut self,
+    run_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<RunProjection, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+      return Err(DurableStoreError::Contract(
+        "Run finalization authority requires compiled Model v11.".to_string(),
+      ));
+    }
+    let mut events = load_events(&transaction, run_id)?;
+    let projection = fold_events(&events)?;
+    let outcome = projection.business_outcome.ok_or_else(|| {
+      DurableStoreError::Contract("Run finalization requires a decided outcome.".to_string())
+    })?;
+    if projection.lifecycle_hooks.values().any(|hook| {
+      matches!(
+        hook.status,
+        crate::projection::LifecycleHookStatus::Requested
+          | crate::projection::LifecycleHookStatus::Running
+      )
+    }) {
+      return Err(DurableStoreError::Contract(
+        "Run finalization requires every admitted lifecycle hook to complete.".to_string(),
+      ));
+    }
+    let warnings = lifecycle_warnings_from_projection(&projection);
+    let lifecycle_status = if warnings.is_empty() {
+      crate::event::FinalLifecycleStatus::Completed
+    } else {
+      crate::event::FinalLifecycleStatus::CompletedWithWarnings
+    };
+    let event_schema_version = projection.event_schema_version.unwrap();
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      generated_event_id(),
+      now,
+      event_schema_version,
+      RunEventPayload::RunFinalized(crate::event::RunFinalizedData {
+        outcome,
+        lifecycle_status,
+        warnings,
+      }),
+    )?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    transaction.commit()?;
+    Ok(projection)
   }
 
   pub fn begin_notification_delivery(
@@ -3918,9 +4526,12 @@ impl DurableEventStore {
       let projection = self.projection(&child_run_id)?;
       let next = match projection.status {
         RunStatus::Succeeded => Some("succeeded"),
-        RunStatus::Failed | RunStatus::Waiting => Some("failed"),
+        RunStatus::Failed | RunStatus::Cancelled | RunStatus::Waiting => Some("failed"),
         RunStatus::Running if stored_state == "running" => Some("admitted"),
-        RunStatus::NotStarted | RunStatus::Running => None,
+        RunStatus::NotStarted
+        | RunStatus::Running
+        | RunStatus::Cancelling
+        | RunStatus::Finalizing => None,
       };
       if let Some(next) = next {
         self.connection.execute(
@@ -3954,6 +4565,90 @@ impl DurableEventStore {
     let event_schema_version = projection.event_schema_version.ok_or_else(|| {
       DurableStoreError::Contract("A stored run has no event schema version.".to_string())
     })?;
+    if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+      let ambiguous_actions = projection
+        .lifecycle_hooks
+        .values()
+        .flat_map(|hook| {
+          hook.actions.values().filter_map(|action| {
+            (action.status == crate::projection::LifecycleActionStatus::Started).then_some((
+              hook.hook_invocation_id.clone(),
+              action.action_id.clone(),
+              action.attempt,
+            ))
+          })
+        })
+        .collect::<Vec<_>>();
+      if !ambiguous_actions.is_empty() {
+        let now = Utc::now();
+        for (hook_invocation_id, action_id, attempt) in &ambiguous_actions {
+          append_to_history(
+            &transaction,
+            &mut events,
+            run_id,
+            generated_event_id(),
+            now,
+            event_schema_version,
+            RunEventPayload::LifecycleActionFailed(crate::event::LifecycleActionFailedData {
+              hook_invocation_id: hook_invocation_id.clone(),
+              action_id: action_id.clone(),
+              attempt: *attempt,
+              failure: crate::event::LifecycleFailure {
+                kind: crate::event::LifecycleFailureKind::Interrupted,
+                code: "WOML_LIFECYCLE_ACTION_INTERRUPTED".to_string(),
+                message: "Recovery found a started lifecycle action without a terminal event; its outcome is ambiguous and it will not be replayed.".to_string(),
+              },
+            }),
+          )?;
+        }
+        let recovered = fold_events(&events)?;
+        for hook_invocation_id in ambiguous_actions
+          .iter()
+          .map(|(hook_id, _, _)| hook_id)
+          .collect::<std::collections::HashSet<_>>()
+        {
+          let hook_projection = recovered.lifecycle_hooks.get(hook_invocation_id).unwrap();
+          let compiled = workflow
+            .lifecycle_hook(&hook_projection.hook_id)
+            .ok_or_else(|| {
+              DurableStoreError::Contract("Recovered hook is absent from Model v11.".to_string())
+            })?;
+          if hook_projection.actions.len() == compiled.actions.len() {
+            append_to_history(
+              &transaction,
+              &mut events,
+              run_id,
+              generated_event_id(),
+              now,
+              event_schema_version,
+              RunEventPayload::LifecycleHookCompleted(crate::event::LifecycleHookCompletedData {
+                hook_invocation_id: hook_invocation_id.clone(),
+                status: crate::event::LifecycleHookCompletionStatus::CompletedWithWarnings,
+                failed_actions: hook_projection.failed_actions,
+              }),
+            )?;
+          }
+        }
+        validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+          .map_err(DurableStoreError::Contract)?;
+        transaction.commit()?;
+        return Ok(RunRecovery::Recovered {
+          interrupted_attempts: 0,
+        });
+      }
+      if projection.lifecycle_hooks.values().any(|hook| {
+        matches!(
+          hook.status,
+          crate::projection::LifecycleHookStatus::Requested
+            | crate::projection::LifecycleHookStatus::Running
+        )
+      }) || matches!(
+        projection.status,
+        RunStatus::Cancelling | RunStatus::Finalizing
+      ) {
+        return Ok(RunRecovery::Resumable);
+      }
+    }
     if projection.status == RunStatus::Waiting {
       let started = projection
         .notification_deliveries
@@ -5608,7 +6303,197 @@ fn load_events(connection: &Connection, run_id: &str) -> Result<Vec<RunEvent>, D
   Ok(events)
 }
 
+fn lifecycle_warnings_from_projection(
+  projection: &RunProjection,
+) -> Vec<crate::event::LifecycleWarning> {
+  projection
+    .lifecycle_hooks
+    .values()
+    .flat_map(|hook| {
+      hook.actions.values().filter_map(|action| {
+        let failure = action.failure.as_ref()?;
+        Some(crate::event::LifecycleWarning {
+          hook_id: hook.hook_id.clone(),
+          action_id: action.action_id.clone(),
+          step_id: matches!(hook.subject.kind, LifecycleSubjectKind::Step)
+            .then(|| hook.subject.id.clone()),
+          provider: None,
+          destination: None,
+          code: failure.code.clone(),
+        })
+      })
+    })
+    .collect()
+}
+
+fn lifecycle_failure_from_attempt(failure: &AttemptFailure) -> crate::event::LifecycleFailure {
+  let kind = match failure.kind {
+    AttemptFailureKind::ScriptThrew => crate::event::LifecycleFailureKind::ScriptThrew,
+    AttemptFailureKind::ScriptTimedOut => crate::event::LifecycleFailureKind::TimedOut,
+    AttemptFailureKind::InvalidScriptResult => crate::event::LifecycleFailureKind::NonJson,
+    AttemptFailureKind::ContextTooLarge | AttemptFailureKind::ResultTooLarge => {
+      crate::event::LifecycleFailureKind::SizeLimitExceeded
+    }
+    AttemptFailureKind::WorkerCrashed => crate::event::LifecycleFailureKind::WorkerCrashed,
+    AttemptFailureKind::HostCrashed => crate::event::LifecycleFailureKind::HostCrashed,
+    AttemptFailureKind::InvocationCancelled => crate::event::LifecycleFailureKind::Cancelled,
+    AttemptFailureKind::Interrupted => crate::event::LifecycleFailureKind::Interrupted,
+    AttemptFailureKind::ServiceFailed => crate::event::LifecycleFailureKind::ProviderFailed,
+  };
+  crate::event::LifecycleFailure {
+    kind,
+    code: failure.code.clone(),
+    message: failure.message.clone(),
+  }
+}
+
+fn lifecycle_failure_from_legacy(data: &RunFailedData) -> crate::event::LifecycleFailure {
+  match data {
+    RunFailedData::V1(data) => lifecycle_failure_from_attempt(&data.failure),
+    RunFailedData::V2(RunFailedDataV2::Attempt { failure, .. }) => {
+      lifecycle_failure_from_attempt(failure)
+    }
+    RunFailedData::V2(RunFailedDataV2::Branch { failure, .. }) => {
+      let message = match failure {
+        crate::event::BranchFailure::BranchTestNotBoolean { message, .. }
+        | crate::event::BranchFailure::ReferenceNotAvailable { message, .. }
+        | crate::event::BranchFailure::BranchSelectionInvalid { message, .. } => message.clone(),
+      };
+      crate::event::LifecycleFailure {
+        kind: crate::event::LifecycleFailureKind::ProviderFailed,
+        code: failure.code().to_string(),
+        message,
+      }
+    }
+    RunFailedData::V3(RunFailedDataV3::Parallel { failure, .. }) => {
+      crate::event::LifecycleFailure {
+        kind: crate::event::LifecycleFailureKind::ProviderFailed,
+        code: failure.code.clone(),
+        message: failure.message.clone(),
+      }
+    }
+    RunFailedData::V4(RunFailedDataV4::Approval { failure, .. }) => {
+      crate::event::LifecycleFailure {
+        kind: crate::event::LifecycleFailureKind::TimedOut,
+        code: failure.code.clone(),
+        message: failure.message.clone(),
+      }
+    }
+    RunFailedData::V5(RunFailedDataV5::Notification { failure, .. }) => {
+      crate::event::LifecycleFailure {
+        kind: crate::event::LifecycleFailureKind::ProviderFailed,
+        code: failure.code.clone(),
+        message: failure.message.clone(),
+      }
+    }
+  }
+}
+
+pub(crate) fn translate_legacy_terminal_v10(
+  payload: RunEventPayload,
+) -> Result<Vec<RunEventPayload>, DurableStoreError> {
+  let outcome = match payload {
+    RunEventPayload::RunSucceeded(data) => crate::event::RunOutcomeDecidedData::Succeeded {
+      result: data.result,
+    },
+    RunEventPayload::RunFailed(data) => crate::event::RunOutcomeDecidedData::Failed {
+      failure: lifecycle_failure_from_legacy(&data),
+    },
+    payload => return Ok(vec![payload]),
+  };
+  let business_outcome = outcome.outcome();
+  Ok(vec![
+    RunEventPayload::RunOutcomeDecided(outcome),
+    RunEventPayload::RunFinalized(crate::event::RunFinalizedData {
+      outcome: business_outcome,
+      lifecycle_status: crate::event::FinalLifecycleStatus::Completed,
+      warnings: Vec::new(),
+    }),
+  ])
+}
+
+fn write_run_summary(
+  connection: &Connection,
+  events: &[RunEvent],
+) -> Result<(), DurableStoreError> {
+  let Some(first) = events.first() else {
+    return Ok(());
+  };
+  let projection = fold_events(events)?;
+  let workflow_id = projection.workflow_id.as_deref().ok_or_else(|| {
+    DurableStoreError::Contract("A run summary requires a started workflow.".to_string())
+  })?;
+  let updated_at = events.last().unwrap().occurred_at;
+  connection.execute(
+    "INSERT INTO woml_run_summaries(run_id, workflow_id, status, started_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT(run_id) DO UPDATE SET
+       workflow_id = excluded.workflow_id,
+       status = excluded.status,
+       started_at = excluded.started_at,
+       updated_at = excluded.updated_at",
+    params![
+      first.run_id,
+      workflow_id,
+      PublicRunStatus::from(projection.status).as_str(),
+      first.occurred_at.to_rfc3339(),
+      updated_at.to_rfc3339(),
+    ],
+  )?;
+  Ok(())
+}
+
+fn rebuild_run_summary_index(connection: &Connection) -> Result<(), DurableStoreError> {
+  connection.execute("DELETE FROM woml_run_summaries", [])?;
+  let run_ids = {
+    let mut statement = connection.prepare("SELECT run_id FROM woml_runs ORDER BY run_id")?;
+    let rows = statement
+      .query_map([], |row| row.get::<_, String>(0))?
+      .collect::<Result<Vec<_>, _>>()?;
+    rows
+  };
+  for run_id in run_ids {
+    let events = load_events(connection, &run_id)?;
+    write_run_summary(connection, &events)?;
+  }
+  Ok(())
+}
+
 fn append_to_history(
+  transaction: &Transaction<'_>,
+  events: &mut Vec<RunEvent>,
+  run_id: &str,
+  event_id: String,
+  occurred_at: DateTime<Utc>,
+  event_schema_version: u32,
+  payload: RunEventPayload,
+) -> Result<RunEvent, DurableStoreError> {
+  let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+    translate_legacy_terminal_v10(payload)?
+  } else {
+    vec![payload]
+  };
+  let mut first = None;
+  for (index, payload) in payloads.into_iter().enumerate() {
+    let event = append_single_to_history(
+      transaction,
+      events,
+      run_id,
+      if index == 0 {
+        event_id.clone()
+      } else {
+        generated_event_id()
+      },
+      occurred_at,
+      event_schema_version,
+      payload,
+    )?;
+    first.get_or_insert(event);
+  }
+  Ok(first.unwrap())
+}
+
+fn append_single_to_history(
   transaction: &Transaction<'_>,
   events: &mut Vec<RunEvent>,
   run_id: &str,
@@ -5646,6 +6531,7 @@ fn append_to_history(
     ],
   )?;
   events.push(event.clone());
+  write_run_summary(transaction, events)?;
   Ok(event)
 }
 
@@ -5690,7 +6576,8 @@ fn attempt_run_failed_data(
     | RUN_EVENT_SCHEMA_VERSION_V6
     | RUN_EVENT_SCHEMA_VERSION_V7
     | RUN_EVENT_SCHEMA_VERSION_V8
-    | RUN_EVENT_SCHEMA_VERSION_V9 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | RUN_EVENT_SCHEMA_VERSION_V9
+    | crate::RUN_EVENT_SCHEMA_VERSION_V10 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -5816,6 +6703,36 @@ impl DurableDagEngine {
     occurred_at: DateTime<Utc>,
     payload: RunEventPayload,
   ) -> Result<RunProjection, DurableEngineError> {
+    let event_id = event_id.into();
+    if run_event_schema_version_for_model(self.workflow.schema_version)
+      == crate::RUN_EVENT_SCHEMA_VERSION_V10
+      && matches!(
+        &payload,
+        RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
+      )
+    {
+      let translated = translate_legacy_terminal_v10(payload)?;
+      return Ok(
+        self.store.append_payloads_atomically(
+          run_id,
+          translated
+            .into_iter()
+            .enumerate()
+            .map(|(index, payload)| {
+              (
+                if index == 0 {
+                  event_id.clone()
+                } else {
+                  generated_event_id()
+                },
+                occurred_at,
+                payload,
+              )
+            })
+            .collect(),
+        )?,
+      );
+    }
     validate_payload_against_definition(&self.workflow, &self.definition_hash, &payload)
       .map_err(DurableEngineError::Contract)?;
     if let RunEventPayload::StepAttemptStarted(data) = &payload {

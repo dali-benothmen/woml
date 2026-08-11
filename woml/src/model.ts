@@ -52,6 +52,7 @@ export interface TemplateExpression {
 export type ValueExpression =
   | LiteralExpression
   | ContextReferenceExpression
+  | LifecycleReferenceExpression
   | SecretReferenceExpression
   | ObjectExpression
   | ArrayExpression

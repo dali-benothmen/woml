@@ -1027,7 +1027,11 @@ async fn observe_existing_child(
       RunStatus::Waiting => {
         return Err(workflow_call_wait_unsupported(admission));
       }
-      RunStatus::NotStarted | RunStatus::Running => {}
+      RunStatus::Cancelled => return Err(workflow_call_child_failed(admission)),
+      RunStatus::NotStarted
+      | RunStatus::Running
+      | RunStatus::Cancelling
+      | RunStatus::Finalizing => {}
     }
     tokio::select! {
       _ = cancellation.cancelled() => {

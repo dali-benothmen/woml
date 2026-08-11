@@ -1,8 +1,9 @@
 # WOML Lifecycle and Engine Controls Implementation Plan
 
-Status: LEC0 and LEC1 completed on 2026-08-11. Lifecycle source now validates
-and lowers to reviewed Model v11 definitions; durable lifecycle execution and
-run control have not started. LEC2 is next.
+Status: LEC0, LEC1, and LEC2 completed on 2026-08-11. Lifecycle source lowers
+to reviewed Model v11 definitions, and Rust now owns Event v10 folding, Store
+v11 summaries, lifecycle/control state, atomic admissions, inspection, and
+fail-closed recovery. Lifecycle action execution has not started; LEC3 is next.
 
 ## 1. Product Outcome
 
@@ -721,7 +722,7 @@ written.
 | --------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | LEC0 (complete) | Freeze lifecycle, notification, cancellation, inspection, model, event, and store contracts.          | Every expensive boundary is reviewable before runtime code.                                                                                     |
 | LEC1 (complete) | Validate lifecycle WOML and lower lifecycle-bearing definitions to Model v11.                         | Authors receive exact syntax diagnostics and deterministic compiled lifecycle definitions without breaking the Event v9 runtime between phases. |
-| LEC2            | Implement Event v10 folding, Store v11, hook identity, outcome/finalization state, and run summaries. | Rust can durably represent lifecycle and controls without executing hooks.                                                                      |
+| LEC2 (complete) | Implement Event v10 folding, Store v11, hook identity, outcome/finalization state, and run summaries. | Rust can durably represent lifecycle and controls without executing hooks.                                                                      |
 | LEC3            | Execute workflow-level lifecycle scripts.                                                             | `on-start`, outcome hooks, and `on-complete` work end to end.                                                                                   |
 | LEC4            | Execute step lifecycle hooks across retries and control flow.                                         | Step start/success/failure/complete observers work correctly in sequential, branch, parallel, and approval workflows.                           |
 | LEC5            | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
@@ -784,7 +785,7 @@ Frontend tests cover all hook kinds, nested step discovery, duplicate IDs,
 filtering, templates, scripts, modules, secrets, approval notifications versus
 informational notifications, and compatibility compilation.
 
-### LEC2 — Build the durable lifecycle and control authority
+### LEC2 — Build the durable lifecycle and control authority (completed)
 
 Changes:
 
@@ -808,6 +809,42 @@ Gate:
 Event/store tests cover sequence validation, duplicate admission, corruption,
 rebuildable summaries, v10-to-v11 migration, unknown future versions, and every
 crash boundary from hook request through finalization.
+
+Completed implementation:
+
+- Rust validates Model v11 lifecycle bindings and Event v10 payloads while
+  keeping Models v1-v10 and Events v1-v9 on their original behavior.
+- `RunProjection` now folds public status, business outcome, lifecycle health,
+  cancellation, hooks, action attempts, and safe warnings from events alone.
+- Store v11 migrates Store v10, rebuilds bounded run summaries from the event
+  log, and updates that cache at the common append boundary.
+- Cancellation and outcome decisions atomically admit their eligible hook
+  request using deterministic logical identities.
+- Recovery fails ambiguous started actions as interrupted and never replays
+  them; requested work remains resumable and completed work remains complete.
+- Rust exposes safe list, inspection-v2, cancellation, outcome, finalization,
+  and summary-rebuild authorities without adding public CLI commands yet.
+- New CLI admissions are promoted to Model v11/Event v10. Historical compiler
+  fixtures remain immutable, and lifecycle-bearing `woml run` stays explicitly
+  gated until LEC3 can execute its actions.
+
+Verification:
+
+- The focused LEC2 Rust suite covers Model/Event/Store versions, atomic and
+  duplicate cancellation, atomic outcome-hook admission, lifecycle folding,
+  summary rebuild, Store v10-to-v11 migration, lifecycle-free v11
+  finalization, and fail-closed crash recovery.
+- A native end-to-end `woml run hello.woml` smoke test produced the expected
+  result and persisted this Event v10 sequence:
+  `run_started`, step attempts, `run_outcome_decided`, `run_finalized`.
+- The workspace compiles, the WOML CLI type-checks, lifecycle CLI staging tests
+  pass, Store migration compatibility tests pass, and `woml-engine` Clippy is
+  clean. One unrelated existing retry test cannot bind `127.0.0.1:0` in the
+  restricted test environment; all tests reached before it passed.
+- Existing Workflow Start remains asynchronous and reaches a successful child
+  result under Model v11 admission. The complete 13-test module compatibility
+  suite also passes, including Event v10 branch/parallel/retry composition,
+  native Fetch tracking, and source-free durable resume.
 
 ### LEC3 — Execute workflow lifecycle scripts
 

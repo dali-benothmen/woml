@@ -47,13 +47,16 @@ pub use capability::{
 };
 pub use database::{ManagedDatabaseHandler, ManagedDatabasePool};
 pub use durable::{
-  ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus, ApprovalTimeoutSettlement,
-  ApprovalTimeoutSettlementStatus, ApprovalTokenBinding, DurableDagEngine, DurableEngineError,
-  DurableEventStore, DurableStoreError, InternalEventAdmissionOutcome,
-  InternalEventAdmissionRequest, IntervalCursor, IntervalCursorRegistration,
-  IntervalCursorRegistrationOutcome, IssuedApprovalToken, NotificationDeliveryWork,
-  NotificationDispatchReport, NotificationProviderAdapter, NotificationProviderDeliveryResult,
-  NotificationProviderUpdateResult, NotificationUpdateWork, RecoveryReport, RunDefinitionBinding,
+  derive_lifecycle_hook_invocation_id, ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus,
+  ApprovalTimeoutSettlement, ApprovalTimeoutSettlementStatus, ApprovalTokenBinding,
+  DurableDagEngine, DurableEngineError, DurableEventStore, DurableStoreError,
+  InspectedBusinessOutcome, InternalEventAdmissionOutcome, InternalEventAdmissionRequest,
+  IntervalCursor, IntervalCursorRegistration, IntervalCursorRegistrationOutcome,
+  IssuedApprovalToken, NotificationDeliveryWork, NotificationDispatchReport,
+  NotificationProviderAdapter, NotificationProviderDeliveryResult,
+  NotificationProviderUpdateResult, NotificationUpdateWork, PublicRunStatus, RecoveryReport,
+  RunCancellationCode, RunCancellationResult, RunCancellationStatus, RunDefinitionBinding,
+  RunInspectionCancellationV2, RunInspectionHookV2, RunInspectionV2, RunListV1, RunSummaryV1,
   ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, StepFailureCommit,
   StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest, TriggerOccurrence,
   TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
@@ -62,17 +65,22 @@ pub use engine::{step_effect_idempotency_key, EngineError, InMemoryDagEngine};
 pub use event::{
   ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalRequestedData,
   ApprovalResolution, ApprovalResolvedData, ApprovalTimeoutPolicy, AttemptFailure,
-  AttemptFailureKind, BranchFailure, BranchSelectedData, FailureSizeDetails, JsonValueType,
-  NotificationDecisionAcceptedData, NotificationDeliveryAttemptStartedData,
-  NotificationDeliveryFailedData, NotificationDeliveryRequestedData,
-  NotificationDeliverySucceededData, NotificationMessageUpdateAttemptStartedData,
-  NotificationMessageUpdateFailedData, NotificationMessageUpdateRequestedData,
-  NotificationMessageUpdatedData, NotificationResolution, NotificationRunFailure,
-  NotificationSafeFailure, OperationExecutionMode, OperationFailedData, OperationStartedData,
-  OperationSucceededData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
-  ParallelGroupOutcome, ParallelGroupStartedData, ProviderMessageIdentity, RunEvent,
-  RunEventPayload, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
-  RunFailedDataV4, RunFailedDataV5, RunIngress, RunStartedData, StepRetryScheduledData,
+  AttemptFailureKind, BranchFailure, BranchSelectedData, BusinessOutcome, FailureSizeDetails,
+  FinalLifecycleStatus, JsonValueType, LifecycleActionFailedData, LifecycleActionIdentityData,
+  LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
+  LifecycleHookCompletionStatus, LifecycleHookRequestedData, LifecycleSubject,
+  LifecycleSubjectKind, LifecycleWarning, NotificationDecisionAcceptedData,
+  NotificationDeliveryAttemptStartedData, NotificationDeliveryFailedData,
+  NotificationDeliveryRequestedData, NotificationDeliverySucceededData,
+  NotificationMessageUpdateAttemptStartedData, NotificationMessageUpdateFailedData,
+  NotificationMessageUpdateRequestedData, NotificationMessageUpdatedData, NotificationResolution,
+  NotificationRunFailure, NotificationSafeFailure, OperationExecutionMode, OperationFailedData,
+  OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData,
+  ProviderMessageIdentity, RunCancellationRequestedData, RunEvent, RunEventPayload, RunFailedData,
+  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5,
+  RunFinalizedData, RunIngress, RunOutcomeDecidedData, RunStartedData, RunSucceededData,
+  StepRetryScheduledData,
 };
 pub use events_service::{
   EventServiceAcceptedRun, EventServiceRunDispatcher, EventServiceSubscriber, ManagedEventsHandler,
@@ -87,8 +95,9 @@ pub use interval::{
   INTERVAL_PROGRESS_CONTRACT, INTERVAL_PROGRESS_CONTRACT_VERSION, MAX_INTERVAL_MS, MIN_INTERVAL_MS,
 };
 pub use model::{
-  CompiledModuleBinding, CompiledModuleRuntime, CompiledWorkflowDefinition, ModelIssue,
-  ModelIssueCode, ModelValidationError, NotificationDefinition, ScriptRuntimeBindings,
+  CompiledLifecycleAction, CompiledLifecycleDefinition, CompiledLifecycleHook,
+  CompiledModuleBinding, CompiledModuleRuntime, CompiledWorkflowDefinition, LifecycleEventName,
+  ModelIssue, ModelIssueCode, ModelValidationError, NotificationDefinition, ScriptRuntimeBindings,
 };
 pub use notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
@@ -107,10 +116,11 @@ pub use notification_runtime::{
 };
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError,
-  NotificationDeliveryProjection, NotificationDeliveryStatus, NotificationMessageUpdateProjection,
-  NotificationMessageUpdateStatus, OperationIdentity, OperationProjection, OperationStatus,
-  ParallelGroupProjection, ParallelGroupStatus, RetryScheduleProjection, RunFailure, RunProjection,
-  RunStatus, WorkflowContext,
+  LifecycleActionProjection, LifecycleActionStatus, LifecycleHookProjection, LifecycleHookStatus,
+  LifecycleStatus, NotificationDeliveryProjection, NotificationDeliveryStatus,
+  NotificationMessageUpdateProjection, NotificationMessageUpdateStatus, OperationIdentity,
+  OperationProjection, OperationStatus, ParallelGroupProjection, ParallelGroupStatus,
+  RetryScheduleProjection, RunFailure, RunProjection, RunStatus, WorkflowContext,
 };
 pub use runtime::{
   execute_admitted_trigger_run_durable, execute_workflow, execute_workflow_durable,
@@ -159,7 +169,8 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V7: u32 = 7;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V8: u32 = 8;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V9: u32 = 9;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V10: u32 = 10;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V10;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V11: u32 = 11;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V11;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
@@ -169,10 +180,13 @@ pub const RUN_EVENT_SCHEMA_VERSION_V6: u32 = 6;
 pub const RUN_EVENT_SCHEMA_VERSION_V7: u32 = 7;
 pub const RUN_EVENT_SCHEMA_VERSION_V8: u32 = 8;
 pub const RUN_EVENT_SCHEMA_VERSION_V9: u32 = 9;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V9;
+pub const RUN_EVENT_SCHEMA_VERSION_V10: u32 = 10;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V10;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V10 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V11 {
+    RUN_EVENT_SCHEMA_VERSION_V10
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V10 {
     RUN_EVENT_SCHEMA_VERSION_V9
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V8 {
     RUN_EVENT_SCHEMA_VERSION_V8

@@ -683,9 +683,10 @@ fn prepare_state(
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V8
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V9
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V10
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V11
     ) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} must use compiled Model v7, v8, v9, or v10",
+        "workflow {:?} must use compiled Model v7, v8, v9, v10, or v11",
         registration.workflow.workflow_id
       )));
     }

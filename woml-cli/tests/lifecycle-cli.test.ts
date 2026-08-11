@@ -23,7 +23,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('LEC1 lifecycle CLI staging', () => {
+describe('LEC2 lifecycle CLI staging', () => {
   test('woml check accepts module-free and module-backed lifecycle source', async () => {
     for (const name of ['lifecycle.woml', 'lifecycle-module.woml']) {
       const result = await invoke(['check', resolve(fixtureRoot, name)]);
@@ -50,7 +50,7 @@ describe('LEC1 lifecycle CLI staging', () => {
     });
   });
 
-  test('woml run rejects lifecycle explicitly until the Event v10 runtime exists', async () => {
+  test('woml run rejects lifecycle explicitly until action execution exists', async () => {
     const result = await invoke([
       'run',
       resolve(fixtureRoot, 'lifecycle.woml'),
@@ -58,6 +58,6 @@ describe('LEC1 lifecycle CLI staging', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('WOML_LIFECYCLE_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('Use woml check during LEC1');
+    expect(result.stderr).toContain('Use woml check until LEC3');
   });
 });

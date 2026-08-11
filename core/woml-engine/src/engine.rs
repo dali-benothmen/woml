@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::event::{
   is_definition_hash, ApprovalTimeoutPolicy, AttemptFailureKind, ParallelFailurePolicy,
   ParallelGroupOutcome, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
-  RunFailedDataV4, RunFailedDataV5, RunStartedData,
+  RunFailedDataV4, RunFailedDataV5, RunOutcomeDecidedData, RunStartedData,
 };
 use crate::{
   model::{EdgeCondition, ValueExpression},
@@ -508,6 +508,15 @@ pub(crate) fn validate_payload_against_definition(
         }
       } else if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V10 {
         return Err("Call-only Model v10 requires workflow_call ingress.".to_string());
+      } else if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+        && data.ingress.is_some()
+      {
+        if data.trigger_id.is_some()
+          || data.trigger_handler.is_some()
+          || data.trigger_occurrence_id.is_some()
+        {
+          return Err("Model v11 workflow-call ingress cannot carry trigger identity.".to_string());
+        }
       } else if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V7 {
         let trigger_id = data
           .trigger_id
@@ -797,6 +806,9 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunSucceeded(data) => {
+      if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+        return Err("Model v11 finalizes with run_outcome_decided and run_finalized.".to_string());
+      }
       if workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
         return Err(format!(
           "run_succeeded names {:?}, which is not the workflow terminal node.",
@@ -813,7 +825,75 @@ pub(crate) fn validate_payload_against_definition(
     RunEventPayload::OperationFailed(data) => {
       validate_operation_node(workflow, &data.node_id)?;
     }
+    RunEventPayload::RunCancellationRequested(_)
+    | RunEventPayload::RunOutcomeDecided(_)
+    | RunEventPayload::RunFinalized(_) => {
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+        return Err("Lifecycle and run-control events require compiled Model v11.".to_string());
+      }
+    }
+    RunEventPayload::LifecycleHookRequested(data) => {
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+        return Err("Lifecycle hook events require compiled Model v11.".to_string());
+      }
+      let hook = workflow.lifecycle_hook(&data.hook_id).ok_or_else(|| {
+        format!(
+          "Lifecycle request references unknown hook {:?}.",
+          data.hook_id
+        )
+      })?;
+      if hook.event != data.event
+        || (data.event.is_step()
+          && (workflow.node(&data.subject.id).is_none()
+            || hook
+              .step_ids
+              .as_ref()
+              .is_some_and(|ids| !ids.contains(&data.subject.id))))
+      {
+        return Err("Lifecycle hook request does not match its compiled binding.".to_string());
+      }
+    }
+    RunEventPayload::LifecycleActionAttemptStarted(data)
+    | RunEventPayload::LifecycleActionSucceeded(data) => {
+      let action_exists = workflow.lifecycle.as_ref().is_some_and(|lifecycle| {
+        lifecycle.hooks.iter().any(|hook| {
+          hook.hook_id == data.action_id.split(":action:").next().unwrap_or_default()
+            && hook
+              .actions
+              .iter()
+              .any(|action| action.action_id == data.action_id)
+        })
+      });
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 || !action_exists {
+        return Err("Lifecycle action event references an unknown Model v11 action.".to_string());
+      }
+    }
+    RunEventPayload::LifecycleActionFailed(data) => {
+      let action_exists = workflow.lifecycle.as_ref().is_some_and(|lifecycle| {
+        lifecycle
+          .hooks
+          .iter()
+          .flat_map(|hook| &hook.actions)
+          .any(|action| action.action_id == data.action_id)
+      });
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 || !action_exists {
+        return Err("Lifecycle action failure references an unknown Model v11 action.".to_string());
+      }
+    }
+    RunEventPayload::LifecycleHookCompleted(data) => {
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+        || workflow.lifecycle.is_none()
+        || !crate::event::is_definition_hash(&data.hook_invocation_id)
+      {
+        return Err(
+          "Lifecycle hook completion requires a Model v11 lifecycle binding.".to_string(),
+        );
+      }
+    }
     RunEventPayload::RunFailed(data) => {
+      if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+        return Err("Model v11 finalizes with run_outcome_decided and run_finalized.".to_string());
+      }
       if let RunFailedData::V5(RunFailedDataV5::Notification {
         approval_id,
         failed_delivery_ids,
@@ -1205,6 +1285,104 @@ pub(crate) fn validate_event_history_against_definition(
           );
         }
       }
+      RunEventPayload::LifecycleHookRequested(data) => {
+        let expected = crate::derive_lifecycle_hook_invocation_id(
+          &event.run_id,
+          &data.hook_id,
+          data.subject.kind,
+          &data.subject.id,
+        );
+        if data.hook_invocation_id != expected
+          || (matches!(data.subject.kind, crate::LifecycleSubjectKind::Workflow)
+            && data.subject.id != event.run_id)
+        {
+          return Err(
+            "Lifecycle hook request has a non-canonical invocation identity.".to_string(),
+          );
+        }
+        let eligible = events
+          .get(index.wrapping_sub(1))
+          .is_some_and(|previous| match data.event {
+            crate::LifecycleEventName::RunStart => {
+              matches!(previous.payload, RunEventPayload::RunStarted(_))
+            }
+            crate::LifecycleEventName::RunCancel => matches!(
+              previous.payload,
+              RunEventPayload::RunCancellationRequested(_)
+                | RunEventPayload::RunOutcomeDecided(RunOutcomeDecidedData::Cancelled { .. })
+            ),
+            crate::LifecycleEventName::RunSuccess => matches!(
+              previous.payload,
+              RunEventPayload::RunOutcomeDecided(RunOutcomeDecidedData::Succeeded { .. })
+            ),
+            crate::LifecycleEventName::RunFailure => matches!(
+              previous.payload,
+              RunEventPayload::RunOutcomeDecided(RunOutcomeDecidedData::Failed { .. })
+            ),
+            crate::LifecycleEventName::RunComplete => matches!(
+              previous.payload,
+              RunEventPayload::LifecycleHookCompleted(_) | RunEventPayload::RunOutcomeDecided(_)
+            ),
+            crate::LifecycleEventName::StepStart => matches!(
+              previous.payload,
+              RunEventPayload::StepAttemptStarted(ref step) if step.node_id == data.subject.id
+            ),
+            crate::LifecycleEventName::StepSuccess => matches!(
+              previous.payload,
+              RunEventPayload::StepAttemptSucceeded(ref step) if step.node_id == data.subject.id
+            ),
+            crate::LifecycleEventName::StepFailure => matches!(
+              previous.payload,
+              RunEventPayload::StepAttemptFailed(ref step) if step.node_id == data.subject.id
+            ),
+            crate::LifecycleEventName::StepComplete => matches!(
+              previous.payload,
+              RunEventPayload::LifecycleHookCompleted(_)
+                | RunEventPayload::StepAttemptSucceeded(_)
+                | RunEventPayload::StepAttemptFailed(_)
+            ),
+          });
+        if !eligible {
+          return Err(
+            "Lifecycle hook request is not adjacent to its eligibility event.".to_string(),
+          );
+        }
+      }
+      RunEventPayload::LifecycleActionAttemptStarted(data) => {
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let hook_projection = prefix
+          .lifecycle_hooks
+          .get(&data.hook_invocation_id)
+          .ok_or_else(|| "Lifecycle action has no requested hook.".to_string())?;
+        let hook = workflow
+          .lifecycle_hook(&hook_projection.hook_id)
+          .ok_or_else(|| "Lifecycle action hook is absent from Model v11.".to_string())?;
+        let expected = hook
+          .actions
+          .get(hook_projection.actions.len())
+          .ok_or_else(|| {
+            "Lifecycle hook has no remaining action at this source-order position.".to_string()
+          })?;
+        if expected.action_id != data.action_id {
+          return Err("Lifecycle actions must start in compiled source order.".to_string());
+        }
+      }
+      RunEventPayload::LifecycleHookCompleted(data) => {
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let hook_projection = prefix
+          .lifecycle_hooks
+          .get(&data.hook_invocation_id)
+          .ok_or_else(|| "Lifecycle completion has no requested hook.".to_string())?;
+        let hook = workflow
+          .lifecycle_hook(&hook_projection.hook_id)
+          .ok_or_else(|| "Lifecycle completion hook is absent from Model v11.".to_string())?;
+        if hook_projection.actions.len() != hook.actions.len() {
+          return Err(
+            "Lifecycle hook cannot complete before every compiled action has an outcome."
+              .to_string(),
+          );
+        }
+      }
       RunEventPayload::RunStarted(_)
       | RunEventPayload::BranchSelected(_)
       | RunEventPayload::NotificationDeliveryRequested(_)
@@ -1219,6 +1397,11 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::OperationStarted(_)
       | RunEventPayload::OperationSucceeded(_)
       | RunEventPayload::OperationFailed(_)
+      | RunEventPayload::RunCancellationRequested(_)
+      | RunEventPayload::LifecycleActionSucceeded(_)
+      | RunEventPayload::LifecycleActionFailed(_)
+      | RunEventPayload::RunOutcomeDecided(_)
+      | RunEventPayload::RunFinalized(_)
       | RunEventPayload::RunFailed(_) => {}
     }
   }
