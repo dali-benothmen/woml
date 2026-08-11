@@ -32,7 +32,9 @@ const protocol = readFileSync(
 );
 if (
   !plan.includes('WC0 and WC1 completed') ||
-  !plan.includes('The next implementation action is WC2') ||
+  !plan.includes(
+    '### WC1 — Compile call-only workflows and expose editor contracts'
+  ) ||
   !protocol.includes('Compiled Workflow Model v10') ||
   !protocol.includes('approval')
 ) {
@@ -40,5 +42,5 @@ if (
 }
 
 process.stdout.write(
-  '[WC1] frozen contracts, call-only lowering, workflow-call analysis, editor types, and honest CLI boundary are publishable\n'
+  '[WC1] frozen contracts, call-only lowering, workflow-call analysis, and editor types remain publishable\n'
 );

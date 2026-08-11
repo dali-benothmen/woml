@@ -59,9 +59,19 @@ call-only definition to Model v10, while existing triggered workflows retain
 Models v1-v9. Definition Packages v4/v5 carry Model v10 when local modules are
 present. WC2 now gives Rust exact target registration and atomic, idempotent
 child admission through durable store v9 and truthful Run Event v9
-`workflow_call` ingress. The CLI still refuses author-facing calls until WC3
-adds child dispatch, terminal waiting, and result delivery; no fake manual
-trigger or frontend executor fills that gap.
+`workflow_call` ingress. WC3 adds the deeply read-only Bun facade and routes an
+admitted same-runtime child through the normal Rust DAG executor. The child is
+an independent durable run; only its terminal JSON result crosses back into the
+parent script. WC4 completes same-runtime crash/retry reattachment; WC5 retains
+local cross-process discovery and routing.
+
+WC4 makes the same-runtime boundary retry-safe. The first admitting attempt
+stores one immutable call key and child run; later attempts and duplicate
+delivery observe it instead of executing another child. One atomic index claim
+elects the child executor. Hidden lineage rejects direct and indirect cycles,
+and startup recovery rebuilds mutable call state from authoritative child
+events. If a crash leaves the parent attempt ambiguous, that attempt still
+fails closed even when the child already succeeded.
 
 The Rust core is the execution authority. It validates the compiled model,
 selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends

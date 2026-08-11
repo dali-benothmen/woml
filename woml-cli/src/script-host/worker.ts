@@ -16,6 +16,7 @@ export interface ScriptWorkerRequest {
   readonly invocationId: string;
   readonly runId: string;
   readonly nodeId: string;
+  readonly timeoutMs: number;
   readonly source: string;
   readonly context: ScriptContext;
   readonly attempt?: ScriptAttempt;
@@ -289,6 +290,7 @@ const pendingFetchAcks = new Map<
 >();
 const operationSequences = new Map<string, number>();
 const automaticEffectfulCalls = new Map<string, number>();
+const workflowTargetIdentityModes = new Map<string, 'automatic' | 'named'>();
 let fetchSequence = 0;
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const nativeFetchFailures = new WeakMap<
@@ -1017,7 +1019,137 @@ function publicEventResult(result: JsonValue): JsonValue {
   return object.data;
 }
 
-function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
+function workflowCallTimeoutMilliseconds(value: unknown): number {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (typeof value !== 'string') {
+    throw new TypeError(
+      'Workflow Call timeout must be milliseconds or a duration string.'
+    );
+  }
+  const match = value.match(/^(\d+)(ms|s|m|h)$/);
+  if (match === null) {
+    throw new TypeError(
+      'Workflow Call timeout must look like 500ms, 10s, 2m, or 1h.'
+    );
+  }
+  const multiplier =
+    match[2] === 'ms'
+      ? 1
+      : match[2] === 's'
+        ? 1_000
+        : match[2] === 'm'
+          ? 60_000
+          : 3_600_000;
+  return Number(match[1]) * multiplier;
+}
+
+function normalizeWorkflowCall(
+  args: readonly unknown[],
+  remainingTimeoutMs: number
+): {
+  readonly request: JsonObject;
+  readonly callOptions?: JsonObject;
+} {
+  if (args.length < 2 || args.length > 3) {
+    throw new TypeError(
+      'services.workflows.call() requires workflowId, payload, and optional options.'
+    );
+  }
+  const [workflowId, payload, rawOptions] = args;
+  if (
+    typeof workflowId !== 'string' ||
+    !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(workflowId) ||
+    workflowId.length > 256
+  ) {
+    throw new TypeError(
+      'Workflow Call workflowId must use lowercase kebab-case.'
+    );
+  }
+  const payloadObject = plainObject(payload as JsonValue);
+  if (payloadObject === undefined) {
+    throw new TypeError('Workflow Call payload must be a JSON object.');
+  }
+  const options =
+    rawOptions === undefined ? {} : plainObject(rawOptions as JsonValue);
+  if (options === undefined) {
+    throw new TypeError('Workflow Call options must be an object.');
+  }
+  const unknown = Object.keys(options).find(
+    key => key !== 'name' && key !== 'timeout'
+  );
+  if (unknown !== undefined) {
+    throw new TypeError(`Unknown Workflow Call option "${unknown}".`);
+  }
+  const name = options.name;
+  if (
+    name !== undefined &&
+    (typeof name !== 'string' ||
+      !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(name) ||
+      name.length > 128)
+  ) {
+    throw new TypeError('Workflow Call name is invalid.');
+  }
+  const timeoutMs =
+    options.timeout === undefined
+      ? remainingTimeoutMs
+      : workflowCallTimeoutMilliseconds(options.timeout);
+  if (timeoutMs < 1 || timeoutMs > 86_400_000) {
+    throw new TypeError(
+      'Workflow Call timeout must be between 1 ms and 24 hours.'
+    );
+  }
+  if (timeoutMs > remainingTimeoutMs) {
+    throw new TypeError(
+      'Workflow Call timeout cannot exceed the calling step remaining timeout.'
+    );
+  }
+  const identityMode = name === undefined ? 'automatic' : 'named';
+  const previousIdentityMode = workflowTargetIdentityModes.get(workflowId);
+  if (
+    previousIdentityMode !== undefined &&
+    (previousIdentityMode === 'automatic' || identityMode === 'automatic')
+  ) {
+    throw new TypeError(
+      `Multiple calls to workflow "${workflowId}" in one step require stable names, for example { name: "primary-call" }.`
+    );
+  }
+  workflowTargetIdentityModes.set(workflowId, identityMode);
+  return {
+    request: {
+      contract: 'woml.workflow-call',
+      contractVersion: 1,
+      kind: 'request',
+      workflowId,
+      payload: payloadObject,
+      options: {
+        ...(name === undefined ? {} : { name }),
+        timeoutMs,
+      },
+    },
+    ...(name === undefined ? {} : { callOptions: { name } }),
+  };
+}
+
+function publicWorkflowCallResult(result: JsonValue): JsonValue {
+  const object = plainObject(result);
+  if (
+    object?.contract !== 'woml.workflow-call' ||
+    object.contractVersion !== 1 ||
+    object.kind !== 'succeeded' ||
+    typeof object.workflowId !== 'string' ||
+    typeof object.definitionHash !== 'string' ||
+    typeof object.childRunId !== 'string' ||
+    !Object.hasOwn(object, 'result')
+  ) {
+    throw new TypeError('Rust returned an invalid Workflow Call v1 result.');
+  }
+  return object.result as JsonValue;
+}
+
+function deeplyReadonlyServiceFacade(
+  request: ScriptWorkerRequest,
+  executionDeadline: number
+): unknown {
   if (request.attempt === undefined || request.bindings === undefined) {
     return Object.freeze({});
   }
@@ -1038,12 +1170,14 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
       capability === 'cache' && cacheWireOperations.has(operation);
     const managedEvents =
       capability === 'events' && eventOperations.has(operation);
+    const managedWorkflows = capability === 'workflows' && operation === 'call';
     if (
       !managedHttp &&
       !managedDatabase &&
       !managedStorage &&
       !managedCache &&
       !managedEvents &&
+      !managedWorkflows &&
       callOptions !== undefined
     ) {
       throw new TypeError(
@@ -1055,7 +1189,8 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
       throw new TypeError(`${violation.path}: ${violation.reason}`);
     }
     const inputBytes = Buffer.byteLength(JSON.stringify(input), 'utf8');
-    if (inputBytes > 1_048_576) {
+    const inputLimit = managedWorkflows ? 1_052_672 : 1_048_576;
+    if (inputBytes > inputLimit) {
       const id = callId();
       throw new ServiceCallError(capability, operation, id, {
         kind: 'input_too_large',
@@ -1063,7 +1198,7 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         message: 'The capability input exceeds its configured byte limit.',
         retryable: false,
         ambiguous: false,
-        details: { actualBytes: inputBytes, limitBytes: 1_048_576 },
+        details: { actualBytes: inputBytes, limitBytes: inputLimit },
       });
     }
     const identity = namedOperation(capability, operation, callOptions);
@@ -1100,7 +1235,14 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         : undefined;
     const timeoutMs = managedHttp
       ? Math.min(86_400_000, Number((input as JsonObject).timeoutMs) + 1_000)
-      : 30_000;
+      : managedWorkflows
+        ? Math.min(
+            86_400_000,
+            Number(
+              plainObject((input as JsonObject).options)?.timeoutMs ?? 30_000
+            ) + 1_000
+          )
+        : 30_000;
     const id = callId();
     const call: CapabilityCallRequest = {
       contract: 'woml.capability-call',
@@ -1125,8 +1267,8 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
           : { providerIdempotencyKey }),
       },
       limits: {
-        inputBytes: 1_048_576,
-        resultBytes: 4_194_304,
+        inputBytes: inputLimit,
+        resultBytes: managedWorkflows ? 4_198_400 : 4_194_304,
         timeoutMs,
       },
       input,
@@ -1148,7 +1290,9 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
             ? publicCacheResult(result, operation)
             : managedEvents
               ? publicEventResult(result)
-              : result;
+              : managedWorkflows
+                ? publicWorkflowCallResult(result)
+                : result;
   };
   return new Proxy(Object.freeze({}), {
     get(_target, capabilityProperty) {
@@ -1262,6 +1406,25 @@ function deeplyReadonlyServiceFacade(request: ScriptWorkerRequest): unknown {
         const events = Object.freeze({ emit });
         capabilityCache.set(capabilityProperty, events);
         return events;
+      }
+      if (capabilityProperty === 'workflows') {
+        const call = async (...args: unknown[]): Promise<JsonValue> => {
+          const remainingTimeoutMs = Math.max(
+            1,
+            Math.floor(executionDeadline - performance.now())
+          );
+          const normalized = normalizeWorkflowCall(args, remainingTimeoutMs);
+          return invokeCapability(
+            'workflows',
+            'call',
+            normalized.request,
+            normalized.callOptions
+          );
+        };
+        Object.freeze(call);
+        const workflows = Object.freeze({ call });
+        capabilityCache.set(capabilityProperty, workflows);
+        return workflows;
       }
       const operationCache = new Map<string, unknown>();
       const capability = new Proxy(Object.freeze({}), {
@@ -1458,8 +1621,10 @@ async function loadRuntimeModules(
 async function execute(request: ScriptWorkerRequest): Promise<void> {
   let secretValues: readonly string[] = [];
   try {
+    const executionDeadline = performance.now() + request.timeoutMs;
     operationSequences.clear();
     automaticEffectfulCalls.clear();
+    workflowTargetIdentityModes.clear();
     const context = deepFreezeJson(request.context);
     const attempt =
       request.attempt === undefined
@@ -1467,7 +1632,10 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
         : deepFreezeJson(request.attempt);
     const secrets = deepFreezeJson(request.bindings?.secrets ?? {});
     secretValues = Object.values(request.bindings?.secrets ?? {});
-    const builtInServices = deeplyReadonlyServiceFacade(request);
+    const builtInServices = deeplyReadonlyServiceFacade(
+      request,
+      executionDeadline
+    );
     const nativeFetch = trackedNativeFetch(request);
     const services =
       request.modules === undefined

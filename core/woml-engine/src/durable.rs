@@ -674,6 +674,8 @@ pub enum DurableStoreError {
   WorkflowCallIdempotencyConflict,
   #[error("the workflow call exceeds the maximum lineage depth")]
   WorkflowCallDepthExceeded,
+  #[error("the workflow call would create a recursive call cycle")]
+  WorkflowCallCycle,
   #[error("the workflow call target does not match its registered definition")]
   WorkflowCallDefinitionMismatch,
   #[error("stored workflow call history is contradictory: {0}")]
@@ -1276,6 +1278,68 @@ impl DurableEventStore {
     load_workflow_call(&self.connection, call_key)
   }
 
+  /// Advances only the mutable execution state of a durable workflow call.
+  /// All identity-bearing columns remain protected by the schema trigger.
+  pub fn transition_workflow_call_state(
+    &mut self,
+    call_key: &str,
+    expected: WorkflowCallIndexState,
+    next: WorkflowCallIndexState,
+  ) -> Result<(), DurableStoreError> {
+    let valid = matches!(
+      (expected, next),
+      (
+        WorkflowCallIndexState::Admitted,
+        WorkflowCallIndexState::Running
+      ) | (
+        WorkflowCallIndexState::Running,
+        WorkflowCallIndexState::Succeeded
+      ) | (
+        WorkflowCallIndexState::Running,
+        WorkflowCallIndexState::Failed
+      )
+    );
+    if !valid {
+      return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+        "workflow call state transition is invalid".to_string(),
+      ));
+    }
+    let changed = self.connection.execute(
+      "UPDATE woml_workflow_calls SET state = ?1 WHERE call_key = ?2 AND state = ?3",
+      params![
+        workflow_call_state_name(next),
+        call_key,
+        workflow_call_state_name(expected),
+      ],
+    )?;
+    if changed != 1 {
+      return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+        "workflow call state changed unexpectedly".to_string(),
+      ));
+    }
+    Ok(())
+  }
+
+  /// Claims an admitted child for execution. Concurrent callers race through
+  /// one conditional update, so exactly one caller becomes the executor and
+  /// every other caller observes the same child run.
+  pub fn claim_workflow_call_execution(
+    &mut self,
+    call_key: &str,
+  ) -> Result<bool, DurableStoreError> {
+    let changed = self.connection.execute(
+      "UPDATE woml_workflow_calls SET state = 'running'
+       WHERE call_key = ?1 AND state = 'admitted'",
+      [call_key],
+    )?;
+    if changed > 1 {
+      return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+        "more than one workflow call row was claimed".to_string(),
+      ));
+    }
+    Ok(changed == 1)
+  }
+
   /// Atomically binds one stable parent call identity to exactly one child run.
   /// Repeating the same request returns the existing child; changing any
   /// identity-bearing input fails closed.
@@ -1309,6 +1373,14 @@ impl DurableEventStore {
       ));
     }
 
+    if workflow_call_would_cycle(
+      &transaction,
+      &request.parent_run_id,
+      &request.target_workflow_id,
+    )? {
+      return Err(DurableStoreError::WorkflowCallCycle);
+    }
+
     let workflow = definition_by_hash(&transaction, &request.target_definition_hash)?;
     if workflow.workflow_id != request.target_workflow_id {
       return Err(DurableStoreError::WorkflowCallDefinitionMismatch);
@@ -1332,7 +1404,6 @@ impl DurableEventStore {
     if let Some(existing) = load_workflow_call(&transaction, &request.call_key)? {
       let identical = existing.parent_run_id == request.parent_run_id
         && existing.parent_node_id == request.parent_node_id
-        && existing.parent_attempt == request.parent_attempt
         && existing.target_workflow_id == request.target_workflow_id
         && existing.target_definition_hash == request.target_definition_hash
         && existing.child_run_id == request.child_run_id
@@ -3452,7 +3523,45 @@ impl DurableEventStore {
         RunRecovery::Unchanged => {}
       }
     }
+    self.reconcile_workflow_call_states()?;
     Ok(report)
+  }
+
+  /// Repairs the reconstructible call index from authoritative child history
+  /// after run recovery. No result value is copied into the index.
+  pub fn reconcile_workflow_call_states(&mut self) -> Result<(), DurableStoreError> {
+    let pending = {
+      let mut statement = self.connection.prepare(
+        "SELECT call_key, child_run_id, state FROM woml_workflow_calls
+         WHERE state IN ('admitted', 'running') ORDER BY admitted_at, call_key",
+      )?;
+      let rows = statement
+        .query_map([], |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+          ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+      rows
+    };
+    for (call_key, child_run_id, stored_state) in pending {
+      let projection = self.projection(&child_run_id)?;
+      let next = match projection.status {
+        RunStatus::Succeeded => Some("succeeded"),
+        RunStatus::Failed | RunStatus::Waiting => Some("failed"),
+        RunStatus::Running if stored_state == "running" => Some("admitted"),
+        RunStatus::NotStarted | RunStatus::Running => None,
+      };
+      if let Some(next) = next {
+        self.connection.execute(
+          "UPDATE woml_workflow_calls SET state = ?1 WHERE call_key = ?2",
+          params![next, call_key],
+        )?;
+      }
+    }
+    Ok(())
   }
 
   fn run_ids(&self) -> Result<Vec<String>, DurableStoreError> {
@@ -4285,6 +4394,37 @@ fn load_workflow_call(
     state,
     admitted_at,
   }))
+}
+
+fn workflow_call_would_cycle(
+  connection: &Connection,
+  parent_run_id: &str,
+  target_workflow_id: &str,
+) -> Result<bool, DurableStoreError> {
+  connection
+    .query_row(
+      "WITH RECURSIVE lineage(run_id, workflow_id) AS (
+         SELECT run_id, workflow_id FROM woml_runs WHERE run_id = ?1
+         UNION
+         SELECT parent.parent_run_id, runs.workflow_id
+         FROM lineage current
+         JOIN woml_workflow_calls parent ON parent.child_run_id = current.run_id
+         JOIN woml_runs runs ON runs.run_id = parent.parent_run_id
+       )
+       SELECT EXISTS(SELECT 1 FROM lineage WHERE workflow_id = ?2)",
+      params![parent_run_id, target_workflow_id],
+      |row| row.get(0),
+    )
+    .map_err(DurableStoreError::from)
+}
+
+fn workflow_call_state_name(state: WorkflowCallIndexState) -> &'static str {
+  match state {
+    WorkflowCallIndexState::Admitted => "admitted",
+    WorkflowCallIndexState::Running => "running",
+    WorkflowCallIndexState::Succeeded => "succeeded",
+    WorkflowCallIndexState::Failed => "failed",
+  }
 }
 
 fn validate_workflow_call_child(

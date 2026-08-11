@@ -1,9 +1,9 @@
 # WOML Durable Workflow Calls Implementation Plan
 
-Status: WC0 and WC1 completed on 2026-08-10; WC2 completed on 2026-08-11. The
-versioned Workflow Call contracts are frozen, call-only WOML validates and
-lowers, and Rust now owns exact target registration plus idempotent durable
-child admission. WC3 is the next phase and adds child execution and waiting.
+Status: WC0 and WC1 completed on 2026-08-10; WC2, WC3, and WC4 completed on
+2026-08-11. Same-runtime Workflow Calls now execute through Rust, reuse one
+durable child across retries and duplicate delivery, reject cycles, and recover
+fail-closed without manufacturing another child. WC5 is next.
 
 ## 1. Product Outcome
 
@@ -496,6 +496,8 @@ pre-admission failure. Concurrent duplicate admissions create one child.
 
 ### WC3 — Execute the first same-runtime WOML call end to end
 
+Status: **completed on 2026-08-11.**
+
 Changes:
 
 - Add the read-only Bun `services.workflows.call()` facade.
@@ -516,6 +518,8 @@ The manual journey proves object payload, `context.trigger`, object/scalar/null
 results, child failure, missing result, timeout, and no event/HTTP workaround.
 
 ### WC4 — Make same-runtime calls retry-safe and recoverable
+
+Status: **completed on 2026-08-11.**
 
 Changes:
 
@@ -696,7 +700,6 @@ admission.
 7. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-The next implementation action is WC3. WC2 stops at truthful, durable child
-admission: it does not pretend the child has executed or produced a result.
-WC3 connects the Bun facade to the Rust handler, dispatches the child through
-the normal engine, and returns its terminal result to the parent.
+The next implementation action is WC5. WC4 now protects same-runtime calls
+across retries, duplicate delivery, and crash boundaries. WC5 adds project-local
+routing between separate `woml run` processes without changing the author API.

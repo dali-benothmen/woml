@@ -700,6 +700,7 @@ export class ScriptHost {
             invocationId: request.invocationId,
             runId: request.runId,
             nodeId: request.nodeId,
+            timeoutMs: request.timeoutMs,
             source: request.source,
             context: request.context,
             attempt,

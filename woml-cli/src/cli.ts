@@ -701,17 +701,6 @@ function workflowCallFrontendOnlySource(
   );
 }
 
-function rejectUnavailableWorkflowCallRuntime(
-  sources: readonly CompiledWorkflowSource[]
-): void {
-  const source = sources.find(workflowCallFrontendOnlySource);
-  if (source === undefined) return;
-  throw new CliInputError(
-    'WOML_WORKFLOW_CALL_RUNTIME_UNAVAILABLE',
-    `workflow "${source.workflow.workflowId}" uses the WC1 Workflow Calls frontend, but durable Rust execution begins in WC2.`
-  );
-}
-
 function runtimeModulesFromPackage(
   definitionPackage: WomlDefinitionPackageV3 | WomlDefinitionPackageV5
 ): readonly RustRuntimeModuleArtifact[] {
@@ -909,7 +898,7 @@ async function runCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       workflowCallsFrontendOnly
-        ? 'Execution: Workflow Calls frontend is valid; durable Rust execution begins in WC2.\n'
+        ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
         : definitionPackage.modules.length === 0
           ? 'Execution: module-free workflow; woml run is available.\n'
           : 'Execution: local modules are compiled and ready for woml run.\n'
@@ -1749,10 +1738,12 @@ async function activateWorkflows(
         trigger.handler === 'trigger.event'
     )
   );
-  // A loaded automation directory is one runtime unit. Manual workflows in
-  // that directory must share its services/event registry instead of running
-  // prematurely as isolated one-shot processes.
-  const productionSources = hasProductionTrigger ? sources : [];
+  const hasWorkflowCalls = sources.some(workflowCallFrontendOnlySource);
+  // A loaded automation directory is one runtime unit. Production triggers
+  // and Workflow Calls both require every definition to share one target and
+  // capability registry before a startup manual trigger runs.
+  const productionSources =
+    hasProductionTrigger || hasWorkflowCalls ? sources : [];
   const oneShotSources = sources.filter(
     source => !productionSources.includes(source)
   );
@@ -2229,7 +2220,6 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowSources(filePath);
-    rejectUnavailableWorkflowCallRuntime(sources);
     if (runArguments.command === 'test') {
       if ((await stat(filePath)).isDirectory()) {
         throw new CliInputError(

@@ -8,8 +8,9 @@ use std::{
   path::PathBuf,
   sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, Weak,
   },
+  time::Duration,
 };
 
 use chrono::{DateTime, Utc};
@@ -20,16 +21,20 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-  capability::CapabilityIdentityMode, event::is_definition_hash, CapabilityCallRequest,
+  capability::CapabilityIdentityMode, event::is_definition_hash,
+  execute_admitted_trigger_run_durable, AttemptFailureKind, CapabilityCallRequest,
   CapabilityCancellationToken, CapabilityDescriptor, CapabilityEffect, CapabilityFailure,
-  CapabilityFailureKind, CapabilityHandler, CompiledWorkflowDefinition, DurableEventStore,
-  DurableStoreError,
+  CapabilityFailureKind, CapabilityHandler, CapabilityRegistry, CompiledWorkflowDefinition,
+  DurableEventStore, DurableStoreError, EngineClock, ExecutionProgressReporter,
+  IntervalProgressReporter, RunFailure, RunStatus, RuntimeExecutionOptions, ScheduleClock,
+  ScheduleProgressReporter, ScriptHostProcessOptions, WorkflowRuntimeOutcome,
 };
 
 pub const WORKFLOW_CALL_CONTRACT: &str = "woml.workflow-call";
 pub const WORKFLOW_CALL_CONTRACT_VERSION: u32 = 1;
 pub const MAX_WORKFLOW_CALL_DEPTH: u32 = 32;
 const MAX_WORKFLOW_CALL_PAYLOAD_BYTES: usize = 1_048_576;
+const MAX_WORKFLOW_CALL_RESULT_BYTES: usize = 4_194_304;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,10 +201,66 @@ struct WorkflowCallOptions {
   timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ManagedWorkflowCallsHandler {
   database_path: PathBuf,
   targets: Arc<WorkflowTargetRegistry>,
+  execution: Option<WorkflowCallExecutionConfig>,
+}
+
+#[derive(Clone)]
+struct WorkflowCallExecutionConfig {
+  script_host: ScriptHostProcessOptions,
+  script_timeout_ms: u64,
+  max_context_bytes: Option<usize>,
+  clock: Arc<dyn EngineClock>,
+  progress_reporter: Option<ExecutionProgressReporter>,
+  schedule_clock: Arc<dyn ScheduleClock>,
+  schedule_progress_reporter: Option<ScheduleProgressReporter>,
+  interval_progress_reporter: Option<IntervalProgressReporter>,
+  resolved_secrets: Arc<BTreeMap<String, String>>,
+  capability_registry: Weak<CapabilityRegistry>,
+}
+
+impl WorkflowCallExecutionConfig {
+  fn from_options(options: &RuntimeExecutionOptions) -> Self {
+    Self {
+      script_host: options.script_host.clone(),
+      script_timeout_ms: options.script_timeout_ms,
+      max_context_bytes: options.max_context_bytes,
+      clock: Arc::clone(&options.clock),
+      progress_reporter: options.progress_reporter.clone(),
+      schedule_clock: Arc::clone(&options.schedule_clock),
+      schedule_progress_reporter: options.schedule_progress_reporter.clone(),
+      interval_progress_reporter: options.interval_progress_reporter.clone(),
+      resolved_secrets: Arc::clone(&options.resolved_secrets),
+      capability_registry: Arc::downgrade(&options.capability_registry),
+    }
+  }
+
+  fn runtime_options(&self) -> Result<RuntimeExecutionOptions, CapabilityFailure> {
+    let registry = self
+      .capability_registry
+      .upgrade()
+      .ok_or_else(workflow_call_unavailable)?;
+    let mut options =
+      RuntimeExecutionOptions::new(self.script_host.clone(), self.script_timeout_ms)
+        .with_capability_registry(registry);
+    options.max_context_bytes = self.max_context_bytes;
+    options.clock = Arc::clone(&self.clock);
+    options.progress_reporter = self.progress_reporter.clone();
+    options.schedule_clock = Arc::clone(&self.schedule_clock);
+    options.schedule_progress_reporter = self.schedule_progress_reporter.clone();
+    options.interval_progress_reporter = self.interval_progress_reporter.clone();
+    options.resolved_secrets = Arc::clone(&self.resolved_secrets);
+    Ok(options)
+  }
+}
+
+#[derive(Clone)]
+struct PreparedWorkflowCall {
+  admission: WorkflowCallAdmissionRequest,
+  timeout_ms: u64,
 }
 
 impl ManagedWorkflowCallsHandler {
@@ -207,13 +268,19 @@ impl ManagedWorkflowCallsHandler {
     Self {
       database_path,
       targets,
+      execution: None,
     }
+  }
+
+  pub fn with_execution(mut self, options: &RuntimeExecutionOptions) -> Self {
+    self.execution = Some(WorkflowCallExecutionConfig::from_options(options));
+    self
   }
 
   fn prepare(
     &self,
     call: &CapabilityCallRequest,
-  ) -> Result<WorkflowCallAdmissionRequest, CapabilityFailure> {
+  ) -> Result<PreparedWorkflowCall, CapabilityFailure> {
     let request = parse_request(&call.input)?;
     let identity_matches = match (&request.options.name, call.identity.mode) {
       (Some(name), CapabilityIdentityMode::Named) => name == &call.identity.operation_name,
@@ -237,16 +304,19 @@ impl ManagedWorkflowCallsHandler {
       &target.workflow_id,
       &call.identity.operation_name,
     );
-    Ok(WorkflowCallAdmissionRequest {
-      child_run_id: child_run_id(&call_key),
-      call_key,
-      parent_run_id: call.run_id.clone(),
-      parent_node_id: call.node_id.clone(),
-      parent_attempt: call.attempt_number,
-      target_workflow_id: target.workflow_id,
-      target_definition_hash: target.definition_hash,
-      payload: request.payload,
-      admitted_at: Utc::now(),
+    Ok(PreparedWorkflowCall {
+      admission: WorkflowCallAdmissionRequest {
+        child_run_id: child_run_id(&call_key),
+        call_key,
+        parent_run_id: call.run_id.clone(),
+        parent_node_id: call.node_id.clone(),
+        parent_attempt: call.attempt_number,
+        target_workflow_id: target.workflow_id,
+        target_definition_hash: target.definition_hash,
+        payload: request.payload,
+        admitted_at: Utc::now(),
+      },
+      timeout_ms: request.options.timeout_ms.unwrap_or(30_000),
     })
   }
 }
@@ -272,7 +342,7 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
     &self,
     call: &CapabilityCallRequest,
   ) -> Result<Map<String, Value>, CapabilityFailure> {
-    let admission = self.prepare(call)?;
+    let admission = self.prepare(call)?.admission;
     let store = DurableEventStore::open(&self.database_path).map_err(store_failure)?;
     let depth = store
       .workflow_call_depth_for_parent(&admission.parent_run_id)
@@ -298,26 +368,39 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
   }
 
   fn safe_result_metadata(&self, result: &Value) -> Map<String, Value> {
-    let Some(data) = result.get("data") else {
+    let Some(child_run_id) = result.get("childRunId").and_then(Value::as_str) else {
       return Map::new();
     };
-    let mut metadata = Map::new();
-    for field in [
-      "targetWorkflowId",
-      "targetDefinitionHash",
-      "childRunId",
-      "payloadDigest",
-    ] {
-      if let Some(value) = data.get(field).and_then(Value::as_str) {
-        metadata.insert(field.to_string(), Value::String(value.to_string()));
-      }
-    }
-    for field in ["lineageDepth", "duplicate"] {
-      if let Some(value) = data.get(field) {
-        metadata.insert(field.to_string(), value.clone());
-      }
-    }
-    metadata
+    let Some(digest) = child_run_id.strip_prefix("run_call_") else {
+      return Map::new();
+    };
+    let call_key = format!("sha256:{digest}");
+    let admission = DurableEventStore::open(&self.database_path)
+      .and_then(|store| store.workflow_call(&call_key))
+      .ok()
+      .flatten();
+    let Some(admission) = admission else {
+      return Map::new();
+    };
+    Map::from_iter([
+      (
+        "targetWorkflowId".to_string(),
+        Value::String(admission.target_workflow_id),
+      ),
+      (
+        "targetDefinitionHash".to_string(),
+        Value::String(admission.target_definition_hash),
+      ),
+      (
+        "childRunId".to_string(),
+        Value::String(admission.child_run_id),
+      ),
+      (
+        "payloadDigest".to_string(),
+        Value::String(admission.payload_digest),
+      ),
+      ("lineageDepth".to_string(), Value::from(admission.depth)),
+    ])
   }
 
   fn execute(
@@ -334,36 +417,212 @@ impl CapabilityHandler for ManagedWorkflowCallsHandler {
     _workflow_scope: Option<String>,
     cancellation: CapabilityCancellationToken,
   ) -> BoxFuture<'static, Result<Value, CapabilityFailure>> {
-    let admission = match self.prepare(call) {
-      Ok(admission) => admission,
+    let prepared = match self.prepare(call) {
+      Ok(prepared) => prepared,
       Err(error) => return Box::pin(async move { Err(error) }),
     };
     let database_path = self.database_path.clone();
+    let execution = self.execution.clone();
     Box::pin(async move {
       if cancellation.is_cancelled() {
         return Err(workflow_call_cancelled());
       }
+      let admission_request = prepared.admission;
+      let admission_database_path = database_path.clone();
       let outcome = tokio::task::spawn_blocking(move || {
-        DurableEventStore::open(database_path)?.admit_workflow_call(admission)
+        DurableEventStore::open(admission_database_path)?.admit_workflow_call(admission_request)
       })
       .await
       .map_err(|_| workflow_call_unavailable())?
       .map_err(store_failure)?;
-      Ok(json!({
-        "contract": "woml.workflow-call-admission",
-        "contractVersion": 1,
-        "kind": "admitted",
-        "data": {
-          "targetWorkflowId": outcome.admission.target_workflow_id,
-          "targetDefinitionHash": outcome.admission.target_definition_hash,
-          "childRunId": outcome.admission.child_run_id,
-          "payloadDigest": outcome.admission.payload_digest,
-          "lineageDepth": outcome.admission.depth,
-          "duplicate": outcome.duplicate,
-        }
-      }))
+      let Some(execution) = execution else {
+        return Ok(admission_result(&outcome));
+      };
+      execute_child_and_wait(
+        database_path,
+        outcome,
+        execution,
+        prepared.timeout_ms,
+        cancellation,
+      )
+      .await
     })
   }
+}
+
+fn admission_result(outcome: &WorkflowCallAdmissionOutcome) -> Value {
+  json!({
+    "contract": "woml.workflow-call-admission",
+    "contractVersion": 1,
+    "kind": "admitted",
+    "data": {
+      "targetWorkflowId": outcome.admission.target_workflow_id,
+      "targetDefinitionHash": outcome.admission.target_definition_hash,
+      "childRunId": outcome.admission.child_run_id,
+      "payloadDigest": outcome.admission.payload_digest,
+      "lineageDepth": outcome.admission.depth,
+      "duplicate": outcome.duplicate,
+    }
+  })
+}
+
+async fn execute_child_and_wait(
+  database_path: PathBuf,
+  outcome: WorkflowCallAdmissionOutcome,
+  execution: WorkflowCallExecutionConfig,
+  timeout_ms: u64,
+  cancellation: CapabilityCancellationToken,
+) -> Result<Value, CapabilityFailure> {
+  let admission = outcome.admission;
+  let mut store = DurableEventStore::open(&database_path).map_err(store_failure)?;
+  let claimed = store
+    .claim_workflow_call_execution(&admission.call_key)
+    .map_err(store_failure)?;
+  drop(store);
+  if !claimed {
+    return observe_existing_child(&database_path, &admission, timeout_ms, &cancellation).await;
+  }
+
+  let child_run_id = admission.child_run_id.clone();
+  let call_key = admission.call_key.clone();
+  let task_database_path = database_path.clone();
+  let runtime_options = execution.runtime_options()?;
+  let mut task = tokio::spawn(async move {
+    let result = execute_admitted_trigger_run_durable(
+      task_database_path.clone(),
+      &child_run_id,
+      runtime_options,
+    )
+    .await;
+    let terminal_state = if matches!(result, Ok(WorkflowRuntimeOutcome::Succeeded { .. })) {
+      WorkflowCallIndexState::Succeeded
+    } else {
+      WorkflowCallIndexState::Failed
+    };
+    let transition = DurableEventStore::open(&task_database_path).and_then(|mut store| {
+      store.transition_workflow_call_state(
+        &call_key,
+        WorkflowCallIndexState::Running,
+        terminal_state,
+      )
+    });
+    (result, transition)
+  });
+
+  tokio::select! {
+    _ = cancellation.cancelled() => Err(workflow_call_cancelled_after_admission(&admission)),
+    timed = tokio::time::timeout(Duration::from_millis(timeout_ms), &mut task) => {
+      match timed {
+        Err(_) => Err(workflow_call_timed_out(&admission)),
+        Ok(Err(_)) => {
+          let _ = DurableEventStore::open(&database_path).and_then(|mut store| {
+            store.transition_workflow_call_state(
+              &admission.call_key,
+              WorkflowCallIndexState::Running,
+              WorkflowCallIndexState::Failed,
+            )
+          });
+          Err(workflow_call_unavailable())
+        },
+        Ok(Ok((result, transition))) => {
+          transition.map_err(store_failure)?;
+          terminal_child_result(&admission, result)
+        }
+      }
+    }
+  }
+}
+
+async fn observe_existing_child(
+  database_path: &std::path::Path,
+  admission: &WorkflowCallAdmission,
+  timeout_ms: u64,
+  cancellation: &CapabilityCancellationToken,
+) -> Result<Value, CapabilityFailure> {
+  let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+  loop {
+    let store = DurableEventStore::open(database_path.to_path_buf()).map_err(store_failure)?;
+    let projection = store
+      .projection(&admission.child_run_id)
+      .map_err(store_failure)?;
+    match projection.status {
+      RunStatus::Succeeded => {
+        let result = projection
+          .result
+          .ok_or_else(|| workflow_call_result_missing(admission))?;
+        return workflow_call_success(admission, result);
+      }
+      RunStatus::Failed => {
+        return if matches!(
+          projection.failure,
+          Some(RunFailure::Attempt(ref failure))
+            if failure.kind == AttemptFailureKind::InvalidScriptResult
+        ) {
+          Err(workflow_call_result_missing(admission))
+        } else {
+          Err(workflow_call_child_failed(admission))
+        };
+      }
+      RunStatus::Waiting => {
+        return Err(workflow_call_wait_unsupported(admission));
+      }
+      RunStatus::NotStarted | RunStatus::Running => {}
+    }
+    tokio::select! {
+      _ = cancellation.cancelled() => {
+        return Err(workflow_call_cancelled_after_admission(admission));
+      }
+      _ = tokio::time::sleep_until(deadline) => {
+        return Err(workflow_call_timed_out(admission));
+      }
+      _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+    }
+  }
+}
+
+fn terminal_child_result(
+  admission: &WorkflowCallAdmission,
+  outcome: Result<WorkflowRuntimeOutcome, crate::RuntimeExecutionError>,
+) -> Result<Value, CapabilityFailure> {
+  match outcome {
+    Ok(WorkflowRuntimeOutcome::Succeeded { execution, .. }) => {
+      workflow_call_success(admission, execution.result)
+    }
+    Ok(WorkflowRuntimeOutcome::Waiting { .. }) => Err(workflow_call_wait_unsupported(admission)),
+    Err(crate::RuntimeExecutionError::RunFailed(details))
+      if details.failure.kind == AttemptFailureKind::InvalidScriptResult =>
+    {
+      Err(workflow_call_result_missing(admission))
+    }
+    Err(_) => Err(workflow_call_child_failed(admission)),
+  }
+}
+
+fn workflow_call_success(
+  admission: &WorkflowCallAdmission,
+  result: Value,
+) -> Result<Value, CapabilityFailure> {
+  let result_bytes = serde_json::to_vec(&result)
+    .map_err(|_| workflow_call_result_missing(admission))?
+    .len();
+  if result_bytes > MAX_WORKFLOW_CALL_RESULT_BYTES {
+    return Err(workflow_call_failure_with_child(
+      CapabilityFailureKind::ResultTooLarge,
+      "WOML_WORKFLOW_RESULT_TOO_LARGE",
+      "The called workflow result exceeds the 4 MiB limit.",
+      false,
+      admission,
+    ));
+  }
+  Ok(json!({
+    "contract": WORKFLOW_CALL_CONTRACT,
+    "contractVersion": WORKFLOW_CALL_CONTRACT_VERSION,
+    "kind": "succeeded",
+    "workflowId": admission.target_workflow_id,
+    "definitionHash": admission.target_definition_hash,
+    "childRunId": admission.child_run_id,
+    "result": result,
+  }))
 }
 
 pub fn derive_workflow_call_key(
@@ -501,6 +760,12 @@ fn store_failure(error: DurableStoreError) -> CapabilityFailure {
       "The workflow call exceeds the maximum lineage depth.",
       false,
     ),
+    DurableStoreError::WorkflowCallCycle => (
+      CapabilityFailureKind::ServiceRejected,
+      "WOML_WORKFLOW_CALL_CYCLE",
+      "The workflow call would repeat a workflow already present in its lineage.",
+      false,
+    ),
     DurableStoreError::WorkflowCallDefinitionMismatch => (
       CapabilityFailureKind::ServiceRejected,
       "WOML_WORKFLOW_DEFINITION_MISMATCH",
@@ -539,6 +804,77 @@ fn workflow_call_cancelled() -> CapabilityFailure {
     "The workflow call was cancelled before child admission.",
     false,
   )
+}
+
+fn workflow_call_cancelled_after_admission(admission: &WorkflowCallAdmission) -> CapabilityFailure {
+  workflow_call_failure_with_child(
+    CapabilityFailureKind::Cancelled,
+    "WOML_WORKFLOW_CALL_CANCELLED",
+    "The parent stopped waiting; the admitted child workflow remains independent.",
+    false,
+    admission,
+  )
+}
+
+fn workflow_call_timed_out(admission: &WorkflowCallAdmission) -> CapabilityFailure {
+  workflow_call_failure_with_child(
+    CapabilityFailureKind::TimedOut,
+    "WOML_WORKFLOW_CALL_TIMED_OUT",
+    "The parent stopped waiting before the child workflow finished.",
+    false,
+    admission,
+  )
+}
+
+fn workflow_call_result_missing(admission: &WorkflowCallAdmission) -> CapabilityFailure {
+  workflow_call_failure_with_child(
+    CapabilityFailureKind::InvalidResult,
+    "WOML_WORKFLOW_RESULT_MISSING",
+    "The called workflow reached success without a JSON result.",
+    false,
+    admission,
+  )
+}
+
+fn workflow_call_wait_unsupported(admission: &WorkflowCallAdmission) -> CapabilityFailure {
+  workflow_call_failure_with_child(
+    CapabilityFailureKind::ServiceRejected,
+    "WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED",
+    "Workflow Calls v1 cannot wait for a child Human Approval.",
+    false,
+    admission,
+  )
+}
+
+fn workflow_call_child_failed(admission: &WorkflowCallAdmission) -> CapabilityFailure {
+  workflow_call_failure_with_child(
+    CapabilityFailureKind::ServiceRejected,
+    "WOML_WORKFLOW_CALL_FAILED",
+    "The called workflow failed. Inspect its child run for details.",
+    false,
+    admission,
+  )
+}
+
+fn workflow_call_failure_with_child(
+  kind: CapabilityFailureKind,
+  code: &str,
+  message: &str,
+  retryable: bool,
+  admission: &WorkflowCallAdmission,
+) -> CapabilityFailure {
+  let mut failure = workflow_call_failure(kind, code, message, retryable);
+  failure.details = Some(Map::from_iter([
+    (
+      "workflowId".to_string(),
+      Value::String(admission.target_workflow_id.clone()),
+    ),
+    (
+      "childRunId".to_string(),
+      Value::String(admission.child_run_id.clone()),
+    ),
+  ]));
+  failure
 }
 
 fn workflow_call_failure(

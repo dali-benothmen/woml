@@ -642,10 +642,10 @@ fn prepare_state(
   config
     .execution
     .capability_registry
-    .register(Arc::new(ManagedWorkflowCallsHandler::new(
-      config.database_path.clone(),
-      workflow_targets,
-    )))
+    .register(Arc::new(
+      ManagedWorkflowCallsHandler::new(config.database_path.clone(), workflow_targets)
+        .with_execution(&config.execution),
+    ))
     .map_err(|error| WebhookRuntimeError::InvalidRegistration(error.to_string()))?;
 
   Ok((

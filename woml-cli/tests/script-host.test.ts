@@ -882,6 +882,142 @@ return {
     });
   });
 
+  test('WC3/WC4 lowers workflows.call, bounds waiting, and enforces stable repeated identities', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const request = message.call.input as {
+          readonly workflowId: string;
+          readonly payload: { readonly customerId: string };
+        };
+        const workflowResult = {
+          contract: 'woml.workflow-call',
+          contractVersion: 1,
+          kind: 'succeeded',
+          workflowId: request.workflowId,
+          definitionHash:
+            'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+          childRunId: 'run_call_test',
+          result: {
+            score: request.payload.customerId === 'customer-42' ? 90 : 20,
+          },
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(workflowResult)),
+            durationMs: 1,
+            result: workflowResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_workflow_call',
+        `const risk = await services.workflows.call(
+          'calculate-risk',
+          { customerId: 'customer-42' },
+          { name: 'customer-risk', timeout: '1s' }
+        );
+        return { risk, frozen: Object.isFrozen(services.workflows) };`
+      )
+    );
+    host.accept(
+      executeV4(
+        'inv_v4_workflow_call_timeout_limit',
+        `try {
+          await services.workflows.call('calculate-risk', {}, { timeout: '3s' });
+          return { rejected: false };
+        } catch (error) {
+          return { rejected: true, message: error.message };
+        }`
+      )
+    );
+    host.accept(
+      executeV4(
+        'inv_v4_workflow_call_automatic_identity',
+        `await services.workflows.call('calculate-risk', { customerId: 'customer-42' });
+        try {
+          await services.workflows.call('calculate-risk', { customerId: 'customer-7' });
+          return { rejected: false };
+        } catch (error) {
+          return { rejected: true, message: error.message };
+        }`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(2);
+    const mainCall = calls.find(
+      call => call.invocationId === 'inv_v4_workflow_call'
+    );
+    expect(mainCall?.call).toMatchObject({
+      capability: 'workflows',
+      operation: 'call',
+      identity: {
+        mode: 'named',
+        operationName: 'workflows.call.customer-risk',
+      },
+      limits: { timeoutMs: 2_000 },
+      input: {
+        contract: 'woml.workflow-call',
+        contractVersion: 1,
+        kind: 'request',
+        workflowId: 'calculate-risk',
+        payload: { customerId: 'customer-42' },
+        options: { name: 'customer-risk', timeoutMs: 1_000 },
+      },
+    });
+    expect(
+      byInvocation(completed).get('inv_v4_workflow_call')?.outcome
+    ).toEqual({
+      kind: 'success',
+      value: { risk: { score: 90 }, frozen: true },
+    });
+    expect(
+      byInvocation(completed).get('inv_v4_workflow_call_timeout_limit')?.outcome
+    ).toEqual({
+      kind: 'success',
+      value: {
+        rejected: true,
+        message:
+          'Workflow Call timeout cannot exceed the calling step remaining timeout.',
+      },
+    });
+    expect(
+      byInvocation(completed).get('inv_v4_workflow_call_automatic_identity')
+        ?.outcome
+    ).toEqual({
+      kind: 'success',
+      value: {
+        rejected: true,
+        message: expect.stringContaining('require stable names'),
+      },
+    });
+  });
+
   test('protocol v4 lowers services.db() calls and exposes only Database v1 data', async () => {
     const completed: CompletedMessage[] = [];
     const calls: CapabilityCallMessage[] = [];

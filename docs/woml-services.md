@@ -1,6 +1,6 @@
 # WOML Services
 
-WOML scripts currently execute with five built-in services without installing
+WOML scripts currently execute with six built-in services without installing
 an npm package:
 
 ```js
@@ -9,12 +9,15 @@ services.db
 services.storage
 services.cache
 services.events
+services.workflows
 ```
 
-The frontend also reserves and type-checks `services.workflows.call()` for
-durable workflow-to-workflow calls. WC2 implements exact Rust target lookup and
-idempotent child admission. `woml run` still reports a clear availability error
-until WC3 adds child execution, terminal waiting, and result delivery.
+`services.workflows.call()` starts exactly one activated child workflow by ID,
+passes a JSON object as its `context.trigger`, and resolves to its final JSON
+result. WC4 safely reconnects retries and duplicate delivery to that same child,
+requires stable names for repeated calls to one target in a step, rejects call
+cycles, and fails ambiguous parent attempts closed. Workflows must currently be
+loaded by the same `woml run` runtime; WC5 adds local cross-process routing.
 
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies
@@ -30,6 +33,7 @@ cancellation and limits, and keeps secrets out of durable operation metadata.
 | Files and larger durable values | `services.storage` | Checksummed objects stored outside workflow context |
 | Reusable but disposable values | `services.cache` | Workflow-scoped expiring optimization data |
 | Start every workflow interested in a fact | `services.events.emit()` | Durable internal named-event fan-out |
+| Delegate work and use one workflow's answer | `services.workflows.call()` | One independently durable child run and direct JSON result |
 
 Queue is deliberately unavailable. Durable triggers already create runs safely,
 and internal events cover fan-out. A queue will be added only when WOML has a
@@ -79,6 +83,17 @@ It writes an order to SQLite, object storage, and cache concurrently, reads the
 values back, then emits `order.prepared` to the subscriber. No event secret or
 HTTP endpoint is involved. Press Ctrl+C to stop.
 
+The Workflow Calls example loads a triggered parent and a call-only child into
+one runtime:
+
+```bash
+woml run examples/workflowCalls
+```
+
+The parent passes a customer ID to the child, receives its risk score, and
+prints `{"message":"Customer risk score: 90","score":90}`. Press Ctrl+C to
+stop the active runtime.
+
 ## Detailed references
 
 - Outbound HTTP: `docs/woml-http-services.md`
@@ -86,4 +101,5 @@ HTTP endpoint is involved. Press Ctrl+C to stop.
 - Durable object storage: `docs/woml-storage.md`
 - Cache: `docs/woml-cache.md`
 - Internal events: `docs/woml-events-service.md`
+- Workflow Calls: `docs/protocols/workflow-calls-v1.md`
 - SDK migration: `docs/woml-sdk-migration.md`

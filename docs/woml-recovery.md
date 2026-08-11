@@ -53,6 +53,18 @@ A managed `operation_started` without `operation_succeeded` or
 surrounding attempt is recovered. WOML never reconstructs a JavaScript
 instruction pointer or releases an unpersisted service result after restart.
 
+## Workflow Calls
+
+A workflow call admits one independent child before executing it. Retries and
+duplicate delivery with the same logical identity reconnect to that child;
+they never manufacture another run. The mutable call index is reconstructed
+from the child's authoritative events during startup recovery.
+
+If the child succeeded but the parent crashed before durably committing its
+step result, the child remains successful and inspectable. The ambiguous parent
+attempt still fails closed. WOML does not replay the parent script or pretend
+that receiving the child's result proves the parent finished using it.
+
 ## Operational output
 
 Attempt failures, schedules, successes, and the recovery command are written to

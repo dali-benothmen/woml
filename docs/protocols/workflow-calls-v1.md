@@ -1,8 +1,9 @@
 # WOML Workflow Calls v1
 
-Status: frozen by WC0 on 2026-08-10. WC1 compiled the source contract and WC2
-implemented Rust target registration plus durable child admission. Child
-dispatch and result waiting begin in WC3.
+Status: frozen by WC0 on 2026-08-10. WC1 compiled the source contract, WC2
+implemented exact registration plus durable child admission, WC3 executed
+same-runtime children, and WC4 completed retry-safe reattachment, cycle
+rejection, single-executor claiming, and fail-closed recovery.
 
 ## Author contract
 
@@ -76,6 +77,21 @@ A duplicate with the same inputs reattaches to the child. A duplicate with a
 different payload or target fails with
 `WOML_WORKFLOW_CALL_IDEMPOTENCY_CONFLICT`. A route retry after admission never
 creates another child.
+
+The stored `parentAttempt` records the attempt that first admitted the child;
+it is not part of the logical call identity. A later attempt with the same
+step idempotency key, target, operation name, payload digest, and definition
+hash observes that original child. Exactly one concurrent caller may move the
+index from `admitted` to `running`; all others wait on authoritative child run
+history.
+
+Recovery reconciles the reconstructible index from child events. A child that
+committed success stays successful even if the parent crashed before committing
+its step result. The ambiguous parent attempt fails closed and is never replayed
+as proof that its script did or did not finish.
+
+Self-calls and indirect calls to a workflow already present in hidden lineage
+fail with `WOML_WORKFLOW_CALL_CYCLE`. The maximum lineage depth remains 32.
 
 The durable call index is a transactional uniqueness/routing index. Parent
 operation history and child run history remain authoritative and the index
