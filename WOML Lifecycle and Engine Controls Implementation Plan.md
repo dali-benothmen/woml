@@ -728,7 +728,7 @@ written.
 | LEC3 (complete) | Execute workflow-level lifecycle scripts.                                                             | `on-start`, outcome hooks, and `on-complete` work end to end.                                                                                   |
 | LEC4 (complete) | Execute step lifecycle hooks across retries and control flow.                                         | Step start/success/failure/complete observers work correctly in sequential, branch, parallel, and approval workflows.                           |
 | LEC5 (complete) | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
-| LEC6            | Implement durable cancellation and propagation.                                                       | Active and waiting Event v10 runs can be cancelled safely and recovered.                                                                        |
+| LEC6 (complete) | Implement durable cancellation and propagation.                                                       | Active and waiting Event v10 runs can be cancelled safely and recovered.                                                                        |
 | LEC7            | Ship direct `list`, `get`, and `cancel` CLI commands.                                                 | Operators manage runs without the `runs` namespace or workflow source files.                                                                    |
 | LEC8            | Harden, migrate, document, benchmark, and publish.                                                    | Lifecycle and Engine Controls become a supported release feature.                                                                               |
 
@@ -980,6 +980,8 @@ uses the existing `woml secrets` experience.
 
 ### LEC6 — Implement durable run cancellation
 
+Status: complete.
+
 Changes:
 
 - Expose an atomic Rust cancel command over Event v10 runs.
@@ -989,8 +991,9 @@ Changes:
 - Signal active pre-outcome lifecycle actions and settle them as cancelled
   lifecycle work before `on-cancel` begins.
 - Settle running step, parallel, branch, and retry state truthfully.
-- Cancel waiting approvals, invalidate decision capabilities, and update
-  delivered approval messages.
+- Make waiting approvals inactive and invalidate every decision capability;
+  defer visible `cancelled` message updates according to the frozen-contract
+  adjustment below.
 - Preserve committed work and independent child workflows.
 - Execute `on-cancel`, then `on-complete`, and finalize as cancelled.
 - Recover cancellation after process crash or target-runtime restart.
@@ -1000,11 +1003,41 @@ Result:
 An active or waiting workflow can be cancelled durably without pretending that
 external side effects were rolled back.
 
+Implemented behavior:
+
+- Rust observes the durable request while scripts, lifecycle scripts, parallel
+  children, and retry waits are active.
+- Bun receives the frozen Script Host `run_cancelled` signal, and Rust cancels
+  the invocation's managed capability tokens before settling the attempt.
+- No new node or retry starts after cancellation wins the durable sequence.
+- Active step attempts settle as engine-cancelled; step-complete, on-cancel,
+  and on-complete lifecycle work then runs in that order before finalization.
+- Waiting approval and Slack decision capabilities become unusable immediately.
+- Restart recovery closes active attempts without replay and completes the same
+  cancelled outcome.
+- Already committed step results and independently started child workflows are
+  preserved.
+
+Reviewed contract adjustment:
+
+Event v10 and Notification Provider Host v2 only encode approved, rejected, and
+timeout message resolutions. LEC6 therefore invalidates approval capabilities
+and treats a waiting request as inactive once its run is cancelling, while
+retaining that request's historical `waiting` projection. It deliberately does
+not mislabel an existing Slack approval message as rejected. A first-class
+approval-cancelled projection and visible `cancelled` message update require an
+explicit future Event/Provider protocol version, and remain on the post-LEC7
+provider-hardening roadmap rather than silently changing a frozen contract.
+
 Gate:
 
 Race/crash tests cover every boundary before and after step start/success,
 operation dispatch, approval wait, retry schedule, child admission, cancellation
 request, cancellation signal, hook execution, and finalization.
+
+The completed automated gate covers live script signalling, pre-outcome
+lifecycle action settlement, parallel child signalling, retry suppression,
+approval credential invalidation, and crash/restart continuation.
 
 ### LEC7 — Ship direct run-management commands
 

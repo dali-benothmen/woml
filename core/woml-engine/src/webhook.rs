@@ -2526,6 +2526,7 @@ fn runtime_failure_code(error: &crate::RuntimeExecutionError) -> String {
     crate::RuntimeExecutionError::ParallelFailed(details) => details.code.clone(),
     crate::RuntimeExecutionError::ApprovalFailed(details) => details.code.clone(),
     crate::RuntimeExecutionError::NotificationFailed(details) => details.code.clone(),
+    crate::RuntimeExecutionError::RunCancelled(details) => details.code.clone(),
     _ => "WOML_TRIGGER_EXECUTION_FAILED".to_string(),
   }
 }

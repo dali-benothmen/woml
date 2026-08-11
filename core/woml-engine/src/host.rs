@@ -258,11 +258,24 @@ impl ScriptHostClient {
   }
 
   pub async fn cancel(&self, invocation_id: &str) -> Result<(), ScriptHostClientError> {
-    cancel_invocation_calls(&self.shared, invocation_id).await;
-    if let Err(error) = self
-      .write_message(&CancelMessage::parallel_fail_fast(invocation_id))
+    self
+      .cancel_with_message(CancelMessage::parallel_fail_fast(invocation_id))
       .await
-    {
+  }
+
+  pub async fn cancel_run(&self, invocation_id: &str) -> Result<(), ScriptHostClientError> {
+    self
+      .cancel_with_message(CancelMessage::run_cancelled(invocation_id))
+      .await
+  }
+
+  async fn cancel_with_message(
+    &self,
+    message: CancelMessage<'_>,
+  ) -> Result<(), ScriptHostClientError> {
+    let invocation_id = message.invocation_id;
+    cancel_invocation_calls(&self.shared, invocation_id).await;
+    if let Err(error) = self.write_message(&message).await {
       fail_all(&self.shared, error.clone()).await;
       return Err(error);
     }

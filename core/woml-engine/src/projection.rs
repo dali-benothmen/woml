@@ -600,7 +600,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           .insert(data.node_id.clone(), data.output.clone());
       }
       RunEventPayload::StepAttemptFailed(data) => {
-        require_running(&projection)?;
+        require_running_or_cancelling(&projection)?;
         if !projection
           .active_managed_operations(&data.invocation_id)
           .is_empty()
@@ -696,7 +696,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         );
       }
       RunEventPayload::ParallelGroupCompleted(data) => {
-        require_running(&projection)?;
+        require_running_or_cancelling(&projection)?;
         let group = projection
           .parallel_groups
           .get_mut(&data.parallel_id)
@@ -1171,7 +1171,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         };
       }
       RunEventPayload::OperationFailed(data) => {
-        require_operation_runtime(&projection)?;
+        require_operation_settlement(&projection)?;
         require_active_operation_attempt(
           &projection,
           &data.node_id,
@@ -1682,6 +1682,18 @@ fn require_running(projection: &RunProjection) -> Result<(), FoldError> {
   Ok(())
 }
 
+fn require_running_or_cancelling(projection: &RunProjection) -> Result<(), FoldError> {
+  if !matches!(
+    projection.status,
+    RunStatus::Running | RunStatus::Cancelling
+  ) {
+    return Err(FoldError::InvalidHistory(
+      "An attempt may only settle while its run is running or cancelling.".to_string(),
+    ));
+  }
+  Ok(())
+}
+
 fn require_operation_runtime(projection: &RunProjection) -> Result<(), FoldError> {
   if !matches!(
     projection.status,
@@ -1689,6 +1701,18 @@ fn require_operation_runtime(projection: &RunProjection) -> Result<(), FoldError
   ) {
     return Err(FoldError::InvalidHistory(
       "An operation requires a running or lifecycle-finalizing run.".to_string(),
+    ));
+  }
+  Ok(())
+}
+
+fn require_operation_settlement(projection: &RunProjection) -> Result<(), FoldError> {
+  if !matches!(
+    projection.status,
+    RunStatus::Running | RunStatus::Cancelling | RunStatus::Finalizing
+  ) {
+    return Err(FoldError::InvalidHistory(
+      "An operation may only settle for an active or finalizing run.".to_string(),
     ));
   }
   Ok(())

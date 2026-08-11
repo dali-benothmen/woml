@@ -54,6 +54,16 @@ impl<'a> CancelMessage<'a> {
       reason: "parallel_fail_fast",
     }
   }
+
+  pub fn run_cancelled(invocation_id: &'a str) -> Self {
+    Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "cancel",
+      invocation_id,
+      reason: "run_cancelled",
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

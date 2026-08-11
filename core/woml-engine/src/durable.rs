@@ -3117,7 +3117,10 @@ impl DurableEventStore {
       event_schema_version,
       RunEventPayload::RunOutcomeDecided(outcome),
     )?;
-    if let Some(hook) = workflow.lifecycle_hook_for_event(lifecycle_event) {
+    if let Some(hook) = workflow
+      .lifecycle_hook_for_event(lifecycle_event)
+      .or_else(|| workflow.lifecycle_hook_for_event(crate::model::LifecycleEventName::RunComplete))
+    {
       let already_requested = fold_events(&events)?
         .lifecycle_hooks
         .values()
@@ -3547,6 +3550,13 @@ impl DurableEventStore {
     let workflow = definition_for_run(&transaction, &run_id)?;
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
     let projection = fold_events(&events)?;
+    if matches!(
+      projection.status,
+      RunStatus::Cancelling | RunStatus::Finalizing
+    ) || projection.business_outcome == Some(crate::event::BusinessOutcome::Cancelled)
+    {
+      return Err(DurableStoreError::ApprovalExpired);
+    }
     let request = projection
       .approval_requests
       .get(&approval_id)
@@ -4094,6 +4104,13 @@ impl DurableEventStore {
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
+    if matches!(
+      projection.status,
+      RunStatus::Cancelling | RunStatus::Finalizing
+    ) || projection.business_outcome == Some(crate::event::BusinessOutcome::Cancelled)
+    {
+      return Err(DurableStoreError::ApprovalExpired);
+    }
     let request = projection
       .approval_requests
       .get(&approval_id)
@@ -4397,6 +4414,18 @@ impl DurableEventStore {
     let credential_expires_at = parse_stored_timestamp(&expires_at)?;
     if now >= credential_expires_at {
       return Err(DurableStoreError::ExpiredApprovalToken);
+    }
+    let projection = self.projection(&run_id)?;
+    let request_is_waiting =
+      projection
+        .approval_requests
+        .get(&approval_id)
+        .is_some_and(|request| {
+          request.request_id == request_id
+            && matches!(request.status, ApprovalRequestStatus::Waiting)
+        });
+    if projection.status != RunStatus::Waiting || !request_is_waiting {
+      return Err(DurableStoreError::ApprovalExpired);
     }
     Ok(ApprovalTokenBinding {
       token_id: token_id.to_string(),
@@ -6894,6 +6923,19 @@ impl DurableDagEngine {
     &self.definition_hash
   }
 
+  pub fn decide_run_outcome(
+    &mut self,
+    run_id: &str,
+    outcome: crate::event::RunOutcomeDecidedData,
+    occurred_at: DateTime<Utc>,
+  ) -> Result<RunProjection, DurableEngineError> {
+    Ok(
+      self
+        .store
+        .decide_run_outcome(run_id, outcome, occurred_at)?,
+    )
+  }
+
   pub fn start_run(
     &mut self,
     event_id: impl Into<String>,
@@ -7010,8 +7052,11 @@ impl DurableDagEngine {
       ));
     }
 
+    let cancellation_settlement = projection.status == RunStatus::Cancelling
+      && failure.failure.kind == AttemptFailureKind::InvocationCancelled;
     let retry = node.retry_policy.as_ref().filter(|policy| {
-      failure.failure.kind == AttemptFailureKind::ScriptThrew
+      !cancellation_settlement
+        && failure.failure.kind == AttemptFailureKind::ScriptThrew
         && failure.attempt < policy.max_attempts
     });
     let (payloads, disposition) = if let Some(policy) = retry {
@@ -7046,7 +7091,7 @@ impl DurableDagEngine {
           scheduled_at,
         },
       )
-    } else if parallel_child {
+    } else if parallel_child || cancellation_settlement {
       (
         vec![(
           generated_event_id(),

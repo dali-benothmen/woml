@@ -24,8 +24,8 @@ use crate::event::{
   OperationFailedData, OperationStartedData, OperationSucceededData, ParallelFailure,
   ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome,
   ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
-  RunFinalizedData, RunSucceededData, StepAttemptFailedData, StepAttemptStartedData,
-  StepAttemptSucceededData,
+  RunFinalizedData, RunOutcomeDecidedData, RunSucceededData, StepAttemptFailedData,
+  StepAttemptStartedData, StepAttemptSucceededData,
 };
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{
@@ -34,7 +34,7 @@ use crate::model::{
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, LifecycleActionStatus, LifecycleHookProjection,
-  LifecycleHookStatus,
+  LifecycleHookStatus, ParallelGroupStatus,
 };
 use crate::protocol::{
   ExecuteMessage, HostOutcome, LifecycleBindingV1, LifecycleFailureBindingV1,
@@ -51,9 +51,9 @@ use crate::{
   DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
   InformationalNotificationDeliverMessage, IssuedApprovalToken, NotificationCredentials,
   NotificationHostClient, NotificationHostClientError, NotificationHostOutcome,
-  NotificationHostProcessOptions, RecoveryReport, RunEvent, RunEventPayload, RunFailure,
-  RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostModuleArtifact,
-  ScriptHostProcessOptions, StepFailureDisposition, WorkflowContext,
+  NotificationHostProcessOptions, OperationStatus, RecoveryReport, RunEvent, RunEventPayload,
+  RunFailure, RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError,
+  ScriptHostModuleArtifact, ScriptHostProcessOptions, StepFailureDisposition, WorkflowContext,
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION, NOTIFICATION_PROVIDER_PROTOCOL,
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
@@ -554,10 +554,21 @@ pub enum RuntimeExecutionError {
   ApprovalFailed(Box<FailedApprovalDetails>),
   #[error(transparent)]
   NotificationFailed(Box<FailedNotificationDetails>),
+  #[error(transparent)]
+  RunCancelled(Box<CancelledRunDetails>),
   #[error("workflow execution stalled: {0}")]
   Stalled(String),
   #[error("runtime configuration is invalid: {0}")]
   InvalidConfiguration(String),
+}
+
+#[derive(Debug, Error)]
+#[error("workflow run {run_id:?} was cancelled [{code}]")]
+pub struct CancelledRunDetails {
+  pub code: String,
+  pub run_id: String,
+  pub cancellation_request_id: String,
+  pub events: Vec<RunEvent>,
 }
 
 #[derive(Debug, Error)]
@@ -1001,9 +1012,7 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
     }
     RunStatus::Failed => return Err(resumed_failure(&engine, run_id, projection)?),
     RunStatus::Cancelled => {
-      return Err(RuntimeExecutionError::Stalled(
-        "stored run was cancelled".to_string(),
-      ));
+      return Err(cancelled_run_error(&engine, run_id)?);
     }
     RunStatus::Finalizing => {
       let mut host = None;
@@ -1019,17 +1028,13 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
           execution_order,
         )?)),
         RunStatus::Failed => Err(resumed_failure(&engine, run_id, projection)?),
+        RunStatus::Cancelled => Err(cancelled_run_error(&engine, run_id)?),
         _ => Err(RuntimeExecutionError::Stalled(
           "stored run did not finish lifecycle continuation".to_string(),
         )),
       };
     }
-    RunStatus::Cancelling => {
-      return Err(RuntimeExecutionError::Stalled(
-        "stored run cancellation continuation is introduced in LEC6".to_string(),
-      ));
-    }
-    RunStatus::Running => {}
+    RunStatus::Cancelling | RunStatus::Running => {}
     RunStatus::Waiting => {
       return engine.reissue_waiting_outcome(run_id, options.clock.now());
     }
@@ -1078,7 +1083,7 @@ async fn continue_runtime<E: RuntimeDagEngine>(
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let mut host = None;
   drive_workflow_lifecycle(engine, run_id, options, &mut host).await?;
-  let execution = continue_runtime_loop(
+  let mut execution = continue_runtime_loop(
     engine,
     run_id,
     terminal_node_id,
@@ -1087,16 +1092,22 @@ async fn continue_runtime<E: RuntimeDagEngine>(
     &mut host,
   )
   .await;
+  if execution.is_err() && engine.projection(run_id)?.status == RunStatus::Cancelling {
+    settle_cancelling_run(engine, run_id, options.clock.now())?;
+    execution = Err(cancelled_run_error(engine, run_id)?);
+  }
   let lifecycle = drive_workflow_lifecycle(engine, run_id, options, &mut host).await;
   if let Some(host) = host {
     host.shutdown().await;
   }
   lifecycle?;
-  match execution? {
-    WorkflowRuntimeOutcome::Succeeded { execution, .. } => Ok(WorkflowRuntimeOutcome::succeeded(
-      final_result(engine, run_id, execution.execution_order)?,
-    )),
-    waiting @ WorkflowRuntimeOutcome::Waiting { .. } => Ok(waiting),
+  match execution {
+    Ok(WorkflowRuntimeOutcome::Succeeded { execution, .. }) => Ok(
+      WorkflowRuntimeOutcome::succeeded(final_result(engine, run_id, execution.execution_order)?),
+    ),
+    Ok(waiting @ WorkflowRuntimeOutcome::Waiting { .. }) => Ok(waiting),
+    Err(RuntimeExecutionError::RunCancelled(_)) => Err(cancelled_run_error(engine, run_id)?),
+    Err(error) => Err(error),
   }
 }
 
@@ -1855,6 +1866,14 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       }
       return Ok(());
     };
+    if hook_projection.event == LifecycleEventName::RunCancel
+      && projection.business_outcome.is_none()
+    {
+      // The cancellation request admits this hook durably, but it must not run
+      // until all pre-outcome work has settled and cancellation is the durable
+      // business outcome.
+      return Ok(());
+    }
     let hook = engine
       .workflow()
       .lifecycle_hook(&hook_projection.hook_id)
@@ -1946,6 +1965,47 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       );
       continue;
     };
+    if projection.cancellation_request_id.is_some()
+      && matches!(
+        hook.event,
+        LifecycleEventName::RunStart | LifecycleEventName::StepStart
+      )
+    {
+      let attempt_number = 1;
+      engine.append_payloads(
+        run_id,
+        vec![
+          RunEventPayload::LifecycleActionAttemptStarted(LifecycleActionIdentityData {
+            hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+            action_id: action.action_id.clone(),
+            attempt: attempt_number,
+          }),
+          RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
+            hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+            action_id: action.action_id.clone(),
+            attempt: attempt_number,
+            failure: LifecycleFailure {
+              kind: LifecycleFailureKind::Cancelled,
+              code: "WOML_LIFECYCLE_ACTION_CANCELLED".to_string(),
+              message: "The pending pre-outcome lifecycle action was cancelled without execution."
+                .to_string(),
+            },
+          }),
+        ],
+      )?;
+      report_lifecycle(
+        options,
+        engine.workflow(),
+        run_id,
+        LifecycleProgressPhase::ActionFailed,
+        &hook.hook_id,
+        &action.action_id,
+        matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step)
+          .then_some(hook_projection.subject.id.as_str()),
+        Some("WOML_LIFECYCLE_ACTION_CANCELLED".to_string()),
+      );
+      continue;
+    }
     if !matches!(
       action.handler.as_str(),
       "runtime.lifecycle-script" | "notification.informational"
@@ -2133,12 +2193,41 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       &secrets,
       &modules,
     );
-    let result = host
-      .as_ref()
-      .expect("script host was initialized")
-      .execute(&request)
-      .await;
+    let host_client = host.as_ref().expect("script host was initialized");
+    let mut execution = Box::pin(host_client.execute(&request));
+    let mut cancellation_sent = false;
+    let result = loop {
+      tokio::select! {
+        result = &mut execution => break result,
+        _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !cancellation_sent => {
+          let current = engine.projection(run_id)?;
+          let pre_outcome_action = current.business_outcome.is_none()
+            && hook.event != LifecycleEventName::RunCancel;
+          if current.status == RunStatus::Cancelling && pre_outcome_action {
+            cancellation_sent = true;
+            if let Err(error) = host_client.cancel_run(&invocation_id).await {
+              break Err(error);
+            }
+          }
+        }
+      }
+    };
+    drop(execution);
     let (payload, phase, failure_code) = match result {
+      _ if cancellation_sent => (
+        RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
+          hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+          action_id: action.action_id.clone(),
+          attempt: attempt_number,
+          failure: LifecycleFailure {
+            kind: LifecycleFailureKind::Cancelled,
+            code: "WOML_LIFECYCLE_ACTION_CANCELLED".to_string(),
+            message: "The lifecycle action was cancelled with its workflow run.".to_string(),
+          },
+        }),
+        LifecycleProgressPhase::ActionFailed,
+        Some("WOML_LIFECYCLE_ACTION_CANCELLED".to_string()),
+      ),
       Ok(completed) => match completed.outcome {
         HostOutcome::Success { .. } => (
           RunEventPayload::LifecycleActionSucceeded(LifecycleActionIdentityData {
@@ -2206,6 +2295,14 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
   host: &mut Option<ScriptHostClient>,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   loop {
+    let current = engine.projection(run_id)?;
+    if current.status == RunStatus::Cancelling {
+      settle_cancelling_run(engine, run_id, options.clock.now())?;
+      return Err(cancelled_run_error(engine, run_id)?);
+    }
+    if current.status == RunStatus::Cancelled {
+      return Err(cancelled_run_error(engine, run_id)?);
+    }
     let ready = engine.ready_node_ids(run_id)?;
     let Some(node_id) = ready.first() else {
       let projection = engine.projection(run_id)?;
@@ -2246,7 +2343,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           let wait = (scheduled_at - now).to_std().map_err(|_| {
             RuntimeExecutionError::Stalled("retry schedule exceeds the runtime clock".to_string())
           })?;
-          tokio::time::sleep(wait).await;
+          tokio::time::sleep(wait.min(CANCELLATION_POLL_INTERVAL)).await;
           continue;
         }
       }
@@ -2688,9 +2785,21 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
   let mut completion_order = Vec::new();
   let mut active: Vec<ActiveParallelInvocation<'_>> = Vec::new();
   let mut fail_fast_closed = false;
+  let mut run_cancellation_sent = false;
 
   loop {
-    while !fail_fast_closed && active.len() < group.concurrency {
+    let cancelling = engine.projection(run_id)?.status == RunStatus::Cancelling;
+    if cancelling && !run_cancellation_sent {
+      run_cancellation_sent = true;
+      let active_invocation_ids = active
+        .iter()
+        .map(|invocation| invocation.invocation_id.clone())
+        .collect::<Vec<_>>();
+      for invocation_id in active_invocation_ids {
+        let _ = host.cancel_run(&invocation_id).await;
+      }
+    }
+    while !fail_fast_closed && !cancelling && active.len() < group.concurrency {
       let projection = engine.projection(run_id)?;
       let now = chrono::Utc::now();
       let Some((node_id, attempt_number)) = group.child_node_ids.iter().find_map(|node_id| {
@@ -2766,9 +2875,35 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
       });
     }
 
-    let Some(completion) = next_parallel_completion(&mut active).await else {
+    let completion = loop {
+      tokio::select! {
+        completion = next_parallel_completion(&mut active) => break completion,
+        _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !run_cancellation_sent => {
+          if engine.projection(run_id)?.status == RunStatus::Cancelling {
+            run_cancellation_sent = true;
+            let active_invocation_ids = active
+              .iter()
+              .map(|invocation| invocation.invocation_id.clone())
+              .collect::<Vec<_>>();
+            for invocation_id in active_invocation_ids {
+              let _ = host.cancel_run(&invocation_id).await;
+            }
+          }
+        }
+      }
+    };
+    let Some(mut completion) = completion else {
       break;
     };
+    if run_cancellation_sent || engine.projection(run_id)?.status == RunStatus::Cancelling {
+      completion.outcome = Err(AttemptFailure {
+        kind: AttemptFailureKind::InvocationCancelled,
+        code: AttemptFailureKind::InvocationCancelled.code().to_string(),
+        message: "The parallel step invocation was cancelled with its workflow run.".to_string(),
+        details: None,
+        ..AttemptFailure::legacy_defaults()
+      });
+    }
     match completion.outcome {
       Ok(output) => {
         completion_order.push(completion.node_id.clone());
@@ -2847,6 +2982,9 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
   }
 
   let projection = engine.projection(run_id)?;
+  if projection.status == RunStatus::Cancelling {
+    return Ok(completion_order);
+  }
   let mut failed_node_ids = Vec::new();
   let mut cancelled_node_ids = Vec::new();
   let mut final_attempts = HashMap::new();
@@ -3091,12 +3229,41 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     &secrets,
     &module_bindings,
   );
-  let outcome = match host
-    .as_ref()
-    .expect("script host was initialized")
-    .execute(&request)
-    .await
-  {
+  let host_client = host.as_ref().expect("script host was initialized");
+  let mut execution = Box::pin(host_client.execute(&request));
+  let mut cancellation_sent = false;
+  let completed = loop {
+    tokio::select! {
+      result = &mut execution => break result,
+      _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !cancellation_sent => {
+        if engine.projection(run_id)?.status == RunStatus::Cancelling {
+          cancellation_sent = true;
+          if let Err(error) = host_client.cancel_run(&invocation_id).await {
+            break Err(error);
+          }
+        }
+      }
+    }
+  };
+  drop(execution);
+  let outcome = match completed {
+    _ if cancellation_sent || engine.projection(run_id)?.status == RunStatus::Cancelling => {
+      return settle_script_attempt_failure(
+        engine,
+        options,
+        run_id,
+        node_id,
+        attempt_number,
+        &invocation_id,
+        AttemptFailure {
+          kind: AttemptFailureKind::InvocationCancelled,
+          code: AttemptFailureKind::InvocationCancelled.code().to_string(),
+          message: "The step invocation was cancelled with its workflow run.".to_string(),
+          details: None,
+          ..AttemptFailure::legacy_defaults()
+        },
+      );
+    }
     Ok(completed) => completed.outcome,
     Err(error) => {
       let failure = AttemptFailure {
@@ -3147,6 +3314,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
 enum ScriptNodeOutcome {
   Succeeded(Value),
   RetryScheduled,
+  Cancelled,
 }
 
 fn recorded_execution_order(events: &[RunEvent]) -> Vec<String> {
@@ -3366,6 +3534,152 @@ fn final_result<E: RuntimeDagEngine>(
   })
 }
 
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+fn cancelled_run_error<E: RuntimeDagEngine>(
+  engine: &E,
+  run_id: &str,
+) -> Result<RuntimeExecutionError, RuntimeExecutionError> {
+  let projection = engine.projection(run_id)?;
+  let cancellation_request_id = projection.cancellation_request_id.ok_or_else(|| {
+    RuntimeExecutionError::Stalled("cancelled run has no durable cancellation request".to_string())
+  })?;
+  Ok(RuntimeExecutionError::RunCancelled(Box::new(
+    CancelledRunDetails {
+      code: "WOML_RUN_CANCELLED".to_string(),
+      run_id: run_id.to_string(),
+      cancellation_request_id,
+      events: engine.events(run_id)?,
+    },
+  )))
+}
+
+fn settle_cancelling_run<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  occurred_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), RuntimeExecutionError> {
+  let projection = engine.projection(run_id)?;
+  if projection.status != RunStatus::Cancelling {
+    return Ok(());
+  }
+
+  let active_operations = projection
+    .operations
+    .values()
+    .filter(|operation| operation.status == OperationStatus::Started)
+    .cloned()
+    .collect::<Vec<_>>();
+  for operation in active_operations {
+    engine.append_payload(
+      run_id,
+      RunEventPayload::OperationFailed(OperationFailedData {
+        node_id: operation.node_id,
+        attempt_number: operation.attempt_number,
+        invocation_id: operation.identity.invocation_id,
+        call_id: operation.identity.call_id,
+        operation_key: operation.operation_key,
+        capability: operation.capability,
+        operation: operation.operation,
+        execution_mode: operation.execution_mode,
+        metadata: operation.metadata,
+        duration_ms: 0.0,
+        failure: CapabilityFailure {
+          kind: CapabilityFailureKind::Ambiguous,
+          code: "WOML_CAPABILITY_CANCELLATION_AMBIGUOUS".to_string(),
+          message: "Cancellation found an operation without a durable terminal event; its external outcome is ambiguous and it will not be replayed.".to_string(),
+          retryable: false,
+          ambiguous: true,
+          details: None,
+        },
+      }),
+    )?;
+  }
+
+  let projection = engine.projection(run_id)?;
+  let active_attempts = projection
+    .attempts
+    .iter()
+    .filter(|attempt| attempt.status == AttemptStatus::Started)
+    .map(|attempt| attempt.identity.clone())
+    .collect::<Vec<_>>();
+  for attempt in active_attempts {
+    let disposition = engine.record_step_attempt_failure(
+      run_id,
+      occurred_at,
+      StepAttemptFailedData {
+        node_id: attempt.node_id,
+        attempt: attempt.attempt,
+        invocation_id: attempt.invocation_id,
+        failure: AttemptFailure {
+          kind: AttemptFailureKind::InvocationCancelled,
+          code: AttemptFailureKind::InvocationCancelled.code().to_string(),
+          message: "The step invocation was cancelled with its workflow run.".to_string(),
+          details: None,
+          ..AttemptFailure::legacy_defaults()
+        },
+      },
+    )?;
+    if disposition != StepFailureDisposition::StepFailed {
+      return Err(RuntimeExecutionError::Stalled(
+        "cancellation attempted to retry or fail the workflow".to_string(),
+      ));
+    }
+  }
+
+  let projection = engine.projection(run_id)?;
+  let started_parallel_ids = projection
+    .parallel_groups
+    .values()
+    .filter(|group| group.status == ParallelGroupStatus::Started)
+    .map(|group| group.parallel_id.clone())
+    .collect::<Vec<_>>();
+  for parallel_id in started_parallel_ids {
+    let group = engine
+      .workflow()
+      .parallel_group(&parallel_id)
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(
+          "cancelling run references an unknown parallel group".to_string(),
+        )
+      })?;
+    let projection = engine.projection(run_id)?;
+    let mut failed_node_ids = Vec::new();
+    let mut cancelled_node_ids = Vec::new();
+    for node_id in &group.child_node_ids {
+      let Some(attempt) = projection.latest_attempt(node_id) else {
+        continue;
+      };
+      let AttemptStatus::Failed { failure } = &attempt.status else {
+        continue;
+      };
+      if failure.kind == AttemptFailureKind::InvocationCancelled {
+        cancelled_node_ids.push(node_id.clone());
+      } else {
+        failed_node_ids.push(node_id.clone());
+      }
+    }
+    if failed_node_ids.is_empty() && cancelled_node_ids.is_empty() {
+      continue;
+    }
+    engine.append_payload(
+      run_id,
+      RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+        parallel_id,
+        outcome: ParallelGroupOutcome::Failed,
+        failed_node_ids,
+        cancelled_node_ids,
+      }),
+    )?;
+  }
+
+  let projection = engine.projection(run_id)?;
+  let cancellation_request_id = projection.cancellation_request_id.ok_or_else(|| {
+    RuntimeExecutionError::Stalled("cancelling run has no durable request identity".to_string())
+  })?;
+  engine.decide_run_cancelled(run_id, cancellation_request_id, occurred_at)
+}
+
 fn settle_script_attempt_failure<E: RuntimeDagEngine>(
   engine: &mut E,
   options: &RuntimeExecutionOptions,
@@ -3402,6 +3716,11 @@ fn settle_script_attempt_failure<E: RuntimeDagEngine>(
       return Ok(ScriptNodeOutcome::RetryScheduled);
     }
     StepFailureDisposition::StepFailed => {
+      if failure.kind == AttemptFailureKind::InvocationCancelled
+        && engine.projection(run_id)?.status == RunStatus::Cancelling
+      {
+        return Ok(ScriptNodeOutcome::Cancelled);
+      }
       return Err(RuntimeExecutionError::Stalled(format!(
         "non-parallel node {node_id:?} returned a group-owned failure"
       )));
@@ -3550,6 +3869,19 @@ trait RuntimeDagEngine {
     run_id: &str,
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError>;
+  fn decide_run_cancelled(
+    &mut self,
+    run_id: &str,
+    cancellation_request_id: String,
+    _occurred_at: chrono::DateTime<chrono::Utc>,
+  ) -> Result<(), RuntimeExecutionError> {
+    self.append_payload(
+      run_id,
+      RunEventPayload::RunOutcomeDecided(RunOutcomeDecidedData::Cancelled {
+        cancellation_request_id,
+      }),
+    )
+  }
   fn record_step_attempt_failure(
     &mut self,
     run_id: &str,
@@ -3786,6 +4118,23 @@ impl RuntimeDagEngine for DurableDagEngine {
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError> {
     self.append_payload(generated_id("evt"), run_id, chrono::Utc::now(), payload)?;
+    Ok(())
+  }
+
+  fn decide_run_cancelled(
+    &mut self,
+    run_id: &str,
+    cancellation_request_id: String,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+  ) -> Result<(), RuntimeExecutionError> {
+    DurableDagEngine::decide_run_outcome(
+      self,
+      run_id,
+      RunOutcomeDecidedData::Cancelled {
+        cancellation_request_id,
+      },
+      occurred_at,
+    )?;
     Ok(())
   }
 

@@ -141,6 +141,25 @@ fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
       failure_code: None,
       details: None,
     },
+    RuntimeExecutionError::RunCancelled(details) => NativeExecutionError {
+      kind: "woml_execution_error",
+      code: details.code.clone(),
+      message: format!(
+        "Workflow run {:?} was cancelled by request {:?}.",
+        details.run_id, details.cancellation_request_id
+      ),
+      node_id: None,
+      branch_id: None,
+      arm_id: None,
+      reference_path: None,
+      branch_site: None,
+      approval_id: None,
+      request_id: None,
+      attempt: None,
+      max_attempts: None,
+      failure_code: None,
+      details: None,
+    },
     error => NativeExecutionError {
       kind: "woml_execution_error",
       code: "WOML_RUST_EXECUTION_FAILED".to_string(),
