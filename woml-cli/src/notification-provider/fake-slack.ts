@@ -19,7 +19,8 @@ export interface FakeSlackMessage {
   readonly deliveryId: string;
   readonly destination: string;
   readonly providerMessage: ProviderMessageIdentity;
-  readonly decisionCapability: string;
+  readonly decisionCapability?: string;
+  readonly message: string;
   readonly idempotencyKey: string;
   resolution?: SlackUpdateRequest['invocation']['resolution'];
 }
@@ -30,6 +31,7 @@ export interface FakeSlackOptions {
   readonly automaticActorId?: string;
   readonly automaticDelayMs?: number;
   readonly deliveryFailuresBeforeSuccess?: number;
+  readonly failedDestinations?: readonly string[];
 }
 
 function stableSlackId(prefix: string, value: string): string {
@@ -42,6 +44,7 @@ export class FakeSlackTransport implements SlackTransport {
   readonly #automaticActorId: string;
   readonly #automaticDelayMs: number;
   readonly #deliveryFailuresBeforeSuccess: number;
+  readonly #failedDestinations: ReadonlySet<string>;
   readonly #connections = new Map<string, string>();
   readonly #messagesByDelivery = new Map<string, FakeSlackMessage>();
   readonly #messagesByIdempotency = new Map<string, FakeSlackMessage>();
@@ -57,6 +60,7 @@ export class FakeSlackTransport implements SlackTransport {
     this.#automaticDelayMs = options.automaticDelayMs ?? 0;
     this.#deliveryFailuresBeforeSuccess =
       options.deliveryFailuresBeforeSuccess ?? 0;
+    this.#failedDestinations = new Set(options.failedDestinations ?? []);
   }
 
   get connectionCount(): number {
@@ -86,6 +90,14 @@ export class FakeSlackTransport implements SlackTransport {
 
   async deliver(request: SlackDeliveryRequest): Promise<ProviderMessageIdentity> {
     if (this.#closed) throw this.#unavailable();
+    if (this.#failedDestinations.has(request.invocation.destination)) {
+      throw new SlackTransportError({
+        kind: 'destination_invalid',
+        code: 'WOML_SLACK_DESTINATION_INVALID',
+        message: `The fake Slack destination ${request.invocation.destination} is unavailable.`,
+        retryable: false,
+      });
+    }
     const attempts =
       (this.#deliveryAttempts.get(request.invocation.deliveryId) ?? 0) + 1;
     this.#deliveryAttempts.set(request.invocation.deliveryId, attempts);
@@ -116,12 +128,21 @@ export class FakeSlackTransport implements SlackTransport {
       deliveryId: request.invocation.deliveryId,
       destination: request.invocation.destination,
       providerMessage,
-      decisionCapability: request.invocation.decisionCapability,
+      ...(request.invocation.protocolVersion === 1
+        ? { decisionCapability: request.invocation.decisionCapability }
+        : {}),
+      message:
+        request.invocation.protocolVersion === 1
+          ? request.invocation.message.approvalName
+          : request.invocation.message,
       idempotencyKey: request.invocation.idempotencyKey,
     };
     this.#messagesByDelivery.set(request.invocation.deliveryId, message);
     this.#messagesByIdempotency.set(request.invocation.idempotencyKey, message);
-    if (this.#automaticDecision !== undefined) {
+    if (
+      request.invocation.protocolVersion === 1 &&
+      this.#automaticDecision !== undefined
+    ) {
       setTimeout(() => {
         void this.click(
           request.invocation.deliveryId,
@@ -164,7 +185,12 @@ export class FakeSlackTransport implements SlackTransport {
   ): Promise<void> {
     if (this.#closed) return;
     const message = this.#messagesByDelivery.get(deliveryId);
-    if (message === undefined || message.resolution !== undefined) return;
+    if (
+      message === undefined ||
+      message.resolution !== undefined ||
+      message.decisionCapability === undefined
+    )
+      return;
     await this.#emit({
       protocol: NOTIFICATION_PROVIDER_PROTOCOL,
       protocolVersion: NOTIFICATION_PROVIDER_PROTOCOL_VERSION,

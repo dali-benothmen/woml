@@ -10,6 +10,7 @@ use crate::ProviderMessageIdentity;
 
 pub const NOTIFICATION_PROVIDER_PROTOCOL: &str = "woml.notification-provider-host";
 pub const NOTIFICATION_PROVIDER_PROTOCOL_VERSION: u32 = 1;
+pub const INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION: u32 = 2;
 pub const NOTIFICATION_PROVIDER_MAX_FRAME_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -24,8 +25,12 @@ pub struct NotificationReadyMessage {
 
 impl NotificationReadyMessage {
   pub fn validate(&self) -> Result<(), String> {
+    self.validate_for(NOTIFICATION_PROVIDER_PROTOCOL_VERSION)
+  }
+
+  pub fn validate_for(&self, protocol_version: u32) -> Result<(), String> {
     if self.protocol != NOTIFICATION_PROVIDER_PROTOCOL
-      || self.protocol_version != NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+      || self.protocol_version != protocol_version
       || self.message_type != "ready"
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 320
@@ -109,6 +114,25 @@ pub struct NotificationDeliverMessage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct InformationalNotificationDeliverMessage {
+  pub protocol: &'static str,
+  pub protocol_version: u32,
+  pub message_type: &'static str,
+  pub mode: &'static str,
+  pub invocation_id: String,
+  pub run_id: String,
+  pub hook_invocation_id: String,
+  pub action_id: String,
+  pub delivery_id: String,
+  pub provider: String,
+  pub destination: String,
+  pub idempotency_key: String,
+  pub credentials: NotificationCredentials,
+  pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NotificationUpdateMessage {
   pub protocol: &'static str,
   pub protocol_version: u32,
@@ -139,8 +163,12 @@ pub struct NotificationCompletedMessage {
 
 impl NotificationCompletedMessage {
   pub fn validate(&self) -> Result<(), String> {
+    self.validate_for(NOTIFICATION_PROVIDER_PROTOCOL_VERSION)
+  }
+
+  pub fn validate_for(&self, protocol_version: u32) -> Result<(), String> {
     if self.protocol != NOTIFICATION_PROVIDER_PROTOCOL
-      || self.protocol_version != NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+      || self.protocol_version != protocol_version
       || self.message_type != "completed"
       || self.invocation_id.is_empty()
       || self.invocation_id.chars().count() > 320
@@ -157,8 +185,22 @@ impl NotificationCompletedMessage {
           Err("The provider host returned an invalid provider message identity.".to_string())
         }
       }
-      NotificationHostOutcome::UpdateSuccess => Ok(()),
+      NotificationHostOutcome::UpdateSuccess => {
+        if protocol_version == NOTIFICATION_PROVIDER_PROTOCOL_VERSION {
+          Ok(())
+        } else {
+          Err("Informational notification delivery cannot update messages.".to_string())
+        }
+      }
       NotificationHostOutcome::Failure { error } => {
+        if protocol_version == INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+          && error.kind == "update_failed"
+        {
+          return Err(
+            "Informational notification delivery returned an approval-only failure kind."
+              .to_string(),
+          );
+        }
         error.validate().map_err(|error| error.to_string())
       }
     }

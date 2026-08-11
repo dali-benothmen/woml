@@ -1,10 +1,11 @@
 # WOML Lifecycle and Engine Controls Implementation Plan
 
-Status: LEC0 through LEC3 completed on 2026-08-11. Workflow-level lifecycle
+Status: LEC0 through LEC5 completed on 2026-08-11. Workflow-level lifecycle
 scripts now run through isolated Bun workers under Rust supervision. `on-start`
 runs before the business DAG; the matching outcome hook and `on-complete` run
 after the durable business outcome; lifecycle failures remain visible warnings
-without rewriting that outcome. Step hooks are executable as of LEC4.
+without rewriting that outcome. Step hooks are executable as of LEC4, and
+informational Slack lifecycle notifications are executable as of LEC5.
 
 ## 1. Product Outcome
 
@@ -726,7 +727,7 @@ written.
 | LEC2 (complete) | Implement Event v10 folding, Store v11, hook identity, outcome/finalization state, and run summaries. | Rust can durably represent lifecycle and controls without executing hooks.                                                                      |
 | LEC3 (complete) | Execute workflow-level lifecycle scripts.                                                             | `on-start`, outcome hooks, and `on-complete` work end to end.                                                                                   |
 | LEC4 (complete) | Execute step lifecycle hooks across retries and control flow.                                         | Step start/success/failure/complete observers work correctly in sequential, branch, parallel, and approval workflows.                           |
-| LEC5            | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
+| LEC5 (complete) | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
 | LEC6            | Implement durable cancellation and propagation.                                                       | Active and waiting Event v10 runs can be cancelled safely and recovered.                                                                        |
 | LEC7            | Ship direct `list`, `get`, and `cancel` CLI commands.                                                 | Operators manage runs without the `runs` namespace or workflow source files.                                                                    |
 | LEC8            | Harden, migrate, document, benchmark, and publish.                                                    | Lifecycle and Engine Controls become a supported release feature.                                                                               |
@@ -917,7 +918,8 @@ Changes:
   current when the observer runs.
 - Include the step ID in Lifecycle Progress v1 terminal output.
 - Allow lifecycle scripts in step hooks through `woml run`; informational
-  notification actions remain staged for LEC5.
+  notification actions through the same Model v11 lifecycle authority used by
+  LEC5.
 
 Result:
 
@@ -943,6 +945,8 @@ step-correlated progress output.
 
 ### LEC5 — Add informational lifecycle notifications
 
+Status: **completed on 2026-08-11.**
+
 Changes:
 
 - Implement Notification Provider Host v2 informational delivery.
@@ -966,6 +970,13 @@ Gate:
 Real-workspace and mock-adapter tests cover multi-channel delivery, duplicate
 recovery, message templates, missing scopes, invalid channels, partial success,
 provider crash, secret redaction, and approval-contract compatibility.
+
+Completed automated gates cover Provider Host v2 isolation, informational
+delivery without approval capabilities, multi-channel delivery, WOML Template
+v1 rendering, durable bounded delivery/message identities, partial success,
+secret redaction, and Provider Host v1 approval compatibility. The real Slack
+smoke-test workflow is `examples/lifecycleSlackWorkflow.woml` and
+uses the existing `woml secrets` experience.
 
 ### LEC6 — Implement durable run cancellation
 

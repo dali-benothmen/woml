@@ -1,6 +1,7 @@
 import { isValidSecretName } from 'woml';
 
 import {
+  INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   NOTIFICATION_PROVIDER_PROTOCOL,
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   type NotificationInvocation,
@@ -75,7 +76,7 @@ export function validProviderMessage(
   );
 }
 
-function base(value: Record<string, unknown>): boolean {
+function approvalBase(value: Record<string, unknown>): boolean {
   return (
     value.protocol === NOTIFICATION_PROVIDER_PROTOCOL &&
     value.protocolVersion === NOTIFICATION_PROVIDER_PROTOCOL_VERSION &&
@@ -90,6 +91,30 @@ function base(value: Record<string, unknown>): boolean {
     typeof value.deliveryId === 'string' &&
     DELIVERY_ID.test(value.deliveryId) &&
     value.provider === 'slack' &&
+    credentials(value.credentials)
+  );
+}
+
+function informationalBase(value: Record<string, unknown>): boolean {
+  return (
+    value.protocol === NOTIFICATION_PROVIDER_PROTOCOL &&
+    value.protocolVersion ===
+      INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION &&
+    typeof value.invocationId === 'string' &&
+    ID.test(value.invocationId) &&
+    typeof value.runId === 'string' &&
+    ID.test(value.runId) &&
+    typeof value.hookInvocationId === 'string' &&
+    SHA256.test(value.hookInvocationId) &&
+    typeof value.actionId === 'string' &&
+    ID.test(value.actionId) &&
+    typeof value.deliveryId === 'string' &&
+    ID.test(value.deliveryId) &&
+    value.provider === 'slack' &&
+    typeof value.destination === 'string' &&
+    DESTINATION.test(value.destination) &&
+    typeof value.idempotencyKey === 'string' &&
+    SHA256.test(value.idempotencyKey) &&
     credentials(value.credentials)
   );
 }
@@ -120,7 +145,43 @@ function approvalMessage(value: unknown): boolean {
 export function assertNotificationInvocation(
   value: unknown
 ): asserts value is NotificationInvocation {
-  if (!record(value) || !base(value)) {
+  if (!record(value)) {
+    throw new NotificationProtocolError(
+      'The provider host received an invalid invocation envelope.'
+    );
+  }
+  if (value.protocolVersion === INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION) {
+    if (
+      !informationalBase(value) ||
+      !exactKeys(value, [
+        'protocol',
+        'protocolVersion',
+        'messageType',
+        'mode',
+        'invocationId',
+        'runId',
+        'hookInvocationId',
+        'actionId',
+        'deliveryId',
+        'provider',
+        'destination',
+        'idempotencyKey',
+        'credentials',
+        'message',
+      ]) ||
+      value.messageType !== 'deliver' ||
+      value.mode !== 'informational' ||
+      typeof value.message !== 'string' ||
+      value.message.length < 1 ||
+      [...value.message].length > 4096
+    ) {
+      throw new NotificationProtocolError(
+        'The provider host received an invalid informational delivery invocation.'
+      );
+    }
+    return;
+  }
+  if (!approvalBase(value)) {
     throw new NotificationProtocolError(
       'The provider host received an invalid invocation envelope.'
     );

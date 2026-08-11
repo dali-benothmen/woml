@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use tokio::time::timeout;
 
 use crate::notification_protocol::{
   NotificationCompletedMessage, NotificationInteractionMessage, NotificationReadyMessage,
-  NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
+  NOTIFICATION_PROVIDER_MAX_FRAME_BYTES, NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
 
 const HEADER_PREFIX: &str = "Content-Length: ";
@@ -29,6 +29,8 @@ pub struct NotificationHostProcessOptions {
   pub startup_timeout: Duration,
   pub shutdown_timeout: Duration,
   pub max_frame_bytes: usize,
+  pub protocol_version: u32,
+  pub environment: BTreeMap<String, String>,
 }
 
 impl NotificationHostProcessOptions {
@@ -39,7 +41,19 @@ impl NotificationHostProcessOptions {
       startup_timeout: Duration::from_secs(5),
       shutdown_timeout: Duration::from_secs(2),
       max_frame_bytes: NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
+      protocol_version: NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+      environment: BTreeMap::new(),
     }
+  }
+
+  pub fn with_protocol_version(mut self, protocol_version: u32) -> Self {
+    self.protocol_version = protocol_version;
+    self
+  }
+
+  pub fn with_environment(mut self, environment: BTreeMap<String, String>) -> Self {
+    self.environment = environment;
+    self
   }
 }
 
@@ -80,6 +94,11 @@ impl NotificationHostClient {
   ) -> Result<Self, NotificationHostClientError> {
     let mut child = Command::new(&options.bun_executable)
       .arg(&options.host_script_path)
+      .env(
+        "WOML_NOTIFICATION_PROTOCOL_VERSION",
+        options.protocol_version.to_string(),
+      )
+      .envs(&options.environment)
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::inherit())
@@ -118,15 +137,23 @@ impl NotificationHostClient {
       Ok(Ok(Some(ready))) => ready,
     };
     ready
-      .validate()
+      .validate_for(options.protocol_version)
       .map_err(NotificationHostClientError::Protocol)?;
 
     let shared = Arc::new(Mutex::new(SharedState::default()));
     let reader_shared = Arc::clone(&shared);
     let (interaction_sender, interaction_receiver) = mpsc::unbounded_channel();
     let max_frame_bytes = options.max_frame_bytes;
+    let protocol_version = options.protocol_version;
     let reader_task = tokio::spawn(async move {
-      outbound_reader(reader, reader_shared, interaction_sender, max_frame_bytes).await;
+      outbound_reader(
+        reader,
+        reader_shared,
+        interaction_sender,
+        max_frame_bytes,
+        protocol_version,
+      )
+      .await;
     });
 
     Ok(Self {
@@ -232,6 +259,7 @@ async fn outbound_reader<R: AsyncRead + Unpin>(
   shared: Arc<Mutex<SharedState>>,
   interactions: mpsc::UnboundedSender<NotificationInteractionMessage>,
   max_frame_bytes: usize,
+  protocol_version: u32,
 ) {
   loop {
     let message =
@@ -254,7 +282,7 @@ async fn outbound_reader<R: AsyncRead + Unpin>(
       };
     match message {
       NotificationOutboundMessage::Completed(message) => {
-        if let Err(error) = message.validate() {
+        if let Err(error) = message.validate_for(protocol_version) {
           fail_all(&shared, NotificationHostClientError::Protocol(error)).await;
           return;
         }
@@ -273,6 +301,17 @@ async fn outbound_reader<R: AsyncRead + Unpin>(
         let _ = sender.send(Ok(message));
       }
       NotificationOutboundMessage::Interaction(message) => {
+        if protocol_version != NOTIFICATION_PROVIDER_PROTOCOL_VERSION {
+          fail_all(
+            &shared,
+            NotificationHostClientError::Protocol(
+              "Informational Notification Provider Host v2 emitted a forbidden interaction."
+                .to_string(),
+            ),
+          )
+          .await;
+          return;
+        }
         if let Err(error) = message.validate() {
           fail_all(&shared, NotificationHostClientError::Protocol(error)).await;
           return;

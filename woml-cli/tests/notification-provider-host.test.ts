@@ -8,6 +8,8 @@ import {
   type CompletedMessage,
   type DeliverMessage,
   type InteractionMessage,
+  type InformationalDeliverMessage,
+  INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   type NotificationProviderOutbound,
   type ProviderMessageIdentity,
   type SlackDeliveryRequest,
@@ -72,6 +74,63 @@ function completions(
 }
 
 describe('N4 notification provider host', () => {
+  test('LEC5 v2 sends informational messages without approval capabilities', async () => {
+    const sent: NotificationProviderOutbound[] = [];
+    const interactions: InteractionMessage[] = [];
+    const transport = new FakeSlackTransport({
+      emit: message => {
+        interactions.push(message);
+      },
+      automaticDecision: 'approved',
+    });
+    const host = new NotificationProviderHost({
+      secretStore: credentials(),
+      transport,
+      protocolVersion: INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+      send: async message => {
+        sent.push(message);
+      },
+    });
+    const invocation: InformationalDeliverMessage = {
+      protocol: 'woml.notification-provider-host',
+      protocolVersion: 2,
+      messageType: 'deliver',
+      mode: 'informational',
+      invocationId: 'lifecycle-delivery-1',
+      runId: 'run_lec5',
+      hookInvocationId:
+        'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      actionId: 'lifecycle:run_success:action:0',
+      deliveryId: 'lifecycle:run_success:action:0:provider:0:channel:0',
+      provider: 'slack',
+      destination: '#woml-testing',
+      idempotencyKey:
+        'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      credentials: {
+        botToken: { kind: 'secretReference', name: 'SLACK_BOT_TOKEN' },
+        appToken: { kind: 'secretReference', name: 'SLACK_APP_TOKEN' },
+      },
+      message: 'Workflow lifecycle-demo succeeded.',
+    };
+
+    host.accept(invocation);
+    await host.drain();
+
+    expect(completions(sent)).toHaveLength(1);
+    expect(completions(sent)[0]).toMatchObject({
+      protocolVersion: 2,
+      outcome: { kind: 'delivery_success' },
+    });
+    expect(transport.messages()[0]).toMatchObject({
+      message: invocation.message,
+      destination: '#woml-testing',
+    });
+    expect(transport.messages()[0]!.decisionCapability).toBeUndefined();
+    expect(interactions).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain(invocation.message);
+    await host.close();
+  });
+
   test('resolves symbolic credentials inside each invocation and reuses one app connection', async () => {
     const sent: NotificationProviderOutbound[] = [];
     const interactions: InteractionMessage[] = [];

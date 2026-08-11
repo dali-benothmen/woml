@@ -1014,7 +1014,7 @@ async function runCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasLifecycle
-        ? 'Execution: workflow and step lifecycle scripts are executable; lifecycle notifications remain staged for LEC5.\n'
+        ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
         : workflowCallsFrontendOnly
           ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
           : definitionPackage.modules.length === 0
@@ -1870,21 +1870,6 @@ async function activateWorkflows(
         trigger.handler === 'trigger.event'
     )
   );
-  const unsupportedLifecycleSource = sources.find(
-    source =>
-      source.workflow.schemaVersion === 11 &&
-      source.workflow.lifecycle?.hooks.some(hook =>
-        hook.actions.some(
-          action => action.handler !== 'runtime.lifecycle-script'
-        )
-      ) === true
-  );
-  if (unsupportedLifecycleSource !== undefined) {
-    throw new CliInputError(
-      'WOML_LIFECYCLE_RUNTIME_UNAVAILABLE',
-      `workflow "${unsupportedLifecycleSource.workflow.workflowId}" uses lifecycle notifications, which are introduced in LEC5. LEC4 executes workflow and step lifecycle scripts.`
-    );
-  }
   const hasWorkflowCalls = sources.some(workflowCallFrontendOnlySource);
   // A loaded automation directory is one runtime unit. Production triggers
   // and Workflow Calls both require every definition to share one target and

@@ -103,11 +103,12 @@ pub use notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
 };
 pub use notification_protocol::{
-  NotificationApprovalMessage, NotificationCompletedMessage, NotificationCredentials,
-  NotificationDeliverMessage, NotificationHostOutcome, NotificationInteractionMessage,
-  NotificationReadyMessage, NotificationSecretReference, NotificationUpdateMessage,
-  NOTIFICATION_PROVIDER_MAX_FRAME_BYTES, NOTIFICATION_PROVIDER_PROTOCOL,
-  NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+  InformationalNotificationDeliverMessage, NotificationApprovalMessage,
+  NotificationCompletedMessage, NotificationCredentials, NotificationDeliverMessage,
+  NotificationHostOutcome, NotificationInteractionMessage, NotificationReadyMessage,
+  NotificationSecretReference, NotificationUpdateMessage,
+  INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION, NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
+  NOTIFICATION_PROVIDER_PROTOCOL, NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
 pub use notification_runtime::{
   run_notification_provider_journey, NotificationDeliveryDiagnostic,

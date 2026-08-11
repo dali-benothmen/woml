@@ -1418,7 +1418,13 @@ fn validate_operation_node(
       .hooks
       .iter()
       .flat_map(|hook| &hook.actions)
-      .any(|action| action.action_id == node_id && action.handler == "runtime.lifecycle-script")
+      .any(|action| {
+        action.action_id == node_id
+          && matches!(
+            action.handler.as_str(),
+            "runtime.lifecycle-script" | "notification.informational"
+          )
+      })
   }) {
     return Ok(());
   }

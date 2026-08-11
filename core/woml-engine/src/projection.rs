@@ -1088,7 +1088,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         };
       }
       RunEventPayload::OperationStarted(data) => {
-        require_running(&projection)?;
+        require_operation_runtime(&projection)?;
         let attempt_active = projection.attempts.iter().any(|attempt| {
           attempt.identity.node_id == data.node_id
             && attempt.identity.attempt == data.attempt_number
@@ -1140,7 +1140,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         );
       }
       RunEventPayload::OperationSucceeded(data) => {
-        require_running(&projection)?;
+        require_operation_runtime(&projection)?;
         require_active_operation_attempt(
           &projection,
           &data.node_id,
@@ -1171,7 +1171,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         };
       }
       RunEventPayload::OperationFailed(data) => {
-        require_running(&projection)?;
+        require_operation_runtime(&projection)?;
         require_active_operation_attempt(
           &projection,
           &data.node_id,
@@ -1677,6 +1677,18 @@ fn require_running(projection: &RunProjection) -> Result<(), FoldError> {
   if projection.status != RunStatus::Running {
     return Err(FoldError::InvalidHistory(
       "A run must be started and nonterminal before attempt or terminal events.".to_string(),
+    ));
+  }
+  Ok(())
+}
+
+fn require_operation_runtime(projection: &RunProjection) -> Result<(), FoldError> {
+  if !matches!(
+    projection.status,
+    RunStatus::Running | RunStatus::Finalizing
+  ) {
+    return Err(FoldError::InvalidHistory(
+      "An operation requires a running or lifecycle-finalizing run.".to_string(),
     ));
   }
   Ok(())

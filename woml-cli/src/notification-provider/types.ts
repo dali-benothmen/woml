@@ -1,6 +1,7 @@
 export const NOTIFICATION_PROVIDER_PROTOCOL =
   'woml.notification-provider-host' as const;
 export const NOTIFICATION_PROVIDER_PROTOCOL_VERSION = 1 as const;
+export const INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION = 2 as const;
 export const NOTIFICATION_PROVIDER_MAX_FRAME_BYTES = 1024 * 1024;
 
 export type ApprovalDecision = 'approved' | 'rejected';
@@ -44,6 +45,20 @@ interface InvocationBase {
   readonly credentials: NotificationCredentials;
 }
 
+interface InformationalInvocationBase {
+  readonly protocol: typeof NOTIFICATION_PROVIDER_PROTOCOL;
+  readonly protocolVersion: typeof INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
+  readonly invocationId: string;
+  readonly runId: string;
+  readonly hookInvocationId: string;
+  readonly actionId: string;
+  readonly deliveryId: string;
+  readonly provider: 'slack';
+  readonly destination: string;
+  readonly idempotencyKey: string;
+  readonly credentials: NotificationCredentials;
+}
+
 export interface DeliverMessage extends InvocationBase {
   readonly messageType: 'deliver';
   readonly destination: string;
@@ -60,7 +75,16 @@ export interface UpdateMessage extends InvocationBase {
   readonly resolution: NotificationResolution;
 }
 
-export type NotificationInvocation = DeliverMessage | UpdateMessage;
+export interface InformationalDeliverMessage extends InformationalInvocationBase {
+  readonly messageType: 'deliver';
+  readonly mode: 'informational';
+  readonly message: string;
+}
+
+export type NotificationInvocation =
+  | DeliverMessage
+  | UpdateMessage
+  | InformationalDeliverMessage;
 
 export interface SlackTransportFailure {
   readonly kind:
@@ -92,7 +116,9 @@ export type NotificationProviderOutcome =
 
 export interface CompletedMessage {
   readonly protocol: typeof NOTIFICATION_PROVIDER_PROTOCOL;
-  readonly protocolVersion: typeof NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
+  readonly protocolVersion:
+    | typeof NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+    | typeof INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
   readonly messageType: 'completed';
   readonly invocationId: string;
   readonly outcome: NotificationProviderOutcome;
@@ -101,7 +127,9 @@ export interface CompletedMessage {
 
 export interface ReadyMessage {
   readonly protocol: typeof NOTIFICATION_PROVIDER_PROTOCOL;
-  readonly protocolVersion: typeof NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
+  readonly protocolVersion:
+    | typeof NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+    | typeof INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
   readonly messageType: 'ready';
   readonly hostInstanceId: string;
   readonly providers: readonly ['slack'];
@@ -131,7 +159,7 @@ export interface ResolvedSlackCredentials {
 }
 
 export interface SlackDeliveryRequest {
-  readonly invocation: DeliverMessage;
+  readonly invocation: DeliverMessage | InformationalDeliverMessage;
   readonly credentials: ResolvedSlackCredentials;
 }
 

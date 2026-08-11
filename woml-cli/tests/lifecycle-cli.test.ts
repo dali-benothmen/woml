@@ -23,7 +23,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('LEC4 lifecycle CLI admission', () => {
+describe('LEC5 lifecycle CLI admission', () => {
   test('LEC4 progress identifies the observed step', () => {
     expect(
       formatExecutionProgress({
@@ -45,7 +45,7 @@ describe('LEC4 lifecycle CLI admission', () => {
       expect(result.stderr).toBe('');
       expect(result.stdout).toContain('WOML check passed');
       expect(result.stdout).toContain(
-        'workflow and step lifecycle scripts are executable'
+        'lifecycle scripts plus informational Slack notifications are executable'
       );
     }
   });
@@ -66,14 +66,13 @@ describe('LEC4 lifecycle CLI admission', () => {
     });
   });
 
-  test('woml run keeps lifecycle notifications staged for LEC5', async () => {
+  test('lifecycle notifications are no longer reported as staged', async () => {
     const result = await invoke([
-      'run',
+      'check',
       resolve(fixtureRoot, 'lifecycle.woml'),
     ]);
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('WOML_LIFECYCLE_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('introduced in LEC5');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('informational Slack notifications are executable');
+    expect(result.stderr).not.toContain('WOML_LIFECYCLE_RUNTIME_UNAVAILABLE');
   });
 });

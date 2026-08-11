@@ -2,6 +2,7 @@ import type { SecretStore } from '../secrets';
 import { SecretStoreError } from '../secrets';
 import { assertNotificationInvocation, validFailure, validProviderMessage } from './protocol';
 import {
+  INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
   NOTIFICATION_PROVIDER_PROTOCOL,
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
@@ -22,6 +23,9 @@ export interface NotificationProviderHostOptions {
   readonly transport: SlackTransport;
   readonly send: (message: NotificationProviderOutbound) => Promise<void>;
   readonly maxFrameBytes?: number;
+  readonly protocolVersion?:
+    | typeof NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+    | typeof INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
 }
 
 function elapsedMilliseconds(startedAt: number): number {
@@ -29,13 +33,14 @@ function elapsedMilliseconds(startedAt: number): number {
 }
 
 function completed(
+  protocolVersion: CompletedMessage['protocolVersion'],
   invocationId: string,
   startedAt: number,
   outcome: CompletedMessage['outcome']
 ): CompletedMessage {
   return {
     protocol: NOTIFICATION_PROVIDER_PROTOCOL,
-    protocolVersion: NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+    protocolVersion,
     messageType: 'completed',
     invocationId,
     outcome,
@@ -86,6 +91,7 @@ export class NotificationProviderHost {
   readonly #transport: SlackTransport;
   readonly #send: NotificationProviderHostOptions['send'];
   readonly #maxFrameBytes: number;
+  readonly #protocolVersion: CompletedMessage['protocolVersion'];
   readonly #tasks = new Map<string, Promise<void>>();
   #aborted = false;
 
@@ -95,11 +101,18 @@ export class NotificationProviderHost {
     this.#send = options.send;
     this.#maxFrameBytes =
       options.maxFrameBytes ?? NOTIFICATION_PROVIDER_MAX_FRAME_BYTES;
+    this.#protocolVersion =
+      options.protocolVersion ?? NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
   }
 
   accept(value: unknown): void {
     if (this.#aborted) throw new Error('The notification provider host is closed.');
     assertNotificationInvocation(value);
+    if (value.protocolVersion !== this.#protocolVersion) {
+      throw new Error(
+        `Notification Provider Host v${this.#protocolVersion} cannot execute a v${value.protocolVersion} invocation.`
+      );
+    }
     if (this.#tasks.has(value.invocationId)) {
       throw new Error(`Invocation ID "${value.invocationId}" is already active.`);
     }
@@ -152,25 +165,25 @@ export class NotificationProviderHost {
             retryable: false,
           });
         }
-        response = completed(invocation.invocationId, startedAt, {
+        response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
           kind: 'delivery_success',
           providerMessage,
         });
       } else {
         await this.#transport.update({ invocation, credentials });
-        response = completed(invocation.invocationId, startedAt, {
+        response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
           kind: 'update_success',
         });
       }
     } catch (error) {
-      response = completed(invocation.invocationId, startedAt, {
+      response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
         kind: 'failure',
         error: safeFailure(error, resolvedValues),
       });
     }
 
     if (byteLength(response) > this.#maxFrameBytes) {
-      response = completed(invocation.invocationId, startedAt, {
+      response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
         kind: 'failure',
         error: {
           kind: 'size_limit_exceeded',

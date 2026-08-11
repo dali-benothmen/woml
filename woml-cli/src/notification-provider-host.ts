@@ -9,6 +9,7 @@ import { NotificationProviderHost } from './notification-provider/host';
 import { RealSlackTransport } from './notification-provider/real-slack';
 import type { SlackTransport } from './notification-provider/slack-transport';
 import {
+  INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
   NOTIFICATION_PROVIDER_PROTOCOL,
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
@@ -45,6 +46,13 @@ function fakeDeliveryFailures(): number {
   return value;
 }
 
+function fakeFailedDestinations(): readonly string[] {
+  return (process.env.WOML_FAKE_SLACK_FAILED_DESTINATIONS ?? '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(value => value.length > 0);
+}
+
 async function writeStdout(frame: Uint8Array): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     process.stdout.write(frame, error => {
@@ -56,6 +64,9 @@ async function writeStdout(frame: Uint8Array): Promise<void> {
 
 export interface RunNotificationProviderHostOptions {
   readonly adapter?: 'real' | 'fake';
+  readonly protocolVersion?:
+    | typeof NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+    | typeof INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
   readonly createTransport?: (
     emit: (message: Parameters<SerializedFrameWriter['send']>[0]) => Promise<void>
   ) => SlackTransport;
@@ -64,6 +75,11 @@ export interface RunNotificationProviderHostOptions {
 export async function runNotificationProviderHost(
   options: RunNotificationProviderHostOptions = {}
 ): Promise<void> {
+  const protocolVersion =
+    options.protocolVersion ??
+    (process.env.WOML_NOTIFICATION_PROTOCOL_VERSION === '2'
+      ? INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION
+      : NOTIFICATION_PROVIDER_PROTOCOL_VERSION);
   const writer = new SerializedFrameWriter(writeStdout);
   const decoder = new FrameDecoder({
     maxFrameBytes: NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
@@ -80,6 +96,7 @@ export async function runNotificationProviderHost(
             process.env.WOML_FAKE_SLACK_ACTOR_ID ?? 'U12345678',
           automaticDelayMs: automaticDelay(),
           deliveryFailuresBeforeSuccess: fakeDeliveryFailures(),
+          failedDestinations: fakeFailedDestinations(),
         })
       : new RealSlackTransport({
           emit,
@@ -89,10 +106,11 @@ export async function runNotificationProviderHost(
     secretStore: createSecretStore(),
     transport,
     send: message => writer.send(message),
+    protocolVersion,
   });
   const ready: ReadyMessage = {
     protocol: NOTIFICATION_PROVIDER_PROTOCOL,
-    protocolVersion: NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+    protocolVersion,
     messageType: 'ready',
     hostInstanceId: `notification_host_${randomUUID()}`,
     providers: ['slack'],

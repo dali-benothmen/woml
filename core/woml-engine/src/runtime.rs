@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -19,7 +20,8 @@ use crate::event::{
   ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
   FinalLifecycleStatus, LifecycleActionFailedData, LifecycleActionIdentityData, LifecycleFailure,
   LifecycleFailureKind, LifecycleHookCompletedData, LifecycleHookCompletionStatus,
-  LifecycleHookRequestedData, LifecycleSubject, LifecycleSubjectKind, ParallelFailure,
+  LifecycleHookRequestedData, LifecycleSubject, LifecycleSubjectKind, OperationExecutionMode,
+  OperationFailedData, OperationStartedData, OperationSucceededData, ParallelFailure,
   ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome,
   ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
   RunFinalizedData, RunSucceededData, StepAttemptFailedData, StepAttemptStartedData,
@@ -28,7 +30,7 @@ use crate::event::{
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{
   ApprovalDefinition, CompiledLifecycleAction, LifecycleEventName, ParallelGroupDefinition,
-  ValueExpression,
+  TemplatePart, ValueExpression,
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, LifecycleActionStatus, LifecycleHookProjection,
@@ -44,13 +46,16 @@ use crate::schedule::{
 use crate::workflow_calls::WorkflowCallProgressReporter;
 use crate::{
   run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
-  AttemptFailure, AttemptFailureKind, BranchFailure, CapabilityRegistry,
-  CompiledWorkflowDefinition, DurableCapabilityAuthority, DurableDagEngine, DurableEngineError,
-  DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine, IssuedApprovalToken,
-  RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection, RunStatus,
-  ScriptHostClient, ScriptHostClientError, ScriptHostModuleArtifact, ScriptHostProcessOptions,
-  StepFailureDisposition, WorkflowContext, RUN_EVENT_SCHEMA_VERSION_V1,
-  RUN_EVENT_SCHEMA_VERSION_V2,
+  AttemptFailure, AttemptFailureKind, BranchFailure, CapabilityFailure, CapabilityFailureKind,
+  CapabilityRegistry, CompiledWorkflowDefinition, DurableCapabilityAuthority, DurableDagEngine,
+  DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
+  InformationalNotificationDeliverMessage, IssuedApprovalToken, NotificationCredentials,
+  NotificationHostClient, NotificationHostClientError, NotificationHostOutcome,
+  NotificationHostProcessOptions, RecoveryReport, RunEvent, RunEventPayload, RunFailure,
+  RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError, ScriptHostModuleArtifact,
+  ScriptHostProcessOptions, StepFailureDisposition, WorkflowContext,
+  INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION, NOTIFICATION_PROVIDER_PROTOCOL,
+  RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
 
 pub trait EngineClock: Send + Sync {
@@ -176,6 +181,7 @@ impl EngineClock for FixedEngineClock {
 #[derive(Clone)]
 pub struct RuntimeExecutionOptions {
   pub script_host: ScriptHostProcessOptions,
+  pub notification_host: Option<NotificationHostProcessOptions>,
   pub script_timeout_ms: u64,
   pub max_context_bytes: Option<usize>,
   pub clock: Arc<dyn EngineClock>,
@@ -200,6 +206,7 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
       .debug_struct("RuntimeExecutionOptions")
       .field("script_host", &self.script_host)
       .field("script_timeout_ms", &self.script_timeout_ms)
+      .field("notification_host", &self.notification_host)
       .field("max_context_bytes", &self.max_context_bytes)
       .field("clock", &"dyn EngineClock")
       .field("schedule_clock", &"dyn ScheduleClock")
@@ -244,6 +251,18 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
 
 impl RuntimeExecutionOptions {
   pub fn new(script_host: ScriptHostProcessOptions, script_timeout_ms: u64) -> Self {
+    let notification_host_path = script_host.host_script_path.parent().map(|parent| {
+      let extension = script_host
+        .host_script_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("js");
+      parent.join(format!("notification-provider-host.{extension}"))
+    });
+    let notification_host = notification_host_path.map(|path| {
+      NotificationHostProcessOptions::new(script_host.bun_executable.clone(), path)
+        .with_protocol_version(INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION)
+    });
     let capability_registry = Arc::new(CapabilityRegistry::default());
     let managed_storage_store = Arc::new(crate::ManagedStorageStore::default());
     capability_registry
@@ -270,6 +289,7 @@ impl RuntimeExecutionOptions {
     }
     Self {
       script_host,
+      notification_host,
       script_timeout_ms,
       max_context_bytes: None,
       clock: Arc::new(SystemEngineClock),
@@ -291,6 +311,12 @@ impl RuntimeExecutionOptions {
 
   pub fn with_clock(mut self, clock: Arc<dyn EngineClock>) -> Self {
     self.clock = clock;
+    self
+  }
+
+  pub fn with_notification_host(mut self, host: NotificationHostProcessOptions) -> Self {
+    self.notification_host =
+      Some(host.with_protocol_version(INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION));
     self
   }
 
@@ -1111,6 +1137,195 @@ fn resolved_lifecycle_secrets(
     .collect()
 }
 
+#[derive(Debug)]
+struct LifecycleNotificationDelivery<'a> {
+  delivery_id: &'a str,
+  provider: &'a str,
+  destination: &'a str,
+  credentials: BTreeMap<String, String>,
+  message: &'a ValueExpression,
+}
+
+fn lifecycle_notification_deliveries(
+  action: &CompiledLifecycleAction,
+) -> Result<Vec<LifecycleNotificationDelivery<'_>>, RuntimeExecutionError> {
+  let ValueExpression::Object { fields } = &action.inputs else {
+    return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+      "lifecycle notification action {:?} has invalid inputs",
+      action.action_id
+    )));
+  };
+  let Some(ValueExpression::Array { items }) = fields.get("deliveries") else {
+    return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+      "lifecycle notification action {:?} has no deliveries",
+      action.action_id
+    )));
+  };
+  items
+    .iter()
+    .map(|item| {
+      let ValueExpression::Object { fields } = item else {
+        return Err(RuntimeExecutionError::InvalidConfiguration(
+          "lifecycle notification delivery is not an object".to_string(),
+        ));
+      };
+      let literal = |name: &str| match fields.get(name) {
+        Some(ValueExpression::Literal { value }) => value.as_str(),
+        _ => None,
+      };
+      let ValueExpression::Object {
+        fields: credential_fields,
+      } = fields.get("credentials").ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(
+          "lifecycle notification credentials are unavailable".to_string(),
+        )
+      })?
+      else {
+        return Err(RuntimeExecutionError::InvalidConfiguration(
+          "lifecycle notification credentials are invalid".to_string(),
+        ));
+      };
+      let credentials = credential_fields
+        .iter()
+        .map(|(name, expression)| match expression {
+          ValueExpression::SecretReference { name: secret } => Ok((name.clone(), secret.clone())),
+          _ => Err(RuntimeExecutionError::InvalidConfiguration(
+            "lifecycle notification credentials must be symbolic secret references".to_string(),
+          )),
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+      Ok(LifecycleNotificationDelivery {
+        delivery_id: literal("deliveryId").ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(
+            "lifecycle notification deliveryId is unavailable".to_string(),
+          )
+        })?,
+        provider: literal("provider").ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(
+            "lifecycle notification provider is unavailable".to_string(),
+          )
+        })?,
+        destination: literal("destination").ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(
+            "lifecycle notification destination is unavailable".to_string(),
+          )
+        })?,
+        credentials,
+        message: fields.get("message").ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(
+            "lifecycle notification message is unavailable".to_string(),
+          )
+        })?,
+      })
+    })
+    .collect()
+}
+
+fn resolve_json_path(root: &Value, path: &[String]) -> Option<Value> {
+  let mut value = root;
+  for segment in path {
+    value = value.as_object()?.get(segment)?;
+  }
+  Some(value.clone())
+}
+
+fn render_template_scalar(value: Value) -> Option<String> {
+  match value {
+    Value::Null => Some("null".to_string()),
+    Value::Bool(value) => Some(value.to_string()),
+    Value::Number(value) => Some(value.to_string()),
+    Value::String(value) => Some(value),
+    Value::Array(_) | Value::Object(_) => None,
+  }
+}
+
+fn render_lifecycle_notification_message(
+  expression: &ValueExpression,
+  context: &WorkflowContext,
+  lifecycle: &LifecycleBindingV1,
+) -> Result<String, LifecycleFailure> {
+  let ValueExpression::Template { parts } = expression else {
+    return Err(LifecycleFailure {
+      kind: LifecycleFailureKind::ProviderFailed,
+      code: "WOML_LIFECYCLE_TEMPLATE_INVALID".to_string(),
+      message: "Lifecycle notification message is not a WOML Template v1 value.".to_string(),
+    });
+  };
+  let lifecycle_json = serde_json::to_value(lifecycle).map_err(|_| LifecycleFailure {
+    kind: LifecycleFailureKind::ProviderFailed,
+    code: "WOML_LIFECYCLE_TEMPLATE_INVALID".to_string(),
+    message: "Lifecycle notification data could not be rendered safely.".to_string(),
+  })?;
+  let mut rendered = String::new();
+  for part in parts {
+    match part {
+      TemplatePart::Text { text } => rendered.push_str(text),
+      TemplatePart::ContextReference { path } => {
+        let value = resolve_context_reference(
+          &ValueExpression::ContextReference { path: path.clone() },
+          context,
+        )
+        .ok()
+        .and_then(render_template_scalar)
+        .ok_or_else(|| LifecycleFailure {
+          kind: LifecycleFailureKind::ProviderFailed,
+          code: "WOML_LIFECYCLE_TEMPLATE_REFERENCE_INVALID".to_string(),
+          message: format!(
+            "Lifecycle notification reference context.{} is unavailable or is not a scalar.",
+            path.join(".")
+          ),
+        })?;
+        rendered.push_str(&value);
+      }
+      TemplatePart::LifecycleReference { path } => {
+        let value = resolve_json_path(&lifecycle_json, path)
+          .and_then(render_template_scalar)
+          .ok_or_else(|| LifecycleFailure {
+            kind: LifecycleFailureKind::ProviderFailed,
+            code: "WOML_LIFECYCLE_TEMPLATE_REFERENCE_INVALID".to_string(),
+            message: format!(
+              "Lifecycle notification reference lifecycle.{} is unavailable or is not a scalar.",
+              path.join(".")
+            ),
+          })?;
+        rendered.push_str(&value);
+      }
+    }
+    if rendered.chars().count() > 4_096 {
+      return Err(LifecycleFailure {
+        kind: LifecycleFailureKind::SizeLimitExceeded,
+        code: "WOML_LIFECYCLE_TEMPLATE_TOO_LARGE".to_string(),
+        message: "Lifecycle notification message exceeds 4096 characters.".to_string(),
+      });
+    }
+  }
+  if rendered.is_empty() {
+    return Err(LifecycleFailure {
+      kind: LifecycleFailureKind::ProviderFailed,
+      code: "WOML_LIFECYCLE_TEMPLATE_EMPTY".to_string(),
+      message: "Lifecycle notification message rendered to an empty value.".to_string(),
+    });
+  }
+  Ok(rendered)
+}
+
+fn notification_capability_failure(
+  kind: CapabilityFailureKind,
+  code: String,
+  message: String,
+  retryable: bool,
+  ambiguous: bool,
+) -> CapabilityFailure {
+  CapabilityFailure {
+    kind,
+    code,
+    message,
+    retryable,
+    ambiguous,
+    details: None,
+  }
+}
+
 fn lifecycle_failure_from_attempt(failure: AttemptFailure) -> LifecycleFailure {
   let kind = match failure.kind {
     AttemptFailureKind::ScriptThrew => LifecycleFailureKind::ScriptThrew,
@@ -1280,6 +1495,292 @@ fn step_lifecycle_outcome(
   }
 }
 
+async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  action: &CompiledLifecycleAction,
+  hook_invocation_id: &str,
+  context: &WorkflowContext,
+  lifecycle: &LifecycleBindingV1,
+  options: &RuntimeExecutionOptions,
+) -> Result<(), LifecycleFailure> {
+  let deliveries = lifecycle_notification_deliveries(action).map_err(|error| LifecycleFailure {
+    kind: LifecycleFailureKind::ProviderFailed,
+    code: "WOML_NOTIFICATION_REQUEST_INVALID".to_string(),
+    message: error.to_string(),
+  })?;
+  let host_options = options
+    .notification_host
+    .clone()
+    .ok_or_else(|| LifecycleFailure {
+      kind: LifecycleFailureKind::HostCrashed,
+      code: "WOML_NOTIFICATION_HOST_UNAVAILABLE".to_string(),
+      message: "The informational notification provider host is not configured.".to_string(),
+    })?;
+  let host = NotificationHostClient::spawn(host_options)
+    .await
+    .map_err(|error| LifecycleFailure {
+      kind: LifecycleFailureKind::HostCrashed,
+      code: "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
+      message: error.to_string(),
+    })?;
+  let action_key = step_effect_idempotency_key(run_id, engine.definition_hash(), &action.action_id);
+  let mut failures = Vec::new();
+
+  for delivery in deliveries {
+    let message = match render_lifecycle_notification_message(delivery.message, context, lifecycle)
+    {
+      Ok(message) => message,
+      Err(failure) => {
+        failures.push(failure);
+        continue;
+      }
+    };
+    let credentials = match NotificationCredentials::from_symbolic(&delivery.credentials) {
+      Ok(credentials) => credentials,
+      Err(message) => {
+        failures.push(LifecycleFailure {
+          kind: LifecycleFailureKind::ProviderFailed,
+          code: "WOML_NOTIFICATION_REQUEST_INVALID".to_string(),
+          message,
+        });
+        continue;
+      }
+    };
+    let operation_key = crate::derive_operation_key(&action_key, delivery.delivery_id);
+    let mut delivered = false;
+    for provider_attempt in 1..=3_u32 {
+      let invocation_id = generated_id("ninv");
+      let mut started_metadata = Map::new();
+      started_metadata.insert(
+        "provider".to_string(),
+        Value::String(delivery.provider.to_string()),
+      );
+      started_metadata.insert(
+        "destination".to_string(),
+        Value::String(delivery.destination.to_string()),
+      );
+      started_metadata.insert("providerAttempt".to_string(), Value::from(provider_attempt));
+      engine
+        .append_payload(
+          run_id,
+          RunEventPayload::OperationStarted(OperationStartedData {
+            node_id: action.action_id.clone(),
+            attempt_number: 1,
+            invocation_id: invocation_id.clone(),
+            call_id: delivery.delivery_id.to_string(),
+            operation_key: operation_key.clone(),
+            capability: "notifications".to_string(),
+            operation: "deliver".to_string(),
+            execution_mode: OperationExecutionMode::Managed,
+            metadata: started_metadata,
+          }),
+        )
+        .map_err(|error| LifecycleFailure {
+          kind: LifecycleFailureKind::ProviderFailed,
+          code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
+          message: error.to_string(),
+        })?;
+      let request = InformationalNotificationDeliverMessage {
+        protocol: NOTIFICATION_PROVIDER_PROTOCOL,
+        protocol_version: INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+        message_type: "deliver",
+        mode: "informational",
+        invocation_id: invocation_id.clone(),
+        run_id: run_id.to_string(),
+        hook_invocation_id: hook_invocation_id.to_string(),
+        action_id: action.action_id.clone(),
+        delivery_id: delivery.delivery_id.to_string(),
+        provider: delivery.provider.to_string(),
+        destination: delivery.destination.to_string(),
+        idempotency_key: operation_key.clone(),
+        credentials: credentials.clone(),
+        message: message.clone(),
+      };
+      match host.invoke(&invocation_id, &request).await {
+        Ok(completed) => match completed.outcome {
+          NotificationHostOutcome::DeliverySuccess { provider_message } => {
+            let encoded = serde_json::to_vec(&provider_message).unwrap_or_default();
+            let mut metadata = Map::new();
+            metadata.insert(
+              "provider".to_string(),
+              Value::String(delivery.provider.to_string()),
+            );
+            metadata.insert(
+              "destination".to_string(),
+              Value::String(delivery.destination.to_string()),
+            );
+            metadata.insert("providerAttempt".to_string(), Value::from(provider_attempt));
+            metadata.insert(
+              "workspaceId".to_string(),
+              Value::String(provider_message.workspace_id),
+            );
+            metadata.insert(
+              "channelId".to_string(),
+              Value::String(provider_message.channel_id),
+            );
+            metadata.insert(
+              "providerMessageId".to_string(),
+              Value::String(provider_message.message_id),
+            );
+            engine
+              .append_payload(
+                run_id,
+                RunEventPayload::OperationSucceeded(OperationSucceededData {
+                  node_id: action.action_id.clone(),
+                  attempt_number: 1,
+                  invocation_id,
+                  call_id: delivery.delivery_id.to_string(),
+                  operation_key: operation_key.clone(),
+                  capability: "notifications".to_string(),
+                  operation: "deliver".to_string(),
+                  execution_mode: OperationExecutionMode::Managed,
+                  metadata,
+                  duration_ms: completed.duration_ms,
+                  result_bytes: encoded.len() as u64,
+                  result_digest: format!("sha256:{}", hex::encode(Sha256::digest(&encoded))),
+                }),
+              )
+              .map_err(|error| LifecycleFailure {
+                kind: LifecycleFailureKind::ProviderFailed,
+                code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
+                message: error.to_string(),
+              })?;
+            delivered = true;
+            break;
+          }
+          NotificationHostOutcome::Failure { error } => {
+            let retry = error.retryable && provider_attempt < 3;
+            let capability_failure = notification_capability_failure(
+              if error.kind == "delivery_ambiguous" {
+                CapabilityFailureKind::Ambiguous
+              } else {
+                CapabilityFailureKind::TransportFailed
+              },
+              error.code.clone(),
+              error.message.clone(),
+              error.retryable,
+              error.kind == "delivery_ambiguous",
+            );
+            engine
+              .append_payload(
+                run_id,
+                RunEventPayload::OperationFailed(OperationFailedData {
+                  node_id: action.action_id.clone(),
+                  attempt_number: 1,
+                  invocation_id,
+                  call_id: delivery.delivery_id.to_string(),
+                  operation_key: operation_key.clone(),
+                  capability: "notifications".to_string(),
+                  operation: "deliver".to_string(),
+                  execution_mode: OperationExecutionMode::Managed,
+                  metadata: Map::new(),
+                  duration_ms: completed.duration_ms,
+                  failure: capability_failure,
+                }),
+              )
+              .map_err(|event_error| LifecycleFailure {
+                kind: LifecycleFailureKind::ProviderFailed,
+                code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
+                message: event_error.to_string(),
+              })?;
+            if retry {
+              if let Some(delay) = error.retry_after_ms {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+              }
+              continue;
+            }
+            failures.push(LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: error.code,
+              message: error.message,
+            });
+            break;
+          }
+          NotificationHostOutcome::UpdateSuccess => {
+            failures.push(LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: "WOML_NOTIFICATION_PROTOCOL_INVALID".to_string(),
+              message: "Informational notification delivery returned an update result.".to_string(),
+            });
+            break;
+          }
+        },
+        Err(error) => {
+          let capability_failure = notification_capability_failure(
+            match error {
+              NotificationHostClientError::HostCrashed(_)
+              | NotificationHostClientError::Startup(_) => CapabilityFailureKind::HostCrashed,
+              NotificationHostClientError::Protocol(_)
+              | NotificationHostClientError::InteractionTimedOut => {
+                CapabilityFailureKind::TransportFailed
+              }
+            },
+            "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
+            error.to_string(),
+            false,
+            true,
+          );
+          engine
+            .append_payload(
+              run_id,
+              RunEventPayload::OperationFailed(OperationFailedData {
+                node_id: action.action_id.clone(),
+                attempt_number: 1,
+                invocation_id,
+                call_id: delivery.delivery_id.to_string(),
+                operation_key: operation_key.clone(),
+                capability: "notifications".to_string(),
+                operation: "deliver".to_string(),
+                execution_mode: OperationExecutionMode::Managed,
+                metadata: Map::new(),
+                duration_ms: 0.0,
+                failure: capability_failure,
+              }),
+            )
+            .map_err(|event_error| LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
+              message: event_error.to_string(),
+            })?;
+          failures.push(LifecycleFailure {
+            kind: LifecycleFailureKind::HostCrashed,
+            code: "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
+            message: error.to_string(),
+          });
+          break;
+        }
+      }
+    }
+    if !delivered && failures.is_empty() {
+      failures.push(LifecycleFailure {
+        kind: LifecycleFailureKind::ProviderFailed,
+        code: "WOML_NOTIFICATION_DELIVERY_FAILED".to_string(),
+        message: "Slack lifecycle notification delivery failed.".to_string(),
+      });
+    }
+  }
+  host.shutdown().await;
+  if failures.is_empty() {
+    Ok(())
+  } else {
+    let failed = failures.len();
+    let first = failures.remove(0);
+    Err(LifecycleFailure {
+      kind: first.kind,
+      code: first.code,
+      message: if failed == 1 {
+        first.message
+      } else {
+        format!(
+          "{failed} Slack lifecycle deliveries failed. First failure: {}",
+          first.message
+        )
+      },
+    })
+  }
+}
+
 async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
@@ -1445,19 +1946,15 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       );
       continue;
     };
-    if action.handler != "runtime.lifecycle-script" {
+    if !matches!(
+      action.handler.as_str(),
+      "runtime.lifecycle-script" | "notification.informational"
+    ) {
       return Err(RuntimeExecutionError::InvalidConfiguration(format!(
-        "lifecycle action {:?} requires a provider introduced after LEC3",
+        "lifecycle action {:?} uses an unsupported runtime handler",
         action.action_id
       )));
     }
-    let source = lifecycle_action_source(&action).ok_or_else(|| {
-      RuntimeExecutionError::InvalidConfiguration(format!(
-        "lifecycle action {:?} has no script source",
-        action.action_id
-      ))
-    })?;
-    let secrets = resolved_lifecycle_secrets(&action, options)?;
     let attempt_number = 1;
     let invocation_id = generated_id("lcinv");
     let idempotency_key =
@@ -1521,6 +2018,62 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
           })
       }),
     };
+    if action.handler == "notification.informational" {
+      let result = execute_lifecycle_notification(
+        engine,
+        run_id,
+        &action,
+        &hook_projection.hook_invocation_id,
+        &context,
+        &binding,
+        options,
+      )
+      .await;
+      let (payload, phase, failure_code) = match result {
+        Ok(()) => (
+          RunEventPayload::LifecycleActionSucceeded(LifecycleActionIdentityData {
+            hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+            action_id: action.action_id.clone(),
+            attempt: attempt_number,
+          }),
+          LifecycleProgressPhase::ActionSucceeded,
+          None,
+        ),
+        Err(failure) => {
+          let code = failure.code.clone();
+          (
+            RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
+              hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+              action_id: action.action_id.clone(),
+              attempt: attempt_number,
+              failure,
+            }),
+            LifecycleProgressPhase::ActionFailed,
+            Some(code),
+          )
+        }
+      };
+      engine.append_payload(run_id, payload)?;
+      report_lifecycle(
+        options,
+        engine.workflow(),
+        run_id,
+        phase,
+        &hook.hook_id,
+        &action.action_id,
+        matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step)
+          .then_some(hook_projection.subject.id.as_str()),
+        failure_code,
+      );
+      continue;
+    }
+    let source = lifecycle_action_source(&action).ok_or_else(|| {
+      RuntimeExecutionError::InvalidConfiguration(format!(
+        "lifecycle action {:?} has no script source",
+        action.action_id
+      ))
+    })?;
+    let secrets = resolved_lifecycle_secrets(&action, options)?;
     if host.is_none() {
       match ScriptHostClient::spawn_with_authority(
         options.script_host.clone(),

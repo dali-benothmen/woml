@@ -11,6 +11,7 @@ import {
   NOTIFICATION_PROVIDER_PROTOCOL,
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   type ApprovalDecision,
+  type DeliverMessage,
   type InteractionMessage,
   type NotificationProviderFailure,
   type ProviderMessageIdentity,
@@ -54,7 +55,7 @@ function failure(
 }
 
 function actionValue(
-  request: SlackDeliveryRequest,
+  request: SlackDeliveryRequest & { readonly invocation: DeliverMessage },
   decision: ApprovalDecision
 ): string {
   return JSON.stringify({
@@ -65,7 +66,9 @@ function actionValue(
   } satisfies SlackActionValue);
 }
 
-function pendingBlocks(request: SlackDeliveryRequest): readonly unknown[] {
+function pendingBlocks(
+  request: SlackDeliveryRequest & { readonly invocation: DeliverMessage }
+): readonly unknown[] {
   const { message } = request.invocation;
   const details = [
     `Workflow: ${message.workflowId}`,
@@ -162,6 +165,7 @@ export class RealSlackTransport implements SlackTransport {
   readonly #listenerId = `approval_${randomUUID()}`;
   readonly #unsubscribers = new Map<string, () => void>();
   readonly #deliveries = new Map<string, Promise<ProviderMessageIdentity>>();
+  readonly #approvalDeliveryIds = new Set<string>();
   readonly #updates = new Map<string, Promise<void>>();
   #closed = false;
 
@@ -206,6 +210,9 @@ export class RealSlackTransport implements SlackTransport {
       throw error;
     });
     this.#deliveries.set(key, delivery);
+    if (request.invocation.protocolVersion === 1) {
+      this.#approvalDeliveryIds.add(request.invocation.deliveryId);
+    }
     return await delivery;
   }
 
@@ -243,13 +250,21 @@ export class RealSlackTransport implements SlackTransport {
       botReference,
       request.credentials.botToken
     );
+    const invocation = request.invocation;
+    const informational = invocation.protocolVersion === 2;
+    const content =
+      invocation.protocolVersion === 2
+        ? { text: safeText(invocation.message, 4_096) }
+        : {
+            text: `Approval required: ${safeText(invocation.message.approvalName, 300)}`,
+            blocks: pendingBlocks({ ...request, invocation }),
+          };
     const response = await this.#shared.api(
       'chat.postMessage',
       request.credentials.botToken,
       {
         channel,
-        text: `Approval required: ${safeText(request.invocation.message.approvalName, 300)}`,
-        blocks: pendingBlocks(request),
+        ...content,
         unfurl_links: false,
         unfurl_media: false,
       },
@@ -269,7 +284,9 @@ export class RealSlackTransport implements SlackTransport {
       );
     }
     this.#log(
-      `Slack approval sent to ${request.invocation.destination}; waiting for Approve or Reject.`
+      informational
+        ? `Slack lifecycle notification sent to ${request.invocation.destination}.`
+        : `Slack approval sent to ${request.invocation.destination}; waiting for Approve or Reject.`
     );
     return providerMessage;
   }
@@ -325,6 +342,7 @@ export class RealSlackTransport implements SlackTransport {
           : undefined;
     const value = parseActionValue(action.value);
     if (value === undefined || value.decision !== expectedDecision) return;
+    if (!this.#approvalDeliveryIds.has(value.deliveryId)) return;
     if (
       !record(payload.user) ||
       typeof payload.user.id !== 'string' ||
