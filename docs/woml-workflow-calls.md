@@ -105,3 +105,6 @@ durable suspension of a calling JavaScript continuation is available.
 Retries and duplicate transports reconnect to the original child when the
 logical operation identity and payload match. Repeated calls to the same target
 from one step need stable, different `{ name: "..." }` values.
+
+For deployment, security, migration, shutdown, benchmarks, and the release
+gate, see `docs/woml-workflow-calls-production.md`.

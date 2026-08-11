@@ -4756,12 +4756,78 @@ fn load_workflow_call(
   let Some(stored) = stored else {
     return Ok(None);
   };
+  if !is_definition_hash(call_key) {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored call key is invalid".to_string(),
+    ));
+  }
+  let expected_child_run_id = format!(
+    "run_call_{}",
+    call_key.strip_prefix("sha256:").unwrap_or(call_key)
+  );
+  if stored.5 != expected_child_run_id {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored child run identity does not match its call key".to_string(),
+    ));
+  }
   let parent_attempt = u32::try_from(stored.2).map_err(|_| {
     DurableStoreError::WorkflowCallHistoryInvalid("stored parent attempt is invalid".to_string())
   })?;
+  if !(1..=10).contains(&parent_attempt) {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored parent attempt is invalid".to_string(),
+    ));
+  }
   let depth = u32::try_from(stored.7).map_err(|_| {
     DurableStoreError::WorkflowCallHistoryInvalid("stored lineage depth is invalid".to_string())
   })?;
+  if !(1..=MAX_WORKFLOW_CALL_DEPTH).contains(&depth) {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored lineage depth is invalid".to_string(),
+    ));
+  }
+  if stored.1.is_empty()
+    || stored.1.len() > 128
+    || stored.3.is_empty()
+    || stored.3.len() > 128
+    || !is_definition_hash(&stored.4)
+    || !is_definition_hash(&stored.6)
+  {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored workflow call identity fields are invalid".to_string(),
+    ));
+  }
+  let parent_binding = load_run_binding_optional(connection, &stored.0)?.ok_or_else(|| {
+    DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored workflow call parent run is missing".to_string(),
+    )
+  })?;
+  let child_binding = load_run_binding_optional(connection, &stored.5)?.ok_or_else(|| {
+    DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored workflow call child run is missing".to_string(),
+    )
+  })?;
+  if parent_binding.run_id != stored.0
+    || child_binding.run_id != stored.5
+    || child_binding.workflow_id != stored.3
+    || child_binding.definition_hash != stored.4
+  {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored child run binding does not match its workflow call".to_string(),
+    ));
+  }
+  let target_definition_workflow_id: Option<String> = connection
+    .query_row(
+      "SELECT workflow_id FROM woml_definitions WHERE definition_hash = ?1",
+      [&stored.4],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if target_definition_workflow_id.as_deref() != Some(stored.3.as_str()) {
+    return Err(DurableStoreError::WorkflowCallHistoryInvalid(
+      "stored target definition does not match its workflow call".to_string(),
+    ));
+  }
   let state = match stored.8.as_str() {
     "admitted" => WorkflowCallIndexState::Admitted,
     "running" => WorkflowCallIndexState::Running,

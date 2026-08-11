@@ -28,6 +28,8 @@ sufficient parity and the relevant production features have migration paths.
 | Durable files/large values | `services.storage` and portable object references |
 | Temporary reusable values | `services.cache` with an explicit TTL |
 | Internal workflow fan-out | `services.events.emit()` plus an `<event>` trigger |
+| Reusable local JavaScript helper package | `<imports><module name="..." from="..." /></imports>` and `services.<name>` |
+| Call one workflow and await its answer | `services.workflows.call(workflowId, payload)` |
 
 WOML makes every downstream dependency explicit. Give each step a stable ID and
 replace positional or “last result” access with the producing step's path:
@@ -67,6 +69,11 @@ replace positional or “last result” access with the producing step's path:
 8. Replace SDK webhook/schedule/provider registration with the corresponding
    WOML trigger tag. Keep credentials as `{{secrets.NAME}}` references and
    configure their values through `woml secrets set NAME`.
+9. Move reusable local JavaScript/TypeScript functions into a named WOML module
+   and call them through `services.<alias>`.
+10. Split reusable durable workflow work into a call-only workflow and activate
+    it with its parent, then use `services.workflows.call()` when the parent
+    needs its terminal JSON result.
 
 ## Current parity boundary
 
@@ -74,9 +81,10 @@ Sequential scripts, branch, parallel, Human Approval, Slack approval
 notifications, secrets, durable retry, and manual, webhook, Slack, schedule,
 interval, and named-event triggers are available through `woml run`.
 
-Native Fetch and the Rust-managed HTTP, database, storage, cache, and internal
-event services are available. Queue is explicitly postponed; additional
-messaging services, the module system, lifecycle controls, and the hosted
-production runtime remain roadmap items. Keep an SDK workflow in place when it
-depends on those unavailable capabilities. The SDK is not retired merely
-because the first services milestone is complete.
+Native Fetch; the Rust-managed HTTP, database, storage, cache, and internal
+event services; local JavaScript/TypeScript modules; and durable local Workflow
+Calls are available. Queue, package modules, additional messaging services,
+lifecycle controls, cross-machine workflow routing, and the hosted production
+runtime remain roadmap items. Keep an SDK workflow in place when it depends on
+those unavailable capabilities. The SDK is not retired merely because the
+local Workflow Calls milestone is complete.

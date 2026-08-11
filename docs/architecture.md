@@ -67,7 +67,12 @@ durable store v10 runtime ownership leases, authenticated private loopback
 wake-up, pending-child scans, and explicit multi-input runtime activation. WC6
 keeps child execution on that same DAG engine, rejects Human Approval targets
 before admission, and adds separate versioned call progress plus bounded safe
-parent/child inspection without widening the immutable event vocabulary.
+parent/child inspection without widening the immutable event vocabulary. WC7
+hardens every stored call read against corrupted identity and definition
+bindings, proves transactional v9-to-v10 migration, benchmarks both local
+routing paths, verifies the packed native CLI, and publishes the one-machine
+deployment and security boundary. The complete operational contract is
+`docs/woml-workflow-calls-production.md`.
 
 WC4 makes the same-runtime boundary retry-safe. The first admitting attempt
 stores one immutable call key and child run; later attempts and duplicate

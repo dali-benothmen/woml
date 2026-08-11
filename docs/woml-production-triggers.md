@@ -168,10 +168,13 @@ SIGINT and SIGTERM stop new admission, close provider connections and the HTTP
 listener, and join the Rust runtime. Already committed state remains available
 for restart recovery.
 
-Production Triggers T13 is a durable single-node profile. Do not start multiple
-processes against one SQLite file or claim distributed exactly-once scheduling.
-Multi-node leases, ownership, queues, retention, and hosted administration
-belong to the Production Runtime roadmap milestone.
+Production Triggers T13 is a durable single-node profile. Workflow Calls v1 may
+intentionally use multiple local processes against one SQLite file when each
+workflow ID has exactly one owner; that narrow call-routing profile does not
+turn trigger schedulers into distributed schedulers. Do not run multiple owners
+for one trigger workflow or claim distributed exactly-once scheduling.
+Multi-node leases, queues, retention, and hosted administration belong to the
+Production Runtime roadmap milestone.
 
 ## Troubleshooting
 
@@ -208,3 +211,6 @@ investigating a failure.
 10. Monitor readiness, rejection, run-terminal, scheduler, provider, and
     managed-service messages.
 11. Run `bun run test:sc6` from `woml-cli` before publishing a build.
+12. When using Workflow Calls across local processes, give every process the
+    exact same persistent state path, keep one owner per workflow ID, and apply
+    `docs/woml-workflow-calls-production.md`.

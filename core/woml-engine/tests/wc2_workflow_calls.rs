@@ -391,7 +391,7 @@ async fn managed_handler_routes_verified_identity_into_durable_admission() {
   targets.seal();
   let handler = ManagedWorkflowCallsHandler::new(database.path().to_path_buf(), targets);
   let step_key = step_effect_idempotency_key(&parent_run_id, PARENT_HASH, "requestRisk");
-  let operation_name = "customer-risk".to_string();
+  let operation_name = "workflows.call.customer-risk".to_string();
   let request = CapabilityCallRequest {
     contract: "woml.capability-call".to_string(),
     contract_version: 1,

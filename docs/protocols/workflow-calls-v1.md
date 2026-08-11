@@ -6,7 +6,10 @@ same-runtime children, and WC4 completed retry-safe reattachment, cycle
 rejection, single-executor claiming, and fail-closed recovery. WC5 implements
 project-local cross-process ownership, wake-up, and pending-child recovery.
 WC6 adds a separate progress surface, bounded parent/child inspection,
-composition coverage, and pre-admission Human Approval rejection.
+composition coverage, and pre-admission Human Approval rejection. WC7 hardens
+stored identity verification, v9-to-v10 migration, clean packaging, benchmark
+coverage, and publication of the local deployment/security profile without
+changing this frozen v1 protocol.
 
 ## Author contract
 

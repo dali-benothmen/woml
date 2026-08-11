@@ -456,7 +456,9 @@ impl ManagedWorkflowCallsHandler {
   ) -> Result<PreparedWorkflowCall, CapabilityFailure> {
     let request = parse_request(&call.input)?;
     let identity_matches = match (&request.options.name, call.identity.mode) {
-      (Some(name), CapabilityIdentityMode::Named) => name == &call.identity.operation_name,
+      (Some(name), CapabilityIdentityMode::Named) => {
+        call.identity.operation_name == format!("workflows.call.{name}")
+      }
       (None, CapabilityIdentityMode::Automatic) => true,
       _ => false,
     };

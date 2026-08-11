@@ -26,6 +26,9 @@ parallel groups, retries, modules, native Fetch, and all current services keep
 their normal behavior. Human Approval targets are rejected before admission in
 v1. The CLI prints both run IDs and `woml runs get` exposes a bounded safe
 relationship summary; see `docs/woml-workflow-calls.md`.
+WC7 hardens migration, corrupted-store rejection, clean packaging, benchmark
+coverage, and the documented one-machine production boundary in
+`docs/woml-workflow-calls-production.md`.
 
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies

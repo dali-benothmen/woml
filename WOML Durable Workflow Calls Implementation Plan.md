@@ -1,11 +1,12 @@
 # WOML Durable Workflow Calls Implementation Plan
 
-Status: WC0 and WC1 completed on 2026-08-10; WC2 through WC6 completed on
-2026-08-11. Workflow Calls now execute through Rust in one runtime or across
-separate local WOML processes, reuse one durable child across retries and
-duplicate delivery, reject cycles and Human Approval targets before admission,
-recover fail-closed, print safe parent/child progress, and expose bounded run
-relationships. WC7 is next.
+Status: WC0 and WC1 completed on 2026-08-10; WC2 through WC7 completed on
+2026-08-11. Durable Workflow Calls are published for one-machine operation:
+they execute through Rust in one runtime or across separate local WOML
+processes, reuse one durable child across retries and duplicate delivery,
+reject cycles, unsupported Human Approval targets, and corrupted durable
+identity, recover fail-closed, expose safe bounded inspection, migrate v9 state
+without history loss, and pass the packaged release gate and benchmark.
 
 ## 1. Product Outcome
 
@@ -599,6 +600,8 @@ not call another workflow.
 
 ### WC7 — Harden and publish Durable Workflow Calls
 
+Status: **completed on 2026-08-11.**
+
 Changes:
 
 - Run adversarial identity, lineage, routing, storage, crash, and corruption
@@ -609,6 +612,8 @@ Changes:
 - Update language, architecture, services, deployment, security, and SDK
   migration documentation.
 - Add one Workflow Calls release gate to the complete WOML release suite.
+- Correct and exercise named-call identity across the Bun/Rust boundary so
+  explicit names support safe repeated and concurrent calls.
 
 Result:
 
@@ -710,7 +715,7 @@ admission.
 7. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-The next implementation action is WC7. WC6 proves that called children retain
-normal branch, parallel, retry, module, native Fetch, HTTP, database, storage,
-cache, event, and trigger composition. It also adds actionable pre-admission
-rejection, versioned safe call progress, and bounded two-way run inspection.
+Durable Workflow Calls WC0–WC7 are complete. The next roadmap feature is
+Lifecycle and Engine Controls. It must begin with reviewed cancellation,
+durable suspension, lifecycle-hook, and engine-control contracts rather than
+silently extending Workflow Calls v1.

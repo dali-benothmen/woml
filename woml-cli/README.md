@@ -91,6 +91,12 @@ The returned `workflowCalls` relationship list is capped at 50 children. See
 [Calling One WOML Workflow from Another](../docs/woml-workflow-calls.md) for
 composition, inspection, Human Approval limits, and troubleshooting.
 
+Production deployment, security, upgrade, recovery, and performance guidance
+is in [Operating Durable Workflow Calls](../docs/woml-workflow-calls-production.md).
+After building, `bun run benchmark:workflow-calls` prints a same-runtime versus
+local cross-process baseline. `bun run test:wc7` is the complete Workflow Calls
+publication gate.
+
 To activate the webhook example:
 
 ```bash
