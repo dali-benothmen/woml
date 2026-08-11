@@ -3,6 +3,8 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import packageMetadata from '../package.json' with { type: 'json' };
+
 const packageRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(packageRoot, '..');
 const cliPath = join(packageRoot, 'dist', 'cli.js');
@@ -45,6 +47,26 @@ afterAll(async () => {
 });
 
 describe('LEC7 direct run management', () => {
+  test('prints global help and version information', () => {
+    for (const flag of ['--version', '-v']) {
+      const version = invoke(flag);
+      expect(version.exitCode).toBe(0);
+      expect(version.stdout.toString()).toBe(
+        `woml ${packageMetadata.version}\n`
+      );
+      expect(version.stderr.toString()).toBe('');
+    }
+
+    for (const flag of ['--help', '-h']) {
+      const help = invoke(flag);
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout.toString()).toContain('Usage: woml run');
+      expect(help.stdout.toString()).toContain('Usage: woml list');
+      expect(help.stdout.toString()).toContain('Usage: woml cancel');
+      expect(help.stderr.toString()).toBe('');
+    }
+  });
+
   test('lists an empty store and validates filters before opening Rust', () => {
     const statePath = join(temporaryDirectory, 'empty.sqlite');
     const empty = invoke('list', '--state', statePath, '--json');

@@ -7,6 +7,14 @@ Every source now uses `<woml>` as its document root, with optional `<imports>`
 before the one `<workflow>` definition. Direct `<workflow>` roots are rejected
 with a migration hint.
 
+Show all commands or print the installed CLI version with:
+
+```bash
+woml --help
+woml --version
+woml -v
+```
+
 ## Check a workflow or local module graph
 
 Validate and inspect a source without activating triggers or executing code:

@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
+import packageMetadata from '../package.json' with { type: 'json' };
+
 import {
   buildWomlDefinitionPackage,
   buildWomlExecutableDefinitionPackage,
@@ -96,6 +98,8 @@ const processIo: CliIo = {
   stdout: text => process.stdout.write(text),
   stderr: text => process.stderr.write(text),
 };
+
+const WOML_CLI_VERSION = packageMetadata.version;
 
 class CliInputError extends Error {
   readonly code: string;
@@ -2478,6 +2482,16 @@ export async function runCli(
   io: CliIo = processIo,
   dependencies: CliDependencies = defaultDependencies
 ): Promise<number> {
+  if (args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
+    io.stdout(`woml ${WOML_CLI_VERSION}\n`);
+    return 0;
+  }
+
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    io.stdout(`${usage()}\n`);
+    return 0;
+  }
+
   if (args[0] === 'check') {
     return await runCheckCommand(args, io);
   }
