@@ -584,13 +584,31 @@ impl DurableCapabilityAuthority {
     let workflow_scope = {
       let store = self.store.lock().await;
       let projection = store.projection(&request.run_id)?;
+      let binding = store.run_binding(&request.run_id)?;
       let attempt = projection.attempts.iter().find(|attempt| {
         attempt.identity.node_id == request.node_id
           && attempt.identity.attempt == request.attempt_number
           && attempt.identity.invocation_id == request.invocation_id
           && attempt.status == crate::projection::AttemptStatus::Started
       });
-      if attempt.and_then(|attempt| attempt.idempotency_key.as_deref())
+      let lifecycle_key = projection.lifecycle_hooks.values().find_map(|hook| {
+        hook.actions.get(&request.node_id).and_then(|action| {
+          (action.attempt == request.attempt_number
+            && action.status == crate::projection::LifecycleActionStatus::Started)
+            .then(|| {
+              crate::step_effect_idempotency_key(
+                &request.run_id,
+                &binding.definition_hash,
+                &request.node_id,
+              )
+            })
+        })
+      });
+      if attempt
+        .and_then(|attempt| attempt.idempotency_key.as_deref())
+        .map(str::to_string)
+        .or(lifecycle_key)
+        .as_deref()
         != Some(request.identity.step_idempotency_key.as_str())
       {
         return Err(
@@ -600,7 +618,7 @@ impl DurableCapabilityAuthority {
           .into(),
         );
       }
-      store.run_binding(&request.run_id)?.workflow_id
+      binding.workflow_id
     };
     let metadata = match self.registry.safe_metadata(&request) {
       Ok(metadata) => metadata,
@@ -733,13 +751,31 @@ impl DurableCapabilityAuthority {
         {
           let store = self.store.lock().await;
           let projection = store.projection(&identity.run_id)?;
+          let binding = store.run_binding(&identity.run_id)?;
           let attempt = projection.attempts.iter().find(|attempt| {
             attempt.identity.node_id == identity.node_id
               && attempt.identity.attempt == identity.attempt_number
               && attempt.identity.invocation_id == identity.invocation_id
               && attempt.status == crate::projection::AttemptStatus::Started
           });
-          if attempt.and_then(|attempt| attempt.idempotency_key.as_deref())
+          let lifecycle_key = projection.lifecycle_hooks.values().find_map(|hook| {
+            hook.actions.get(&identity.node_id).and_then(|action| {
+              (action.attempt == identity.attempt_number
+                && action.status == crate::projection::LifecycleActionStatus::Started)
+                .then(|| {
+                  crate::step_effect_idempotency_key(
+                    &identity.run_id,
+                    &binding.definition_hash,
+                    &identity.node_id,
+                  )
+                })
+            })
+          });
+          if attempt
+            .and_then(|attempt| attempt.idempotency_key.as_deref())
+            .map(str::to_string)
+            .or(lifecycle_key)
+            .as_deref()
             != Some(identity.step_idempotency_key.as_str())
           {
             return Err(

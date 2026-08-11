@@ -19,7 +19,7 @@ use woml_engine::{
   resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
   run_notification_provider_journey, settle_approval_timeout_durable, ApprovalDecision,
   ApprovalDecisionOutcome, CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
-  ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter,
+  ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter, LifecycleProgress,
   NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
   NotificationJourneyError, ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError,
   RuntimeExecutionOptions, RuntimeModuleArtifact, ScheduleProgress, ScheduleProgressReporter,
@@ -552,6 +552,7 @@ fn runtime_options_with_progress(
       Ok(vec![context.value])
     })?;
   progress.unref(env)?;
+  let lifecycle_progress = progress.clone();
   Ok(
     runtime_options_with_secrets(
       bun_executable,
@@ -562,6 +563,11 @@ fn runtime_options_with_progress(
     .with_progress_reporter(Arc::new(move |message| {
       if let Ok(json) = serde_json::to_string(&message) {
         let _ = progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    }))
+    .with_lifecycle_progress_reporter(Arc::new(move |message: LifecycleProgress| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = lifecycle_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
       }
     })),
   )
@@ -952,6 +958,15 @@ pub fn inspect_woml_stored_run_requirements(
         .flat_map(|runtime| runtime.required_secrets.iter().cloned())
     })
     .collect::<Vec<_>>();
+  required_secrets.extend(
+    workflow
+      .lifecycle
+      .iter()
+      .flat_map(|lifecycle| &lifecycle.hooks)
+      .flat_map(|hook| &hook.actions)
+      .flat_map(|action| action.script_runtime.iter())
+      .flat_map(|runtime| runtime.required_secrets.iter().cloned()),
+  );
   required_secrets.sort();
   required_secrets.dedup();
   let has_approval = workflow

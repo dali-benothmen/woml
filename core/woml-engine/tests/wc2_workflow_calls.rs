@@ -12,8 +12,8 @@ use woml_engine::{
   DurableStoreError, ManagedWorkflowCallsHandler, RunIngress, RuntimeExecutionOptions,
   ScriptHostProcessOptions, TriggerAdmissionRequest, WebhookDefinitionRegistration,
   WomlWebhookServer, WomlWebhookServerConfig, WorkflowCallAdmissionRequest, WorkflowCallIndexState,
-  WorkflowTargetRegistry, WorkflowTargetRegistryError, DURABLE_STORE_SCHEMA_VERSION,
-  RUN_EVENT_SCHEMA_VERSION_V9,
+  WorkflowTargetRegistry, WorkflowTargetRegistryError, COMPILED_MODEL_SCHEMA_VERSION_V11,
+  DURABLE_STORE_SCHEMA_VERSION, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
 const PARENT_MODEL: &str =
@@ -22,7 +22,7 @@ const CHILD_MODEL: &str =
   include_str!("../../../woml/tests/fixtures/workflow-calls/calculate-risk.compiled.v10.json");
 const PARENT_HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CHILD_HASH: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const LEGACY_CHILD_HASH: &str =
+const TRIGGERED_CHILD_HASH: &str =
   "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
 fn parent_model() -> CompiledWorkflowDefinition {
@@ -213,7 +213,7 @@ fn admission_creates_one_truthfully_bound_child_and_reuses_it() {
     at,
   );
   let mut store = DurableEventStore::open(database.path()).unwrap();
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 10);
+  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 11);
 
   let first = store.admit_workflow_call(request.clone()).unwrap();
   assert!(!first.duplicate);
@@ -252,17 +252,18 @@ fn admission_creates_one_truthfully_bound_child_and_reuses_it() {
 fn an_existing_triggered_definition_is_also_callable_without_faking_its_trigger() {
   let database = TemporaryDatabase::new("triggered-target");
   let (parent_run_id, at) = seed_parent(database.path());
-  let mut legacy_child = parent_model();
-  legacy_child.workflow_id = "legacy-worker".to_string();
+  let mut triggered_child = parent_model();
+  triggered_child.schema_version = COMPILED_MODEL_SCHEMA_VERSION_V11;
+  triggered_child.workflow_id = "triggered-worker".to_string();
   let mut store = DurableEventStore::open(database.path()).unwrap();
   store
-    .register_definition(&legacy_child, LEGACY_CHILD_HASH)
+    .register_definition(&triggered_child, TRIGGERED_CHILD_HASH)
     .unwrap();
 
   let call_key = derive_workflow_call_key(
     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "legacy-worker",
-    "legacy-call",
+    "triggered-worker",
+    "triggered-call",
   );
   let request = WorkflowCallAdmissionRequest {
     child_run_id: format!("run_call_{}", call_key.strip_prefix("sha256:").unwrap()),
@@ -270,14 +271,14 @@ fn an_existing_triggered_definition_is_also_callable_without_faking_its_trigger(
     parent_run_id,
     parent_node_id: "requestRisk".to_string(),
     parent_attempt: 1,
-    target_workflow_id: "legacy-worker".to_string(),
-    target_definition_hash: LEGACY_CHILD_HASH.to_string(),
+    target_workflow_id: "triggered-worker".to_string(),
+    target_definition_hash: TRIGGERED_CHILD_HASH.to_string(),
     payload: Map::from_iter([("jobId".to_string(), json!("job-42"))]),
     admitted_at: at,
   };
   let outcome = store.admit_workflow_call(request.clone()).unwrap();
   let events = store.events(&outcome.admission.child_run_id).unwrap();
-  assert_eq!(events[0].event_schema_version, RUN_EVENT_SCHEMA_VERSION_V9);
+  assert_eq!(events[0].event_schema_version, RUN_EVENT_SCHEMA_VERSION_V10);
   let projection = store.projection(&outcome.admission.child_run_id).unwrap();
   assert_eq!(projection.context.trigger, request.payload);
   assert_eq!(

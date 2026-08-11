@@ -73,10 +73,10 @@ function moduleRegisteredMessage(
     bundleDigest: request.bundleDigest,
     ...outcome,
   };
-  return request.protocolVersion === 6
+  return request.protocolVersion === 6 || request.protocolVersion === 7
     ? {
         ...base,
-        protocolVersion: 6,
+        protocolVersion: request.protocolVersion,
         sourceMapDigest: request.sourceMapDigest,
       }
     : { ...base, protocolVersion: 5 };
@@ -195,14 +195,14 @@ export class ScriptHost {
       .update(message.bundle)
       .digest('hex')}`;
     const sourceMapDigest =
-      message.protocolVersion === 6
+      message.protocolVersion === 6 || message.protocolVersion === 7
         ? `sha256:${new Bun.CryptoHasher('sha256')
             .update(message.sourceMap)
             .digest('hex')}`
         : undefined;
     const digestMismatch =
       actualDigest !== message.bundleDigest ||
-      (message.protocolVersion === 6 &&
+      ((message.protocolVersion === 6 || message.protocolVersion === 7) &&
         sourceMapDigest !== message.sourceMapDigest);
     if (digestMismatch) {
       void this.#send(
@@ -219,7 +219,7 @@ export class ScriptHost {
     if (
       existing !== undefined &&
       (existing.bundle !== message.bundle ||
-        (message.protocolVersion === 6 &&
+        ((message.protocolVersion === 6 || message.protocolVersion === 7) &&
           (existing.sourceMap !== message.sourceMap ||
             existing.sourceMapDigest !== message.sourceMapDigest)))
     ) {
@@ -229,12 +229,12 @@ export class ScriptHost {
     }
     const bytes =
       Buffer.byteLength(message.bundle, 'utf8') +
-      (message.protocolVersion === 6
+      (message.protocolVersion === 6 || message.protocolVersion === 7
         ? Buffer.byteLength(message.sourceMap, 'utf8')
         : 0);
     const individualLimitExceeded =
       Buffer.byteLength(message.bundle, 'utf8') > MAX_MODULE_ARTIFACT_BYTES ||
-      (message.protocolVersion === 6 &&
+      ((message.protocolVersion === 6 || message.protocolVersion === 7) &&
         Buffer.byteLength(message.sourceMap, 'utf8') >
           MAX_MODULE_ARTIFACT_BYTES);
     if (
@@ -255,7 +255,7 @@ export class ScriptHost {
     if (existing === undefined) {
       this.#moduleBundles.set(message.bundleDigest, {
         bundle: message.bundle,
-        ...(message.protocolVersion === 6
+        ...(message.protocolVersion === 6 || message.protocolVersion === 7
           ? {
               sourceMap: message.sourceMap,
               sourceMapDigest: message.sourceMapDigest,
@@ -459,7 +459,8 @@ export class ScriptHost {
     if (
       (request.protocolVersion === 4 ||
         request.protocolVersion === 5 ||
-        request.protocolVersion === 6) &&
+        request.protocolVersion === 6 ||
+        request.protocolVersion === 7) &&
       containsKnownSecret(
         response.result,
         Object.values(request.bindings.secrets)
@@ -582,7 +583,8 @@ export class ScriptHost {
           if (
             (request.protocolVersion !== 4 &&
               request.protocolVersion !== 5 &&
-              request.protocolVersion !== 6) ||
+              request.protocolVersion !== 6 &&
+              request.protocolVersion !== 7) ||
             observation.invocationId !== request.invocationId
           ) {
             finish({
@@ -630,7 +632,8 @@ export class ScriptHost {
         if (
           (request.protocolVersion !== 4 &&
             request.protocolVersion !== 5 &&
-            request.protocolVersion !== 6) ||
+            request.protocolVersion !== 6 &&
+            request.protocolVersion !== 7) ||
           call.invocationId !== request.invocationId ||
           call.runId !== request.runId ||
           call.nodeId !== request.nodeId ||
@@ -691,7 +694,8 @@ export class ScriptHost {
           request.protocolVersion === 3 ||
           request.protocolVersion === 4 ||
           request.protocolVersion === 5 ||
-          request.protocolVersion === 6
+          request.protocolVersion === 6 ||
+          request.protocolVersion === 7
             ? request.attempt
             : undefined;
         worker.postMessage({
@@ -703,13 +707,24 @@ export class ScriptHost {
             timeoutMs: request.timeoutMs,
             source: request.source,
             context: request.context,
+            ...(request.protocolVersion === 7
+              ? {
+                  mode: request.mode,
+                  ...(request.mode === 'lifecycle'
+                    ? { lifecycle: request.lifecycle }
+                    : {}),
+                }
+              : {}),
             attempt,
             ...(request.protocolVersion === 4 ||
             request.protocolVersion === 5 ||
-            request.protocolVersion === 6
+            request.protocolVersion === 6 ||
+            request.protocolVersion === 7
               ? { bindings: request.bindings }
               : {}),
-            ...(request.protocolVersion === 5 || request.protocolVersion === 6
+            ...(request.protocolVersion === 5 ||
+            request.protocolVersion === 6 ||
+            request.protocolVersion === 7
               ? {
                   modules: request.modules.map(module => {
                     const artifact = this.#moduleBundles.get(
@@ -723,7 +738,8 @@ export class ScriptHost {
                     return {
                       ...module,
                       bundle: artifact.bundle,
-                      ...(request.protocolVersion === 6
+                      ...(request.protocolVersion === 6 ||
+                      request.protocolVersion === 7
                         ? {
                             sourceMap: artifact.sourceMap,
                             sourceMapDigest: artifact.sourceMapDigest,

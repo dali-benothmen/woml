@@ -1,0 +1,41 @@
+<woml>
+  <workflow id="lifecycle-workflow-demo" name="Lifecycle workflow demo" version="1.0.0">
+    <lifecycle>
+      <on-start>
+        <script>
+          console.log(`Starting ${lifecycle.workflow.id}`);
+        </script>
+      </on-start>
+      <on-success>
+        <script>
+          console.log(`Workflow ${lifecycle.workflow.id} succeeded`);
+        </script>
+      </on-success>
+      <on-failure>
+        <script>
+          console.log(`Workflow failed with ${lifecycle.failure.code}`);
+        </script>
+      </on-failure>
+      <on-complete>
+        <script>
+          console.log(`Final outcome: ${lifecycle.workflow.outcome}`);
+        </script>
+      </on-complete>
+    </lifecycle>
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="greeting">
+        <script>
+          return { message: 'Hello from the business workflow' };
+        </script>
+      </step>
+      <step id="finish">
+        <script>
+          return { message: context.steps.greeting.message };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

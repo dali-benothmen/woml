@@ -23,14 +23,16 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('LEC2 lifecycle CLI staging', () => {
+describe('LEC3 lifecycle CLI admission', () => {
   test('woml check accepts module-free and module-backed lifecycle source', async () => {
     for (const name of ['lifecycle.woml', 'lifecycle-module.woml']) {
       const result = await invoke(['check', resolve(fixtureRoot, name)]);
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toContain('WOML check passed');
-      expect(result.stdout).toContain('compiled to Model v11');
+      expect(result.stdout).toContain(
+        'workflow-level lifecycle scripts are executable'
+      );
     }
   });
 
@@ -50,7 +52,7 @@ describe('LEC2 lifecycle CLI staging', () => {
     });
   });
 
-  test('woml run rejects lifecycle explicitly until action execution exists', async () => {
+  test('woml run keeps step hooks and notifications staged for LEC4/LEC5', async () => {
     const result = await invoke([
       'run',
       resolve(fixtureRoot, 'lifecycle.woml'),
@@ -58,6 +60,6 @@ describe('LEC2 lifecycle CLI staging', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('WOML_LIFECYCLE_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('Use woml check until LEC3');
+    expect(result.stderr).toContain('introduced in LEC4 and LEC5');
   });
 });

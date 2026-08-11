@@ -1,9 +1,10 @@
 # WOML Lifecycle and Engine Controls Implementation Plan
 
-Status: LEC0, LEC1, and LEC2 completed on 2026-08-11. Lifecycle source lowers
-to reviewed Model v11 definitions, and Rust now owns Event v10 folding, Store
-v11 summaries, lifecycle/control state, atomic admissions, inspection, and
-fail-closed recovery. Lifecycle action execution has not started; LEC3 is next.
+Status: LEC0 through LEC3 completed on 2026-08-11. Workflow-level lifecycle
+scripts now run through isolated Bun workers under Rust supervision. `on-start`
+runs before the business DAG; the matching outcome hook and `on-complete` run
+after the durable business outcome; lifecycle failures remain visible warnings
+without rewriting that outcome. Step hooks remain staged for LEC4.
 
 ## 1. Product Outcome
 
@@ -723,7 +724,7 @@ written.
 | LEC0 (complete) | Freeze lifecycle, notification, cancellation, inspection, model, event, and store contracts.          | Every expensive boundary is reviewable before runtime code.                                                                                     |
 | LEC1 (complete) | Validate lifecycle WOML and lower lifecycle-bearing definitions to Model v11.                         | Authors receive exact syntax diagnostics and deterministic compiled lifecycle definitions without breaking the Event v9 runtime between phases. |
 | LEC2 (complete) | Implement Event v10 folding, Store v11, hook identity, outcome/finalization state, and run summaries. | Rust can durably represent lifecycle and controls without executing hooks.                                                                      |
-| LEC3            | Execute workflow-level lifecycle scripts.                                                             | `on-start`, outcome hooks, and `on-complete` work end to end.                                                                                   |
+| LEC3 (complete) | Execute workflow-level lifecycle scripts.                                                             | `on-start`, outcome hooks, and `on-complete` work end to end.                                                                                   |
 | LEC4            | Execute step lifecycle hooks across retries and control flow.                                         | Step start/success/failure/complete observers work correctly in sequential, branch, parallel, and approval workflows.                           |
 | LEC5            | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
 | LEC6            | Implement durable cancellation and propagation.                                                       | Active and waiting Event v10 runs can be cancelled safely and recovered.                                                                        |
@@ -846,7 +847,7 @@ Verification:
   suite also passes, including Event v10 branch/parallel/retry composition,
   native Fetch tracking, and source-free durable resume.
 
-### LEC3 — Execute workflow lifecycle scripts
+### LEC3 — Execute workflow lifecycle scripts (completed)
 
 Changes:
 
@@ -872,6 +873,26 @@ Gate:
 End-to-end tests cover success, failure, hook script throw, timeout, non-JSON
 return, managed services, Fetch, secrets, modules, Worker crash, host crash,
 restart, and no `context.steps` mutation.
+
+Implementation result (2026-08-11):
+
+- Script Host Protocol v7 adds an explicit lifecycle execution mode and the
+  frozen Lifecycle Binding v1 without changing step invocation behavior.
+- Rust admits and executes workflow hooks in durable order, supervises their
+  Bun workers, records each action attempt, and finalizes only after the
+  outcome hook and `on-complete` settle.
+- Lifecycle returns are ignored, including `undefined`; normal business-step
+  JSON-result validation remains unchanged.
+- Lifecycle scripts receive deeply read-only `context` and `lifecycle`
+  bindings plus declared secrets, modules, managed services, and tracked
+  Fetch. Managed operations use the lifecycle action's durable identity.
+- Hook throws, timeouts, invalid results, Worker/host failures, and interrupted
+  attempts fail closed as lifecycle warnings. They do not replace the already
+  decided business result.
+- Lifecycle Progress v1 is emitted through the existing CLI progress channel,
+  and run inspection continues to expose durable hook/action health.
+- `examples/lifecycleWorkflow.woml` is the manual end-to-end example. The CLI
+  continues to reject step hooks and lifecycle notifications until LEC4/LEC5.
 
 ### LEC4 — Execute step lifecycle hooks
 

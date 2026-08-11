@@ -75,6 +75,23 @@ export type ExecutionProgressV1 =
       readonly nodeId: string;
       readonly attempt: number;
       readonly maxAttempts: number;
+    }
+  | {
+      readonly profile: 'woml.lifecycle-progress/v1';
+      readonly runId: string;
+      readonly workflowId: string;
+      readonly phase:
+        | 'hook_requested'
+        | 'action_started'
+        | 'action_succeeded'
+        | 'action_failed'
+        | 'hook_completed'
+        | 'run_finalizing'
+        | 'run_finalized';
+      readonly hookId: string;
+      readonly actionId: string;
+      readonly stepId?: string;
+      readonly code?: string;
     };
 
 export interface RustRecoveryReport {
@@ -801,6 +818,42 @@ function dateTime(value: unknown): value is string {
 export function parseExecutionProgress(json: string): ExecutionProgressV1 {
   const value: unknown = JSON.parse(json);
   if (
+    record(value) &&
+    value.profile === 'woml.lifecycle-progress/v1' &&
+    exactKeys(value, [
+      'profile',
+      'runId',
+      'workflowId',
+      'phase',
+      'hookId',
+      'actionId',
+      ...(value.stepId === undefined ? [] : ['stepId']),
+      ...(value.code === undefined ? [] : ['code']),
+    ]) &&
+    typeof value.runId === 'string' &&
+    value.runId.length > 0 &&
+    typeof value.workflowId === 'string' &&
+    value.workflowId.length > 0 &&
+    typeof value.hookId === 'string' &&
+    value.hookId.length > 0 &&
+    typeof value.actionId === 'string' &&
+    value.actionId.length > 0 &&
+    [
+      'hook_requested',
+      'action_started',
+      'action_succeeded',
+      'action_failed',
+      'hook_completed',
+      'run_finalizing',
+      'run_finalized',
+    ].includes(String(value.phase)) &&
+    (value.stepId === undefined || typeof value.stepId === 'string') &&
+    (value.code === undefined ||
+      (typeof value.code === 'string' && /^WOML_[A-Z0-9_]+$/.test(value.code)))
+  ) {
+    return value as ExecutionProgressV1;
+  }
+  if (
     !record(value) ||
     value.contract !== 'woml.execution-progress' ||
     value.version !== 1 ||
@@ -983,7 +1036,9 @@ export function parseTriggerProgress(json: string): TriggerProgressV1 {
   throw new Error('The native core returned invalid trigger progress.');
 }
 
-export function parseWorkflowCallProgress(json: string): WorkflowCallProgressV1 {
+export function parseWorkflowCallProgress(
+  json: string
+): WorkflowCallProgressV1 {
   const value: unknown = JSON.parse(json);
   if (
     !record(value) ||
@@ -2021,7 +2076,8 @@ export function inspectRunWithRust(
     ].includes(String(value.status)) ||
     (value.terminalNodeId !== undefined &&
       typeof value.terminalNodeId !== 'string') ||
-    (value.failureCode !== undefined && typeof value.failureCode !== 'string') ||
+    (value.failureCode !== undefined &&
+      typeof value.failureCode !== 'string') ||
     !record(value.workflowCalls) ||
     !exactKeys(
       value.workflowCalls,

@@ -51,7 +51,15 @@ fn legacy_model_v1() -> CompiledWorkflowDefinition {
 
 fn started_store() -> DurableEventStore {
   let mut store = DurableEventStore::open_in_memory().expect("store opens");
-  let workflow = lifecycle_model();
+  let mut workflow = lifecycle_model();
+  // These LEC2 authority tests isolate cancellation/outcome admission. LEC3
+  // separately verifies automatic run-start hook admission and execution.
+  workflow
+    .lifecycle
+    .as_mut()
+    .unwrap()
+    .hooks
+    .retain(|hook| hook.event != woml_engine::LifecycleEventName::RunStart);
   workflow.validate_structure().expect("Model v11 validates");
   store
     .register_definition(&workflow, DEFINITION_HASH)

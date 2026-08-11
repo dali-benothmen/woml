@@ -2770,7 +2770,7 @@ impl DurableEventStore {
     let workflow = definition_for_run(&transaction, &run_id)?;
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
     let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
-      translate_legacy_terminal_v10(payload)?
+      expand_model_v11_payload(&workflow, &run_id, payload)?
     } else {
       vec![payload]
     };
@@ -2844,7 +2844,7 @@ impl DurableEventStore {
     let binding = run_binding_in_transaction(&transaction, run_id)?;
     for (event_id, occurred_at, payload) in payloads {
       let translated = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
-        translate_legacy_terminal_v10(payload)?
+        expand_model_v11_payload(&workflow, run_id, payload)?
       } else {
         vec![payload]
       };
@@ -6303,7 +6303,7 @@ fn load_events(connection: &Connection, run_id: &str) -> Result<Vec<RunEvent>, D
   Ok(events)
 }
 
-fn lifecycle_warnings_from_projection(
+pub(crate) fn lifecycle_warnings_from_projection(
   projection: &RunProjection,
 ) -> Vec<crate::event::LifecycleWarning> {
   projection
@@ -6389,9 +6389,38 @@ fn lifecycle_failure_from_legacy(data: &RunFailedData) -> crate::event::Lifecycl
   }
 }
 
-pub(crate) fn translate_legacy_terminal_v10(
+pub(crate) fn expand_model_v11_payload(
+  workflow: &CompiledWorkflowDefinition,
+  run_id: &str,
   payload: RunEventPayload,
 ) -> Result<Vec<RunEventPayload>, DurableStoreError> {
+  let payload = if let RunEventPayload::RunStarted(data) = payload {
+    let mut payloads = vec![RunEventPayload::RunStarted(data)];
+    if let Some(hook) =
+      workflow.lifecycle_hook_for_event(crate::model::LifecycleEventName::RunStart)
+    {
+      let subject = LifecycleSubject {
+        kind: LifecycleSubjectKind::Workflow,
+        id: run_id.to_string(),
+      };
+      payloads.push(RunEventPayload::LifecycleHookRequested(
+        LifecycleHookRequestedData {
+          hook_invocation_id: derive_lifecycle_hook_invocation_id(
+            run_id,
+            &hook.hook_id,
+            subject.kind,
+            &subject.id,
+          ),
+          hook_id: hook.hook_id.clone(),
+          event: hook.event,
+          subject,
+        },
+      ));
+    }
+    return Ok(payloads);
+  } else {
+    payload
+  };
   let outcome = match payload {
     RunEventPayload::RunSucceeded(data) => crate::event::RunOutcomeDecidedData::Succeeded {
       result: data.result,
@@ -6402,14 +6431,43 @@ pub(crate) fn translate_legacy_terminal_v10(
     payload => return Ok(vec![payload]),
   };
   let business_outcome = outcome.outcome();
-  Ok(vec![
-    RunEventPayload::RunOutcomeDecided(outcome),
-    RunEventPayload::RunFinalized(crate::event::RunFinalizedData {
-      outcome: business_outcome,
-      lifecycle_status: crate::event::FinalLifecycleStatus::Completed,
-      warnings: Vec::new(),
-    }),
-  ])
+  let lifecycle_event = match business_outcome {
+    crate::event::BusinessOutcome::Succeeded => crate::model::LifecycleEventName::RunSuccess,
+    crate::event::BusinessOutcome::Failed => crate::model::LifecycleEventName::RunFailure,
+    crate::event::BusinessOutcome::Cancelled => crate::model::LifecycleEventName::RunCancel,
+  };
+  let mut payloads = vec![RunEventPayload::RunOutcomeDecided(outcome)];
+  let next_hook = workflow
+    .lifecycle_hook_for_event(lifecycle_event)
+    .or_else(|| workflow.lifecycle_hook_for_event(crate::model::LifecycleEventName::RunComplete));
+  if let Some(hook) = next_hook {
+    let subject = LifecycleSubject {
+      kind: LifecycleSubjectKind::Workflow,
+      id: run_id.to_string(),
+    };
+    payloads.push(RunEventPayload::LifecycleHookRequested(
+      LifecycleHookRequestedData {
+        hook_invocation_id: derive_lifecycle_hook_invocation_id(
+          run_id,
+          &hook.hook_id,
+          subject.kind,
+          &subject.id,
+        ),
+        hook_id: hook.hook_id.clone(),
+        event: hook.event,
+        subject,
+      },
+    ));
+  } else {
+    payloads.push(RunEventPayload::RunFinalized(
+      crate::event::RunFinalizedData {
+        outcome: business_outcome,
+        lifecycle_status: crate::event::FinalLifecycleStatus::Completed,
+        warnings: Vec::new(),
+      },
+    ));
+  }
+  Ok(payloads)
 }
 
 fn write_run_summary(
@@ -6468,8 +6526,12 @@ fn append_to_history(
   event_schema_version: u32,
   payload: RunEventPayload,
 ) -> Result<RunEvent, DurableStoreError> {
-  let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
-    translate_legacy_terminal_v10(payload)?
+  let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10
+    && matches!(
+      payload,
+      RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
+    ) {
+    expand_model_v11_payload(&definition_for_run(transaction, run_id)?, run_id, payload)?
   } else {
     vec![payload]
   };
@@ -6711,7 +6773,7 @@ impl DurableDagEngine {
         RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
       )
     {
-      let translated = translate_legacy_terminal_v10(payload)?;
+      let translated = expand_model_v11_payload(&self.workflow, run_id, payload)?;
       return Ok(
         self.store.append_payloads_atomically(
           run_id,

@@ -16,6 +16,7 @@ import type {
   ExecuteMessage,
   ExecuteMessageV4,
   ExecuteMessageV6,
+  ExecuteMessageV7,
   FetchObservationMessage,
   ScriptAttempt,
   ScriptHostMessage,
@@ -122,6 +123,36 @@ function executeV6(
     ...base,
     protocolVersion: 6,
     modules: [{ name: 'utility', bundleDigest, exports }],
+  };
+}
+
+function executeLifecycleV7(
+  invocationId: string,
+  source: string
+): ExecuteMessageV7 {
+  return {
+    protocol: 'woml.script-host',
+    protocolVersion: 7,
+    messageType: 'execute',
+    invocationId,
+    runId: `run_${invocationId}`,
+    nodeId: 'lifecycle:run_start:action:0',
+    attempt: {
+      number: 1,
+      maxAttempts: 1,
+      idempotencyKey: defaultEffectKey,
+    },
+    mode: 'lifecycle',
+    handler: 'runtime.lifecycle-script',
+    timeoutMs: 2_000,
+    source,
+    context: { trigger: { orderId: 'order-1' }, steps: {} },
+    lifecycle: {
+      event: 'run_start',
+      workflow: { id: 'lifecycle-test' },
+    },
+    bindings: { bindingVersion: 1, servicesVersion: 1, secrets: {} },
+    modules: [],
   };
 }
 
@@ -921,8 +952,7 @@ return {
                   'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
                 childRunId: 'run_call_test',
                 result: {
-                  score:
-                    request.payload.customerId === 'customer-42' ? 90 : 20,
+                  score: request.payload.customerId === 'customer-42' ? 90 : 20,
                 },
               } as const);
         host.accept({
@@ -2193,5 +2223,57 @@ describe('MS4 Script Host v6 recoverability and diagnostics', () => {
         sourceMap: '{}',
       })
     ).toThrow('protocol v6');
+  });
+});
+
+describe('LEC3 Script Host v7 lifecycle mode', () => {
+  test('injects a deeply read-only lifecycle binding and accepts an undefined return', async () => {
+    const result = await runHost(
+      [
+        executeLifecycleV7(
+          'inv_lifecycle_binding',
+          `
+            if (!Object.isFrozen(lifecycle) || !Object.isFrozen(lifecycle.workflow)) {
+              throw new Error('lifecycle was mutable');
+            }
+            if (context.trigger.orderId !== 'order-1') throw new Error('context missing');
+            try { context.steps.injected = true; } catch {}
+          `
+        ),
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '7' }
+    );
+    const completed = result.messages.find(
+      message => message.messageType === 'completed'
+    ) as CompletedMessage;
+    expect(completed.outcome).toEqual({ kind: 'success', value: null });
+  });
+
+  test('keeps lifecycle throw, timeout, and non-JSON failures distinct', async () => {
+    const result = await runHost(
+      [
+        executeLifecycleV7('inv_lifecycle_throw', `throw new Error('boom');`),
+        executeLifecycleV7('inv_lifecycle_non_json', `return () => true;`),
+        {
+          ...executeLifecycleV7(
+            'inv_lifecycle_timeout',
+            `await new Promise(resolve => setTimeout(resolve, 500));`
+          ),
+          timeoutMs: 20,
+        },
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '7' }
+    );
+    const failures = result.messages
+      .filter(message => message.messageType === 'completed')
+      .map(message => (message as CompletedMessage).outcome)
+      .filter(outcome => outcome.kind === 'failure')
+      .map(outcome => outcome.error.kind)
+      .sort();
+    expect(failures).toEqual([
+      'invalid_script_result',
+      'script_threw',
+      'script_timed_out',
+    ]);
   });
 });

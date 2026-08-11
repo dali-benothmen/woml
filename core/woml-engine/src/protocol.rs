@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 6;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,7 +28,7 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v6 ready message.".to_string());
+      return Err("The child did not send a valid script-host v7 ready message.".to_string());
     }
     Ok(())
   }
@@ -66,12 +66,57 @@ pub struct ExecuteMessage<'a> {
   pub run_id: &'a str,
   pub node_id: &'a str,
   pub attempt: ScriptAttempt<'a>,
+  pub mode: ScriptExecutionMode,
   pub handler: &'static str,
   pub timeout_ms: u64,
   pub source: &'a str,
   pub context: &'a WorkflowContext,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub lifecycle: Option<&'a LifecycleBindingV1>,
   pub bindings: ScriptBindings<'a>,
   pub modules: &'a [RuntimeModuleBinding],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptExecutionMode {
+  Step,
+  Lifecycle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LifecycleBindingV1 {
+  pub event: crate::model::LifecycleEventName,
+  pub workflow: LifecycleWorkflowBindingV1,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub step: Option<LifecycleStepBindingV1>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub failure: Option<LifecycleFailureBindingV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LifecycleWorkflowBindingV1 {
+  pub id: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub outcome: Option<crate::event::BusinessOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LifecycleStepBindingV1 {
+  pub id: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub outcome: Option<crate::event::BusinessOutcome>,
+  pub attempts: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LifecycleFailureBindingV1 {
+  pub code: String,
+  pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,7 +198,7 @@ impl ModuleRegisteredMessage {
     if envelope && outcome {
       Ok(())
     } else {
-      Err("The child sent an invalid script-host v6 module registration response.".to_string())
+      Err("The child sent an invalid script-host v7 module registration response.".to_string())
     }
   }
 }
@@ -259,10 +304,48 @@ impl<'a> ExecuteMessage<'a> {
       run_id,
       node_id,
       attempt,
+      mode: ScriptExecutionMode::Step,
       handler: "runtime.script",
       timeout_ms,
       source,
       context,
+      lifecycle: None,
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    }
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn lifecycle_script_with_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    action_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    lifecycle: &'a LifecycleBindingV1,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+  ) -> Self {
+    Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id: action_id,
+      attempt,
+      mode: ScriptExecutionMode::Lifecycle,
+      handler: "runtime.lifecycle-script",
+      timeout_ms,
+      source,
+      context,
+      lifecycle: Some(lifecycle),
       bindings: ScriptBindings {
         binding_version: 1,
         services_version: 1,
@@ -294,7 +377,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v6 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v7 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;

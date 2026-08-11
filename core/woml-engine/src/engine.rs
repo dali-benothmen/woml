@@ -1415,9 +1415,18 @@ fn validate_operation_node(
   if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V8 {
     return Err("Operation events require compiled workflow Model v8.".to_string());
   }
+  if workflow.lifecycle.as_ref().is_some_and(|lifecycle| {
+    lifecycle
+      .hooks
+      .iter()
+      .flat_map(|hook| &hook.actions)
+      .any(|action| action.action_id == node_id && action.handler == "runtime.lifecycle-script")
+  }) {
+    return Ok(());
+  }
   let node = workflow
     .node(node_id)
-    .ok_or_else(|| format!("Operation references unknown node {node_id:?}."))?;
+    .ok_or_else(|| format!("Operation references unknown node or lifecycle action {node_id:?}."))?;
   if node.handler != "runtime.script" || node.script_runtime.is_none() {
     return Err(format!(
       "Operation node {node_id:?} is not a Model v8 runtime.script node."

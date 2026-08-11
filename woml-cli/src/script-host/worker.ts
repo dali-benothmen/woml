@@ -6,6 +6,7 @@ import type {
   FetchObservationAckMessage,
   JsonObject,
   JsonValue,
+  LifecycleBindingV1,
   NativeFetchObservation,
   ScriptAttempt,
   ScriptBindingsV1,
@@ -19,6 +20,8 @@ export interface ScriptWorkerRequest {
   readonly timeoutMs: number;
   readonly source: string;
   readonly context: ScriptContext;
+  readonly mode?: 'step' | 'lifecycle';
+  readonly lifecycle?: LifecycleBindingV1;
   readonly attempt?: ScriptAttempt;
   readonly bindings?: ScriptBindingsV1;
   readonly modules?: readonly ScriptWorkerModule[];
@@ -77,13 +80,7 @@ export type ScriptWorkerOutbound =
       readonly observation: NativeFetchObservation;
     };
 
-type AsyncFunction = (
-  context: ScriptContext,
-  attempt: ScriptAttempt | undefined,
-  services: unknown,
-  secrets: Readonly<Record<string, string>>,
-  fetch: typeof globalThis.fetch
-) => Promise<unknown>;
+type AsyncFunction = (...arguments_: unknown[]) => Promise<unknown>;
 type AsyncFunctionConstructor = new (
   ...parametersAndBody: string[]
 ) => AsyncFunction;
@@ -1068,9 +1065,7 @@ function normalizeWorkflowOperation(
   }
   const payloadObject = plainObject(payload as JsonValue);
   if (payloadObject === undefined) {
-    throw new TypeError(
-      `Workflow ${operation} payload must be a JSON object.`
-    );
+    throw new TypeError(`Workflow ${operation} payload must be a JSON object.`);
   }
   const options =
     rawOptions === undefined ? {} : plainObject(rawOptions as JsonValue);
@@ -1100,18 +1095,20 @@ function normalizeWorkflowOperation(
         ? remainingTimeoutMs
         : workflowCallTimeoutMilliseconds(options.timeout)
       : undefined;
-  if (
-    timeoutMs !== undefined &&
-    (timeoutMs < 1 || timeoutMs > 86_400_000)
-  ) {
-    throw new TypeError('Workflow Call timeout must be between 1 ms and 24 hours.');
+  if (timeoutMs !== undefined && (timeoutMs < 1 || timeoutMs > 86_400_000)) {
+    throw new TypeError(
+      'Workflow Call timeout must be between 1 ms and 24 hours.'
+    );
   }
   if (timeoutMs !== undefined && timeoutMs > remainingTimeoutMs) {
-    throw new TypeError('Workflow Call timeout cannot exceed the calling step remaining timeout.');
+    throw new TypeError(
+      'Workflow Call timeout cannot exceed the calling step remaining timeout.'
+    );
   }
   const identityMode = name === undefined ? 'automatic' : 'named';
   const targetIdentityKey = `${operation}:${workflowId}`;
-  const previousIdentityMode = workflowTargetIdentityModes.get(targetIdentityKey);
+  const previousIdentityMode =
+    workflowTargetIdentityModes.get(targetIdentityKey);
   if (
     previousIdentityMode !== undefined &&
     (previousIdentityMode === 'automatic' || identityMode === 'automatic')
@@ -1199,7 +1196,8 @@ function deeplyReadonlyServiceFacade(
     const managedEvents =
       capability === 'events' && eventOperations.has(operation);
     const managedWorkflows =
-      capability === 'workflows' && (operation === 'call' || operation === 'start');
+      capability === 'workflows' &&
+      (operation === 'call' || operation === 'start');
     if (
       !managedHttp &&
       !managedDatabase &&
@@ -1685,7 +1683,41 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
         ? undefined
         : deepFreezeJson(request.attempt);
     const secrets = deepFreezeJson(request.bindings?.secrets ?? {});
+    const lifecycle =
+      request.lifecycle === undefined
+        ? undefined
+        : deepFreezeJson(request.lifecycle);
     secretValues = Object.values(request.bindings?.secrets ?? {});
+    const lifecycleConsole = Object.freeze({
+      log: (...values: unknown[]) =>
+        globalThis.console.error(
+          redactKnownSecrets(
+            values.map(value => String(value)).join(' '),
+            secretValues
+          )
+        ),
+      info: (...values: unknown[]) =>
+        globalThis.console.error(
+          redactKnownSecrets(
+            values.map(value => String(value)).join(' '),
+            secretValues
+          )
+        ),
+      warn: (...values: unknown[]) =>
+        globalThis.console.error(
+          redactKnownSecrets(
+            values.map(value => String(value)).join(' '),
+            secretValues
+          )
+        ),
+      error: (...values: unknown[]) =>
+        globalThis.console.error(
+          redactKnownSecrets(
+            values.map(value => String(value)).join(' '),
+            secretValues
+          )
+        ),
+    });
     const builtInServices = deeplyReadonlyServiceFacade(
       request,
       executionDeadline
@@ -1704,22 +1736,44 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
       });
     }
     const safeNodeId = request.nodeId.replace(/[^A-Za-z0-9_-]/g, '_');
-    const body = `"use strict";\n${request.source}\n//# sourceURL=woml-step-${safeNodeId}.js`;
+    const body = `"use strict";\n${request.source}\n//# sourceURL=woml-${request.mode === 'lifecycle' ? 'lifecycle' : 'step'}-${safeNodeId}.js`;
     const script =
       request.bindings === undefined
         ? new AsyncFunction('context', 'attempt', body)
-        : new AsyncFunction(
-            'context',
-            'attempt',
-            'services',
-            'secrets',
-            'fetch',
-            body
-          );
-    const result =
+        : request.mode === 'lifecycle'
+          ? new AsyncFunction(
+              'context',
+              'lifecycle',
+              'attempt',
+              'services',
+              'secrets',
+              'fetch',
+              'console',
+              body
+            )
+          : new AsyncFunction(
+              'context',
+              'attempt',
+              'services',
+              'secrets',
+              'fetch',
+              body
+            );
+    let result =
       request.bindings === undefined
         ? await script(context, attempt, undefined, {}, globalThis.fetch)
-        : await script(context, attempt, services, secrets, nativeFetch);
+        : request.mode === 'lifecycle'
+          ? await script(
+              context,
+              lifecycle,
+              attempt,
+              services,
+              secrets,
+              nativeFetch,
+              lifecycleConsole
+            )
+          : await script(context, attempt, services, secrets, nativeFetch);
+    if (request.mode === 'lifecycle' && result === undefined) result = null;
     const violation = findJsonViolation(result);
     if (violation !== undefined) {
       self.postMessage({

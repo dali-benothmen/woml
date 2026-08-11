@@ -128,9 +128,10 @@ pub use runtime::{
   resume_workflow_durable, resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
   settle_approval_timeout_durable, BranchFailureSite, EngineClock, ExecutionProgress,
   ExecutionProgressReporter, FailedApprovalDetails, FailedNotificationDetails,
-  FailedParallelDetails, FixedEngineClock, RuntimeExecutionError, RuntimeExecutionOptions,
-  RuntimeModuleArtifact, SystemEngineClock, WaitingWorkflowApproval, WorkflowExecutionResult,
-  WorkflowRuntimeOutcome, EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION,
+  FailedParallelDetails, FixedEngineClock, LifecycleProgress, LifecycleProgressPhase,
+  LifecycleProgressReporter, RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact,
+  SystemEngineClock, WaitingWorkflowApproval, WorkflowExecutionResult, WorkflowRuntimeOutcome,
+  EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION, LIFECYCLE_PROGRESS_PROFILE,
   RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
 };
 pub use schedule::{

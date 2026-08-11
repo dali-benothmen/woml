@@ -398,11 +398,16 @@ fn require_active_operation_attempt(
       && attempt.identity.attempt == attempt_number
       && attempt.identity.invocation_id == invocation_id
       && attempt.status == AttemptStatus::Started
+  }) || projection.lifecycle_hooks.values().any(|hook| {
+    hook.actions.get(node_id).is_some_and(|action| {
+      action.attempt == attempt_number && action.status == LifecycleActionStatus::Started
+    })
   }) {
     Ok(())
   } else {
     Err(FoldError::InvalidHistory(
-      "A terminal operation event requires its matching active step attempt.".to_string(),
+      "An operation event requires its matching active step or lifecycle action attempt."
+        .to_string(),
     ))
   }
 }
@@ -1089,10 +1094,15 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
             && attempt.identity.attempt == data.attempt_number
             && attempt.identity.invocation_id == data.invocation_id
             && attempt.status == AttemptStatus::Started
+        }) || projection.lifecycle_hooks.values().any(|hook| {
+          hook.actions.get(&data.node_id).is_some_and(|action| {
+            action.attempt == data.attempt_number && action.status == LifecycleActionStatus::Started
+          })
         });
         if !attempt_active {
           return Err(FoldError::InvalidHistory(
-            "operation_started requires its matching active step attempt.".to_string(),
+            "operation_started requires its matching active step or lifecycle action attempt."
+              .to_string(),
           ));
         }
         let key = OperationIdentity {

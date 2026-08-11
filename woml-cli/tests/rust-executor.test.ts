@@ -10,12 +10,29 @@ import {
   executeWorkflowWithRustDurable,
   executeWorkflowWithRust,
   parseIntervalProgress,
+  parseExecutionProgress,
   parseScheduleProgress,
   parseTriggerProgress,
   parseWorkflowCallProgress,
   recoverDurableRuns,
   RustWorkflowExecutionError,
 } from '../src/rust-executor';
+
+test('Lifecycle Progress v1 decoding preserves safe lifecycle identity', () => {
+  expect(
+    parseExecutionProgress(
+      JSON.stringify({
+        profile: 'woml.lifecycle-progress/v1',
+        runId: 'run_lec3',
+        workflowId: 'lifecycle-demo',
+        phase: 'action_failed',
+        hookId: 'lifecycle:run_success',
+        actionId: 'lifecycle:run_success:action:0',
+        code: 'WOML_SCRIPT_THROWN',
+      })
+    )
+  ).toMatchObject({ phase: 'action_failed', code: 'WOML_SCRIPT_THROWN' });
+});
 
 const packageRoot = resolve(import.meta.dir, '..');
 const stagedNativeCorePath = resolve(
@@ -55,7 +72,9 @@ describe('Trigger Progress v1 decoding', () => {
       'progress-run-failed.v1.json',
       'progress-rejected.v1.json',
     ]) {
-      const progress = parseTriggerProgress(await Bun.file(join(directory, name)).text());
+      const progress = parseTriggerProgress(
+        await Bun.file(join(directory, name)).text()
+      );
       expect(progress.contract).toBe('woml.trigger-progress');
       expect(progress.contractVersion).toBe(1);
     }

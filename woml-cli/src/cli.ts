@@ -388,6 +388,10 @@ function runtimeCode(code: string): string {
 }
 
 export function formatExecutionProgress(progress: ExecutionProgressV1): string {
+  if ('profile' in progress) {
+    const status = progress.phase.replaceAll('_', ' ');
+    return `Lifecycle ${progress.hookId} ${status}${progress.code === undefined ? '.' : `: ${progress.code}`}`;
+  }
   if (progress.type === 'step_attempt_failed') {
     return `Step ${progress.nodeId} failed (attempt ${progress.attempt}/${progress.maxAttempts}): ${progress.failureCode}`;
   }
@@ -414,7 +418,11 @@ function durableRetryProgress(
   let recoveryPrinted = false;
   return progress => {
     io.stderr(`${formatExecutionProgress(progress)}\n`);
-    if (progress.type === 'step_retry_scheduled' && !recoveryPrinted) {
+    if (
+      'type' in progress &&
+      progress.type === 'step_retry_scheduled' &&
+      !recoveryPrinted
+    ) {
       recoveryPrinted = true;
       io.stderr(
         `Recovery: woml run ${JSON.stringify(args.filePath)} --state ${JSON.stringify(
@@ -718,9 +726,7 @@ function promoteForLifecycleAuthority(
   return {
     schemaVersion: 11,
     workflowId: workflow.workflowId,
-    ...(workflow.metadata === undefined
-      ? {}
-      : { metadata: workflow.metadata }),
+    ...(workflow.metadata === undefined ? {} : { metadata: workflow.metadata }),
     triggers: workflow.triggers,
     graph: {
       entryNodeIds: workflow.graph.entryNodeIds,
@@ -998,15 +1004,15 @@ async function runCheckCommand(
         `Warning [WOML_MODULE_UNUSED]: services.${name} is declared but is not called by this workflow.\n`
       );
     }
-    const lifecycleFrontendOnly =
+    const hasLifecycle =
       compiledWorkflow.schemaVersion === 11 &&
       compiledWorkflow.lifecycle !== undefined;
     const workflowCallsFrontendOnly =
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      lifecycleFrontendOnly
-        ? 'Execution: lifecycle syntax is compiled to Model v11; lifecycle action execution begins in LEC3.\n'
+      hasLifecycle
+        ? 'Execution: workflow-level lifecycle scripts are executable; step hooks and lifecycle notifications remain staged for LEC4 and LEC5.\n'
         : workflowCallsFrontendOnly
           ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
           : definitionPackage.modules.length === 0
@@ -1862,15 +1868,21 @@ async function activateWorkflows(
         trigger.handler === 'trigger.event'
     )
   );
-  const lifecycleSource = sources.find(
+  const unsupportedLifecycleSource = sources.find(
     source =>
       source.workflow.schemaVersion === 11 &&
-      source.workflow.lifecycle !== undefined
+      source.workflow.lifecycle?.hooks.some(
+        hook =>
+          hook.event.startsWith('step_') ||
+          hook.actions.some(
+            action => action.handler !== 'runtime.lifecycle-script'
+          )
+      ) === true
   );
-  if (lifecycleSource !== undefined) {
+  if (unsupportedLifecycleSource !== undefined) {
     throw new CliInputError(
       'WOML_LIFECYCLE_RUNTIME_UNAVAILABLE',
-      `workflow "${lifecycleSource.workflow.workflowId}" compiled successfully, but lifecycle action execution begins in LEC3. Use woml check until LEC3.`
+      `workflow "${unsupportedLifecycleSource.workflow.workflowId}" uses step lifecycle hooks or lifecycle notifications, which are introduced in LEC4 and LEC5. LEC3 executes workflow-level lifecycle scripts.`
     );
   }
   const hasWorkflowCalls = sources.some(workflowCallFrontendOnlySource);

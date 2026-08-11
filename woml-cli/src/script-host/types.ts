@@ -9,7 +9,7 @@ export interface ScriptContext extends JsonObject {
   readonly steps: Readonly<Record<string, JsonValue>>;
 }
 
-export type ScriptHostProtocolVersion = 1 | 2 | 3 | 4 | 5 | 6;
+export type ScriptHostProtocolVersion = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface ScriptAttempt extends JsonObject {
   readonly number: number;
@@ -30,7 +30,7 @@ interface ExecuteMessageBase {
   readonly invocationId: string;
   readonly runId: string;
   readonly nodeId: string;
-  readonly handler: 'runtime.script';
+  readonly handler: 'runtime.script' | 'runtime.lifecycle-script';
   readonly timeoutMs: number;
   readonly source: string;
   readonly context: ScriptContext;
@@ -78,12 +78,50 @@ export interface ExecuteMessageV6 extends ExecuteMessageBase {
   readonly modules: readonly RuntimeModuleBindingV1[];
 }
 
+export interface LifecycleBindingV1 extends JsonObject {
+  readonly event:
+    | 'run_start'
+    | 'step_start'
+    | 'step_success'
+    | 'step_failure'
+    | 'step_complete'
+    | 'run_success'
+    | 'run_failure'
+    | 'run_cancel'
+    | 'run_complete';
+  readonly workflow: {
+    readonly id: string;
+    readonly outcome?: 'succeeded' | 'failed' | 'cancelled';
+  };
+  readonly step?: {
+    readonly id: string;
+    readonly outcome?: 'succeeded' | 'failed' | 'cancelled';
+    readonly attempts: number;
+  };
+  readonly failure?: { readonly code: string; readonly message: string };
+}
+
+export type ExecuteMessageV7 = ExecuteMessageBase & {
+  readonly protocolVersion: 7;
+  readonly attempt: ScriptAttempt;
+  readonly bindings: ScriptBindingsV1;
+  readonly modules: readonly RuntimeModuleBindingV1[];
+} & (
+    | { readonly mode: 'step'; readonly handler: 'runtime.script' }
+    | {
+        readonly mode: 'lifecycle';
+        readonly handler: 'runtime.lifecycle-script';
+        readonly lifecycle: LifecycleBindingV1;
+      }
+  );
+
 export type ExecuteMessage =
   | LegacyExecuteMessage
   | ExecuteMessageV3
   | ExecuteMessageV4
   | ExecuteMessageV5
-  | ExecuteMessageV6;
+  | ExecuteMessageV6
+  | ExecuteMessageV7;
 
 export interface RegisterModuleMessageV5 {
   readonly protocol: 'woml.script-host';
@@ -95,7 +133,7 @@ export interface RegisterModuleMessageV5 {
 
 export interface RegisterModuleMessageV6 {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 6;
+  readonly protocolVersion: 6 | 7;
   readonly messageType: 'register_module';
   readonly bundleDigest: string;
   readonly bundle: string;
@@ -116,7 +154,7 @@ type ModuleRegisteredMessageBase = {
 export type ModuleRegisteredMessage = ModuleRegisteredMessageBase &
   (
     | { readonly protocolVersion: 5 }
-    | { readonly protocolVersion: 6; readonly sourceMapDigest: string }
+    | { readonly protocolVersion: 6 | 7; readonly sourceMapDigest: string }
   ) &
   (
     | { readonly accepted: true }
@@ -131,7 +169,7 @@ export type ModuleRegisteredMessage = ModuleRegisteredMessageBase &
 
 export interface CancelMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 2 | 3 | 4 | 5 | 6;
+  readonly protocolVersion: 2 | 3 | 4 | 5 | 6 | 7;
   readonly messageType: 'cancel';
   readonly invocationId: string;
   readonly reason:
@@ -220,7 +258,7 @@ export type CapabilityCallResult =
 
 export interface CapabilityCallMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6;
+  readonly protocolVersion: 4 | 5 | 6 | 7;
   readonly messageType: 'capability_call';
   readonly invocationId: string;
   readonly callId: string;
@@ -229,7 +267,7 @@ export interface CapabilityCallMessage {
 
 export interface CapabilityResultMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6;
+  readonly protocolVersion: 4 | 5 | 6 | 7;
   readonly messageType: 'capability_result';
   readonly invocationId: string;
   readonly callId: string;
@@ -278,7 +316,7 @@ export type NativeFetchObservation =
 
 export interface FetchObservationMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6;
+  readonly protocolVersion: 4 | 5 | 6 | 7;
   readonly messageType: 'fetch_observation';
   readonly invocationId: string;
   readonly requestId: string;
@@ -287,7 +325,7 @@ export interface FetchObservationMessage {
 
 export type FetchObservationAckMessage = {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6;
+  readonly protocolVersion: 4 | 5 | 6 | 7;
   readonly messageType: 'fetch_observation_ack';
   readonly invocationId: string;
   readonly requestId: string;
