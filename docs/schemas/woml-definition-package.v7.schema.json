@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/woml-definition-package.v7.schema.json",
+  "title": "WOML Runtime Policy Compilation Package v7",
+  "description": "Immutable local-module compilation package carrying Model v12 while runtime-policy enforcement remains gated.",
+  "x-status": "runtime-policies-rp0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile", "executable", "runtimeReady", "workflow", "modules", "sources", "artifacts", "compiler", "permissions", "rootHash"],
+  "properties": {
+    "schemaVersion": { "const": 7 },
+    "profile": { "const": "woml.definition-package/v7" },
+    "executable": { "const": true },
+    "runtimeReady": { "const": false },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "modelDigest", "model"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+        "source": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/portablePath" },
+        "modelDigest": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/sha256" },
+        "model": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v12" }
+      }
+    },
+    "modules": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/modules" },
+    "sources": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/sources" },
+    "artifacts": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/artifacts" },
+    "compiler": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/compiler" },
+    "permissions": { "$ref": "https://woml.dev/schemas/woml-definition-package.v1.schema.json#/$defs/permissions" },
+    "rootHash": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/sha256" }
+  }
+}

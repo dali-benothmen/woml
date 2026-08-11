@@ -203,6 +203,21 @@ export interface CompiledModuleRuntimeV1 {
   readonly modules: readonly CompiledModuleBindingV1[];
 }
 
+export interface CompiledRuntimePolicyV1 {
+  readonly profileVersion: 1;
+  readonly concurrency?: number;
+  readonly timeoutMs?: number;
+  readonly rateLimit?: Readonly<{
+    readonly count: number;
+    readonly windowMs: number;
+    readonly algorithm: 'rolling_window';
+  }>;
+  readonly queue?: Readonly<{
+    readonly name: string;
+    readonly discipline: 'work_conserving_fifo';
+  }>;
+}
+
 export interface CompiledWorkflowEdge {
   readonly id: string;
   readonly from: string;
@@ -285,6 +300,14 @@ export interface CompiledWorkflowDefinitionV11
   readonly lifecycle?: CompiledLifecycleDefinitionV1;
 }
 
+export interface CompiledWorkflowDefinitionV12
+  extends CompiledWorkflowDefinitionBase {
+  readonly schemaVersion: 12;
+  readonly moduleRuntime?: CompiledModuleRuntimeV1;
+  readonly lifecycle?: CompiledLifecycleDefinitionV1;
+  readonly runtimePolicy: CompiledRuntimePolicyV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -296,7 +319,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV8
   | CompiledWorkflowDefinitionV9
   | CompiledWorkflowDefinitionV10
-  | CompiledWorkflowDefinitionV11;
+  | CompiledWorkflowDefinitionV11
+  | CompiledWorkflowDefinitionV12;
 
 export interface CompiledGraphIssue {
   readonly code:

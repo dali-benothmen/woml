@@ -1,0 +1,71 @@
+{
+  "policy": {
+    "profileVersion": 1,
+    "concurrency": 4,
+    "timeoutMs": 600000,
+    "rateLimit": {
+      "count": 100,
+      "windowMs": 60000,
+      "algorithm": "rolling_window"
+    },
+    "queue": { "name": "orders", "discipline": "work_conserving_fifo" }
+  },
+  "claim": {
+    "profile": "woml.scheduler-claim/v1",
+    "runId": "run_policy",
+    "workflowId": "policy-demo",
+    "ownerId": "runtime_owner",
+    "claimId": "claim_policy",
+    "claimedAt": "2026-08-11T12:00:01.000Z",
+    "expiresAt": "2026-08-11T12:00:31.000Z"
+  },
+  "queuedRecord": {
+    "profile": "woml.runtime-policy-store.queued-run/v12",
+    "runId": "run_policy",
+    "workflowId": "policy-demo",
+    "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "policyHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "queue": "orders",
+    "admittedAt": "2026-08-11T12:00:00.000Z",
+    "occurrenceSequence": 42
+  },
+  "list": {
+    "profile": "woml.run-list/v2",
+    "runs": [
+      {
+        "runId": "run_policy",
+        "workflowId": "policy-demo",
+        "status": "queued",
+        "admittedAt": "2026-08-11T12:00:00.000Z",
+        "updatedAt": "2026-08-11T12:00:00.000Z",
+        "queue": "orders",
+        "waitingFor": "rate_limit",
+        "eligibleAt": "2026-08-11T12:00:30.000Z"
+      }
+    ]
+  },
+  "inspection": {
+    "profile": "woml.run-inspection/v3",
+    "runId": "run_policy",
+    "workflowId": "policy-demo",
+    "status": "queued",
+    "businessOutcome": "undecided",
+    "lifecycleStatus": "idle",
+    "hooks": [],
+    "warnings": [],
+    "cancellation": { "requested": false },
+    "policy": {
+      "queue": "orders",
+      "waitingFor": "rate_limit",
+      "eligibleAt": "2026-08-11T12:00:30.000Z"
+    }
+  },
+  "progress": {
+    "profile": "woml.runtime-policy-progress/v1",
+    "runId": "run_policy",
+    "workflowId": "policy-demo",
+    "phase": "queued",
+    "queue": "orders",
+    "waitingFor": "concurrency"
+  }
+}

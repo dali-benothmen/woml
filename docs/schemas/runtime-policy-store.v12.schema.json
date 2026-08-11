@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-policy-store/v12",
+  "title": "WOML Durable Store v12 Runtime Policy Records",
+  "description": "Logical Store v12 queue/index/claim contract. Queue and summary records are rebuildable; leases are expiring coordination state.",
+  "x-status": "runtime-policies-rp0-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/queuedRun" },
+    { "$ref": "https://woml.dev/schemas/scheduler-claim/v1" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "queuedRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "runId", "workflowId", "definitionHash", "policyHash", "queue", "admittedAt", "occurrenceSequence"],
+      "properties": {
+        "profile": { "const": "woml.runtime-policy-store.queued-run/v12" },
+        "runId": { "$ref": "#/$defs/id" },
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "definitionHash": { "$ref": "#/$defs/sha256" },
+        "policyHash": { "$ref": "#/$defs/sha256" },
+        "queue": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "admittedAt": { "type": "string", "format": "date-time" },
+        "occurrenceSequence": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v12",
+  "title": "WOML Compiled Workflow Model v12",
+  "description": "Language-neutral DAG contract with an immutable workflow runtime-policy snapshot outside the business graph.",
+  "x-status": "runtime-policies-rp0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v11",
+  "x-invariants": [
+    "Runtime policy is workflow metadata outside DAG nodes and edges.",
+    "The business graph, module runtime, lifecycle definition, and trigger unions retain their frozen contracts.",
+    "No resolved queue owner, scheduler lease, secret, source location, or mutable runtime value is compiled.",
+    "Models v1-v11 remain immutable and executable under their original contracts."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy"],
+  "properties": {
+    "schemaVersion": { "const": 12 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowGraph" },
+    "moduleRuntime": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime" },
+    "lifecycle": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/lifecycle" },
+    "runtimePolicy": { "$ref": "https://woml.dev/schemas/runtime-policy/v1" }
+  }
+}

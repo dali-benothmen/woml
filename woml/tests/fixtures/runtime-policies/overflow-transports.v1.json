@@ -1,0 +1,15 @@
+{
+  "code": "WOML_POLICY_QUEUE_FULL",
+  "retryable": true,
+  "runCreated": false,
+  "transports": {
+    "manual": { "exitCode": 1 },
+    "webhook": { "httpStatus": 503, "retryAfter": true },
+    "slack": { "acknowledge": false },
+    "schedule": { "advanceCursor": false },
+    "interval": { "advanceCursor": false },
+    "event": { "subscriberStatus": "retryable_failure" },
+    "workflowCall": { "operationFailure": "retryable" },
+    "workflowStart": { "operationFailure": "retryable" }
+  }
+}

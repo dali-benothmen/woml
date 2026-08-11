@@ -64,7 +64,8 @@ includes conditional branches and bounded parallel groups:
 | Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
 | Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
-| Config and lifecycle | Designed | Unavailable until their activation phases |
+| `<config>` runtime policy | RP0 contracts frozen; RP1 frontend completed | Validated and lowered to Model v12 by `woml check`; Rust enforcement is deliberately gated until RP2/RP3 |
+| Lifecycle | LEC0–LEC8 completed and hardened | Workflow/step hooks, informational Slack notification, cancellation, and direct run management are executable and publishable through Model v11/Event v10/Store v11 |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
@@ -596,8 +597,8 @@ rate := positive-integer "/" duration
 ```
 
 For example, `100/1m` means at most 100 run starts in one minute.
-The rate-limiting algorithm and distributed coordination behavior are runtime
-contracts; the source syntax only declares the count and window.
+Runtime Policy v1 fixes the algorithm as a strict rolling window. Only the
+first execution start consumes rate capacity; resuming a durable wait does not.
 
 The initial duration syntax is:
 
@@ -607,13 +608,21 @@ duration := positive-number ("ms" | "s" | "m" | "h" | "d")
 
 Bare numeric durations are invalid because their unit would be ambiguous.
 
-`<config>` contains data only. Lifecycle scripts MUST NOT be nested inside it.
+`<config>` contains data only, requires at least one attribute, and occurs before
+`<lifecycle>`. Lifecycle scripts MUST NOT be nested inside it.
 
-The current compiled-workflow schema does not yet represent workflow-level
-concurrency, timeout, rate limiting, or queue selection. Before the compiler may
-accept `<config>`, these values need an approved language-neutral home—either in
-the compiled definition or in a separately versioned registration policy. The
-WOML frontend must not pass them to the core through WOML-specific fields.
+RP1 validates these attributes and lowers them into the language-neutral
+`runtimePolicy` object in Compiled Workflow Model v12, outside the business DAG.
+`woml check` accepts and displays that model. `woml run` and `woml test` reject
+it with `WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE` until RP2 adds the Event v11 /
+Store v12 authority and RP3 executes concurrency and queue policy. No policy is
+silently ignored.
+
+Runtime Policy v1 limits counts to 1,000,000, durations to whole milliseconds
+from 1 ms through 365 days, and queue names to 128-character lowercase dot,
+underscore, or kebab identifiers. Named queues are work-conserving FIFO
+admission lanes; they do not create shared concurrency pools and are unrelated
+to the postponed `services.queue` capability.
 
 ## 8. `<lifecycle>`
 

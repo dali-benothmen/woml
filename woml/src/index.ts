@@ -16,6 +16,7 @@ export {
   WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE,
   WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE,
   WOML_LIFECYCLE_DEFINITION_PACKAGE_PROFILE,
+  WOML_RUNTIME_POLICY_DEFINITION_PACKAGE_PROFILE,
   WOML_MODULE_RESOLVER_PROFILE,
   type WomlDefinitionPackageModuleV1,
   type WomlDefinitionPackageModuleV2,
@@ -27,6 +28,7 @@ export {
   type WomlDefinitionPackageV4,
   type WomlDefinitionPackageV5,
   type WomlDefinitionPackageV6,
+  type WomlDefinitionPackageV7,
   type WomlModuleResolverOptions,
 } from './modules';
 export {
@@ -38,6 +40,7 @@ export {
   type CompiledTrigger,
   type CompiledModuleBindingV1,
   type CompiledModuleRuntimeV1,
+  type CompiledRuntimePolicyV1,
   type CompiledLifecycleActionV1,
   type CompiledLifecycleDefinitionV1,
   type CompiledLifecycleHookV1,
@@ -53,6 +56,7 @@ export {
   type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowDefinitionV10,
   type CompiledWorkflowDefinitionV11,
+  type CompiledWorkflowDefinitionV12,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,

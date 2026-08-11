@@ -27,6 +27,7 @@ import type {
   CompiledModuleBindingV1,
   CompiledWorkflowDefinitionV10,
   CompiledWorkflowDefinitionV11,
+  CompiledWorkflowDefinitionV12,
   CompiledWorkflowDefinitionV9,
 } from './model';
 import {
@@ -50,6 +51,8 @@ export const WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v5' as const;
 export const WOML_LIFECYCLE_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v6' as const;
+export const WOML_RUNTIME_POLICY_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v7' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -203,6 +206,21 @@ export interface WomlDefinitionPackageV6
     readonly source: string;
     readonly modelDigest: string;
     readonly model: CompiledWorkflowDefinitionV11;
+  };
+}
+
+export interface WomlDefinitionPackageV7
+  extends Omit<
+    WomlDefinitionPackageV4,
+    'schemaVersion' | 'profile' | 'workflow'
+  > {
+  readonly schemaVersion: 7;
+  readonly profile: typeof WOML_RUNTIME_POLICY_DEFINITION_PACKAGE_PROFILE;
+  readonly workflow: {
+    readonly id: string;
+    readonly source: string;
+    readonly modelDigest: string;
+    readonly model: CompiledWorkflowDefinitionV12;
   };
 }
 
@@ -962,7 +980,10 @@ export async function buildWomlExecutableDefinitionPackage(
   document: WomlSourceDocument,
   options: WomlModuleResolverOptions = {}
 ): Promise<
-  WomlDefinitionPackageV2 | WomlDefinitionPackageV4 | WomlDefinitionPackageV6
+  | WomlDefinitionPackageV2
+  | WomlDefinitionPackageV4
+  | WomlDefinitionPackageV6
+  | WomlDefinitionPackageV7
 > {
   const resolved = buildWomlDefinitionPackage(document, options);
   if (resolved.modules.length === 0) {
@@ -1129,6 +1150,15 @@ export async function buildWomlExecutableDefinitionPackage(
     },
     permissions: resolved.permissions,
   };
+  if (model.schemaVersion === 12) {
+    const unsigned = {
+      schemaVersion: 7 as const,
+      profile: WOML_RUNTIME_POLICY_DEFINITION_PACKAGE_PROFILE,
+      ...common,
+      workflow: { ...common.workflow, model },
+    };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   if (model.schemaVersion === 11) {
     const unsigned = {
       schemaVersion: 6 as const,
@@ -1169,6 +1199,15 @@ export async function buildWomlRuntimeDefinitionPackage(
     document,
     options
   );
+  if (compiled.schemaVersion === 7) {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE',
+      'Runtime-policy syntax compiled successfully, but durable policy enforcement begins in RP2 and RP3.',
+      document.root.openTagSpan,
+      'Use `woml check` to review the Model v12 definition during RP1.'
+    );
+  }
   if (compiled.schemaVersion === 6) {
     throw compileDiagnostic(
       document.file,
@@ -1218,6 +1257,7 @@ export function canonicalizeWomlDefinitionPackage(
     | WomlDefinitionPackageV4
     | WomlDefinitionPackageV5
     | WomlDefinitionPackageV6
+    | WomlDefinitionPackageV7
 ): string {
   return canonicalJson(definitionPackage);
 }

@@ -248,6 +248,16 @@ cancellation races. Direct `woml list`, `woml get`, and `woml cancel` commands
 operate on local durable state without reopening workflow source. See
 [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
 
+Runtime Policies RP0 freezes Model v12, Event v11, Store v12 coordination,
+Run List v2, Run Inspection v3, and Runtime Policy Progress v1. RP1 makes
+`<config>` an executable frontend construct: TypeScript validates concurrency,
+timeout, rolling-window rate limit, and queue attributes, then lowers one
+language-neutral `runtimePolicy` object outside the DAG. Definition Package v7
+carries Model v12 with unchanged module artifacts. Rust execution remains
+explicitly gated until RP2/RP3 implement durable admission and scheduling, so
+the current runtime cannot silently ignore a compiled policy. See
+[Runtime Policies v1](protocols/runtime-policies-v1.md).
+
 ## Legacy Cronflow Architecture (Migration Context)
 
 The remainder of this document describes the original JavaScript-chaining SDK.

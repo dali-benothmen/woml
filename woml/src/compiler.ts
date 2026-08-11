@@ -7,10 +7,12 @@ import {
   type CompiledLifecycleDefinitionV1,
   type CompiledLifecycleHookV1,
   type CompiledModuleRuntimeV1,
+  type CompiledRuntimePolicyV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowDefinitionV10,
   type CompiledWorkflowDefinitionV11,
+  type CompiledWorkflowDefinitionV12,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowMetadata,
@@ -156,6 +158,11 @@ interface ValidatedLifecycle {
   readonly hooks: readonly ValidatedLifecycleHook[];
 }
 
+interface ValidatedRuntimePolicy {
+  readonly value: CompiledRuntimePolicyV1;
+  readonly element: WomlSourceElement;
+}
+
 interface ValidatedWorkflow {
   readonly element: WomlSourceElement;
   readonly modules: readonly ValidatedModuleDeclaration[];
@@ -164,6 +171,7 @@ interface ValidatedWorkflow {
   readonly triggers: readonly ValidatedTrigger[];
   readonly flow: ValidatedFlow;
   readonly lifecycle?: ValidatedLifecycle;
+  readonly runtimePolicy?: ValidatedRuntimePolicy;
 }
 
 export interface ValidatedModuleDeclaration {
@@ -247,6 +255,7 @@ const supportedElements = new Set([
   'imports',
   'module',
   'workflow',
+  'config',
   'lifecycle',
   'on-start',
   'on-step-start',
@@ -279,7 +288,7 @@ const supportedElements = new Set([
   'when-rejected',
 ]);
 
-const stagedElements = new Set(['config']);
+const stagedElements = new Set<string>();
 
 const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   woml: { attributes: new Set() },
@@ -288,6 +297,9 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   workflow: {
     attributes: new Set(['id', 'name', 'description', 'version']),
     stagedAttributes: new Set(['tags']),
+  },
+  config: {
+    attributes: new Set(['concurrency', 'timeout', 'rate-limit', 'queue']),
   },
   lifecycle: { attributes: new Set() },
   'on-start': { attributes: new Set() },
@@ -364,8 +376,12 @@ const eventNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
 const moduleAliasPattern = /^[a-z][A-Za-z0-9]*$/;
 const moduleSourcePattern =
   /^(?:\.\/|\.\.\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.(?:js|ts)$/;
+const queueNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const artifactDigestPattern = /^sha256:[0-9a-f]{64}$/;
 const runtimeExportPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const maximumWorkflowConcurrency = 1_000_000;
+const maximumWorkflowRateCount = 1_000_000;
+const maximumWorkflowPolicyDurationMs = 365 * 24 * 60 * 60 * 1000;
 const reservedModuleAliases = new Set([
   'http',
   'db',
@@ -475,7 +491,9 @@ function visitProfile(
             ? 'WOML_RETRY_HANDLER_UNSUPPORTED'
             : element.name === 'slack'
               ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
-              : 'WOML_UNKNOWN_ATTRIBUTE',
+              : element.name === 'config'
+                ? 'WOML_CONFIG_ATTRIBUTE_UNKNOWN'
+                : 'WOML_UNKNOWN_ATTRIBUTE',
         isLifecycleStepFilterMisuse
           ? 'Attribute "steps" is valid only on step lifecycle hooks.'
           : attribute.name === 'retry' || attribute.name.startsWith('retry-')
@@ -678,14 +696,25 @@ function validateWorkflowChildren(
 ): readonly [
   WomlSourceElement | undefined,
   WomlSourceElement | undefined,
+  WomlSourceElement | undefined,
   WomlSourceElement,
 ] {
   const children = elementChildren(document, workflow);
+  const configContainers = children.filter(child => child.name === 'config');
   const lifecycleContainers = children.filter(
     child => child.name === 'lifecycle'
   );
   const triggerContainers = children.filter(child => child.name === 'triggers');
   const stepsContainers = children.filter(child => child.name === 'steps');
+
+  if (configContainers.length > 1) {
+    failValidation(
+      document,
+      'WOML_CONFIG_DUPLICATE',
+      `<workflow> accepts at most one <config> element; found ${configContainers.length}.`,
+      configContainers[1]?.openTagSpan ?? workflow.openTagSpan
+    );
+  }
 
   if (lifecycleContainers.length > 1) {
     failValidation(
@@ -713,9 +742,10 @@ function validateWorkflowChildren(
     );
   }
   const triggers = triggerContainers[0];
+  const config = configContainers[0];
   const lifecycle = lifecycleContainers[0];
   const steps = stepsContainers[0];
-  const expected = [lifecycle, triggers, steps].filter(
+  const expected = [config, lifecycle, triggers, steps].filter(
     (child): child is WomlSourceElement => child !== undefined
   );
   const canonical =
@@ -725,15 +755,203 @@ function validateWorkflowChildren(
     const offender = children.find((child, index) => child !== expected[index]);
     failValidation(
       document,
-      lifecycle !== undefined && children.indexOf(lifecycle) > 0
-        ? 'WOML_LIFECYCLE_ORDER_INVALID'
-        : 'WOML_INVALID_STRUCTURE',
-      '<workflow> must contain optional <lifecycle>, optional <triggers>, then exactly one <steps> container.',
+      config !== undefined && children.indexOf(config) > 0
+        ? 'WOML_CONFIG_ORDER_INVALID'
+        : lifecycle !== undefined &&
+            children.indexOf(lifecycle) > (config === undefined ? 0 : 1)
+          ? 'WOML_LIFECYCLE_ORDER_INVALID'
+          : 'WOML_INVALID_STRUCTURE',
+      '<workflow> must contain optional <config>, optional <lifecycle>, optional <triggers>, then exactly one <steps> container.',
       offender?.openTagSpan ?? workflow.openTagSpan
     );
   }
 
-  return [lifecycle, triggers, steps];
+  return [config, lifecycle, triggers, steps];
+}
+
+function workflowPolicyDurationMs(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute,
+  code: 'WOML_CONFIG_TIMEOUT_INVALID' | 'WOML_CONFIG_RATE_LIMIT_INVALID'
+): number {
+  const match =
+    /^(?:(?:[1-9][0-9]*)(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)(ms|s|m|h|d)$/.exec(
+      attribute.value
+    );
+  if (match === null) {
+    failValidation(
+      document,
+      code,
+      `Policy duration "${attribute.value}" must be positive and include ms, s, m, h, or d.`,
+      attribute.valueSpan,
+      'Examples: 500ms, 10s, 5m, 2h, 1d'
+    );
+  }
+  const numeric = Number(attribute.value.slice(0, -match[1].length));
+  const units = {
+    ms: 1,
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+  } as const;
+  const milliseconds = numeric * units[match[1] as keyof typeof units];
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    milliseconds < 1 ||
+    milliseconds > maximumWorkflowPolicyDurationMs
+  ) {
+    failValidation(
+      document,
+      code,
+      `Policy duration "${attribute.value}" must resolve to a whole number of milliseconds from 1ms through 365d.`,
+      attribute.valueSpan
+    );
+  }
+  return milliseconds;
+}
+
+function validateRuntimePolicy(
+  document: WomlSourceDocument,
+  config: WomlSourceElement
+): ValidatedRuntimePolicy {
+  if (config.children.length > 0) {
+    failValidation(
+      document,
+      'WOML_CONFIG_CHILD_NOT_ALLOWED',
+      '<config> is data-only and cannot contain text or child elements.',
+      config.children[0].span,
+      'Declare workflow runtime policy through <config> attributes only.'
+    );
+  }
+  if (Object.keys(config.attributes).length === 0) {
+    failValidation(
+      document,
+      'WOML_CONFIG_EMPTY',
+      '<config> requires at least one runtime-policy attribute.',
+      config.openTagSpan,
+      'Add concurrency, timeout, rate-limit, or queue; otherwise remove <config>.'
+    );
+  }
+
+  const concurrencyAttribute = config.attributes.concurrency;
+  let concurrency: number | undefined;
+  if (concurrencyAttribute !== undefined) {
+    if (!/^[1-9][0-9]*$/.test(concurrencyAttribute.value)) {
+      failValidation(
+        document,
+        'WOML_CONFIG_CONCURRENCY_INVALID',
+        `Workflow concurrency "${concurrencyAttribute.value}" must be a positive integer.`,
+        concurrencyAttribute.valueSpan
+      );
+    }
+    concurrency = Number(concurrencyAttribute.value);
+    if (
+      !Number.isSafeInteger(concurrency) ||
+      concurrency > maximumWorkflowConcurrency
+    ) {
+      failValidation(
+        document,
+        'WOML_CONFIG_CONCURRENCY_INVALID',
+        `Workflow concurrency must be between 1 and ${maximumWorkflowConcurrency}.`,
+        concurrencyAttribute.valueSpan
+      );
+    }
+  }
+
+  const timeoutAttribute = config.attributes.timeout;
+  const timeoutMs =
+    timeoutAttribute === undefined
+      ? undefined
+      : workflowPolicyDurationMs(
+          document,
+          timeoutAttribute,
+          'WOML_CONFIG_TIMEOUT_INVALID'
+        );
+
+  const rateAttribute = config.attributes['rate-limit'];
+  let rateLimit: CompiledRuntimePolicyV1['rateLimit'];
+  if (rateAttribute !== undefined) {
+    const separator = rateAttribute.value.indexOf('/');
+    const countSource = rateAttribute.value.slice(0, separator);
+    const windowSource = rateAttribute.value.slice(separator + 1);
+    if (
+      separator <= 0 ||
+      rateAttribute.value.indexOf('/', separator + 1) !== -1 ||
+      !/^[1-9][0-9]*$/.test(countSource) ||
+      windowSource.length === 0
+    ) {
+      failValidation(
+        document,
+        'WOML_CONFIG_RATE_LIMIT_INVALID',
+        `Rate limit "${rateAttribute.value}" must use positive-integer/duration syntax.`,
+        rateAttribute.valueSpan,
+        'Example: 100/1m'
+      );
+    }
+    const count = Number(countSource);
+    if (!Number.isSafeInteger(count) || count > maximumWorkflowRateCount) {
+      failValidation(
+        document,
+        'WOML_CONFIG_RATE_LIMIT_INVALID',
+        `Rate-limit count must be between 1 and ${maximumWorkflowRateCount}.`,
+        rateAttribute.valueSpan
+      );
+    }
+    const sourceFile = new SourceFile(document.file, document.source);
+    const windowStart = rateAttribute.valueSpan.start.offset + separator + 1;
+    const windowAttribute: WomlSourceAttribute = {
+      name: rateAttribute.name,
+      value: windowSource,
+      nameSpan: rateAttribute.nameSpan,
+      valueSpan: sourceFile.span(
+        windowStart,
+        rateAttribute.valueSpan.end.offset
+      ),
+      span: rateAttribute.span,
+    };
+    rateLimit = {
+      count,
+      windowMs: workflowPolicyDurationMs(
+        document,
+        windowAttribute,
+        'WOML_CONFIG_RATE_LIMIT_INVALID'
+      ),
+      algorithm: 'rolling_window',
+    };
+  }
+
+  const queueAttribute = config.attributes.queue;
+  let queue: CompiledRuntimePolicyV1['queue'];
+  if (queueAttribute !== undefined) {
+    if (
+      queueAttribute.value.length > 128 ||
+      !queueNamePattern.test(queueAttribute.value)
+    ) {
+      failValidation(
+        document,
+        'WOML_CONFIG_QUEUE_INVALID',
+        `Queue name "${queueAttribute.value}" must be a lowercase dot, underscore, or kebab identifier.`,
+        queueAttribute.valueSpan,
+        'Examples: orders, moderation-high, agents.inbound'
+      );
+    }
+    queue = {
+      name: queueAttribute.value,
+      discipline: 'work_conserving_fifo',
+    };
+  }
+
+  return {
+    element: config,
+    value: {
+      profileVersion: 1,
+      ...(concurrency === undefined ? {} : { concurrency }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      ...(rateLimit === undefined ? {} : { rateLimit }),
+      ...(queue === undefined ? {} : { queue }),
+    },
+  };
 }
 
 function schemaBody(
@@ -3482,8 +3700,12 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     requiredAttribute(document, workflow, 'id')
   );
   const metadata = workflowMetadata(document, workflow);
-  const [lifecycleElement, triggersElement, stepsElement] =
+  const [configElement, lifecycleElement, triggersElement, stepsElement] =
     validateWorkflowChildren(document, workflow);
+  const runtimePolicy =
+    configElement === undefined
+      ? undefined
+      : validateRuntimePolicy(document, configElement);
   const triggers =
     triggersElement === undefined
       ? []
@@ -3502,6 +3724,7 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     triggers,
     flow,
     ...(lifecycle === undefined ? {} : { lifecycle }),
+    ...(runtimePolicy === undefined ? {} : { runtimePolicy }),
   };
 }
 
@@ -3527,6 +3750,7 @@ function compileValidatedWoml(
     triggers,
     flow,
     lifecycle,
+    runtimePolicy,
   } = validateDocument(document);
   if (modules.length > 0 && moduleRuntime === undefined) {
     failCompile(
@@ -3646,6 +3870,7 @@ function compileValidatedWoml(
   }
   const usesScriptRuntimeV1 =
     lifecycle !== undefined ||
+    runtimePolicy !== undefined ||
     triggers.length === 0 ||
     moduleRuntime !== undefined ||
     [...scriptAnalyses.values()].some(
@@ -3670,33 +3895,42 @@ function compileValidatedWoml(
     ...(lifecycle === undefined
       ? {}
       : { lifecycle: lowerLifecycle(lifecycle) }),
+    ...(runtimePolicy === undefined
+      ? {}
+      : { runtimePolicy: runtimePolicy.value }),
   };
   const compiled: CompiledWorkflowDefinition =
-    lifecycle !== undefined
-      ? { schemaVersion: 11, ...definition }
-      : triggers.length === 0
-        ? {
-            schemaVersion: 10,
-            ...definition,
-          }
-        : moduleRuntime !== undefined
-          ? { schemaVersion: 9, ...definition, moduleRuntime }
-          : usesScriptRuntimeV1
-            ? { schemaVersion: 8, ...definition }
-            : triggers.length > 1 ||
-                triggers.some(trigger => trigger.kind !== 'manual')
-              ? { schemaVersion: 7, ...definition }
-              : lowered.nodes.some(node => node.retryPolicy !== undefined)
-                ? { schemaVersion: 6, ...definition }
-                : flow.firstNotification !== undefined
-                  ? { schemaVersion: 5, ...definition }
-                  : flow.firstApproval !== undefined
-                    ? { schemaVersion: 4, ...definition }
-                    : flow.firstParallel !== undefined
-                      ? { schemaVersion: 3, ...definition }
-                      : flow.firstBranch === undefined
-                        ? { schemaVersion: 1, ...definition }
-                        : { schemaVersion: 2, ...definition };
+    runtimePolicy !== undefined
+      ? {
+          schemaVersion: 12,
+          ...definition,
+          runtimePolicy: runtimePolicy.value,
+        }
+      : lifecycle !== undefined
+        ? { schemaVersion: 11, ...definition }
+        : triggers.length === 0
+          ? {
+              schemaVersion: 10,
+              ...definition,
+            }
+          : moduleRuntime !== undefined
+            ? { schemaVersion: 9, ...definition, moduleRuntime }
+            : usesScriptRuntimeV1
+              ? { schemaVersion: 8, ...definition }
+              : triggers.length > 1 ||
+                  triggers.some(trigger => trigger.kind !== 'manual')
+                ? { schemaVersion: 7, ...definition }
+                : lowered.nodes.some(node => node.retryPolicy !== undefined)
+                  ? { schemaVersion: 6, ...definition }
+                  : flow.firstNotification !== undefined
+                    ? { schemaVersion: 5, ...definition }
+                    : flow.firstApproval !== undefined
+                      ? { schemaVersion: 4, ...definition }
+                      : flow.firstParallel !== undefined
+                        ? { schemaVersion: 3, ...definition }
+                        : flow.firstBranch === undefined
+                          ? { schemaVersion: 1, ...definition }
+                          : { schemaVersion: 2, ...definition };
 
   const graphIssues = inspectCompiledWorkflowGraph(compiled.graph, {
     requireSingleTerminal: true,
@@ -3725,14 +3959,18 @@ export function compileWomlWithModules(
 ):
   | CompiledWorkflowDefinitionV9
   | CompiledWorkflowDefinitionV10
-  | CompiledWorkflowDefinitionV11 {
+  | CompiledWorkflowDefinitionV11
+  | CompiledWorkflowDefinitionV12 {
   const compiled = compileValidatedWoml(document, moduleRuntime);
   if (
     compiled.schemaVersion !== 9 &&
     compiled.schemaVersion !== 10 &&
-    compiled.schemaVersion !== 11
+    compiled.schemaVersion !== 11 &&
+    compiled.schemaVersion !== 12
   ) {
-    throw new Error('module compilation did not produce Model v9, v10, or v11');
+    throw new Error(
+      'module compilation did not produce Model v9, v10, v11, or v12'
+    );
   }
   return compiled;
 }

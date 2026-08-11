@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-inspection/v3",
+  "title": "WOML Safe Run Inspection v3",
+  "x-status": "runtime-policies-rp0-frozen",
+  "x-forbiddenFields": ["context", "payload", "secret", "credentials", "messageBody", "stack", "operationKey", "idempotencyKey", "ownerId", "claimId"],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "runId", "workflowId", "status", "businessOutcome", "lifecycleStatus", "hooks", "warnings", "cancellation", "policy"],
+  "properties": {
+    "profile": { "const": "woml.run-inspection/v3" },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "status": { "enum": ["not_started", "queued", "running", "waiting", "cancelling", "finalizing", "succeeded", "failed", "cancelled"] },
+    "businessOutcome": { "enum": ["undecided", "succeeded", "failed", "cancelled"] },
+    "lifecycleStatus": { "enum": ["idle", "running", "finalizing", "completed_with_warnings", "completed"] },
+    "hooks": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/hooks" },
+    "warnings": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/warnings" },
+    "cancellation": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/cancellation" },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["queue"],
+      "properties": {
+        "queue": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "waitingFor": { "enum": ["concurrency", "rate_limit"] },
+        "eligibleAt": { "type": "string", "format": "date-time" },
+        "timeoutAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

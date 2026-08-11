@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-list/v2",
+  "title": "WOML Run List v2",
+  "x-status": "runtime-policies-rp0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "runs"],
+  "properties": {
+    "profile": { "const": "woml.run-list/v2" },
+    "runs": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/summary" } }
+  },
+  "$defs": {
+    "status": { "enum": ["not_started", "queued", "running", "waiting", "cancelling", "finalizing", "succeeded", "failed", "cancelled"] },
+    "waitingFor": { "enum": ["concurrency", "rate_limit"] },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "workflowId", "status", "admittedAt", "updatedAt"],
+      "properties": {
+        "runId": { "type": "string", "minLength": 1, "maxLength": 320 },
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "$ref": "#/$defs/status" },
+        "admittedAt": { "type": "string", "format": "date-time" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "queue": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "waitingFor": { "$ref": "#/$defs/waitingFor" },
+        "eligibleAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

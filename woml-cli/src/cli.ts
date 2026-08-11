@@ -898,7 +898,9 @@ interface CompiledWorkflowSource {
 function promoteForLifecycleAuthority(
   workflow: CompiledWorkflowDefinition
 ): CompiledWorkflowDefinition {
-  if (workflow.schemaVersion === 11) return workflow;
+  if (workflow.schemaVersion === 11 || workflow.schemaVersion === 12) {
+    return workflow;
+  }
   return {
     schemaVersion: 11,
     workflowId: workflow.workflowId,
@@ -1022,9 +1024,15 @@ async function compileWorkflowSources(
             projectRoot,
           })
         : undefined;
-    const workflow = promoteForLifecycleAuthority(
-      runtimePackage?.workflow.model ?? compileWoml(document)
-    );
+    const frontendWorkflow =
+      runtimePackage?.workflow.model ?? compileWoml(document);
+    if (frontendWorkflow.schemaVersion === 12) {
+      throw new CliInputError(
+        'WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE',
+        'runtime-policy syntax is valid, but durable policy enforcement begins in RP2 and RP3. Use `woml check` to review this Model v12 workflow.'
+      );
+    }
+    const workflow = promoteForLifecycleAuthority(frontendWorkflow);
     compiled.push({
       filePath,
       document,
@@ -1141,10 +1149,15 @@ async function runCheckCommand(
       workflowElement.children.some(
         child => child.kind === 'element' && child.name === 'lifecycle'
       );
+    const declaresRuntimePolicy =
+      workflowElement !== undefined &&
+      workflowElement.children.some(
+        child => child.kind === 'element' && child.name === 'config'
+      );
     const definitionPackage =
       inspectionPackage.modules.length === 0
         ? inspectionPackage
-        : declaresLifecycle
+        : declaresLifecycle || declaresRuntimePolicy
           ? await buildWomlExecutableDefinitionPackage(document, {
               sourcePath: filePath,
               projectRoot: moduleProjectRoot(filePath),
@@ -1181,19 +1194,23 @@ async function runCheckCommand(
       );
     }
     const hasLifecycle =
-      compiledWorkflow.schemaVersion === 11 &&
+      (compiledWorkflow.schemaVersion === 11 ||
+        compiledWorkflow.schemaVersion === 12) &&
       compiledWorkflow.lifecycle !== undefined;
+    const hasRuntimePolicy = compiledWorkflow.schemaVersion === 12;
     const workflowCallsFrontendOnly =
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      hasLifecycle
-        ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
-        : workflowCallsFrontendOnly
-          ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
-          : definitionPackage.modules.length === 0
-            ? 'Execution: module-free workflow; woml run is available.\n'
-            : 'Execution: local modules are compiled and ready for woml run.\n'
+      hasRuntimePolicy
+        ? 'Execution: runtime policy is compiled as Model v12; enforcement begins in RP2 and RP3, so woml run is intentionally gated during RP1.\n'
+        : hasLifecycle
+          ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
+          : workflowCallsFrontendOnly
+            ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
+            : definitionPackage.modules.length === 0
+              ? 'Execution: module-free workflow; woml run is available.\n'
+              : 'Execution: local modules are compiled and ready for woml run.\n'
     );
     return 0;
   } catch (error) {
