@@ -844,11 +844,9 @@ pub(crate) fn validate_payload_against_definition(
       })?;
       if hook.event != data.event
         || (data.event.is_step()
-          && (workflow.node(&data.subject.id).is_none()
-            || hook
-              .step_ids
-              .as_ref()
-              .is_some_and(|ids| !ids.contains(&data.subject.id))))
+          && workflow
+            .lifecycle_hook_for_step_event(data.event, &data.subject.id)
+            .is_none())
       {
         return Err("Lifecycle hook request does not match its compiled binding.".to_string());
       }

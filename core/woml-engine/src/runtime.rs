@@ -31,11 +31,12 @@ use crate::model::{
   ValueExpression,
 };
 use crate::projection::{
-  ApprovalRequestStatus, AttemptStatus, LifecycleActionStatus, LifecycleHookStatus,
+  ApprovalRequestStatus, AttemptStatus, LifecycleActionStatus, LifecycleHookProjection,
+  LifecycleHookStatus,
 };
 use crate::protocol::{
   ExecuteMessage, HostOutcome, LifecycleBindingV1, LifecycleFailureBindingV1,
-  LifecycleWorkflowBindingV1, RuntimeModuleBinding, ScriptAttempt,
+  LifecycleStepBindingV1, LifecycleWorkflowBindingV1, RuntimeModuleBinding, ScriptAttempt,
 };
 use crate::schedule::{
   ScheduleClock, ScheduleProgress, ScheduleProgressReporter, SystemScheduleClock,
@@ -1131,7 +1132,7 @@ fn lifecycle_failure_from_attempt(failure: AttemptFailure) -> LifecycleFailure {
   }
 }
 
-fn lifecycle_request(
+fn workflow_lifecycle_request(
   workflow: &CompiledWorkflowDefinition,
   run_id: &str,
   event: LifecycleEventName,
@@ -1156,6 +1157,32 @@ fn lifecycle_request(
   ))
 }
 
+fn step_lifecycle_request(
+  workflow: &CompiledWorkflowDefinition,
+  run_id: &str,
+  event: LifecycleEventName,
+  step_id: &str,
+) -> Option<RunEventPayload> {
+  let hook = workflow.lifecycle_hook_for_step_event(event, step_id)?;
+  let subject = LifecycleSubject {
+    kind: LifecycleSubjectKind::Step,
+    id: step_id.to_string(),
+  };
+  Some(RunEventPayload::LifecycleHookRequested(
+    LifecycleHookRequestedData {
+      hook_invocation_id: crate::derive_lifecycle_hook_invocation_id(
+        run_id,
+        &hook.hook_id,
+        subject.kind,
+        &subject.id,
+      ),
+      hook_id: hook.hook_id.clone(),
+      event: hook.event,
+      subject,
+    },
+  ))
+}
+
 fn report_lifecycle(
   options: &RuntimeExecutionOptions,
   workflow: &CompiledWorkflowDefinition,
@@ -1163,6 +1190,7 @@ fn report_lifecycle(
   phase: LifecycleProgressPhase,
   hook_id: &str,
   action_id: &str,
+  step_id: Option<&str>,
   code: Option<String>,
 ) {
   options.report_lifecycle(LifecycleProgress {
@@ -1172,9 +1200,84 @@ fn report_lifecycle(
     phase,
     hook_id: hook_id.to_string(),
     action_id: action_id.to_string(),
-    step_id: None,
+    step_id: step_id.map(str::to_string),
     code,
   });
+}
+
+fn pending_lifecycle_hook(
+  projection: &RunProjection,
+  events: &[RunEvent],
+) -> Option<LifecycleHookProjection> {
+  let pending = |hook: &LifecycleHookProjection| {
+    matches!(
+      hook.status,
+      LifecycleHookStatus::Requested | LifecycleHookStatus::Running
+    )
+  };
+  for subject_kind in [LifecycleSubjectKind::Step, LifecycleSubjectKind::Workflow] {
+    if let Some(hook) = events.iter().find_map(|event| {
+      let RunEventPayload::LifecycleHookRequested(request) = &event.payload else {
+        return None;
+      };
+      let hook = projection
+        .lifecycle_hooks
+        .get(&request.hook_invocation_id)?;
+      (hook.subject.kind == subject_kind && pending(hook)).then(|| hook.clone())
+    }) {
+      return Some(hook);
+    }
+  }
+  None
+}
+
+fn lifecycle_request_snapshot(
+  events: &[RunEvent],
+  hook_invocation_id: &str,
+) -> Result<RunProjection, RuntimeExecutionError> {
+  let request_index = events
+    .iter()
+    .position(|event| {
+      matches!(
+        &event.payload,
+        RunEventPayload::LifecycleHookRequested(request)
+          if request.hook_invocation_id == hook_invocation_id
+      )
+    })
+    .ok_or_else(|| {
+      RuntimeExecutionError::Stalled("lifecycle request event disappeared".to_string())
+    })?;
+  crate::fold_events(&events[..=request_index])
+    .map_err(|error| RuntimeExecutionError::Stalled(error.to_string()))
+}
+
+fn step_lifecycle_outcome(
+  event: LifecycleEventName,
+  projection: &RunProjection,
+  step_id: &str,
+) -> Option<crate::BusinessOutcome> {
+  match event {
+    LifecycleEventName::StepStart => None,
+    LifecycleEventName::StepSuccess => Some(crate::BusinessOutcome::Succeeded),
+    LifecycleEventName::StepFailure => Some(crate::BusinessOutcome::Failed),
+    LifecycleEventName::StepComplete => {
+      if projection.context.steps.contains_key(step_id) {
+        Some(crate::BusinessOutcome::Succeeded)
+      } else {
+        projection.latest_attempt(step_id).and_then(|attempt| {
+          let AttemptStatus::Failed { failure } = &attempt.status else {
+            return None;
+          };
+          Some(if failure.kind == AttemptFailureKind::InvocationCancelled {
+            crate::BusinessOutcome::Cancelled
+          } else {
+            crate::BusinessOutcome::Failed
+          })
+        })
+      }
+    }
+    _ => None,
+  }
 }
 
 async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
@@ -1188,17 +1291,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
   }
   loop {
     let projection = engine.projection(run_id)?;
-    let pending = projection
-      .lifecycle_hooks
-      .values()
-      .find(|hook| {
-        hook.subject.kind == LifecycleSubjectKind::Workflow
-          && matches!(
-            hook.status,
-            LifecycleHookStatus::Requested | LifecycleHookStatus::Running
-          )
-      })
-      .cloned();
+    let events = engine.events(run_id)?;
+    let pending = pending_lifecycle_hook(&projection, &events);
     let Some(hook_projection) = pending else {
       if projection.status == RunStatus::Finalizing {
         let outcome = projection.business_outcome.ok_or_else(|| {
@@ -1233,6 +1327,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
           hook_id,
           action_id,
           None,
+          None,
         );
         engine.append_payload(
           run_id,
@@ -1253,6 +1348,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
           LifecycleProgressPhase::RunFinalized,
           hook_id,
           action_id,
+          None,
           None,
         );
       }
@@ -1279,11 +1375,10 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
         LifecycleProgressPhase::HookRequested,
         &hook.hook_id,
         &progress_action_id,
+        matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step)
+          .then_some(hook_projection.subject.id.as_str()),
         None,
       );
-    }
-    if hook.event.is_step() {
-      return Ok(());
     }
     if hook_projection
       .actions
@@ -1319,8 +1414,20 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
           | LifecycleEventName::RunCancel
       ) {
         if let Some(request) =
-          lifecycle_request(engine.workflow(), run_id, LifecycleEventName::RunComplete)
+          workflow_lifecycle_request(engine.workflow(), run_id, LifecycleEventName::RunComplete)
         {
+          payloads.push(request);
+        }
+      } else if matches!(
+        hook.event,
+        LifecycleEventName::StepSuccess | LifecycleEventName::StepFailure
+      ) {
+        if let Some(request) = step_lifecycle_request(
+          engine.workflow(),
+          run_id,
+          LifecycleEventName::StepComplete,
+          &hook_projection.subject.id,
+        ) {
           payloads.push(request);
         }
       }
@@ -1332,6 +1439,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
         LifecycleProgressPhase::HookCompleted,
         &hook.hook_id,
         &progress_action_id,
+        matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step)
+          .then_some(hook_projection.subject.id.as_str()),
         None,
       );
       continue;
@@ -1368,23 +1477,49 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       LifecycleProgressPhase::ActionStarted,
       &hook.hook_id,
       &action.action_id,
+      matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step)
+        .then_some(hook_projection.subject.id.as_str()),
       None,
     );
-    let context = engine.projection(run_id)?.context;
+    let snapshot = lifecycle_request_snapshot(&events, &hook_projection.hook_invocation_id)?;
+    let context = snapshot.context.clone();
+    let step = matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step).then(|| {
+      let step_id = hook_projection.subject.id.clone();
+      LifecycleStepBindingV1 {
+        id: step_id.clone(),
+        outcome: step_lifecycle_outcome(hook.event, &snapshot, &step_id),
+        attempts: snapshot
+          .latest_attempt(&step_id)
+          .map_or(0, |attempt| attempt.identity.attempt),
+      }
+    });
+    let step_failure = step.as_ref().and_then(|step| {
+      snapshot.latest_attempt(&step.id).and_then(|attempt| {
+        let AttemptStatus::Failed { failure } = &attempt.status else {
+          return None;
+        };
+        Some(LifecycleFailureBindingV1 {
+          code: failure.code.clone(),
+          message: failure.message.clone(),
+        })
+      })
+    });
     let binding = LifecycleBindingV1 {
       event: hook.event,
       workflow: LifecycleWorkflowBindingV1 {
         id: engine.workflow().workflow_id.clone(),
-        outcome: projection.business_outcome,
+        outcome: snapshot.business_outcome,
       },
-      step: None,
-      failure: projection
-        .lifecycle_failure
-        .as_ref()
-        .map(|failure| LifecycleFailureBindingV1 {
-          code: failure.code.clone(),
-          message: failure.message.clone(),
-        }),
+      step,
+      failure: step_failure.or_else(|| {
+        snapshot
+          .lifecycle_failure
+          .as_ref()
+          .map(|failure| LifecycleFailureBindingV1 {
+            code: failure.code.clone(),
+            message: failure.message.clone(),
+          })
+      }),
     };
     if host.is_none() {
       match ScriptHostClient::spawn_with_authority(
@@ -1398,8 +1533,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
           engine.append_payload(
             run_id,
             RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
-              hook_invocation_id: hook_projection.hook_invocation_id,
-              action_id: action.action_id,
+              hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+              action_id: action.action_id.clone(),
               attempt: attempt_number,
               failure: LifecycleFailure {
                 kind: LifecycleFailureKind::HostCrashed,
@@ -1415,6 +1550,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
             LifecycleProgressPhase::ActionFailed,
             &hook.hook_id,
             &progress_action_id,
+            matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step)
+              .then_some(hook_projection.subject.id.as_str()),
             Some("WOML_SCRIPT_HOST_CRASHED".to_string()),
           );
           continue;
@@ -1452,8 +1589,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       Ok(completed) => match completed.outcome {
         HostOutcome::Success { .. } => (
           RunEventPayload::LifecycleActionSucceeded(LifecycleActionIdentityData {
-            hook_invocation_id: hook_projection.hook_invocation_id,
-            action_id: action.action_id,
+            hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+            action_id: action.action_id.clone(),
             attempt: attempt_number,
           }),
           LifecycleProgressPhase::ActionSucceeded,
@@ -1464,8 +1601,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
           let code = failure.code.clone();
           (
             RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
-              hook_invocation_id: hook_projection.hook_invocation_id,
-              action_id: action.action_id,
+              hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+              action_id: action.action_id.clone(),
               attempt: attempt_number,
               failure,
             }),
@@ -1478,8 +1615,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
         *host = None;
         (
           RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
-            hook_invocation_id: hook_projection.hook_invocation_id,
-            action_id: action.action_id,
+            hook_invocation_id: hook_projection.hook_invocation_id.clone(),
+            action_id: action.action_id.clone(),
             attempt: attempt_number,
             failure: LifecycleFailure {
               kind: LifecycleFailureKind::HostCrashed,
@@ -1500,6 +1637,8 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       phase,
       &hook.hook_id,
       &progress_action_id,
+      matches!(hook_projection.subject.kind, LifecycleSubjectKind::Step)
+        .then_some(hook_projection.subject.id.as_str()),
       failure_code,
     );
   }

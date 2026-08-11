@@ -1686,7 +1686,9 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
     const lifecycle =
       request.lifecycle === undefined
         ? undefined
-        : deepFreezeJson(request.lifecycle);
+        : (deepFreezeJson(
+            request.lifecycle as unknown as JsonValue
+          ) as unknown as LifecycleBindingV1);
     secretValues = Object.values(request.bindings?.secrets ?? {});
     const lifecycleConsole = Object.freeze({
       log: (...values: unknown[]) =>

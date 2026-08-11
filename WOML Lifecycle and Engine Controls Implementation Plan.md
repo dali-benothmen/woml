@@ -4,7 +4,7 @@ Status: LEC0 through LEC3 completed on 2026-08-11. Workflow-level lifecycle
 scripts now run through isolated Bun workers under Rust supervision. `on-start`
 runs before the business DAG; the matching outcome hook and `on-complete` run
 after the durable business outcome; lifecycle failures remain visible warnings
-without rewriting that outcome. Step hooks remain staged for LEC4.
+without rewriting that outcome. Step hooks are executable as of LEC4.
 
 ## 1. Product Outcome
 
@@ -725,7 +725,7 @@ written.
 | LEC1 (complete) | Validate lifecycle WOML and lower lifecycle-bearing definitions to Model v11.                         | Authors receive exact syntax diagnostics and deterministic compiled lifecycle definitions without breaking the Event v9 runtime between phases. |
 | LEC2 (complete) | Implement Event v10 folding, Store v11, hook identity, outcome/finalization state, and run summaries. | Rust can durably represent lifecycle and controls without executing hooks.                                                                      |
 | LEC3 (complete) | Execute workflow-level lifecycle scripts.                                                             | `on-start`, outcome hooks, and `on-complete` work end to end.                                                                                   |
-| LEC4            | Execute step lifecycle hooks across retries and control flow.                                         | Step start/success/failure/complete observers work correctly in sequential, branch, parallel, and approval workflows.                           |
+| LEC4 (complete) | Execute step lifecycle hooks across retries and control flow.                                         | Step start/success/failure/complete observers work correctly in sequential, branch, parallel, and approval workflows.                           |
 | LEC5            | Deliver informational Slack lifecycle notifications.                                                  | Lifecycle hooks can notify real Slack channels without approval actions.                                                                        |
 | LEC6            | Implement durable cancellation and propagation.                                                       | Active and waiting Event v10 runs can be cancelled safely and recovered.                                                                        |
 | LEC7            | Ship direct `list`, `get`, and `cancel` CLI commands.                                                 | Operators manage runs without the `runs` namespace or workflow source files.                                                                    |
@@ -892,9 +892,11 @@ Implementation result (2026-08-11):
 - Lifecycle Progress v1 is emitted through the existing CLI progress channel,
   and run inspection continues to expose durable hook/action health.
 - `examples/lifecycleWorkflow.woml` is the manual end-to-end example. The CLI
-  continues to reject step hooks and lifecycle notifications until LEC4/LEC5.
+  rejected step hooks and lifecycle notifications at the LEC3 boundary.
 
 ### LEC4 — Execute step lifecycle hooks
+
+Status: **completed on 2026-08-11.**
 
 Changes:
 
@@ -906,17 +908,38 @@ Changes:
 - Compose with retries, sequential steps, branches, parallels, approvals, and
   call-only workflows.
 - Treat fail-fast sibling cancellation separately from permanent step failure.
+- Admit step-hook requests atomically with their first-start or final-settlement
+  event, using the frozen run/step/hook identity.
+- Execute pending step observers in durable request order, prioritizing them
+  ahead of workflow outcome hooks during finalization.
+- Build `lifecycle.step`, `lifecycle.failure`, and read-only `context` from the
+  durable hook-request snapshot rather than whichever context happens to be
+  current when the observer runs.
+- Include the step ID in Lifecycle Progress v1 terminal output.
+- Allow lifecycle scripts in step hooks through `woml run`; informational
+  notification actions remain staged for LEC5.
 
 Result:
 
 One workflow-level lifecycle block observes every selected business step without
 being copied into each step tag or changing DAG outputs.
 
+Retries produce one logical start and one final settlement observation. Selected
+branch and parallel children are correlated independently; unselected routes
+produce no hooks. Approval pause/resume drains already admitted observers and
+continues without duplicate admission. Hook failures remain warnings and do not
+change step output or workflow outcome.
+
 Gate:
 
 Tests prove once-per-logical-step behavior, no hook per retry, deterministic
 parallel event correlation, filter correctness, approval pause/resume behavior,
 and restart without duplicate hook admission.
+
+Completed gates cover sequential filters and frozen snapshots, retry success,
+interrupted-attempt recovery, engine-cancelled sibling classification,
+branch-plus-parallel composition, approval pause/resume, CLI admission, and
+step-correlated progress output.
 
 ### LEC5 — Add informational lifecycle notifications
 

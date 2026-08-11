@@ -4614,6 +4614,8 @@ impl DurableEventStore {
               DurableStoreError::Contract("Recovered hook is absent from Model v11.".to_string())
             })?;
           if hook_projection.actions.len() == compiled.actions.len() {
+            let completed_event = compiled.event;
+            let completed_subject = hook_projection.subject.clone();
             append_to_history(
               &transaction,
               &mut events,
@@ -4627,6 +4629,49 @@ impl DurableEventStore {
                 failed_actions: hook_projection.failed_actions,
               }),
             )?;
+            let next_hook = match completed_event {
+              crate::model::LifecycleEventName::StepSuccess
+              | crate::model::LifecycleEventName::StepFailure => workflow
+                .lifecycle_hook_for_step_event(
+                  crate::model::LifecycleEventName::StepComplete,
+                  &completed_subject.id,
+                ),
+              crate::model::LifecycleEventName::RunSuccess
+              | crate::model::LifecycleEventName::RunFailure
+              | crate::model::LifecycleEventName::RunCancel => {
+                workflow.lifecycle_hook_for_event(crate::model::LifecycleEventName::RunComplete)
+              }
+              _ => None,
+            };
+            if let Some(next_hook) = next_hook {
+              let subject = if next_hook.event.is_step() {
+                completed_subject
+              } else {
+                LifecycleSubject {
+                  kind: LifecycleSubjectKind::Workflow,
+                  id: run_id.to_string(),
+                }
+              };
+              append_to_history(
+                &transaction,
+                &mut events,
+                run_id,
+                generated_event_id(),
+                now,
+                event_schema_version,
+                RunEventPayload::LifecycleHookRequested(LifecycleHookRequestedData {
+                  hook_invocation_id: derive_lifecycle_hook_invocation_id(
+                    run_id,
+                    &next_hook.hook_id,
+                    subject.kind,
+                    &subject.id,
+                  ),
+                  hook_id: next_hook.hook_id.clone(),
+                  event: next_hook.event,
+                  subject,
+                }),
+              )?;
+            }
           }
         }
         validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
@@ -4636,16 +4681,27 @@ impl DurableEventStore {
           interrupted_attempts: 0,
         });
       }
-      if projection.lifecycle_hooks.values().any(|hook| {
+      let has_pending_hook = projection.lifecycle_hooks.values().any(|hook| {
         matches!(
           hook.status,
           crate::projection::LifecycleHookStatus::Requested
             | crate::projection::LifecycleHookStatus::Running
         )
-      }) || matches!(
-        projection.status,
-        RunStatus::Cancelling | RunStatus::Finalizing
-      ) {
+      });
+      let has_active_business_attempt = projection
+        .attempts
+        .iter()
+        .any(|attempt| attempt.status == AttemptStatus::Started);
+      let has_active_operation = projection
+        .operations
+        .values()
+        .any(|operation| operation.status == crate::projection::OperationStatus::Started);
+      if (has_pending_hook && !has_active_business_attempt && !has_active_operation)
+        || matches!(
+          projection.status,
+          RunStatus::Cancelling | RunStatus::Finalizing
+        )
+      {
         return Ok(RunRecovery::Resumable);
       }
     }
@@ -4854,20 +4910,28 @@ impl DurableEventStore {
     if let Some(first) = started.first().cloned() {
       let failure = interrupted_failure();
       for attempt in &started {
-        append_to_history(
-          &transaction,
-          &mut events,
-          run_id,
-          generated_event_id(),
-          Utc::now(),
-          event_schema_version,
-          RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
-            node_id: attempt.node_id.clone(),
-            attempt: attempt.attempt,
-            invocation_id: attempt.invocation_id.clone(),
-            failure: failure.clone(),
-          }),
-        )?;
+        let payload = RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+          node_id: attempt.node_id.clone(),
+          attempt: attempt.attempt,
+          invocation_id: attempt.invocation_id.clone(),
+          failure: failure.clone(),
+        });
+        let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+          expand_model_v11_payload(&workflow, run_id, payload)?
+        } else {
+          vec![payload]
+        };
+        for payload in payloads {
+          append_to_history(
+            &transaction,
+            &mut events,
+            run_id,
+            generated_event_id(),
+            Utc::now(),
+            event_schema_version,
+            payload,
+          )?;
+        }
       }
       append_to_history(
         &transaction,
@@ -6394,6 +6458,32 @@ pub(crate) fn expand_model_v11_payload(
   run_id: &str,
   payload: RunEventPayload,
 ) -> Result<Vec<RunEventPayload>, DurableStoreError> {
+  fn step_hook_request(
+    workflow: &CompiledWorkflowDefinition,
+    run_id: &str,
+    event: crate::model::LifecycleEventName,
+    step_id: &str,
+  ) -> Option<RunEventPayload> {
+    let hook = workflow.lifecycle_hook_for_step_event(event, step_id)?;
+    let subject = LifecycleSubject {
+      kind: LifecycleSubjectKind::Step,
+      id: step_id.to_string(),
+    };
+    Some(RunEventPayload::LifecycleHookRequested(
+      LifecycleHookRequestedData {
+        hook_invocation_id: derive_lifecycle_hook_invocation_id(
+          run_id,
+          &hook.hook_id,
+          subject.kind,
+          &subject.id,
+        ),
+        hook_id: hook.hook_id.clone(),
+        event: hook.event,
+        subject,
+      },
+    ))
+  }
+
   let payload = if let RunEventPayload::RunStarted(data) = payload {
     let mut payloads = vec![RunEventPayload::RunStarted(data)];
     if let Some(hook) =
@@ -6420,6 +6510,70 @@ pub(crate) fn expand_model_v11_payload(
     return Ok(payloads);
   } else {
     payload
+  };
+  let payload = match payload {
+    RunEventPayload::StepAttemptStarted(data) if data.attempt == 1 => {
+      let request = step_hook_request(
+        workflow,
+        run_id,
+        crate::model::LifecycleEventName::StepStart,
+        &data.node_id,
+      );
+      let mut payloads = vec![RunEventPayload::StepAttemptStarted(data)];
+      payloads.extend(request);
+      return Ok(payloads);
+    }
+    RunEventPayload::StepAttemptSucceeded(data) => {
+      let request = step_hook_request(
+        workflow,
+        run_id,
+        crate::model::LifecycleEventName::StepSuccess,
+        &data.node_id,
+      )
+      .or_else(|| {
+        step_hook_request(
+          workflow,
+          run_id,
+          crate::model::LifecycleEventName::StepComplete,
+          &data.node_id,
+        )
+      });
+      let mut payloads = vec![RunEventPayload::StepAttemptSucceeded(data)];
+      payloads.extend(request);
+      return Ok(payloads);
+    }
+    RunEventPayload::StepAttemptFailed(data) => {
+      let retryable = workflow
+        .node(&data.node_id)
+        .and_then(|node| node.retry_policy.as_ref())
+        .is_some_and(|policy| {
+          data.failure.kind == AttemptFailureKind::ScriptThrew && data.attempt < policy.max_attempts
+        });
+      if retryable {
+        return Ok(vec![RunEventPayload::StepAttemptFailed(data)]);
+      }
+      let event = if data.failure.kind == AttemptFailureKind::InvocationCancelled {
+        crate::model::LifecycleEventName::StepComplete
+      } else {
+        crate::model::LifecycleEventName::StepFailure
+      };
+      let request = step_hook_request(workflow, run_id, event, &data.node_id).or_else(|| {
+        (event != crate::model::LifecycleEventName::StepComplete)
+          .then(|| {
+            step_hook_request(
+              workflow,
+              run_id,
+              crate::model::LifecycleEventName::StepComplete,
+              &data.node_id,
+            )
+          })
+          .flatten()
+      });
+      let mut payloads = vec![RunEventPayload::StepAttemptFailed(data)];
+      payloads.extend(request);
+      return Ok(payloads);
+    }
+    payload => payload,
   };
   let outcome = match payload {
     RunEventPayload::RunSucceeded(data) => crate::event::RunOutcomeDecidedData::Succeeded {
@@ -6458,7 +6612,7 @@ pub(crate) fn expand_model_v11_payload(
         subject,
       },
     ));
-  } else {
+  } else if workflow.lifecycle.is_none() {
     payloads.push(RunEventPayload::RunFinalized(
       crate::event::RunFinalizedData {
         outcome: business_outcome,

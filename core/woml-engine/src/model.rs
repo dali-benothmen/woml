@@ -1018,6 +1018,7 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
     .graph
     .nodes
     .iter()
+    .filter(|node| node.handler == "runtime.script")
     .map(|node| node.id.as_str())
     .collect::<HashSet<_>>();
   let mut events = HashSet::new();
@@ -1608,6 +1609,26 @@ impl CompiledWorkflowDefinition {
       .hooks
       .iter()
       .find(|hook| hook.event == event)
+  }
+
+  pub fn lifecycle_hook_for_step_event(
+    &self,
+    event: LifecycleEventName,
+    step_id: &str,
+  ) -> Option<&CompiledLifecycleHook> {
+    let hook = self.lifecycle_hook_for_event(event)?;
+    if !event.is_step()
+      || self
+        .node(step_id)
+        .is_none_or(|node| node.handler != "runtime.script")
+      || hook
+        .step_ids
+        .as_ref()
+        .is_some_and(|step_ids| !step_ids.iter().any(|id| id == step_id))
+    {
+      return None;
+    }
+    Some(hook)
   }
 
   pub(crate) fn approval(&self, approval_id: &str) -> Option<ApprovalDefinition> {

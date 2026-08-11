@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
-import { runCli, type CliIo } from '../src/cli';
+import { formatExecutionProgress, runCli, type CliIo } from '../src/cli';
 
 const fixtureRoot = resolve(
   import.meta.dir,
@@ -23,7 +23,21 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('LEC3 lifecycle CLI admission', () => {
+describe('LEC4 lifecycle CLI admission', () => {
+  test('LEC4 progress identifies the observed step', () => {
+    expect(
+      formatExecutionProgress({
+        profile: 'woml.lifecycle-progress/v1',
+        runId: 'run_lec4',
+        workflowId: 'lifecycle-demo',
+        phase: 'action_started',
+        hookId: 'lifecycle:step_success',
+        actionId: 'lifecycle:step_success:action:0',
+        stepId: 'prepare',
+      })
+    ).toBe('Lifecycle lifecycle:step_success for step prepare action started.');
+  });
+
   test('woml check accepts module-free and module-backed lifecycle source', async () => {
     for (const name of ['lifecycle.woml', 'lifecycle-module.woml']) {
       const result = await invoke(['check', resolve(fixtureRoot, name)]);
@@ -31,7 +45,7 @@ describe('LEC3 lifecycle CLI admission', () => {
       expect(result.stderr).toBe('');
       expect(result.stdout).toContain('WOML check passed');
       expect(result.stdout).toContain(
-        'workflow-level lifecycle scripts are executable'
+        'workflow and step lifecycle scripts are executable'
       );
     }
   });
@@ -52,7 +66,7 @@ describe('LEC3 lifecycle CLI admission', () => {
     });
   });
 
-  test('woml run keeps step hooks and notifications staged for LEC4/LEC5', async () => {
+  test('woml run keeps lifecycle notifications staged for LEC5', async () => {
     const result = await invoke([
       'run',
       resolve(fixtureRoot, 'lifecycle.woml'),
@@ -60,6 +74,6 @@ describe('LEC3 lifecycle CLI admission', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('WOML_LIFECYCLE_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('introduced in LEC4 and LEC5');
+    expect(result.stderr).toContain('introduced in LEC5');
   });
 });

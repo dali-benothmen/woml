@@ -390,7 +390,9 @@ function runtimeCode(code: string): string {
 export function formatExecutionProgress(progress: ExecutionProgressV1): string {
   if ('profile' in progress) {
     const status = progress.phase.replaceAll('_', ' ');
-    return `Lifecycle ${progress.hookId} ${status}${progress.code === undefined ? '.' : `: ${progress.code}`}`;
+    const subject =
+      progress.stepId === undefined ? '' : ` for step ${progress.stepId}`;
+    return `Lifecycle ${progress.hookId}${subject} ${status}${progress.code === undefined ? '.' : `: ${progress.code}`}`;
   }
   if (progress.type === 'step_attempt_failed') {
     return `Step ${progress.nodeId} failed (attempt ${progress.attempt}/${progress.maxAttempts}): ${progress.failureCode}`;
@@ -1012,7 +1014,7 @@ async function runCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasLifecycle
-        ? 'Execution: workflow-level lifecycle scripts are executable; step hooks and lifecycle notifications remain staged for LEC4 and LEC5.\n'
+        ? 'Execution: workflow and step lifecycle scripts are executable; lifecycle notifications remain staged for LEC5.\n'
         : workflowCallsFrontendOnly
           ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
           : definitionPackage.modules.length === 0
@@ -1871,18 +1873,16 @@ async function activateWorkflows(
   const unsupportedLifecycleSource = sources.find(
     source =>
       source.workflow.schemaVersion === 11 &&
-      source.workflow.lifecycle?.hooks.some(
-        hook =>
-          hook.event.startsWith('step_') ||
-          hook.actions.some(
-            action => action.handler !== 'runtime.lifecycle-script'
-          )
+      source.workflow.lifecycle?.hooks.some(hook =>
+        hook.actions.some(
+          action => action.handler !== 'runtime.lifecycle-script'
+        )
       ) === true
   );
   if (unsupportedLifecycleSource !== undefined) {
     throw new CliInputError(
       'WOML_LIFECYCLE_RUNTIME_UNAVAILABLE',
-      `workflow "${unsupportedLifecycleSource.workflow.workflowId}" uses step lifecycle hooks or lifecycle notifications, which are introduced in LEC4 and LEC5. LEC3 executes workflow-level lifecycle scripts.`
+      `workflow "${unsupportedLifecycleSource.workflow.workflowId}" uses lifecycle notifications, which are introduced in LEC5. LEC4 executes workflow and step lifecycle scripts.`
     );
   }
   const hasWorkflowCalls = sources.some(workflowCallFrontendOnlySource);

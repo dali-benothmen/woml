@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { compileWoml, parseWoml, type CompiledWorkflowDefinition } from 'woml';
 import {
   compiledDefinitionHash,
+  executeApprovalWorkflowWithRust,
   executeWorkflowWithRustDurable,
   executeWorkflowWithRust,
   parseIntervalProgress,
@@ -15,6 +16,8 @@ import {
   parseTriggerProgress,
   parseWorkflowCallProgress,
   recoverDurableRuns,
+  resolveApprovalWithRust,
+  resumeApprovalWorkflowWithRust,
   RustWorkflowExecutionError,
 } from '../src/rust-executor';
 
@@ -428,6 +431,82 @@ const parallelBranchCompositionSource = `<woml>
 </workflow>
 </woml>`;
 
+const lifecycleControlFlowSource = `<woml>
+<workflow version="1.0.0" id="lifecycle-control-flow">
+  <lifecycle>
+    <on-step-start>
+      <script>
+        if (!Object.isFrozen(lifecycle.step) || lifecycle.step.attempts !== 1) {
+          throw new Error('invalid step-start binding');
+        }
+      </script>
+    </on-step-start>
+    <on-step-success>
+      <script>
+        if (lifecycle.step.outcome !== 'succeeded') {
+          throw new Error('invalid step-success binding');
+        }
+      </script>
+    </on-step-success>
+    <on-step-complete>
+      <script>
+        if (lifecycle.step.outcome !== 'succeeded') {
+          throw new Error('invalid step-complete binding');
+        }
+      </script>
+    </on-step-complete>
+  </lifecycle>
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="chooseRoute"><script>return { selected: true };</script></step>
+    <branch id="route">
+      <when test="{{context.steps.chooseRoute.selected}}">
+        <parallel id="checks" concurrency="2" on-error="wait-all">
+          <step id="leftCheck" retry="2" retry-backoff="fixed" retry-delay="1ms">
+            <script>
+              if (attempt.number === 1) throw new Error('retry left');
+              return { value: 20 };
+            </script>
+          </step>
+          <step id="rightCheck"><script>return { value: 22 };</script></step>
+        </parallel>
+        <result value="{{context.steps.leftCheck}}" />
+      </when>
+      <otherwise>
+        <step id="fallback"><script>return { value: 0 };</script></step>
+        <result value="{{context.steps.fallback}}" />
+      </otherwise>
+    </branch>
+    <step id="finish">
+      <script>return { total: context.steps.route.value + context.steps.rightCheck.value };</script>
+    </step>
+  </steps>
+</workflow>
+</woml>`;
+
+const lifecycleApprovalSource = `<woml>
+<workflow version="1.0.0" id="lifecycle-approval">
+  <lifecycle>
+    <on-step-start><script>if (!lifecycle.step) throw new Error('missing step');</script></on-step-start>
+    <on-step-success><script>if (lifecycle.step.outcome !== 'succeeded') throw new Error('bad outcome');</script></on-step-success>
+    <on-step-complete><script>if (!lifecycle.step) throw new Error('missing completion');</script></on-step-complete>
+  </lifecycle>
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="prepare"><script>return { ready: true };</script></step>
+    <approval id="review" timeout="24h" on-timeout="reject">
+      <when-approved>
+        <step id="publish"><script>return { published: true };</script></step>
+      </when-approved>
+      <when-rejected>
+        <step id="reject"><script>return { published: false };</script></step>
+      </when-rejected>
+    </approval>
+    <step id="finish"><script>return { published: context.steps.review.decision === 'approved' };</script></step>
+  </steps>
+</workflow>
+</woml>`;
+
 const parallelBeforeBranchSource = `<woml>
 <workflow version="0.1" id="parallel-before-branch">
   <triggers><manual id="start" /></triggers>
@@ -631,6 +710,101 @@ describe('Rust to Bun workflow execution', () => {
       expect(rust.events.every(event => event.eventSchemaVersion === 2)).toBe(
         true
       );
+    }
+  );
+
+  nativeTest(
+    'LEC4 observes selected branch and parallel steps once across retries',
+    async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), 'woml-lec4-control-flow-')
+      );
+      try {
+        const execution = await executeWorkflowWithRustDurable(
+          compileSource(
+            lifecycleControlFlowSource,
+            'lifecycle-control-flow.woml'
+          ),
+          join(directory, 'state.sqlite'),
+          { nativeCorePath, scriptHostPath }
+        );
+        expect(execution.result).toEqual({ total: 42 });
+        const requests = execution.events
+          .filter(event => event.type === 'lifecycle_hook_requested')
+          .map(
+            event => event.data as { event: string; subject: { id: string } }
+          );
+        for (const event of ['step_start', 'step_success', 'step_complete']) {
+          expect(
+            requests
+              .filter(request => request.event === event)
+              .map(request => request.subject.id)
+              .sort()
+          ).toEqual(['chooseRoute', 'finish', 'leftCheck', 'rightCheck']);
+        }
+        expect(
+          requests.some(request => request.subject.id === 'fallback')
+        ).toBe(false);
+        expect(
+          execution.events.filter(
+            event =>
+              event.type === 'step_attempt_started' &&
+              (event.data as { nodeId?: string }).nodeId === 'leftCheck'
+          )
+        ).toHaveLength(2);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  );
+
+  nativeTest(
+    'LEC4 drains step hooks across approval pause and resume',
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'woml-lec4-approval-'));
+      const database = join(directory, 'state.sqlite');
+      const workflow = compileSource(
+        lifecycleApprovalSource,
+        'lifecycle-approval.woml'
+      );
+      try {
+        const waiting = await executeApprovalWorkflowWithRust(
+          workflow,
+          database,
+          { nativeCorePath, scriptHostPath }
+        );
+        expect(waiting.status).toBe('waiting');
+        if (waiting.status !== 'waiting') throw new Error('expected approval');
+        resolveApprovalWithRust(database, waiting.approval.token, 'approved', {
+          nativeCorePath,
+        });
+        const resumed = await resumeApprovalWorkflowWithRust(
+          workflow,
+          database,
+          waiting.runId,
+          { nativeCorePath, scriptHostPath }
+        );
+        expect(resumed.status).toBe('succeeded');
+        if (resumed.status !== 'succeeded') throw new Error('expected success');
+        const requests = resumed.execution.events
+          .filter(event => event.type === 'lifecycle_hook_requested')
+          .map(
+            event => event.data as { event: string; subject: { id: string } }
+          );
+        for (const event of ['step_start', 'step_success', 'step_complete']) {
+          expect(
+            requests
+              .filter(request => request.event === event)
+              .map(request => request.subject.id)
+              .sort()
+          ).toEqual(['finish', 'prepare', 'publish']);
+        }
+        expect(requests.some(request => request.subject.id === 'reject')).toBe(
+          false
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
     }
   );
 

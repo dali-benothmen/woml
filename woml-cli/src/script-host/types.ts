@@ -78,7 +78,7 @@ export interface ExecuteMessageV6 extends ExecuteMessageBase {
   readonly modules: readonly RuntimeModuleBindingV1[];
 }
 
-export interface LifecycleBindingV1 extends JsonObject {
+export interface LifecycleBindingV1 {
   readonly event:
     | 'run_start'
     | 'step_start'

@@ -6,6 +6,21 @@
           console.log(`Starting ${lifecycle.workflow.id}`);
         </script>
       </on-start>
+      <on-step-start>
+        <script>
+          console.log(`Starting step ${lifecycle.step.id} (attempt ${lifecycle.step.attempts})`);
+        </script>
+      </on-step-start>
+      <on-step-success>
+        <script>
+          console.log(`Step ${lifecycle.step.id} ${lifecycle.step.outcome}`);
+        </script>
+      </on-step-success>
+      <on-step-complete>
+        <script>
+          console.log(`Completed step ${lifecycle.step.id}`);
+        </script>
+      </on-step-complete>
       <on-success>
         <script>
           console.log(`Workflow ${lifecycle.workflow.id} succeeded`);
