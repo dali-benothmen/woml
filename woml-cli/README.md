@@ -105,12 +105,27 @@ provider is ready. A request that reaches a bound HTTP listener before then
 receives `503 WOML_RUNTIME_NOT_READY`. Source changes or provider startup
 failure close the partial runtime without admitting a trigger occurrence.
 
-Call-only workflows remain active with zero triggers. Separate local WOML
-processes can use `services.workflows.call()` or `services.workflows.start()`
-when they share the same `--state` database. `call()` waits for the child's
-result; `start()` returns its durable run ID and lets the parent continue. WOML
-handles local discovery, private wake-up credentials, and ownership leases
-automatically.
+Foreground is the default for a terminal or process supervisor. For a directly
+managed PC or VPS, detach only when requested:
+
+```bash
+woml run workflows/ --background
+# or: woml run workflows/ -d
+```
+
+The initiating command waits for authenticated readiness and then prints the
+runtime ID, owner-only descriptor, log path, and stop command. Stop that exact
+runtime gracefully with `woml stop` (add `--state <path>` when using a custom
+state file). Store v14 prevents a second live runtime from owning the same
+state boundary; a crashed owner's lease is reclaimed only after expiry and a
+startup integrity/recovery audit.
+
+Call-only workflows remain active with zero triggers. Workflows loaded into the
+same `woml run` deployment can use `services.workflows.call()` or
+`services.workflows.start()`. `call()` waits for the child's result; `start()`
+returns its durable run ID and lets the parent continue. Store v14 deliberately
+allows only one live process per state boundary; cross-process/multi-node calls
+belong to the later distributed-runtime milestone.
 
 Workflow Call progress prints the parent and child run IDs without printing
 payloads or secrets. Inspect either side later with:

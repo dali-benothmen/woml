@@ -124,8 +124,9 @@ the missing operation success without applying the mutation again. The
 surrounding interrupted script attempt still fails closed because unrelated
 JavaScript effects may remain ambiguous.
 
-Store v13 startup validates one consistent SQLite snapshot, including schema,
-digests, canonical results, versions, and quotas. Corruption returns
+Store v14 startup validates one consistent SQLite snapshot, including the
+Store v13 State v1 schema, digests, canonical results, versions, quotas, and
+runtime coordination records. Corruption returns
 `WOML_STATE_STORE_CORRUPT`; state is never guessed from event history. Restore
 the complete database from a known-good coherent backup as described in
 [Durable User State Operations](woml-durable-state.md).

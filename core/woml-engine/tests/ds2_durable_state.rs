@@ -80,7 +80,7 @@ fn data(execution: &woml_engine::DurableStateExecution) -> &Value {
 }
 
 #[test]
-fn store_v12_migrates_transactionally_to_the_frozen_v13_shape() {
+fn store_v12_migrates_transactionally_through_state_v1_to_store_v14() {
   let database = TestDatabase::new("migration");
   drop(DurableEventStore::open(database.path()).unwrap());
   let connection = Connection::open(database.path()).unwrap();
@@ -89,6 +89,9 @@ fn store_v12_migrates_transactionally_to_the_frozen_v13_shape() {
       "DROP TABLE woml_state_entries;
        DROP TABLE woml_state_mutations;
        DROP TABLE woml_state_quotas;
+       DROP TABLE woml_runtime_owner;
+       DROP TABLE woml_maintenance_lease;
+       DROP TABLE woml_last_verified_backup;
        UPDATE woml_store_metadata SET value = '12' WHERE key = 'schema_version';",
     )
     .unwrap();
@@ -104,7 +107,7 @@ fn store_v12_migrates_transactionally_to_the_frozen_v13_shape() {
     )
     .unwrap();
   assert_eq!(version, DURABLE_STORE_SCHEMA_VERSION.to_string());
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 13);
+  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 14);
   for object in [
     "woml_state_entries",
     "woml_state_mutations",
@@ -122,7 +125,7 @@ fn store_v12_migrates_transactionally_to_the_frozen_v13_shape() {
 }
 
 #[test]
-fn failed_v12_migration_rolls_back_without_claiming_store_v13() {
+fn failed_v12_migration_rolls_back_without_claiming_a_newer_store() {
   let database = TestDatabase::new("migration-rollback");
   drop(DurableEventStore::open(database.path()).unwrap());
   let connection = Connection::open(database.path()).unwrap();

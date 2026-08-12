@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use actix_web::http::{header, Method, StatusCode};
@@ -15,7 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
-use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+use tokio::sync::{mpsc as tokio_mpsc, oneshot, Notify};
 use uuid::Uuid;
 
 use crate::interval::{
@@ -160,6 +160,7 @@ pub struct WomlWebhookServer {
   workflow_runtime_id: String,
   timed_trigger_tasks: Vec<actix_web::rt::task::JoinHandle<()>>,
   pending_activation: Option<PendingActivation>,
+  runtime_state: web::Data<WebhookRuntimeState>,
 }
 
 struct PendingActivation {
@@ -247,6 +248,7 @@ impl WomlWebhookServer {
       database_path,
       workflow_runtime_id,
       timed_trigger_tasks: Vec::new(),
+      runtime_state: app_state.clone(),
       pending_activation: Some(PendingActivation {
         state: app_state,
         recovery_runs,
@@ -349,6 +351,16 @@ impl WomlWebhookServer {
   }
 
   pub async fn stop(self) {
+    self
+      .stop_with_deadline(std::time::Duration::from_secs(30))
+      .await;
+  }
+
+  pub async fn stop_with_deadline(self, deadline: std::time::Duration) {
+    self
+      .runtime_state
+      .admission_open
+      .store(false, Ordering::Release);
     for task in self.timed_trigger_tasks {
       task.abort();
     }
@@ -356,6 +368,7 @@ impl WomlWebhookServer {
       handle.stop(true).await;
     }
     self.internal_handle.stop(true).await;
+    wait_for_active_runs(&self.runtime_state, deadline).await;
     let _ = DurableEventStore::open(&self.database_path).and_then(|mut store| {
       store
         .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
@@ -396,6 +409,8 @@ struct WebhookRuntimeState {
   workflow_targets: Arc<WorkflowTargetRegistry>,
   workflow_routing_credential: String,
   admission_open: AtomicBool,
+  active_runs: Arc<AtomicUsize>,
+  active_runs_changed: Arc<Notify>,
 }
 
 async fn handle_workflow_call_wakeup(
@@ -953,6 +968,8 @@ fn prepare_state(
       workflow_targets,
       workflow_routing_credential,
       admission_open: AtomicBool::new(false),
+      active_runs: Arc::new(AtomicUsize::new(0)),
+      active_runs_changed: Arc::new(Notify::new()),
     },
     recovery_runs,
     startup_manual_runs,
@@ -2670,6 +2687,9 @@ fn dispatch_run(state: &WebhookRuntimeState, identity: RunProgressIdentity) {
   let database_path = state.database_path.clone();
   let execution = state.execution.clone();
   let reporter = state.progress_reporter.clone();
+  let active_runs = Arc::clone(&state.active_runs);
+  let active_runs_changed = Arc::clone(&state.active_runs_changed);
+  active_runs.fetch_add(1, Ordering::AcqRel);
   actix_web::rt::spawn(async move {
     let result =
       execute_admitted_trigger_run_durable(database_path, &identity.run_id, execution).await;
@@ -2697,7 +2717,18 @@ fn dispatch_run(state: &WebhookRuntimeState, identity: RunProgressIdentity) {
     if let (Some(reporter), Some(progress)) = (reporter, progress) {
       reporter(progress);
     }
+    active_runs.fetch_sub(1, Ordering::AcqRel);
+    active_runs_changed.notify_waiters();
   });
+}
+
+async fn wait_for_active_runs(state: &WebhookRuntimeState, deadline: std::time::Duration) {
+  let wait = async {
+    while state.active_runs.load(Ordering::Acquire) > 0 {
+      state.active_runs_changed.notified().await;
+    }
+  };
+  let _ = tokio::time::timeout(deadline, wait).await;
 }
 
 fn runtime_failure_code(error: &crate::RuntimeExecutionError) -> String {

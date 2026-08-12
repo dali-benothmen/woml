@@ -1,7 +1,8 @@
 # WOML Production Runtime and Operations
 
-Production Runtime PRO0 through PRO2 provide the reviewed contracts,
-deployment preflight, and atomic direct-source activation. Runtime hosting uses
+Production Runtime PRO0 through PRO3 provide the reviewed contracts,
+deployment preflight, atomic direct-source activation, durable ownership,
+restart recovery, graceful shutdown, and foreground/background operation. Runtime hosting uses
 the direct `.woml` experience—there is no build command or deployment-package
 extension.
 
@@ -107,22 +108,53 @@ The runtime prints a short form of its internal activation identity after
 readiness. That identity is derived from exact compiled definitions and module
 artifacts; it is not a new artifact users need to build or manage.
 
+## Foreground and background operation
+
+Foreground remains the default for local development, systemd, Docker, and
+Kubernetes:
+
+```bash
+woml run workflows/ --config woml.runtime.json
+```
+
+For a directly managed PC or VPS, detach explicitly:
+
+```bash
+woml run workflows/ --background
+# short form: woml run workflows/ -d
+```
+
+The command returns only after the detached runtime is genuinely ready. It
+prints the exact runtime ID, owner-only descriptor path, project-local log
+path, and stop command. Stop that exact runtime gracefully with:
+
+```bash
+woml stop
+# or: woml stop --state ./data/state.sqlite
+```
+
+Rust owns a renewable Store v14 lease for the state boundary. A second process
+cannot activate the same deployment while that lease is live. After a crash,
+a replacement waits for lease expiry, audits the store, recovers durable work
+behind a closed admission gate, and only then reports ready.
+
+SIGINT, SIGTERM, and `woml stop` all use the same ordered drain. A second signal
+forces exit; ambiguous external effects still fail closed during recovery.
+
 ## Current phase boundary
 
 PRO0 freezes the production contracts, PRO1 implements configuration and
-non-activating preflight, and PRO2 implements atomic activation. Durable
-deployment ownership and detached operation begin in PRO3.
+non-activating preflight, PRO2 implements atomic activation, and PRO3
+implements Store v14 ownership, recovery, background operation, exact stop,
+and graceful shutdown.
 
 These planned commands are not executable until their phases:
 
 ```bash
-woml run workflows/ --background  # PRO3
-woml stop                         # PRO3
 woml top                          # PRO6
 woml backup                       # PRO7
 woml prune --before 30d --dry-run # PRO8
 ```
 
 WOML must reject an unavailable feature rather than accepting and ignoring it.
-The existing foreground `woml run workflows/` is now the atomically activated
-production-trigger host while PRO3 adds durable ownership and background mode.
+Foreground and background `woml run` now share the same Rust production host.

@@ -177,7 +177,7 @@ async fn prepared_runtime_rejects_traffic_until_atomic_activation_opens_admissio
   )
   .await;
   assert_eq!(opened.status, 202);
-  server.stop().await;
+  server.stop_with_deadline(Duration::from_secs(3)).await;
 }
 
 struct HttpResult {

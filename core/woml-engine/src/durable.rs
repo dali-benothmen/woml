@@ -52,7 +52,7 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 13;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 14;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -66,6 +66,7 @@ const STORE_SCHEMA_VERSION_V10: &str = "10";
 const STORE_SCHEMA_VERSION_V11: &str = "11";
 const STORE_SCHEMA_VERSION_V12: &str = "12";
 const STORE_SCHEMA_VERSION_V13: &str = "13";
+const STORE_SCHEMA_VERSION_V14: &str = "14";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_RUN_SUMMARY_SCHEMA_V11: &str = r#"
@@ -212,6 +213,42 @@ CREATE TABLE IF NOT EXISTS woml_state_quotas (
   value_bytes INTEGER NOT NULL CHECK (value_bytes BETWEEN 0 AND 67108864)
 );
 "#;
+
+const CREATE_PRODUCTION_RUNTIME_SCHEMA_V14: &str = r#"
+CREATE TABLE IF NOT EXISTS woml_runtime_owner (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  deployment_id TEXT NOT NULL,
+  activation_id TEXT NOT NULL,
+  runtime_instance_id TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS woml_maintenance_lease (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  lease_id TEXT NOT NULL UNIQUE,
+  operation TEXT NOT NULL CHECK (operation IN ('backup', 'restore', 'retention', 'checkpoint', 'vacuum')),
+  owner_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS woml_last_verified_backup (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  backup_id TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  verified INTEGER NOT NULL CHECK (verified = 1)
+);
+"#;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeOwnerLease {
+  pub deployment_id: String,
+  pub activation_id: String,
+  pub runtime_instance_id: String,
+  pub heartbeat_at: DateTime<Utc>,
+  pub lease_expires_at: DateTime<Utc>,
+}
 
 const CREATE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS woml_store_metadata (
@@ -1138,6 +1175,11 @@ pub enum DurableStoreError {
   WorkflowCallHistoryInvalid(String),
   #[error("workflow ID {0:?} already has a live local owner")]
   WorkflowRuntimeDuplicateOwner(String),
+  #[error("deployment {deployment_id:?} is already owned by runtime {runtime_instance_id:?}")]
+  DeploymentRuntimeOwned {
+    deployment_id: String,
+    runtime_instance_id: String,
+  },
   #[error("the durable schedule cursor changed before this operation could commit")]
   ScheduleCursorConflict,
   #[error("the durable interval cursor changed before this operation could commit")]
@@ -1436,6 +1478,23 @@ fn migrate_store_v12_to_v13(connection: &mut Connection) -> Result<(), DurableSt
   if changed != 1 {
     return Err(DurableStoreError::Contract(
       "Store v12-to-v13 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
+fn migrate_store_v13_to_v14(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_PRODUCTION_RUNTIME_SCHEMA_V14)?;
+  validate_store_v14_schema(&transaction)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V14, STORE_SCHEMA_VERSION_V13],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v13-to-v14 migration could not update the schema version atomically.".to_string(),
     ));
   }
   transaction.commit()?;
@@ -1792,6 +1851,58 @@ fn validate_store_v13_schema(connection: &Connection) -> Result<(), DurableStore
   Ok(())
 }
 
+fn validate_store_v14_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v13_schema(connection)?;
+  for (name, expected_columns) in [
+    (
+      "woml_runtime_owner",
+      &[
+        "singleton",
+        "deployment_id",
+        "activation_id",
+        "runtime_instance_id",
+        "heartbeat_at",
+        "lease_expires_at",
+      ][..],
+    ),
+    (
+      "woml_maintenance_lease",
+      &[
+        "singleton",
+        "lease_id",
+        "operation",
+        "owner_id",
+        "expires_at",
+      ][..],
+    ),
+    (
+      "woml_last_verified_backup",
+      &["singleton", "backup_id", "completed_at", "verified"][..],
+    ),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+      [name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v14 is missing required table {name:?}."
+      )));
+    }
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({name})"))?;
+    let columns = statement
+      .query_map([], |row| row.get::<_, String>(1))?
+      .collect::<Result<Vec<_>, _>>()?;
+    if columns != expected_columns {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v14 {name} columns do not match the frozen schema: expected {expected_columns:?}, found {columns:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 fn runtime_policy_indexes_need_rebuild(connection: &Connection) -> Result<bool, DurableStoreError> {
   let count = |sql: &str| -> Result<i64, DurableStoreError> {
     Ok(connection.query_row(sql, [], |row| row.get(0))?)
@@ -1834,6 +1945,7 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
+      Some(STORE_SCHEMA_VERSION_V14) => validate_store_v14_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V13) => validate_store_v13_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V12) => validate_store_v12_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V11) => validate_store_v11_schema(&connection)?,
@@ -1952,7 +2064,15 @@ impl DurableEventStore {
     if current_version == STORE_SCHEMA_VERSION_V12 {
       migrate_store_v12_to_v13(&mut connection)?;
     }
-    validate_store_v13_schema(&connection)?;
+    let current_version: String = connection.query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )?;
+    if current_version == STORE_SCHEMA_VERSION_V13 {
+      migrate_store_v13_to_v14(&mut connection)?;
+    }
+    validate_store_v14_schema(&connection)?;
     if runtime_policy_indexes_need_rebuild(&connection)? {
       let recovery = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
       rebuild_runtime_policy_indexes(&recovery)?;
@@ -2218,6 +2338,162 @@ impl DurableEventStore {
     }
     transaction.commit()?;
     Ok(())
+  }
+
+  pub fn audit_integrity(&self) -> Result<(), DurableStoreError> {
+    let result: String = self
+      .connection
+      .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if result != "ok" {
+      return Err(DurableStoreError::Contract(format!(
+        "The durable WOML store failed its integrity audit: {result}."
+      )));
+    }
+    validate_store_v14_schema(&self.connection)
+  }
+
+  pub fn runtime_owner(&self) -> Result<Option<RuntimeOwnerLease>, DurableStoreError> {
+    let stored: Option<(String, String, String, String, String)> = self
+      .connection
+      .query_row(
+        "SELECT deployment_id, activation_id, runtime_instance_id, heartbeat_at, lease_expires_at
+         FROM woml_runtime_owner WHERE singleton = 1",
+        [],
+        |row| {
+          Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+          ))
+        },
+      )
+      .optional()?;
+    stored
+      .map(
+        |(deployment_id, activation_id, runtime_instance_id, heartbeat, expires)| {
+          let heartbeat_at = DateTime::parse_from_rfc3339(&heartbeat)
+            .map_err(|_| {
+              DurableStoreError::Contract("Stored runtime heartbeat is invalid.".to_string())
+            })?
+            .with_timezone(&Utc);
+          let lease_expires_at = DateTime::parse_from_rfc3339(&expires)
+            .map_err(|_| {
+              DurableStoreError::Contract("Stored runtime lease expiry is invalid.".to_string())
+            })?
+            .with_timezone(&Utc);
+          Ok(RuntimeOwnerLease {
+            deployment_id,
+            activation_id,
+            runtime_instance_id,
+            heartbeat_at,
+            lease_expires_at,
+          })
+        },
+      )
+      .transpose()
+  }
+
+  pub fn acquire_runtime_owner(
+    &mut self,
+    deployment_id: &str,
+    activation_id: &str,
+    runtime_instance_id: &str,
+    now: DateTime<Utc>,
+    lease_expires_at: DateTime<Utc>,
+  ) -> Result<(), DurableStoreError> {
+    if deployment_id.is_empty()
+      || deployment_id.len() > 320
+      || runtime_instance_id.is_empty()
+      || runtime_instance_id.len() > 320
+      || !is_definition_hash(activation_id)
+      || lease_expires_at <= now
+    {
+      return Err(DurableStoreError::Contract(
+        "Runtime owner lease fields are invalid.".to_string(),
+      ));
+    }
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing: Option<(String, String, String)> = transaction
+      .query_row(
+        "SELECT deployment_id, runtime_instance_id, lease_expires_at
+         FROM woml_runtime_owner WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+      )
+      .optional()?;
+    if let Some((owner_deployment, owner_runtime, expires)) = existing {
+      let expires = DateTime::parse_from_rfc3339(&expires)
+        .map_err(|_| {
+          DurableStoreError::Contract("Stored runtime lease expiry is invalid.".to_string())
+        })?
+        .with_timezone(&Utc);
+      if owner_runtime != runtime_instance_id && expires > now {
+        return Err(DurableStoreError::DeploymentRuntimeOwned {
+          deployment_id: owner_deployment,
+          runtime_instance_id: owner_runtime,
+        });
+      }
+    }
+    transaction.execute(
+      "INSERT INTO woml_runtime_owner(
+         singleton, deployment_id, activation_id, runtime_instance_id, heartbeat_at, lease_expires_at
+       ) VALUES (1, ?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(singleton) DO UPDATE SET
+         deployment_id = excluded.deployment_id,
+         activation_id = excluded.activation_id,
+         runtime_instance_id = excluded.runtime_instance_id,
+         heartbeat_at = excluded.heartbeat_at,
+         lease_expires_at = excluded.lease_expires_at",
+      params![
+        deployment_id,
+        activation_id,
+        runtime_instance_id,
+        now.to_rfc3339(),
+        lease_expires_at.to_rfc3339(),
+      ],
+    )?;
+    transaction.commit()?;
+    Ok(())
+  }
+
+  pub fn renew_runtime_owner(
+    &mut self,
+    runtime_instance_id: &str,
+    now: DateTime<Utc>,
+    lease_expires_at: DateTime<Utc>,
+  ) -> Result<bool, DurableStoreError> {
+    if runtime_instance_id.is_empty() || lease_expires_at <= now {
+      return Err(DurableStoreError::Contract(
+        "Runtime owner renewal is invalid.".to_string(),
+      ));
+    }
+    Ok(
+      self.connection.execute(
+        "UPDATE woml_runtime_owner SET heartbeat_at = ?1, lease_expires_at = ?2
+       WHERE singleton = 1 AND runtime_instance_id = ?3",
+        params![
+          now.to_rfc3339(),
+          lease_expires_at.to_rfc3339(),
+          runtime_instance_id
+        ],
+      )? == 1,
+    )
+  }
+
+  pub fn release_runtime_owner(
+    &mut self,
+    runtime_instance_id: &str,
+  ) -> Result<bool, DurableStoreError> {
+    Ok(
+      self.connection.execute(
+        "DELETE FROM woml_runtime_owner WHERE singleton = 1 AND runtime_instance_id = ?1",
+        [runtime_instance_id],
+      )? == 1,
+    )
   }
 
   pub fn renew_workflow_runtime_routes(

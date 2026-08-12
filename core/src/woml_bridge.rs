@@ -350,6 +350,23 @@ struct NativeTriggerRuntimeError {
   message: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeRuntimeInstanceProgress {
+  profile: &'static str,
+  deployment_id: String,
+  activation_id: String,
+  runtime_instance_id: String,
+  runtime_version: &'static str,
+  native_version: &'static str,
+  lifecycle: &'static str,
+  started_at: DateTime<Utc>,
+  heartbeat_at: DateTime<Utc>,
+  lease_expires_at: DateTime<Utc>,
+}
+
+type NativeRuntimeInstanceReporter = Arc<dyn Fn(NativeRuntimeInstanceProgress) + Send + Sync>;
+
 struct NativeWebhookRuntimeThread {
   control: mpsc::Sender<NativeWebhookRuntimeCommand>,
   ingress: tokio::sync::mpsc::UnboundedSender<ExternalTriggerAdmissionCommand>,
@@ -358,6 +375,7 @@ struct NativeWebhookRuntimeThread {
 
 enum NativeWebhookRuntimeCommand {
   Activate(mpsc::SyncSender<Result<(), NativeTriggerRuntimeError>>),
+  OwnershipLost,
   Stop,
 }
 
@@ -425,6 +443,9 @@ fn native_trigger_runtime_error(error: WebhookRuntimeError) -> NativeTriggerRunt
     WebhookRuntimeError::DurableStore(DurableStoreError::WorkflowRuntimeDuplicateOwner(_)) => {
       "WOML_WORKFLOW_TARGET_AMBIGUOUS"
     }
+    WebhookRuntimeError::DurableStore(DurableStoreError::DeploymentRuntimeOwned { .. }) => {
+      "WOML_DEPLOYMENT_ALREADY_RUNNING"
+    }
     WebhookRuntimeError::DurableStore(_) => "WOML_TRIGGER_UNAVAILABLE",
     WebhookRuntimeError::Io(_) => "WOML_WEBHOOK_BIND_FAILED",
     WebhookRuntimeError::InvalidRegistration(_) | WebhookRuntimeError::Model(_) => {
@@ -453,6 +474,7 @@ fn native_runtime_progress_reporters(
   IntervalProgressReporter,
   WorkflowCallProgressReporter,
   RuntimePolicyProgressReporter,
+  NativeRuntimeInstanceReporter,
 )> {
   let mut progress = progress_callback
     .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
@@ -465,6 +487,7 @@ fn native_runtime_progress_reporters(
   let interval_progress = progress;
   let workflow_call_progress = interval_progress.clone();
   let runtime_policy_progress = workflow_call_progress.clone();
+  let runtime_instance_progress = runtime_policy_progress.clone();
   Ok((
     Arc::new(move |message: TriggerProgress| {
       if let Ok(json) = serde_json::to_string(&message) {
@@ -489,6 +512,11 @@ fn native_runtime_progress_reporters(
     Arc::new(move |message: RuntimePolicyProgress| {
       if let Ok(json) = serde_json::to_string(&message) {
         let _ = runtime_policy_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    }),
+    Arc::new(move |message: NativeRuntimeInstanceProgress| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = runtime_instance_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
       }
     }),
   ))
@@ -1164,6 +1192,9 @@ pub fn start_woml_webhook_runtime(
   bun_executable: String,
   script_host_path: String,
   script_timeout_ms: u32,
+  shutdown_timeout_ms: u32,
+  deployment_id: String,
+  activation_id: String,
   start_suspended: bool,
   progress_callback: JsFunction,
 ) -> napi::Result<JsObject> {
@@ -1184,6 +1215,7 @@ pub fn start_woml_webhook_runtime(
     interval_progress_reporter,
     workflow_call_progress_reporter,
     runtime_policy_progress_reporter,
+    runtime_instance_reporter,
   ) = native_runtime_progress_reporters(&env, progress_callback)?;
   let mut runtime_secrets = BTreeMap::new();
   for registration in &registrations {
@@ -1222,15 +1254,38 @@ pub fn start_woml_webhook_runtime(
   };
 
   env.spawn_future(async move {
+    let started_at = Utc::now();
+    let shutdown_deadline = std::time::Duration::from_millis(u64::from(shutdown_timeout_ms));
     let runtime_id = format!("runtime_{}", uuid::Uuid::new_v4().simple());
     let (startup_sender, startup_receiver) =
       mpsc::sync_channel::<Result<SocketAddr, NativeTriggerRuntimeError>>(1);
     let (control_sender, mut control_receiver) = mpsc::channel::<NativeWebhookRuntimeCommand>();
+    let ownership_control = control_sender.clone();
     let (ingress_sender, ingress_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let thread_runtime_id = runtime_id.clone();
     let join = std::thread::Builder::new()
       .name(format!("woml-trigger-{runtime_id}"))
       .spawn(move || {
         actix_web::rt::System::new().block_on(async move {
+          let ownership = (|| {
+            let now = Utc::now();
+            let mut store = DurableEventStore::open(&config.database_path)?;
+            store.audit_integrity()?;
+            store.acquire_runtime_owner(
+              &deployment_id,
+              &activation_id,
+              &thread_runtime_id,
+              now,
+              now + chrono::Duration::seconds(10),
+            )
+          })();
+          if let Err(error) = ownership {
+            let _ = startup_sender.send(Err(native_trigger_runtime_error(
+              WebhookRuntimeError::DurableStore(error),
+            )));
+            return;
+          }
+          let runtime_database_path = config.database_path.clone();
           match WomlWebhookServer::prepare_with_external_ingress(config, Some(ingress_receiver))
             .await
           {
@@ -1238,15 +1293,38 @@ pub fn start_woml_webhook_runtime(
               if !start_suspended {
                 if let Err(error) = server.activate().await {
                   let _ = startup_sender.send(Err(native_trigger_runtime_error(error)));
-                  server.stop().await;
+                  server.stop_with_deadline(shutdown_deadline).await;
+                  let _ = DurableEventStore::open(&runtime_database_path).and_then(|mut store| {
+                    store.release_runtime_owner(&thread_runtime_id).map(|_| ())
+                  });
                   return;
                 }
               }
               let address = server.local_address();
               if startup_sender.send(Ok(address)).is_err() {
-                server.stop().await;
+                server.stop_with_deadline(shutdown_deadline).await;
                 return;
               }
+              let heartbeat_path = runtime_database_path.clone();
+              let heartbeat_runtime_id = thread_runtime_id.clone();
+              let heartbeat_control = ownership_control.clone();
+              let heartbeat = actix_web::rt::spawn(async move {
+                loop {
+                  tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                  let now = Utc::now();
+                  let renewed = DurableEventStore::open(&heartbeat_path).and_then(|mut store| {
+                    store.renew_runtime_owner(
+                      &heartbeat_runtime_id,
+                      now,
+                      now + chrono::Duration::seconds(10),
+                    )
+                  });
+                  if !renewed.is_ok_and(|renewed| renewed) {
+                    let _ = heartbeat_control.send(NativeWebhookRuntimeCommand::OwnershipLost);
+                    break;
+                  }
+                }
+              });
               loop {
                 let received = actix_web::rt::task::spawn_blocking(move || {
                   let command = control_receiver.recv();
@@ -1266,13 +1344,34 @@ pub fn start_woml_webhook_runtime(
                       .map_err(native_trigger_runtime_error);
                     let _ = response.send(outcome);
                   }
+                  Ok(NativeWebhookRuntimeCommand::OwnershipLost) => {
+                    let now = Utc::now();
+                    runtime_instance_reporter(NativeRuntimeInstanceProgress {
+                      profile: "woml.runtime-instance/v1",
+                      deployment_id: deployment_id.clone(),
+                      activation_id: activation_id.clone(),
+                      runtime_instance_id: thread_runtime_id.clone(),
+                      runtime_version: env!("CARGO_PKG_VERSION"),
+                      native_version: env!("CARGO_PKG_VERSION"),
+                      lifecycle: "degraded",
+                      started_at,
+                      heartbeat_at: now,
+                      lease_expires_at: now,
+                    });
+                    break;
+                  }
                   Ok(NativeWebhookRuntimeCommand::Stop) | Err(_) => break,
                 }
               }
-              server.stop().await;
+              heartbeat.abort();
+              server.stop_with_deadline(shutdown_deadline).await;
+              let _ = DurableEventStore::open(&runtime_database_path)
+                .and_then(|mut store| store.release_runtime_owner(&thread_runtime_id).map(|_| ()));
             }
             Err(error) => {
               let _ = startup_sender.send(Err(native_trigger_runtime_error(error)));
+              let _ = DurableEventStore::open(&runtime_database_path)
+                .and_then(|mut store| store.release_runtime_owner(&thread_runtime_id).map(|_| ()));
             }
           }
         });

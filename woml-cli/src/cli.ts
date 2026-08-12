@@ -2,7 +2,16 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
 import packageMetadata from '../package.json' with { type: 'json' };
@@ -97,6 +106,16 @@ import {
   type ResolvedRuntimeConfigurationV1,
   type RuntimePreflightV1,
 } from './runtime-config';
+import {
+  readRuntimeDescriptor,
+  removeRuntimeDescriptor,
+  requestRuntimeStop,
+  runtimeDescriptorPath,
+  runtimeLogPath,
+  startRuntimeControl,
+  writeRuntimeDescriptor,
+  type RuntimeControlHandle,
+} from './runtime-control';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -121,7 +140,7 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml|directory>... [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+  return 'Usage: woml run <workflow.woml|directory>... [--config <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--background|-d]';
 }
 
 function testUsage(): string {
@@ -138,6 +157,10 @@ function getUsage(): string {
 
 function cancelUsage(): string {
   return 'Usage: woml cancel <runId> [--state <path>] [--json]';
+}
+
+function stopUsage(): string {
+  return 'Usage: woml stop [--state <path>] [--json]';
 }
 
 function secretsUsage(): string {
@@ -162,7 +185,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -175,6 +198,14 @@ interface RunArguments {
   readonly host: string;
   readonly port: number;
   readonly triggerId?: string;
+  readonly configPath?: string;
+  readonly stateExplicit: boolean;
+  readonly hostExplicit: boolean;
+  readonly portExplicit: boolean;
+  readonly adminHost: string;
+  readonly adminPort: number;
+  readonly shutdownTimeoutMs: number;
+  readonly logDirectory: string;
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
@@ -206,6 +237,10 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   let host = '127.0.0.1';
   let port = 3_000;
   let triggerId: string | undefined;
+  let configPath: string | undefined;
+  let stateExplicit = false;
+  let hostExplicit = false;
+  let portExplicit = false;
   const seen = new Set<string>();
   for (let index = 0; index < options.length; index += 2) {
     const option = options[index];
@@ -214,6 +249,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       value === undefined ||
       seen.has(option) ||
       (option !== '--state' &&
+        option !== '--config' &&
         option !== '--resume' &&
         option !== '--approval-port' &&
         option !== '--trigger' &&
@@ -233,6 +269,15 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       statePath = resolve(value);
+      stateExplicit = true;
+    } else if (option === '--config') {
+      if (command !== 'run' || value.length === 0) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--config requires a non-empty path for woml run.'
+        );
+      }
+      configPath = value;
     } else if (option === '--resume') {
       if (value.length === 0) {
         throw new CliInputError(
@@ -258,6 +303,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       host = value;
+      hostExplicit = true;
     } else if (option === '--port') {
       const parsedPort = Number(value);
       if (
@@ -271,6 +317,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       port = parsedPort;
+      portExplicit = true;
     } else {
       if (value.length === 0) {
         throw new CliInputError(
@@ -292,11 +339,43 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     filePath,
     inputPaths,
     statePath,
-    resumeRunId,
+    ...(resumeRunId === undefined ? {} : { resumeRunId }),
     approvalPort,
     host,
     port,
-    triggerId,
+    ...(triggerId === undefined ? {} : { triggerId }),
+    ...(configPath === undefined ? {} : { configPath }),
+    stateExplicit,
+    hostExplicit,
+    portExplicit,
+    adminHost: '127.0.0.1',
+    adminPort: 3_001,
+    shutdownTimeoutMs: 30_000,
+    logDirectory: resolve('.woml/logs'),
+  };
+}
+
+async function resolveRunArgumentsConfiguration(
+  args: RunArguments
+): Promise<RunArguments> {
+  if (args.command !== 'run') return args;
+  const configuration = await resolveRuntimeConfiguration(args.configPath, {
+    ...(args.stateExplicit ? { statePath: args.statePath } : {}),
+    ...(args.hostExplicit ? { publicHost: args.host } : {}),
+    ...(args.portExplicit ? { publicPort: args.port } : {}),
+  });
+  if (args.configPath !== undefined) {
+    await preflightRuntimeConfiguration(configuration);
+  }
+  return {
+    ...args,
+    statePath: configuration.statePath,
+    host: configuration.public.host,
+    port: configuration.public.port,
+    adminHost: configuration.admin.host,
+    adminPort: configuration.admin.port,
+    shutdownTimeoutMs: configuration.shutdownTimeoutMs,
+    logDirectory: configuration.logging.directory,
   };
 }
 
@@ -562,7 +641,9 @@ function formatRunInspection(inspection: RustRunInspectionV2): string {
     for (const hook of inspection.hooks) {
       const subject = `${hook.subjectKind} ${hook.subjectId}`;
       const failures =
-        hook.failedActions === 0 ? '' : `, ${hook.failedActions} failed action(s)`;
+        hook.failedActions === 0
+          ? ''
+          : `, ${hook.failedActions} failed action(s)`;
       lines.push(`  ${hook.hookId}: ${hook.status} (${subject}${failures})`);
     }
   }
@@ -1151,7 +1232,10 @@ async function compileWorkflowSources(
       projectRoot,
     });
     if (inspected.modules.length > 0) {
-      inspectWomlModuleServiceUsage(document, { sourcePath: filePath, projectRoot });
+      inspectWomlModuleServiceUsage(document, {
+        sourcePath: filePath,
+        projectRoot,
+      });
     }
     const executablePackage =
       inspected.modules.length > 0
@@ -1297,6 +1381,13 @@ export function activationIdentity(
     .digest('hex')}`;
 }
 
+function deploymentIdentity(statePath: string): string {
+  return `deployment_${createHash('sha256')
+    .update(resolve(statePath))
+    .digest('hex')
+    .slice(0, 24)}`;
+}
+
 function editorTypesPath(inputPath: string, inputIsDirectory: boolean): string {
   return join(
     inputIsDirectory ? inputPath : dirname(inputPath),
@@ -1432,13 +1523,13 @@ async function runSingleCheckCommand(
         ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
         : hasRuntimePolicy
           ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
-        : hasLifecycle
-          ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
-          : workflowCallsFrontendOnly
-            ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
-            : definitionPackage.modules.length === 0
-              ? 'Execution: module-free workflow; woml run is available.\n'
-              : 'Execution: local modules are compiled and ready for woml run.\n'
+          : hasLifecycle
+            ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
+            : workflowCallsFrontendOnly
+              ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
+              : definitionPackage.modules.length === 0
+                ? 'Execution: module-free workflow; woml run is available.\n'
+                : 'Execution: local modules are compiled and ready for woml run.\n'
     );
     return 0;
   } catch (error) {
@@ -1463,13 +1554,18 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
   for (let index = 1; index < args.length; index += 1) {
     const argument = args[index]!;
     if (argument === '--json') {
-      if (json) throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+      if (json)
+        throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
       json = true;
       continue;
     }
     if (argument === '--config') {
       const value = args[index + 1];
-      if (configPath !== undefined || value === undefined || value.startsWith('--')) {
+      if (
+        configPath !== undefined ||
+        value === undefined ||
+        value.startsWith('--')
+      ) {
         throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
       }
       configPath = value;
@@ -1494,7 +1590,10 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
 function validateDeploymentRoutes(
   sources: readonly CompiledWorkflowSource[]
 ): void {
-  const claimed = new Map<string, { readonly workflowId: string; readonly triggerId: string }>();
+  const claimed = new Map<
+    string,
+    { readonly workflowId: string; readonly triggerId: string }
+  >();
   for (const source of sources) {
     for (const route of webhookRouteSummaries(source.workflow)) {
       const previous = claimed.get(route.path);
@@ -1550,7 +1649,9 @@ async function runDeploymentCheckCommand(
       const store = dependencies.createSecretStore();
       secretProvider = store.provider;
       await preflightSecretReferences(
-        sources.flatMap(source => [...workflowSecretReferences(source.workflow)]),
+        sources.flatMap(source => [
+          ...workflowSecretReferences(source.workflow),
+        ]),
         store
       );
     }
@@ -1597,7 +1698,9 @@ async function runDeploymentCheckCommand(
       io.stdout(
         `Environment: writable storage, ${Math.floor(environment.state.availableBytes / (1024 * 1024))} MiB available, secrets ready through ${secretProvider}.\n`
       );
-      io.stdout('Activation: not started; no trigger or provider was opened.\n');
+      io.stdout(
+        'Activation: not started; no trigger or provider was opened.\n'
+      );
     } else {
       io.stdout(
         'Environment: not checked; pass --config <path> for production storage, listener, and secret preflight.\n'
@@ -2534,6 +2637,12 @@ async function activateWorkflows(
   let runtimeId: string | undefined;
   let slackHost: SlackTriggerHost | undefined;
   let slackTransport: SharedSlackTransport | undefined;
+  let runtimeControl: RuntimeControlHandle | undefined;
+  let descriptorPath: string | undefined;
+  let resolveRuntimeUnavailable!: () => void;
+  const runtimeUnavailable = new Promise<void>(resolveUnavailable => {
+    resolveRuntimeUnavailable = resolveUnavailable;
+  });
   try {
     if (productionSources.length > 0) {
       await mkdir(dirname(args.statePath), { recursive: true });
@@ -2582,6 +2691,8 @@ async function activateWorkflows(
         seenRoutes.set(route.path, route);
       }
       const hasHttpEndpoint = routes.length > 0 || uniqueEventRoutes.length > 0;
+      const currentActivationId = activationIdentity(productionSources);
+      const currentDeploymentId = deploymentIdentity(args.statePath);
       const runtime = await startWebhookRuntimeWithRust(
         registrations,
         args.statePath,
@@ -2590,6 +2701,9 @@ async function activateWorkflows(
           host: hasHttpEndpoint ? args.host : '127.0.0.1',
           port: hasHttpEndpoint ? args.port : 0,
           startupManualTriggers,
+          deploymentId: currentDeploymentId,
+          activationId: currentActivationId,
+          shutdownTimeoutMs: args.shutdownTimeoutMs,
           startSuspended: true,
           onTriggerProgress: progress =>
             reportTriggerProgress(
@@ -2606,9 +2720,26 @@ async function activateWorkflows(
             io.stderr(`${formatWorkflowCallProgress(progress)}\n`),
           onRuntimePolicyProgress: progress =>
             io.stderr(`${formatExecutionProgress(progress)}\n`),
+          onRuntimeLifecycle: progress => {
+            if (
+              progress.lifecycle === 'degraded' ||
+              progress.lifecycle === 'failed'
+            ) {
+              io.stderr(
+                `WOML runtime error [WOML_RUNTIME_OWNERSHIP_LOST]: Runtime ${progress.runtimeInstanceId} lost durable deployment ownership and is shutting down.\n`
+              );
+              resolveRuntimeUnavailable();
+            }
+          },
         }
       );
       runtimeId = runtime.runtimeId;
+      runtimeControl = await startRuntimeControl({
+        runtimeInstanceId: runtime.runtimeId,
+        deploymentId: currentDeploymentId,
+        host: args.adminHost,
+        port: args.adminPort,
+      });
 
       if (slackRegistrations.length > 0) {
         slackTransport =
@@ -2662,8 +2793,15 @@ async function activateWorkflows(
         nativeCorePath: dependencies.nativeCorePath,
       });
       io.stderr(
-        `WOML deployment activation ${activationIdentity(productionSources).slice(7, 19)} ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.\n`
+        `WOML deployment activation ${currentActivationId.slice(7, 19)} ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.\n`
       );
+      descriptorPath = runtimeDescriptorPath(args.statePath);
+      await writeRuntimeDescriptor(descriptorPath, runtimeControl.descriptor);
+      await dependencies.onRuntimeReady?.({
+        runtimeInstanceId: runtime.runtimeId,
+        descriptorPath,
+        workflowCount: productionSources.length,
+      });
       if (hasHttpEndpoint) {
         io.stderr(
           `WOML workflow active at http://${runtime.host}:${runtime.port}.\n`
@@ -2703,14 +2841,30 @@ async function activateWorkflows(
     }
 
     io.stderr('WOML automation is active. Press Ctrl+C to stop.\n');
-    await (dependencies.waitForShutdown ?? waitForShutdownSignal)();
+    await Promise.race([
+      (dependencies.waitForShutdown ?? waitForShutdownSignal)(),
+      runtimeUnavailable,
+      ...(runtimeControl === undefined ? [] : [runtimeControl.stopRequested]),
+    ]);
   } finally {
+    if (runtimeId !== undefined) {
+      io.stderr('WOML runtime is draining; new trigger admission is closed.\n');
+    }
+    await runtimeControl?.close().catch(() => {});
+    const runtimeStop =
+      runtimeId === undefined
+        ? Promise.resolve()
+        : stopWebhookRuntimeWithRust(runtimeId, {
+            nativeCorePath: dependencies.nativeCorePath,
+          });
     await slackHost?.close().catch(() => {});
     await slackTransport?.close().catch(() => {});
-    if (runtimeId !== undefined) {
-      await stopWebhookRuntimeWithRust(runtimeId, {
-        nativeCorePath: dependencies.nativeCorePath,
-      });
+    await runtimeStop;
+    if (descriptorPath !== undefined && runtimeControl !== undefined) {
+      await removeRuntimeDescriptor(
+        descriptorPath,
+        runtimeControl.descriptor.runtimeInstanceId
+      ).catch(() => {});
     }
   }
   io.stderr('WOML automation stopped.\n');
@@ -2726,17 +2880,32 @@ export interface CliDependencies {
     options: SharedSlackTransportOptions
   ) => SharedSlackTransport;
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+  readonly onRuntimeReady?: (info: {
+    readonly runtimeInstanceId: string;
+    readonly descriptorPath: string;
+    readonly workflowCount: number;
+  }) => Promise<void> | void;
 }
 
 function waitForShutdownSignal(): Promise<void> {
   return new Promise(resolveShutdown => {
-    const shutdown = (): void => {
-      process.off('SIGINT', shutdown);
-      process.off('SIGTERM', shutdown);
+    let draining = false;
+    const shutdown = (signal: NodeJS.Signals): void => {
+      if (draining) {
+        process.stderr.write(
+          `WOML runtime received a second ${signal}; forcing process exit.\n`
+        );
+        process.kill(process.pid, 'SIGKILL');
+        return;
+      }
+      draining = true;
+      process.stderr.write(
+        `WOML runtime received ${signal}; stopping admission and draining work. Send the signal again to force exit.\n`
+      );
       resolveShutdown();
     };
-    process.once('SIGINT', shutdown);
-    process.once('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   });
 }
 
@@ -2745,6 +2914,27 @@ const defaultDependencies: CliDependencies = {
   readSecret: readSecretFromTerminal,
   waitForShutdown: waitForShutdownSignal,
   fetch: globalThis.fetch,
+  onRuntimeReady: async info => {
+    const handoffPath = process.env.WOML_BACKGROUND_HANDOFF;
+    const handoffToken = process.env.WOML_BACKGROUND_HANDOFF_TOKEN;
+    if (handoffPath === undefined || handoffToken === undefined) return;
+    await writeFile(
+      handoffPath,
+      `${JSON.stringify({
+        profile: 'woml.background-runtime-control/v1',
+        kind: 'started',
+        token: handoffToken,
+        runtimeInstanceId: info.runtimeInstanceId,
+        pid: process.pid,
+        status: 'ready',
+        descriptorPath: info.descriptorPath,
+        logPath: process.env.WOML_BACKGROUND_LOG,
+        workflowCount: info.workflowCount,
+      })}\n`,
+      { mode: 0o600 }
+    );
+    await chmod(handoffPath, 0o600);
+  },
 };
 
 async function runEmitCommand(
@@ -2924,11 +3114,221 @@ async function runSecretsCommand(
   }
 }
 
+async function runStopCommand(
+  args: readonly string[],
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<number> {
+  let statePath = resolve('.woml/state.sqlite');
+  let json = false;
+  const seen = new Set<string>();
+  for (let index = 1; index < args.length; index += 1) {
+    const option = args[index]!;
+    if (seen.has(option) || !['--state', '--json'].includes(option)) {
+      io.stderr(`${stopUsage()}\n`);
+      return 2;
+    }
+    seen.add(option);
+    if (option === '--json') {
+      json = true;
+      continue;
+    }
+    const value = args[++index];
+    if (value === undefined || value.startsWith('--')) {
+      io.stderr(`${stopUsage()}\n`);
+      return 2;
+    }
+    statePath = resolve(value);
+  }
+  const path = runtimeDescriptorPath(statePath);
+  try {
+    const descriptor = await readRuntimeDescriptor(path);
+    const status = await requestRuntimeStop(
+      descriptor,
+      (dependencies.fetch ?? globalThis.fetch) as typeof globalThis.fetch
+    );
+    const deadline = Date.now() + 35_000;
+    while (Date.now() < deadline && (await Bun.file(path).exists())) {
+      await Bun.sleep(100);
+    }
+    if (await Bun.file(path).exists()) {
+      throw new CliInputError(
+        'WOML_RUNTIME_STOP_TIMEOUT',
+        'The runtime accepted shutdown but did not stop before the deadline.'
+      );
+    }
+    const result = {
+      profile: 'woml.background-runtime-control/v1',
+      kind: 'stop',
+      runtimeInstanceId: descriptor.runtimeInstanceId,
+      status: 'stopped',
+    } as const;
+    io.stdout(
+      json
+        ? `${JSON.stringify(result)}\n`
+        : `WOML runtime ${descriptor.runtimeInstanceId} stopped (${status}).\n`
+    );
+    return 0;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      io.stderr(
+        'WOML runtime error [WOML_RUNTIME_NOT_RUNNING]: No active runtime descriptor was found.\n'
+      );
+      return 1;
+    }
+    try {
+      const descriptor = await readRuntimeDescriptor(path);
+      if (!processExists(descriptor.pid)) {
+        await removeRuntimeDescriptor(path, descriptor.runtimeInstanceId);
+        io.stderr(
+          `WOML runtime error [WOML_RUNTIME_STALE_DESCRIPTOR]: Runtime ${descriptor.runtimeInstanceId} is no longer alive; its stale descriptor was removed.\n`
+        );
+        return 1;
+      }
+    } catch {
+      // Preserve the original authenticated-control error when the descriptor
+      // cannot be proved stale. PID is never used as shutdown authority.
+    }
+    io.stderr(`${formatError(error)}\n`);
+    return 1;
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      'code' in error &&
+      error.code === 'ESRCH'
+    );
+  }
+}
+
+async function runInBackground(
+  args: readonly string[],
+  io: CliIo
+): Promise<number> {
+  const foregroundArgs = args.filter(
+    argument => argument !== '--background' && argument !== '-d'
+  );
+  let parsed: RunArguments;
+  try {
+    parsed = await resolveRunArgumentsConfiguration(
+      parseRunArguments(foregroundArgs)
+    );
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
+    return error instanceof CliInputError ? 2 : 1;
+  }
+  const statePath = parsed.statePath;
+  const descriptorPath = runtimeDescriptorPath(statePath);
+  const logPath = runtimeLogPath(statePath, parsed.logDirectory);
+  const handoffPath = join(
+    dirname(statePath),
+    `.background-${randomUUID()}.json`
+  );
+  const token =
+    randomUUID().replaceAll('-', '') + randomUUID().replaceAll('-', '');
+  await mkdir(dirname(logPath), { recursive: true, mode: 0o700 });
+  await writeFile(handoffPath, `${JSON.stringify({ status: 'starting' })}\n`, {
+    mode: 0o600,
+    flag: 'wx',
+  });
+  await chmod(handoffPath, 0o600);
+  const log = await open(logPath, 'a', 0o600);
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn([process.execPath, process.argv[1]!, ...foregroundArgs], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        WOML_BACKGROUND_HANDOFF: handoffPath,
+        WOML_BACKGROUND_HANDOFF_TOKEN: token,
+        WOML_BACKGROUND_LOG: logPath,
+      },
+      stdin: 'ignore',
+      stdout: log.fd,
+      stderr: log.fd,
+      detached: true,
+    });
+    child.unref();
+  } finally {
+    await log.close();
+  }
+
+  try {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      let handoff: Record<string, unknown> | undefined;
+      try {
+        handoff = JSON.parse(await readFile(handoffPath, 'utf8')) as Record<
+          string,
+          unknown
+        >;
+      } catch {
+        // The child replaces this tiny file atomically enough for a bounded
+        // retry to handle an in-progress write.
+      }
+      if (
+        handoff?.kind === 'started' &&
+        handoff.status === 'ready' &&
+        handoff.token === token &&
+        typeof handoff.runtimeInstanceId === 'string' &&
+        typeof handoff.pid === 'number'
+      ) {
+        io.stdout(
+          [
+            'WOML runtime started in the background.',
+            `PID: ${handoff.pid}`,
+            `Runtime: ${handoff.runtimeInstanceId}`,
+            `Workflows: ${handoff.workflowCount}`,
+            `Descriptor: ${descriptorPath}`,
+            `Logs: ${logPath}`,
+            `Stop: woml stop --state ${JSON.stringify(statePath)}`,
+          ].join('\n') + '\n'
+        );
+        return 0;
+      }
+      if (handoff?.status === 'startup_failed' && handoff.token === token) {
+        io.stderr(
+          `WOML runtime failed to start. See ${logPath} for the actionable startup error.\n`
+        );
+        return 1;
+      }
+      if (child.exitCode !== null) {
+        io.stderr(`WOML runtime failed to start. See ${logPath}.\n`);
+        return 1;
+      }
+      await Bun.sleep(50);
+    }
+    io.stderr(
+      `WOML runtime startup timed out; readiness was not confirmed. See ${logPath}.\n`
+    );
+    return 1;
+  } finally {
+    await unlink(handoffPath).catch(() => {});
+  }
+}
+
 export async function runCli(
   args: readonly string[],
   io: CliIo = processIo,
   dependencies: CliDependencies = defaultDependencies
 ): Promise<number> {
+  if (
+    args[0] === 'run' &&
+    (args.includes('--background') || args.includes('-d')) &&
+    process.env.WOML_BACKGROUND_HANDOFF === undefined
+  ) {
+    if (args.includes('--background') && args.includes('-d')) {
+      io.stderr(`${runUsage()}\n`);
+      return 2;
+    }
+    return await runInBackground(args, io);
+  }
   if (args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
     io.stdout(`woml ${WOML_CLI_VERSION}\n`);
     return 0;
@@ -2955,6 +3355,10 @@ export async function runCli(
     return await runEmitCommand(args, io, dependencies);
   }
 
+  if (args[0] === 'stop') {
+    return await runStopCommand(args, io, dependencies);
+  }
+
   if (args[0] === 'list') {
     try {
       const list = parseRunListArguments(args);
@@ -2967,7 +3371,9 @@ export async function runCli(
         },
         { nativeCorePath: dependencies.nativeCorePath }
       );
-      io.stdout(list.json ? `${JSON.stringify(result)}\n` : formatRunList(result));
+      io.stdout(
+        list.json ? `${JSON.stringify(result)}\n` : formatRunList(result)
+      );
       return 0;
     } catch (error) {
       if (error instanceof CliInputError && error.message === listUsage()) {
@@ -2985,7 +3391,9 @@ export async function runCli(
       const result = inspectRunV2WithRust(get.statePath, get.runId, {
         nativeCorePath: dependencies.nativeCorePath,
       });
-      io.stdout(get.json ? `${JSON.stringify(result)}\n` : formatRunInspection(result));
+      io.stdout(
+        get.json ? `${JSON.stringify(result)}\n` : formatRunInspection(result)
+      );
       return 0;
     } catch (error) {
       if (error instanceof CliInputError && error.message === getUsage()) {
@@ -3021,7 +3429,9 @@ export async function runCli(
   }
 
   if (args[0] === 'runs') {
-    io.stderr('The "woml runs" namespace was removed. Use "woml list", "woml get", or "woml cancel".\n');
+    io.stderr(
+      'The "woml runs" namespace was removed. Use "woml list", "woml get", or "woml cancel".\n'
+    );
     return 2;
   }
 
@@ -3035,6 +3445,12 @@ export async function runCli(
     }
     io.stderr(`${args.length === 0 ? usage() : commandUsage}\n`);
     return 2;
+  }
+  try {
+    runArguments = await resolveRunArgumentsConfiguration(runArguments);
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
+    return 1;
   }
   const { filePath, inputPaths } = runArguments;
 
@@ -3105,5 +3521,23 @@ export async function runCli(
 }
 
 if (import.meta.main) {
-  process.exitCode = await runCli(process.argv.slice(2));
+  const exitCode = await runCli(process.argv.slice(2));
+  if (exitCode !== 0) {
+    const handoffPath = process.env.WOML_BACKGROUND_HANDOFF;
+    const handoffToken = process.env.WOML_BACKGROUND_HANDOFF_TOKEN;
+    if (handoffPath !== undefined && handoffToken !== undefined) {
+      await writeFile(
+        handoffPath,
+        `${JSON.stringify({
+          profile: 'woml.background-runtime-control/v1',
+          kind: 'started',
+          token: handoffToken,
+          status: 'startup_failed',
+          pid: process.pid,
+        })}\n`,
+        { mode: 0o600 }
+      ).catch(() => {});
+    }
+  }
+  process.exitCode = exitCode;
 }

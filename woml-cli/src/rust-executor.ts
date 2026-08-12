@@ -278,13 +278,39 @@ export interface WebhookRuntimeOptions extends RustExecutorOptions {
   readonly host?: string;
   readonly port?: number;
   readonly startupManualTriggers?: Readonly<Record<string, string>>;
+  readonly deploymentId?: string;
+  readonly activationId?: string;
+  readonly shutdownTimeoutMs?: number;
   /** Prepare and bind the runtime without opening trigger admission. */
   readonly startSuspended?: boolean;
   readonly onTriggerProgress?: (progress: TriggerProgressV1) => void;
   readonly onScheduleProgress?: (progress: ScheduleProgressV1) => void;
   readonly onIntervalProgress?: (progress: IntervalProgressV1) => void;
   readonly onWorkflowCallProgress?: (progress: WorkflowCallProgressV1) => void;
-  readonly onRuntimePolicyProgress?: (progress: RuntimePolicyProgressV1) => void;
+  readonly onRuntimePolicyProgress?: (
+    progress: RuntimePolicyProgressV1
+  ) => void;
+  readonly onRuntimeLifecycle?: (progress: RuntimeInstanceV1) => void;
+}
+
+export interface RuntimeInstanceV1 {
+  readonly profile: 'woml.runtime-instance/v1';
+  readonly deploymentId: string;
+  readonly activationId: string;
+  readonly runtimeInstanceId: string;
+  readonly runtimeVersion: string;
+  readonly nativeVersion: string;
+  readonly lifecycle:
+    | 'starting'
+    | 'recovering'
+    | 'ready'
+    | 'degraded'
+    | 'draining'
+    | 'stopped'
+    | 'failed';
+  readonly startedAt: string;
+  readonly heartbeatAt: string;
+  readonly leaseExpiresAt: string;
 }
 
 export type RuntimePolicyProgressV1 = Extract<
@@ -639,6 +665,9 @@ interface NativeCore {
     bunExecutable: string,
     scriptHostPath: string,
     scriptTimeoutMs: number,
+    shutdownTimeoutMs: number,
+    deploymentId: string,
+    activationId: string,
     startSuspended: boolean,
     progressCallback: (message: string) => void
   ) => Promise<string>;
@@ -655,10 +684,7 @@ interface NativeCore {
     workflowId?: string,
     status?: string
   ) => string;
-  readonly inspectWomlRunV2: (
-    eventStorePath: string,
-    runId: string
-  ) => string;
+  readonly inspectWomlRunV2: (eventStorePath: string, runId: string) => string;
   readonly cancelWomlRun: (
     eventStorePath: string,
     runId: string,
@@ -2030,6 +2056,17 @@ export async function startWebhookRuntimeWithRust(
   }
   const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
   const native = loadNativeCore(nativePath);
+  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 30_000;
+  if (
+    !Number.isSafeInteger(shutdownTimeoutMs) ||
+    shutdownTimeoutMs < 1 ||
+    shutdownTimeoutMs > 0xffff_ffff
+  ) {
+    throw new Error('shutdownTimeoutMs must be a positive 32-bit integer.');
+  }
+  const deploymentId = options.deploymentId ?? 'default';
+  const activationId =
+    options.activationId ?? compiledDefinitionHash(registrations[0]!.workflow);
   if (
     typeof native.startWomlWebhookRuntime !== 'function' ||
     typeof native.stopWomlWebhookRuntime !== 'function'
@@ -2047,6 +2084,9 @@ export async function startWebhookRuntimeWithRust(
       options.bunExecutable ?? process.execPath,
       options.scriptHostPath ?? defaultScriptHostPath(),
       timeoutMs,
+      shutdownTimeoutMs,
+      deploymentId,
+      activationId,
       options.startSuspended ?? false,
       message => {
         const decoded: unknown = JSON.parse(message);
@@ -2076,6 +2116,30 @@ export async function startWebhookRuntimeWithRust(
           ) {
             options.onRuntimePolicyProgress?.(progress);
           }
+          return;
+        }
+        if (
+          record(decoded) &&
+          decoded.profile === 'woml.runtime-instance/v1' &&
+          typeof decoded.deploymentId === 'string' &&
+          typeof decoded.activationId === 'string' &&
+          typeof decoded.runtimeInstanceId === 'string' &&
+          typeof decoded.runtimeVersion === 'string' &&
+          typeof decoded.nativeVersion === 'string' &&
+          [
+            'starting',
+            'recovering',
+            'ready',
+            'degraded',
+            'draining',
+            'stopped',
+            'failed',
+          ].includes(String(decoded.lifecycle)) &&
+          typeof decoded.startedAt === 'string' &&
+          typeof decoded.heartbeatAt === 'string' &&
+          typeof decoded.leaseExpiresAt === 'string'
+        ) {
+          options.onRuntimeLifecycle?.(decoded as unknown as RuntimeInstanceV1);
           return;
         }
         options.onTriggerProgress?.(parseTriggerProgress(message));
@@ -2350,7 +2414,9 @@ export function listRunsWithRust(
     limit < 1 ||
     limit > 200
   ) {
-    throw new Error('Run list requires a store path and a limit from 1 through 200.');
+    throw new Error(
+      'Run list requires a store path and a limit from 1 through 200.'
+    );
   }
   const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
   const native = loadNativeCore(nativePath);
@@ -2389,7 +2455,8 @@ export function listRunsWithRust(
     (isV2
       ? dateTime(candidate.admittedAt) &&
         (candidate.startedAt === undefined || dateTime(candidate.startedAt)) &&
-        (candidate.queue === undefined || typeof candidate.queue === 'string') &&
+        (candidate.queue === undefined ||
+          typeof candidate.queue === 'string') &&
         (candidate.waitingFor === undefined ||
           ['concurrency', 'rate_limit'].includes(
             String(candidate.waitingFor)
@@ -2400,9 +2467,7 @@ export function listRunsWithRust(
   if (
     !record(value) ||
     !exactKeys(value, ['profile', 'runs']) ||
-    !['woml.run-list/v1', 'woml.run-list/v2'].includes(
-      String(value.profile)
-    ) ||
+    !['woml.run-list/v1', 'woml.run-list/v2'].includes(String(value.profile)) ||
     !Array.isArray(value.runs) ||
     value.runs.length > 200 ||
     !value.runs.every(summary)
@@ -2458,7 +2523,8 @@ export function inspectRunV2WithRust(
     typeof candidate.actionId === 'string' &&
     typeof candidate.code === 'string' &&
     (candidate.stepId === undefined || typeof candidate.stepId === 'string') &&
-    (candidate.provider === undefined || typeof candidate.provider === 'string') &&
+    (candidate.provider === undefined ||
+      typeof candidate.provider === 'string') &&
     (candidate.destination === undefined ||
       typeof candidate.destination === 'string');
   if (
@@ -2539,7 +2605,9 @@ export function cancelRunWithRust(
     runId.length === 0 ||
     commandId.length === 0
   ) {
-    throw new Error('Run cancellation requires a store path, run ID, and command ID.');
+    throw new Error(
+      'Run cancellation requires a store path, run ID, and command ID.'
+    );
   }
   const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
   const native = loadNativeCore(nativePath);

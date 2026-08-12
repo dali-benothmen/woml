@@ -280,8 +280,10 @@ boundary without adding a public build artifact: users continue to pass direct
 extends `woml check` to validate multiple workflows as one deployment and, with
 `--config`, preflight writable storage, disk headroom, listener separation, and
 all required symbolic secrets without opening ingress or creating a run.
-Atomic activation, background `woml run -d`, `woml stop`, Store v14 ownership,
-observability, `woml top`, backup, and retention remain gated to PRO2–PRO8. See
+PRO2 adds atomic direct-source activation. PRO3 adds Store v14 leased ownership,
+recovery-before-readiness, background `woml run -d`, authenticated exact-instance
+`woml stop`, and bounded graceful shutdown. Observability, `woml top`, backup,
+and retention remain gated to PRO5–PRO8. See
 [Production Runtime and Operations](woml-production-runtime.md) and the
 [Production Runtime v1 contracts](protocols/production-runtime-operations-v1.md).
 

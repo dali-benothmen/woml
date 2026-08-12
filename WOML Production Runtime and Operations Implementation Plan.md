@@ -1,8 +1,9 @@
 # WOML Production Runtime and Operations Implementation Plan
 
-Status: PRO0 and PRO1 completed on 2026-08-12. The Production Runtime v1
-contracts, Runtime Configuration v1, and whole-deployment preflight are frozen
-and implemented. Production Runtime v1 is deliberately a strong single-machine
+Status: PRO0 through PRO3 completed on 2026-08-12. The Production Runtime v1
+contracts, Runtime Configuration v1, whole-deployment preflight, atomic source
+activation, durable ownership, recovery, background operation, exact stop, and
+graceful shutdown are implemented. Production Runtime v1 is deliberately a strong single-machine
 deployment profile: one
 long-running `woml run` host can activate several workflows, survive supervised
 restarts, expose safe operational visibility, and protect and maintain its
@@ -1109,7 +1110,7 @@ Completion notes:
   typecheck, and focused Rust compatibility coverage. It is included in the
   repository release gate.
 
-### PRO3 — Durable ownership, background mode, recovery, and shutdown
+### PRO3 — Durable ownership, background mode, recovery, and shutdown (completed)
 
 Changes:
 
@@ -1149,6 +1150,35 @@ start, second owner, process crash, stale descriptor/lease, PID reuse, restart
 during every durable wait, first/second termination signal, slow Bun work,
 stuck provider, SQLite contention, failed migration, and no contradictory run
 outcomes.
+
+Completion notes:
+
+- Store v14 is implemented as a transactional migration from Store v13. It
+  adds the frozen runtime-owner, maintenance-lease, and verified-backup tables
+  without changing immutable definitions, events, or State v1 records.
+- Rust acquires one exact deployment/runtime lease per state boundary before
+  preparing the trigger host, audits the database before stale takeover,
+  heartbeats the lease, stops on ownership loss, and releases only its own
+  lease after shutdown.
+- Recovery and definition registration finish while the PRO2 admission gate is
+  closed. The CLI publishes readiness only after Rust recovery, source
+  stability checks, provider readiness, activation, admin binding, and the
+  owner-only descriptor are complete.
+- `woml run ... --background` and `-d` spawn the same runtime as a detached
+  child. The parent waits for an authenticated owner-only ready/failure
+  handoff, writes output to `.woml/logs/runtime.log` (or the configured log
+  directory), and never reports success for a merely spawned process.
+- Runtime Descriptor v1 is written with Unix mode `0600`. `woml stop`
+  authenticates to its loopback admin endpoint and targets the exact runtime
+  ID; PID is used only to prove an unreachable descriptor belongs to an absent
+  process before stale cleanup.
+- The first SIGINT/SIGTERM or authenticated stop closes admission and drains
+  tracked work through the configured deadline. A second signal forces exit;
+  interrupted effects retain the existing fail-closed recovery semantics.
+- `bun run test:pro3` composes all earlier production gates with Store v14
+  migration/ownership, background readiness/failure, second-owner rejection,
+  descriptor permissions, exact stop, stale cleanup, typecheck, and packaged
+  runtime coverage. It is included in the repository release gate.
 
 ### PRO4 — Production secrets and administration security
 

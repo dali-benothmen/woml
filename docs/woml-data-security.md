@@ -30,7 +30,7 @@ audit design.
 - State operation events use digests instead of raw keys and values.
 - Cache values, storage bodies, database rows, credentials, and state values do
   not appear in ordinary run inspection.
-- Startup fails closed when Store v13 state integrity contradicts its schema,
+- Startup fails closed when Store v14 integrity (including State v1) contradicts its schema,
   digests, canonical results, versions, or quotas.
 - WOML does not silently copy the `secrets` object into workflow state.
 
