@@ -1245,7 +1245,7 @@ Completion notes:
   redaction, verification, and typecheck. It is included in the repository
   release gate.
 
-### PRO5 — Observability foundation
+### PRO5 — Observability foundation (completed)
 
 Changes:
 
@@ -1275,6 +1275,41 @@ Gate:
 Golden log/metric/snapshot fixtures, stream-gap/backpressure tests,
 readiness-transition tests, cardinality budgets, slow/broken telemetry client
 tests, redaction scans, and disabled-observability overhead benchmarks pass.
+
+Completion notes:
+
+- Runtime Operations Snapshot v1 now combines Rust's bounded redacted recent
+  run projection with live runtime lifecycle, exact loaded workflow hashes and
+  trigger types, component state, duration, queue/wait/failure counts, and a
+  bounded safe alert list. It does not change or duplicate workflow events.
+- A compact Rust observation query derives all-run status and trigger totals,
+  currently scheduled retries, unresolved approvals, and active Workflow Calls
+  from Store v14 without returning payloads, results, state, or event bodies;
+  those facts therefore survive process replacement.
+- Existing trigger, schedule, interval, Workflow Call, policy, and runtime
+  progress is normalized into Runtime Operations Stream v1. Each runtime has a
+  monotonic sequence, a 1024-update ring, explicit gap/resnapshot behavior, an
+  eight-client ceiling, and slow-reader disconnection without workflow
+  backpressure.
+- Runtime Log Record v1 is emitted in text or newline-delimited JSON with only
+  reviewed identifiers and safe authored messages. JSON progress logging drops
+  arbitrary payload/result/error detail instead of serializing legacy output.
+- Runtime Metrics v1 and Prometheus exposition use only the frozen metric and
+  label allowlists. Payload fields, context, state keys/values, URLs, messages,
+  run IDs, node IDs, secrets, and capabilities cannot become labels.
+- The loopback operations listener exposes unauthenticated minimal `/livez`
+  and `/readyz`; detailed health, snapshots, streams, JSON metrics, and
+  Prometheus metrics require the rotating PRO4 capability. Configuration can
+  disable health or metrics explicitly.
+- Observability responses are bounded to 2 MiB and share PRO4 concurrency/rate
+  protection. A failed store/size read, stale sequence, slow stream, malformed
+  query, or broken telemetry client returns a safe telemetry failure and never
+  decides a workflow business outcome.
+- `bun run test:pro5` composes PRO4 with frozen-schema golden fixtures,
+  sequence/gap/backpressure cases, readiness/authentication and disabled-state
+  transitions, cardinality/redaction checks, broken telemetry isolation, a
+  packaged `.woml` runtime journey, overhead budgets, verification, and
+  typecheck. It is included in the repository release gate.
 
 ### PRO6 — `woml top`
 

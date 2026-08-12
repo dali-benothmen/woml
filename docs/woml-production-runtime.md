@@ -1,6 +1,6 @@
 # WOML Production Runtime and Operations
 
-Production Runtime PRO0 through PRO4 provide the reviewed contracts,
+Production Runtime PRO0 through PRO5 provide the reviewed contracts,
 deployment preflight, atomic direct-source activation, durable ownership,
 restart recovery, graceful shutdown, and foreground/background operation. Runtime hosting uses
 the direct `.woml` experience—there is no build command or deployment-package
@@ -189,6 +189,17 @@ system/container memory, CPU, process, file-descriptor, filesystem, and network
 limits: the v1 runtime is not a multi-tenant sandbox and JavaScript memory
 isolation is not an application-level promise.
 
+## Observability
+
+PRO5 exposes minimal local liveness/readiness probes plus authenticated detail,
+bounded snapshots, ordered SSE updates, JSON/text runtime records, and stable
+Prometheus metrics on the loopback operations listener. Telemetry is derived
+from durable recent-run state and live component state; it never becomes
+workflow truth. Slow or broken telemetry clients are isolated from execution.
+
+See [WOML Runtime Observability](woml-observability.md) for the endpoints,
+redaction rules, stream resynchronization, limits, and monitoring guidance.
+
 ## Current phase boundary
 
 PRO0 freezes the production contracts, PRO1 implements configuration and
@@ -196,7 +207,8 @@ non-activating preflight, PRO2 implements atomic activation, and PRO3
 implements Store v14 ownership, recovery, background operation, exact stop,
 and graceful shutdown. PRO4 implements production secret sources, authenticated
 live run control, rotating capabilities, request bounds, and isolation
-guidance.
+guidance. PRO5 implements the observability foundation consumed by the future
+`woml top`.
 
 These planned commands are not executable until their phases:
 

@@ -1,0 +1,26 @@
+{
+  "profile": "woml.runtime-operations-snapshot/v1",
+  "runtimeInstanceId": "runtime_observability",
+  "sequence": 1,
+  "capturedAt": "2026-08-12T09:00:02.000Z",
+  "lifecycle": "ready",
+  "ready": true,
+  "uptimeMs": 0,
+  "workflows": [
+    {
+      "workflowId": "orders",
+      "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "active": 0,
+      "queued": 0,
+      "waiting": 0,
+      "failed": 0,
+      "triggerTypes": ["schedule", "webhook"]
+    }
+  ],
+  "runs": [],
+  "components": [
+    { "name": "sqlite", "kind": "store", "status": "ready" },
+    { "name": "script-host", "kind": "worker", "status": "ready" }
+  ],
+  "alerts": []
+}

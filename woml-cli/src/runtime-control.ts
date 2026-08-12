@@ -15,6 +15,8 @@ import {
 } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
+import type { RuntimeObservabilitySurface } from './runtime-observability';
+
 export interface RuntimeDescriptorV1 {
   readonly profile: 'woml.runtime-descriptor/v1';
   readonly runtimeInstanceId: string;
@@ -34,6 +36,10 @@ export interface RuntimeControlHandle {
 }
 
 export type RuntimeAdminOperation =
+  | 'snapshot'
+  | 'stream'
+  | 'health'
+  | 'metrics'
   | 'list_runs'
   | 'get_run'
   | 'cancel_run'
@@ -60,6 +66,7 @@ export class RuntimeControlError extends Error {
 
 const DEFAULT_CAPABILITY_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_REQUEST_BYTES = 16 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 16;
 const DEFAULT_MAX_OPERATIONS_PER_MINUTE = 120;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -189,9 +196,13 @@ export function startRuntimeControl(options: {
   readonly port?: number;
   readonly capabilityTtlMs?: number;
   readonly maxRequestBytes?: number;
+  readonly maxResponseBytes?: number;
   readonly maxConcurrentRequests?: number;
   readonly maxOperationsPerMinute?: number;
   readonly operations?: RuntimeAdminOperations;
+  readonly observability?: RuntimeObservabilitySurface;
+  readonly healthEnabled?: boolean;
+  readonly metricsEnabled?: boolean;
 }): RuntimeControlHandle {
   const hostname = options.host ?? '127.0.0.1';
   if (!LOOPBACK_HOSTS.has(hostname)) {
@@ -202,6 +213,7 @@ export function startRuntimeControl(options: {
   }
   const capabilityTtlMs = options.capabilityTtlMs ?? DEFAULT_CAPABILITY_TTL_MS;
   const maxRequestBytes = options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
+  const maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const maxConcurrentRequests =
     options.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
   const maxOperationsPerMinute =
@@ -211,6 +223,8 @@ export function startRuntimeControl(options: {
     capabilityTtlMs < 100 ||
     !Number.isSafeInteger(maxRequestBytes) ||
     maxRequestBytes < 256 ||
+    !Number.isSafeInteger(maxResponseBytes) ||
+    maxResponseBytes < 1024 ||
     !Number.isSafeInteger(maxConcurrentRequests) ||
     maxConcurrentRequests < 1 ||
     !Number.isSafeInteger(maxOperationsPerMinute) ||
@@ -253,11 +267,164 @@ export function startRuntimeControl(options: {
       { status: httpStatus }
     );
 
+  const authorized = (request: Request): boolean => {
+    if (closed || Date.now() >= expiresAt.getTime()) return false;
+    return safeEqual(
+      request.headers.get('authorization') ?? '',
+      `Bearer ${capability}`
+    );
+  };
+
+  const beginOperation = (): Response | undefined => {
+    const now = Date.now();
+    if (now - windowStartedAt >= 60_000) {
+      windowStartedAt = now;
+      operationsInWindow = 0;
+    }
+    if (operationsInWindow >= maxOperationsPerMinute) {
+      return Response.json(
+        { error: { code: 'WOML_ADMIN_RATE_LIMITED' } },
+        { status: 429, headers: { 'retry-after': '60' } }
+      );
+    }
+    if (inFlight >= maxConcurrentRequests) {
+      return Response.json(
+        { error: { code: 'WOML_ADMIN_BUSY' } },
+        { status: 503 }
+      );
+    }
+    operationsInWindow += 1;
+    inFlight += 1;
+    return undefined;
+  };
+
+  const boundedJson = (value: unknown): Response => {
+    const body = JSON.stringify(value);
+    if (new TextEncoder().encode(body).byteLength > maxResponseBytes) {
+      return Response.json(
+        { error: { code: 'WOML_ADMIN_RESPONSE_TOO_LARGE' } },
+        { status: 507 }
+      );
+    }
+    return new Response(body, {
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      },
+    });
+  };
+
   const server = Bun.serve({
     hostname,
     port: options.port ?? 0,
     async fetch(request) {
-      if (request.method !== 'POST' || new URL(request.url).pathname !== '/v1/control') {
+      const url = new URL(request.url);
+      if (
+        request.method === 'GET' &&
+        (url.pathname === '/livez' || url.pathname === '/readyz')
+      ) {
+        if (options.healthEnabled === false) {
+          return Response.json(
+            { error: { code: 'WOML_OBSERVABILITY_DISABLED' } },
+            { status: 404 }
+          );
+        }
+        if (options.observability === undefined) {
+          return Response.json(
+            {
+              profile: 'woml.runtime-health/v1',
+              kind: url.pathname === '/livez' ? 'liveness' : 'readiness',
+              status: url.pathname === '/livez' ? 'ok' : 'unready',
+            },
+            { status: url.pathname === '/livez' ? 200 : 503 }
+          );
+        }
+        const kind = url.pathname === '/livez' ? 'liveness' : 'readiness';
+        const health = options.observability.minimalHealth(kind) as {
+          status?: string;
+        };
+        return Response.json(health, {
+          status: health.status === 'ok' ? 200 : 503,
+          headers: { 'cache-control': 'no-store' },
+        });
+      }
+      if (
+        request.method === 'GET' &&
+        ['/v1/health', '/v1/snapshot', '/v1/metrics', '/metrics', '/v1/stream'].includes(
+          url.pathname
+        )
+      ) {
+        if (!authorized(request)) {
+          return Response.json(
+            { error: { code: 'WOML_ADMIN_UNAUTHORIZED' } },
+            { status: 401 }
+          );
+        }
+        if (options.observability === undefined) {
+          return Response.json(
+            { error: { code: 'WOML_OBSERVABILITY_DISABLED' } },
+            { status: 404 }
+          );
+        }
+        if (
+          (url.pathname === '/v1/health' && options.healthEnabled === false) ||
+          ((url.pathname === '/v1/metrics' || url.pathname === '/metrics') &&
+            options.metricsEnabled === false)
+        ) {
+          return Response.json(
+            { error: { code: 'WOML_OBSERVABILITY_DISABLED' } },
+            { status: 404 }
+          );
+        }
+        const limited = beginOperation();
+        if (limited !== undefined) return limited;
+        try {
+          if (url.pathname === '/v1/health') {
+            return boundedJson(options.observability.detailedHealth());
+          }
+          if (url.pathname === '/v1/snapshot') {
+            return boundedJson(await options.observability.snapshot());
+          }
+          if (url.pathname === '/v1/metrics') {
+            return boundedJson(await options.observability.metrics());
+          }
+          if (url.pathname === '/metrics') {
+            const body = await options.observability.prometheusMetrics();
+            if (new TextEncoder().encode(body).byteLength > maxResponseBytes) {
+              return Response.json(
+                { error: { code: 'WOML_ADMIN_RESPONSE_TOO_LARGE' } },
+                { status: 507 }
+              );
+            }
+            return new Response(body, {
+              headers: {
+                'content-type': 'text/plain; version=0.0.4; charset=utf-8',
+                'cache-control': 'no-store',
+              },
+            });
+          }
+          const rawAfter = url.searchParams.get('after');
+          const after = rawAfter === null ? undefined : Number(rawAfter);
+          if (
+            after !== undefined &&
+            (!Number.isSafeInteger(after) || after < 0)
+          ) {
+            return Response.json(
+              { error: { code: 'WOML_ADMIN_REQUEST_INVALID' } },
+              { status: 400 }
+            );
+          }
+          return options.observability.stream(after);
+        } catch {
+          return Response.json(
+            { error: { code: 'WOML_OBSERVABILITY_UNAVAILABLE' } },
+            { status: 503, headers: { 'cache-control': 'no-store' } }
+          );
+        } finally {
+          inFlight -= 1;
+        }
+      }
+      if (request.method !== 'POST' || url.pathname !== '/v1/control') {
         return Response.json(
           { error: { code: 'WOML_ADMIN_NOT_FOUND' } },
           { status: 404 }
@@ -269,8 +436,7 @@ export function startRuntimeControl(options: {
           { status: 401 }
         );
       }
-      const authorization = request.headers.get('authorization') ?? '';
-      if (!safeEqual(authorization, `Bearer ${capability}`)) {
+      if (!authorized(request)) {
         return Response.json(
           { error: { code: 'WOML_ADMIN_UNAUTHORIZED' } },
           { status: 401 }
@@ -287,25 +453,8 @@ export function startRuntimeControl(options: {
           { status: 413 }
         );
       }
-      const now = Date.now();
-      if (now - windowStartedAt >= 60_000) {
-        windowStartedAt = now;
-        operationsInWindow = 0;
-      }
-      if (operationsInWindow >= maxOperationsPerMinute) {
-        return Response.json(
-          { error: { code: 'WOML_ADMIN_RATE_LIMITED' } },
-          { status: 429, headers: { 'retry-after': '60' } }
-        );
-      }
-      if (inFlight >= maxConcurrentRequests) {
-        return Response.json(
-          { error: { code: 'WOML_ADMIN_BUSY' } },
-          { status: 503 }
-        );
-      }
-      operationsInWindow += 1;
-      inFlight += 1;
+      const limited = beginOperation();
+      if (limited !== undefined) return limited;
       let body: unknown;
       try {
         const text = await request.text();
@@ -342,7 +491,16 @@ export function startRuntimeControl(options: {
           ) ||
           value.profile !== 'woml.runtime-admin-http/v1' ||
           value.kind !== 'request' ||
-          !['stop', 'list_runs', 'get_run', 'cancel_run'].includes(operation) ||
+          ![
+            'snapshot',
+            'stream',
+            'health',
+            'metrics',
+            'stop',
+            'list_runs',
+            'get_run',
+            'cancel_run',
+          ].includes(operation) ||
           typeof value.requestId !== 'string' ||
           value.requestId.length < 1 ||
           value.requestId.length > 320 ||
@@ -369,6 +527,11 @@ export function startRuntimeControl(options: {
             'accepted',
             alreadyDraining ? 'WOML_RUNTIME_ALREADY_DRAINING' : undefined
           );
+        }
+        if (['snapshot', 'stream', 'health', 'metrics'].includes(operation)) {
+          if (value.subjectId !== undefined || options.observability === undefined)
+            return response(value.requestId, 'failed', 'WOML_ADMIN_OPERATION_UNAVAILABLE');
+          return response(value.requestId, 'succeeded');
         }
         if (operation === 'list_runs') {
           if (value.subjectId !== undefined || options.operations?.listRuns === undefined)
@@ -428,6 +591,7 @@ export function startRuntimeControl(options: {
     capability = randomBytes(32).toString('base64url');
     createdAt = new Date();
     expiresAt = new Date(createdAt.getTime() + capabilityTtlMs);
+    options.observability?.closeStreams();
     if (publishedDescriptorPath !== undefined) {
       const path = publishedDescriptorPath;
       descriptorWrite = descriptorWrite.then(() =>
@@ -450,6 +614,7 @@ export function startRuntimeControl(options: {
       if (closed) return;
       closed = true;
       clearTimeout(rotationTimer);
+      options.observability?.closeStreams();
       await server.stop(true);
       await descriptorWrite.catch(() => {});
       capability = '';

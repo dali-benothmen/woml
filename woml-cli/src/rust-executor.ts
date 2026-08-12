@@ -418,8 +418,18 @@ export type RustRunListV1 =
         readonly queue?: string;
         readonly waitingFor?: 'concurrency' | 'rate_limit';
         readonly eligibleAt?: string;
-      }[];
+    }[];
     };
+
+export interface RustRuntimeObservationV1 {
+  readonly profile: 'woml.runtime-observation/v1';
+  readonly statusTotals: Readonly<Record<string, number>>;
+  readonly retryingRunIds: readonly string[];
+  readonly approvalWaitingRunIds: readonly string[];
+  readonly retriesTotal: number;
+  readonly triggersTotal: number;
+  readonly workflowCallsActive: number;
+}
 
 export interface RustLifecycleWarning {
   readonly hookId: string;
@@ -684,6 +694,7 @@ interface NativeCore {
     workflowId?: string,
     status?: string
   ) => string;
+  readonly observeWomlRuntime: (eventStorePath: string) => string;
   readonly inspectWomlRunV2: (eventStorePath: string, runId: string) => string;
   readonly cancelWomlRun: (
     eventStorePath: string,
@@ -2475,6 +2486,58 @@ export function listRunsWithRust(
     throw new Error('The native core returned invalid run-list data.');
   }
   return value as unknown as RustRunListV1;
+}
+
+export function observeRuntimeWithRust(
+  eventStorePath: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRuntimeObservationV1 {
+  if (eventStorePath.length === 0) {
+    throw new Error('Runtime observation requires a store path.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.observeWomlRuntime !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose runtime observation; rebuild the Rust addon.`
+    );
+  }
+  const value = callRunManagementNative(() =>
+    native.observeWomlRuntime(eventStorePath)
+  );
+  const identifiers = (candidate: unknown): candidate is readonly string[] =>
+    Array.isArray(candidate) &&
+    candidate.length <= 1000 &&
+    candidate.every(item => typeof item === 'string' && item.length > 0 && item.length <= 320);
+  const totals = record(value) ? value.statusTotals : undefined;
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      'profile',
+      'statusTotals',
+      'retryingRunIds',
+      'approvalWaitingRunIds',
+      'retriesTotal',
+      'triggersTotal',
+      'workflowCallsActive',
+    ]) ||
+    value.profile !== 'woml.runtime-observation/v1' ||
+    !record(totals) ||
+    !Object.entries(totals).every(
+      ([status, count]) =>
+        PUBLIC_RUN_STATUSES.includes(status as PublicRunStatus) &&
+        Number.isSafeInteger(count) &&
+        Number(count) >= 0
+    ) ||
+    !identifiers(value.retryingRunIds) ||
+    !identifiers(value.approvalWaitingRunIds) ||
+    ![value.retriesTotal, value.triggersTotal, value.workflowCallsActive].every(
+      count => Number.isSafeInteger(count) && Number(count) >= 0
+    )
+  ) {
+    throw new Error('The native core returned invalid runtime-observation data.');
+  }
+  return value as unknown as RustRuntimeObservationV1;
 }
 
 export function inspectRunV2WithRust(

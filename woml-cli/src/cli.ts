@@ -54,6 +54,7 @@ import {
   cancelRunWithRust,
   inspectRunV2WithRust,
   listRunsWithRust,
+  observeRuntimeWithRust,
   RunManagementError,
   RunInspectionError,
   settleApprovalTimeoutWithRust,
@@ -117,6 +118,7 @@ import {
   startRuntimeControl,
   type RuntimeControlHandle,
 } from './runtime-control';
+import { RuntimeObservability } from './runtime-observability';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -207,6 +209,10 @@ interface RunArguments {
   readonly adminPort: number;
   readonly shutdownTimeoutMs: number;
   readonly logDirectory: string;
+  readonly logFormat: 'text' | 'json';
+  readonly observabilityEnabled: boolean;
+  readonly observabilityHealth: boolean;
+  readonly observabilityMetrics: boolean;
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
@@ -353,6 +359,10 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     adminPort: 3_001,
     shutdownTimeoutMs: 30_000,
     logDirectory: resolve('.woml/logs'),
+    logFormat: 'text',
+    observabilityEnabled: true,
+    observabilityHealth: true,
+    observabilityMetrics: true,
   };
 }
 
@@ -377,6 +387,11 @@ async function resolveRunArgumentsConfiguration(
     adminPort: configuration.admin.port,
     shutdownTimeoutMs: configuration.shutdownTimeoutMs,
     logDirectory: configuration.logging.directory,
+    logFormat: configuration.logging.format,
+    observabilityEnabled:
+      configuration.observability.health || configuration.observability.metrics,
+    observabilityHealth: configuration.observability.health,
+    observabilityMetrics: configuration.observability.metrics,
   };
 }
 
@@ -2562,6 +2577,34 @@ export function formatWorkflowCallProgress(
   return `Workflow call child ${progress.childRunId} for "${progress.targetWorkflowId}" ${progress.status}; parent ${progress.parentRunId}.`;
 }
 
+async function durableStoreSize(path: string): Promise<number> {
+  let total = 0;
+  for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      const entry = await stat(candidate);
+      if (entry.isFile()) total += entry.size;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+        throw error;
+    }
+  }
+  return total;
+}
+
+function observedTriggerType(handler: string):
+  | 'manual'
+  | 'webhook'
+  | 'slack'
+  | 'schedule'
+  | 'interval'
+  | 'event'
+  | undefined {
+  const type = handler.startsWith('trigger.') ? handler.slice(8) : handler;
+  return ['manual', 'webhook', 'slack', 'schedule', 'interval', 'event'].includes(type)
+    ? (type as 'manual' | 'webhook' | 'slack' | 'schedule' | 'interval' | 'event')
+    : undefined;
+}
+
 async function activateWorkflows(
   sources: readonly CompiledWorkflowSource[],
   args: RunArguments,
@@ -2643,6 +2686,16 @@ async function activateWorkflows(
   let slackHost: SlackTriggerHost | undefined;
   let slackTransport: SharedSlackTransport | undefined;
   let runtimeControl: RuntimeControlHandle | undefined;
+  let observability: RuntimeObservability | undefined;
+  const pendingObservabilityProgress: unknown[] = [];
+  const observe = (progress: unknown): void => {
+    if (observability === undefined) {
+      if (pendingObservabilityProgress.length < 1024)
+        pendingObservabilityProgress.push(progress);
+      return;
+    }
+    observability.recordProgress(progress);
+  };
   let descriptorPath: string | undefined;
   let resolveRuntimeUnavailable!: () => void;
   const runtimeUnavailable = new Promise<void>(resolveUnavailable => {
@@ -2710,22 +2763,39 @@ async function activateWorkflows(
           activationId: currentActivationId,
           shutdownTimeoutMs: args.shutdownTimeoutMs,
           startSuspended: true,
-          onTriggerProgress: progress =>
-            reportTriggerProgress(
-              progress,
-              args.statePath,
-              io,
-              dependencies.nativeCorePath
-            ),
-          onScheduleProgress: progress =>
-            io.stderr(`${formatScheduleProgress(progress)}\n`),
-          onIntervalProgress: progress =>
-            io.stderr(`${formatIntervalProgress(progress)}\n`),
-          onWorkflowCallProgress: progress =>
-            io.stderr(`${formatWorkflowCallProgress(progress)}\n`),
-          onRuntimePolicyProgress: progress =>
-            io.stderr(`${formatExecutionProgress(progress)}\n`),
+          onTriggerProgress: progress => {
+            observe(progress);
+            if (args.logFormat === 'text') {
+              reportTriggerProgress(
+                progress,
+                args.statePath,
+                io,
+                dependencies.nativeCorePath
+              );
+            }
+          },
+          onScheduleProgress: progress => {
+            observe(progress);
+            if (args.logFormat === 'text')
+              io.stderr(`${formatScheduleProgress(progress)}\n`);
+          },
+          onIntervalProgress: progress => {
+            observe(progress);
+            if (args.logFormat === 'text')
+              io.stderr(`${formatIntervalProgress(progress)}\n`);
+          },
+          onWorkflowCallProgress: progress => {
+            observe(progress);
+            if (args.logFormat === 'text')
+              io.stderr(`${formatWorkflowCallProgress(progress)}\n`);
+          },
+          onRuntimePolicyProgress: progress => {
+            observe(progress);
+            if (args.logFormat === 'text')
+              io.stderr(`${formatExecutionProgress(progress)}\n`);
+          },
           onRuntimeLifecycle: progress => {
+            observe(progress);
             if (
               progress.lifecycle === 'degraded' ||
               progress.lifecycle === 'failed'
@@ -2739,11 +2809,73 @@ async function activateWorkflows(
         }
       );
       runtimeId = runtime.runtimeId;
+      if (args.observabilityEnabled) {
+        const componentRecords = [
+          {
+            name: 'sqlite',
+            kind: 'store' as const,
+            status: 'ready' as const,
+          },
+          {
+            name: 'rust-trigger-host',
+            kind: 'trigger' as const,
+            status: 'ready' as const,
+          },
+          {
+            name: 'script-host',
+            kind: 'worker' as const,
+            status: 'ready' as const,
+          },
+          ...(slackRegistrations.length === 0
+            ? []
+            : [
+                {
+                  name: 'slack',
+                  kind: 'provider' as const,
+                  status: 'unready' as const,
+                },
+              ]),
+        ];
+        observability = new RuntimeObservability({
+          runtimeInstanceId: runtime.runtimeId,
+          deploymentId: currentDeploymentId,
+          workflows: productionSources.map(source => ({
+            workflowId: source.workflow.workflowId,
+            definitionHash: source.definitionHash,
+            triggerTypes: source.workflow.triggers
+              .map(trigger => observedTriggerType(trigger.handler))
+              .filter(
+                (type): type is NonNullable<typeof type> => type !== undefined
+              ),
+          })),
+          listRuns: () =>
+            listRunsWithRust(
+              args.statePath,
+              { limit: 200 },
+              { nativeCorePath: dependencies.nativeCorePath }
+            ),
+          observeDurable: () =>
+            observeRuntimeWithRust(args.statePath, {
+              nativeCorePath: dependencies.nativeCorePath,
+            }),
+          storeSize: () => durableStoreSize(args.statePath),
+          logFormat: args.logFormat,
+          emitLog: io.stderr,
+          components: componentRecords,
+        });
+        observability.setLifecycle('recovering');
+        for (const progress of pendingObservabilityProgress)
+          observability.recordProgress(progress);
+        pendingObservabilityProgress.length = 0;
+      }
       runtimeControl = await startRuntimeControl({
         runtimeInstanceId: runtime.runtimeId,
         deploymentId: currentDeploymentId,
         host: args.adminHost,
         port: args.adminPort,
+        observability,
+        healthEnabled: args.observabilityHealth,
+        metricsEnabled: args.observabilityMetrics,
         operations: {
           listRuns: () => {
             listRunsWithRust(args.statePath, { limit: 1 }, {
@@ -2802,7 +2934,14 @@ async function activateWorkflows(
         });
         try {
           await slackHost.start();
+          observability?.setComponent('slack', 'provider', 'ready');
         } catch (error) {
+          observability?.setComponent(
+            'slack',
+            'provider',
+            'unready',
+            'WOML_SLACK_TRIGGER_UNAVAILABLE'
+          );
           const failure = slackTriggerStartupError(error);
           throw new CliInputError(failure.code, failure.message);
         }
@@ -2815,6 +2954,12 @@ async function activateWorkflows(
       await activateWebhookRuntimeWithRust(runtime.runtimeId, {
         nativeCorePath: dependencies.nativeCorePath,
       });
+      observability?.setLifecycle('ready');
+      observability?.log(
+        'info',
+        'WOML_RUNTIME_READY',
+        `WOML runtime is ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.`
+      );
       io.stderr(
         `WOML deployment activation ${currentActivationId.slice(7, 19)} ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.\n`
       );
@@ -2871,6 +3016,7 @@ async function activateWorkflows(
     ]);
   } finally {
     if (runtimeId !== undefined) {
+      observability?.setLifecycle('draining');
       io.stderr('WOML runtime is draining; new trigger admission is closed.\n');
     }
     await runtimeControl?.close().catch(() => {});
@@ -2883,6 +3029,7 @@ async function activateWorkflows(
     await slackHost?.close().catch(() => {});
     await slackTransport?.close().catch(() => {});
     await runtimeStop;
+    observability?.setLifecycle('stopped');
     if (descriptorPath !== undefined && runtimeControl !== undefined) {
       await removeRuntimeDescriptor(
         descriptorPath,

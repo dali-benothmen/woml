@@ -60,7 +60,7 @@ pub use durable::{
   RunCancellationCode, RunCancellationResult, RunCancellationStatus, RunDefinitionBinding,
   RunInspectionCancellationV2, RunInspectionHookV2, RunInspectionPolicyV3, RunInspectionV2,
   RunInspectionV3, RunListV1, RunListV2, RunSummaryV1, RunSummaryV2, RunTimeoutSettlement,
-  RuntimeOwnerLease, ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome,
+  RuntimeObservationV1, RuntimeOwnerLease, ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome,
   SchedulerClaimV1, StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome,
   TriggerAdmissionRequest, TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
   RUNTIME_POLICY_QUEUE_CEILING,

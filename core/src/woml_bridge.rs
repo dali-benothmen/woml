@@ -1592,6 +1592,20 @@ pub fn list_woml_runs(
 }
 
 #[napi]
+pub fn observe_woml_runtime(event_store_path: String) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_management_error("WOML_OBSERVABILITY_UNAVAILABLE", error))?;
+  let observation = store
+    .runtime_observation_v1()
+    .map_err(|error| native_run_management_error("WOML_OBSERVABILITY_UNAVAILABLE", error))?;
+  serde_json::to_string(&observation).map_err(|error| {
+    napi::Error::from_reason(format!(
+      "Could not encode WOML runtime observation: {error}"
+    ))
+  })
+}
+
+#[napi]
 pub fn inspect_woml_run_v2(event_store_path: String, run_id: String) -> napi::Result<String> {
   let store = DurableEventStore::open(PathBuf::from(event_store_path))
     .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?;

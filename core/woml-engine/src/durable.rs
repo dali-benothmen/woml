@@ -964,6 +964,18 @@ pub struct RunListV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeObservationV1 {
+  pub profile: &'static str,
+  pub status_totals: BTreeMap<String, u64>,
+  pub retrying_run_ids: Vec<String>,
+  pub approval_waiting_run_ids: Vec<String>,
+  pub retries_total: u64,
+  pub triggers_total: u64,
+  pub workflow_calls_active: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunInspectionHookV2 {
   pub hook_id: String,
   pub subject_kind: crate::event::LifecycleSubjectKind,
@@ -3918,6 +3930,88 @@ impl DurableEventStore {
     Ok(RunListV2 {
       profile: "woml.run-list/v2",
       runs,
+    })
+  }
+
+  /// Returns a compact, payload-free projection for Runtime Operations v1.
+  /// Counts come from durable coordination/event facts and therefore survive
+  /// process replacement without making telemetry authoritative.
+  pub fn runtime_observation_v1(&self) -> Result<RuntimeObservationV1, DurableStoreError> {
+    let mut status_totals = BTreeMap::new();
+    let mut statement = self.connection.prepare(
+      "SELECT status, COUNT(*) FROM woml_run_summaries GROUP BY status ORDER BY status",
+    )?;
+    let rows = statement
+      .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)))?
+      .collect::<Result<Vec<_>, _>>()?;
+    for (status, count) in rows {
+      if PublicRunStatus::parse(&status).is_none() {
+        return Err(DurableStoreError::Contract(
+          "Stored runtime observation status is invalid.".to_string(),
+        ));
+      }
+      status_totals.insert(status, count);
+    }
+
+    let latest_event_run_ids = |event_type: &str| -> Result<Vec<String>, DurableStoreError> {
+      let pattern = format!("%\"type\":\"{event_type}\"%");
+      let mut statement = self.connection.prepare(
+        "SELECT summaries.run_id
+         FROM woml_run_summaries AS summaries
+         JOIN woml_run_events AS events
+           ON events.run_id = summaries.run_id
+          AND events.sequence = (
+            SELECT MAX(latest.sequence)
+            FROM woml_run_events AS latest
+            WHERE latest.run_id = summaries.run_id
+          )
+         WHERE events.event_json LIKE ?1
+         ORDER BY summaries.updated_at DESC, summaries.run_id DESC
+         LIMIT 1000",
+      )?;
+      let rows = statement
+        .query_map([pattern], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+      Ok(rows)
+    };
+    let retrying_run_ids = latest_event_run_ids("step_retry_scheduled")?;
+    let mut approval_statement = self.connection.prepare(
+      "SELECT summaries.run_id
+       FROM woml_run_summaries AS summaries
+       WHERE summaries.status = 'waiting'
+         AND EXISTS (
+           SELECT 1 FROM woml_run_events AS requested
+           WHERE requested.run_id = summaries.run_id
+             AND requested.event_json LIKE '%\"type\":\"approval_requested\"%'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM woml_run_events AS resolved
+           WHERE resolved.run_id = summaries.run_id
+             AND resolved.event_json LIKE '%\"type\":\"approval_resolved\"%'
+         )
+       ORDER BY summaries.updated_at DESC, summaries.run_id DESC
+       LIMIT 1000",
+    )?;
+    let approval_waiting_run_ids = approval_statement
+      .query_map([], |row| row.get::<_, String>(0))?
+      .collect::<Result<Vec<_>, _>>()?;
+    let count = |sql: &str| -> Result<u64, DurableStoreError> {
+      Ok(self.connection.query_row(sql, [], |row| row.get(0))?)
+    };
+
+    Ok(RuntimeObservationV1 {
+      profile: "woml.runtime-observation/v1",
+      status_totals,
+      retrying_run_ids,
+      approval_waiting_run_ids,
+      retries_total: count(
+        "SELECT COUNT(*) FROM woml_run_events
+         WHERE event_json LIKE '%\"type\":\"step_retry_scheduled\"%'",
+      )?,
+      triggers_total: count("SELECT COUNT(*) FROM woml_trigger_occurrences")?,
+      workflow_calls_active: count(
+        "SELECT COUNT(*) FROM woml_workflow_calls WHERE state IN ('admitted', 'running')",
+      )?,
     })
   }
 

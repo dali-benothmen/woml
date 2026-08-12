@@ -2,8 +2,9 @@
 
 Status: frozen by PRO0 on 2026-08-12. PRO1 through PRO4 implement configuration,
 preflight, atomic activation, background hosting, durable ownership, production
-secret sources, and authenticated local administration. Observability, backup,
-and retention remain gated to their later PRO phases.
+secret sources, authenticated local administration, and the PRO5 observability
+foundation. The terminal dashboard, backup, and retention remain gated to their
+later PRO phases.
 
 ## Product boundary
 
@@ -228,6 +229,20 @@ detailed health.
 
 `woml top` consumes these contracts and never becomes a second runtime truth.
 Closing or crashing the TUI cannot stop or slow workflow execution.
+
+PRO5 implements the snapshot and stream on the authenticated loopback listener.
+The stream retains 1024 monotonically sequenced updates per runtime instance,
+allows eight clients, emits `WOML_OBSERVABILITY_STREAM_GAP` when snapshot
+resynchronization is required, and disconnects slow readers. Snapshot/admin
+responses are bounded to 2 MiB. Minimal `/livez` and `/readyz` responses carry
+only the frozen public health shape; detailed health, snapshot, stream, JSON
+metrics, and Prometheus exposition require the rotating admin capability.
+
+Runtime Log v1 uses only its frozen correlation fields. Runtime Metrics v1 uses
+only its frozen names and label allowlist; payloads, context, state, results,
+URLs, arbitrary messages, run IDs, and node IDs cannot become labels.
+Telemetry failures return safe operational errors and never decide workflow
+business outcomes.
 
 ## Backup and retention
 
