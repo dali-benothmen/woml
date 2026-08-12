@@ -52,7 +52,7 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 12;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 13;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -65,6 +65,7 @@ const STORE_SCHEMA_VERSION_V9: &str = "9";
 const STORE_SCHEMA_VERSION_V10: &str = "10";
 const STORE_SCHEMA_VERSION_V11: &str = "11";
 const STORE_SCHEMA_VERSION_V12: &str = "12";
+const STORE_SCHEMA_VERSION_V13: &str = "13";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_RUN_SUMMARY_SCHEMA_V11: &str = r#"
@@ -157,6 +158,59 @@ CREATE INDEX woml_scheduler_claims_expiry
   ON woml_scheduler_claims(expires_at);
 
 DROP TABLE woml_run_summaries_v11;
+"#;
+
+const CREATE_DURABLE_STATE_SCHEMA_V13: &str = r#"
+CREATE TABLE IF NOT EXISTS woml_state_entries (
+  scope_digest TEXT NOT NULL,
+  key_digest TEXT NOT NULL,
+  key_text TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  value_bytes INTEGER NOT NULL CHECK (value_bytes BETWEEN 1 AND 262144),
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 9007199254740991),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (scope_digest, key_text),
+  UNIQUE (scope_digest, key_digest)
+);
+
+CREATE INDEX IF NOT EXISTS woml_state_entries_scope
+  ON woml_state_entries(scope_digest, key_digest);
+
+CREATE TABLE IF NOT EXISTS woml_state_mutations (
+  operation_key TEXT PRIMARY KEY,
+  scope_digest TEXT NOT NULL,
+  operation_name TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('set', 'delete', 'increment', 'set_if_absent')),
+  key_digest TEXT NOT NULL,
+  input_digest TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  result_digest TEXT NOT NULL,
+  committed_version INTEGER CHECK (
+    committed_version IS NULL OR committed_version BETWEEN 1 AND 9007199254740991
+  ),
+  committed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS woml_state_mutations_scope_key
+  ON woml_state_mutations(scope_digest, key_digest, committed_at, operation_key);
+
+CREATE TRIGGER IF NOT EXISTS woml_state_mutations_no_update
+BEFORE UPDATE ON woml_state_mutations
+BEGIN
+  SELECT RAISE(ABORT, 'WOML durable state mutation results are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS woml_state_mutations_no_delete
+BEFORE DELETE ON woml_state_mutations
+BEGIN
+  SELECT RAISE(ABORT, 'WOML durable state mutation results are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS woml_state_quotas (
+  scope_digest TEXT PRIMARY KEY,
+  live_keys INTEGER NOT NULL CHECK (live_keys BETWEEN 0 AND 10000),
+  value_bytes INTEGER NOT NULL CHECK (value_bytes BETWEEN 0 AND 67108864)
+);
 "#;
 
 const CREATE_SCHEMA: &str = r#"
@@ -1371,6 +1425,23 @@ fn migrate_store_v11_to_v12(connection: &mut Connection) -> Result<(), DurableSt
   Ok(())
 }
 
+fn migrate_store_v12_to_v13(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_DURABLE_STATE_SCHEMA_V13)?;
+  validate_store_v13_schema(&transaction)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V13, STORE_SCHEMA_VERSION_V12],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v12-to-v13 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
 fn validate_store_v2_schema(connection: &Connection) -> Result<(), DurableStoreError> {
   for (object_type, name) in [
     ("table", "woml_approval_tokens"),
@@ -1653,6 +1724,74 @@ fn validate_store_v12_schema(connection: &Connection) -> Result<(), DurableStore
   Ok(())
 }
 
+fn validate_store_v13_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v12_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_state_entries"),
+    ("index", "woml_state_entries_scope"),
+    ("table", "woml_state_mutations"),
+    ("index", "woml_state_mutations_scope_key"),
+    ("trigger", "woml_state_mutations_no_update"),
+    ("trigger", "woml_state_mutations_no_delete"),
+    ("table", "woml_state_quotas"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v13 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  for (table, expected_columns) in [
+    (
+      "woml_state_entries",
+      vec![
+        "scope_digest",
+        "key_digest",
+        "key_text",
+        "value_json",
+        "value_bytes",
+        "version",
+        "updated_at",
+      ],
+    ),
+    (
+      "woml_state_mutations",
+      vec![
+        "operation_key",
+        "scope_digest",
+        "operation_name",
+        "operation",
+        "key_digest",
+        "input_digest",
+        "result_json",
+        "result_digest",
+        "committed_version",
+        "committed_at",
+      ],
+    ),
+    (
+      "woml_state_quotas",
+      vec!["scope_digest", "live_keys", "value_bytes"],
+    ),
+  ] {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let actual_columns = statement
+      .query_map([], |row| row.get::<_, String>(1))?
+      .collect::<Result<Vec<_>, _>>()?;
+    if actual_columns != expected_columns {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v13 {table} columns do not match the frozen schema: expected {expected_columns:?}, found {actual_columns:?}."
+      )));
+    }
+  }
+  Ok(())
+}
+
 fn runtime_policy_indexes_need_rebuild(connection: &Connection) -> Result<bool, DurableStoreError> {
   let count = |sql: &str| -> Result<i64, DurableStoreError> {
     Ok(connection.query_row(sql, [], |row| row.get(0))?)
@@ -1695,6 +1834,7 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
+      Some(STORE_SCHEMA_VERSION_V13) => validate_store_v13_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V12) => validate_store_v12_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V11) => validate_store_v11_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V10) => validate_store_v10_schema(&connection)?,
@@ -1804,7 +1944,15 @@ impl DurableEventStore {
     if current_version == STORE_SCHEMA_VERSION_V11 {
       migrate_store_v11_to_v12(&mut connection)?;
     }
-    validate_store_v12_schema(&connection)?;
+    let current_version: String = connection.query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )?;
+    if current_version == STORE_SCHEMA_VERSION_V12 {
+      migrate_store_v12_to_v13(&mut connection)?;
+    }
+    validate_store_v13_schema(&connection)?;
     if runtime_policy_indexes_need_rebuild(&connection)? {
       let recovery = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
       rebuild_runtime_policy_indexes(&recovery)?;

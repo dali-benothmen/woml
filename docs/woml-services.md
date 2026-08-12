@@ -16,9 +16,9 @@ await services.state.set('previous-sales', 700, {
 Normal `woml check`/`woml run` preparation generates the `StateService` editor
 types automatically, including for local modules. Execution currently fails
 explicitly with `WOML_STATE_RUNTIME_UNAVAILABLE`; DS1 never substitutes Cache
-v1 or process memory. Store v13 is implemented in DS2 and connected end to end
-in DS3. The frozen boundary is documented in
-[Durable User State v1](protocols/durable-state-v1.md).
+v1 or process memory. DS2 implements and transaction-tests the Rust/SQLite
+Store v13 authority; DS3 connects it end to end. The frozen boundary is
+documented in [Durable User State v1](protocols/durable-state-v1.md).
 
 WOML scripts expose seven built-in services without installing
 an npm package:

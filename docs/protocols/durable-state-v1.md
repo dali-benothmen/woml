@@ -1,8 +1,8 @@
 # WOML Durable User State v1 Contracts
 
-Status: frozen by DS0 on 2026-08-12. DS1 exposes the typed authoring surface;
-no user state value is stored until Store v13 and the managed Rust capability
-are implemented in DS2 and DS3.
+Status: frozen by DS0 on 2026-08-12. DS1 exposes the typed authoring surface and
+DS2 implements the transaction-tested Store v13 Rust authority. WOML scripts
+remain gated until that authority joins the managed capability path in DS3.
 
 ## Public service contract
 

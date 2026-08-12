@@ -1,6 +1,6 @@
 # WOML Runtime Policies and Durable User State Implementation Plan
 
-Status: RP0 through RP7 and DS0 through DS1 completed on 2026-08-12. Runtime
+Status: RP0 through RP7 and DS0 through DS2 completed on 2026-08-12. Runtime
 Policy v1, Model v12, Event v11, Store v12 coordination, public
 inspection/progress, and Definition Package v7 contracts are frozen. Durable
 User State v1, Mutation Identity v1, State Operation Metadata v1, and the Store
@@ -14,10 +14,11 @@ compatibility, adversarial durability, performance-budget, package-audit, and
 secret-scan `bun run test:rp7` gate.
 `services.state` is now a protected, typed authoring surface in scripts and
 local modules. Calls fail explicitly with `WOML_STATE_RUNTIME_UNAVAILABLE` and
-never fall back to cache or process memory until the Store v13 authority is
-built in DS2 and connected in DS3. Runtime Policies and Durable User State are
-one roadmap milestone, delivered as two independently reviewable releases:
-RP0-RP7 first, then DS0-DS5.
+never fall back to cache or process memory. The Store v13 authority is built and
+transaction-tested in DS2; calls remain gated until it is connected to scripts
+in DS3. Runtime Policies and Durable User State are one roadmap milestone,
+delivered as two independently reviewable releases: RP0-RP7 first, then
+DS0-DS5.
 
 ## 1. Product Outcome
 
@@ -848,7 +849,7 @@ changing underneath it.
 | RP7 (complete) | Harden, migrate, benchmark, document, and publish Runtime Policies.         | `<config>` becomes a supported executable WOML feature.                                                |
 | DS0 (complete) | Freeze State v1, mutation identity, Store v13, and reviewed fixtures.       | Durable state semantics are reviewable before a mutable authority is added.                            |
 | DS1 (complete) | Add frontend discovery, editor types, and the Bun `services.state` facade.  | Scripts and modules receive a typed service surface; runtime calls remain deliberately gated.          |
-| DS2            | Build Store v13's transactional state authority.                            | Rust can perform atomic, versioned, idempotent state operations without Bun execution.                 |
+| DS2 (complete) | Build Store v13's transactional state authority.                            | Rust can perform atomic, versioned, idempotent state operations without Bun execution.                 |
 | DS3            | Connect State v1 through the managed capability path.                       | Real `.woml` scripts can read and mutate durable state end to end.                                     |
 | DS4            | Add contention, retry, recovery, quota, security, and inspection hardening. | State remains correct under concurrent runs, crashes, migrations, and adversarial input.               |
 | DS5            | Package, benchmark, document, and publish Durable User State.               | `services.state` becomes a supported correctness-capable service distinct from cache.                  |
@@ -1290,7 +1291,7 @@ Completed implementation:
   DS1 cannot accidentally mutate cache, memory, or an undeclared backend.
 - `bun run test:ds1` is the authoring-surface gate.
 
-### DS2 — Build Store v13 transactional state authority
+### DS2 — Build Store v13 transactional state authority (completed)
 
 Changes:
 
@@ -1314,6 +1315,28 @@ Gate:
 Tests cover all operations, multiple database connections, conflicts, duplicate
 identity, rollback, crash boundaries, quota, corruption, migration, and exact
 redaction.
+
+Completed implementation:
+
+- Store v12 now migrates transactionally to Store v13 and creates separate
+  state-entry, immutable mutation-result, and quota tables without rewriting
+  workflow definitions or run histories.
+- Rust directly executes all six State v1 operations with canonical JSON,
+  bounded UTF-8 keys and values, exact public result shapes, and monotonically
+  increasing per-key versions that survive deletion and recreation.
+- `ifVersion` compare-and-set, `setIfAbsent`, quota accounting, value changes,
+  mutation identity, and the original canonical result commit in one immediate
+  SQLite transaction.
+- Duplicate named mutations return their first result without executing twice;
+  reuse with another canonical input fails closed.
+- Independent SQLite connections cannot both win the same version condition,
+  and quota or validation failures leave existing state and counters unchanged.
+- The direct authority produces only digest-based safe operation metadata;
+  keys, values, workflow/run IDs, and operation identities remain absent.
+- Startup rejects missing or malformed v13 objects, and a failed migration
+  rolls back without claiming schema version 13.
+- `bun run test:ds2` is the direct Rust authority and compatibility gate. WOML
+  scripts remain deliberately gated until DS3.
 
 ### DS3 — Execute `services.state` end to end
 
@@ -1572,8 +1595,9 @@ No durable user value is stored until DS0 answers and tests:
     context automatically?
 
 Those questions are answered by the frozen DS0 schemas, fixtures, and
-`docs/protocols/durable-state-v1.md`. DS1 has completed; DS2 may now build the
-transactional Rust/SQLite authority without changing the public contract.
+`docs/protocols/durable-state-v1.md`. DS1 and DS2 have completed; DS3 may now
+connect the transactional Rust/SQLite authority to the existing managed
+capability path without changing the public contract.
 
 ## 20. Definition of Done
 

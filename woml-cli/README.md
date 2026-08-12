@@ -212,7 +212,8 @@ alias, and validates calls inside steps, lifecycle scripts, and local modules.
 
 The authoring surface is deliberately staged: calls currently fail with
 `WOML_STATE_RUNTIME_UNAVAILABLE` and never fall back to cache or in-memory
-storage. Rust Store v13 execution begins in DS2/DS3. See
+storage. The Rust Store v13 authority is complete in DS2; script execution is
+connected in DS3. See
 [Durable User State v1](../docs/protocols/durable-state-v1.md).
 
 Lifecycle syntax, cancellation races, recovery, security boundaries, and the
