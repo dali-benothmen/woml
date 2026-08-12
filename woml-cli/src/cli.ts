@@ -26,6 +26,7 @@ import {
   type WomlSourceElement,
   type WomlDefinitionPackageV3,
   type WomlDefinitionPackageV5,
+  type WomlDefinitionPackageV7,
 } from 'woml';
 import {
   compiledDefinitionHash,
@@ -395,6 +396,7 @@ function parseEmitArguments(args: readonly string[]): EmitArguments {
 
 const publicRunStatuses = new Set<PublicRunStatus>([
   'not_started',
+  'queued',
   'running',
   'waiting',
   'cancelling',
@@ -507,11 +509,19 @@ function runtimeCode(code: string): string {
 
 function formatRunList(list: RustRunListV1): string {
   if (list.runs.length === 0) return 'No WOML runs found.\n';
-  const lines = ['RUN ID\tWORKFLOW\tSTATUS\tSTARTED\tUPDATED'];
-  for (const run of list.runs) {
-    lines.push(
-      `${run.runId}\t${run.workflowId}\t${run.status}\t${run.startedAt}\t${run.updatedAt}`
-    );
+  const lines = ['RUN ID\tWORKFLOW\tSTATUS\tADMITTED\tSTARTED\tQUEUE\tWAITING'];
+  if (list.profile === 'woml.run-list/v2') {
+    for (const run of list.runs) {
+      lines.push(
+        `${run.runId}\t${run.workflowId}\t${run.status}\t${run.admittedAt}\t${run.startedAt ?? '-'}\t${run.queue ?? '-'}\t${run.waitingFor?.replaceAll('_', ' ') ?? '-'}`
+      );
+    }
+  } else {
+    for (const run of list.runs) {
+      lines.push(
+        `${run.runId}\t${run.workflowId}\t${run.status}\t${run.startedAt}\t${run.startedAt}\t-\t-`
+      );
+    }
   }
   return `${lines.join('\n')}\n`;
 }
@@ -525,6 +535,20 @@ function formatRunInspection(inspection: RustRunInspectionV2): string {
     `Lifecycle: ${inspection.lifecycleStatus}`,
     `Cancellation requested: ${inspection.cancellation.requested ? 'yes' : 'no'}`,
   ];
+  if (inspection.policy !== undefined) {
+    lines.push(`Policy queue: ${inspection.policy.queue}`);
+    if (inspection.policy.waitingFor !== undefined) {
+      lines.push(
+        `Policy waiting for: ${inspection.policy.waitingFor.replaceAll('_', ' ')}`
+      );
+    }
+    if (inspection.policy.eligibleAt !== undefined) {
+      lines.push(`Policy eligible at: ${inspection.policy.eligibleAt}`);
+    }
+    if (inspection.policy.timeoutAt !== undefined) {
+      lines.push(`Workflow timeout at: ${inspection.policy.timeoutAt}`);
+    }
+  }
   if (inspection.hooks.length > 0) {
     lines.push('Lifecycle hooks:');
     for (const hook of inspection.hooks) {
@@ -558,6 +582,29 @@ function formatCancellation(result: RustRunCancellationResultV1): string {
 }
 
 export function formatExecutionProgress(progress: ExecutionProgressV1): string {
+  if (
+    'profile' in progress &&
+    progress.profile === 'woml.runtime-policy-progress/v1'
+  ) {
+    if (progress.phase === 'queued') {
+      const reason =
+        progress.waitingFor === undefined
+          ? ''
+          : ` for ${progress.waitingFor.replaceAll('_', ' ')}`;
+      const eligible =
+        progress.eligibleAt === undefined
+          ? ''
+          : `; eligible at ${progress.eligibleAt}`;
+      return `Run ${progress.runId} queued in "${progress.queue}"${reason}${eligible}.`;
+    }
+    if (progress.phase === 'eligible') {
+      return `Run ${progress.runId} is eligible in queue "${progress.queue}".`;
+    }
+    if (progress.phase === 'started') {
+      return `Run ${progress.runId} started under runtime policy.`;
+    }
+    return `Run ${progress.runId} timed out [${progress.code ?? 'WOML_WORKFLOW_TIMED_OUT'}].`;
+  }
   if ('profile' in progress) {
     const status = progress.phase.replaceAll('_', ' ');
     const subject =
@@ -945,7 +992,10 @@ function workflowCallFrontendOnlySource(
 }
 
 function runtimeModulesFromPackage(
-  definitionPackage: WomlDefinitionPackageV3 | WomlDefinitionPackageV5
+  definitionPackage:
+    | WomlDefinitionPackageV3
+    | WomlDefinitionPackageV5
+    | WomlDefinitionPackageV7
 ): readonly RustRuntimeModuleArtifact[] {
   return definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
@@ -1017,13 +1067,25 @@ async function compileWorkflowSources(
       sourcePath: filePath,
       projectRoot,
     });
-    const runtimePackage =
+    const executablePackage =
       inspected.modules.length > 0
-        ? await buildWomlRuntimeDefinitionPackage(document, {
+        ? await buildWomlExecutableDefinitionPackage(document, {
             sourcePath: filePath,
             projectRoot,
           })
         : undefined;
+    // Definition Package v7 is the frozen Model v12 compilation identity. RP6
+    // promotes its exact reviewed artifacts directly at activation time rather
+    // than mutating that immutable package into a second public shape.
+    const runtimePackage =
+      executablePackage?.schemaVersion === 7
+        ? executablePackage
+        : inspected.modules.length > 0
+          ? await buildWomlRuntimeDefinitionPackage(document, {
+              sourcePath: filePath,
+              projectRoot,
+            })
+          : undefined;
     const frontendWorkflow =
       runtimePackage?.workflow.model ?? compileWoml(document);
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
@@ -1197,7 +1259,7 @@ async function runCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasRuntimePolicy && definitionPackage.modules.length > 0
-        ? 'Execution: Model v12 policy is valid; combined local-module runtime packaging remains staged for RP6.\n'
+        ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
         : hasRuntimePolicy
           ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
         : hasLifecycle
@@ -2185,6 +2247,8 @@ async function activateWorkflows(
             io.stderr(`${formatIntervalProgress(progress)}\n`),
           onWorkflowCallProgress: progress =>
             io.stderr(`${formatWorkflowCallProgress(progress)}\n`),
+          onRuntimePolicyProgress: progress =>
+            io.stderr(`${formatExecutionProgress(progress)}\n`),
         }
       );
       runtimeId = runtime.runtimeId;

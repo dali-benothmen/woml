@@ -491,6 +491,7 @@ struct WebhookRoute {
   trigger_id: String,
   authentication: WebhookAuthentication,
   schema: Option<Arc<Validator>>,
+  runtime_policy: bool,
 }
 
 type EventSubscriber = EventServiceSubscriber;
@@ -532,6 +533,14 @@ impl WebhookRuntimeState {
   }
 
   fn report_run_started(&self, identity: &RunProgressIdentity) {
+    // Event v11 reports the real scheduler start through Runtime Policy
+    // Progress. Do not claim that a newly admitted queued run has started.
+    if DurableEventStore::open(&self.database_path)
+      .and_then(|store| store.projection(&identity.run_id))
+      .is_ok_and(|projection| projection.status == crate::RunStatus::Queued)
+    {
+      return;
+    }
     self.report(TriggerProgress::RunStarted {
       contract: TRIGGER_PROGRESS_CONTRACT,
       contract_version: TRIGGER_PROGRESS_CONTRACT_VERSION,
@@ -802,6 +811,7 @@ fn prepare_state(
     store.recover_interrupted_runs()?;
   }
   for (workflow, definition_hash, runtime_modules) in &definitions {
+    store.validate_runtime_policy_activation(workflow, definition_hash)?;
     store.register_definition_module_artifacts(workflow, definition_hash, runtime_modules)?;
   }
   if has_live_workflow_runtime {
@@ -1059,6 +1069,8 @@ fn compile_route(
     trigger_id: trigger.id.clone(),
     authentication,
     schema,
+    runtime_policy: registration.workflow.schema_version
+      == crate::COMPILED_MODEL_SCHEMA_VERSION_V12,
   })
 }
 
@@ -1380,6 +1392,10 @@ async fn run_schedule_loop(
     ) {
       Ok(value) => value,
       Err(DurableStoreError::ScheduleCursorConflict) => continue,
+      Err(DurableStoreError::RuntimePolicyQueueFull) => {
+        report_schedule_policy_queue_full(state.get_ref(), &registration);
+        return;
+      }
       Err(error) => {
         report_schedule_error(state.get_ref(), &registration, &error.to_string());
         return;
@@ -1465,6 +1481,24 @@ fn report_schedule_error(
       trigger_id: registration.trigger_id.clone(),
       code: "WOML_SCHEDULE_RUNTIME_FAILED".to_string(),
       message: message.to_string(),
+      occurred_at: state.execution.schedule_clock.now(),
+    });
+}
+
+fn report_schedule_policy_queue_full(
+  state: &WebhookRuntimeState,
+  registration: &ScheduleRuntimeRegistration,
+) {
+  state
+    .execution
+    .report_schedule(ScheduleProgress::SchedulerError {
+      contract: SCHEDULE_PROGRESS_CONTRACT,
+      contract_version: SCHEDULE_PROGRESS_CONTRACT_VERSION,
+      workflow_id: registration.workflow_id.clone(),
+      trigger_id: registration.trigger_id.clone(),
+      code: "WOML_POLICY_QUEUE_FULL".to_string(),
+      message: "The durable WOML policy queue is full; the schedule cursor was not advanced."
+        .to_string(),
       occurred_at: state.execution.schedule_clock.now(),
     });
 }
@@ -1759,6 +1793,10 @@ async fn run_interval_loop(
     ) {
       Ok(value) => value,
       Err(DurableStoreError::IntervalCursorConflict) => continue,
+      Err(DurableStoreError::RuntimePolicyQueueFull) => {
+        report_interval_policy_queue_full(state.get_ref(), &registration);
+        return;
+      }
       Err(error) => {
         report_interval_error(state.get_ref(), &registration, &error.to_string());
         return;
@@ -1849,6 +1887,24 @@ fn report_interval_error(
       trigger_id: registration.trigger_id.clone(),
       code: "WOML_INTERVAL_RUNTIME_FAILED".to_string(),
       message: message.to_string(),
+      occurred_at: state.execution.schedule_clock.now(),
+    });
+}
+
+fn report_interval_policy_queue_full(
+  state: &WebhookRuntimeState,
+  registration: &IntervalRuntimeRegistration,
+) {
+  state
+    .execution
+    .report_interval(IntervalProgress::SchedulerError {
+      contract: INTERVAL_PROGRESS_CONTRACT,
+      contract_version: INTERVAL_PROGRESS_CONTRACT_VERSION,
+      workflow_id: registration.workflow_id.clone(),
+      trigger_id: registration.trigger_id.clone(),
+      code: "WOML_POLICY_QUEUE_FULL".to_string(),
+      message: "The durable WOML policy queue is full; the interval cursor was not advanced."
+        .to_string(),
       occurred_at: state.execution.schedule_clock.now(),
     });
 }
@@ -2036,6 +2092,23 @@ async fn handle_webhook(
         None,
       )
     }
+    Ok(Err(DurableStoreError::RuntimePolicyQueueFull)) => {
+      state.report_rejected(
+        Some(route.as_ref()),
+        "WOML_POLICY_QUEUE_FULL",
+        "The durable WOML policy queue is full; retry this request.",
+      );
+      let mut response = HttpResponse::ServiceUnavailable();
+      response.insert_header((header::CACHE_CONTROL, "no-store"));
+      response.insert_header((header::RETRY_AFTER, "1"));
+      return response.json(WebhookErrorResponse {
+        error: WebhookErrorBody {
+          code: "WOML_POLICY_QUEUE_FULL",
+          message: "The durable WOML policy queue is full; retry this request.",
+          issues: None,
+        },
+      });
+    }
     Ok(Err(_)) | Err(_) => {
       return rejected_response(
         state.get_ref(),
@@ -2062,7 +2135,11 @@ async fn handle_webhook(
   }
   HttpResponse::Accepted().json(WebhookAcceptedResponse {
     run_id: outcome.run_id,
-    status: "accepted",
+    status: if route.runtime_policy {
+      "queued"
+    } else {
+      "accepted"
+    },
     duplicate: outcome.duplicate,
   })
 }
@@ -2326,6 +2403,11 @@ fn event_source_identity(event_id: &str, workflow_id: &str, trigger_id: &str) ->
 
 fn event_admission_failure(error: &DurableStoreError) -> (&'static str, &'static str, bool) {
   match error {
+    DurableStoreError::RuntimePolicyQueueFull => (
+      "WOML_POLICY_QUEUE_FULL",
+      "The durable WOML policy queue is full; retry this subscriber delivery.",
+      true,
+    ),
     DurableStoreError::TriggerIdempotencyConflict => (
       "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
       "This event ID is already bound to a different payload.",
@@ -2376,14 +2458,24 @@ fn admit_startup_manual(state: &WebhookRuntimeState, startup: StartupManualTrigg
       state.report_run_started(&identity);
       dispatch_run(state, identity);
     }
-    Err(_) => state.report(TriggerProgress::OccurrenceRejected {
+    Err(error) => state.report(TriggerProgress::OccurrenceRejected {
       contract: TRIGGER_PROGRESS_CONTRACT,
       contract_version: TRIGGER_PROGRESS_CONTRACT_VERSION,
       workflow_id: Some(startup.workflow_id),
       trigger_id: Some(startup.trigger_id),
       trigger_handler: "trigger.manual".to_string(),
-      code: "WOML_TRIGGER_UNAVAILABLE".to_string(),
-      message: "The durable WOML trigger authority is unavailable.".to_string(),
+      code: if matches!(error, DurableStoreError::RuntimePolicyQueueFull) {
+        "WOML_POLICY_QUEUE_FULL"
+      } else {
+        "WOML_TRIGGER_UNAVAILABLE"
+      }
+      .to_string(),
+      message: if matches!(error, DurableStoreError::RuntimePolicyQueueFull) {
+        "The durable WOML policy queue is full; retry the manual run."
+      } else {
+        "The durable WOML trigger authority is unavailable."
+      }
+      .to_string(),
       occurred_at: Utc::now(),
     }),
   }
@@ -2412,6 +2504,11 @@ async fn run_external_ingress(
           (
             "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
             "This provider event is already bound to a different payload.",
+          )
+        } else if matches!(error, DurableStoreError::RuntimePolicyQueueFull) {
+          (
+            "WOML_POLICY_QUEUE_FULL",
+            "The durable WOML policy queue is full; the provider may retry this event.",
           )
         } else {
           (

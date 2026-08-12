@@ -503,14 +503,18 @@ pub(crate) fn validate_payload_against_definition(
             .to_string(),
         );
       }
-      let trigger = workflow.trigger(&data.trigger.id).ok_or_else(|| {
-        format!(
-          "run_admitted references unknown trigger {:?}.",
-          data.trigger.id
-        )
-      })?;
-      if trigger.handler != data.trigger.handler {
-        return Err("run_admitted trigger identity does not match the definition.".to_string());
+      let workflow_call_ingress =
+        data.trigger.id == "workflow-call" && data.trigger.handler == "trigger.event";
+      if !workflow_call_ingress {
+        let trigger = workflow.trigger(&data.trigger.id).ok_or_else(|| {
+          format!(
+            "run_admitted references unknown trigger {:?}.",
+            data.trigger.id
+          )
+        })?;
+        if trigger.handler != data.trigger.handler {
+          return Err("run_admitted trigger identity does not match the definition.".to_string());
+        }
       }
     }
     RunEventPayload::RunExecutionStarted(data) => {

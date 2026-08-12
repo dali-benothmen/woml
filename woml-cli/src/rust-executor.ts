@@ -92,6 +92,16 @@ export type ExecutionProgressV1 =
       readonly actionId: string;
       readonly stepId?: string;
       readonly code?: string;
+    }
+  | {
+      readonly profile: 'woml.runtime-policy-progress/v1';
+      readonly runId: string;
+      readonly workflowId: string;
+      readonly phase: 'queued' | 'eligible' | 'started' | 'timed_out';
+      readonly queue: string;
+      readonly waitingFor?: 'concurrency' | 'rate_limit';
+      readonly eligibleAt?: string;
+      readonly code?: 'WOML_WORKFLOW_TIMED_OUT';
     };
 
 export interface RustRecoveryReport {
@@ -272,7 +282,13 @@ export interface WebhookRuntimeOptions extends RustExecutorOptions {
   readonly onScheduleProgress?: (progress: ScheduleProgressV1) => void;
   readonly onIntervalProgress?: (progress: IntervalProgressV1) => void;
   readonly onWorkflowCallProgress?: (progress: WorkflowCallProgressV1) => void;
+  readonly onRuntimePolicyProgress?: (progress: RuntimePolicyProgressV1) => void;
 }
+
+export type RuntimePolicyProgressV1 = Extract<
+  ExecutionProgressV1,
+  { readonly profile: 'woml.runtime-policy-progress/v1' }
+>;
 
 export interface WebhookRuntimeHandle {
   readonly runtimeId: string;
@@ -340,6 +356,7 @@ export interface RustRunInspection {
 
 export type PublicRunStatus =
   | 'not_started'
+  | 'queued'
   | 'running'
   | 'waiting'
   | 'cancelling'
@@ -356,10 +373,25 @@ export interface RustRunSummaryV1 {
   readonly updatedAt: string;
 }
 
-export interface RustRunListV1 {
-  readonly profile: 'woml.run-list/v1';
-  readonly runs: readonly RustRunSummaryV1[];
-}
+export type RustRunListV1 =
+  | {
+      readonly profile: 'woml.run-list/v1';
+      readonly runs: readonly RustRunSummaryV1[];
+    }
+  | {
+      readonly profile: 'woml.run-list/v2';
+      readonly runs: readonly {
+        readonly runId: string;
+        readonly workflowId: string;
+        readonly status: PublicRunStatus;
+        readonly admittedAt: string;
+        readonly startedAt?: string;
+        readonly updatedAt: string;
+        readonly queue?: string;
+        readonly waitingFor?: 'concurrency' | 'rate_limit';
+        readonly eligibleAt?: string;
+      }[];
+    };
 
 export interface RustLifecycleWarning {
   readonly hookId: string;
@@ -371,7 +403,7 @@ export interface RustLifecycleWarning {
 }
 
 export interface RustRunInspectionV2 {
-  readonly profile: 'woml.run-inspection/v2';
+  readonly profile: 'woml.run-inspection/v2' | 'woml.run-inspection/v3';
   readonly runId: string;
   readonly workflowId: string;
   readonly status: PublicRunStatus;
@@ -397,6 +429,12 @@ export interface RustRunInspectionV2 {
   readonly cancellation: {
     readonly requested: boolean;
     readonly requestId?: string;
+  };
+  readonly policy?: {
+    readonly queue: string;
+    readonly waitingFor?: 'concurrency' | 'rate_limit';
+    readonly eligibleAt?: string;
+    readonly timeoutAt?: string;
   };
 }
 
@@ -921,6 +959,30 @@ function dateTime(value: unknown): value is string {
 
 export function parseExecutionProgress(json: string): ExecutionProgressV1 {
   const value: unknown = JSON.parse(json);
+  if (
+    record(value) &&
+    value.profile === 'woml.runtime-policy-progress/v1' &&
+    exactKeys(
+      value,
+      ['profile', 'runId', 'workflowId', 'phase', 'queue'],
+      ['waitingFor', 'eligibleAt', 'code']
+    ) &&
+    typeof value.runId === 'string' &&
+    value.runId.length > 0 &&
+    typeof value.workflowId === 'string' &&
+    value.workflowId.length > 0 &&
+    typeof value.queue === 'string' &&
+    value.queue.length > 0 &&
+    ['queued', 'eligible', 'started', 'timed_out'].includes(
+      String(value.phase)
+    ) &&
+    (value.waitingFor === undefined ||
+      ['concurrency', 'rate_limit'].includes(String(value.waitingFor))) &&
+    (value.eligibleAt === undefined || dateTime(value.eligibleAt)) &&
+    (value.code === undefined || value.code === 'WOML_WORKFLOW_TIMED_OUT')
+  ) {
+    return value as ExecutionProgressV1;
+  }
   if (
     record(value) &&
     value.profile === 'woml.lifecycle-progress/v1' &&
@@ -1998,6 +2060,19 @@ export async function startWebhookRuntimeWithRust(
           options.onWorkflowCallProgress?.(parseWorkflowCallProgress(message));
           return;
         }
+        if (
+          record(decoded) &&
+          decoded.profile === 'woml.runtime-policy-progress/v1'
+        ) {
+          const progress = parseExecutionProgress(message);
+          if (
+            'profile' in progress &&
+            progress.profile === 'woml.runtime-policy-progress/v1'
+          ) {
+            options.onRuntimePolicyProgress?.(progress);
+          }
+          return;
+        }
         options.onTriggerProgress?.(parseTriggerProgress(message));
       }
     )
@@ -2227,6 +2302,7 @@ function callRunManagementNative(call: () => string): unknown {
 
 const PUBLIC_RUN_STATUSES: readonly PublicRunStatus[] = [
   'not_started',
+  'queued',
   'running',
   'waiting',
   'cancelling',
@@ -2269,24 +2345,42 @@ export function listRunsWithRust(
       filters.status
     )
   );
+  const isV2 = record(value) && value.profile === 'woml.run-list/v2';
   const summary = (candidate: unknown): boolean =>
     record(candidate) &&
-    exactKeys(candidate, [
-      'runId',
-      'workflowId',
-      'status',
-      'startedAt',
-      'updatedAt',
-    ]) &&
+    (isV2
+      ? exactKeys(
+          candidate,
+          ['runId', 'workflowId', 'status', 'admittedAt', 'updatedAt'],
+          ['startedAt', 'queue', 'waitingFor', 'eligibleAt']
+        )
+      : exactKeys(candidate, [
+          'runId',
+          'workflowId',
+          'status',
+          'startedAt',
+          'updatedAt',
+        ])) &&
     typeof candidate.runId === 'string' &&
     typeof candidate.workflowId === 'string' &&
     PUBLIC_RUN_STATUSES.includes(candidate.status as PublicRunStatus) &&
-    dateTime(candidate.startedAt) &&
+    (isV2
+      ? dateTime(candidate.admittedAt) &&
+        (candidate.startedAt === undefined || dateTime(candidate.startedAt)) &&
+        (candidate.queue === undefined || typeof candidate.queue === 'string') &&
+        (candidate.waitingFor === undefined ||
+          ['concurrency', 'rate_limit'].includes(
+            String(candidate.waitingFor)
+          )) &&
+        (candidate.eligibleAt === undefined || dateTime(candidate.eligibleAt))
+      : dateTime(candidate.startedAt)) &&
     dateTime(candidate.updatedAt);
   if (
     !record(value) ||
     !exactKeys(value, ['profile', 'runs']) ||
-    value.profile !== 'woml.run-list/v1' ||
+    !['woml.run-list/v1', 'woml.run-list/v2'].includes(
+      String(value.profile)
+    ) ||
     !Array.isArray(value.runs) ||
     value.runs.length > 200 ||
     !value.runs.every(summary)
@@ -2347,18 +2441,24 @@ export function inspectRunV2WithRust(
       typeof candidate.destination === 'string');
   if (
     !record(value) ||
-    !exactKeys(value, [
-      'profile',
-      'runId',
-      'workflowId',
-      'status',
-      'businessOutcome',
-      'lifecycleStatus',
-      'hooks',
-      'warnings',
-      'cancellation',
-    ]) ||
-    value.profile !== 'woml.run-inspection/v2' ||
+    !exactKeys(
+      value,
+      [
+        'profile',
+        'runId',
+        'workflowId',
+        'status',
+        'businessOutcome',
+        'lifecycleStatus',
+        'hooks',
+        'warnings',
+        'cancellation',
+      ],
+      ['policy']
+    ) ||
+    !['woml.run-inspection/v2', 'woml.run-inspection/v3'].includes(
+      String(value.profile)
+    ) ||
     typeof value.runId !== 'string' ||
     typeof value.workflowId !== 'string' ||
     !PUBLIC_RUN_STATUSES.includes(value.status as PublicRunStatus) ||
@@ -2382,7 +2482,24 @@ export function inspectRunV2WithRust(
     !exactKeys(value.cancellation, ['requested'], ['requestId']) ||
     typeof value.cancellation.requested !== 'boolean' ||
     (value.cancellation.requestId !== undefined &&
-      typeof value.cancellation.requestId !== 'string')
+      typeof value.cancellation.requestId !== 'string') ||
+    (value.profile === 'woml.run-inspection/v3' &&
+      (!record(value.policy) ||
+        !exactKeys(
+          value.policy,
+          ['queue'],
+          ['waitingFor', 'eligibleAt', 'timeoutAt']
+        ) ||
+        typeof value.policy.queue !== 'string' ||
+        (value.policy.waitingFor !== undefined &&
+          !['concurrency', 'rate_limit'].includes(
+            String(value.policy.waitingFor)
+          )) ||
+        (value.policy.eligibleAt !== undefined &&
+          !dateTime(value.policy.eligibleAt)) ||
+        (value.policy.timeoutAt !== undefined &&
+          !dateTime(value.policy.timeoutAt)))) ||
+    (value.profile === 'woml.run-inspection/v2' && value.policy !== undefined)
   ) {
     throw new Error('The native core returned invalid run-inspection data.');
   }

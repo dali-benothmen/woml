@@ -74,6 +74,7 @@ export type SlackTriggerProtocolMessage =
         | 'WOML_SLACK_TRIGGER_UNAVAILABLE'
         | 'WOML_SLACK_TRIGGER_EVENT_INVALID'
         | 'WOML_SLACK_TRIGGER_EVENT_TOO_LARGE'
+        | 'WOML_POLICY_QUEUE_FULL'
         | 'WOML_TRIGGER_UNAVAILABLE';
       readonly message: string;
       readonly retryable: boolean;

@@ -62,6 +62,7 @@ pub use durable::{
   ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, SchedulerClaimV1,
   StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest,
   TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
+  RUNTIME_POLICY_QUEUE_CEILING,
 };
 pub use engine::{step_effect_idempotency_key, EngineError, InMemoryDagEngine};
 pub use event::{

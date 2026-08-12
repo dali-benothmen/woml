@@ -345,7 +345,9 @@ export class SlackTriggerHost {
     if (rejected?.messageType === 'rejected') {
       await this.#failure(
         envelope.envelopeId,
-        'WOML_TRIGGER_UNAVAILABLE',
+        rejected.failure.code === 'WOML_POLICY_QUEUE_FULL'
+          ? 'WOML_POLICY_QUEUE_FULL'
+          : 'WOML_TRIGGER_UNAVAILABLE',
         rejected.failure.message,
         rejected.failure.retryable
       );

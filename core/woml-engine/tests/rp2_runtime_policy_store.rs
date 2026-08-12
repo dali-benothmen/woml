@@ -7,7 +7,7 @@ use uuid::Uuid;
 use woml_engine::{
   fold_events, CompiledWorkflowDefinition, DurableEventStore, DurableStoreError, PublicRunStatus,
   RunEvent, RunEventPayload, RunExecutionStartedData, RunStatus, RunTimeoutReachedData,
-  TriggerAdmissionRequest, DURABLE_STORE_SCHEMA_VERSION,
+  TriggerAdmissionRequest, DURABLE_STORE_SCHEMA_VERSION, RUNTIME_POLICY_QUEUE_CEILING,
 };
 
 const DEFINITION_A: &str =
@@ -270,6 +270,12 @@ fn active_policy_definition_conflicts_are_rejected() {
     .unwrap();
 
   assert!(matches!(
+    store.validate_runtime_policy_activation(&second, DEFINITION_B),
+    Err(DurableStoreError::RuntimePolicyDefinitionConflict(workflow_id))
+      if workflow_id == "policy-demo"
+  ));
+
+  assert!(matches!(
     store.admit_trigger_occurrence(admission(
       DEFINITION_B,
       "manual:b",
@@ -278,6 +284,50 @@ fn active_policy_definition_conflicts_are_rejected() {
     Err(DurableStoreError::RuntimePolicyDefinitionConflict(workflow_id))
       if workflow_id == "policy-demo"
   ));
+}
+
+#[test]
+fn queue_ceiling_rejects_without_creating_a_run_and_keeps_retry_identity_free() {
+  let file = TestDatabase::new();
+  let now = Utc.with_ymd_and_hms(2026, 8, 12, 10, 0, 0).unwrap();
+  let mut store = DurableEventStore::open(file.path()).unwrap();
+  store
+    .register_definition(&policy_model(), DEFINITION_A)
+    .unwrap();
+  let connection = Connection::open(file.path()).unwrap();
+  connection
+    .execute_batch(&format!(
+      "WITH RECURSIVE sequence(value) AS (
+         SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < {RUNTIME_POLICY_QUEUE_CEILING}
+       )
+       INSERT INTO woml_runs(run_id, workflow_id, definition_hash, created_at)
+       SELECT printf('run_ceiling_%05d', value), 'policy-demo', '{DEFINITION_A}', '{now}'
+       FROM sequence;
+       WITH RECURSIVE sequence(value) AS (
+         SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < {RUNTIME_POLICY_QUEUE_CEILING}
+       )
+       INSERT INTO woml_runtime_policy_queue(
+         run_id, workflow_id, queue_name, admitted_at, occurrence_sequence
+       )
+       SELECT printf('run_ceiling_%05d', value), 'policy-demo', 'orders', '{now}', value
+       FROM sequence;"
+    ))
+    .unwrap();
+  drop(connection);
+
+  assert!(matches!(
+    store.admit_trigger_occurrence(admission(DEFINITION_A, "manual:overflow", now)),
+    Err(DurableStoreError::RuntimePolicyQueueFull)
+  ));
+  let connection = Connection::open(file.path()).unwrap();
+  let created: i64 = connection
+    .query_row(
+      "SELECT COUNT(*) FROM woml_trigger_occurrences WHERE source_identity_hash IS NOT NULL",
+      [],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert_eq!(created, 0);
 }
 
 #[test]

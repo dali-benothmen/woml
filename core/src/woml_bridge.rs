@@ -22,7 +22,8 @@ use woml_engine::{
   ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter, LifecycleProgress,
   NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
   NotificationJourneyError, ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError,
-  RuntimeExecutionOptions, RuntimeModuleArtifact, ScheduleProgress, ScheduleProgressReporter,
+  RuntimeExecutionOptions, RuntimeModuleArtifact, RuntimePolicyProgress,
+  RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
   ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest, TriggerProgress,
   TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
   WomlWebhookServerConfig, WorkflowCallProgress, WorkflowCallProgressReporter,
@@ -71,6 +72,24 @@ struct NativeExecutionError {
 
 fn native_execution_error(error: RuntimeExecutionError) -> napi::Error {
   let envelope = match error {
+    RuntimeExecutionError::DurableStore(DurableStoreError::RuntimePolicyQueueFull) => {
+      NativeExecutionError {
+        kind: "woml_execution_error",
+        code: "WOML_POLICY_QUEUE_FULL".to_string(),
+        message: "The durable WOML policy queue is full; retry this run.".to_string(),
+        node_id: None,
+        branch_id: None,
+        arm_id: None,
+        reference_path: None,
+        branch_site: None,
+        approval_id: None,
+        request_id: None,
+        attempt: None,
+        max_attempts: None,
+        failure_code: None,
+        details: None,
+      }
+    }
     RuntimeExecutionError::RunFailed(details) => NativeExecutionError {
       kind: "woml_execution_error",
       code: details.code.clone(),
@@ -394,6 +413,9 @@ fn native_trigger_runtime_error(error: WebhookRuntimeError) -> NativeTriggerRunt
   let code = match error {
     WebhookRuntimeError::RouteConflict(_) => "WOML_WEBHOOK_ROUTE_CONFLICT",
     WebhookRuntimeError::SecretMissing(_) => "WOML_WEBHOOK_SECRET_MISSING",
+    WebhookRuntimeError::DurableStore(DurableStoreError::RuntimePolicyDefinitionConflict(_)) => {
+      "WOML_POLICY_CONFLICT"
+    }
     WebhookRuntimeError::InvalidSchema { .. } => "WOML_TRIGGER_SCHEMA_INVALID",
     WebhookRuntimeError::DurableStore(DurableStoreError::WorkflowRuntimeDuplicateOwner(_)) => {
       "WOML_WORKFLOW_TARGET_AMBIGUOUS"
@@ -425,6 +447,7 @@ fn native_runtime_progress_reporters(
   ScheduleProgressReporter,
   IntervalProgressReporter,
   WorkflowCallProgressReporter,
+  RuntimePolicyProgressReporter,
 )> {
   let mut progress = progress_callback
     .create_threadsafe_function::<String, String, _, ErrorStrategy::Fatal>(0, |context| {
@@ -436,6 +459,7 @@ fn native_runtime_progress_reporters(
   let schedule_progress = progress.clone();
   let interval_progress = progress;
   let workflow_call_progress = interval_progress.clone();
+  let runtime_policy_progress = workflow_call_progress.clone();
   Ok((
     Arc::new(move |message: TriggerProgress| {
       if let Ok(json) = serde_json::to_string(&message) {
@@ -455,6 +479,11 @@ fn native_runtime_progress_reporters(
     Arc::new(move |message: WorkflowCallProgress| {
       if let Ok(json) = serde_json::to_string(&message) {
         let _ = workflow_call_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    }),
+    Arc::new(move |message: RuntimePolicyProgress| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = runtime_policy_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
       }
     }),
   ))
@@ -590,6 +619,7 @@ fn runtime_options_with_progress(
     })?;
   progress.unref(env)?;
   let lifecycle_progress = progress.clone();
+  let runtime_policy_progress = lifecycle_progress.clone();
   Ok(
     runtime_options_with_secrets(
       bun_executable,
@@ -605,6 +635,11 @@ fn runtime_options_with_progress(
     .with_lifecycle_progress_reporter(Arc::new(move |message: LifecycleProgress| {
       if let Ok(json) = serde_json::to_string(&message) {
         let _ = lifecycle_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
+      }
+    }))
+    .with_runtime_policy_progress_reporter(Arc::new(move |message: RuntimePolicyProgress| {
+      if let Ok(json) = serde_json::to_string(&message) {
+        let _ = runtime_policy_progress.call(json, ThreadsafeFunctionCallMode::Blocking);
       }
     })),
   )
@@ -1142,6 +1177,7 @@ pub fn start_woml_webhook_runtime(
     schedule_progress_reporter,
     interval_progress_reporter,
     workflow_call_progress_reporter,
+    runtime_policy_progress_reporter,
   ) = native_runtime_progress_reporters(&env, progress_callback)?;
   let mut runtime_secrets = BTreeMap::new();
   for registration in &registrations {
@@ -1174,7 +1210,8 @@ pub fn start_woml_webhook_runtime(
       .with_resolved_secrets(runtime_secrets)
       .with_schedule_progress_reporter(schedule_progress_reporter)
       .with_interval_progress_reporter(interval_progress_reporter)
-      .with_workflow_call_progress_reporter(workflow_call_progress_reporter),
+      .with_workflow_call_progress_reporter(workflow_call_progress_reporter)
+      .with_runtime_policy_progress_reporter(runtime_policy_progress_reporter),
     progress_reporter: Some(progress_reporter),
   };
 
@@ -1310,6 +1347,19 @@ pub async fn submit_woml_trigger_occurrence(
         },
       })
     }
+    Err(DurableStoreError::RuntimePolicyQueueFull) => {
+      serde_json::to_string(&NativeTriggerIngressRejected {
+        contract: "woml.trigger-ingress",
+        contract_version: 1,
+        message_type: "rejected",
+        request_id,
+        failure: NativeTriggerIngressFailure {
+          code: "WOML_POLICY_QUEUE_FULL",
+          message: "The durable WOML policy queue is full; Slack may redeliver this event.",
+          retryable: true,
+        },
+      })
+    }
     Err(_) => serde_json::to_string(&NativeTriggerIngressRejected {
       contract: "woml.trigger-ingress",
       contract_version: 1,
@@ -1378,7 +1428,7 @@ pub fn list_woml_runs(
   let store = DurableEventStore::open(PathBuf::from(event_store_path))
     .map_err(|error| native_run_management_error("WOML_RUN_LIST_FAILED", error))?;
   let list = store
-    .list_runs_filtered(
+    .list_runs_v2_filtered(
       usize::try_from(limit).unwrap_or(usize::MAX),
       workflow_id.as_deref(),
       status.as_deref(),
@@ -1392,13 +1442,32 @@ pub fn list_woml_runs(
 pub fn inspect_woml_run_v2(event_store_path: String, run_id: String) -> napi::Result<String> {
   let store = DurableEventStore::open(PathBuf::from(event_store_path))
     .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?;
-  let inspection = store.inspect_run_v2(&run_id).map_err(|error| {
+  let binding = store.run_binding(&run_id).map_err(|error| {
     let code = if matches!(error, DurableStoreError::RunNotFound(_)) {
       "WOML_RUN_NOT_FOUND"
     } else {
       "WOML_RUN_INSPECTION_FAILED"
     };
     native_run_management_error(code, error)
+  })?;
+  let workflow = store
+    .definition(&binding.definition_hash)
+    .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?;
+  let inspection = if workflow.schema_version >= 12 {
+    serde_json::to_value(
+      store
+        .inspect_run_v3(&run_id)
+        .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?,
+    )
+  } else {
+    serde_json::to_value(
+      store
+        .inspect_run_v2(&run_id)
+        .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?,
+    )
+  }
+  .map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode WOML run inspection: {error}"))
   })?;
   serde_json::to_string(&inspection).map_err(|error| {
     napi::Error::from_reason(format!("Could not encode WOML run inspection: {error}"))

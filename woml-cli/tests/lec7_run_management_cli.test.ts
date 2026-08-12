@@ -72,7 +72,7 @@ describe('LEC7 direct run management', () => {
     const empty = invoke('list', '--state', statePath, '--json');
     expect(empty.exitCode).toBe(0);
     expect(JSON.parse(empty.stdout.toString())).toEqual({
-      profile: 'woml.run-list/v1',
+      profile: 'woml.run-list/v2',
       runs: [],
     });
 
@@ -107,7 +107,7 @@ describe('LEC7 direct run management', () => {
     );
     expect(listing.exitCode).toBe(0);
     const listed = JSON.parse(listing.stdout.toString());
-    expect(listed.profile).toBe('woml.run-list/v1');
+    expect(listed.profile).toBe('woml.run-list/v2');
     expect(listed.runs).toHaveLength(1);
     const runId = listed.runs[0].runId as string;
 

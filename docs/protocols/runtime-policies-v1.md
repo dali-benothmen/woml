@@ -82,7 +82,8 @@ Recovery derives queued runs and rate history from Event v11. Store v12 may
 rebuild queue/summary indexes. Scheduler leases are expired/reconciled using
 the live owner boundary. Duplicate ingress observes the original run.
 
-The bounded local queue ceiling uses one frozen fail-closed mapping:
+The bounded local queue ceiling is 10,000 queued runs per state location in
+the local runtime and uses one frozen fail-closed mapping:
 
 | Ingress | `WOML_POLICY_QUEUE_FULL` behavior |
 | --- | --- |
@@ -96,14 +97,15 @@ The bounded local queue ceiling uses one frozen fail-closed mapping:
 No run is created when the safety ceiling itself prevents admission. The
 existing occurrence/source identity remains the deduplication key for a retry.
 
-## Compatibility and staged execution
+## Compatibility and execution
 
 Models v1-v11, Events v1-v10, Store v11, Run List v1, and Run Inspection v2
 remain immutable. RP1 emits Model v12 only when source contains `<config>`.
 `woml check` can review it, including Definition Package v7 for local modules.
 `woml run` executes concurrency, queue, rate-limit, and timeout policies.
-Definition Package v7 local-module runtime promotion remains staged for RP6
-integration.
+RP6 activates Definition Package v7's exact compiled local-module artifacts
+without changing its frozen compilation identity. Model v12 policies and local
+modules therefore execute together through the Rust policy authority.
 
 `<config queue>` is run-admission policy. It does not implement the postponed
 `services.queue` message producer/consumer feature.

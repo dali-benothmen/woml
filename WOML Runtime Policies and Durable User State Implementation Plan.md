@@ -1,11 +1,12 @@
 # WOML Runtime Policies and Durable User State Implementation Plan
 
-Status: RP0 through RP5 completed on 2026-08-12. Runtime Policy v1, Model v12,
+Status: RP0 through RP6 completed on 2026-08-12. Runtime Policy v1, Model v12,
 Event v11, Store v12 coordination, public inspection/progress, and Definition
 Package v7 contracts are frozen. `<config>` validates and lowers outside the
 DAG. Rust now durably executes concurrency, work-conserving FIFO queueing,
-strict rolling-window rate limits, and immutable total workflow deadlines.
-`woml run` and `woml test` execute all four Runtime Policy v1 fields.
+strict rolling-window rate limits, and immutable total workflow deadlines across
+every run ingress. `woml run` and `woml test` execute all four Runtime Policy v1
+fields, including workflows that use local modules.
 No durable-user-state execution code begins until the later DS0 gate is
 reviewed. Runtime Policies and Durable User State are one roadmap milestone,
 delivered as two independently reviewable releases: RP0-RP7 first, then
@@ -834,7 +835,7 @@ changing underneath it.
 | RP3 (complete) | Execute concurrency limits and durable FIFO queueing.                       | Bursts wait safely and start as capacity becomes available across processes/restarts.                  |
 | RP4 (complete) | Execute strict rolling-window rate limits.                                  | Starts are durably paced without resetting after restart.                                              |
 | RP5 (complete) | Execute workflow timeouts.                                                  | Overdue runs fail truthfully and run their failure lifecycle.                                          |
-| RP6            | Integrate all trigger/call paths, cancellation, inspection, and progress.   | Policies behave consistently everywhere users can create or control a run.                             |
+| RP6 (complete) | Integrate all trigger/call paths, cancellation, inspection, and progress.   | Policies behave consistently everywhere users can create or control a run.                             |
 | RP7            | Harden, migrate, benchmark, document, and publish Runtime Policies.         | `<config>` becomes a supported executable WOML feature.                                                |
 | DS0            | Freeze State v1, mutation identity, Store v13, and reviewed fixtures.       | Durable state semantics are reviewable before a mutable authority is added.                            |
 | DS1            | Add frontend discovery, editor types, and the Bun `services.state` facade.  | Scripts and modules receive a typed service surface; runtime calls remain deliberately gated.          |
@@ -1101,7 +1102,7 @@ Completion notes (2026-08-12):
 - `examples/runtimePolicyTimeoutWorkflow.woml` is the manual RP5 example;
   `bun run test:rp5` is the focused release gate.
 
-### RP6 — Integrate all ingress, controls, and operator surfaces
+### RP6 — Integrate all ingress, controls, and operator surfaces (completed)
 
 Changes:
 
@@ -1125,6 +1126,29 @@ Gate:
 Packaged CLI tests and real/manual trigger fixtures prove every ingress path,
 shared state across terminals, cancellation, JSON output, redaction, shutdown,
 and restart.
+
+Completed implementation:
+
+- Manual, webhook, Slack, schedule, interval, named-event, Workflow Call, and
+  Workflow Start admission now converge on Model v12's Event v11 scheduler;
+  call/start children use a reserved durable `workflow-call` admission identity
+  instead of bypassing policy, without changing frozen Event v11's shape.
+- The local state queue has a 10,000-entry fail-closed ceiling. Overflow creates
+  no run, preserves the publisher's retry identity, returns HTTP 503 plus
+  `Retry-After` for webhooks, remains retryable for event/provider/call ingress,
+  and surfaces `WOML_POLICY_QUEUE_FULL`.
+- Trigger-host and direct executions publish frozen Runtime Policy Progress v1,
+  and the CLI explains queued, eligible, started, and timed-out policy states.
+- `woml list` now uses Run List v2 (including queued runs), while `woml get`
+  selects Run Inspection v3 for policy runs and retains v2 for legacy runs;
+  human and `--json` output expose queue, wait, eligibility, and timeout data.
+- Runtime startup checks active definition/policy conflicts before activation,
+  producing `WOML_POLICY_CONFLICT` rather than failing after a trigger arrives.
+- Definition Package v7 local modules execute with Model v12 by promoting the
+  exact frozen compiled artifacts at activation time; the immutable compilation
+  package shape is unchanged.
+- The concurrency, rate-limit, timeout, and mixed-policy examples are the RP6
+  manual suite. `bun run test:rp6` is the integrated release gate.
 
 ### RP7 — Harden and publish Runtime Policies
 

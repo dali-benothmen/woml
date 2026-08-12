@@ -518,6 +518,15 @@ async fn synchronous_workflow_call_releases_then_reacquires_the_parent_slot() {
     "../../../woml/tests/fixtures/workflow-calls/calculate-risk.compiled.v10.json"
   ))
   .unwrap();
+  child_value["schemaVersion"] = Value::from(12);
+  child_value["runtimePolicy"] = serde_json::json!({
+    "profileVersion": 1,
+    "concurrency": 1,
+    "queue": {
+      "name": "workflow-call-child",
+      "discipline": "work_conserving_fifo"
+    }
+  });
   child_value["graph"]["nodes"][0]["inputs"]["fields"]["source"]["value"] = Value::String(
     "await new Promise(resolve => setTimeout(resolve, 600)); return { score: 90 };".to_string(),
   );

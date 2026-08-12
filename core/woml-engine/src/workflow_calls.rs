@@ -1220,6 +1220,12 @@ fn target_failure(error: WorkflowTargetRegistryError) -> CapabilityFailure {
 
 fn store_failure(error: DurableStoreError) -> CapabilityFailure {
   let (kind, code, message, retryable) = match error {
+    DurableStoreError::RuntimePolicyQueueFull => (
+      CapabilityFailureKind::ServiceRejected,
+      "WOML_POLICY_QUEUE_FULL",
+      "The target workflow queue is full; retry the workflow operation.",
+      true,
+    ),
     DurableStoreError::WorkflowCallIdempotencyConflict => (
       CapabilityFailureKind::ServiceRejected,
       "WOML_WORKFLOW_CALL_IDEMPOTENCY_CONFLICT",
