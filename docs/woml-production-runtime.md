@@ -1,8 +1,9 @@
 # WOML Production Runtime and Operations
 
-Production Runtime PRO0 and PRO1 provide the reviewed contracts and the first
-deployment preflight. Runtime hosting still uses the existing direct `.woml`
-experience—there is no build command or deployment-package extension.
+Production Runtime PRO0 through PRO2 provide the reviewed contracts,
+deployment preflight, and atomic direct-source activation. Runtime hosting uses
+the direct `.woml` experience—there is no build command or deployment-package
+extension.
 
 ## Current commands
 
@@ -87,11 +88,30 @@ With `--config`, `woml check` collects required names from every selected
 workflow and reports all missing names together. It never prints values. The
 existing local or environment-backed WOML secret provider remains the source.
 
+## Atomic activation
+
+`woml run` treats every supplied file and directory as one deployment. WOML
+orders and compiles that complete set, hashes every `.woml`, `.js`, and `.ts`
+source, pins the exact compiled definitions and module artifacts in Rust, and
+starts providers behind a closed readiness gate.
+
+A bound webhook or event listener returns HTTP 503 with
+`WOML_RUNTIME_NOT_READY` until every required provider is ready. Schedules,
+intervals, startup manual triggers, Slack ingress, recovery dispatch, and
+Workflow Calls are closed by the same gate. WOML rechecks source bytes and
+directory membership immediately before opening admission. If a source changes
+or Slack/provider startup fails, the partial runtime is closed and no new
+trigger occurrence is admitted.
+
+The runtime prints a short form of its internal activation identity after
+readiness. That identity is derived from exact compiled definitions and module
+artifacts; it is not a new artifact users need to build or manage.
+
 ## Current phase boundary
 
-PRO0 freezes atomic activation, background control, ownership, administration,
-observability, backup, restore, and retention contracts. PRO1 implements only
-configuration and non-activating preflight.
+PRO0 freezes the production contracts, PRO1 implements configuration and
+non-activating preflight, and PRO2 implements atomic activation. Durable
+deployment ownership and detached operation begin in PRO3.
 
 These planned commands are not executable until their phases:
 
@@ -100,9 +120,9 @@ woml run workflows/ --background  # PRO3
 woml stop                         # PRO3
 woml top                          # PRO6
 woml backup                       # PRO7
-woml cleanup --older-than 30d     # PRO8; final spelling reviewed there
+woml prune --before 30d --dry-run # PRO8
 ```
 
 WOML must reject an unavailable feature rather than accepting and ignoring it.
-The existing foreground `woml run workflows/` remains the production-trigger
-host while PRO2 and PRO3 add atomic activation and durable ownership.
+The existing foreground `woml run workflows/` is now the atomically activated
+production-trigger host while PRO3 adds durable ownership and background mode.

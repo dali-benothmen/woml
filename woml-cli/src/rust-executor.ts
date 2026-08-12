@@ -278,6 +278,8 @@ export interface WebhookRuntimeOptions extends RustExecutorOptions {
   readonly host?: string;
   readonly port?: number;
   readonly startupManualTriggers?: Readonly<Record<string, string>>;
+  /** Prepare and bind the runtime without opening trigger admission. */
+  readonly startSuspended?: boolean;
   readonly onTriggerProgress?: (progress: TriggerProgressV1) => void;
   readonly onScheduleProgress?: (progress: ScheduleProgressV1) => void;
   readonly onIntervalProgress?: (progress: IntervalProgressV1) => void;
@@ -637,8 +639,10 @@ interface NativeCore {
     bunExecutable: string,
     scriptHostPath: string,
     scriptTimeoutMs: number,
+    startSuspended: boolean,
     progressCallback: (message: string) => void
   ) => Promise<string>;
+  readonly activateWomlWebhookRuntime: (runtimeId: string) => Promise<void>;
   readonly stopWomlWebhookRuntime: (runtimeId: string) => Promise<void>;
   readonly submitWomlTriggerOccurrence: (
     runtimeId: string,
@@ -2043,6 +2047,7 @@ export async function startWebhookRuntimeWithRust(
       options.bunExecutable ?? process.execPath,
       options.scriptHostPath ?? defaultScriptHostPath(),
       timeoutMs,
+      options.startSuspended ?? false,
       message => {
         const decoded: unknown = JSON.parse(message);
         if (record(decoded) && decoded.contract === 'woml.schedule-progress') {
@@ -2094,6 +2099,23 @@ export async function startWebhookRuntimeWithRust(
     );
   }
   return value as unknown as WebhookRuntimeHandle;
+}
+
+export async function activateWebhookRuntimeWithRust(
+  runtimeId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): Promise<void> {
+  if (runtimeId.length === 0) throw new Error('runtimeId must not be empty.');
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.activateWomlWebhookRuntime !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose atomic runtime activation; rebuild the Rust addon.`
+    );
+  }
+  await native
+    .activateWomlWebhookRuntime(runtimeId)
+    .catch(decodeTriggerRuntimeError);
 }
 
 export async function submitTriggerOccurrenceWithRust(

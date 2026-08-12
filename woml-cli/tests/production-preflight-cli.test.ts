@@ -131,8 +131,8 @@ describe('PRO1 Runtime Configuration and production preflight', () => {
         configuration: { deploymentName: 'test-runtime' },
         secretProvider: 'environment',
       });
-      expect(report.workflows.map((entry: { workflowId: string }) => entry.workflowId)).toEqual(['orders', 'agent']);
-      expect(report.workflows[0].requiredSecrets).toEqual(['ORDER_TOKEN']);
+      expect(report.workflows.map((entry: { workflowId: string }) => entry.workflowId)).toEqual(['agent', 'orders']);
+      expect(report.workflows[1].requiredSecrets).toEqual(['ORDER_TOKEN']);
       expect(await Bun.file(join(directory, 'data/state.sqlite')).exists()).toBe(false);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });

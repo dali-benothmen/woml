@@ -123,6 +123,63 @@ async fn start_server(
   .unwrap()
 }
 
+#[actix_web::test]
+async fn prepared_runtime_rejects_traffic_until_atomic_activation_opens_admission() {
+  let database = TemporaryDatabase::new("pro2-readiness-gate");
+  let mut server = WomlWebhookServer::prepare_with_external_ingress(
+    WomlWebhookServerConfig {
+      bind_address: "127.0.0.1:0".parse().unwrap(),
+      database_path: database.path().to_path_buf(),
+      registrations: vec![WebhookDefinitionRegistration::new(model(), WEBHOOK_HASH)
+        .with_secret("ORDER_WEBHOOK_TOKEN", BEARER_TOKEN)],
+      startup_manual_triggers: Default::default(),
+      execution: RuntimeExecutionOptions::new(placeholder_host(), 2_000),
+      progress_reporter: None,
+    },
+    None,
+  )
+  .await
+  .unwrap();
+  let address = server.local_address();
+  let authorization = format!("Bearer {BEARER_TOKEN}");
+
+  let closed = request(
+    address,
+    "POST",
+    WEBHOOK_PATH,
+    &[
+      ("Authorization", authorization.as_str()),
+      ("Content-Type", "application/json"),
+    ],
+    br#"{"orderId":"before-ready"}"#,
+    None,
+  )
+  .await;
+  assert_eq!(closed.status, 503);
+  assert_eq!(closed.body["error"]["code"], "WOML_RUNTIME_NOT_READY");
+  let store = DurableEventStore::open(database.path()).unwrap();
+  assert!(store
+    .recover_undispatched_trigger_runs()
+    .unwrap()
+    .is_empty());
+
+  server.activate().await.unwrap();
+  let opened = request(
+    address,
+    "POST",
+    WEBHOOK_PATH,
+    &[
+      ("Authorization", authorization.as_str()),
+      ("Content-Type", "application/json"),
+    ],
+    br#"{"orderId":"after-ready"}"#,
+    None,
+  )
+  .await;
+  assert_eq!(opened.status, 202);
+  server.stop().await;
+}
+
 struct HttpResult {
   status: u16,
   headers: String,

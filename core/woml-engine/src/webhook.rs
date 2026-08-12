@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use actix_web::http::{header, Method, StatusCode};
@@ -158,6 +159,16 @@ pub struct WomlWebhookServer {
   database_path: PathBuf,
   workflow_runtime_id: String,
   timed_trigger_tasks: Vec<actix_web::rt::task::JoinHandle<()>>,
+  pending_activation: Option<PendingActivation>,
+}
+
+struct PendingActivation {
+  state: web::Data<WebhookRuntimeState>,
+  recovery_runs: Vec<RunProgressIdentity>,
+  startup_manual_runs: Vec<StartupManualTrigger>,
+  external_ingress: Option<ExternalTriggerAdmissionReceiver>,
+  internal_event_dispatch: tokio_mpsc::UnboundedReceiver<EventServiceAcceptedRun>,
+  internal_address: SocketAddr,
 }
 
 impl WomlWebhookServer {
@@ -166,6 +177,19 @@ impl WomlWebhookServer {
   }
 
   pub async fn start_with_external_ingress(
+    config: WomlWebhookServerConfig,
+    external_ingress: Option<ExternalTriggerAdmissionReceiver>,
+  ) -> Result<Self, WebhookRuntimeError> {
+    let mut server = Self::prepare_with_external_ingress(config, external_ingress).await?;
+    server.activate().await?;
+    Ok(server)
+  }
+
+  /// Prepares the complete runtime without admitting trigger occurrences.
+  /// Definitions and module artifacts are pinned, listeners are bound, and
+  /// routes are compiled, but every ingress surface remains closed until
+  /// `activate` succeeds.
+  pub async fn prepare_with_external_ingress(
     config: WomlWebhookServerConfig,
     external_ingress: Option<ExternalTriggerAdmissionReceiver>,
   ) -> Result<Self, WebhookRuntimeError> {
@@ -185,25 +209,12 @@ impl WomlWebhookServer {
     let internal_address = internal_listener.local_addr()?;
     let workflow_runtime_id = state.workflow_targets.runtime_id().to_string();
     let database_path = state.database_path.clone();
-    let now = Utc::now();
-    DurableEventStore::open(&database_path)?.register_workflow_runtime_routes(
-      &workflow_runtime_id,
-      &state.workflow_targets.targets(),
-      &format!("http://{internal_address}"),
-      &workflow_routing_credential_hash(&state.workflow_routing_credential),
-      now,
-      now + ChronoDuration::seconds(WORKFLOW_RUNTIME_LEASE_SECONDS),
-    )?;
     let app_state = web::Data::new(state);
-    let recovery_state = app_state.clone();
-    let (mut timed_trigger_tasks, recovered_schedule_runs) =
-      initialize_schedules(recovery_state.clone())?;
-    let (interval_tasks, recovered_interval_runs) = initialize_intervals(recovery_state.clone())?;
-    timed_trigger_tasks.extend(interval_tasks);
+    let public_app_state = app_state.clone();
     let handle = if let Some(listener) = listener {
       let server = HttpServer::new(move || {
         App::new()
-          .app_data(app_state.clone())
+          .app_data(public_app_state.clone())
           .default_service(web::to(handle_webhook))
       })
       .listen(listener)?
@@ -214,7 +225,7 @@ impl WomlWebhookServer {
     } else {
       None
     };
-    let internal_app_state = recovery_state.clone();
+    let internal_app_state = app_state.clone();
     let internal_server = HttpServer::new(move || {
       App::new()
         .app_data(internal_app_state.clone())
@@ -229,58 +240,108 @@ impl WomlWebhookServer {
     let internal_handle = internal_server.handle();
     actix_web::rt::spawn(internal_server);
 
-    let routing_state = recovery_state.clone();
-    timed_trigger_tasks.push(actix_web::rt::spawn(async move {
-      run_workflow_routing_maintenance(routing_state).await;
-    }));
-
-    if let Some(receiver) = external_ingress {
-      let external_state = recovery_state.clone();
-      actix_web::rt::spawn(run_external_ingress(external_state, receiver));
-    }
-    let internal_state = recovery_state.clone();
-    actix_web::rt::spawn(run_internal_event_dispatch(
-      internal_state,
-      internal_event_dispatch,
-    ));
-
-    recovery_state.report(TriggerProgress::Ready {
-      contract: TRIGGER_PROGRESS_CONTRACT,
-      contract_version: TRIGGER_PROGRESS_CONTRACT_VERSION,
-      registration_count: recovery_state.registration_count,
-      occurred_at: Utc::now(),
-    });
-
-    for identity in recovery_runs {
-      recovery_state.report_run_started(&identity);
-      dispatch_run(recovery_state.get_ref(), identity);
-    }
-    for (identity, duplicate) in recovered_schedule_runs {
-      recovery_state.report_accepted(&identity, duplicate);
-      if !duplicate {
-        recovery_state.report_run_started(&identity);
-        dispatch_run(recovery_state.get_ref(), identity);
-      }
-    }
-    for (identity, duplicate) in recovered_interval_runs {
-      recovery_state.report_accepted(&identity, duplicate);
-      if !duplicate {
-        recovery_state.report_run_started(&identity);
-        dispatch_run(recovery_state.get_ref(), identity);
-      }
-    }
-    for startup in startup_manual_runs {
-      admit_startup_manual(recovery_state.get_ref(), startup);
-    }
-
     Ok(Self {
       local_address,
       handle,
       internal_handle,
       database_path,
       workflow_runtime_id,
-      timed_trigger_tasks,
+      timed_trigger_tasks: Vec::new(),
+      pending_activation: Some(PendingActivation {
+        state: app_state,
+        recovery_runs,
+        startup_manual_runs,
+        external_ingress,
+        internal_event_dispatch,
+        internal_address,
+      }),
     })
+  }
+
+  pub async fn activate(&mut self) -> Result<(), WebhookRuntimeError> {
+    let Some(pending) = self.pending_activation.take() else {
+      return Ok(());
+    };
+    let state = pending.state;
+    let now = Utc::now();
+    if let Err(error) = DurableEventStore::open(&self.database_path)?
+      .register_workflow_runtime_routes(
+        &self.workflow_runtime_id,
+        &state.workflow_targets.targets(),
+        &format!("http://{}", pending.internal_address),
+        &workflow_routing_credential_hash(&state.workflow_routing_credential),
+        now,
+        now + ChronoDuration::seconds(WORKFLOW_RUNTIME_LEASE_SECONDS),
+      )
+    {
+      return Err(error.into());
+    }
+
+    let activation = (|| {
+      let (mut tasks, recovered_schedule_runs) = initialize_schedules(state.clone())?;
+      let (interval_tasks, recovered_interval_runs) = initialize_intervals(state.clone())?;
+      tasks.extend(interval_tasks);
+      Ok::<_, WebhookRuntimeError>((tasks, recovered_schedule_runs, recovered_interval_runs))
+    })();
+    let (mut tasks, recovered_schedule_runs, recovered_interval_runs) = match activation {
+      Ok(value) => value,
+      Err(error) => {
+        let _ = DurableEventStore::open(&self.database_path).and_then(|mut store| {
+          store
+            .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
+            .map(|_| ())
+        });
+        return Err(error);
+      }
+    };
+
+    let routing_state = state.clone();
+    tasks.push(actix_web::rt::spawn(async move {
+      run_workflow_routing_maintenance(routing_state).await;
+    }));
+    if let Some(receiver) = pending.external_ingress {
+      let external_state = state.clone();
+      tasks.push(actix_web::rt::spawn(run_external_ingress(
+        external_state,
+        receiver,
+      )));
+    }
+    let internal_state = state.clone();
+    tasks.push(actix_web::rt::spawn(run_internal_event_dispatch(
+      internal_state,
+      pending.internal_event_dispatch,
+    )));
+
+    state.admission_open.store(true, Ordering::Release);
+    state.report(TriggerProgress::Ready {
+      contract: TRIGGER_PROGRESS_CONTRACT,
+      contract_version: TRIGGER_PROGRESS_CONTRACT_VERSION,
+      registration_count: state.registration_count,
+      occurred_at: Utc::now(),
+    });
+    for identity in pending.recovery_runs {
+      state.report_run_started(&identity);
+      dispatch_run(state.get_ref(), identity);
+    }
+    for (identity, duplicate) in recovered_schedule_runs {
+      state.report_accepted(&identity, duplicate);
+      if !duplicate {
+        state.report_run_started(&identity);
+        dispatch_run(state.get_ref(), identity);
+      }
+    }
+    for (identity, duplicate) in recovered_interval_runs {
+      state.report_accepted(&identity, duplicate);
+      if !duplicate {
+        state.report_run_started(&identity);
+        dispatch_run(state.get_ref(), identity);
+      }
+    }
+    for startup in pending.startup_manual_runs {
+      admit_startup_manual(state.get_ref(), startup);
+    }
+    self.timed_trigger_tasks = tasks;
+    Ok(())
   }
 
   pub const fn local_address(&self) -> SocketAddr {
@@ -334,6 +395,7 @@ struct WebhookRuntimeState {
   intervals: Vec<IntervalRuntimeRegistration>,
   workflow_targets: Arc<WorkflowTargetRegistry>,
   workflow_routing_credential: String,
+  admission_open: AtomicBool,
 }
 
 async fn handle_workflow_call_wakeup(
@@ -341,6 +403,14 @@ async fn handle_workflow_call_wakeup(
   request: HttpRequest,
   wakeup: web::Json<WorkflowRoutingWakeup>,
 ) -> HttpResponse {
+  if !state.admission_open.load(Ordering::Acquire) {
+    return workflow_routing_acknowledgement(
+      StatusCode::SERVICE_UNAVAILABLE,
+      &wakeup.child_run_id,
+      false,
+      Some("WOML_RUNTIME_NOT_READY"),
+    );
+  }
   let supplied = request
     .headers()
     .get(header::AUTHORIZATION)
@@ -882,6 +952,7 @@ fn prepare_state(
       intervals,
       workflow_targets,
       workflow_routing_credential,
+      admission_open: AtomicBool::new(false),
     },
     recovery_runs,
     startup_manual_runs,
@@ -1914,6 +1985,18 @@ async fn handle_webhook(
   mut body: web::Payload,
   state: web::Data<WebhookRuntimeState>,
 ) -> HttpResponse {
+  if !state.admission_open.load(Ordering::Acquire) {
+    let mut response = HttpResponse::ServiceUnavailable();
+    response.insert_header((header::CACHE_CONTROL, "no-store"));
+    response.insert_header((header::RETRY_AFTER, "1"));
+    return response.json(WebhookErrorResponse {
+      error: WebhookErrorBody {
+        code: "WOML_RUNTIME_NOT_READY",
+        message: "The WOML deployment is still activating; retry this request.",
+        issues: None,
+      },
+    });
+  }
   let event_name = request
     .path()
     .strip_prefix("/_woml/events/")

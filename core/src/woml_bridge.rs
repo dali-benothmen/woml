@@ -351,9 +351,14 @@ struct NativeTriggerRuntimeError {
 }
 
 struct NativeWebhookRuntimeThread {
-  stop: mpsc::Sender<()>,
+  control: mpsc::Sender<NativeWebhookRuntimeCommand>,
   ingress: tokio::sync::mpsc::UnboundedSender<ExternalTriggerAdmissionCommand>,
   join: JoinHandle<()>,
+}
+
+enum NativeWebhookRuntimeCommand {
+  Activate(mpsc::SyncSender<Result<(), NativeTriggerRuntimeError>>),
+  Stop,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1159,6 +1164,7 @@ pub fn start_woml_webhook_runtime(
   bun_executable: String,
   script_host_path: String,
   script_timeout_ms: u32,
+  start_suspended: bool,
   progress_callback: JsFunction,
 ) -> napi::Result<JsObject> {
   let registrations: Vec<NativeWebhookRegistration> = serde_json::from_str(&registrations_json)
@@ -1219,21 +1225,50 @@ pub fn start_woml_webhook_runtime(
     let runtime_id = format!("runtime_{}", uuid::Uuid::new_v4().simple());
     let (startup_sender, startup_receiver) =
       mpsc::sync_channel::<Result<SocketAddr, NativeTriggerRuntimeError>>(1);
-    let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+    let (control_sender, mut control_receiver) = mpsc::channel::<NativeWebhookRuntimeCommand>();
     let (ingress_sender, ingress_receiver) = tokio::sync::mpsc::unbounded_channel();
     let join = std::thread::Builder::new()
       .name(format!("woml-trigger-{runtime_id}"))
       .spawn(move || {
         actix_web::rt::System::new().block_on(async move {
-          match WomlWebhookServer::start_with_external_ingress(config, Some(ingress_receiver)).await
+          match WomlWebhookServer::prepare_with_external_ingress(config, Some(ingress_receiver))
+            .await
           {
-            Ok(server) => {
+            Ok(mut server) => {
+              if !start_suspended {
+                if let Err(error) = server.activate().await {
+                  let _ = startup_sender.send(Err(native_trigger_runtime_error(error)));
+                  server.stop().await;
+                  return;
+                }
+              }
               let address = server.local_address();
               if startup_sender.send(Ok(address)).is_err() {
                 server.stop().await;
                 return;
               }
-              let _ = actix_web::rt::task::spawn_blocking(move || stop_receiver.recv()).await;
+              loop {
+                let received = actix_web::rt::task::spawn_blocking(move || {
+                  let command = control_receiver.recv();
+                  (control_receiver, command)
+                })
+                .await;
+                let (receiver, command) = match received {
+                  Ok(value) => value,
+                  Err(_) => break,
+                };
+                control_receiver = receiver;
+                match command {
+                  Ok(NativeWebhookRuntimeCommand::Activate(response)) => {
+                    let outcome = server
+                      .activate()
+                      .await
+                      .map_err(native_trigger_runtime_error);
+                    let _ = response.send(outcome);
+                  }
+                  Ok(NativeWebhookRuntimeCommand::Stop) | Err(_) => break,
+                }
+              }
               server.stop().await;
             }
             Err(error) => {
@@ -1266,7 +1301,7 @@ pub fn start_woml_webhook_runtime(
       .insert(
         runtime_id.clone(),
         NativeWebhookRuntimeThread {
-          stop: stop_sender,
+          control: control_sender,
           ingress: ingress_sender,
           join,
         },
@@ -1280,6 +1315,25 @@ pub fn start_woml_webhook_runtime(
       napi::Error::from_reason(format!("Could not encode webhook runtime startup: {error}"))
     })
   })
+}
+
+#[napi(ts_return_type = "Promise<void>")]
+pub async fn activate_woml_webhook_runtime(runtime_id: String) -> napi::Result<()> {
+  let control = webhook_runtimes()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("Webhook runtime registry is unavailable.".to_string()))?
+    .get(&runtime_id)
+    .map(|runtime| runtime.control.clone())
+    .ok_or_else(|| napi::Error::from_reason("WOML webhook runtime does not exist.".to_string()))?;
+  let (response_sender, response_receiver) = mpsc::sync_channel(1);
+  control
+    .send(NativeWebhookRuntimeCommand::Activate(response_sender))
+    .map_err(|_| napi::Error::from_reason("WOML webhook runtime is stopping.".to_string()))?;
+  let result = tokio::task::spawn_blocking(move || response_receiver.recv())
+    .await
+    .map_err(|error| napi::Error::from_reason(format!("Runtime activation task failed: {error}")))?
+    .map_err(|_| napi::Error::from_reason("Runtime activation response was lost.".to_string()))?;
+  result.map_err(trigger_runtime_napi_error)
 }
 
 #[napi(ts_return_type = "Promise<string>")]
@@ -1385,7 +1439,7 @@ pub async fn stop_woml_webhook_runtime(runtime_id: String) -> napi::Result<()> {
     .remove(&runtime_id)
     .ok_or_else(|| napi::Error::from_reason("WOML webhook runtime does not exist.".to_string()))?;
   drop(runtime.ingress);
-  let _ = runtime.stop.send(());
+  let _ = runtime.control.send(NativeWebhookRuntimeCommand::Stop);
   tokio::task::spawn_blocking(move || runtime.join.join())
     .await
     .map_err(|error| napi::Error::from_reason(format!("Webhook shutdown task failed: {error}")))?

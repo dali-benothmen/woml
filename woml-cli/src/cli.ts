@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
 import packageMetadata from '../package.json' with { type: 'json' };
@@ -51,6 +51,7 @@ import {
   inspectRunWithRust,
   inspectStoredRunRequirementsWithRust,
   resumeStoredRunWithRust,
+  activateWebhookRuntimeWithRust,
   startWebhookRuntimeWithRust,
   stopWebhookRuntimeWithRust,
   submitTriggerOccurrenceWithRust,
@@ -946,7 +947,82 @@ interface CompiledWorkflowSource {
   readonly filePath: string;
   readonly document: WomlSourceDocument;
   readonly workflow: CompiledWorkflowDefinition;
+  readonly definitionHash: string;
   readonly runtimeModules: readonly RustRuntimeModuleArtifact[];
+  readonly sourceSnapshot: readonly SourceSnapshotEntry[];
+}
+
+export interface SourceSnapshotEntry {
+  readonly path: string;
+  readonly digest: string;
+}
+
+function sourceDigest(source: string | Uint8Array): string {
+  return `sha256:${createHash('sha256').update(source).digest('hex')}`;
+}
+
+function samePackageSources(
+  left: readonly { readonly path: string; readonly digest: string }[],
+  right: readonly { readonly path: string; readonly digest: string }[]
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (source, index) =>
+        source.path === right[index]?.path &&
+        source.digest === right[index]?.digest
+    )
+  );
+}
+
+export async function assertStableSourceSnapshot(
+  sources: readonly {
+    readonly sourceSnapshot: readonly SourceSnapshotEntry[];
+  }[]
+): Promise<void> {
+  for (const source of sources) {
+    for (const snapshot of source.sourceSnapshot) {
+      let content: Buffer;
+      try {
+        content = await readFile(snapshot.path);
+      } catch {
+        throw new CliInputError(
+          'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
+          `source "${snapshot.path}" changed or became unreadable during activation.`
+        );
+      }
+      if (sourceDigest(content) !== snapshot.digest) {
+        throw new CliInputError(
+          'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
+          `source "${snapshot.path}" changed while the deployment was being compiled; run the command again.`
+        );
+      }
+    }
+  }
+}
+
+async function assertStableWorkflowInputSet(
+  inputPaths: readonly string[],
+  sources: readonly Pick<CompiledWorkflowSource, 'filePath'>[]
+): Promise<void> {
+  const current = new Set<string>();
+  for (const inputPath of inputPaths) {
+    for (const path of await workflowFilePaths(inputPath))
+      current.add(resolve(path));
+  }
+  const expected = [
+    ...new Set(sources.map(source => resolve(source.filePath))),
+  ].sort();
+  const observed = [...current].sort();
+  if (
+    expected.length !== observed.length ||
+    expected.some((path, index) => path !== observed[index])
+  ) {
+    throw new CliInputError(
+      'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
+      'the workflow input set changed while the deployment was activating; run the command again.'
+    );
+  }
 }
 
 function promoteForLifecycleAuthority(
@@ -1096,17 +1172,33 @@ async function compileWorkflowSources(
               projectRoot,
             })
           : undefined;
+    const packageSources = runtimePackage?.sources ?? inspected.sources;
+    if (
+      runtimePackage !== undefined &&
+      !samePackageSources(inspected.sources, runtimePackage.sources)
+    ) {
+      throw new CliInputError(
+        'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
+        `workflow or module source changed while "${filePath}" was being compiled; run the command again.`
+      );
+    }
     const frontendWorkflow =
       runtimePackage?.workflow.model ?? compileWoml(document);
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
+    const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
       filePath,
       document,
       workflow,
+      definitionHash,
       runtimeModules:
         runtimePackage === undefined
           ? []
           : runtimeModulesFromPackage(runtimePackage),
+      sourceSnapshot: packageSources.map(item => ({
+        path: resolve(projectRoot, item.path),
+        digest: item.digest,
+      })),
     });
   }
   const workflowIds = new Set<string>();
@@ -1127,11 +1219,28 @@ async function compileWorkflowInputs(
 ): Promise<readonly CompiledWorkflowSource[]> {
   const compiled: CompiledWorkflowSource[] = [];
   const seenFiles = new Set<string>();
+  const filePaths: string[] = [];
+  const inputSnapshots: Array<{
+    readonly inputPath: string;
+    readonly files: readonly string[];
+    readonly directory: boolean;
+  }> = [];
   for (const inputPath of inputPaths) {
-    for (const source of await compileWorkflowSources(inputPath)) {
-      const absolutePath = resolve(source.filePath);
+    const resolvedFiles = (await workflowFilePaths(inputPath)).map(path =>
+      resolve(path)
+    );
+    const directory = (await stat(inputPath)).isDirectory();
+    inputSnapshots.push({ inputPath, files: resolvedFiles, directory });
+    for (const filePath of resolvedFiles) {
+      const absolutePath = resolve(filePath);
       if (seenFiles.has(absolutePath)) continue;
       seenFiles.add(absolutePath);
+      filePaths.push(absolutePath);
+    }
+  }
+  filePaths.sort((left, right) => left.localeCompare(right));
+  for (const filePath of filePaths) {
+    for (const source of await compileWorkflowSources(filePath)) {
       compiled.push(source);
     }
   }
@@ -1145,7 +1254,47 @@ async function compileWorkflowInputs(
     }
     workflowIds.add(source.workflow.workflowId);
   }
+  await assertStableSourceSnapshot(compiled);
+  for (const snapshot of inputSnapshots) {
+    if (!snapshot.directory) continue;
+    const current = (await workflowFilePaths(snapshot.inputPath)).map(path =>
+      resolve(path)
+    );
+    if (
+      current.length !== snapshot.files.length ||
+      current.some((path, index) => path !== snapshot.files[index])
+    ) {
+      throw new CliInputError(
+        'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
+        `workflow directory "${snapshot.inputPath}" changed while the deployment was being compiled; run the command again.`
+      );
+    }
+  }
   return compiled;
+}
+
+export function activationIdentity(
+  sources: readonly Pick<
+    CompiledWorkflowSource,
+    'workflow' | 'definitionHash' | 'runtimeModules'
+  >[]
+): string {
+  const material = sources
+    .map(source => ({
+      workflowId: source.workflow.workflowId,
+      definitionHash: source.definitionHash,
+      modules: source.runtimeModules
+        .map(module => ({
+          name: module.name,
+          bundleDigest: module.bundleDigest,
+          sourceMapDigest: module.sourceMapDigest,
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    }))
+    .sort((left, right) => left.workflowId.localeCompare(right.workflowId));
+  return `sha256:${createHash('sha256')
+    .update(JSON.stringify(material))
+    .digest('hex')}`;
 }
 
 function editorTypesPath(inputPath: string, inputIsDirectory: boolean): string {
@@ -1415,7 +1564,7 @@ async function runDeploymentCheckCommand(
       workflows: sources.map(source => ({
         workflowId: source.workflow.workflowId,
         sourcePath: source.filePath,
-        definitionHash: compiledDefinitionHash(source.workflow),
+        definitionHash: source.definitionHash,
         triggerCount: source.workflow.triggers.length,
         moduleCount: source.runtimeModules.length,
         requiredSecrets: [
@@ -2402,7 +2551,7 @@ async function activateWorkflows(
       const registrations = await Promise.all(
         productionSources.map(async source => ({
           workflow: source.workflow,
-          definitionHash: compiledDefinitionHash(source.workflow),
+          definitionHash: source.definitionHash,
           resolvedSecrets: await resolvedSecrets(source.workflow, store),
           runtimeModules: source.runtimeModules,
         }))
@@ -2411,10 +2560,7 @@ async function activateWorkflows(
         webhookRouteSummaries(source.workflow)
       );
       const slackRegistrations = productionSources.flatMap(source =>
-        slackTriggerRegistrations(
-          source.workflow,
-          compiledDefinitionHash(source.workflow)
-        )
+        slackTriggerRegistrations(source.workflow, source.definitionHash)
       );
       const uniqueEventRoutes: EventRouteSummary[] = [];
       const seenEventNames = new Set<string>();
@@ -2444,6 +2590,7 @@ async function activateWorkflows(
           host: hasHttpEndpoint ? args.host : '127.0.0.1',
           port: hasHttpEndpoint ? args.port : 0,
           startupManualTriggers,
+          startSuspended: true,
           onTriggerProgress: progress =>
             reportTriggerProgress(
               progress,
@@ -2462,32 +2609,6 @@ async function activateWorkflows(
         }
       );
       runtimeId = runtime.runtimeId;
-      if (hasHttpEndpoint) {
-        io.stderr(
-          `WOML workflow active at http://${runtime.host}:${runtime.port}.\n`
-        );
-      }
-      for (const route of uniqueEventRoutes) {
-        io.stderr(
-          `Event ${route.eventName}: POST http://${runtime.host}:${runtime.port}/_woml/events/${route.eventName}\n`
-        );
-        io.stderr(
-          `Try event ${route.eventName}:\n${eventCurlExample(route, runtime.host, runtime.port)}\n`
-        );
-      }
-      for (const route of routes) {
-        io.stderr(
-          `Webhook ${route.triggerId}: ${route.method} http://${runtime.host}:${runtime.port}${route.path}\n`
-        );
-        if (route.authentication === 'none') {
-          io.stderr(
-            `Warning: webhook ${route.triggerId} has auth="none" and accepts unauthenticated requests.\n`
-          );
-        }
-        io.stderr(
-          `Try webhook ${route.triggerId}:\n${webhookCurlExample(route, runtime.host, runtime.port)}\n`
-        );
-      }
 
       if (slackRegistrations.length > 0) {
         slackTransport =
@@ -2531,6 +2652,43 @@ async function activateWorkflows(
           const failure = slackTriggerStartupError(error);
           throw new CliInputError(failure.code, failure.message);
         }
+      }
+
+      // Provider startup may take long enough for an editor or generator to
+      // rewrite a source. Never open admission for a mixed activation.
+      await assertStableSourceSnapshot(productionSources);
+      await assertStableWorkflowInputSet(args.inputPaths, sources);
+      await activateWebhookRuntimeWithRust(runtime.runtimeId, {
+        nativeCorePath: dependencies.nativeCorePath,
+      });
+      io.stderr(
+        `WOML deployment activation ${activationIdentity(productionSources).slice(7, 19)} ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.\n`
+      );
+      if (hasHttpEndpoint) {
+        io.stderr(
+          `WOML workflow active at http://${runtime.host}:${runtime.port}.\n`
+        );
+      }
+      for (const route of uniqueEventRoutes) {
+        io.stderr(
+          `Event ${route.eventName}: POST http://${runtime.host}:${runtime.port}/_woml/events/${route.eventName}\n`
+        );
+        io.stderr(
+          `Try event ${route.eventName}:\n${eventCurlExample(route, runtime.host, runtime.port)}\n`
+        );
+      }
+      for (const route of routes) {
+        io.stderr(
+          `Webhook ${route.triggerId}: ${route.method} http://${runtime.host}:${runtime.port}${route.path}\n`
+        );
+        if (route.authentication === 'none') {
+          io.stderr(
+            `Warning: webhook ${route.triggerId} has auth="none" and accepts unauthenticated requests.\n`
+          );
+        }
+        io.stderr(
+          `Try webhook ${route.triggerId}:\n${webhookCurlExample(route, runtime.host, runtime.port)}\n`
+        );
       }
 
       if (args.resumeRunId !== undefined) {

@@ -934,7 +934,7 @@ versioned before implementation rather than widened silently.
 |---|---|---|
 | PRO0 (complete) | Freeze activation, background control, ownership, admin, observability, backup, and retention contracts. | Every layer agrees on the production boundaries before runtime behavior changes. |
 | PRO1 (complete) | Add runtime configuration and production preflight. | Users can validate a whole deployment and its environment without activating it. |
-| PRO2 | Make direct `.woml` input activation atomic and durably pinned. | `woml run` either activates the complete source set safely or activates nothing. |
+| PRO2 (complete) | Make direct `.woml` input activation atomic and durably pinned. | `woml run` either activates the complete source set safely or activates nothing. |
 | PRO3 | Add durable ownership, recovery, background mode, `woml stop`, and graceful shutdown. | One foreground or detached runtime can own a deployment safely across restarts and replacements. |
 | PRO4 | Harden production secrets, local administration, and process/resource boundaries. | Production activation fails safely and operational control is authenticated and separated from ingress. |
 | PRO5 | Add health, structured logs, metrics, snapshots, and live operations streaming. | Humans and monitoring systems can understand runtime health without reading SQLite or raw logs. |
@@ -1045,7 +1045,7 @@ Completion notes:
   Model/Event fixture, and all-schema compatibility tests. It is included in
   the repository release gate.
 
-### PRO2 — Atomic direct-source activation
+### PRO2 — Atomic direct-source activation (completed)
 
 Changes:
 
@@ -1078,6 +1078,36 @@ workflow calls, every trigger type, missing secrets, source changes during
 startup, partial provider failure, concurrent incoming traffic before
 readiness, definition pinning, rollback, restart, path escape, size bounds, and
 secret scans.
+
+Completion notes:
+
+- `woml run` resolves every explicit file and direct directory member into one
+  absolute, deduplicated, lexically ordered deployment input set. `woml check`
+  uses the same compiler path and therefore the same compiled definitions.
+- Each WOML document and every local JavaScript/TypeScript module is hashed.
+  The compiler rejects disagreement between inspection and executable-package
+  passes, then rereads the complete snapshot before startup and again after
+  provider readiness. Directory membership is also rechecked, so files cannot
+  be added or removed unnoticed during activation.
+- One `sha256:` activation identity is derived from the sorted workflow IDs,
+  exact compiled-definition hashes, and sorted runtime-module artifact
+  digests. It remains internal; users still deploy only `.woml` source.
+- Rust preparation validates the complete registration set and durably pins
+  compiled definitions and module artifacts before any ingress can open.
+- The native runtime now has separate prepare and activate operations. A
+  prepared HTTP listener returns `503 WOML_RUNTIME_NOT_READY`; schedules,
+  intervals, startup manual runs, Slack ingress, event dispatch, recovery, and
+  Workflow Call routing remain closed until activation.
+- The CLI starts Slack and other required components while Rust is suspended,
+  rechecks the source snapshot, and activates Rust only when every provider is
+  ready. Any provider or activation failure closes partial components in the
+  existing `finally` rollback path and creates no trigger occurrence.
+- Existing engine callers keep immediate-start behavior unless they explicitly
+  request suspended preparation, preserving the pre-PRO2 runtime API behavior.
+- `bun run test:pro2` composes PRO0/PRO1 compatibility with stable-source,
+  deterministic-identity, closed-ingress, durable-pinning, provider-rollback,
+  typecheck, and focused Rust compatibility coverage. It is included in the
+  repository release gate.
 
 ### PRO3 — Durable ownership, background mode, recovery, and shutdown
 

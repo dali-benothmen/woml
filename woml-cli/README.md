@@ -98,6 +98,13 @@ unit. Direct `.woml` files in directories are loaded non-recursively:
 woml run workflows/orders.woml workflows/risk.woml shared-workflows/
 ```
 
+The unit activates atomically. WOML hashes the exact workflow and local-module
+sources, pins their compiled definitions and artifacts in Rust, prepares all
+listeners with admission closed, and opens triggers only after every required
+provider is ready. A request that reaches a bound HTTP listener before then
+receives `503 WOML_RUNTIME_NOT_READY`. Source changes or provider startup
+failure close the partial runtime without admitting a trigger occurrence.
+
 Call-only workflows remain active with zero triggers. Separate local WOML
 processes can use `services.workflows.call()` or `services.workflows.start()`
 when they share the same `--state` database. `call()` waits for the child's
