@@ -163,6 +163,8 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
     message: string;
   }[] = [];
   readonly #counters = new Map<string, number>();
+  readonly #currentNodes = new Map<string, string>();
+  readonly #parentRuns = new Map<string, string>();
   #nextSubscriberId = 1;
   #sequence = 0;
   #lifecycle: RuntimeLifecycle = 'starting';
@@ -222,6 +224,28 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
   recordProgress(progress: unknown): void {
     if (progress === null || typeof progress !== 'object' || Array.isArray(progress)) return;
     const value = progress as Record<string, unknown>;
+    const runId = typeof value.runId === 'string'
+      ? value.runId
+      : typeof value.parentRunId === 'string'
+        ? value.parentRunId
+        : undefined;
+    const nodeId = typeof value.nodeId === 'string'
+      ? value.nodeId
+      : typeof value.stepId === 'string'
+        ? value.stepId
+        : typeof value.parentNodeId === 'string'
+          ? value.parentNodeId
+          : undefined;
+    if (runId !== undefined && nodeId !== undefined) {
+      this.#remember(this.#currentNodes, bounded(runId, 'run_unknown'), bounded(nodeId, 'node_unknown'));
+    }
+    if (typeof value.childRunId === 'string' && typeof value.parentRunId === 'string') {
+      this.#remember(
+        this.#parentRuns,
+        bounded(value.childRunId, 'run_unknown'),
+        bounded(value.parentRunId, 'run_unknown')
+      );
+    }
     const kind = progressKind(value);
     const status = progressStatus(value);
     if (
@@ -353,6 +377,12 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
         workflowId: run.workflowId,
         status: retrying.has(run.runId) ? ('retrying' as const) : publicStatus(run.status),
         durationMs: Math.max(0, Date.parse(end) - Date.parse(start)),
+        ...(this.#currentNodes.get(run.runId) === undefined
+          ? {}
+          : { currentNodeId: this.#currentNodes.get(run.runId)! }),
+        ...(this.#parentRuns.get(run.runId) === undefined
+          ? {}
+          : { parentRunId: this.#parentRuns.get(run.runId)! }),
       };
     });
     const workflows = this.#workflows.map(workflow => {
@@ -556,5 +586,11 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
       if (key.startsWith(prefix)) total += value;
     }
     return total;
+  }
+
+  #remember(map: Map<string, string>, key: string, value: string): void {
+    map.delete(key);
+    map.set(key, value);
+    if (map.size > 1000) map.delete(map.keys().next().value!);
   }
 }

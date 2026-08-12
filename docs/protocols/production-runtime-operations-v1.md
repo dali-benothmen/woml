@@ -3,7 +3,7 @@
 Status: frozen by PRO0 on 2026-08-12. PRO1 through PRO4 implement configuration,
 preflight, atomic activation, background hosting, durable ownership, production
 secret sources, authenticated local administration, and the PRO5 observability
-foundation. The terminal dashboard, backup, and retention remain gated to their
+foundation. The terminal inspector, backup, and retention remain gated to their
 later PRO phases.
 
 ## Product boundary
@@ -14,7 +14,7 @@ The public deployment input remains `.woml` source:
 woml run workflows/
 woml run workflows/ --background
 woml stop
-woml top
+woml inspect
 ```
 
 There is no public `woml build` command and no `.womlpack` format in Production
@@ -125,7 +125,7 @@ internal durability/projection record, not a user-created artifact.
 process waits for an authenticated `ready` or `startup_failed` handoff. It never
 prints success merely because a process was spawned.
 
-On success it prints the ready status, PID, workflow count, dashboard command,
+On success it prints the ready status, PID, workflow count, inspector command,
 log path, and `woml stop`. Closing the initiating terminal does not stop the
 runtime. Machine restart and crash restart remain supervisor responsibilities.
 
@@ -227,7 +227,7 @@ node IDs, URLs, state keys, payload fields, and error messages are forbidden
 labels. Health v1 separates public minimal liveness/readiness from authenticated
 detailed health.
 
-`woml top` consumes these contracts and never becomes a second runtime truth.
+`woml inspect` consumes these contracts and never becomes a second runtime truth.
 Closing or crashing the TUI cannot stop or slow workflow execution.
 
 PRO5 implements the snapshot and stream on the authenticated loopback listener.

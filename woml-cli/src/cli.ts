@@ -119,6 +119,12 @@ import {
   type RuntimeControlHandle,
 } from './runtime-control';
 import { RuntimeObservability } from './runtime-observability';
+import {
+  inspectUsage,
+  parseInspectArguments,
+  runRuntimeInspector,
+  type InspectorTerminal,
+} from './runtime-inspector';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -188,7 +194,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -2965,6 +2971,9 @@ async function activateWorkflows(
       );
       descriptorPath = runtimeDescriptorPath(args.statePath);
       await runtimeControl.publishDescriptor(descriptorPath);
+      io.stderr(
+        `Inspect live runtime: woml inspect --state ${JSON.stringify(args.statePath)}\n`
+      );
       await dependencies.onRuntimeReady?.({
         runtimeInstanceId: runtime.runtimeId,
         descriptorPath,
@@ -3050,6 +3059,7 @@ export interface CliDependencies {
     options: SharedSlackTransportOptions
   ) => SharedSlackTransport;
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+  readonly inspectorTerminal?: InspectorTerminal;
   readonly onRuntimeReady?: (info: {
     readonly runtimeInstanceId: string;
     readonly descriptorPath: string;
@@ -3476,6 +3486,7 @@ async function runInBackground(
             `Workflows: ${handoff.workflowCount}`,
             `Descriptor: ${descriptorPath}`,
             `Logs: ${logPath}`,
+            `Inspect: woml inspect --state ${JSON.stringify(statePath)}`,
             `Stop: woml stop --state ${JSON.stringify(statePath)}`,
           ].join('\n') + '\n'
         );
@@ -3546,6 +3557,23 @@ export async function runCli(
 
   if (args[0] === 'stop') {
     return await runStopCommand(args, io, dependencies);
+  }
+
+  if (args[0] === 'inspect') {
+    let parsed;
+    try {
+      parsed = parseInspectArguments(args);
+    } catch {
+      io.stderr(`${inspectUsage}\n`);
+      return 2;
+    }
+    return await runRuntimeInspector({
+      args: parsed,
+      ...(dependencies.inspectorTerminal === undefined
+        ? {}
+        : { terminal: dependencies.inspectorTerminal }),
+      fetcher: (dependencies.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
+    });
   }
 
   if (args[0] === 'list') {

@@ -1,7 +1,7 @@
 # WOML Runtime Observability
 
 PRO5 provides the safe local observability layer used by the future
-`woml top`. Workflow events and the SQLite store remain execution truth;
+`woml inspect`. Workflow events and the SQLite store remain execution truth;
 telemetry is a bounded projection and can be discarded or re-created.
 
 ## What operators can observe
@@ -99,15 +99,57 @@ For hostile code, the process-isolation guidance in
 [WOML Local Data Security](woml-data-security.md) still applies. Observability
 does not turn Bun Workers into a multi-tenant security sandbox.
 
+## Live terminal inspection
+
+`woml inspect` is the color-coded, htop-style client for a running WOML
+automation host:
+
+```bash
+# Start one self-contained long-lived example first.
+woml run examples/webhookWorkflow.woml --background
+
+woml inspect
+woml inspect --state ./custom/state.sqlite
+woml inspect --no-color
+```
+
+The repository's complete `examples/` directory is a mixed catalog, not one
+deployable application. Some examples intentionally require secrets such as
+`POSTGRES_URL` or Slack credentials, so `woml run examples --background`
+correctly fails production preflight unless every example dependency is
+configured. A real application directory may be run as one deployment when
+all workflows in it are intended to run together.
+
+It discovers the owner-only runtime descriptor next to the state database,
+authenticates to the loopback operations endpoint, loads Snapshot v1, and
+follows Stream v1. It never becomes an executor and never treats an in-memory
+screen model as workflow truth. Quitting or disconnecting the inspector leaves
+all workflows running.
+
+The inspector provides Overview, Runs, Triggers, Approvals, Queues, Failures,
+and Runtime views. Statuses are always written as text and are additionally
+colored: green for healthy/succeeded, blue for running, yellow for
+waiting/retrying, magenta for queued, and red for failures/alerts. `NO_COLOR`
+and `--no-color` disable the palette. Narrow terminals, resize, Unicode,
+bounded event history, stale-stream resynchronization, and terminal restoration
+are handled without widening the frozen observability schemas.
+
+Keyboard controls are shown in the footer: arrows select, Tab changes view,
+Enter expands, `/` filters, `l` shows bounded live events, `c` starts a
+confirmed cancellation, `r` refreshes, `?` shows help, and `q` closes only the
+inspector. Non-TTY use is rejected with `woml list --json` as the scriptable
+alternative.
+
 ## Release gate
 
 Run from `woml-cli`:
 
 ```bash
-bun run test:pro5
+bun run test:pro6
 ```
 
-The gate composes PRO4 and validates golden snapshots/logs/metrics, schemas,
+The gate composes PRO5 and validates golden snapshots/logs/metrics, schemas,
 the packaged runtime, readiness changes, authentication, response and rate
 bounds, stream ordering/gaps/backpressure, disabled endpoints, broken-client
-isolation, redaction, type checking, and the observability overhead budget.
+isolation, redaction, type checking, the observability overhead budget, and the
+deterministic virtual-terminal inspector suite.

@@ -208,12 +208,12 @@ implements Store v14 ownership, recovery, background operation, exact stop,
 and graceful shutdown. PRO4 implements production secret sources, authenticated
 live run control, rotating capabilities, request bounds, and isolation
 guidance. PRO5 implements the observability foundation consumed by the future
-`woml top`.
+`woml inspect`.
 
 These planned commands are not executable until their phases:
 
 ```bash
-woml top                          # PRO6
+woml inspect                      # PRO6
 woml backup                       # PRO7
 woml prune --before 30d --dry-run # PRO8
 ```

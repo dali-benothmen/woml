@@ -27,11 +27,11 @@ For direct background operation on a PC or VPS:
 woml run workflows/ --background
 ```
 
-Operators can open a live terminal dashboard without stopping or owning the
+Operators can open a live terminal inspector without stopping or owning the
 runtime process:
 
 ```bash
-woml top
+woml inspect
 ```
 
 After this milestone, a user can:
@@ -41,7 +41,7 @@ After this milestone, a user can:
 - restart or replace the runtime without losing accepted work;
 - know whether the process is alive, ready, overloaded, or degraded;
 - inspect workflows, runs, queues, retries, approvals, calls, and failures from
-  an `htop`-style terminal dashboard;
+  an `htop`-style terminal inspector;
 - emit structured logs and machine-readable metrics for external monitoring;
 - inject production secrets without putting values in source or compiled
   definition records;
@@ -80,7 +80,7 @@ They do not require a public build command or another file extension.
 
 Immutable definitions and run events remain workflow truth. SQLite remains the
 first production profile's durable authority. Runtime summaries, metrics,
-health, logs, and the terminal dashboard are projections or operational
+health, logs, and the terminal inspector are projections or operational
 signals; none may become a second workflow state machine.
 
 ### 2.4 Readiness is stricter than liveness
@@ -104,7 +104,7 @@ process exit cleanly.
 
 ### 2.6 Observability must help humans and machines
 
-`woml top` is the human live view. Structured logs, health endpoints, metrics,
+`woml inspect` is the human live view. Structured logs, health endpoints, metrics,
 and a versioned local operations protocol are the machine interfaces. The TUI
 is not the only monitoring system and does not need to remain open for WOML to
 detect or report failures.
@@ -164,7 +164,7 @@ implemented.
 - Bounded metrics for workflow, run, queue, trigger, worker, storage, and
   provider health.
 - A versioned operations snapshot and live update stream.
-- The interactive `woml top` terminal dashboard.
+- The interactive `woml inspect` terminal inspector.
 - Local authenticated runtime control for inspection and cancellation.
 - Development secrets plus production environment/mounted-file secret
   injection using the existing `{{secrets.NAME}}` syntax.
@@ -241,7 +241,7 @@ WOML runtime started in the background.
 Status:    ready
 PID:       18427
 Workflows: 6
-Dashboard: woml top
+Inspect: woml inspect
 Logs:      .woml/logs/runtime.log
 Stop:      woml stop
 ```
@@ -319,7 +319,7 @@ The product surface remains compact:
 ```bash
 woml run workflows/ --background
 woml stop
-woml top
+woml inspect
 woml list
 woml get <runId>
 woml cancel <runId>
@@ -512,7 +512,7 @@ Resolved values remain memory-only and are never written to:
 The local operations server is distinct from the public webhook/event listener.
 Its default is loopback only. On startup WOML creates an owner-only runtime
 descriptor containing the endpoint and a fresh capability credential so
-`woml top` and local commands can discover and authenticate automatically.
+`woml inspect` and local commands can discover and authenticate automatically.
 
 The descriptor:
 
@@ -538,7 +538,7 @@ sandbox. Untrusted tenant code requires container/VM and OS-level isolation.
 ### 8.1 Runtime snapshot
 
 Runtime Operations Snapshot v1 is a bounded, redacted point-in-time view that
-can power `woml top`, `woml health`, and future tools. It includes:
+can power `woml inspect`, `woml health`, and future tools. It includes:
 
 - runtime identity, lifecycle, version, uptime, and readiness;
 - loaded workflow IDs, names, definition versions/hashes, and trigger types;
@@ -566,7 +566,7 @@ workflow-call, schedule, interval, notification, and policy progress into one
 safe operations envelope. It does not alter or replace the underlying run-event
 vocabulary.
 
-Backpressure is bounded. A slow dashboard loses incremental updates and
+Backpressure is bounded. A slow inspector loses incremental updates and
 resynchronizes; it never consumes unbounded runtime memory or blocks workflow
 execution.
 
@@ -640,12 +640,12 @@ Readiness becomes false for conditions including:
 
 Ordinary workflow failure does not make the runtime unready.
 
-## 9. `woml top` Terminal Dashboard
+## 9. `woml inspect` Terminal Inspector
 
 ### 9.1 Product role
 
-`woml top` is an interactive operations client, not an executor. Closing the
-dashboard does not stop workflows. It discovers the active runtime descriptor,
+`woml inspect` is an interactive operations client, not an executor. Closing the
+inspector does not stop workflows. It discovers the active runtime descriptor,
 authenticates to the local operations server, fetches a snapshot, and follows
 the bounded live stream.
 
@@ -656,7 +656,7 @@ mutates SQLite as a fake live runtime.
 ### 9.2 Default layout
 
 ```text
- WOML TOP  healthy  uptime 2d 04h  workflows 8  active 6  queued 16
+ WOML INSPECT  healthy  uptime 2d 04h  workflows 8  active 6  queued 16
 ────────────────────────────────────────────────────────────────────
  WORKFLOWS              ACTIVE  QUEUED  FAILED  LAST RUN   TRIGGERS
  order-processing            3      12       1  2s ago     webhook
@@ -682,7 +682,7 @@ mutates SQLite as a fake live runtime.
 
 ### 9.3 Views
 
-The first dashboard contains:
+The first inspector contains:
 
 - **Overview** — runtime health and workflow summary;
 - **Runs** — active and recent runs with safe status and duration;
@@ -704,7 +704,7 @@ The first supported controls are:
 - `c` to request cancellation with explicit confirmation;
 - `r` to force snapshot refresh;
 - `?` to show help; and
-- `q` to close the dashboard only.
+- `q` to close the inspector only.
 
 The TUI does not expose raw state, secrets, approval decision tokens, trigger
 credentials, or full arbitrary payloads. Human approval remains provider/HTTP
@@ -712,7 +712,7 @@ capability based; observing an approval does not grant approval authority.
 
 ### 9.5 Terminal behavior
 
-The dashboard must:
+The inspector must:
 
 - restore the terminal on normal exit, crash, and signal;
 - handle resize and narrow screens;
@@ -722,8 +722,8 @@ The dashboard must:
 - display a plain-text error when stdout is not a TTY; and
 - cap retained rows and log lines.
 
-An optional later convenience may open it with `woml run ... --dashboard`, but
-the independent `woml top` command is the contract because production runtimes
+An optional later convenience may open it from `woml run`, but
+the independent `woml inspect` command is the contract because production runtimes
 are commonly supervised without an attached terminal.
 
 ## 10. Backup, Restore, and Upgrade
@@ -892,7 +892,7 @@ WOML_RETENTION_MAINTENANCE_BUSY
 WOML_STORAGE_MAINTENANCE_FAILED
 ```
 
-Ordinary “no runs matched,” “nothing eligible to prune,” and “dashboard client
+Ordinary “no runs matched,” “nothing eligible to prune,” and “inspector client
 resynchronized” outcomes are not errors.
 
 ## 13. Versioned Artifacts Required Before Runtime Code
@@ -939,7 +939,7 @@ versioned before implementation rather than widened silently.
 | PRO3 | Add durable ownership, recovery, background mode, `woml stop`, and graceful shutdown. | One foreground or detached runtime can own a deployment safely across restarts and replacements. |
 | PRO4 | Harden production secrets, local administration, and process/resource boundaries. | Production activation fails safely and operational control is authenticated and separated from ingress. |
 | PRO5 | Add health, structured logs, metrics, snapshots, and live operations streaming. | Humans and monitoring systems can understand runtime health without reading SQLite or raw logs. |
-| PRO6 | Build the interactive `woml top` terminal dashboard. | Users can observe and safely control active automations from an htop-style CLI view. |
+| PRO6 | Build the interactive `woml inspect` terminal inspector. | Users can observe and safely control active automations from an htop-style CLI view. |
 | PRO7 | Add coherent backup, verified restore, and safe runtime/store upgrades. | A deployment can recover from disk loss or a failed upgrade using a tested procedure. |
 | PRO8 | Add retention planning, cleanup, and bounded SQLite maintenance. | Run history can be managed without deleting active truth or durable user state. |
 | PRO9 | Harden, benchmark, package, document, and publish Production Runtime v1. | WOML is supported for continuously operated single-machine production deployments. |
@@ -1191,7 +1191,7 @@ Changes:
 - Validate mounted-file ownership/mode and reject unsafe secret paths.
 - Harden the separate loopback operations listener and Runtime Descriptor v1.
 - Generate, rotate, expire, and erase the per-instance admin capability used by
-  `woml stop`, `woml top`, and live run-management commands.
+  `woml stop`, `woml inspect`, and live run-management commands.
 - Route live `list`, `get`, and `cancel` through authenticated admin operations
   while preserving safe offline inspection.
 - Enforce request, response, connection, and operation-rate bounds.
@@ -1311,11 +1311,11 @@ Completion notes:
   packaged `.woml` runtime journey, overhead budgets, verification, and
   typecheck. It is included in the repository release gate.
 
-### PRO6 — `woml top`
+### PRO6 — `woml inspect` ✅ Completed
 
 Changes:
 
-- Add the `woml top` command as a Bun/TypeScript terminal client of the local
+- Add the `woml inspect` command as a Bun/TypeScript terminal client of the local
   admin protocol.
 - Implement Overview, Runs, Triggers, Approvals, Queues, Failures, and Runtime
   views.
@@ -1330,7 +1330,7 @@ Changes:
 
 Result:
 
-Running `woml top` gives users an htop-style live view of active automation and
+Running `woml inspect` gives users an htop-style, color-coded live view of active automation and
 safe local run control without stopping the runtime.
 
 Gate:
@@ -1338,7 +1338,30 @@ Gate:
 Deterministic virtual-terminal tests cover every view, keyboard control,
 confirmation, reconnect, stream gaps, narrow terminals, resize, no color,
 Unicode, long names, thousands of runs, redaction, terminal restoration, and
-dashboard-client failure isolation.
+inspector-client failure isolation.
+
+Completed implementation:
+
+- `woml inspect` is the final public command name; it clearly describes a
+  terminal inspection tool without implying that a browser UI will open.
+- The independent Bun/TypeScript client consumes the authenticated PRO5
+  snapshot and SSE stream, reloads rotating descriptors, marks stale data,
+  reconnects with bounded backoff, and resynchronizes after stream gaps.
+- Overview, Runs, Triggers, Approvals, Queues, Failures, and Runtime views are
+  available with Tab and numeric navigation, selection, details, filtering,
+  recent live events, help, forced refresh, and confirmed durable cancellation.
+- The htop-style palette is cyan for structure, green for healthy/succeeded,
+  blue for running, yellow for waiting/retrying, magenta for queued, and red
+  for failure/alerts. Every state remains text-labelled; `NO_COLOR` and
+  `--no-color` are supported.
+- Current-node and parent-run metadata are maintained as bounded discardable
+  observability projections, allowing compact step/retry/lifecycle/call work
+  to be shown without changing the frozen Snapshot v1 shape.
+- Alternate-screen, cursor, raw-input, signal, disconnect, and render-failure
+  cleanup restore the terminal. The inspector rejects non-TTY use and points
+  automation users to `woml list --json`.
+- `bun run test:pro6` composes PRO5 with deterministic virtual-terminal tests,
+  the PRO6 verifier, and type checking; it is included in the release gate.
 
 ### PRO7 — Backup, restore, and upgrades
 
@@ -1380,7 +1403,7 @@ Changes:
 - Batch cleanup transactionally with maintenance leasing and crash-safe resume.
 - Add WAL-size monitoring, bounded checkpoints, and explicit compaction
   guidance/operation.
-- Report maintenance status through health, metrics, logs, and `woml top`.
+- Report maintenance status through health, metrics, logs, and `woml inspect`.
 
 Result:
 
@@ -1478,9 +1501,9 @@ the final module boundaries.
 
 ## 17. Risks and Guardrails
 
-### A CLI dashboard can be mistaken for the observability system
+### A CLI inspector can be mistaken for the observability system
 
-The dashboard consumes versioned snapshots and streams. Health, logs, and
+The inspector consumes versioned snapshots and streams. Health, logs, and
 metrics continue independently when no TUI is attached.
 
 ### Dashboard refresh can slow workflows
@@ -1647,7 +1670,7 @@ No production-host behavior begins until PRO0 answers and tests:
 18. Can a stream gap always recover through a fresh snapshot?
 19. Are logs and metrics safe by construction with bounded label cardinality?
 20. Which failures make readiness false without confusing workflow failure?
-21. Can `woml top` fail or disconnect without affecting execution?
+21. Can `woml inspect` fail or disconnect without affecting execution?
 22. Does backup capture one coherent durable authority while writes continue?
 23. Can restore prove definitions, events, state, and artifacts agree before
     activation?
@@ -1678,7 +1701,7 @@ Production Runtime and Operations v1 is complete when a user can:
 6. observe truthful liveness/readiness and safely scraped metrics;
 7. restart or replace the process without losing accepted runs, waits, queues,
    policies, calls, or durable state;
-8. use `woml top` to see workflows, active runs, queues, retries, approvals,
+8. use `woml inspect` to see workflows, active runs, queues, retries, approvals,
    failures, triggers, workers, and storage health;
 9. inspect and cancel a run through authenticated local operations;
 10. inject and rotate production credentials without editing `.woml` source;
