@@ -2,8 +2,7 @@
 
 ## Durable workflow memory (`services.state`)
 
-DS0 and DS1 freeze and expose the authoring surface for small, permanent,
-workflow-owned JSON values:
+`services.state` stores small, permanent, workflow-owned JSON values:
 
 ```js
 const previous = await services.state.get('previous-sales');
@@ -14,10 +13,9 @@ await services.state.set('previous-sales', 700, {
 ```
 
 Normal `woml check`/`woml run` preparation generates the `StateService` editor
-types automatically, including for local modules. Execution currently fails
-explicitly with `WOML_STATE_RUNTIME_UNAVAILABLE`; DS1 never substitutes Cache
-v1 or process memory. DS2 implements and transaction-tests the Rust/SQLite
-Store v13 authority; DS3 connects it end to end. The frozen boundary is
+types automatically, including for local modules. DS3 routes every call from
+Bun through Capability Call v1 to Rust's workflow-scoped Store v13 authority;
+it never substitutes Cache v1 or process memory. The frozen boundary is
 documented in [Durable User State v1](protocols/durable-state-v1.md).
 
 WOML scripts expose seven built-in services without installing
@@ -76,7 +74,7 @@ step. See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
 | Start every workflow interested in a fact | `services.events.emit()` | Durable internal named-event fan-out |
 | Delegate work and use one workflow's answer | `services.workflows.call()` | One independently durable child run and direct JSON result |
 | Start exact background workflow work | `services.workflows.start()` | Durable child run ID without waiting for completion |
-| Small workflow-owned correctness data | `services.state` | Versioned durable JSON state; authoring is available in DS1 and execution begins in DS3 |
+| Small workflow-owned correctness data | `services.state` | Versioned durable JSON state shared by future runs of the same workflow ID |
 
 Queue is deliberately unavailable. Durable triggers already create runs safely,
 and internal events cover fan-out. A queue will be added only when WOML has a
@@ -88,6 +86,7 @@ complete producer, consumer trigger, recovery, and inspection experience.
 - Return only the data that later steps genuinely need. Returned values become
   durable workflow context.
 - Give repeated effectful calls stable `{ name: "..." }` identities.
+- Use `ifVersion` when concurrent runs may update the same state key.
 - Use provider idempotency keys for external APIs when they are available.
 - Treat cache as disposable and database/storage as application-owned durable
   data.

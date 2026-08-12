@@ -233,6 +233,7 @@ pub struct RuntimeExecutionOptions {
   managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
   managed_storage_store: Option<Arc<crate::ManagedStorageStore>>,
   managed_cache_store: Option<Arc<crate::ManagedCacheStore>>,
+  managed_durable_state_store: Option<Arc<crate::ManagedDurableStateStore>>,
   policy_execution: Option<Arc<PolicyExecutionCoordinator>>,
   policy_execution_registry: PolicyExecutionRegistry,
 }
@@ -324,6 +325,14 @@ impl RuntimeExecutionOptions {
         .register(handler)
         .expect("each production cache operation is registered exactly once");
     }
+    let managed_durable_state_store = Arc::new(crate::ManagedDurableStateStore::default());
+    for handler in
+      crate::ManagedDurableStateHandler::handlers(Arc::clone(&managed_durable_state_store))
+    {
+      capability_registry
+        .register(handler)
+        .expect("each production durable state operation is registered exactly once");
+    }
     Self {
       script_host,
       notification_host,
@@ -344,6 +353,7 @@ impl RuntimeExecutionOptions {
       managed_database_pool: Some(managed_database_pool),
       managed_storage_store: Some(managed_storage_store),
       managed_cache_store: Some(managed_cache_store),
+      managed_durable_state_store: Some(managed_durable_state_store),
       policy_execution: None,
       policy_execution_registry: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     }
@@ -399,6 +409,7 @@ impl RuntimeExecutionOptions {
     self.managed_database_pool = None;
     self.managed_storage_store = None;
     self.managed_cache_store = None;
+    self.managed_durable_state_store = None;
     self
   }
 
@@ -1404,6 +1415,11 @@ fn attach_durable_capability_authority(
   }
   if let Some(cache) = &options.managed_cache_store {
     cache
+      .configure_for_state(database_path)
+      .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
+  }
+  if let Some(state) = &options.managed_durable_state_store {
+    state
       .configure_for_state(database_path)
       .map_err(|failure| RuntimeExecutionError::InvalidConfiguration(failure.message))?;
   }

@@ -658,10 +658,20 @@ impl DurableCapabilityAuthority {
     let payload = match &result {
       CapabilityCallResult::Succeeded(success) => {
         let encoded = serde_json::to_vec(&success.result).unwrap_or_default();
-        let result_metadata = self
-          .registry
-          .safe_result_metadata(&request, &success.result)
-          .unwrap_or_default();
+        let mut result_metadata = if request.capability == "state" {
+          metadata.clone()
+        } else {
+          Map::new()
+        };
+        result_metadata.extend(
+          self
+            .registry
+            .safe_result_metadata(&request, &success.result)
+            .unwrap_or_default(),
+        );
+        if request.capability == "state" {
+          result_metadata.insert("durationMs".to_string(), Value::from(success.duration_ms));
+        }
         RunEventPayload::OperationSucceeded(OperationSucceededData {
           node_id: request.node_id.clone(),
           attempt_number: request.attempt_number,
@@ -678,6 +688,20 @@ impl DurableCapabilityAuthority {
         })
       }
       CapabilityCallResult::Failed(failed) | CapabilityCallResult::Cancelled(failed) => {
+        let mut metadata = metadata;
+        if request.capability == "state" {
+          let outcome = if failed.error.kind == CapabilityFailureKind::Cancelled {
+            "cancelled"
+          } else if failed.error.code == "WOML_STATE_CONFLICT" {
+            "conflict"
+          } else if failed.error.code == "WOML_STATE_QUOTA_EXCEEDED" {
+            "quota_exceeded"
+          } else {
+            "failed"
+          };
+          metadata.insert("outcome".to_string(), Value::String(outcome.to_string()));
+          metadata.insert("durationMs".to_string(), Value::from(failed.duration_ms));
+        }
         RunEventPayload::OperationFailed(OperationFailedData {
           node_id: request.node_id.clone(),
           attempt_number: request.attempt_number,

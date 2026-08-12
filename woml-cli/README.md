@@ -210,10 +210,16 @@ by future runs of the same workflow ID. DS1 generates its declarations during
 normal `woml check` and `woml run` preparation, reserves the `state` module
 alias, and validates calls inside steps, lifecycle scripts, and local modules.
 
-The authoring surface is deliberately staged: calls currently fail with
-`WOML_STATE_RUNTIME_UNAVAILABLE` and never fall back to cache or in-memory
-storage. The Rust Store v13 authority is complete in DS2; script execution is
-connected in DS3. See
+Calls execute through Rust's Store v13 authority and never fall back to cache
+or in-memory storage. Named mutations reattach to their first committed result
+during a step retry, and `ifVersion` protects concurrent updates. Try the
+included workflow twice with the same state path:
+
+```bash
+woml run examples/durableStateWorkflow.woml --state .woml/state.sqlite
+```
+
+Each run increments the durable counter. See
 [Durable User State v1](../docs/protocols/durable-state-v1.md).
 
 Lifecycle syntax, cancellation races, recovery, security boundaries, and the

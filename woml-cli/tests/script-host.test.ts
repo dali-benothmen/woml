@@ -2289,37 +2289,94 @@ describe('LEC3 Script Host v7 lifecycle mode', () => {
   });
 });
 
-describe('DS1 Script Host v7 Durable User State facade', () => {
-  test('is deeply read-only and fails with the staged code before emitting a call', async () => {
-    const result = await runHost(
-      [
-        executeStepV7(
-          'inv_ds1_state',
-          `
-            if (!Object.isFrozen(services.state)) throw new Error('state facade was mutable');
-            if (!Object.isFrozen(services.state.set)) throw new Error('state method was mutable');
-            await services.state.set('conversation:C123', { count: 1 }, {
-              name: 'remember-conversation',
-              ifVersion: 0
-            });
-          `
-        ),
-      ],
-      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '7' }
+describe('DS1 Script Host v7 / DS3 managed Durable User State', () => {
+  test('is deeply read-only and lowers calls to the frozen State v1 contract', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 7,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const stateResult = {
+          contract: 'woml.state',
+          contractVersion: 1,
+          kind: 'result',
+          operation: message.call.operation,
+          data: {
+            stored: true,
+            version: 1,
+            updatedAt: '2026-08-12T10:00:00.000Z',
+          },
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 7,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(stateResult)),
+            durationMs: 1,
+            result: stateResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeStepV7(
+        'inv_ds1_state',
+        `
+          if (!Object.isFrozen(services.state)) throw new Error('state facade was mutable');
+          if (!Object.isFrozen(services.state.set)) throw new Error('state method was mutable');
+          const saved = await services.state.set('conversation:C123', { count: 1 }, {
+            name: 'remember-conversation',
+            ifVersion: 0
+          });
+          return { saved, frozen: Object.isFrozen(saved) };
+        `
+      )
     );
-    expect(result.messages.some(message => message.messageType === 'capability_call')).toBe(false);
-    const completed = result.messages.find(
-      message => message.messageType === 'completed'
-    ) as CompletedMessage;
-    expect(completed.outcome).toMatchObject({
-      kind: 'failure',
-      error: {
-        kind: 'service_failed',
-        code: 'WOML_STATE_RUNTIME_UNAVAILABLE',
-        capability: 'state',
+    await host.drain();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.call).toMatchObject({
+      capability: 'state',
+      operation: 'set',
+      identity: {
+        mode: 'named',
+        operationName: 'state.set.remember-conversation',
+      },
+      input: {
+        contract: 'woml.state',
+        contractVersion: 1,
+        kind: 'request',
         operation: 'set',
-        retryable: false,
-        ambiguous: false,
+        input: {
+          key: 'conversation:C123',
+          value: { count: 1 },
+          ifVersion: 0,
+        },
+      },
+    });
+    expect(completed[0]?.outcome).toMatchObject({
+      kind: 'success',
+      value: {
+        saved: { stored: true, version: 1 },
+        frozen: true,
       },
     });
   });

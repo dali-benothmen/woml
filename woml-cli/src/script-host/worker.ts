@@ -1494,16 +1494,6 @@ function deeplyReadonlyServiceFacade(
       },
       input,
     };
-    if (managedState) {
-      throw new ServiceCallError(capability, operation, id, {
-        kind: 'unsupported_capability',
-        code: 'WOML_STATE_RUNTIME_UNAVAILABLE',
-        message:
-          'Durable User State execution is not available until DS2 and DS3.',
-        retryable: false,
-        ambiguous: false,
-      });
-    }
     const result = await new Promise<JsonValue>((resolve, reject) => {
       pendingCalls.set(id, { capability, operation, resolve, reject });
       self.postMessage({

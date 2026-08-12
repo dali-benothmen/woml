@@ -850,7 +850,7 @@ changing underneath it.
 | DS0 (complete) | Freeze State v1, mutation identity, Store v13, and reviewed fixtures.       | Durable state semantics are reviewable before a mutable authority is added.                            |
 | DS1 (complete) | Add frontend discovery, editor types, and the Bun `services.state` facade.  | Scripts and modules receive a typed service surface; runtime calls remain deliberately gated.          |
 | DS2 (complete) | Build Store v13's transactional state authority.                            | Rust can perform atomic, versioned, idempotent state operations without Bun execution.                 |
-| DS3            | Connect State v1 through the managed capability path.                       | Real `.woml` scripts can read and mutate durable state end to end.                                     |
+| DS3 (complete) | Connect State v1 through the managed capability path.                       | Real `.woml` scripts can read and mutate durable state end to end.                                     |
 | DS4            | Add contention, retry, recovery, quota, security, and inspection hardening. | State remains correct under concurrent runs, crashes, migrations, and adversarial input.               |
 | DS5            | Package, benchmark, document, and publish Durable User State.               | `services.state` becomes a supported correctness-capable service distinct from cache.                  |
 
@@ -1338,7 +1338,7 @@ Completed implementation:
 - `bun run test:ds2` is the direct Rust authority and compatibility gate. WOML
   scripts remain deliberately gated until DS3.
 
-### DS3 — Execute `services.state` end to end
+### DS3 — Execute `services.state` end to end (completed)
 
 Changes:
 
@@ -1361,6 +1361,24 @@ Gate:
 End-to-end tests cover read/write/delete, atomic increment, set-if-absent,
 conditional conflict, retry after later script failure, host/worker crash,
 cancel/timeout, modules, lifecycle, and restart.
+
+Completion notes:
+
+- The production registry now exposes all six State v1 operations and binds
+  them to the same Store v13 database selected by `woml run --state`.
+- Bun performs author-facing argument validation and sends the frozen State v1
+  request through Capability Call v1; Rust supplies workflow ID, active step
+  identity, cancellation, deadlines, and durable operation events.
+- Named mutations reattach to their original committed State v1 result when a
+  later script failure causes the step to retry.
+- Operation events contain the State metadata profile, operation, key/input/
+  result digests, outcome, duration, and optional version. Raw keys and values
+  are excluded.
+- `examples/durableStateWorkflow.woml` is the manual product journey: running
+  it repeatedly with the same state path returns a growing durable counter.
+- `bun run test:ds3` covers the frozen authoring/authority gates plus real
+  Bun-to-Rust execution, restart persistence, redaction, retry reattachment,
+  branches, parallel children, lifecycle scripts, and imported modules.
 
 ### DS4 — Harden concurrency, recovery, limits, and security
 
@@ -1595,9 +1613,9 @@ No durable user value is stored until DS0 answers and tests:
     context automatically?
 
 Those questions are answered by the frozen DS0 schemas, fixtures, and
-`docs/protocols/durable-state-v1.md`. DS1 and DS2 have completed; DS3 may now
-connect the transactional Rust/SQLite authority to the existing managed
-capability path without changing the public contract.
+`docs/protocols/durable-state-v1.md`. DS1 through DS3 have completed. DS4 now
+hardens contention, crash recovery, limits, inspection, and adversarial input
+without changing the public contract.
 
 ## 20. Definition of Done
 

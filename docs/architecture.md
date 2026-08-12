@@ -259,13 +259,14 @@ summaries are rebuildable coordination state. See
 [Runtime Policies](woml-runtime-policies.md) and
 [Runtime Policies v1](protocols/runtime-policies-v1.md).
 
-Durable User State DS0–DS2 freezes `services.state` and adds Store v13's
+Durable User State DS0–DS3 freezes `services.state` and adds Store v13's
 workflow-scoped entry, immutable mutation-result, and quota authority. The
 TypeScript frontend discovers state usage and generates editor types; Rust owns
 canonical JSON, versions, compare-and-set, quotas, mutation reattachment, and
-cross-process SQLite transactions. It is deliberately not cache and is never
-injected into event-folded context. Script calls remain fail-closed until DS3
-registers the authority on the existing managed capability path. See
+cross-process SQLite transactions. Bun sends the frozen State v1 request over
+Capability Call v1; the engine supplies workflow scope and verified operation
+identity, and only digest-based metadata reaches durable operation events. It
+is deliberately not cache and is never injected into event-folded context. See
 [Durable User State v1](protocols/durable-state-v1.md).
 
 ## Legacy Cronflow Architecture (Migration Context)

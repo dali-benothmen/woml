@@ -59,6 +59,7 @@
     "test:ds0": "bun test ../woml/tests/durable-state-contracts.test.ts && bun run typecheck",
     "test:ds1": "bun run test:ds0 && bun test ../woml/tests/durable-state-authoring.test.ts ../woml/tests/modules.test.ts tests/durable-state-cli.test.ts && bun test tests/script-host.test.ts --test-name-pattern 'DS1 Script Host v7' && bun run typecheck",
     "test:ds2": "bun run test:ds1 && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test ds2_durable_state --test rp2_runtime_policy_store --test lec2_lifecycle_authority && bun run typecheck",
+    "test:ds3": "bun run test:ds2 && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test ds3_durable_state_runtime && bun run typecheck",
     "test:storage": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc9_storage",
     "test:cache": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine cache::tests --lib && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc10_cache",
     "test:events": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc11_events --test t12_event_runtime",

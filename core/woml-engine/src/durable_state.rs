@@ -1,19 +1,20 @@
 //! Durable User State v1 transactional authority.
 //!
-//! DS2 deliberately exposes this as a direct Rust authority. Registration in
-//! the managed capability runtime is deferred to DS3.
+//! The same transactional authority is exposed directly for conformance tests
+//! and through the managed capability runtime used by real WOML scripts.
 
 use std::{
   fs,
   path::{Path, PathBuf},
   sync::{
     atomic::{AtomicI64, Ordering},
-    Arc,
+    Arc, Mutex,
   },
   time::{Duration, Instant},
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use futures_util::future::BoxFuture;
 use rusqlite::{
   params, Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
 };
@@ -25,7 +26,8 @@ use thiserror::Error;
 
 use crate::{
   capability::CapabilityIdentityMode, derive_operation_key, CapabilityCallRequest,
-  DurableEventStore, DurableStoreError,
+  CapabilityCancellationToken, CapabilityDescriptor, CapabilityEffect, CapabilityFailure,
+  CapabilityFailureKind, CapabilityHandler, DurableEventStore, DurableStoreError,
 };
 
 pub const STATE_CONTRACT: &str = "woml.state";
@@ -229,6 +231,172 @@ pub struct DurableStateStore {
   state_location_digest: String,
   clock: Arc<dyn StateClock>,
   limits: DurableStateLimits,
+}
+
+/// Runtime-owned handle configured from the CLI's durable state path. Keeping
+/// this indirection in Rust prevents scripts from choosing a database or a
+/// workflow namespace.
+#[derive(Default)]
+pub struct ManagedDurableStateStore {
+  store: Mutex<Option<Arc<DurableStateStore>>>,
+}
+
+impl std::fmt::Debug for ManagedDurableStateStore {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter
+      .debug_struct("ManagedDurableStateStore")
+      .field(
+        "configured",
+        &self
+          .store
+          .lock()
+          .map(|store| store.is_some())
+          .unwrap_or(false),
+      )
+      .finish()
+  }
+}
+
+impl ManagedDurableStateStore {
+  pub fn configure_for_state(&self, state_path: &Path) -> Result<(), CapabilityFailure> {
+    let store = DurableStateStore::open(state_path).map_err(state_failure)?;
+    *self.store.lock().map_err(|_| state_store_unavailable())? = Some(Arc::new(store));
+    Ok(())
+  }
+
+  fn configured(&self) -> Result<Arc<DurableStateStore>, CapabilityFailure> {
+    self
+      .store
+      .lock()
+      .map_err(|_| state_store_unavailable())?
+      .clone()
+      .ok_or_else(state_store_unavailable)
+  }
+}
+
+#[derive(Debug)]
+pub struct ManagedDurableStateHandler {
+  store: Arc<ManagedDurableStateStore>,
+  operation: &'static str,
+}
+
+impl ManagedDurableStateHandler {
+  pub fn handlers(store: Arc<ManagedDurableStateStore>) -> Vec<Arc<Self>> {
+    STATE_OPERATIONS
+      .iter()
+      .map(|operation| {
+        Arc::new(Self {
+          store: Arc::clone(&store),
+          operation,
+        })
+      })
+      .collect()
+  }
+}
+
+impl CapabilityHandler for ManagedDurableStateHandler {
+  fn descriptor(&self) -> CapabilityDescriptor {
+    CapabilityDescriptor {
+      capability: "state".to_string(),
+      operation: self.operation.to_string(),
+      input_contract_version: STATE_CONTRACT_VERSION,
+      result_contract_version: STATE_CONTRACT_VERSION,
+      effect: if matches!(self.operation, "get" | "has") {
+        CapabilityEffect::Read
+      } else {
+        CapabilityEffect::IdempotentWrite
+      },
+      supports_cancellation: true,
+      supports_provider_idempotency: false,
+    }
+  }
+
+  fn validate_request(&self, request: &CapabilityCallRequest) -> Result<(), CapabilityFailure> {
+    parse_request(&request.input, self.operation)
+      .map(|_| ())
+      .map_err(state_failure)
+  }
+
+  fn safe_request_metadata(
+    &self,
+    request: &CapabilityCallRequest,
+  ) -> Result<Map<String, Value>, CapabilityFailure> {
+    let parsed = parse_request(&request.input, self.operation).map_err(state_failure)?;
+    let key = state_key(&parsed.input).map_err(state_failure)?;
+    let input_digest =
+      canonical_digest(b"woml.state-input\0v1\0", &request.input).map_err(state_failure)?;
+    Ok(Map::from_iter([
+      (
+        "profile".to_string(),
+        json!("woml.state-operation-metadata/v1"),
+      ),
+      ("operation".to_string(), json!(self.operation)),
+      (
+        "keyDigest".to_string(),
+        json!(digest(b"woml.state-key\0v1\0", key.as_bytes())),
+      ),
+      ("inputDigest".to_string(), json!(input_digest)),
+    ]))
+  }
+
+  fn safe_result_metadata(&self, result: &Value) -> Map<String, Value> {
+    let mut metadata = Map::from_iter([
+      (
+        "profile".to_string(),
+        json!("woml.state-operation-metadata/v1"),
+      ),
+      ("operation".to_string(), json!(self.operation)),
+      ("outcome".to_string(), json!("succeeded")),
+    ]);
+    if let Ok(result_digest) = canonical_digest(b"woml.state-result\0v1\0", result) {
+      metadata.insert("resultDigest".to_string(), json!(result_digest));
+    }
+    if let Some(version) = result
+      .get("data")
+      .and_then(|data| data.get("version"))
+      .and_then(Value::as_u64)
+    {
+      metadata.insert("version".to_string(), json!(version));
+    }
+    metadata
+  }
+
+  fn execute(
+    &self,
+    _input: Value,
+    _cancellation: CapabilityCancellationToken,
+  ) -> BoxFuture<'static, Result<Value, CapabilityFailure>> {
+    Box::pin(async { Err(state_scope_unavailable()) })
+  }
+
+  fn execute_request_scoped(
+    &self,
+    request: &CapabilityCallRequest,
+    workflow_scope: Option<String>,
+    cancellation: CapabilityCancellationToken,
+  ) -> BoxFuture<'static, Result<Value, CapabilityFailure>> {
+    let request = request.clone();
+    let Some(workflow_scope) = workflow_scope else {
+      return Box::pin(async { Err(state_scope_unavailable()) });
+    };
+    let store = match self.store.configured() {
+      Ok(store) => store,
+      Err(error) => return Box::pin(async move { Err(error) }),
+    };
+    Box::pin(async move {
+      tokio::task::spawn_blocking(move || {
+        if cancellation.is_cancelled() {
+          return Err(state_cancelled());
+        }
+        store
+          .execute(&workflow_scope, &request)
+          .map(|execution| execution.result)
+          .map_err(state_failure)
+      })
+      .await
+      .map_err(|_| state_handler_crashed())?
+    })
+  }
 }
 
 impl std::fmt::Debug for DurableStateStore {
@@ -966,5 +1134,67 @@ fn map_durable_store_error(error: DurableStoreError) -> DurableStateError {
       DurableStateError::StoreCorrupt
     }
     _ => DurableStateError::StoreUnavailable,
+  }
+}
+
+fn state_failure(error: DurableStateError) -> CapabilityFailure {
+  let kind = match error {
+    DurableStateError::InvalidRequest
+    | DurableStateError::KeyInvalid
+    | DurableStateError::ValueInvalid
+    | DurableStateError::OperationNameInvalid => CapabilityFailureKind::InvalidInput,
+    DurableStateError::ValueTooLarge => CapabilityFailureKind::InputTooLarge,
+    DurableStateError::StoreUnavailable => CapabilityFailureKind::TransportFailed,
+    DurableStateError::StoreCorrupt => CapabilityFailureKind::InvalidResult,
+    DurableStateError::Conflict
+    | DurableStateError::OperationIdentityConflict
+    | DurableStateError::QuotaExceeded
+    | DurableStateError::IntegerRequired
+    | DurableStateError::IntegerOverflow => CapabilityFailureKind::ServiceRejected,
+  };
+  CapabilityFailure {
+    kind,
+    code: error.code().to_string(),
+    message: error.to_string(),
+    retryable: error.retryable(),
+    ambiguous: error.ambiguous(),
+    details: None,
+  }
+}
+
+fn state_store_unavailable() -> CapabilityFailure {
+  state_failure(DurableStateError::StoreUnavailable)
+}
+
+fn state_scope_unavailable() -> CapabilityFailure {
+  CapabilityFailure {
+    kind: CapabilityFailureKind::ServiceRejected,
+    code: "WOML_STATE_SCOPE_UNAVAILABLE".to_string(),
+    message: "Durable User State requires an engine-owned workflow scope.".to_string(),
+    retryable: false,
+    ambiguous: false,
+    details: None,
+  }
+}
+
+fn state_cancelled() -> CapabilityFailure {
+  CapabilityFailure {
+    kind: CapabilityFailureKind::Cancelled,
+    code: "WOML_STATE_CANCELLED".to_string(),
+    message: "The Durable User State operation was cancelled.".to_string(),
+    retryable: false,
+    ambiguous: false,
+    details: None,
+  }
+}
+
+fn state_handler_crashed() -> CapabilityFailure {
+  CapabilityFailure {
+    kind: CapabilityFailureKind::HandlerCrashed,
+    code: "WOML_STATE_HANDLER_CRASHED".to_string(),
+    message: "The Durable User State handler stopped unexpectedly.".to_string(),
+    retryable: false,
+    ambiguous: false,
+    details: None,
   }
 }
