@@ -181,6 +181,14 @@ PostgreSQL type explicitly. Document and NoSQL databases are not supported by
 SC8; they will receive a separate method contract rather than pretending to be
 SQL drivers.
 
+## Database or durable state?
+
+Use `services.state` for bounded JSON memory owned by one workflow ID: cursors,
+small agent memory, feature flags, checkpoints, and counters. Use a database
+when applications share the data or it needs tables, indexes, filtering,
+joins, reporting, multi-record transactions, or independent administration.
+See [Choosing Where Workflow Data Lives](woml-data-guide.md).
+
 ## Run the example
 
 From the project root after building the CLI:

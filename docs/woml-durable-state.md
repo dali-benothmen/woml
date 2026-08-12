@@ -5,6 +5,9 @@ owns it in the same SQLite file selected by `woml run --state`; future runs and
 new definitions of that workflow see the same values. It is not run context,
 cache, object storage, or a general database.
 
+For a product-level comparison with cache, storage, and database, see
+[Choosing Where Workflow Data Lives](woml-data-guide.md).
+
 ## Reliability boundary
 
 - Every mutation requires a stable `name`. A retry with the same logical
@@ -89,3 +92,8 @@ same-identity deduplication, distinct named mutations, bounded lock waiting,
 recovery after a committed mutation, corrupt digests/quotas/results, Unix file
 permissions, run-inspection redaction, run/state ownership separation, and
 state operation latency/database-size budgets.
+
+DS5 publishes the feature through `bun run test:ds5`, which adds clean package
+installation, packaged native execution across process restarts, both public
+examples, every-schema compilation, historical model/event fixtures, package
+auditing, and secret/redaction scans.

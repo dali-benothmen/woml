@@ -78,6 +78,9 @@ step. See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
 | Start exact background workflow work | `services.workflows.start()` | Durable child run ID without waiting for completion |
 | Small workflow-owned correctness data | `services.state` | Versioned durable JSON state shared by future runs of the same workflow ID |
 
+The expanded decision tree, limits, ownership, and migration signals are in
+[Choosing Where Workflow Data Lives](woml-data-guide.md).
+
 Queue is deliberately unavailable. Durable triggers already create runs safely,
 and internal events cover fan-out. A queue will be added only when WOML has a
 complete producer, consumer trigger, recovery, and inspection experience.
@@ -162,4 +165,6 @@ stop the active runtime.
 - Workflow Calls: `docs/protocols/workflow-calls-v1.md`
 - Workflow Calls author guide: `docs/woml-workflow-calls.md`
 - Durable User State operations: `docs/woml-durable-state.md`
+- Data choice guide: `docs/woml-data-guide.md`
+- Local data security: `docs/woml-data-security.md`
 - SDK migration: `docs/woml-sdk-migration.md`

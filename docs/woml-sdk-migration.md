@@ -27,6 +27,7 @@ sufficient parity and the relevant production features have migration paths.
 | SDK database service | `services.db()` with a SQLite or PostgreSQL driver |
 | Durable files/large values | `services.storage` and portable object references |
 | Temporary reusable values | `services.cache` with an explicit TTL |
+| Small durable workflow-owned memory | `services.state` with named mutations and versions |
 | Internal workflow fan-out | `services.events.emit()` plus an `<event>` trigger |
 | Reusable local JavaScript helper package | `<imports><module name="..." from="..." /></imports>` and `services.<name>` |
 | Call one workflow and await its answer | `services.workflows.call(workflowId, payload)` |
@@ -84,6 +85,9 @@ replace positional or “last result” access with the producing step's path:
 13. Replace SDK process-local concurrency/rate wrappers with one workflow-level
     `<config concurrency="..." rate-limit="..." timeout="..." queue="..." />`.
     Test burst admission and restart against the same explicit state path.
+14. Replace process memory or SDK-local key/value maps with `services.state`
+    only when the data is small and owned by one workflow ID. Give every
+    mutation a stable name and use `ifVersion` for read/modify/write races.
 
 ## Current parity boundary
 
@@ -95,7 +99,8 @@ Native Fetch; the Rust-managed HTTP, database, storage, cache, and internal
 event services; local JavaScript/TypeScript modules; durable local Workflow
 Calls; workflow and step lifecycle hooks; informational Slack lifecycle
 notifications; durable local cancellation; and workflow-level Runtime Policies
-are available. The separate `services.queue` capability, package modules,
+are available. Durable User State provides small, workflow-scoped, versioned
+JSON memory across runs. The separate `services.queue` capability, package modules,
 additional messaging services, cross-machine workflow routing, remote run
 control, and the hosted production runtime remain roadmap items. Keep an SDK
 workflow in place when it depends on those unavailable capabilities. The SDK is
@@ -105,3 +110,5 @@ See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md) for
 hook ordering, warning semantics, cancellation races, and deployment guidance.
 Workflow-level concurrency, rate limiting, durable scheduling lanes, and total
 deadlines are documented in [WOML Runtime Policies](woml-runtime-policies.md).
+Use [Choosing Where Workflow Data Lives](woml-data-guide.md) before migrating
+SDK persistence into cache, state, storage, or a database.

@@ -1094,6 +1094,14 @@ Unexpired entries survive local restarts, but cache misses and eviction are
 normal and cache must never be used as durable business state. The complete
 contract and example are documented in `docs/woml-cache.md`.
 
+`services.state` provides workflow-scoped durable `get`, `has`, `set`,
+`delete`, `increment`, and `setIfAbsent` over bounded JSON. Mutations require a
+stable name, support retry reattachment, and expose monotonic versions plus
+`ifVersion` compare-and-set. State never expires, evicts, falls back to cache,
+or enters `context`; the complete contract and operational guide are
+documented in `docs/protocols/durable-state-v1.md` and
+`docs/woml-durable-state.md`.
+
 `services.events.emit(name, payload, options?)` directly fans out a named event
 to loaded `<event>` subscribers without HTTP or a publisher credential. Rust
 derives a stable publication identity, durably admits child runs, and protects

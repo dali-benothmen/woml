@@ -113,3 +113,19 @@ makes an ambiguous started step safe to replay. Queued runs retain admission
 order after restart; rate history does not reset; and the timeout deadline
 remains the immutable first-start deadline. See
 [WOML Runtime Policies](woml-runtime-policies.md).
+
+## Durable User State recovery
+
+State values are authoritative application data and are not rebuilt from run
+events. A named State v1 mutation commits its value/version, immutable original
+result, quotas, and settlement proof together. If the host stops before the
+ordinary `operation_succeeded` event, startup validates that proof and records
+the missing operation success without applying the mutation again. The
+surrounding interrupted script attempt still fails closed because unrelated
+JavaScript effects may remain ambiguous.
+
+Store v13 startup validates one consistent SQLite snapshot, including schema,
+digests, canonical results, versions, and quotas. Corruption returns
+`WOML_STATE_STORE_CORRUPT`; state is never guessed from event history. Restore
+the complete database from a known-good coherent backup as described in
+[Durable User State Operations](woml-durable-state.md).

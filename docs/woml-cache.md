@@ -80,7 +80,19 @@ internal workflow scope.
 Atomicity does not promise exactly-once JavaScript execution. If a step
 increments a counter and later fails, a step retry can increment it again.
 Cache must not be used for financial counters or any other correctness-critical
-state; use a durable database operation with an idempotency design instead.
+state. Use a named `services.state.increment` for a small workflow-owned
+counter, or a database operation with an idempotency design when records are
+shared or queryable.
+
+## Cache or durable state?
+
+Use cache only when a miss, expiry, or eviction changes performance rather than
+correctness. Use `services.state` when a future run must remember a small JSON
+fact and the write must safely reattach after retry. State never expires or
+evicts automatically and supports durable versions plus `ifVersion`.
+
+The complete cache/state/storage/database comparison is in
+[Choosing Where Workflow Data Lives](woml-data-guide.md).
 
 ## Run the example
 

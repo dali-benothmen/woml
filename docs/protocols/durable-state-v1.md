@@ -2,8 +2,10 @@
 
 Status: frozen by DS0 on 2026-08-12. DS1 exposes the typed authoring surface,
 DS2 implements the transaction-tested Store v13 Rust authority, DS3 connects
-real WOML scripts through the managed capability path, and DS4 hardens local
-concurrency, recovery, integrity, security, and performance.
+real WOML scripts through the managed capability path, DS4 hardens local
+concurrency, recovery, integrity, security, and performance, and DS5 publishes
+the contract through clean-package verification, practical examples,
+cross-version compatibility checks, and user-facing guidance.
 
 ## Public service contract
 

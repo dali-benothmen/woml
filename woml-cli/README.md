@@ -220,7 +220,21 @@ woml run examples/durableStateWorkflow.woml --state .woml/state.sqlite
 ```
 
 Each run increments the durable counter. See
-[Durable User State v1](../docs/protocols/durable-state-v1.md).
+[Durable User State v1](../docs/protocols/durable-state-v1.md), the
+[operations guide](../docs/woml-durable-state.md), and the
+[cache/state/storage/database decision guide](../docs/woml-data-guide.md).
+
+Supported Durable User State includes clean packaged execution, persistent
+cross-run values, atomic counters, optimistic version checks, named mutation
+reattachment, multi-process contention handling, fail-closed integrity checks,
+and redacted run inspection. Try the two publication examples:
+
+```bash
+woml test examples/atomicCounterWorkflow.woml --state .woml/state.sqlite
+woml test examples/conversationStateWorkflow.woml --state .woml/state.sqlite
+```
+
+Run each command again with the same state path to see its remembered value.
 
 Lifecycle syntax, cancellation races, recovery, security boundaries, and the
 production checklist are documented in

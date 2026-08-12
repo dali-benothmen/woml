@@ -55,6 +55,13 @@ WOML waits briefly for ordinary SQLite writer contention; if durability is
 unavailable, webhook admission returns HTTP 503 instead of acknowledging work
 that was not committed.
 
+`services.state` uses separate Store v13 tables in this same database. Its
+values survive runs and run-history retention, and cannot be reconstructed from
+events. Back up the complete database coherently. On Unix, State v1 hardens the
+file to `0600`, but operators must still protect the parent directory, snapshots,
+and backups. The local backend is not transparently encrypted; see
+[Local Data Security](woml-data-security.md).
+
 Readiness, accepted occurrences, run IDs, failures, and results are emitted by
 the process. Retrieve a run later with:
 
@@ -91,3 +98,8 @@ For workflows with `<config>`, queue admission may return HTTP 503 with
 `Retry-After: 1` and `WOML_POLICY_QUEUE_FULL`; callers should retry using the
 same idempotency key and payload. Run `bun run test:rp7` before publishing that
 runtime and follow [WOML Runtime Policies](woml-runtime-policies.md).
+
+For workflows using `services.state`, run `bun run test:ds5` before publishing.
+It adds clean installation, packaged native state execution, restart
+persistence, historical schema/fixture compatibility, redaction, concurrency,
+recovery, integrity, and performance gates.

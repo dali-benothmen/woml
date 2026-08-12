@@ -858,7 +858,7 @@ changing underneath it.
 | DS2 (complete) | Build Store v13's transactional state authority.                            | Rust can perform atomic, versioned, idempotent state operations without Bun execution.                 |
 | DS3 (complete) | Connect State v1 through the managed capability path.                       | Real `.woml` scripts can read and mutate durable state end to end.                                     |
 | DS4 (complete) | Add contention, retry, recovery, quota, security, and inspection hardening. | State remains correct under concurrent runs, crashes, migrations, and adversarial input.               |
-| DS5            | Package, benchmark, document, and publish Durable User State.               | `services.state` becomes a supported correctness-capable service distinct from cache.                  |
+| DS5 (complete) | Package, benchmark, document, and publish Durable User State.               | `services.state` becomes a supported correctness-capable service distinct from cache.                  |
 
 ### RP0 — Freeze runtime-policy contracts and reviewed fixtures (completed)
 
@@ -1439,7 +1439,7 @@ Completion notes:
   concurrency, recovery, corruption, redaction, permissions, and performance
   suite.
 
-### DS5 — Publish Durable User State
+### DS5 — Publish Durable User State (completed)
 
 Changes:
 
@@ -1461,6 +1461,28 @@ Gate:
 The feature passes frontend, Rust, Bun, N-API, SQLite, retry, lifecycle, policy,
 workflow-call, migration, packaging, benchmark, and secret/redaction tests from
 a clean project.
+
+Completion notes:
+
+- `examples/atomicCounterWorkflow.woml` demonstrates an atomic counter under
+  concurrent policy runs; `examples/conversationStateWorkflow.woml`
+  demonstrates version-checked, workflow-owned conversation memory.
+- A clean consumer installs the packed CLI archive, generates StateService
+  declarations, runs the native engine in fresh processes, observes counter and
+  conversation values across restarts, verifies redacted inspection, and checks
+  Unix owner-only state-file permissions.
+- `docs/woml-data-guide.md` gives one cache/state/storage/database decision
+  model. Services, cache, storage, database, architecture, recovery, local data
+  security, deployment, CLI, language, and SDK migration documents now carry
+  the published State v1 boundary.
+- `verify-ds5.ts` compiles every repository schema together, validates Models
+  v1-v12 and Events v1-v11 against historical fixtures, validates all State v1
+  fixtures, runs both examples twice, enforces the state benchmark, audits the
+  package allowlist, and scans public artifacts for active WOML secrets.
+- `bun run test:ds5` is the State publication gate.
+  `bun run test:runtime-state-release` composes the RP7 Runtime Policies gate
+  with DS5, and the repository release command now includes that combined
+  milestone check.
 
 ## 14. Expected File Areas
 
@@ -1647,8 +1669,8 @@ No durable user value is stored until DS0 answers and tests:
     context automatically?
 
 Those questions are answered by the frozen DS0 schemas, fixtures, and
-`docs/protocols/durable-state-v1.md`. DS1 through DS4 have completed. DS5 now
-packages and publishes the feature without changing the public contract.
+`docs/protocols/durable-state-v1.md`. DS1 through DS5 have completed without
+changing the frozen public contract.
 
 ## 20. Definition of Done
 

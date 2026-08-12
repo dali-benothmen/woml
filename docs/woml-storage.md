@@ -96,6 +96,14 @@ conflicts, unsafe paths, corruption, size limits, cancellation, and unavailable
 storage. Interrupted managed operations follow the existing fail-closed WOML
 recovery rule. Object bodies and body-derived text do not enter diagnostics.
 
+## Storage or durable state?
+
+Use `services.state` for small workflow-owned JSON facts that need versions,
+compare-and-set, counters, or retry-safe named mutations. Use storage for files,
+larger documents, portable object references, and data that should not pass
+through every script invocation. See
+[Choosing Where Workflow Data Lives](woml-data-guide.md).
+
 ## Run the example
 
 From the project root after building the CLI:
