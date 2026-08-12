@@ -3,8 +3,9 @@
 Status: frozen by PRO0 on 2026-08-12. PRO1 through PRO4 implement configuration,
 preflight, atomic activation, background hosting, durable ownership, production
 secret sources, authenticated local administration, and the PRO5 observability
-foundation. The terminal inspector, backup, and retention remain gated to their
-later PRO phases.
+foundation. PRO6 implements the terminal inspector and PRO7 implements coherent
+backup, guarded restore, and supported-store recovery. Retention remains gated
+to PRO8.
 
 ## Product boundary
 
@@ -15,6 +16,8 @@ woml run workflows/
 woml run workflows/ --background
 woml stop
 woml inspect
+woml backup ./backups/woml-2026-08-12
+woml restore ./backups/woml-2026-08-12
 ```
 
 There is no public `woml build` command and no `.womlpack` format in Production
@@ -249,6 +252,27 @@ business outcomes.
 Backup Manifest v1 describes a coherent SQLite online backup plus exact
 definition/artifact inventory. It never includes secret values. Restore is an
 offline verified operation and rejects active targets.
+
+`woml backup <directory> [--state <path>]` publishes exactly `manifest.json`
+and `state.sqlite` through a temporary-directory/atomic-rename boundary. Rust
+owns the SQLite online snapshot, maintenance lease, integrity audit, definition
+and module-artifact validation, and verified-backup record. The Bun CLI owns
+strict paths, manifest encoding, streaming SHA-256 verification, and the
+operator-facing result.
+
+`woml restore <directory> [--state <path>] [--replace]` is offline. It verifies
+the immutable backup before copying, prepares and migrates a temporary target,
+clears only ephemeral runtime ownership/claim/route state, audits the result,
+and atomically installs it. Existing targets require `--replace`; their prior
+database and WAL/SHM companions move to a reported rollback path. Active
+descriptor processes or live Store v14 owner leases reject restoration.
+
+Store v13 and v14 are accepted. Supported old stores migrate transactionally
+on the temporary restore copy; future versions fail closed. State v1 persists
+its original location identity in store metadata before snapshot, so restoring
+the verified database to a different absolute path preserves workflow state
+scope. Secret-provider contents, source deployments, runtime configuration,
+and logs are separate operational assets and are not copied by this contract.
 
 Retention v1 removes only dependency-free terminal history. It never owns
 active/queued/waiting/retrying runs, unresolved approvals, active Workflow

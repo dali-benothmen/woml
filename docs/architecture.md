@@ -287,7 +287,10 @@ sources, rotating loopback admin authority, authenticated live
 `list`/`get`/`cancel`, and traffic/resource boundaries. PRO5 then adds bounded
 store/live snapshots, ordered progress streaming,
 structured logs, stable metrics, health probes, and telemetry failure
-isolation. `woml inspect`, backup, and retention remain gated to PRO6–PRO8. See
+isolation. PRO6 adds the color terminal inspector. PRO7 adds Rust-owned coherent
+SQLite backup, strict Backup Manifest v1 verification, guarded offline restore,
+State v1 path portability, and transactional supported-store upgrade recovery.
+Retention remains gated to PRO8. See
 [Production Runtime and Operations](woml-production-runtime.md) and the
 [Production Runtime v1 contracts](protocols/production-runtime-operations-v1.md).
 

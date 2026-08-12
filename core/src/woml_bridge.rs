@@ -14,16 +14,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use woml_engine::model::ValueExpression;
 use woml_engine::{
-  execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
-  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
-  resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
+  create_online_backup, execute_workflow, execute_workflow_durable,
+  execute_workflow_durable_outcome, inspect_backup_store, prepare_restored_store,
+  record_verified_backup, recover_durable_runs, resolve_human_approval_durable,
+  resume_workflow_durable, resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
   run_notification_provider_journey, settle_approval_timeout_durable, ApprovalDecision,
-  ApprovalDecisionOutcome, CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
-  ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter, LifecycleProgress,
-  NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
-  NotificationJourneyError, ParallelFailurePolicy, RunFailure, RunStatus, RuntimeExecutionError,
-  RuntimeExecutionOptions, RuntimeModuleArtifact, RuntimePolicyProgress,
-  RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
+  ApprovalDecisionOutcome, BackupError, CompiledWorkflowDefinition, DurableEventStore,
+  DurableStoreError, ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter,
+  LifecycleProgress, NotificationHostClientError, NotificationHostProcessOptions,
+  NotificationJourneyDiagnostics, NotificationJourneyError, ParallelFailurePolicy, RunFailure,
+  RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact,
+  RuntimePolicyProgress, RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
   ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest, TriggerProgress,
   TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
   WomlWebhookServerConfig, WorkflowCallProgress, WorkflowCallProgressReporter,
@@ -551,6 +552,34 @@ struct NativeRunManagementError {
   kind: &'static str,
   code: &'static str,
   message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeBackupError {
+  kind: &'static str,
+  code: &'static str,
+  message: String,
+}
+
+fn native_backup_error(error: BackupError, fallback: &'static str) -> napi::Error {
+  let code = match error {
+    BackupError::StorePathUnsafe => "WOML_BACKUP_SOURCE_INVALID",
+    BackupError::DestinationUnsafe => "WOML_BACKUP_DESTINATION_INVALID",
+    BackupError::UnsupportedStoreVersion(_) => "WOML_STORE_VERSION_UNSUPPORTED",
+    BackupError::MaintenanceBusy => "WOML_MAINTENANCE_BUSY",
+    BackupError::EmptyDefinitionInventory
+    | BackupError::DefinitionInventoryMismatch
+    | BackupError::IntegrityFailed => "WOML_BACKUP_VERIFICATION_FAILED",
+    _ => fallback,
+  };
+  let reason = serde_json::to_string(&NativeBackupError {
+    kind: "woml_backup_error",
+    code,
+    message: error.to_string(),
+  })
+  .unwrap_or_else(|_| "WOML backup operation failed.".to_string());
+  napi::Error::from_reason(reason)
 }
 
 fn native_run_management_error(code: &'static str, error: DurableStoreError) -> napi::Error {
@@ -1602,6 +1631,75 @@ pub fn observe_woml_runtime(event_store_path: String) -> napi::Result<String> {
     napi::Error::from_reason(format!(
       "Could not encode WOML runtime observation: {error}"
     ))
+  })
+}
+
+#[napi]
+pub fn create_woml_backup(
+  event_store_path: String,
+  destination_path: String,
+  lease_id: String,
+  owner_id: String,
+  fallback_deployment_id: String,
+) -> napi::Result<String> {
+  let inspection = create_online_backup(
+    PathBuf::from(event_store_path),
+    PathBuf::from(destination_path),
+    &lease_id,
+    &owner_id,
+    &fallback_deployment_id,
+  )
+  .map_err(|error| native_backup_error(error, "WOML_BACKUP_FAILED"))?;
+  serde_json::to_string(&inspection).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode backup inventory: {error}"))
+  })
+}
+
+#[napi]
+pub fn inspect_woml_backup_store(event_store_path: String) -> napi::Result<String> {
+  let inspection = inspect_backup_store(PathBuf::from(event_store_path))
+    .map_err(|error| native_backup_error(error, "WOML_BACKUP_VERIFICATION_FAILED"))?;
+  serde_json::to_string(&inspection).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode backup inspection: {error}"))
+  })
+}
+
+#[napi]
+pub fn record_woml_verified_backup(
+  event_store_path: String,
+  backup_id: String,
+  completed_at: String,
+) -> napi::Result<()> {
+  let completed_at = DateTime::parse_from_rfc3339(&completed_at)
+    .map_err(|_| napi::Error::from_reason("Backup completion time is invalid.".to_string()))?
+    .with_timezone(&Utc);
+  record_verified_backup(PathBuf::from(event_store_path), &backup_id, completed_at)
+    .map_err(|error| native_backup_error(error, "WOML_BACKUP_FAILED"))
+}
+
+#[napi]
+pub fn prepare_woml_restored_store(
+  event_store_path: String,
+  expected_definition_hashes_json: String,
+  backup_id: String,
+  restored_at: String,
+) -> napi::Result<String> {
+  let expected: Vec<String> =
+    serde_json::from_str(&expected_definition_hashes_json).map_err(|_| {
+      napi::Error::from_reason("Restore definition inventory is invalid.".to_string())
+    })?;
+  let restored_at = DateTime::parse_from_rfc3339(&restored_at)
+    .map_err(|_| napi::Error::from_reason("Restore time is invalid.".to_string()))?
+    .with_timezone(&Utc);
+  let inspection = prepare_restored_store(
+    PathBuf::from(event_store_path),
+    &expected,
+    &backup_id,
+    restored_at,
+  )
+  .map_err(|error| native_backup_error(error, "WOML_RESTORE_FAILED"))?;
+  serde_json::to_string(&inspection).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode restore inspection: {error}"))
   })
 }
 

@@ -55,6 +55,7 @@ import {
   inspectRunV2WithRust,
   listRunsWithRust,
   observeRuntimeWithRust,
+  BackupOperationError,
   RunManagementError,
   RunInspectionError,
   settleApprovalTimeoutWithRust,
@@ -125,6 +126,15 @@ import {
   runRuntimeInspector,
   type InspectorTerminal,
 } from './runtime-inspector';
+import {
+  backupUsage,
+  createProductionBackup,
+  parseBackupArguments,
+  parseRestoreArguments,
+  ProductionBackupError,
+  restoreProductionBackup,
+  restoreUsage,
+} from './production-backup';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -194,7 +204,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${backupUsage}\n${restoreUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -959,6 +969,11 @@ function formatError(
 
   if (error instanceof RunManagementError) {
     return `WOML run error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof ProductionBackupError || error instanceof BackupOperationError) {
+    const operation = error.code.startsWith('WOML_RESTORE_') ? 'restore' : 'backup';
+    return `WOML ${operation} error [${error.code}]: ${error.message}`;
   }
 
   if (error instanceof NotificationProviderError) {
@@ -3574,6 +3589,71 @@ export async function runCli(
         : { terminal: dependencies.inspectorTerminal }),
       fetcher: (dependencies.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
     });
+  }
+
+  if (args[0] === 'backup') {
+    try {
+      const parsed = parseBackupArguments(args);
+      const manifest = await createProductionBackup(parsed, {
+        nativeCorePath: dependencies.nativeCorePath,
+      });
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(manifest)}\n`
+          : [
+              'WOML backup created and verified.',
+              `Backup: ${parsed.backupDirectory}`,
+              `Backup ID: ${manifest.backupId}`,
+              `Store version: ${manifest.storeVersion}`,
+              `Definitions: ${manifest.definitionHashes.length}`,
+              `Database: ${manifest.database.sizeBytes} bytes (${manifest.database.digest})`,
+            ].join('\n') + '\n'
+      );
+      return 0;
+    } catch (error) {
+      if (
+        error instanceof ProductionBackupError &&
+        error.code === 'WOML_CLI_ARGUMENTS_INVALID'
+      ) {
+        io.stderr(`${backupUsage}\n`);
+        return 2;
+      }
+      io.stderr(`${formatError(error)}\n`);
+      return 1;
+    }
+  }
+
+  if (args[0] === 'restore') {
+    try {
+      const parsed = parseRestoreArguments(args);
+      const restored = await restoreProductionBackup(parsed, {
+        nativeCorePath: dependencies.nativeCorePath,
+      });
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(restored)}\n`
+          : [
+              'WOML backup restored and verified.',
+              `Backup ID: ${restored.backupId}`,
+              `State: ${restored.statePath}`,
+              `Store version: ${restored.storeVersion}`,
+              ...(restored.rollbackPath === undefined
+                ? []
+                : [`Previous state retained at: ${restored.rollbackPath}`]),
+            ].join('\n') + '\n'
+      );
+      return 0;
+    } catch (error) {
+      if (
+        error instanceof ProductionBackupError &&
+        error.code === 'WOML_CLI_ARGUMENTS_INVALID'
+      ) {
+        io.stderr(`${restoreUsage}\n`);
+        return 2;
+      }
+      io.stderr(`${formatError(error)}\n`);
+      return 1;
+    }
   }
 
   if (args[0] === 'list') {

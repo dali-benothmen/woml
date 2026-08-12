@@ -458,10 +458,33 @@ impl DurableStateStore {
       .map_err(map_durable_store_error)?;
     let canonical = fs::canonicalize(&path).map_err(|_| DurableStateError::StoreUnavailable)?;
     harden_local_permissions(&canonical)?;
-    let state_location_digest = digest(
+    let derived_location_digest = digest(
       b"woml.state-location\0v1\0",
       canonical.to_string_lossy().as_bytes(),
     );
+    let identity_connection = Connection::open_with_flags(
+      &canonical,
+      OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+    )
+    .map_err(sqlite_unavailable)?;
+    identity_connection
+      .execute(
+        "INSERT OR IGNORE INTO woml_store_metadata(key, value)
+         VALUES ('state_location_identity_v1', ?1)",
+        [&derived_location_digest],
+      )
+      .map_err(sqlite_unavailable)?;
+    let state_location_digest: String = identity_connection
+      .query_row(
+        "SELECT value FROM woml_store_metadata WHERE key = 'state_location_identity_v1'",
+        [],
+        |row| row.get(0),
+      )
+      .map_err(sqlite_unavailable)?;
+    if !valid_digest(&state_location_digest) {
+      return Err(DurableStateError::StoreCorrupt);
+    }
+    drop(identity_connection);
     let store = Self {
       path: canonical,
       state_location_digest,

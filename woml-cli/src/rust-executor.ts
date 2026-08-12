@@ -431,6 +431,15 @@ export interface RustRuntimeObservationV1 {
   readonly workflowCallsActive: number;
 }
 
+export interface RustBackupStoreInspection {
+  readonly storeVersion: 13 | 14;
+  readonly definitionHashes: readonly string[];
+  readonly deploymentId?: string;
+  readonly activationId?: string;
+  readonly runtimeInstanceId?: string;
+  readonly runtimeLeaseExpiresAt?: string;
+}
+
 export interface RustLifecycleWarning {
   readonly hookId: string;
   readonly actionId: string;
@@ -529,6 +538,16 @@ export class RunManagementError extends Error {
   constructor(code: string, message: string) {
     super(message);
     this.name = 'RunManagementError';
+    this.code = code;
+  }
+}
+
+export class BackupOperationError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'BackupOperationError';
     this.code = code;
   }
 }
@@ -695,6 +714,25 @@ interface NativeCore {
     status?: string
   ) => string;
   readonly observeWomlRuntime: (eventStorePath: string) => string;
+  readonly createWomlBackup: (
+    eventStorePath: string,
+    destinationPath: string,
+    leaseId: string,
+    ownerId: string,
+    fallbackDeploymentId: string
+  ) => string;
+  readonly inspectWomlBackupStore: (eventStorePath: string) => string;
+  readonly recordWomlVerifiedBackup: (
+    eventStorePath: string,
+    backupId: string,
+    completedAt: string
+  ) => void;
+  readonly prepareWomlRestoredStore: (
+    eventStorePath: string,
+    expectedDefinitionHashesJson: string,
+    backupId: string,
+    restoredAt: string
+  ) => string;
   readonly inspectWomlRunV2: (eventStorePath: string, runId: string) => string;
   readonly cancelWomlRun: (
     eventStorePath: string,
@@ -2538,6 +2576,151 @@ export function observeRuntimeWithRust(
     throw new Error('The native core returned invalid runtime-observation data.');
   }
   return value as unknown as RustRuntimeObservationV1;
+}
+
+function decodeBackupNativeError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    const value: unknown = JSON.parse(message);
+    if (
+      record(value) &&
+      value.kind === 'woml_backup_error' &&
+      typeof value.code === 'string' &&
+      typeof value.message === 'string'
+    ) {
+      throw new BackupOperationError(value.code, value.message);
+    }
+  } catch (decoded) {
+    if (decoded instanceof BackupOperationError) throw decoded;
+  }
+  throw new BackupOperationError(
+    'WOML_BACKUP_FAILED',
+    'The native WOML backup operation failed.'
+  );
+}
+
+function backupInspection(value: unknown): RustBackupStoreInspection {
+  const digest = (candidate: unknown): candidate is string =>
+    typeof candidate === 'string' && /^sha256:[0-9a-f]{64}$/.test(candidate);
+  if (
+    !record(value) ||
+    !exactKeys(
+      value,
+      ['storeVersion', 'definitionHashes'],
+      ['deploymentId', 'activationId', 'runtimeInstanceId', 'runtimeLeaseExpiresAt']
+    ) ||
+    ![13, 14].includes(Number(value.storeVersion)) ||
+    !Array.isArray(value.definitionHashes) ||
+    value.definitionHashes.length < 1 ||
+    value.definitionHashes.length > 10_000 ||
+    !value.definitionHashes.every(digest) ||
+    new Set(value.definitionHashes).size !== value.definitionHashes.length ||
+    (value.deploymentId !== undefined &&
+      (typeof value.deploymentId !== 'string' || value.deploymentId.length === 0)) ||
+    (value.activationId !== undefined && !digest(value.activationId)) ||
+    (value.runtimeInstanceId !== undefined &&
+      (typeof value.runtimeInstanceId !== 'string' || value.runtimeInstanceId.length === 0)) ||
+    (value.runtimeLeaseExpiresAt !== undefined && !dateTime(value.runtimeLeaseExpiresAt))
+  ) {
+    throw new BackupOperationError(
+      'WOML_BACKUP_VERIFICATION_FAILED',
+      'The native core returned invalid backup inventory.'
+    );
+  }
+  return value as unknown as RustBackupStoreInspection;
+}
+
+function backupJson(call: () => string): RustBackupStoreInspection {
+  try {
+    return backupInspection(JSON.parse(call()));
+  } catch (error) {
+    if (error instanceof BackupOperationError) throw error;
+    decodeBackupNativeError(error);
+  }
+}
+
+export function createBackupWithRust(
+  eventStorePath: string,
+  destinationPath: string,
+  leaseId: string,
+  ownerId: string,
+  fallbackDeploymentId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustBackupStoreInspection {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.createWomlBackup !== 'function') {
+    throw new BackupOperationError(
+      'WOML_BACKUP_UNAVAILABLE',
+      'The native core does not expose production backup; rebuild the Rust addon.'
+    );
+  }
+  return backupJson(() =>
+    native.createWomlBackup(
+      eventStorePath,
+      destinationPath,
+      leaseId,
+      ownerId,
+      fallbackDeploymentId
+    )
+  );
+}
+
+export function inspectBackupStoreWithRust(
+  eventStorePath: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustBackupStoreInspection {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.inspectWomlBackupStore !== 'function') {
+    throw new BackupOperationError(
+      'WOML_BACKUP_UNAVAILABLE',
+      'The native core does not expose backup verification; rebuild the Rust addon.'
+    );
+  }
+  return backupJson(() => native.inspectWomlBackupStore(eventStorePath));
+}
+
+export function recordVerifiedBackupWithRust(
+  eventStorePath: string,
+  backupId: string,
+  completedAt: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): void {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.recordWomlVerifiedBackup !== 'function') {
+    throw new BackupOperationError(
+      'WOML_BACKUP_UNAVAILABLE',
+      'The native core does not expose verified-backup recording; rebuild the Rust addon.'
+    );
+  }
+  try {
+    native.recordWomlVerifiedBackup(eventStorePath, backupId, completedAt);
+  } catch (error) {
+    decodeBackupNativeError(error);
+  }
+}
+
+export function prepareRestoredStoreWithRust(
+  eventStorePath: string,
+  expectedDefinitionHashes: readonly string[],
+  backupId: string,
+  restoredAt: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustBackupStoreInspection {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.prepareWomlRestoredStore !== 'function') {
+    throw new BackupOperationError(
+      'WOML_RESTORE_UNAVAILABLE',
+      'The native core does not expose production restore; rebuild the Rust addon.'
+    );
+  }
+  return backupJson(() =>
+    native.prepareWomlRestoredStore(
+      eventStorePath,
+      JSON.stringify(expectedDefinitionHashes),
+      backupId,
+      restoredAt
+    )
+  );
 }
 
 export function inspectRunV2WithRust(

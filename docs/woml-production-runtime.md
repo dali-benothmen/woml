@@ -1,8 +1,9 @@
 # WOML Production Runtime and Operations
 
-Production Runtime PRO0 through PRO5 provide the reviewed contracts,
+Production Runtime PRO0 through PRO7 provide the reviewed contracts,
 deployment preflight, atomic direct-source activation, durable ownership,
-restart recovery, graceful shutdown, and foreground/background operation. Runtime hosting uses
+restart recovery, graceful shutdown, foreground/background operation,
+observability, the terminal inspector, and verified backup/restore. Runtime hosting uses
 the direct `.woml` experience—there is no build command or deployment-package
 extension.
 
@@ -200,6 +201,30 @@ workflow truth. Slow or broken telemetry clients are isolated from execution.
 See [WOML Runtime Observability](woml-observability.md) for the endpoints,
 redaction rules, stream resynchronization, limits, and monitoring guidance.
 
+## Backup, restore, and upgrades
+
+Create a coherent verified snapshot of the default durable state location:
+
+```bash
+woml backup ./backups/woml-2026-08-12
+```
+
+Restore is offline and refuses a live target. Replacing an existing database
+requires `--replace` and retains the previous database as a reported rollback
+copy:
+
+```bash
+woml stop
+woml restore ./backups/woml-2026-08-12 --replace
+woml run workflows/
+```
+
+Use `--state <path>` on both commands when the runtime does not use
+`.woml/state.sqlite`. Backup Manifest v1, checksums, definition/module
+verification, supported-store migration, state-path portability, filesystem
+responsibilities, and separate secret-provider recovery are documented in
+[WOML Backup, Restore, and Store Upgrades](woml-backup-and-restore.md).
+
 ## Current phase boundary
 
 PRO0 freezes the production contracts, PRO1 implements configuration and
@@ -207,14 +232,21 @@ non-activating preflight, PRO2 implements atomic activation, and PRO3
 implements Store v14 ownership, recovery, background operation, exact stop,
 and graceful shutdown. PRO4 implements production secret sources, authenticated
 live run control, rotating capabilities, request bounds, and isolation
-guidance. PRO5 implements the observability foundation consumed by the future
-`woml inspect`.
+guidance. PRO5 implements the observability foundation, PRO6 adds the live
+terminal inspector, and PRO7 adds coherent backup, verified guarded restore,
+and supported-store upgrade safety.
 
-These planned commands are not executable until their phases:
+Current production operations include:
 
 ```bash
-woml inspect                      # PRO6
-woml backup                       # PRO7
+woml inspect
+woml backup ./backups/woml-2026-08-12
+woml restore ./backups/woml-2026-08-12
+```
+
+This command remains planned for PRO8:
+
+```bash
 woml prune --before 30d --dry-run # PRO8
 ```
 

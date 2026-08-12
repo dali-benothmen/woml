@@ -24,9 +24,12 @@ changes another entry.
 
 ## Scope and authority
 
-Rust derives scope from the selected state location plus workflow ID. Runs and
-definition versions of that workflow share state; another workflow cannot read
-it. State survives restarts and run-history retention until explicitly deleted.
+Rust derives scope from a versioned state-location identity plus workflow ID.
+The identity is initialized from the selected state location and persisted in
+store metadata; a verified PRO7 backup therefore retains it when restored at a
+different filesystem path. Runs and definition versions of that workflow share
+state; another workflow cannot read it. State survives restarts, verified
+restore, and run-history retention until explicitly deleted.
 
 State is authoritative application data in separate Store v13 tables. It is
 not part of folded `context`, is not reconstructed from run events, and never

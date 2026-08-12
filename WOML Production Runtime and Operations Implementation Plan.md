@@ -1,9 +1,10 @@
 # WOML Production Runtime and Operations Implementation Plan
 
-Status: PRO0 through PRO3 completed on 2026-08-12. The Production Runtime v1
+Status: PRO0 through PRO7 completed on 2026-08-12. The Production Runtime v1
 contracts, Runtime Configuration v1, whole-deployment preflight, atomic source
-activation, durable ownership, recovery, background operation, exact stop, and
-graceful shutdown are implemented. Production Runtime v1 is deliberately a strong single-machine
+activation, durable ownership, recovery, background operation, exact stop,
+graceful shutdown, security, observability, terminal inspection, and verified
+backup/restore are implemented. Production Runtime v1 is deliberately a strong single-machine
 deployment profile: one
 long-running `woml run` host can activate several workflows, survive supervised
 restarts, expose safe operational visibility, and protect and maintain its
@@ -936,11 +937,11 @@ versioned before implementation rather than widened silently.
 | PRO0 (complete) | Freeze activation, background control, ownership, admin, observability, backup, and retention contracts. | Every layer agrees on the production boundaries before runtime behavior changes. |
 | PRO1 (complete) | Add runtime configuration and production preflight. | Users can validate a whole deployment and its environment without activating it. |
 | PRO2 (complete) | Make direct `.woml` input activation atomic and durably pinned. | `woml run` either activates the complete source set safely or activates nothing. |
-| PRO3 | Add durable ownership, recovery, background mode, `woml stop`, and graceful shutdown. | One foreground or detached runtime can own a deployment safely across restarts and replacements. |
-| PRO4 | Harden production secrets, local administration, and process/resource boundaries. | Production activation fails safely and operational control is authenticated and separated from ingress. |
-| PRO5 | Add health, structured logs, metrics, snapshots, and live operations streaming. | Humans and monitoring systems can understand runtime health without reading SQLite or raw logs. |
-| PRO6 | Build the interactive `woml inspect` terminal inspector. | Users can observe and safely control active automations from an htop-style CLI view. |
-| PRO7 | Add coherent backup, verified restore, and safe runtime/store upgrades. | A deployment can recover from disk loss or a failed upgrade using a tested procedure. |
+| PRO3 (complete) | Add durable ownership, recovery, background mode, `woml stop`, and graceful shutdown. | One foreground or detached runtime can own a deployment safely across restarts and replacements. |
+| PRO4 (complete) | Harden production secrets, local administration, and process/resource boundaries. | Production activation fails safely and operational control is authenticated and separated from ingress. |
+| PRO5 (complete) | Add health, structured logs, metrics, snapshots, and live operations streaming. | Humans and monitoring systems can understand runtime health without reading SQLite or raw logs. |
+| PRO6 (complete) | Build the interactive `woml inspect` terminal inspector. | Users can observe and safely control active automations from an htop-style CLI view. |
+| PRO7 (complete) | Add coherent backup, verified restore, and safe runtime/store upgrades. | A deployment can recover from disk loss or a failed upgrade using a tested procedure. |
 | PRO8 | Add retention planning, cleanup, and bounded SQLite maintenance. | Run history can be managed without deleting active truth or durable user state. |
 | PRO9 | Harden, benchmark, package, document, and publish Production Runtime v1. | WOML is supported for continuously operated single-machine production deployments. |
 
@@ -1363,7 +1364,7 @@ Completed implementation:
 - `bun run test:pro6` composes PRO5 with deterministic virtual-terminal tests,
   the PRO6 verifier, and type checking; it is included in the release gate.
 
-### PRO7 — Backup, restore, and upgrades
+### PRO7 — Backup, restore, and upgrades ✅ Completed
 
 Changes:
 
@@ -1389,6 +1390,44 @@ Gate:
 Online-write backup, crash mid-backup, checksum corruption, partial archive,
 missing artifact, active-target rejection, full restore, old-store upgrade,
 future-version rejection, rollback, and recovery-of-waits tests pass.
+
+Completed implementation:
+
+- `woml backup <directory> [--state <path>] [--json]` now uses Rust's SQLite
+  online-backup authority under the Store v14 maintenance lease. It publishes
+  only after a temporary snapshot passes database, event-store, State v1,
+  definition, and required module-artifact audits.
+- The frozen Backup Manifest v1 records the database byte size and streaming
+  SHA-256 digest, Store version, exact sorted definition inventory,
+  deployment/activation identity, creation time, backup identity, and verified
+  status. It contains no secret-provider values.
+- `woml restore <directory> [--state <path>] [--replace] [--json]` verifies the
+  manifest and bytes again, rejects symlinks/partial input/future versions/live
+  targets, prepares a temporary Store v14 database, clears only ephemeral
+  runtime leases/claims/routes, and atomically installs it.
+- Existing target replacement is never implicit. `--replace` moves the prior
+  database and any WAL/SHM companions to a reported `.pre-restore-*` rollback
+  path before the final swap.
+- State v1 now persists its original store-location identity before snapshot,
+  so a verified restore at a different absolute path preserves the same
+  workflow-scoped `services.state` values without weakening isolation between
+  independently created databases.
+- Store v13 restore migrates transactionally on the temporary copy to Store
+  v14. Unknown future versions fail closed. The current v13-to-v14 migration is
+  additive; any future destructive migration must require the durable
+  last-verified-backup record before changing a live store.
+- Backup and restore preserve immutable definitions, events, policy/retry and
+  approval history, Workflow Calls, module artifacts, and durable user state.
+  Recovery tests prove an unresolved human approval remains waiting.
+- Secret providers, `.woml` source/configuration deployment, and logs remain
+  separate operator-owned recovery assets. The new operations guide documents
+  persistent storage, supervisor, off-host backup, encryption, and restore
+  responsibilities.
+- `bun run test:pro7` builds the packaged native/CLI boundary, runs online-WAL,
+  missing-artifact, maintenance-conflict, old/future-store, approval-wait,
+  corruption, partial-input, symlink, active-target, replacement/rollback, and
+  moved-State-v1 journeys, verifies frozen artifacts, type-checks, and runs
+  clippy. It is included in the release gate.
 
 ### PRO8 — Retention and storage maintenance
 

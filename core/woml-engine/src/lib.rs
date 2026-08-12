@@ -4,6 +4,7 @@
 //! paths and from N-API. It consumes the versioned Compiled Workflow Model and
 //! derives all run state by folding versioned events.
 
+pub mod backup;
 pub mod cache;
 pub mod capability;
 pub mod database;
@@ -29,6 +30,10 @@ pub mod store;
 pub mod webhook;
 pub mod workflow_calls;
 
+pub use backup::{
+  create_online_backup, inspect_backup_store, prepare_restored_store, record_verified_backup,
+  BackupError, BackupStoreInspection,
+};
 pub use cache::{
   CacheClock, CacheLimits, FixedCacheClock, ManagedCacheHandler, ManagedCacheStore,
   SystemCacheClock, CACHE_CONTRACT, CACHE_CONTRACT_VERSION, DEFAULT_CACHE_MAX_BYTES,
@@ -60,10 +65,10 @@ pub use durable::{
   RunCancellationCode, RunCancellationResult, RunCancellationStatus, RunDefinitionBinding,
   RunInspectionCancellationV2, RunInspectionHookV2, RunInspectionPolicyV3, RunInspectionV2,
   RunInspectionV3, RunListV1, RunListV2, RunSummaryV1, RunSummaryV2, RunTimeoutSettlement,
-  RuntimeObservationV1, RuntimeOwnerLease, ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome,
-  SchedulerClaimV1, StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome,
-  TriggerAdmissionRequest, TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
-  RUNTIME_POLICY_QUEUE_CEILING,
+  RuntimeObservationV1, RuntimeOwnerLease, ScheduleCursor, ScheduleCursorRegistration,
+  ScheduleCursorRegistrationOutcome, SchedulerClaimV1, StepFailureCommit, StepFailureDisposition,
+  TriggerAdmissionOutcome, TriggerAdmissionRequest, TriggerOccurrence, TriggerRecoveryWork,
+  DURABLE_STORE_SCHEMA_VERSION, RUNTIME_POLICY_QUEUE_CEILING,
 };
 pub use durable_state::{
   DurableStateError, DurableStateExecution, DurableStateLimits, DurableStateStore, FixedStateClock,
