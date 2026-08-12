@@ -20,10 +20,12 @@ databases may live elsewhere.
 - Treat copied databases, WAL files, crash dumps, and support bundles as
   sensitive application data.
 
-`woml list` and `woml get` are local operator controls, not remotely
-authenticated administration APIs. Do not expose direct state-file access or
-wrap these commands in a network service without a reviewed authorization and
-audit design.
+When a runtime is active, `woml list`, `woml get`, and `woml cancel` first use
+its owner-only descriptor and rotating loopback administration capability.
+They never accept a public trigger or provider credential. `list` and `get`
+also retain safe offline inspection when the runtime is stopped. Do not expose
+the state file, descriptor, or loopback operations port to another user or
+machine.
 
 ## What WOML guarantees
 
@@ -38,3 +40,12 @@ WOML cannot determine whether an arbitrary value authored by JavaScript is
 sensitive. If a script stores a secret in state, that secret is present in the
 unencrypted local SQLite file. Transparent encryption, remote authorization,
 and external durable-state backends remain Production Runtime work.
+
+## Process isolation
+
+WOML bounds protocol frames, script context/results, operation timeouts,
+runtime worker configuration, and local admin traffic. It does not claim that
+Bun JavaScript is a hostile multi-tenant sandbox. Run untrusted workloads in a
+dedicated OS account or container with memory, CPU, process, open-file,
+read-only-filesystem, and egress limits. Keep the state, descriptor, mounted
+secrets, logs, backups, and crash dumps outside other tenants' reach.

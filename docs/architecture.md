@@ -282,8 +282,10 @@ extends `woml check` to validate multiple workflows as one deployment and, with
 all required symbolic secrets without opening ingress or creating a run.
 PRO2 adds atomic direct-source activation. PRO3 adds Store v14 leased ownership,
 recovery-before-readiness, background `woml run -d`, authenticated exact-instance
-`woml stop`, and bounded graceful shutdown. Observability, `woml top`, backup,
-and retention remain gated to PRO5–PRO8. See
+`woml stop`, and bounded graceful shutdown. PRO4 adds strict production secret
+sources, rotating loopback admin authority, authenticated live
+`list`/`get`/`cancel`, and traffic/resource boundaries. Observability,
+`woml top`, backup, and retention remain gated to PRO5–PRO8. See
 [Production Runtime and Operations](woml-production-runtime.md) and the
 [Production Runtime v1 contracts](protocols/production-runtime-operations-v1.md).
 

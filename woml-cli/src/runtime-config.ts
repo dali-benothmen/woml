@@ -338,6 +338,9 @@ export async function resolveRuntimeConfiguration(
   const [rawLogDirectory, logDirectorySource] = value(cliLogDirectory, envLogDirectory, config?.logging?.directory, '.woml/logs');
   const [workers, workersSource] = value(optionalInteger(overrides.workers, 'workers', 1, 256), envInteger(environment, 'WOML_RUNTIME_WORKERS', 1, 256), config?.workers, 4);
   const [shutdownTimeoutMs, shutdownSource] = value(optionalInteger(overrides.shutdownTimeoutMs, 'shutdownTimeoutMs', 1_000, 300_000), envInteger(environment, 'WOML_RUNTIME_SHUTDOWN_TIMEOUT_MS', 1_000, 300_000), config?.shutdownTimeoutMs, 30_000);
+  if (!['127.0.0.1', 'localhost', '::1'].includes(adminHost)) {
+    throw invalid('admin.host must be a loopback address in Runtime Admin v1.');
+  }
   if (publicHost === adminHost && publicPort === adminPort) {
     throw invalid('public and admin listeners cannot use the same host and port.');
   }

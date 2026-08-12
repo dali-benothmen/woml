@@ -1180,7 +1180,7 @@ Completion notes:
   descriptor permissions, exact stop, stale cleanup, typecheck, and packaged
   runtime coverage. It is included in the repository release gate.
 
-### PRO4 — Production secrets and administration security
+### PRO4 — Production secrets and administration security (completed)
 
 Changes:
 
@@ -1211,6 +1211,39 @@ Tests cover missing/conflicting secret sources, unsafe files, rotation across
 restart, descriptor theft after replacement, expired credentials, public/admin
 listener confusion, request flooding, unauthorized cancellation, non-leakage,
 and platform permission behavior.
+
+Completion notes:
+
+- `WOML_SECRETS_PROVIDER` now supports the local OS store, the reviewed
+  environment mapping, strict mounted files, and an explicit production
+  composition. Production composition resolves only requested symbolic names
+  in mounted-file/environment/OS order and rejects different duplicate values
+  instead of silently choosing one.
+- Mounted-file secrets require an absolute real directory, exact valid secret
+  filenames, regular non-link files, bounded UTF-8 values, runtime-user/root
+  ownership, a non-writable directory for group/other, and Unix files with no
+  group/other access. All production sources remain read-only through the CLI.
+- Runtime Admin v1 now binds only to loopback and dispatches authenticated
+  `list_runs`, `get_run`, `cancel_run`, and exact-instance `stop`. Live CLI
+  commands pass through that authority while their existing bounded redacted
+  SQLite projections remain the display contract and offline inspection path.
+- The per-instance 256-bit admin capability expires after one hour, rotates at
+  half-life, atomically replaces a published owner-only descriptor, rejects
+  the stolen previous value immediately, and is erased from the live handle on
+  shutdown.
+- Admin traffic is bounded to 16 KiB requests, 16 simultaneous operations, and
+  120 operations per minute. Requests have strict protocol shapes and use a
+  timing-safe credential comparison; public trigger/provider credentials have
+  no admin authority.
+- Script protocol size/timeout limits and the bounded runtime worker setting
+  are documented alongside the OS/container memory, CPU, process, file,
+  filesystem, and egress controls required for hostile code. WOML v1 does not
+  claim Bun is a multi-tenant sandbox.
+- `bun run test:pro4` composes the complete PRO3 gate with mounted-file modes,
+  source conflicts, symbolic-name resolution, capability rotation/expiry,
+  public/admin confusion, live operation dispatch, flooding/size bounds,
+  redaction, verification, and typecheck. It is included in the repository
+  release gate.
 
 ### PRO5 — Observability foundation
 

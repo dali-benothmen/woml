@@ -1,9 +1,9 @@
 # WOML Production Runtime and Operations v1 Contracts
 
-Status: frozen by PRO0 on 2026-08-12. PRO1 implements Runtime Configuration v1
-and deployment preflight only. Atomic activation, background hosting, durable
-ownership, administration, observability, backup, and retention remain gated to
-their later PRO phases.
+Status: frozen by PRO0 on 2026-08-12. PRO1 through PRO4 implement configuration,
+preflight, atomic activation, background hosting, durable ownership, production
+secret sources, and authenticated local administration. Observability, backup,
+and retention remain gated to their later PRO phases.
 
 ## Product boundary
 
@@ -198,8 +198,20 @@ owner-only (`0600` on Unix), contains the admin URL and an ephemeral capability,
 and expires when that runtime instance stops or is replaced.
 
 The capability cannot publish events, call webhooks, resolve approvals, or act
-as a workflow/provider secret. PRO4 freezes implementation details for request
-bounds and capability rotation before exposing controls.
+as a workflow/provider secret. PRO4 rotates it halfway through a one-hour
+lifetime and atomically replaces a published descriptor. The old value is
+invalid immediately; shutdown erases the in-memory value and removes the exact
+instance descriptor. Admin v1 accepts at most 16 KiB per request, 16 concurrent
+operations, and 120 operations per minute. Only loopback binding is accepted.
+
+The reviewed production secret sources are the local OS credential store,
+`WOML_SECRET_<NAME>` environment values, and strict mounted files beneath an
+absolute `WOML_SECRETS_DIRECTORY`. Production precedence is mounted file,
+environment, then OS store. Only activation-declared names are resolved, and
+different values for one name across configured sources fail closed. Mounted
+directories and files cannot be symlinks; Unix ownership is the runtime user or
+root, directories cannot be group/world writable, and files cannot grant any
+group/world access.
 
 ## Observability
 

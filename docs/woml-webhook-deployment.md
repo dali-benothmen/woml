@@ -78,8 +78,10 @@ ambiguous and fails closed; WOML never guesses that it is safe to replay.
 Use `woml list --state /var/lib/woml/state.sqlite` for bounded local discovery,
 `woml get <runId> --json` for redacted lifecycle/cancellation state, and
 `woml cancel <runId>` to request durable cancellation. These are local
-state-file controls, not authenticated remote administration endpoints. Lock
-down the state directory and see
+commands: while the runtime is live they authenticate to its separate loopback
+admin listener; offline `list` and `get` read the redacted state projection.
+The public webhook listener never serves admin operations. Lock down the state
+directory and descriptor, and see
 [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md) before
 placing cancellation behind an operator tool.
 

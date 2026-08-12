@@ -109,11 +109,12 @@ import {
 import {
   readRuntimeDescriptor,
   removeRuntimeDescriptor,
+  requestRuntimeOperation,
   requestRuntimeStop,
+  RuntimeControlError,
   runtimeDescriptorPath,
   runtimeLogPath,
   startRuntimeControl,
-  writeRuntimeDescriptor,
   type RuntimeControlHandle,
 } from './runtime-control';
 
@@ -921,6 +922,10 @@ function formatError(
 
   if (error instanceof SecretStoreError) {
     return `WOML secrets error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof RuntimeControlError) {
+    return `WOML runtime error [${error.code}]: ${error.message}`;
   }
 
   if (error instanceof TriggerRuntimeError) {
@@ -2739,6 +2744,24 @@ async function activateWorkflows(
         deploymentId: currentDeploymentId,
         host: args.adminHost,
         port: args.adminPort,
+        operations: {
+          listRuns: () => {
+            listRunsWithRust(args.statePath, { limit: 1 }, {
+              nativeCorePath: dependencies.nativeCorePath,
+            });
+          },
+          getRun: runId => {
+            inspectRunV2WithRust(args.statePath, runId, {
+              nativeCorePath: dependencies.nativeCorePath,
+            });
+          },
+          cancelRun: (runId, commandId) => {
+            const result = cancelRunWithRust(args.statePath, runId, commandId, {
+              nativeCorePath: dependencies.nativeCorePath,
+            });
+            return result.code;
+          },
+        },
       });
 
       if (slackRegistrations.length > 0) {
@@ -2796,7 +2819,7 @@ async function activateWorkflows(
         `WOML deployment activation ${currentActivationId.slice(7, 19)} ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.\n`
       );
       descriptorPath = runtimeDescriptorPath(args.statePath);
-      await writeRuntimeDescriptor(descriptorPath, runtimeControl.descriptor);
+      await runtimeControl.publishDescriptor(descriptorPath);
       await dependencies.onRuntimeReady?.({
         runtimeInstanceId: runtime.runtimeId,
         descriptorPath,
@@ -3082,10 +3105,10 @@ async function runSecretsCommand(
     }
 
     requireValidSecretName(name!);
-    if (store.provider === 'environment') {
+    if (store.provider !== 'os-keychain') {
       throw new SecretStoreError(
         'WOML_SECRET_PROVIDER_READ_ONLY',
-        'The environment secret provider is read-only. Configure WOML_SECRET_<NAME> in the CI secret manager.'
+        `The ${store.provider} secret provider is read-only. Update that production secret source directly.`
       );
     }
     if (operation === 'delete') {
@@ -3205,6 +3228,25 @@ function processExists(pid: number): boolean {
       error.code === 'ESRCH'
     );
   }
+}
+
+async function requestLiveRunOperation(
+  statePath: string,
+  operation: 'list_runs' | 'get_run' | 'cancel_run',
+  subjectId: string | undefined,
+  dependencies: CliDependencies,
+  requestId?: string
+): Promise<void> {
+  const path = runtimeDescriptorPath(statePath);
+  if (!(await Bun.file(path).exists())) return;
+  const descriptor = await readRuntimeDescriptor(path);
+  await requestRuntimeOperation(
+    descriptor,
+    operation,
+    subjectId,
+    (dependencies.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
+    requestId
+  );
 }
 
 async function runInBackground(
@@ -3362,6 +3404,12 @@ export async function runCli(
   if (args[0] === 'list') {
     try {
       const list = parseRunListArguments(args);
+      await requestLiveRunOperation(
+        list.statePath,
+        'list_runs',
+        undefined,
+        dependencies
+      );
       const result = listRunsWithRust(
         list.statePath,
         {
@@ -3388,6 +3436,12 @@ export async function runCli(
   if (args[0] === 'get') {
     try {
       const get = parseRunGetArguments(args, 'get');
+      await requestLiveRunOperation(
+        get.statePath,
+        'get_run',
+        get.runId,
+        dependencies
+      );
       const result = inspectRunV2WithRust(get.statePath, get.runId, {
         nativeCorePath: dependencies.nativeCorePath,
       });
@@ -3408,10 +3462,18 @@ export async function runCli(
   if (args[0] === 'cancel') {
     try {
       const cancel = parseRunGetArguments(args, 'cancel');
+      const commandId = `cancel_${randomUUID().replaceAll('-', '')}`;
+      await requestLiveRunOperation(
+        cancel.statePath,
+        'cancel_run',
+        cancel.runId,
+        dependencies,
+        commandId
+      );
       const result = cancelRunWithRust(
         cancel.statePath,
         cancel.runId,
-        `cancel_${randomUUID().replaceAll('-', '')}`,
+        commandId,
         { nativeCorePath: dependencies.nativeCorePath }
       );
       io.stdout(

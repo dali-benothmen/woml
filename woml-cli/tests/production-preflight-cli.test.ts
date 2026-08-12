@@ -88,6 +88,7 @@ describe('PRO1 Runtime Configuration and production preflight', () => {
         [{ schemaVersion: 2 }, 'schemaVersion must be 1'],
         [{ schemaVersion: 1, secret: 'no' }, 'unknown field'],
         [{ schemaVersion: 1, workers: 0 }, 'workers must be an integer'],
+        [{ schemaVersion: 1, admin: { host: '0.0.0.0' } }, 'admin.host must be a loopback'],
         [{ schemaVersion: 1, public: { port: 3001 } }, 'cannot use the same host and port'],
       ] as const) {
         const path = join(directory, `${Math.random()}.json`);

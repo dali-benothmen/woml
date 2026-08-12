@@ -1,6 +1,6 @@
 # WOML Production Runtime and Operations
 
-Production Runtime PRO0 through PRO3 provide the reviewed contracts,
+Production Runtime PRO0 through PRO4 provide the reviewed contracts,
 deployment preflight, atomic direct-source activation, durable ownership,
 restart recovery, graceful shutdown, and foreground/background operation. Runtime hosting uses
 the direct `.woml` experience—there is no build command or deployment-package
@@ -77,7 +77,7 @@ The supported environment names are documented in the
 [Production Runtime v1 protocol](protocols/production-runtime-operations-v1.md).
 These variables configure the host; they are not injected into scripts.
 
-## Secrets
+## Production secrets
 
 Workflow syntax does not change:
 
@@ -86,8 +86,31 @@ secret="{{secrets.ORDER_WEBHOOK_TOKEN}}"
 ```
 
 With `--config`, `woml check` collects required names from every selected
-workflow and reports all missing names together. It never prints values. The
-existing local or environment-backed WOML secret provider remains the source.
+workflow and reports all missing names together. It never prints values.
+
+The local OS credential store remains the authoring default. Production can
+select one reviewed read-only source:
+
+```bash
+WOML_SECRETS_PROVIDER=env woml run workflows/
+WOML_SECRETS_PROVIDER=files \
+WOML_SECRETS_DIRECTORY=/run/secrets \
+woml run workflows/
+```
+
+Environment values use the exact `WOML_SECRET_<NAME>` mapping. Mounted values
+use one file named exactly `<NAME>` below an absolute
+`WOML_SECRETS_DIRECTORY`. The directory must be real (not a symlink), owned by
+the runtime user or root, and not group/world writable. Each secret must be a
+regular non-link file owned by the runtime user or root with no group/world
+permission. Values are limited to 2048 UTF-8 bytes.
+
+`WOML_SECRETS_PROVIDER=production` combines mounted files (when configured),
+environment, then the OS store in that precedence order. It resolves only
+symbolic names declared by the activated workflows. Duplicate sources may hold
+the same value during migration; different values fail activation with
+`WOML_SECRET_SOURCE_CONFLICT`. Values are never added to definitions,
+descriptors, events, logs, or inspection.
 
 ## Atomic activation
 
@@ -141,12 +164,39 @@ behind a closed admission gate, and only then reports ready.
 SIGINT, SIGTERM, and `woml stop` all use the same ordered drain. A second signal
 forces exit; ambiguous external effects still fail closed during recovery.
 
+## Local administration security
+
+The public trigger listener and the operations listener are separate. Runtime
+Admin v1 binds only to loopback and accepts `list_runs`, `get_run`,
+`cancel_run`, and `stop` with the current per-instance capability. The
+owner-only runtime descriptor is atomically replaced when that capability
+rotates; old, expired, stopped, and replaced-runtime credentials are rejected.
+Event tokens, webhook credentials, approval tokens, and provider secrets never
+authorize administration.
+
+Live `woml list`, `woml get`, and `woml cancel` authenticate to the active
+runtime first. Their displayed data remains the bounded, redacted local SQLite
+projection. When no runtime descriptor exists, `list` and `get` remain safe
+offline inspection commands; `cancel` can still record a durable request for a
+replacement runtime to settle.
+
+Admin requests are capped at 16 KiB, 16 concurrent operations, and 120
+operations per minute per runtime. Responses are the small frozen Admin HTTP
+v1 acknowledgement. The script-host protocol separately bounds frames,
+context, results, and authored timeouts. Runtime worker configuration is
+bounded to 1–256. For hostile or untrusted code, deploy WOML with operating
+system/container memory, CPU, process, file-descriptor, filesystem, and network
+limits: the v1 runtime is not a multi-tenant sandbox and JavaScript memory
+isolation is not an application-level promise.
+
 ## Current phase boundary
 
 PRO0 freezes the production contracts, PRO1 implements configuration and
 non-activating preflight, PRO2 implements atomic activation, and PRO3
 implements Store v14 ownership, recovery, background operation, exact stop,
-and graceful shutdown.
+and graceful shutdown. PRO4 implements production secret sources, authenticated
+live run control, rotating capabilities, request bounds, and isolation
+guidance.
 
 These planned commands are not executable until their phases:
 

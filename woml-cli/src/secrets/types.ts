@@ -3,9 +3,14 @@ import { isValidSecretName, type SecretReferenceExpression } from 'woml';
 export const WOML_SECRET_SERVICE = 'dev.woml.cli.secrets.v1';
 export const WOML_SECRET_ENV_PREFIX = 'WOML_SECRET_';
 export const WOML_SECRET_PROVIDER_ENV = 'WOML_SECRETS_PROVIDER';
+export const WOML_SECRET_DIRECTORY_ENV = 'WOML_SECRETS_DIRECTORY';
 export const WOML_SECRET_MAX_BYTES = 2048;
 
-export type SecretProvider = 'os-keychain' | 'environment';
+export type SecretProvider =
+  | 'os-keychain'
+  | 'environment'
+  | 'mounted-files'
+  | 'production';
 
 export interface SecretMetadata {
   readonly name: string;
