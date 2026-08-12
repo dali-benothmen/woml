@@ -56,6 +56,7 @@ import {
   listRunsWithRust,
   observeRuntimeWithRust,
   BackupOperationError,
+  RetentionOperationError,
   RunManagementError,
   RunInspectionError,
   settleApprovalTimeoutWithRust,
@@ -135,6 +136,15 @@ import {
   restoreProductionBackup,
   restoreUsage,
 } from './production-backup';
+import {
+  parsePruneArguments,
+  ProductionRetentionError,
+  pruneUsage,
+  runProductionRetention,
+  startAutomaticRetention,
+  type AutomaticRetentionConfiguration,
+  type AutomaticRetentionHandle,
+} from './production-retention';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -204,7 +214,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${backupUsage}\n${restoreUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -229,6 +239,7 @@ interface RunArguments {
   readonly observabilityEnabled: boolean;
   readonly observabilityHealth: boolean;
   readonly observabilityMetrics: boolean;
+  readonly retention?: AutomaticRetentionConfiguration;
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
@@ -408,6 +419,9 @@ async function resolveRunArgumentsConfiguration(
       configuration.observability.health || configuration.observability.metrics,
     observabilityHealth: configuration.observability.health,
     observabilityMetrics: configuration.observability.metrics,
+    ...(configuration.retention === undefined
+      ? {}
+      : { retention: configuration.retention }),
   };
 }
 
@@ -974,6 +988,10 @@ function formatError(
   if (error instanceof ProductionBackupError || error instanceof BackupOperationError) {
     const operation = error.code.startsWith('WOML_RESTORE_') ? 'restore' : 'backup';
     return `WOML ${operation} error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof ProductionRetentionError || error instanceof RetentionOperationError) {
+    return `WOML retention error [${error.code}]: ${error.message}`;
   }
 
   if (error instanceof NotificationProviderError) {
@@ -2708,6 +2726,7 @@ async function activateWorkflows(
   let slackTransport: SharedSlackTransport | undefined;
   let runtimeControl: RuntimeControlHandle | undefined;
   let observability: RuntimeObservability | undefined;
+  let automaticRetention: AutomaticRetentionHandle | undefined;
   const pendingObservabilityProgress: unknown[] = [];
   const observe = (progress: unknown): void => {
     if (observability === undefined) {
@@ -2856,6 +2875,15 @@ async function activateWorkflows(
                   status: 'unready' as const,
                 },
               ]),
+          ...(args.retention?.enabled === true
+            ? [
+                {
+                  name: 'retention',
+                  kind: 'retention' as const,
+                  status: 'ready' as const,
+                },
+              ]
+            : []),
         ];
         observability = new RuntimeObservability({
           runtimeInstanceId: runtime.runtimeId,
@@ -2984,6 +3012,35 @@ async function activateWorkflows(
       io.stderr(
         `WOML deployment activation ${currentActivationId.slice(7, 19)} ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.\n`
       );
+      automaticRetention = startAutomaticRetention({
+        statePath: args.statePath,
+        configuration: args.retention,
+        nativeCorePath: dependencies.nativeCorePath,
+        ownerId: `retention_runtime_${runtime.runtimeId}`,
+        onResult: execution => {
+          observability?.setComponent('retention', 'retention', 'ready');
+          observability?.recordMaintenance('retention', 'completed');
+          observability?.log(
+            'info',
+            'WOML_RETENTION_COMPLETED',
+            `Retention removed ${execution.result.deletedRuns} eligible run${execution.result.deletedRuns === 1 ? '' : 's'} in ${execution.batches} batch${execution.batches === 1 ? '' : 'es'}.`
+          );
+        },
+        onError: error => {
+          const code =
+            error instanceof RetentionOperationError
+              ? error.code
+              : 'WOML_RETENTION_FAILED';
+          observability?.setComponent('retention', 'retention', 'degraded', code);
+          observability?.recordMaintenance('retention', 'failed', code);
+          observability?.alert(code, formatError(error));
+        },
+      });
+      if (automaticRetention.nextRunAt !== undefined) {
+        io.stderr(
+          `Automatic retention is enabled; next maintenance at ${automaticRetention.nextRunAt}.\n`
+        );
+      }
       descriptorPath = runtimeDescriptorPath(args.statePath);
       await runtimeControl.publishDescriptor(descriptorPath);
       io.stderr(
@@ -3039,6 +3096,7 @@ async function activateWorkflows(
       ...(runtimeControl === undefined ? [] : [runtimeControl.stopRequested]),
     ]);
   } finally {
+    automaticRetention?.close();
     if (runtimeId !== undefined) {
       observability?.setLifecycle('draining');
       io.stderr('WOML runtime is draining; new trigger admission is closed.\n');
@@ -3649,6 +3707,54 @@ export async function runCli(
         error.code === 'WOML_CLI_ARGUMENTS_INVALID'
       ) {
         io.stderr(`${restoreUsage}\n`);
+        return 2;
+      }
+      io.stderr(`${formatError(error)}\n`);
+      return 1;
+    }
+  }
+
+  if (args[0] === 'prune') {
+    try {
+      const parsed = parsePruneArguments(args);
+      const outcome = await runProductionRetention(parsed, {
+        nativeCorePath: dependencies.nativeCorePath,
+      });
+      if ('eligibleRuns' in outcome) {
+        io.stdout(
+          parsed.json
+            ? `${JSON.stringify(outcome)}\n`
+            : [
+                'WOML retention dry run completed; nothing was deleted.',
+                `Policy: ${outcome.policyId}`,
+                `Eligible terminal runs: ${outcome.eligibleRuns}`,
+                `Estimated removable history: ${outcome.estimatedBytes} bytes`,
+                `Execute: woml prune --before ${parsed.before} --state ${JSON.stringify(parsed.statePath)}`,
+              ].join('\n') + '\n'
+        );
+      } else {
+        io.stdout(
+          parsed.json
+            ? `${JSON.stringify(outcome.result)}\n`
+            : [
+                'WOML retention completed.',
+                `Policy: ${outcome.result.policyId}`,
+                `Deleted terminal runs: ${outcome.result.deletedRuns}`,
+                `Removed logical history: ${outcome.result.deletedBytes} bytes`,
+                `Batches: ${outcome.batches}`,
+                `Durable state entries deleted: ${outcome.result.stateEntriesDeleted}`,
+                `WAL checkpoint: ${outcome.checkpointedFrames}/${outcome.checkpointLogFrames} frames${outcome.checkpointBusy === 0 ? '' : ' (readers still active)'}`,
+                `Compaction: ${outcome.compacted ? 'completed' : 'not requested'}`,
+              ].join('\n') + '\n'
+        );
+      }
+      return 0;
+    } catch (error) {
+      if (
+        error instanceof ProductionRetentionError &&
+        error.code === 'WOML_CLI_ARGUMENTS_INVALID'
+      ) {
+        io.stderr(`${pruneUsage}\n`);
         return 2;
       }
       io.stderr(`${formatError(error)}\n`);

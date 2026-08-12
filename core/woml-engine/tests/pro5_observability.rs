@@ -6,10 +6,8 @@ use woml_engine::{
   DurableEventStore, RunEventPayload, StepFailureDisposition, TriggerAdmissionRequest,
 };
 
-const RETRY_HASH: &str =
-  "sha256:27606cefeebc5b6d45c965969b621a2f74ae2ebebe2b94edec80d97bfeb8378c";
-const POLICY_HASH: &str =
-  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const RETRY_HASH: &str = "sha256:27606cefeebc5b6d45c965969b621a2f74ae2ebebe2b94edec80d97bfeb8378c";
+const POLICY_HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn retry_model() -> CompiledWorkflowDefinition {
   serde_json::from_str(include_str!(
@@ -77,7 +75,9 @@ fn durable_observation_survives_process_memory_and_contains_no_payloads() {
   ));
 
   let mut store = engine.into_store();
-  store.register_definition(&policy_model(), POLICY_HASH).unwrap();
+  store
+    .register_definition(&policy_model(), POLICY_HASH)
+    .unwrap();
   store
     .admit_trigger_occurrence(TriggerAdmissionRequest {
       workflow_id: "policy-demo".to_string(),

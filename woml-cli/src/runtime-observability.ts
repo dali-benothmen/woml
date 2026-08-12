@@ -75,6 +75,14 @@ export interface RuntimeObservabilitySurface {
   closeStreams(): void;
 }
 
+type RuntimeComponentKind =
+  | 'store'
+  | 'trigger'
+  | 'provider'
+  | 'worker'
+  | 'backup'
+  | 'retention';
+
 interface StreamSubscriber {
   readonly id: number;
   readonly controller: ReadableStreamDefaultController<Uint8Array>;
@@ -168,7 +176,7 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
   #nextSubscriberId = 1;
   #sequence = 0;
   #lifecycle: RuntimeLifecycle = 'starting';
-  #components: { name: string; kind: 'store' | 'trigger' | 'provider' | 'worker'; status: 'ready' | 'degraded' | 'unready' | 'stopped'; code?: string }[];
+  #components: { name: string; kind: RuntimeComponentKind; status: 'ready' | 'degraded' | 'unready' | 'stopped'; code?: string }[];
 
   constructor(options: {
     readonly runtimeInstanceId: string;
@@ -179,7 +187,7 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
     readonly storeSize: () => Promise<number>;
     readonly logFormat: 'text' | 'json';
     readonly emitLog: (text: string) => void;
-    readonly components?: readonly { name: string; kind: 'store' | 'trigger' | 'provider' | 'worker'; status: 'ready' | 'degraded' | 'unready' | 'stopped'; code?: string }[];
+    readonly components?: readonly { name: string; kind: RuntimeComponentKind; status: 'ready' | 'degraded' | 'unready' | 'stopped'; code?: string }[];
     readonly now?: () => number;
   }) {
     this.#runtimeInstanceId = options.runtimeInstanceId;
@@ -204,7 +212,7 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
 
   setComponent(
     name: string,
-    kind: 'store' | 'trigger' | 'provider' | 'worker',
+    kind: RuntimeComponentKind,
     status: 'ready' | 'degraded' | 'unready' | 'stopped',
     code?: string
   ): void {
@@ -218,7 +226,30 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
       ...this.#components.filter(existing => existing.name !== item.name),
       item,
     ].slice(0, 1000);
-    this.record(kind === 'trigger' ? 'trigger' : 'provider', item.name, status, item.code);
+    this.record(
+      kind === 'trigger'
+        ? 'trigger'
+        : kind === 'store'
+          ? 'storage'
+          : kind === 'backup' || kind === 'retention'
+            ? 'maintenance'
+            : 'provider',
+      item.name,
+      status,
+      item.code
+    );
+  }
+
+  recordMaintenance(
+    operation: 'backup' | 'retention',
+    status: 'completed' | 'failed',
+    code?: string
+  ): void {
+    this.record('maintenance', operation, status, code);
+    this.#counters.set(
+      `maintenance:${operation}:${status}`,
+      (this.#counters.get(`maintenance:${operation}:${status}`) ?? 0) + 1
+    );
   }
 
   recordProgress(progress: unknown): void {
@@ -464,6 +495,18 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
       metric('woml_workflow_calls_active', 'gauge', durable?.workflowCallsActive ?? this.#counterPrefix('workflow_call:')),
       metric('woml_worker_restarts_total', 'counter', this.#counters.get('provider:restarted') ?? 0, { provider: 'script_host' })
     );
+    for (const [operation, status] of [
+      ['backup', 'completed'],
+      ['retention', 'completed'],
+      ['retention', 'failed'],
+    ] as const) {
+      const value = this.#counters.get(`maintenance:${operation}:${status}`);
+      if (value !== undefined) {
+        results.push(
+          metric(`woml_${operation}_total`, 'counter', value, { status })
+        );
+      }
+    }
     return results;
   }
 

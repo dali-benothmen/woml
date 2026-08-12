@@ -14,15 +14,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use woml_engine::model::ValueExpression;
 use woml_engine::{
-  create_online_backup, execute_workflow, execute_workflow_durable,
-  execute_workflow_durable_outcome, inspect_backup_store, prepare_restored_store,
-  record_verified_backup, recover_durable_runs, resolve_human_approval_durable,
-  resume_workflow_durable, resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
-  run_notification_provider_journey, settle_approval_timeout_durable, ApprovalDecision,
-  ApprovalDecisionOutcome, BackupError, CompiledWorkflowDefinition, DurableEventStore,
-  DurableStoreError, ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter,
-  LifecycleProgress, NotificationHostClientError, NotificationHostProcessOptions,
-  NotificationJourneyDiagnostics, NotificationJourneyError, ParallelFailurePolicy, RunFailure,
+  create_online_backup, execute_retention, execute_workflow, execute_workflow_durable,
+  execute_workflow_durable_outcome, inspect_backup_store, last_retention_result, plan_retention,
+  prepare_restored_store, record_verified_backup, recover_durable_runs,
+  resolve_human_approval_durable, resume_workflow_durable, resume_workflow_durable_any_outcome,
+  resume_workflow_durable_outcome, run_notification_provider_journey,
+  settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome, BackupError,
+  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
+  ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter, LifecycleProgress,
+  NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
+  NotificationJourneyError, ParallelFailurePolicy, RetentionError, RetentionPolicyV1, RunFailure,
   RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact,
   RuntimePolicyProgress, RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
   ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest, TriggerProgress,
@@ -579,6 +580,24 @@ fn native_backup_error(error: BackupError, fallback: &'static str) -> napi::Erro
     message: error.to_string(),
   })
   .unwrap_or_else(|_| "WOML backup operation failed.".to_string());
+  napi::Error::from_reason(reason)
+}
+
+fn native_retention_error(error: RetentionError) -> napi::Error {
+  let code = match error {
+    RetentionError::StorePathUnsafe => "WOML_RETENTION_STORE_INVALID",
+    RetentionError::InvalidPolicy => "WOML_RETENTION_PLAN_INVALID",
+    RetentionError::MaintenanceBusy | RetentionError::StoreBusy => "WOML_MAINTENANCE_BUSY",
+    RetentionError::IntegrityFailed => "WOML_RETENTION_INTEGRITY_FAILED",
+    RetentionError::DiskFull => "WOML_MAINTENANCE_DISK_FULL",
+    RetentionError::Sqlite(_) | RetentionError::Io(_) => "WOML_RETENTION_FAILED",
+  };
+  let reason = serde_json::to_string(&NativeBackupError {
+    kind: "woml_retention_error",
+    code,
+    message: error.to_string(),
+  })
+  .unwrap_or_else(|_| "WOML retention operation failed.".to_string());
   napi::Error::from_reason(reason)
 }
 
@@ -1701,6 +1720,84 @@ pub fn prepare_woml_restored_store(
   serde_json::to_string(&inspection).map_err(|error| {
     napi::Error::from_reason(format!("Could not encode restore inspection: {error}"))
   })
+}
+
+#[napi]
+pub fn plan_woml_retention(
+  event_store_path: String,
+  policy_json: String,
+  now: String,
+) -> napi::Result<String> {
+  let policy: RetentionPolicyV1 = serde_json::from_str(&policy_json)
+    .map_err(|_| napi::Error::from_reason("Retention Policy v1 is invalid.".to_string()))?;
+  let now = DateTime::parse_from_rfc3339(&now)
+    .map_err(|_| napi::Error::from_reason("Retention planning time is invalid.".to_string()))?
+    .with_timezone(&Utc);
+  let plan = plan_retention(PathBuf::from(event_store_path), &policy, now)
+    .map_err(native_retention_error)?;
+  serde_json::to_string(&plan)
+    .map_err(|error| napi::Error::from_reason(format!("Could not encode retention plan: {error}")))
+}
+
+#[napi]
+pub fn execute_woml_retention(
+  event_store_path: String,
+  policy_json: String,
+  lease_id: String,
+  owner_id: String,
+  compact: bool,
+  now: String,
+) -> napi::Result<String> {
+  let policy: RetentionPolicyV1 = serde_json::from_str(&policy_json)
+    .map_err(|_| napi::Error::from_reason("Retention Policy v1 is invalid.".to_string()))?;
+  let now = DateTime::parse_from_rfc3339(&now)
+    .map_err(|_| napi::Error::from_reason("Retention execution time is invalid.".to_string()))?
+    .with_timezone(&Utc);
+  let outcome = execute_retention(
+    PathBuf::from(event_store_path),
+    &policy,
+    &lease_id,
+    &owner_id,
+    compact,
+    now,
+  )
+  .map_err(native_retention_error)?;
+  serde_json::to_string(&outcome).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode retention result: {error}"))
+  })
+}
+
+#[napi]
+pub async fn execute_woml_retention_async(
+  event_store_path: String,
+  policy_json: String,
+  lease_id: String,
+  owner_id: String,
+  compact: bool,
+  now: String,
+) -> napi::Result<String> {
+  tokio::task::spawn_blocking(move || {
+    execute_woml_retention(
+      event_store_path,
+      policy_json,
+      lease_id,
+      owner_id,
+      compact,
+      now,
+    )
+  })
+  .await
+  .map_err(|error| {
+    napi::Error::from_reason(format!("Retention worker could not complete: {error}"))
+  })?
+}
+
+#[napi]
+pub fn read_woml_last_retention_result(event_store_path: String) -> napi::Result<String> {
+  let result =
+    last_retention_result(PathBuf::from(event_store_path)).map_err(native_retention_error)?;
+  serde_json::to_string(&result)
+    .map_err(|error| napi::Error::from_reason(format!("Could not encode retention audit: {error}")))
 }
 
 #[napi]

@@ -3938,11 +3938,13 @@ impl DurableEventStore {
   /// process replacement without making telemetry authoritative.
   pub fn runtime_observation_v1(&self) -> Result<RuntimeObservationV1, DurableStoreError> {
     let mut status_totals = BTreeMap::new();
-    let mut statement = self.connection.prepare(
-      "SELECT status, COUNT(*) FROM woml_run_summaries GROUP BY status ORDER BY status",
-    )?;
+    let mut statement = self
+      .connection
+      .prepare("SELECT status, COUNT(*) FROM woml_run_summaries GROUP BY status ORDER BY status")?;
     let rows = statement
-      .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)))?
+      .query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+      })?
       .collect::<Result<Vec<_>, _>>()?;
     for (status, count) in rows {
       if PublicRunStatus::parse(&status).is_none() {

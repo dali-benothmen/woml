@@ -440,6 +440,39 @@ export interface RustBackupStoreInspection {
   readonly runtimeLeaseExpiresAt?: string;
 }
 
+export interface RetentionPolicyV1 {
+  readonly policyId: string;
+  readonly succeededBefore: string;
+  readonly failedBefore: string;
+  readonly cancelledBefore: string;
+}
+
+export interface RustRetentionPlanV1 extends RetentionPolicyV1 {
+  readonly profile: 'woml.retention/v1';
+  readonly kind: 'plan';
+  readonly eligibleRuns: number;
+  readonly estimatedBytes: number;
+}
+
+export interface RustRetentionResultV1 {
+  readonly profile: 'woml.retention/v1';
+  readonly kind: 'result';
+  readonly policyId: string;
+  readonly completedAt: string;
+  readonly deletedRuns: number;
+  readonly deletedBytes: number;
+  readonly stateEntriesDeleted: 0;
+}
+
+export interface RustRetentionExecutionV1 {
+  readonly result: RustRetentionResultV1;
+  readonly batches: number;
+  readonly checkpointBusy: number;
+  readonly checkpointLogFrames: number;
+  readonly checkpointedFrames: number;
+  readonly compacted: boolean;
+}
+
 export interface RustLifecycleWarning {
   readonly hookId: string;
   readonly actionId: string;
@@ -548,6 +581,16 @@ export class BackupOperationError extends Error {
   constructor(code: string, message: string) {
     super(message);
     this.name = 'BackupOperationError';
+    this.code = code;
+  }
+}
+
+export class RetentionOperationError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'RetentionOperationError';
     this.code = code;
   }
 }
@@ -733,6 +776,28 @@ interface NativeCore {
     backupId: string,
     restoredAt: string
   ) => string;
+  readonly planWomlRetention: (
+    eventStorePath: string,
+    policyJson: string,
+    now: string
+  ) => string;
+  readonly executeWomlRetention: (
+    eventStorePath: string,
+    policyJson: string,
+    leaseId: string,
+    ownerId: string,
+    compact: boolean,
+    now: string
+  ) => string;
+  readonly executeWomlRetentionAsync?: (
+    eventStorePath: string,
+    policyJson: string,
+    leaseId: string,
+    ownerId: string,
+    compact: boolean,
+    now: string
+  ) => Promise<string>;
+  readonly readWomlLastRetentionResult: (eventStorePath: string) => string;
   readonly inspectWomlRunV2: (eventStorePath: string, runId: string) => string;
   readonly cancelWomlRun: (
     eventStorePath: string,
@@ -2721,6 +2786,223 @@ export function prepareRestoredStoreWithRust(
       restoredAt
     )
   );
+}
+
+function decodeRetentionNativeError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    const value: unknown = JSON.parse(message);
+    if (
+      record(value) &&
+      value.kind === 'woml_retention_error' &&
+      typeof value.code === 'string' &&
+      typeof value.message === 'string'
+    ) {
+      throw new RetentionOperationError(value.code, value.message);
+    }
+  } catch (decoded) {
+    if (decoded instanceof RetentionOperationError) throw decoded;
+  }
+  throw new RetentionOperationError(
+    'WOML_RETENTION_FAILED',
+    'The native WOML retention operation failed.'
+  );
+}
+
+function count(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function retentionResult(value: unknown): RustRetentionResultV1 {
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      'profile',
+      'kind',
+      'policyId',
+      'completedAt',
+      'deletedRuns',
+      'deletedBytes',
+      'stateEntriesDeleted',
+    ]) ||
+    value.profile !== 'woml.retention/v1' ||
+    value.kind !== 'result' ||
+    typeof value.policyId !== 'string' ||
+    value.policyId.length < 1 ||
+    value.policyId.length > 320 ||
+    !dateTime(value.completedAt) ||
+    !count(value.deletedRuns) ||
+    !count(value.deletedBytes) ||
+    value.stateEntriesDeleted !== 0
+  ) {
+    throw new RetentionOperationError(
+      'WOML_RETENTION_RESULT_INVALID',
+      'The native core returned an invalid Retention Result v1.'
+    );
+  }
+  return value as unknown as RustRetentionResultV1;
+}
+
+export function planRetentionWithRust(
+  eventStorePath: string,
+  policy: RetentionPolicyV1,
+  now: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRetentionPlanV1 {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.planWomlRetention !== 'function') {
+    throw new RetentionOperationError(
+      'WOML_RETENTION_UNAVAILABLE',
+      'The native core does not expose retention planning; rebuild the Rust addon.'
+    );
+  }
+  try {
+    const value: unknown = JSON.parse(
+      native.planWomlRetention(eventStorePath, JSON.stringify(policy), now)
+    );
+    if (
+      !record(value) ||
+      !exactKeys(value, [
+        'profile',
+        'kind',
+        'policyId',
+        'succeededBefore',
+        'failedBefore',
+        'cancelledBefore',
+        'eligibleRuns',
+        'estimatedBytes',
+      ]) ||
+      value.profile !== 'woml.retention/v1' ||
+      value.kind !== 'plan' ||
+      typeof value.policyId !== 'string' ||
+      !dateTime(value.succeededBefore) ||
+      !dateTime(value.failedBefore) ||
+      !dateTime(value.cancelledBefore) ||
+      !count(value.eligibleRuns) ||
+      !count(value.estimatedBytes)
+    ) {
+      throw new RetentionOperationError(
+        'WOML_RETENTION_PLAN_INVALID',
+        'The native core returned an invalid Retention Plan v1.'
+      );
+    }
+    return value as unknown as RustRetentionPlanV1;
+  } catch (error) {
+    if (error instanceof RetentionOperationError) throw error;
+    decodeRetentionNativeError(error);
+  }
+}
+
+export function executeRetentionWithRust(
+  eventStorePath: string,
+  policy: RetentionPolicyV1,
+  leaseId: string,
+  ownerId: string,
+  compact: boolean,
+  now: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRetentionExecutionV1 {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.executeWomlRetention !== 'function') {
+    throw new RetentionOperationError(
+      'WOML_RETENTION_UNAVAILABLE',
+      'The native core does not expose retention execution; rebuild the Rust addon.'
+    );
+  }
+  try {
+    return decodeRetentionExecution(JSON.parse(
+      native.executeWomlRetention(
+        eventStorePath,
+        JSON.stringify(policy),
+        leaseId,
+        ownerId,
+        compact,
+        now
+      )
+    ));
+  } catch (error) {
+    if (error instanceof RetentionOperationError) throw error;
+    decodeRetentionNativeError(error);
+  }
+}
+
+function decodeRetentionExecution(value: unknown): RustRetentionExecutionV1 {
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      'result',
+      'batches',
+      'checkpointBusy',
+      'checkpointLogFrames',
+      'checkpointedFrames',
+      'compacted',
+    ]) ||
+    !count(value.batches) ||
+    !count(value.checkpointBusy) ||
+    !count(value.checkpointLogFrames) ||
+    !count(value.checkpointedFrames) ||
+    typeof value.compacted !== 'boolean'
+  ) {
+    throw new RetentionOperationError(
+      'WOML_RETENTION_RESULT_INVALID',
+      'The native core returned invalid retention execution metadata.'
+    );
+  }
+  return {
+    result: retentionResult(value.result),
+    batches: value.batches,
+    checkpointBusy: value.checkpointBusy,
+    checkpointLogFrames: value.checkpointLogFrames,
+    checkpointedFrames: value.checkpointedFrames,
+    compacted: value.compacted,
+  };
+}
+
+export async function executeRetentionWithRustAsync(
+  eventStorePath: string,
+  policy: RetentionPolicyV1,
+  leaseId: string,
+  ownerId: string,
+  compact: boolean,
+  now: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): Promise<RustRetentionExecutionV1> {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.executeWomlRetentionAsync !== 'function') {
+    throw new RetentionOperationError(
+      'WOML_RETENTION_UNAVAILABLE',
+      'The native core does not expose non-blocking retention execution; rebuild the Rust addon.'
+    );
+  }
+  try {
+    const encoded = await native.executeWomlRetentionAsync(
+      eventStorePath,
+      JSON.stringify(policy),
+      leaseId,
+      ownerId,
+      compact,
+      now
+    );
+    return decodeRetentionExecution(JSON.parse(encoded));
+  } catch (error) {
+    if (error instanceof RetentionOperationError) throw error;
+    decodeRetentionNativeError(error);
+  }
+}
+
+export function readLastRetentionResultWithRust(
+  eventStorePath: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRetentionResultV1 | undefined {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.readWomlLastRetentionResult !== 'function') return undefined;
+  try {
+    const value: unknown = JSON.parse(native.readWomlLastRetentionResult(eventStorePath));
+    return value === null ? undefined : retentionResult(value);
+  } catch (error) {
+    if (error instanceof RetentionOperationError) throw error;
+    decodeRetentionNativeError(error);
+  }
 }
 
 export function inspectRunV2WithRust(

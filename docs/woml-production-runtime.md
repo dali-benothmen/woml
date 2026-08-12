@@ -225,6 +225,18 @@ verification, supported-store migration, state-path portability, filesystem
 responsibilities, and separate secret-provider recovery are documented in
 [WOML Backup, Restore, and Store Upgrades](woml-backup-and-restore.md).
 
+Old terminal execution history can be previewed and removed without touching
+active runs or durable user data:
+
+```bash
+woml prune --before 30d --dry-run
+woml prune --before 30d
+```
+
+See [WOML Retention and Storage Maintenance](woml-retention-and-maintenance.md)
+for automatic policy configuration, protected data, WAL checkpoints, and
+explicit compaction.
+
 ## Current phase boundary
 
 PRO0 freezes the production contracts, PRO1 implements configuration and
@@ -234,7 +246,8 @@ and graceful shutdown. PRO4 implements production secret sources, authenticated
 live run control, rotating capabilities, request bounds, and isolation
 guidance. PRO5 implements the observability foundation, PRO6 adds the live
 terminal inspector, and PRO7 adds coherent backup, verified guarded restore,
-and supported-store upgrade safety.
+and supported-store upgrade safety. PRO8 adds Rust-owned retention, bounded WAL
+maintenance, and optional scheduled cleanup.
 
 Current production operations include:
 
@@ -242,12 +255,8 @@ Current production operations include:
 woml inspect
 woml backup ./backups/woml-2026-08-12
 woml restore ./backups/woml-2026-08-12
-```
-
-This command remains planned for PRO8:
-
-```bash
-woml prune --before 30d --dry-run # PRO8
+woml prune --before 30d --dry-run
+woml prune --before 30d
 ```
 
 WOML must reject an unavailable feature rather than accepting and ignoring it.

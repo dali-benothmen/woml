@@ -4,8 +4,10 @@ Status: frozen by PRO0 on 2026-08-12. PRO1 through PRO4 implement configuration,
 preflight, atomic activation, background hosting, durable ownership, production
 secret sources, authenticated local administration, and the PRO5 observability
 foundation. PRO6 implements the terminal inspector and PRO7 implements coherent
-backup, guarded restore, and supported-store recovery. Retention remains gated
-to PRO8.
+backup, guarded restore, and supported-store recovery. PRO8 implements the
+frozen retention contracts through one
+Rust-owned planner/executor, the `woml prune` CLI, and optional scheduled
+maintenance.
 
 ## Product boundary
 
@@ -18,6 +20,8 @@ woml stop
 woml inspect
 woml backup ./backups/woml-2026-08-12
 woml restore ./backups/woml-2026-08-12
+woml prune --before 30d --dry-run
+woml prune --before 30d
 ```
 
 There is no public `woml build` command and no `.womlpack` format in Production

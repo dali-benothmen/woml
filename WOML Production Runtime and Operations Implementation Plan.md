@@ -942,7 +942,7 @@ versioned before implementation rather than widened silently.
 | PRO5 (complete) | Add health, structured logs, metrics, snapshots, and live operations streaming. | Humans and monitoring systems can understand runtime health without reading SQLite or raw logs. |
 | PRO6 (complete) | Build the interactive `woml inspect` terminal inspector. | Users can observe and safely control active automations from an htop-style CLI view. |
 | PRO7 (complete) | Add coherent backup, verified restore, and safe runtime/store upgrades. | A deployment can recover from disk loss or a failed upgrade using a tested procedure. |
-| PRO8 | Add retention planning, cleanup, and bounded SQLite maintenance. | Run history can be managed without deleting active truth or durable user state. |
+| PRO8 (complete) | Add retention planning, cleanup, and bounded SQLite maintenance. | Run history can be managed without deleting active truth or durable user state. |
 | PRO9 | Harden, benchmark, package, document, and publish Production Runtime v1. | WOML is supported for continuously operated single-machine production deployments. |
 
 ### PRO0 — Freeze production contracts and reviewed fixtures (completed)
@@ -1429,7 +1429,7 @@ Completed implementation:
   moved-State-v1 journeys, verifies frozen artifacts, type-checks, and runs
   clippy. It is included in the release gate.
 
-### PRO8 — Retention and storage maintenance
+### PRO8 — Retention and storage maintenance ✅ Completed
 
 Changes:
 
@@ -1454,6 +1454,36 @@ Gate:
 Mixed-status, active-parent/child, approval, retry, lifecycle, old-definition,
 deduplication-window, State v1, concurrent-admission, crash, disk-full,
 dry-run/effect equality, batching, and maintenance-lock tests pass.
+
+Completed implementation:
+
+- `woml prune --before <duration> --dry-run` produces the frozen Retention Plan
+  v1 without mutation; removing `--dry-run` executes the matching Rust-owned
+  cleanup and reports Retention Result v1. `--json`, `--state`, and an explicit
+  maintenance-window `--compact` operation are supported.
+- Rust derives eligibility from Store v14 run summaries and dependency facts.
+  Only old terminal history is eligible. Live policy work, approvals,
+  notifications, workflow calls, recent trigger/event deduplication, and their
+  connected run histories remain protected.
+- Definitions and module artifacts remain immutable. State v1 and all
+  service-owned storage/database/cache/secret data are outside retention
+  ownership; every result fixes `stateEntriesDeleted` to zero.
+- Cleanup uses the shared maintenance lease, rechecks a bounded candidate set
+  inside each immediate transaction, commits no more than 250 independent runs
+  per batch, restores immutable guards atomically, yields between batches, and
+  records the latest safe audit result durably.
+- Normal cleanup performs a passive WAL checkpoint. File compaction is never
+  implicit; `--compact` invokes VACUUM only under the maintenance lease.
+- Runtime Configuration v1 can opt into status-specific daily retention at a
+  UTC maintenance hour. Scheduled execution uses the same Rust authority
+  through a non-blocking native call, so Bun continues serving triggers.
+- Retention status is exposed through health components, structured logs,
+  operations events, `woml_retention_total`, store/WAL byte monitoring, and
+  `woml inspect`.
+- The PRO8 gate covers dry-run/effect equality, multi-batch history, active and
+  recent history, workflow-call dependency groups, State/definition survival,
+  maintenance contention, packaged CLI behavior, automatic scheduling,
+  versioned schema validation, type checking, and Rust linting.
 
 ### PRO9 — Harden and publish Production Runtime v1
 

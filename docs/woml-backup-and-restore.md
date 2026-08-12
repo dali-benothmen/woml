@@ -118,5 +118,7 @@ backup, not an implicit reverse migration.
 - Logs are operational output and are not part of the durable backup. Archive
   them separately if your audit policy requires it.
 
-PRO8 will add bounded retention and storage maintenance. It does not change the
+PRO8 adds bounded retention and storage maintenance. It does not change the
 PRO7 rule that only a verified coherent snapshot is a supported recovery point.
+Retention is not a backup: it intentionally removes eligible history, while a
+verified coherent snapshot remains the supported recovery point.

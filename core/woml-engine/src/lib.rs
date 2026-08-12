@@ -23,6 +23,7 @@ pub mod notification_protocol;
 pub mod notification_runtime;
 pub mod projection;
 pub mod protocol;
+pub mod retention;
 pub mod runtime;
 pub mod schedule;
 pub mod storage;
@@ -140,6 +141,10 @@ pub use projection::{
   NotificationMessageUpdateProjection, NotificationMessageUpdateStatus, OperationIdentity,
   OperationProjection, OperationStatus, ParallelGroupProjection, ParallelGroupStatus,
   RetryScheduleProjection, RunFailure, RunProjection, RunStatus, WorkflowContext,
+};
+pub use retention::{
+  execute_retention, last_retention_result, plan_retention, RetentionError, RetentionExecutionV1,
+  RetentionPlanV1, RetentionPolicyV1, RetentionResultV1, TRIGGER_DEDUPLICATION_SAFETY_DAYS,
 };
 pub use runtime::{
   execute_admitted_trigger_run_durable, execute_workflow, execute_workflow_durable,
