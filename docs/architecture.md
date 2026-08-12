@@ -293,6 +293,9 @@ State v1 path portability, and transactional supported-store upgrade recovery.
 Retention is implemented by the PRO8 Rust maintenance authority. See
 [Production Runtime and Operations](woml-production-runtime.md) and the
 [Production Runtime v1 contracts](protocols/production-runtime-operations-v1.md).
+PRO9 packages and verifies this architecture as the supported continuous
+single-machine Production Runtime v1 profile; deployment recipes do not widen
+the one-owner/local-SQLite boundary.
 
 ## Legacy Cronflow Architecture (Migration Context)
 

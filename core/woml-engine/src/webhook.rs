@@ -266,7 +266,7 @@ impl WomlWebhookServer {
     };
     let state = pending.state;
     let now = Utc::now();
-    if let Err(error) = DurableEventStore::open(&self.database_path)?
+    if let Err(error) = DurableEventStore::open_ready(&self.database_path)?
       .register_workflow_runtime_routes(
         &self.workflow_runtime_id,
         &state.workflow_targets.targets(),
@@ -288,7 +288,7 @@ impl WomlWebhookServer {
     let (mut tasks, recovered_schedule_runs, recovered_interval_runs) = match activation {
       Ok(value) => value,
       Err(error) => {
-        let _ = DurableEventStore::open(&self.database_path).and_then(|mut store| {
+        let _ = DurableEventStore::open_ready(&self.database_path).and_then(|mut store| {
           store
             .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
             .map(|_| ())
@@ -369,7 +369,7 @@ impl WomlWebhookServer {
     }
     self.internal_handle.stop(true).await;
     wait_for_active_runs(&self.runtime_state, deadline).await;
-    let _ = DurableEventStore::open(&self.database_path).and_then(|mut store| {
+    let _ = DurableEventStore::open_ready(&self.database_path).and_then(|mut store| {
       store
         .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
         .map(|_| ())
@@ -455,7 +455,7 @@ async fn handle_workflow_call_wakeup(
       Some("WOML_WORKFLOW_TARGET_UNAVAILABLE"),
     );
   }
-  let admission = DurableEventStore::open(&state.database_path)
+  let admission = DurableEventStore::open_ready(&state.database_path)
     .and_then(|store| store.workflow_call_for_child(&wakeup.child_run_id));
   let Ok(Some(admission)) = admission else {
     return workflow_routing_acknowledgement(
@@ -518,7 +518,7 @@ async fn run_workflow_routing_maintenance(state: web::Data<WebhookRuntimeState>)
     let now = Utc::now();
     let targets = state.workflow_targets.targets();
     if tokio::time::Instant::now() >= next_renewal {
-      let renewed = DurableEventStore::open(&state.database_path).and_then(|mut store| {
+      let renewed = DurableEventStore::open_ready(&state.database_path).and_then(|mut store| {
         store.renew_workflow_runtime_routes(
           state.workflow_targets.runtime_id(),
           now,
@@ -532,7 +532,7 @@ async fn run_workflow_routing_maintenance(state: web::Data<WebhookRuntimeState>)
         + std::time::Duration::from_secs(WORKFLOW_RUNTIME_RENEW_SECONDS);
     }
     for target in targets {
-      let pending = DurableEventStore::open(&state.database_path)
+      let pending = DurableEventStore::open_ready(&state.database_path)
         .and_then(|store| store.admitted_workflow_calls_for_target(&target));
       if let Ok(pending) = pending {
         for admission in pending {
@@ -620,7 +620,7 @@ impl WebhookRuntimeState {
   fn report_run_started(&self, identity: &RunProgressIdentity) {
     // Event v11 reports the real scheduler start through Runtime Policy
     // Progress. Do not claim that a newly admitted queued run has started.
-    if DurableEventStore::open(&self.database_path)
+    if DurableEventStore::open_ready(&self.database_path)
       .and_then(|store| store.projection(&identity.run_id))
       .is_ok_and(|projection| projection.status == crate::RunStatus::Queued)
     {
@@ -1301,7 +1301,7 @@ fn initialize_schedules(
           registration.trigger_id
         ))
       })?;
-    let mut store = DurableEventStore::open(&state.database_path)?;
+    let mut store = DurableEventStore::open_ready(&state.database_path)?;
     let registered = store.register_schedule_cursor(
       &ScheduleCursorRegistration {
         workflow_id: registration.workflow_id.clone(),
@@ -1384,7 +1384,7 @@ async fn run_schedule_loop(
   registration: ScheduleRuntimeRegistration,
 ) {
   loop {
-    let cursor = match DurableEventStore::open(&state.database_path)
+    let cursor = match DurableEventStore::open_ready(&state.database_path)
       .and_then(|store| store.schedule_cursor(&registration.workflow_id, &registration.trigger_id))
     {
       Ok(cursor) => cursor,
@@ -1411,7 +1411,7 @@ async fn run_schedule_loop(
       }
     };
     let multiple_elapsed = following <= now;
-    let mut store = match DurableEventStore::open(&state.database_path) {
+    let mut store = match DurableEventStore::open_ready(&state.database_path) {
       Ok(store) => store,
       Err(error) => {
         report_schedule_error(state.get_ref(), &registration, &error.to_string());
@@ -1604,7 +1604,7 @@ fn initialize_intervals(
   let mut recovered_runs = Vec::new();
   let mut prepared = Vec::new();
   for registration in state.intervals.clone() {
-    let mut store = DurableEventStore::open(&state.database_path)?;
+    let mut store = DurableEventStore::open_ready(&state.database_path)?;
     let registered = store.register_interval_cursor(
       &IntervalCursorRegistration {
         workflow_id: registration.workflow_id.clone(),
@@ -1712,7 +1712,7 @@ async fn run_interval_loop(
   registration: IntervalRuntimeRegistration,
 ) {
   loop {
-    let cursor = match DurableEventStore::open(&state.database_path)
+    let cursor = match DurableEventStore::open_ready(&state.database_path)
       .and_then(|store| store.interval_cursor(&registration.workflow_id, &registration.trigger_id))
     {
       Ok(cursor) => cursor,
@@ -1753,7 +1753,7 @@ async fn run_interval_loop(
       }
     };
     let multiple_elapsed = following_at <= now;
-    let mut store = match DurableEventStore::open(&state.database_path) {
+    let mut store = match DurableEventStore::open_ready(&state.database_path) {
       Ok(store) => store,
       Err(error) => {
         report_interval_error(state.get_ref(), &registration, &error.to_string());
@@ -2175,7 +2175,7 @@ async fn handle_webhook(
   };
   let database_path = state.database_path.clone();
   let admitted = web::block(move || {
-    let mut store = DurableEventStore::open(database_path)?;
+    let mut store = DurableEventStore::open_ready(database_path)?;
     store.admit_trigger_occurrence(admission)
   })
   .await;
@@ -2407,7 +2407,7 @@ async fn handle_event_publication(
     };
     let database_path = state.database_path.clone();
     let admitted = web::block(move || {
-      let mut store = DurableEventStore::open(database_path)?;
+      let mut store = DurableEventStore::open_ready(database_path)?;
       store.admit_trigger_occurrence(admission)
     })
     .await;
@@ -2543,7 +2543,7 @@ fn admit_startup_manual(state: &WebhookRuntimeState, startup: StartupManualTrigg
     payload: serde_json::Map::new(),
     received_at: Utc::now(),
   };
-  let admitted = DurableEventStore::open(&state.database_path)
+  let admitted = DurableEventStore::open_ready(&state.database_path)
     .and_then(|mut store| store.admit_trigger_occurrence(request));
   match admitted {
     Ok(outcome) => {
@@ -2592,7 +2592,7 @@ async fn run_external_ingress(
     let trigger_handler = request.trigger_handler.clone();
     let database_path = state.database_path.clone();
     let admitted = web::block(move || {
-      let mut store = DurableEventStore::open(database_path)?;
+      let mut store = DurableEventStore::open_ready(database_path)?;
       store.admit_trigger_occurrence(request)
     })
     .await;

@@ -1940,6 +1940,26 @@ impl DurableEventStore {
     Self::initialize(connection)
   }
 
+  /// Opens a store that the runtime has already initialized and validated.
+  ///
+  /// Request admission must not repeat schema DDL or migration checks: doing
+  /// so can turn a short, recoverable SQLite writer conflict into a lock-upgrade
+  /// deadlock. Runtime startup remains the sole schema/migration authority.
+  pub(crate) fn open_ready(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
+    let connection = Connection::open(path)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let version: String = connection.query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )?;
+    if version != STORE_SCHEMA_VERSION_V14 {
+      return Err(DurableStoreError::UnsupportedStoreVersion(version));
+    }
+    Ok(Self { connection })
+  }
+
   pub fn open_in_memory() -> Result<Self, DurableStoreError> {
     let connection = Connection::open_in_memory()?;
     Self::initialize(connection)

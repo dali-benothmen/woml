@@ -7,7 +7,9 @@ foundation. PRO6 implements the terminal inspector and PRO7 implements coherent
 backup, guarded restore, and supported-store recovery. PRO8 implements the
 frozen retention contracts through one
 Rust-owned planner/executor, the `woml prune` CLI, and optional scheduled
-maintenance.
+maintenance. PRO9 completes the clean-package/server, deployment, benchmark,
+security, and historical-compatibility release gate without widening these
+frozen contracts.
 
 ## Product boundary
 

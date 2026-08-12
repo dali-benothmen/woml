@@ -3068,8 +3068,10 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
             RuntimeExecutionError::Stalled("retry schedule exceeds the runtime clock".to_string())
           })?;
           tokio::time::sleep(wait.min(CANCELLATION_POLL_INTERVAL)).await;
-          continue;
         }
+        // The retry may become due between the ready-node query above and this
+        // clock read. Recompute readiness instead of reporting a false stall.
+        continue;
       }
       return Err(RuntimeExecutionError::Stalled(
         "no node is ready before the run reached a terminal state".to_string(),

@@ -1,9 +1,10 @@
 # WOML Production Runtime and Operations
 
-Production Runtime PRO0 through PRO7 provide the reviewed contracts,
+Production Runtime v1 (PRO0 through PRO9) provides the reviewed contracts,
 deployment preflight, atomic direct-source activation, durable ownership,
 restart recovery, graceful shutdown, foreground/background operation,
-observability, the terminal inspector, and verified backup/restore. Runtime hosting uses
+observability, the terminal inspector, verified backup/restore, retention,
+deployment recipes, compatibility auditing, and release performance budgets. Runtime hosting uses
 the direct `.woml` experience—there is no build command or deployment-package
 extension.
 
@@ -66,6 +67,10 @@ safe defaults. A production configuration begins with:
 Relative paths are relative to this configuration file. See the complete
 [example](../examples/production/woml.runtime.json) and the
 [Runtime Configuration v1 schema](schemas/runtime-configuration.v1.schema.json).
+
+For copy-ready systemd, Docker, Nginx, single-pod Kubernetes, monitoring,
+security, and upgrade procedures, see
+[Deploying WOML Production Runtime v1](woml-production-deployment.md).
 
 Supported precedence is:
 
@@ -237,7 +242,7 @@ See [WOML Retention and Storage Maintenance](woml-retention-and-maintenance.md)
 for automatic policy configuration, protected data, WAL checkpoints, and
 explicit compaction.
 
-## Current phase boundary
+## Supported release boundary
 
 PRO0 freezes the production contracts, PRO1 implements configuration and
 non-activating preflight, PRO2 implements atomic activation, and PRO3
@@ -247,7 +252,10 @@ live run control, rotating capabilities, request bounds, and isolation
 guidance. PRO5 implements the observability foundation, PRO6 adds the live
 terminal inspector, and PRO7 adds coherent backup, verified guarded restore,
 and supported-store upgrade safety. PRO8 adds Rust-owned retention, bounded WAL
-maintenance, and optional scheduled cleanup.
+maintenance, and optional scheduled cleanup. PRO9 hardens the package, clean
+server journey, deployment recipes, security/compatibility audit, full example,
+and production performance gate. Production Runtime v1 is now the supported
+continuous single-machine release profile.
 
 Current production operations include:
 
@@ -259,5 +267,14 @@ woml prune --before 30d --dry-run
 woml prune --before 30d
 ```
 
-WOML must reject an unavailable feature rather than accepting and ignoring it.
-Foreground and background `woml run` now share the same Rust production host.
+The frozen PRO9 performance budgets and the latest local release-gate results
+are published in
+[`examples/production/performance-budgets.v1.json`](../examples/production/performance-budgets.v1.json).
+On the reference development machine, the gate measured approximately 590 ms
+startup, 307 ms recovery, 117 ms average concurrent admission, 12 ms snapshot,
+18 ms metrics, 1 ms inspector rendering, 216 ms online backup, and 88 ms
+retention. These numbers are regression budgets and measurements, not universal
+latency promises for every host or workflow.
+
+WOML rejects unavailable features rather than accepting and ignoring them.
+Foreground and background `woml run` share the same Rust production host.

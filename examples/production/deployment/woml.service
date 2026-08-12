@@ -1,0 +1,27 @@
+[Unit]
+Description=WOML workflow automation runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=woml
+Group=woml
+WorkingDirectory=/srv/woml
+Environment=WOML_SECRETS_PROVIDER=files
+Environment=WOML_SECRETS_DIRECTORY=/run/secrets/woml
+ExecStartPre=/usr/local/bin/woml check workflows/ --config woml.runtime.json
+ExecStart=/usr/local/bin/woml run workflows/ --config woml.runtime.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/woml/data /srv/woml/logs /srv/woml/backups
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: woml-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woml
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: woml
+  template:
+    metadata:
+      labels:
+        app: woml
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+      containers:
+        - name: woml
+          image: example/woml-automation:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: WOML_SECRETS_PROVIDER
+              value: files
+            - name: WOML_SECRETS_DIRECTORY
+              value: /run/secrets/woml
+          ports:
+            - name: ingress
+              containerPort: 3000
+          readinessProbe:
+            exec:
+              command: ["bun", "-e", "process.exit((await fetch('http://127.0.0.1:3001/readyz')).ok?0:1)"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["bun", "-e", "process.exit((await fetch('http://127.0.0.1:3001/livez')).ok?0:1)"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "2", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+            - { name: logs, mountPath: /app/logs }
+            - { name: backups, mountPath: /app/backups }
+            - { name: secrets, mountPath: /run/secrets/woml, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: woml-data }
+        - name: logs
+          emptyDir: {}
+        - name: backups
+          emptyDir: {}
+        - name: secrets
+          secret: { secretName: woml-secrets, defaultMode: 0400 }
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: woml
+spec:
+  selector: { app: woml }
+  ports:
+    - { name: ingress, port: 80, targetPort: ingress }

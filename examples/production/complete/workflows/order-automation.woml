@@ -1,0 +1,129 @@
+<woml>
+  <imports>
+    <module name="orderTools" from="../modules/order-tools.ts" />
+  </imports>
+  <workflow id="production-orders" name="Production order automation" version="1.0.0">
+    <config concurrency="4" rate-limit="120/1m" timeout="5m" queue="orders" />
+    <lifecycle>
+      <on-failure>
+        <notify>
+          <slack
+            channels="#woml-operations"
+            message="Order workflow {{lifecycle.workflow.id}} failed."
+            bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+            app-token="{{secrets.SLACK_APP_TOKEN}}"
+          />
+        </notify>
+      </on-failure>
+      <on-complete>
+        <script>
+          await services.state.increment('completed-runs', 1, {
+            name: 'count-completed-order-runs'
+          });
+        </script>
+      </on-complete>
+    </lifecycle>
+    <triggers>
+      <webhook
+        id="newOrder"
+        path="/webhooks/orders"
+        method="POST"
+        auth="bearer"
+        secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
+        <schema>
+          {
+            "type": "object",
+            "required": ["orderId", "customerId", "amount"],
+            "properties": {
+              "orderId": { "type": "string" },
+              "customerId": { "type": "string" },
+              "amount": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        </schema>
+      </webhook>
+      <event
+        id="orderImported"
+        name="order.imported"
+        secret="{{secrets.EVENT_CONTROL_TOKEN}}">
+        <schema>
+          {
+            "type": "object",
+            "required": ["orderId", "customerId", "amount"],
+            "properties": {
+              "orderId": { "type": "string" },
+              "customerId": { "type": "string" },
+              "amount": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        </schema>
+      </event>
+    </triggers>
+    <steps>
+      <step id="normalize" name="Normalize order">
+        <script>
+          return services.orderTools.normalizeOrder(context.payload);
+        </script>
+      </step>
+      <step id="remember" name="Remember customer order">
+        <script>
+          const counter = await services.state.increment(
+            `customer:${context.steps.normalize.customerId}:orders`,
+            1,
+            { name: 'count-customer-order' }
+          );
+          return { priorOrders: counter.value - 1 };
+        </script>
+      </step>
+      <step
+        id="risk"
+        name="Call risk workflow"
+        retry="3"
+        retry-backoff="exponential"
+        retry-delay="1s"
+        retry-max-delay="10s">
+        <script>
+          return await services.workflows.call('production-order-risk', {
+            amount: context.steps.normalize.amount,
+            priorOrders: context.steps.remember.priorOrders
+          });
+        </script>
+      </step>
+      <approval
+        id="review"
+        name="Review risky order"
+        description="Approve or reject the order from Slack."
+        timeout="24h"
+        on-timeout="reject">
+        <notify>
+          <slack
+            channels="#woml-approvals"
+            bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+            app-token="{{secrets.SLACK_APP_TOKEN}}"
+          />
+        </notify>
+        <when-approved>
+          <step id="approvedOrder"><script>
+            return { status: 'approved' };
+          </script></step>
+        </when-approved>
+        <when-rejected>
+          <step id="rejectedOrder"><script>
+            return { status: 'rejected' };
+          </script></step>
+        </when-rejected>
+      </approval>
+      <step id="result" name="Return outcome">
+        <script>
+          return {
+            orderId: context.steps.normalize.orderId,
+            risk: context.steps.risk.score,
+            decision: context.steps.review.decision
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

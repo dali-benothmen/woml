@@ -23,6 +23,13 @@ _Built with Rust + Bun for unparalleled performance_
 
 Cronflow is a powerful workflow automation library designed for developers who need the flexibility of code with exceptional performance. Built with a Rust core and Bun runtime, it delivers sub-millisecond execution speeds while maintaining a minimal memory footprint.
 
+> **WOML Production Runtime v1 is now implemented.** The project is migrating
+> from JavaScript chaining to markup-first `.woml` workflows. New production
+> runtime work should use `woml check` and `woml run`. See the
+> [WOML runtime guide](docs/woml-production-runtime.md),
+> [deployment guide](docs/woml-production-deployment.md), and
+> [complete production example](examples/production/complete/README.md).
+
 ### Key Features
 
 - **🚀 High Performance** - Rust-powered execution engine with sub-millisecond step execution

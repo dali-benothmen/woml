@@ -1,0 +1,22 @@
+<woml>
+  <workflow id="production-operations-assistant" name="Operations assistant" version="1.0.0">
+    <config concurrency="2" rate-limit="30/1m" timeout="1m" queue="assistant" />
+    <triggers>
+      <slack
+        id="operatorMessage"
+        events="app-mention,direct-message"
+        channels="woml-operations"
+        bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+        app-token="{{secrets.SLACK_APP_TOKEN}}"
+      />
+    </triggers>
+    <steps>
+      <step id="capture"><script>
+        return {
+          message: context.payload.text,
+          userId: context.payload.userId
+        };
+      </script></step>
+    </steps>
+  </workflow>
+</woml>

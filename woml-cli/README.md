@@ -3,6 +3,17 @@
 The WOML CLI compiles `.woml` workflows, activates their triggers through the
 Rust core, and runs embedded JavaScript in isolated Bun Workers.
 
+Install the published CLI with Bun 1.3.14 or later:
+
+```bash
+bun add --global woml-cli
+```
+
+Production Runtime v1 is the supported continuous single-machine profile. See
+the [runtime guide](../docs/woml-production-runtime.md),
+[deployment recipes](../docs/woml-production-deployment.md), and
+[complete production example](../examples/production/complete/README.md).
+
 Every source now uses `<woml>` as its document root, with optional `<imports>`
 before the one `<workflow>` definition. Direct `<workflow>` roots are rejected
 with a migration hint.

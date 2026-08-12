@@ -789,7 +789,11 @@ async fn concurrent_requests_and_database_contention_preserve_one_run_per_occurr
   actix_web::rt::time::sleep(Duration::from_millis(100)).await;
   lock.execute_batch("COMMIT").unwrap();
   let response = blocked_request.await.unwrap();
-  assert_eq!(response.status, 202);
+  assert_eq!(
+    response.status, 202,
+    "contention admission response: {}",
+    response.body
+  );
   let run_id = response.body["runId"].as_str().unwrap();
   wait_for_status(&database, run_id, RunStatus::Succeeded).await;
   assert_eq!(run_count(&database), 9);

@@ -1789,7 +1789,14 @@ async function runCheckCommand(
     return 2;
   }
 
-  if (parsed.inputPaths.length === 1 && parsed.configPath === undefined) {
+  const onlyInput = parsed.inputPaths[0];
+  const onlyInputIsFile =
+    onlyInput !== undefined && (await stat(onlyInput).catch(() => undefined))?.isFile() === true;
+  if (
+    parsed.inputPaths.length === 1 &&
+    parsed.configPath === undefined &&
+    onlyInputIsFile
+  ) {
     return await runSingleCheckCommand(
       ['check', parsed.inputPaths[0]!, ...(parsed.json ? ['--json'] : [])],
       io

@@ -377,14 +377,17 @@ export async function resolveRuntimeConfiguration(
   };
 }
 
-async function writableAncestor(target: string): Promise<{ path: string; existing: boolean }> {
+async function writableAncestor(
+  target: string,
+  accessPath: (path: string, mode?: number) => Promise<void> = access
+): Promise<{ path: string; existing: boolean }> {
   let candidate = target;
   let existing = true;
   while (true) {
     try {
       const entry = await stat(candidate);
       const directory = entry.isDirectory() ? candidate : dirname(candidate);
-      await access(directory, constants.R_OK | constants.W_OK);
+      await accessPath(directory, constants.R_OK | constants.W_OK);
       return { path: directory, existing };
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
@@ -400,12 +403,18 @@ async function writableAncestor(target: string): Promise<{ path: string; existin
 }
 
 export async function preflightRuntimeConfiguration(
-  configuration: ResolvedRuntimeConfigurationV1
+  configuration: ResolvedRuntimeConfigurationV1,
+  dependencies: {
+    readonly accessPath?: (path: string, mode?: number) => Promise<void>;
+    readonly statFilesystem?: (
+      path: string
+    ) => Promise<{ readonly bavail: number | bigint; readonly bsize: number | bigint }>;
+  } = {}
 ): Promise<RuntimePreflightV1> {
-  const state = await writableAncestor(configuration.statePath);
-  const logs = await writableAncestor(configuration.logging.directory);
-  const backup = configuration.backup === undefined ? undefined : await writableAncestor(configuration.backup.directory);
-  const filesystem = await statfs(state.path);
+  const state = await writableAncestor(configuration.statePath, dependencies.accessPath);
+  const logs = await writableAncestor(configuration.logging.directory, dependencies.accessPath);
+  const backup = configuration.backup === undefined ? undefined : await writableAncestor(configuration.backup.directory, dependencies.accessPath);
+  const filesystem = await (dependencies.statFilesystem ?? statfs)(state.path);
   const availableBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
   if (!Number.isSafeInteger(availableBytes) || availableBytes < RUNTIME_MIN_FREE_BYTES) {
     throw new RuntimeConfigurationError(

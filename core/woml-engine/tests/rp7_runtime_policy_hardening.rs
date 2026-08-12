@@ -146,7 +146,10 @@ fn many_processes_contending_for_one_policy_never_oversubscribe() {
   const CONCURRENCY: usize = 4;
   let database = Arc::new(TestDatabase::new("contention"));
   let workflow = policy_model("rp7-contention", CONCURRENCY as u32);
-  let now = Utc.with_ymd_and_hms(2026, 8, 12, 18, 0, 0).unwrap();
+  // Store startup intentionally expires abandoned scheduler claims using wall
+  // time. Keep this contention lease live regardless of the calendar date on
+  // which the release suite runs.
+  let now = Utc::now();
   let run_ids = {
     let mut store = DurableEventStore::open(&database.0).unwrap();
     store

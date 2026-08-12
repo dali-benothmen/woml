@@ -943,7 +943,7 @@ versioned before implementation rather than widened silently.
 | PRO6 (complete) | Build the interactive `woml inspect` terminal inspector. | Users can observe and safely control active automations from an htop-style CLI view. |
 | PRO7 (complete) | Add coherent backup, verified restore, and safe runtime/store upgrades. | A deployment can recover from disk loss or a failed upgrade using a tested procedure. |
 | PRO8 (complete) | Add retention planning, cleanup, and bounded SQLite maintenance. | Run history can be managed without deleting active truth or durable user state. |
-| PRO9 | Harden, benchmark, package, document, and publish Production Runtime v1. | WOML is supported for continuously operated single-machine production deployments. |
+| PRO9 (complete) | Harden, benchmark, package, document, and publish Production Runtime v1. | WOML is supported for continuously operated single-machine production deployments. |
 
 ### PRO0 — Freeze production contracts and reviewed fixtures (completed)
 
@@ -1485,7 +1485,7 @@ Completed implementation:
   maintenance contention, packaged CLI behavior, automatic scheduling,
   versioned schema validation, type checking, and Rust linting.
 
-### PRO9 — Harden and publish Production Runtime v1
+### PRO9 — Harden and publish Production Runtime v1 ✅ Completed
 
 Changes:
 
@@ -1517,6 +1517,47 @@ retries, approvals, branches, parallel, services, modules, workflow calls,
 lifecycle, cancellation, policies, state, migration, ownership, observability,
 TUI, security, backup, restore, retention, packaging, benchmarks, and
 historical compatibility.
+
+Completed implementation:
+
+- `woml-cli` is now a publishable Apache-2.0 package with a documented `woml`
+  binary, bounded package contents, release metadata, and a clean archive
+  installation journey. Source, tests, databases, workflow inputs, and local
+  secret material are excluded from the installed package.
+- The clean-server journey installs that archive into an empty project, checks
+  a workflow directory, activates a real continuous webhook deployment,
+  executes and observes a run, creates a verified online backup, stops the
+  exact owner, restores to a fresh state path, and previews retention.
+- Runtime startup is the sole SQLite schema and migration authority. Active
+  trigger paths open the already-validated store without repeating DDL, so a
+  short writer conflict remains bounded and recoverable instead of creating a
+  lock-upgrade failure during webhook or event admission.
+- One complete four-workflow deployment demonstrates authenticated webhook and
+  event ingress, Slack ingress, schedule, approval, retry, a local TypeScript
+  module, Workflow Calls, runtime policies, lifecycle notifications/hooks, and
+  durable State v1. `woml check <directory>` now correctly uses deployment
+  checking even when no runtime config is supplied.
+- Copy-ready Docker, systemd, Nginx TLS reverse-proxy, single-pod Kubernetes,
+  Runtime Configuration v1, and Prometheus alert examples are published with
+  the single-owner/local-SQLite boundary made explicit.
+- The production deployment guide covers installation, preflight, foreground
+  supervision, secrets, resource isolation, monitoring, backup, restore,
+  retention, upgrade/rollback, and failure behavior.
+- Production performance budgets are versioned and enforced for CLI startup,
+  runtime startup/recovery, admission, snapshots, metrics, operations stream,
+  inspector rendering, backup, retention, and installed bytes. The reviewed
+  benchmark completes comfortably inside every budget.
+- The compatibility audit validates all 101 published schemas, parses 179 JSON
+  fixtures, and validates 18 historical Model fixtures plus 175 historical
+  Event fixtures under their original schema versions.
+- Release scans cover the installed CLI, production examples, documentation,
+  definitions, outputs, and durable behavior for active secret-like values and
+  sensitive payload markers. Corrupt stores fail closed.
+- `bun run test:pro9` is the independent Production Runtime v1 gate; it builds
+  the packaged native boundary, runs the complete frontend and Rust engine
+  suites, all PRO1-PRO9 operations journeys, benchmarks, compatibility and
+  security verification, type checking, and clippy. It is included in the
+  repository release gate and is also exposed as `test:production-release`.
 
 ## 15. Expected File Areas
 
