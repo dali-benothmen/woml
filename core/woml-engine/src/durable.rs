@@ -944,6 +944,7 @@ pub struct SchedulerClaimV1 {
 #[serde(rename_all = "snake_case")]
 pub enum PolicyClaimWaitReason {
   Concurrency,
+  RateLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -961,6 +962,8 @@ pub enum PolicyExecutionClaimResult {
     workflow_id: String,
     queue: String,
     reason: PolicyClaimWaitReason,
+    #[serde(rename = "eligibleAt", skip_serializing_if = "Option::is_none")]
+    eligible_at: Option<DateTime<Utc>>,
   },
 }
 
@@ -991,6 +994,14 @@ pub enum RunCancellationStatus {
   AlreadyRequested,
   AlreadyCancelled,
   Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunTimeoutSettlement {
+  NotConfigured,
+  NotDue { deadline_at: DateTime<Utc> },
+  LostRace { projection: RunProjection },
+  TimedOut { projection: RunProjection },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -3481,12 +3492,26 @@ impl DurableEventStore {
     now: DateTime<Utc>,
     lease_duration: Duration,
   ) -> Result<PolicyExecutionClaimResult, DurableStoreError> {
+    self.try_claim_policy_run_at(run_id, owner_id, now, now, lease_duration)
+  }
+
+  /// Claims executable capacity using separate clocks for the expiring owner
+  /// lease and the durable policy timeline. Production uses wall time for the
+  /// lease and the runtime clock for deterministic policy eligibility.
+  pub fn try_claim_policy_run_at(
+    &mut self,
+    run_id: &str,
+    owner_id: &str,
+    lease_now: DateTime<Utc>,
+    policy_now: DateTime<Utc>,
+    lease_duration: Duration,
+  ) -> Result<PolicyExecutionClaimResult, DurableStoreError> {
     if owner_id.is_empty() || owner_id.len() > 320 || lease_duration.is_zero() {
       return Err(DurableStoreError::Contract(
         "A scheduler claim requires a valid owner and positive lease.".to_string(),
       ));
     }
-    let expires_at = now
+    let expires_at = lease_now
       + chrono::Duration::from_std(lease_duration).map_err(|_| {
         DurableStoreError::Contract("Scheduler lease duration is out of range.".to_string())
       })?;
@@ -3495,7 +3520,7 @@ impl DurableEventStore {
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(
       "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
-      [now.to_rfc3339()],
+      [lease_now.to_rfc3339()],
     )?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
     let workflow = definition_for_run(&transaction, run_id)?;
@@ -3536,6 +3561,7 @@ impl DurableEventStore {
           workflow_id: binding.workflow_id,
           queue,
           reason: PolicyClaimWaitReason::Concurrency,
+          eligible_at: None,
         });
       }
       return Ok(PolicyExecutionClaimResult::Claimed {
@@ -3570,6 +3596,33 @@ impl DurableEventStore {
         run_id.to_string(),
       ));
     }
+    let first_start = projection.started_at.is_none() && projection.status == RunStatus::Queued;
+    let rate_eligibility = if first_start {
+      workflow_rate_eligibility(
+        &transaction,
+        &binding.workflow_id,
+        policy.rate_limit.as_ref(),
+        policy_now,
+      )?
+    } else {
+      PolicyRateEligibility::Eligible
+    };
+    if let PolicyRateEligibility::Waiting { eligible_at } = rate_eligibility {
+      transaction.execute(
+        "UPDATE woml_run_summaries
+         SET waiting_for = 'rate_limit', eligible_at = ?1, updated_at = ?2
+         WHERE run_id = ?3",
+        params![eligible_at.to_rfc3339(), policy_now.to_rfc3339(), run_id],
+      )?;
+      transaction.commit()?;
+      return Ok(PolicyExecutionClaimResult::Waiting {
+        run_id: run_id.to_string(),
+        workflow_id: binding.workflow_id,
+        queue,
+        reason: PolicyClaimWaitReason::RateLimit,
+        eligible_at: Some(eligible_at),
+      });
+    }
     if !workflow_has_policy_capacity(&transaction, &binding.workflow_id, policy.concurrency)?
       || (projection.status == RunStatus::Queued
         && earlier_eligible_policy_run_exists(
@@ -3580,13 +3633,14 @@ impl DurableEventStore {
             DurableStoreError::Contract("Queued policy run has no admittedAt.".to_string())
           })?,
           projection.occurrence_sequence.unwrap_or(0),
+          policy_now,
         )?)
     {
       transaction.execute(
         "UPDATE woml_run_summaries
          SET waiting_for = 'concurrency', eligible_at = NULL, updated_at = ?1
          WHERE run_id = ?2",
-        params![now.to_rfc3339(), run_id],
+        params![policy_now.to_rfc3339(), run_id],
       )?;
       transaction.commit()?;
       return Ok(PolicyExecutionClaimResult::Waiting {
@@ -3594,6 +3648,7 @@ impl DurableEventStore {
         workflow_id: binding.workflow_id,
         queue,
         reason: PolicyClaimWaitReason::Concurrency,
+        eligible_at: None,
       });
     }
     let claim_id = format!("claim_{}", Uuid::new_v4().simple());
@@ -3606,14 +3661,13 @@ impl DurableEventStore {
         binding.workflow_id,
         owner_id,
         claim_id,
-        now.to_rfc3339(),
+        lease_now.to_rfc3339(),
         expires_at.to_rfc3339(),
       ],
     )?;
-    let first_start = projection.started_at.is_none() && projection.status == RunStatus::Queued;
     if first_start {
       let timeout_at = policy.timeout_ms.map(|timeout_ms| {
-        now + chrono::Duration::milliseconds(i64::try_from(timeout_ms).unwrap_or(i64::MAX))
+        policy_now + chrono::Duration::milliseconds(i64::try_from(timeout_ms).unwrap_or(i64::MAX))
       });
       let mut events = events;
       append_to_history(
@@ -3621,10 +3675,10 @@ impl DurableEventStore {
         &mut events,
         run_id,
         generated_event_id(),
-        now,
+        policy_now,
         RUN_EVENT_SCHEMA_VERSION_V11,
         RunEventPayload::RunExecutionStarted(crate::event::RunExecutionStartedData {
-          started_at: now,
+          started_at: policy_now,
           timeout_at,
         }),
       )?;
@@ -3635,7 +3689,7 @@ impl DurableEventStore {
       "UPDATE woml_run_summaries
        SET waiting_for = NULL, eligible_at = NULL, updated_at = ?1
        WHERE run_id = ?2",
-      params![now.to_rfc3339(), run_id],
+      params![policy_now.to_rfc3339(), run_id],
     )?;
     transaction.commit()?;
     Ok(PolicyExecutionClaimResult::Claimed {
@@ -3645,7 +3699,7 @@ impl DurableEventStore {
         workflow_id: binding.workflow_id,
         owner_id: owner_id.to_string(),
         claim_id,
-        claimed_at: now,
+        claimed_at: lease_now,
         expires_at,
       },
       first_start,
@@ -3798,6 +3852,25 @@ impl DurableEventStore {
     )?;
     u32::try_from(count)
       .map_err(|_| DurableStoreError::Contract("Scheduler claim count exceeded u32.".to_string()))
+  }
+
+  pub(crate) fn policy_run_has_live_claim(
+    &mut self,
+    run_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<bool, DurableStoreError> {
+    self.connection.execute(
+      "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
+      [now.to_rfc3339()],
+    )?;
+    self
+      .connection
+      .query_row(
+        "SELECT EXISTS(SELECT 1 FROM woml_scheduler_claims WHERE run_id = ?1)",
+        [run_id],
+        |row| row.get(0),
+      )
+      .map_err(Into::into)
   }
 
   /// Applies the normal fail-closed recovery policy after a scheduler owner
@@ -4024,6 +4097,164 @@ impl DurableEventStore {
     let projection = fold_events(&events)?;
     transaction.commit()?;
     Ok(projection)
+  }
+
+  /// Atomically lets the immutable workflow deadline race the normal outcome
+  /// and operator cancellation authorities. A committed outcome or
+  /// cancellation request always wins and can never be rewritten by timeout.
+  pub fn settle_run_timeout(
+    &mut self,
+    run_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<RunTimeoutSettlement, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_run_exists(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+      return Err(DurableStoreError::Contract(
+        "Workflow timeout authority requires compiled Model v12.".to_string(),
+      ));
+    }
+    let mut events = load_events(&transaction, run_id)?;
+    let projection = fold_events(&events)?;
+    let Some(deadline_at) = projection.timeout_at else {
+      return Ok(RunTimeoutSettlement::NotConfigured);
+    };
+    if projection.business_outcome.is_some()
+      || projection.cancellation_request_id.is_some()
+      || projection.timeout_reached_at.is_some()
+    {
+      return Ok(RunTimeoutSettlement::LostRace { projection });
+    }
+    if now < deadline_at {
+      return Ok(RunTimeoutSettlement::NotDue { deadline_at });
+    }
+    if !matches!(projection.status, RunStatus::Running | RunStatus::Waiting) {
+      return Ok(RunTimeoutSettlement::LostRace { projection });
+    }
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      generated_event_id(),
+      deadline_at,
+      crate::RUN_EVENT_SCHEMA_VERSION_V11,
+      RunEventPayload::RunTimeoutReached(crate::event::RunTimeoutReachedData {
+        deadline_at,
+        code: "WOML_WORKFLOW_TIMED_OUT".to_string(),
+      }),
+    )?;
+    for operation in projection
+      .operations
+      .values()
+      .filter(|operation| operation.status == crate::projection::OperationStatus::Started)
+    {
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        now,
+        crate::RUN_EVENT_SCHEMA_VERSION_V11,
+        RunEventPayload::OperationFailed(OperationFailedData {
+          node_id: operation.node_id.clone(),
+          attempt_number: operation.attempt_number,
+          invocation_id: operation.identity.invocation_id.clone(),
+          call_id: operation.identity.call_id.clone(),
+          operation_key: operation.operation_key.clone(),
+          capability: operation.capability.clone(),
+          operation: operation.operation.clone(),
+          execution_mode: operation.execution_mode,
+          metadata: operation.metadata.clone(),
+          duration_ms: 0.0,
+          failure: crate::CapabilityFailure {
+            kind: crate::CapabilityFailureKind::Ambiguous,
+            code: "WOML_CAPABILITY_TIMEOUT_AMBIGUOUS".to_string(),
+            message: "The workflow deadline interrupted a managed operation before its terminal outcome became durable; it will not be replayed.".to_string(),
+            retryable: false,
+            ambiguous: true,
+            details: None,
+          },
+        }),
+      )?;
+    }
+    for attempt in projection
+      .attempts
+      .iter()
+      .filter(|attempt| attempt.status == AttemptStatus::Started)
+    {
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        now,
+        crate::RUN_EVENT_SCHEMA_VERSION_V11,
+        RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+          node_id: attempt.identity.node_id.clone(),
+          attempt: attempt.identity.attempt,
+          invocation_id: attempt.identity.invocation_id.clone(),
+          failure: AttemptFailure {
+            kind: AttemptFailureKind::Interrupted,
+            code: AttemptFailureKind::Interrupted.code().to_string(),
+            message: "The workflow deadline interrupted this attempt before its terminal outcome became durable.".to_string(),
+            details: None,
+            ..AttemptFailure::legacy_defaults()
+          },
+        }),
+      )?;
+    }
+    append_to_history(
+      &transaction,
+      &mut events,
+      run_id,
+      generated_event_id(),
+      now,
+      crate::RUN_EVENT_SCHEMA_VERSION_V11,
+      RunEventPayload::RunOutcomeDecided(crate::event::RunOutcomeDecidedData::Failed {
+        failure: crate::event::LifecycleFailure {
+          kind: crate::event::LifecycleFailureKind::TimedOut,
+          code: "WOML_WORKFLOW_TIMED_OUT".to_string(),
+          message: "The workflow exceeded its configured total run timeout.".to_string(),
+        },
+      }),
+    )?;
+    if let Some(hook) = workflow
+      .lifecycle_hook_for_event(crate::model::LifecycleEventName::RunFailure)
+      .or_else(|| workflow.lifecycle_hook_for_event(crate::model::LifecycleEventName::RunComplete))
+    {
+      let subject = LifecycleSubject {
+        kind: LifecycleSubjectKind::Workflow,
+        id: run_id.to_string(),
+      };
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        now,
+        crate::RUN_EVENT_SCHEMA_VERSION_V11,
+        RunEventPayload::LifecycleHookRequested(LifecycleHookRequestedData {
+          hook_invocation_id: derive_lifecycle_hook_invocation_id(
+            run_id,
+            &hook.hook_id,
+            subject.kind,
+            &subject.id,
+          ),
+          hook_id: hook.hook_id.clone(),
+          event: hook.event,
+          subject,
+        }),
+      )?;
+    }
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    transaction.commit()?;
+    Ok(RunTimeoutSettlement::TimedOut { projection })
   }
 
   pub fn finalize_run_v11(
@@ -6665,12 +6896,62 @@ fn workflow_has_policy_capacity(
   Ok(active < i64::from(limit))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PolicyRateEligibility {
+  Eligible,
+  Waiting { eligible_at: DateTime<Utc> },
+}
+
+fn workflow_rate_eligibility(
+  connection: &Connection,
+  workflow_id: &str,
+  rate_limit: Option<&crate::model::CompiledRateLimitPolicy>,
+  now: DateTime<Utc>,
+) -> Result<PolicyRateEligibility, DurableStoreError> {
+  let Some(rate_limit) = rate_limit else {
+    return Ok(PolicyRateEligibility::Eligible);
+  };
+  let window =
+    chrono::Duration::milliseconds(i64::try_from(rate_limit.window_ms).map_err(|_| {
+      DurableStoreError::Contract("Rate-limit window exceeds the runtime clock range.".to_string())
+    })?);
+  let cutoff = now - window;
+  let starts = {
+    let mut statement = connection.prepare(
+      "SELECT started_at FROM woml_runtime_policy_starts
+       WHERE workflow_id = ?1 AND started_at > ?2 ORDER BY started_at",
+    )?;
+    let rows = statement
+      .query_map(params![workflow_id, cutoff.to_rfc3339()], |row| {
+        row.get::<_, String>(0)
+      })?
+      .collect::<Result<Vec<_>, _>>()?;
+    rows
+  };
+  let mut active = starts
+    .iter()
+    .map(|value| parse_durable_timestamp(value, "runtime-policy start"))
+    .collect::<Result<Vec<_>, _>>()?
+    .into_iter()
+    // Future starts are deliberately retained so a wall-clock rollback fails
+    // closed instead of granting extra capacity.
+    .collect::<Vec<_>>();
+  active.sort_unstable();
+  if active.len() < rate_limit.count as usize {
+    return Ok(PolicyRateEligibility::Eligible);
+  }
+  Ok(PolicyRateEligibility::Waiting {
+    eligible_at: active[active.len() - rate_limit.count as usize] + window,
+  })
+}
+
 fn earlier_eligible_policy_run_exists(
   connection: &Connection,
   run_id: &str,
   queue: &str,
   admitted_at: DateTime<Utc>,
   occurrence_sequence: u64,
+  now: DateTime<Utc>,
 ) -> Result<bool, DurableStoreError> {
   let occurrence_sequence = i64::try_from(occurrence_sequence).map_err(|_| {
     DurableStoreError::Contract("occurrenceSequence exceeds SQLite integer range".to_string())
@@ -6707,11 +6988,15 @@ fn earlier_eligible_policy_run_exists(
       |row| row.get(0),
     )?;
     let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
-    let concurrency = workflow
-      .runtime_policy
-      .as_ref()
-      .and_then(|policy| policy.concurrency);
-    if workflow_has_policy_capacity(connection, &workflow_id, concurrency)? {
+    let policy = workflow.runtime_policy.as_ref().ok_or_else(|| {
+      DurableStoreError::Contract("Queued policy run has no Model v12 runtime policy.".to_string())
+    })?;
+    if workflow_has_policy_capacity(connection, &workflow_id, policy.concurrency)?
+      && matches!(
+        workflow_rate_eligibility(connection, &workflow_id, policy.rate_limit.as_ref(), now)?,
+        PolicyRateEligibility::Eligible
+      )
+    {
       return Ok(true);
     }
   }
@@ -8064,6 +8349,14 @@ impl DurableDagEngine {
         .store
         .decide_run_outcome(run_id, outcome, occurred_at)?,
     )
+  }
+
+  pub fn settle_run_timeout(
+    &mut self,
+    run_id: &str,
+    occurred_at: DateTime<Utc>,
+  ) -> Result<RunTimeoutSettlement, DurableEngineError> {
+    Ok(self.store.settle_run_timeout(run_id, occurred_at)?)
   }
 
   pub fn start_run(

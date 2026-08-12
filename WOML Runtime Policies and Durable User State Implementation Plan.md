@@ -1,11 +1,11 @@
 # WOML Runtime Policies and Durable User State Implementation Plan
 
-Status: RP0 through RP3 completed on 2026-08-12. Runtime Policy v1, Model v12,
+Status: RP0 through RP5 completed on 2026-08-12. Runtime Policy v1, Model v12,
 Event v11, Store v12 coordination, public inspection/progress, and Definition
-Package v7 contracts are frozen. `<config>` now validates and lowers outside the
-DAG. Rust now durably schedules and executes `concurrency` and work-conserving
-FIFO `queue` policies through the existing DAG runtime. `woml run` accepts that
-RP3 subset; `rate-limit` and `timeout` remain explicitly gated until RP4/RP5.
+Package v7 contracts are frozen. `<config>` validates and lowers outside the
+DAG. Rust now durably executes concurrency, work-conserving FIFO queueing,
+strict rolling-window rate limits, and immutable total workflow deadlines.
+`woml run` and `woml test` execute all four Runtime Policy v1 fields.
 No durable-user-state execution code begins until the later DS0 gate is
 reviewed. Runtime Policies and Durable User State are one roadmap milestone,
 delivered as two independently reviewable releases: RP0-RP7 first, then
@@ -832,8 +832,8 @@ changing underneath it.
 | RP1 (complete) | Validate `<config>` and lower it into Model v12.                            | Authors can check policy syntax and inspect deterministic compiled policy, but it is not executed yet. |
 | RP2 (complete) | Add Event v11 admission and Store v12 scheduling authority.                 | Rust can durably represent queued versus started runs without dispatching by policy yet.               |
 | RP3 (complete) | Execute concurrency limits and durable FIFO queueing.                       | Bursts wait safely and start as capacity becomes available across processes/restarts.                  |
-| RP4            | Execute strict rolling-window rate limits.                                  | Starts are durably paced without resetting after restart.                                              |
-| RP5            | Execute workflow timeouts.                                                  | Overdue runs fail truthfully and run their failure lifecycle.                                          |
+| RP4 (complete) | Execute strict rolling-window rate limits.                                  | Starts are durably paced without resetting after restart.                                              |
+| RP5 (complete) | Execute workflow timeouts.                                                  | Overdue runs fail truthfully and run their failure lifecycle.                                          |
 | RP6            | Integrate all trigger/call paths, cancellation, inspection, and progress.   | Policies behave consistently everywhere users can create or control a run.                             |
 | RP7            | Harden, migrate, benchmark, document, and publish Runtime Policies.         | `<config>` becomes a supported executable WOML feature.                                                |
 | DS0            | Freeze State v1, mutation identity, Store v13, and reviewed fixtures.       | Durable state semantics are reviewable before a mutable authority is added.                            |
@@ -1022,15 +1022,15 @@ Completed implementation:
 - Trigger-host startup rediscovers queued and ownerless Model v12 work, so runs
   survive process restarts. Bounded Runtime Policy Progress v1 reports queued,
   eligible, and started transitions.
-- The CLI now executes the RP3 subset and continues to reject rate-limit or
-  workflow-timeout policies with an actionable RP4/RP5 message rather than
-  silently ignoring them.
+- At the RP3 checkpoint, the CLI executed only concurrency/queue and rejected
+  rate-limit/timeout rather than silently ignoring them; RP4 and RP5 have now
+  removed that temporary gate.
 - Definition Package v7 workflows that combine local modules with Model v12
   remain explicitly gated for the all-ingress/package integration in RP6.
 - `examples/runtimePolicyConcurrencyWorkflow.woml` is the manual RP3 example;
   `bun run test:rp3` is the focused Rust/frontend/CLI gate.
 
-### RP4 — Execute rolling-window rate limits
+### RP4 — Execute rolling-window rate limits (completed)
 
 Changes:
 
@@ -1052,7 +1052,17 @@ Gate:
 Deterministic-clock tests cover boundary instants, bursts, concurrency plus
 rate, clock rollback/forward policy, process races, restart, and no busy loop.
 
-### RP5 — Execute workflow timeouts
+Completion notes (2026-08-12):
+
+- First starts claim rolling-window capacity in the same transaction as queue
+  eligibility and concurrency ownership.
+- Resumes never consume rate capacity again; durable start events remain the
+  rebuildable authority after restart.
+- Rate waits expose `waitingFor: rate_limit` and an exact `eligibleAt` boundary.
+- `examples/runtimePolicyRateLimitWorkflow.woml` is the manual RP4 example;
+  `bun run test:rp4` is the focused gate.
+
+### RP5 — Execute workflow timeouts (completed)
 
 Changes:
 
@@ -1079,6 +1089,17 @@ Gate:
 Race/crash tests cover before/after start, step success, managed effect,
 approval, retry, child wait, cancellation, outcome decision, lifecycle
 finalization, and restart past deadline.
+
+Completion notes (2026-08-12):
+
+- The first durable execution start freezes one deadline; queued time remains
+  excluded and later waits remain inside the budget.
+- Timeout settlement is transactional against normal outcomes and operator
+  cancellation and records `run_timeout_reached` before the failed outcome.
+- Active Bun work receives cancellation, late success cannot commit, and the
+  public failure code is `WOML_WORKFLOW_TIMED_OUT`.
+- `examples/runtimePolicyTimeoutWorkflow.woml` is the manual RP5 example;
+  `bun run test:rp5` is the focused release gate.
 
 ### RP6 — Integrate all ingress, controls, and operator surfaces
 

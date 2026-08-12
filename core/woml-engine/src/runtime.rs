@@ -52,10 +52,11 @@ use crate::{
   DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
   InformationalNotificationDeliverMessage, IssuedApprovalToken, NotificationCredentials,
   NotificationHostClient, NotificationHostClientError, NotificationHostOutcome,
-  NotificationHostProcessOptions, OperationStatus, PolicyExecutionClaimResult, PolicyWaitingFor,
-  RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection, RunStatus,
-  SchedulerClaimV1, ScriptHostClient, ScriptHostClientError, ScriptHostModuleArtifact,
-  ScriptHostProcessOptions, StepFailureDisposition, TriggerAdmissionRequest, WorkflowContext,
+  NotificationHostProcessOptions, OperationStatus, PolicyClaimWaitReason,
+  PolicyExecutionClaimResult, PolicyWaitingFor, RecoveryReport, RunEvent, RunEventPayload,
+  RunFailure, RunProjection, RunStatus, RunTimeoutSettlement, SchedulerClaimV1, ScriptHostClient,
+  ScriptHostClientError, ScriptHostModuleArtifact, ScriptHostProcessOptions,
+  StepFailureDisposition, TriggerAdmissionRequest, WorkflowContext,
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION, NOTIFICATION_PROVIDER_PROTOCOL,
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
@@ -151,6 +152,7 @@ pub enum RuntimePolicyProgressPhase {
   Queued,
   Eligible,
   Started,
+  TimedOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -163,6 +165,10 @@ pub struct RuntimePolicyProgress {
   pub queue: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub waiting_for: Option<PolicyWaitingFor>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub eligible_at: Option<chrono::DateTime<chrono::Utc>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub code: Option<String>,
 }
 
 pub type RuntimePolicyProgressReporter = Arc<dyn Fn(RuntimePolicyProgress) + Send + Sync>;
@@ -784,6 +790,21 @@ async fn wait_for_policy_wakeup(database_path: &std::path::Path) {
   }
 }
 
+async fn wait_for_policy_rate_eligibility(
+  database_path: &std::path::Path,
+  eligible_at: chrono::DateTime<chrono::Utc>,
+  policy_now: chrono::DateTime<chrono::Utc>,
+) {
+  let wakeup = policy_wakeup(database_path);
+  let wait = (eligible_at - policy_now)
+    .to_std()
+    .unwrap_or(Duration::ZERO);
+  tokio::select! {
+    _ = wakeup.notified() => {}
+    _ = tokio::time::sleep(wait) => {}
+  }
+}
+
 struct PolicyExecutionLease {
   database_path: PathBuf,
   claim: SchedulerClaimV1,
@@ -934,9 +955,17 @@ async fn acquire_policy_execution_lease(
   let owner_id = format!("scheduler_{}", Uuid::new_v4().simple());
   let mut reported_wait = false;
   loop {
-    let now = chrono::Utc::now();
+    let lease_now = chrono::Utc::now();
+    let policy_now = options.clock.now();
     let mut store = DurableEventStore::open(database_path.to_path_buf())?;
-    match store.try_claim_policy_run(run_id, &owner_id, now, POLICY_CLAIM_LEASE) {
+    let rate_eligible_at;
+    match store.try_claim_policy_run_at(
+      run_id,
+      &owner_id,
+      lease_now,
+      policy_now,
+      POLICY_CLAIM_LEASE,
+    ) {
       Ok(PolicyExecutionClaimResult::Claimed { claim, .. }) => {
         let binding = store.run_binding(run_id)?;
         let queue = store
@@ -954,6 +983,8 @@ async fn acquire_policy_execution_lease(
           phase: RuntimePolicyProgressPhase::Eligible,
           queue: queue.clone(),
           waiting_for: None,
+          eligible_at: None,
+          code: None,
         });
         options.report_runtime_policy(RuntimePolicyProgress {
           profile: RUNTIME_POLICY_PROGRESS_PROFILE,
@@ -962,14 +993,24 @@ async fn acquire_policy_execution_lease(
           phase: RuntimePolicyProgressPhase::Started,
           queue,
           waiting_for: None,
+          eligible_at: None,
+          code: None,
         });
         return Ok(PolicyClaimAcquisition::Claimed(
           PolicyExecutionLease::start(database_path.to_path_buf(), claim),
         ));
       }
       Ok(PolicyExecutionClaimResult::Waiting {
-        workflow_id, queue, ..
+        workflow_id,
+        queue,
+        reason,
+        eligible_at,
+        ..
       }) => {
+        let waiting_for = match reason {
+          PolicyClaimWaitReason::Concurrency => PolicyWaitingFor::Concurrency,
+          PolicyClaimWaitReason::RateLimit => PolicyWaitingFor::RateLimit,
+        };
         if !reported_wait {
           options.report_runtime_policy(RuntimePolicyProgress {
             profile: RUNTIME_POLICY_PROGRESS_PROFILE,
@@ -977,19 +1018,130 @@ async fn acquire_policy_execution_lease(
             workflow_id,
             phase: RuntimePolicyProgressPhase::Queued,
             queue,
-            waiting_for: Some(PolicyWaitingFor::Concurrency),
+            waiting_for: Some(waiting_for),
+            eligible_at,
+            code: None,
           });
           reported_wait = true;
         }
+        rate_eligible_at = eligible_at;
       }
       Err(DurableStoreError::SchedulerRecoveryRequired(_)) => {
-        store.recover_policy_run_after_lease_loss(run_id, now)?;
+        store.recover_policy_run_after_lease_loss(run_id, lease_now)?;
         return Ok(PolicyClaimAcquisition::Recovered);
       }
       Err(error) => return Err(error.into()),
     }
-    wait_for_policy_wakeup(database_path).await;
+    if let Some(eligible_at) = rate_eligible_at {
+      wait_for_policy_rate_eligibility(database_path, eligible_at, policy_now).await;
+    } else {
+      wait_for_policy_wakeup(database_path).await;
+    }
   }
+}
+
+fn schedule_workflow_timeout(
+  database_path: PathBuf,
+  run_id: String,
+  workflow_id: String,
+  queue: String,
+  deadline_at: chrono::DateTime<chrono::Utc>,
+  options: RuntimeExecutionOptions,
+) {
+  tokio::spawn(async move {
+    let mut deadline = deadline_at;
+    loop {
+      let wait = (deadline - options.clock.now())
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+      tokio::time::sleep(wait).await;
+      let settlement = DurableEventStore::open(database_path.clone()).and_then(|mut store| {
+        let settlement = store.settle_run_timeout(&run_id, options.clock.now())?;
+        let needs_lifecycle = matches!(
+          &settlement,
+          RunTimeoutSettlement::TimedOut { projection }
+            if !projection.lifecycle_hooks.is_empty()
+              && !store.policy_run_has_live_claim(&run_id, chrono::Utc::now())?
+        );
+        if matches!(
+          &settlement,
+          RunTimeoutSettlement::TimedOut { projection }
+            if projection.lifecycle_hooks.is_empty()
+        ) {
+          let _ = store.finalize_run_v11(&run_id, options.clock.now());
+        }
+        Ok((settlement, needs_lifecycle))
+      });
+      match settlement {
+        Ok((RunTimeoutSettlement::NotDue { deadline_at }, _)) => deadline = deadline_at,
+        Ok((RunTimeoutSettlement::TimedOut { .. }, needs_lifecycle)) => {
+          if let Some(reporter) = &options.runtime_policy_progress_reporter {
+            reporter(RuntimePolicyProgress {
+              profile: RUNTIME_POLICY_PROGRESS_PROFILE,
+              run_id: run_id.clone(),
+              workflow_id: workflow_id.clone(),
+              phase: RuntimePolicyProgressPhase::TimedOut,
+              queue: queue.clone(),
+              waiting_for: None,
+              eligible_at: None,
+              code: Some("WOML_WORKFLOW_TIMED_OUT".to_string()),
+            });
+          }
+          policy_wakeup(&database_path).notify_waiters();
+          if needs_lifecycle {
+            let _ =
+              finish_timed_out_policy_lifecycle(database_path.clone(), &run_id, options.clone())
+                .await;
+          }
+          break;
+        }
+        Ok(_) => {
+          policy_wakeup(&database_path).notify_waiters();
+          break;
+        }
+        Err(_) => tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await,
+      }
+    }
+  });
+}
+
+async fn finish_timed_out_policy_lifecycle(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<(), RuntimeExecutionError> {
+  let acquisition = acquire_policy_execution_lease(&database_path, run_id, &options).await?;
+  let store = DurableEventStore::open(database_path.clone())?;
+  let binding = store.run_binding(run_id)?;
+  let mut options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
+  let engine = DurableDagEngine::resume(store, run_id)?;
+  match acquisition {
+    PolicyClaimAcquisition::Recovered => {
+      let _ = resume_with_engine(engine, run_id, options).await;
+    }
+    PolicyClaimAcquisition::Claimed(lease) => {
+      let coordinator = Arc::new(PolicyExecutionCoordinator {
+        database_path: database_path.clone(),
+        run_id: run_id.to_string(),
+        lease: tokio::sync::Mutex::new(Some(lease)),
+      });
+      options.policy_execution = Some(Arc::clone(&coordinator));
+      options
+        .policy_execution_registry
+        .write()
+        .await
+        .insert(run_id.to_string(), Arc::downgrade(&coordinator));
+      let _ = resume_with_engine(engine, run_id, options.clone()).await;
+      let released = options.release_policy_execution_slot().await;
+      options
+        .policy_execution_registry
+        .write()
+        .await
+        .remove(run_id);
+      released?;
+    }
+  }
+  Ok(())
 }
 
 async fn execute_policy_run_durable(
@@ -1006,13 +1158,20 @@ async fn execute_policy_run_durable(
         "Model v12 execution requires a runtime policy".to_string(),
       )
     })?;
-    if policy.rate_limit.is_some() || policy.timeout_ms.is_some() {
-      return Err(RuntimeExecutionError::InvalidConfiguration(
-        "RP3 executes concurrency and durable FIFO queueing; rate limit and workflow timeout enforcement are not executable yet"
-          .to_string(),
-      ));
-    }
     let projection = store.projection(run_id)?;
+    if let Some(deadline_at) = projection.timeout_at {
+      schedule_workflow_timeout(
+        database_path.clone(),
+        run_id.to_string(),
+        workflow.workflow_id.clone(),
+        policy
+          .queue
+          .as_ref()
+          .map_or_else(|| workflow.workflow_id.clone(), |queue| queue.name.clone()),
+        deadline_at,
+        options.clone(),
+      );
+    }
     if matches!(
       projection.status,
       RunStatus::Waiting | RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled
@@ -1027,6 +1186,22 @@ async fn execute_policy_run_durable(
   let store = DurableEventStore::open(database_path.clone())?;
   let binding = store.run_binding(run_id)?;
   let mut options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
+  let workflow = store.definition(&binding.definition_hash)?;
+  if let Some(deadline_at) = store.projection(run_id)?.timeout_at {
+    let queue = workflow.runtime_policy_queue_name().ok_or_else(|| {
+      RuntimeExecutionError::InvalidConfiguration(
+        "Model v12 has no runtime policy queue".to_string(),
+      )
+    })?;
+    schedule_workflow_timeout(
+      database_path.clone(),
+      run_id.to_string(),
+      workflow.workflow_id,
+      queue,
+      deadline_at,
+      options.clone(),
+    );
+  }
   let engine = DurableDagEngine::resume(store, run_id)?;
   match acquisition {
     PolicyClaimAcquisition::Recovered => resume_with_engine(engine, run_id, options).await,
@@ -1343,7 +1518,61 @@ pub fn settle_approval_timeout_durable(
   clock: &dyn EngineClock,
 ) -> Result<ApprovalTimeoutSettlement, RuntimeExecutionError> {
   let mut store = DurableEventStore::open(database_path)?;
-  Ok(store.settle_approval_timeout(run_id, approval_id, clock.now())?)
+  let now = clock.now();
+  let projection = store.projection(run_id)?;
+  if projection.timeout_reached_at.is_some() {
+    let request = projection
+      .approval_requests
+      .get(approval_id)
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(
+          "workflow timeout references an unknown approval request".to_string(),
+        )
+      })?;
+    return Ok(ApprovalTimeoutSettlement {
+      status: crate::ApprovalTimeoutSettlementStatus::Settled,
+      run_id: run_id.to_string(),
+      approval_id: approval_id.to_string(),
+      request_id: request.request_id.clone(),
+      resolution: None,
+      settled_at: projection.timeout_reached_at,
+    });
+  }
+  if projection
+    .timeout_at
+    .is_some_and(|deadline_at| now >= deadline_at)
+    && projection.business_outcome.is_none()
+    && projection.cancellation_request_id.is_none()
+  {
+    let settlement = store.settle_run_timeout(run_id, now)?;
+    let timed_out = match settlement {
+      RunTimeoutSettlement::TimedOut { projection }
+      | RunTimeoutSettlement::LostRace { projection } => projection
+        .timeout_reached_at
+        .is_some()
+        .then_some(projection),
+      RunTimeoutSettlement::NotConfigured | RunTimeoutSettlement::NotDue { .. } => None,
+    };
+    if let Some(projection) = timed_out {
+      let request = projection
+        .approval_requests
+        .get(approval_id)
+        .ok_or_else(|| {
+          RuntimeExecutionError::Stalled(
+            "workflow timeout references an unknown approval request".to_string(),
+          )
+        })?;
+      return Ok(ApprovalTimeoutSettlement {
+        status: crate::ApprovalTimeoutSettlementStatus::Settled,
+        run_id: run_id.to_string(),
+        approval_id: approval_id.to_string(),
+        request_id: request.request_id.clone(),
+        resolution: None,
+        settled_at: projection.timeout_reached_at,
+      });
+    }
+  }
+  Ok(store.settle_approval_timeout(run_id, approval_id, now)?)
 }
 
 async fn execute_with_engine<E: RuntimeDagEngine>(
@@ -1544,6 +1773,41 @@ async fn continue_runtime<E: RuntimeDagEngine>(
     Err(RuntimeExecutionError::RunCancelled(_)) => Err(cancelled_run_error(engine, run_id)?),
     Err(error) => Err(error),
   }
+}
+
+fn settle_workflow_timeout_if_due<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  now: chrono::DateTime<chrono::Utc>,
+  options: &RuntimeExecutionOptions,
+) -> Result<bool, RuntimeExecutionError> {
+  let projection = engine.projection(run_id)?;
+  if projection.business_outcome.is_some() || projection.cancellation_request_id.is_some() {
+    return Ok(false);
+  }
+  if projection
+    .timeout_at
+    .is_none_or(|deadline_at| now < deadline_at)
+  {
+    return Ok(false);
+  }
+  let settled = engine.settle_workflow_timeout(run_id, now)?;
+  if settled {
+    options.report_runtime_policy(RuntimePolicyProgress {
+      profile: RUNTIME_POLICY_PROGRESS_PROFILE,
+      run_id: run_id.to_string(),
+      workflow_id: engine.workflow().workflow_id.clone(),
+      phase: RuntimePolicyProgressPhase::TimedOut,
+      queue: engine
+        .workflow()
+        .runtime_policy_queue_name()
+        .unwrap_or_else(|| engine.workflow().workflow_id.clone()),
+      waiting_for: None,
+      eligible_at: None,
+      code: Some("WOML_WORKFLOW_TIMED_OUT".to_string()),
+    });
+  }
+  Ok(settled)
 }
 
 fn lifecycle_action_source(action: &CompiledLifecycleAction) -> Option<&str> {
@@ -2733,7 +2997,11 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
   host: &mut Option<ScriptHostClient>,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   loop {
+    settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
     let current = engine.projection(run_id)?;
+    if current.timeout_reached_at.is_some() {
+      return Err(resumed_failure(engine, run_id, current)?);
+    }
     if current.status == RunStatus::Cancelling {
       options.ensure_policy_execution_slot().await?;
       settle_cancelling_run(engine, run_id, options.clock.now())?;
@@ -2970,6 +3238,20 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           }
         };
         let request_id = generated_id("aprreq");
+        let workflow_deadline = engine.projection(run_id)?.timeout_at;
+        let waiting_expires_at = match (expires_at, workflow_deadline) {
+          (Some(approval), Some(workflow)) => Some(approval.min(workflow)),
+          (Some(approval), None) => Some(approval),
+          (None, Some(workflow)) => Some(workflow),
+          (None, None) => None,
+        };
+        let waiting_on_timeout = if workflow_deadline
+          .is_some_and(|workflow| expires_at.is_none_or(|approval| workflow <= approval))
+        {
+          ApprovalTimeoutPolicy::Fail
+        } else {
+          on_timeout
+        };
         let token = engine.request_approval(
           run_id,
           occurred_at,
@@ -2985,8 +3267,8 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           run_id.to_string(),
           approval,
           request_id,
-          expires_at,
-          on_timeout,
+          waiting_expires_at,
+          waiting_on_timeout,
           token,
         ));
       }
@@ -3227,9 +3509,22 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
   let mut active: Vec<ActiveParallelInvocation<'_>> = Vec::new();
   let mut fail_fast_closed = false;
   let mut run_cancellation_sent = false;
+  let mut workflow_timeout_sent = false;
 
   loop {
-    let cancelling = engine.projection(run_id)?.status == RunStatus::Cancelling;
+    let current = engine.projection(run_id)?;
+    let cancelling = current.status == RunStatus::Cancelling;
+    let timed_out = current.timeout_reached_at.is_some();
+    if timed_out && !workflow_timeout_sent {
+      workflow_timeout_sent = true;
+      let active_invocation_ids = active
+        .iter()
+        .map(|invocation| invocation.invocation_id.clone())
+        .collect::<Vec<_>>();
+      for invocation_id in active_invocation_ids {
+        let _ = host.cancel_run(&invocation_id).await;
+      }
+    }
     if cancelling && !run_cancellation_sent {
       run_cancellation_sent = true;
       let active_invocation_ids = active
@@ -3240,7 +3535,7 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         let _ = host.cancel_run(&invocation_id).await;
       }
     }
-    while !fail_fast_closed && !cancelling && active.len() < group.concurrency {
+    while !fail_fast_closed && !cancelling && !timed_out && active.len() < group.concurrency {
       let projection = engine.projection(run_id)?;
       let now = chrono::Utc::now();
       let Some((node_id, attempt_number)) = group.child_node_ids.iter().find_map(|node_id| {
@@ -3319,8 +3614,19 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
     let completion = loop {
       tokio::select! {
         completion = next_parallel_completion(&mut active) => break completion,
-        _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !run_cancellation_sent => {
-          if engine.projection(run_id)?.status == RunStatus::Cancelling {
+        _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !run_cancellation_sent && !workflow_timeout_sent => {
+          settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
+          let current = engine.projection(run_id)?;
+          if current.timeout_reached_at.is_some() {
+            workflow_timeout_sent = true;
+            let active_invocation_ids = active
+              .iter()
+              .map(|invocation| invocation.invocation_id.clone())
+              .collect::<Vec<_>>();
+            for invocation_id in active_invocation_ids {
+              let _ = host.cancel_run(&invocation_id).await;
+            }
+          } else if current.status == RunStatus::Cancelling {
             run_cancellation_sent = true;
             let active_invocation_ids = active
               .iter()
@@ -3333,6 +3639,12 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         }
       }
     };
+    settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
+    if workflow_timeout_sent || engine.projection(run_id)?.timeout_reached_at.is_some() {
+      drop(active);
+      let projection = engine.projection(run_id)?;
+      return Err(resumed_failure(engine, run_id, projection)?);
+    }
     let Some(mut completion) = completion else {
       break;
     };
@@ -3673,11 +3985,19 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   let host_client = host.as_ref().expect("script host was initialized");
   let mut execution = Box::pin(host_client.execute(&request));
   let mut cancellation_sent = false;
+  let mut timeout_sent = false;
   let completed = loop {
     tokio::select! {
       result = &mut execution => break result,
-      _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !cancellation_sent => {
-        if engine.projection(run_id)?.status == RunStatus::Cancelling {
+      _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !cancellation_sent && !timeout_sent => {
+        settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
+        let current = engine.projection(run_id)?;
+        if current.timeout_reached_at.is_some() {
+          timeout_sent = true;
+          if let Err(error) = host_client.cancel_run(&invocation_id).await {
+            break Err(error);
+          }
+        } else if current.status == RunStatus::Cancelling {
           cancellation_sent = true;
           if let Err(error) = host_client.cancel_run(&invocation_id).await {
             break Err(error);
@@ -3687,6 +4007,11 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     }
   };
   drop(execution);
+  settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
+  if timeout_sent || engine.projection(run_id)?.timeout_reached_at.is_some() {
+    let projection = engine.projection(run_id)?;
+    return Err(resumed_failure(engine, run_id, projection)?);
+  }
   let outcome = match completed {
     _ if cancellation_sent || engine.projection(run_id)?.status == RunStatus::Cancelling => {
       return settle_script_attempt_failure(
@@ -4310,6 +4635,13 @@ trait RuntimeDagEngine {
     run_id: &str,
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError>;
+  fn settle_workflow_timeout(
+    &mut self,
+    _run_id: &str,
+    _occurred_at: chrono::DateTime<chrono::Utc>,
+  ) -> Result<bool, RuntimeExecutionError> {
+    Ok(false)
+  }
   fn decide_run_cancelled(
     &mut self,
     run_id: &str,
@@ -4563,6 +4895,17 @@ impl RuntimeDagEngine for DurableDagEngine {
   ) -> Result<(), RuntimeExecutionError> {
     self.append_payload(generated_id("evt"), run_id, chrono::Utc::now(), payload)?;
     Ok(())
+  }
+
+  fn settle_workflow_timeout(
+    &mut self,
+    run_id: &str,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+  ) -> Result<bool, RuntimeExecutionError> {
+    Ok(matches!(
+      DurableDagEngine::settle_run_timeout(self, run_id, occurred_at)?,
+      RunTimeoutSettlement::TimedOut { .. }
+    ))
   }
 
   fn decide_run_cancelled(

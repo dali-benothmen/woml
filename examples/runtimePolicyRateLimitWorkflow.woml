@@ -1,0 +1,24 @@
+<woml>
+  <workflow
+    id="runtime-policy-rate-limit-demo"
+    name="Runtime Policy Rate Limit Demo"
+    description="Starts no more than two runs in each rolling ten-second window"
+    version="1.0.0"
+  >
+    <config rate-limit="2/10s" queue="examples" />
+
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="result">
+        <script>
+          return {
+            message: `Rate-limited run for ${context.payload.name ?? 'World'}`
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

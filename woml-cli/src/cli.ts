@@ -1026,16 +1026,6 @@ async function compileWorkflowSources(
         : undefined;
     const frontendWorkflow =
       runtimePackage?.workflow.model ?? compileWoml(document);
-    if (
-      frontendWorkflow.schemaVersion === 12 &&
-      (frontendWorkflow.runtimePolicy.timeoutMs !== undefined ||
-        frontendWorkflow.runtimePolicy.rateLimit !== undefined)
-    ) {
-      throw new CliInputError(
-        'WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE',
-        'concurrency and durable FIFO queueing are executable in RP3, but workflow timeout and rate-limit enforcement arrive in RP4 and RP5. Remove timeout/rate-limit for now or use `woml check` to review the full Model v12 workflow.'
-      );
-    }
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
     compiled.push({
       filePath,
@@ -1206,8 +1196,10 @@ async function runCheckCommand(
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      hasRuntimePolicy
-        ? 'Execution: Model v12 concurrency and durable FIFO queueing are executable; rate limits and workflow timeout remain staged for RP4 and RP5.\n'
+      hasRuntimePolicy && definitionPackage.modules.length > 0
+        ? 'Execution: Model v12 policy is valid; combined local-module runtime packaging remains staged for RP6.\n'
+        : hasRuntimePolicy
+          ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
         : hasLifecycle
           ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
           : workflowCallsFrontendOnly

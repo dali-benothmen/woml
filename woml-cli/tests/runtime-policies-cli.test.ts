@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
 import { runCli, type CliIo } from '../src/cli';
+import { createSecretStore } from '../src/secrets';
 
 const fixtureRoot = resolve(
   import.meta.dir,
@@ -19,12 +20,19 @@ async function invoke(args: readonly string[]) {
       stderr += value;
     },
   };
-  const exitCode = await runCli(args, io);
+  const exitCode = await runCli(args, io, {
+    createSecretStore: () => createSecretStore(),
+    readSecret: async () => '',
+    nativeCorePath: resolve(
+      import.meta.dir,
+      `../dist/woml-core.${process.platform}-${process.arch}.node`
+    ),
+  });
   return { exitCode, stdout, stderr };
 }
 
-describe('RP3 runtime-policy CLI execution boundary', () => {
-  test('woml check accepts config and explains the enforcement boundary', async () => {
+describe('RP5 executable runtime-policy CLI boundary', () => {
+  test('woml check accepts config and reports the executable policy set', async () => {
     const result = await invoke([
       'check',
       resolve(fixtureRoot, 'runtime-policy.woml'),
@@ -32,8 +40,9 @@ describe('RP3 runtime-policy CLI execution boundary', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('WOML check passed');
-    expect(result.stdout).toContain('Model v12 concurrency and durable FIFO queueing are executable');
-    expect(result.stdout).toContain('remain staged for RP4 and RP5');
+    expect(result.stdout).toContain('Model v12 concurrency');
+    expect(result.stdout).toContain('rolling-window rate limits');
+    expect(result.stdout).toContain('workflow timeouts are executable');
   });
 
   test('woml check --json exposes Definition Package v7 and Model v12 for modules', async () => {
@@ -57,20 +66,15 @@ describe('RP3 runtime-policy CLI execution boundary', () => {
     });
   });
 
-  test('woml run/test reject the RP4/RP5 policy fields instead of ignoring them', async () => {
-    for (const command of ['run', 'test'] as const) {
-      const result = await invoke([
-        command,
-        resolve(fixtureRoot, 'runtime-policy.woml'),
-      ]);
-      expect(result.exitCode, command).toBe(1);
-      expect(result.stdout, command).toBe('');
-      expect(result.stderr, command).toContain(
-        'WOML input error [WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE]'
-      );
-      expect(result.stderr, command).toContain(
-        'workflow timeout and rate-limit enforcement arrive in RP4 and RP5'
-      );
-    }
+  test('woml test executes rate-limit and timeout policy fields', async () => {
+    const result = await invoke([
+      'test',
+      resolve(fixtureRoot, 'runtime-policy.woml'),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(
+      'WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE'
+    );
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true });
   });
 });

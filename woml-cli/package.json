@@ -52,6 +52,8 @@
     "test:rp1": "bun test ../woml/tests/runtime-policies-contracts.test.ts tests/runtime-policies-cli.test.ts && bun run typecheck",
     "test:rp2": "cd ../core && cargo test -p woml-engine --test rp2_runtime_policy_store",
     "test:rp3": "cd ../core && cargo test -p woml-engine --test rp2_runtime_policy_store --test rp3_policy_scheduler && cd ../woml-cli && bun test ../woml/tests/runtime-policies-contracts.test.ts tests/runtime-policies-cli.test.ts && bun run typecheck",
+    "test:rp4": "cd ../core && cargo test -p woml-engine --test rp2_runtime_policy_store --test rp3_policy_scheduler --test rp4_rate_limits && cd ../woml-cli && bun run typecheck",
+    "test:rp5": "bun run build:native && bun run build:js && cd ../core && cargo test -p woml-engine --test rp2_runtime_policy_store --test rp3_policy_scheduler --test rp4_rate_limits --test rp5_workflow_timeouts && cd ../woml-cli && bun test ../woml/tests/runtime-policies-contracts.test.ts tests/runtime-policies-cli.test.ts && bun run typecheck",
     "test:storage": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc9_storage",
     "test:cache": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine cache::tests --lib && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc10_cache",
     "test:events": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc11_events --test t12_event_runtime",
