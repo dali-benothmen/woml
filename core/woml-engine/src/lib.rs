@@ -69,7 +69,7 @@ pub use durable_state::{
   DurableStateError, DurableStateExecution, DurableStateLimits, DurableStateStore, FixedStateClock,
   ManagedDurableStateHandler, ManagedDurableStateStore, StateClock, SystemStateClock,
   DEFAULT_STATE_MAX_BYTES, DEFAULT_STATE_MAX_KEYS, MAX_STATE_KEY_BYTES, MAX_STATE_SAFE_INTEGER,
-  MAX_STATE_VALUE_BYTES, STATE_CONTRACT, STATE_CONTRACT_VERSION,
+  MAX_STATE_VALUE_BYTES, STATE_BUSY_TIMEOUT_MS, STATE_CONTRACT, STATE_CONTRACT_VERSION,
 };
 pub use engine::{step_effect_idempotency_key, EngineError, InMemoryDagEngine};
 pub use event::{

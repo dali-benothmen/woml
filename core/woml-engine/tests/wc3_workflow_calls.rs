@@ -212,7 +212,10 @@ async fn workflow_start_returns_after_admission_while_the_child_keeps_running() 
     .and_then(Value::as_str)
     .unwrap()
     .to_string();
-  assert_eq!(store.projection(&child_run_id).unwrap().status, RunStatus::Running);
+  assert_eq!(
+    store.projection(&child_run_id).unwrap().status,
+    RunStatus::Running
+  );
   assert_eq!(
     wait_for_terminal(&database, &child_run_id).await,
     RunStatus::Succeeded

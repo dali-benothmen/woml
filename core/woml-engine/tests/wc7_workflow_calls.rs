@@ -182,10 +182,22 @@ fn v9_to_v10_migration_preserves_calls_definitions_and_event_histories() {
   assert_eq!(schema_version(database.path()), "9");
 
   let migrated = DurableEventStore::open(database.path()).unwrap();
-  assert_eq!(schema_version(database.path()), DURABLE_STORE_SCHEMA_VERSION.to_string());
-  assert_eq!(migrated.workflow_call(&request.call_key).unwrap(), Some(before_call));
-  assert_eq!(migrated.events(&parent_run_id).unwrap(), before_parent_events);
-  assert_eq!(migrated.events(&request.child_run_id).unwrap(), before_child_events);
+  assert_eq!(
+    schema_version(database.path()),
+    DURABLE_STORE_SCHEMA_VERSION.to_string()
+  );
+  assert_eq!(
+    migrated.workflow_call(&request.call_key).unwrap(),
+    Some(before_call)
+  );
+  assert_eq!(
+    migrated.events(&parent_run_id).unwrap(),
+    before_parent_events
+  );
+  assert_eq!(
+    migrated.events(&request.child_run_id).unwrap(),
+    before_child_events
+  );
   assert_eq!(migrated.definition(CHILD_HASH).unwrap(), model(CHILD_MODEL));
   let route_table_exists: bool = Connection::open(database.path())
     .unwrap()

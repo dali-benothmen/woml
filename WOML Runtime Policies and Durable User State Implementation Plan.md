@@ -688,7 +688,13 @@ database. Every mutation transaction atomically commits:
 1. the new state value/version or deletion;
 2. the stable mutation identity and canonical result needed for reattachment;
 3. bounded audit metadata; and
-4. the managed-operation settlement required by the run authority.
+4. the immutable settlement proof required by the run authority.
+
+The normal managed-operation success event follows immediately in the run
+authority. If the host stops between those commits, recovery verifies the
+immutable proof and appends the missing event without replaying the state
+mutation. The interrupted script attempt still fails closed because other
+script effects may be ambiguous.
 
 State values are authoritative application data. They are not reconstructed by
 folding the run event log. This does not weaken event-sourced run context:
@@ -851,7 +857,7 @@ changing underneath it.
 | DS1 (complete) | Add frontend discovery, editor types, and the Bun `services.state` facade.  | Scripts and modules receive a typed service surface; runtime calls remain deliberately gated.          |
 | DS2 (complete) | Build Store v13's transactional state authority.                            | Rust can perform atomic, versioned, idempotent state operations without Bun execution.                 |
 | DS3 (complete) | Connect State v1 through the managed capability path.                       | Real `.woml` scripts can read and mutate durable state end to end.                                     |
-| DS4            | Add contention, retry, recovery, quota, security, and inspection hardening. | State remains correct under concurrent runs, crashes, migrations, and adversarial input.               |
+| DS4 (complete) | Add contention, retry, recovery, quota, security, and inspection hardening. | State remains correct under concurrent runs, crashes, migrations, and adversarial input.               |
 | DS5            | Package, benchmark, document, and publish Durable User State.               | `services.state` becomes a supported correctness-capable service distinct from cache.                  |
 
 ### RP0 — Freeze runtime-policy contracts and reviewed fixtures (completed)
@@ -1380,7 +1386,7 @@ Completion notes:
   Bun-to-Rust execution, restart persistence, redaction, retry reattachment,
   branches, parallel children, lifecycle scripts, and imported modules.
 
-### DS4 — Harden concurrency, recovery, limits, and security
+### DS4 — Harden concurrency, recovery, limits, and security (completed)
 
 Changes:
 
@@ -1404,6 +1410,34 @@ Gate:
 
 Contention, retry, crash, migration, quota, redaction, and performance budgets
 pass with multiple Rust connections and packaged CLI processes.
+
+Completion notes:
+
+- Independent Rust processes prove that SQLite serializes atomic increments
+  without lost updates. Thread contention proves that a duplicate logical
+  mutation applies once while distinct names remain independent.
+- State connections use a five-second bounded SQLite busy handler. Short locks
+  recover automatically; exhausting the bound remains the stable retryable
+  `WOML_STATE_STORE_UNAVAILABLE` failure.
+- Startup audits SQLite integrity and foreign keys, required Store v13 objects,
+  entry and mutation digests, canonical JSON, timestamps, result envelopes,
+  live versions, and quota totals. Contradictions fail closed with
+  `WOML_STATE_STORE_CORRUPT`.
+- A committed immutable mutation record is a recovery settlement proof. If the
+  host stops before the operation-success event, recovery reconstructs that
+  event without replaying the mutation and still fails the interrupted script
+  attempt closed.
+- Unix state files are hardened to owner-only `0600`. Run inspection and event
+  surfaces remain redacted, and state tables are independent of run ownership.
+- The performance gate writes 256 one-KiB values, enforces a 100 ms local p95
+  operation budget and 16 MiB database-size budget, and is available as
+  `bun run benchmark:state`.
+- `docs/woml-durable-state.md` documents contention, cancellation, coherent
+  backup/restore, fail-closed corruption, local permissions, and the lack of
+  transparent encryption.
+- `bun run test:ds4` composes DS0 through DS3 compatibility with the DS4
+  concurrency, recovery, corruption, redaction, permissions, and performance
+  suite.
 
 ### DS5 — Publish Durable User State
 
@@ -1613,9 +1647,8 @@ No durable user value is stored until DS0 answers and tests:
     context automatically?
 
 Those questions are answered by the frozen DS0 schemas, fixtures, and
-`docs/protocols/durable-state-v1.md`. DS1 through DS3 have completed. DS4 now
-hardens contention, crash recovery, limits, inspection, and adversarial input
-without changing the public contract.
+`docs/protocols/durable-state-v1.md`. DS1 through DS4 have completed. DS5 now
+packages and publishes the feature without changing the public contract.
 
 ## 20. Definition of Done
 

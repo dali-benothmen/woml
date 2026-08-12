@@ -27,15 +27,15 @@ use crate::event::{
   NotificationDeliveryRequestedData, NotificationDeliverySucceededData,
   NotificationMessageUpdateAttemptStartedData, NotificationMessageUpdateFailedData,
   NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure,
-  OperationFailedData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
-  ParallelGroupOutcome, ProviderMessageIdentity, RunAdmissionQueue, RunAdmissionTrigger,
-  RunAdmittedData, RunCancellationRequestedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
-  RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunIngress, RunStartedData, RunSucceededData,
-  StepAttemptFailedData, StepRetryScheduledData,
+  OperationFailedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupCompletedData, ParallelGroupOutcome, ProviderMessageIdentity, RunAdmissionQueue,
+  RunAdmissionTrigger, RunAdmittedData, RunCancellationRequestedData, RunFailedData,
+  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunIngress,
+  RunStartedData, RunSucceededData, StepAttemptFailedData, StepRetryScheduledData,
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, NotificationDeliveryStatus,
-  NotificationMessageUpdateStatus, ParallelGroupStatus,
+  NotificationMessageUpdateStatus, OperationProjection, ParallelGroupStatus,
 };
 use crate::runtime::RuntimeModuleArtifact;
 use crate::workflow_calls::{
@@ -6262,6 +6262,31 @@ impl DurableEventStore {
     if !active_operations.is_empty() {
       let now = Utc::now();
       for operation in &active_operations {
+        if let Some(settlement) = recovered_state_mutation_settlement(&transaction, operation)? {
+          append_to_history(
+            &transaction,
+            &mut events,
+            run_id,
+            generated_event_id(),
+            now,
+            event_schema_version,
+            RunEventPayload::OperationSucceeded(OperationSucceededData {
+              node_id: operation.node_id.clone(),
+              attempt_number: operation.attempt_number,
+              invocation_id: operation.identity.invocation_id.clone(),
+              call_id: operation.identity.call_id.clone(),
+              operation_key: operation.operation_key.clone(),
+              capability: operation.capability.clone(),
+              operation: operation.operation.clone(),
+              execution_mode: operation.execution_mode,
+              metadata: settlement.metadata,
+              duration_ms: 0.0,
+              result_bytes: settlement.result_bytes,
+              result_digest: settlement.result_digest,
+            }),
+          )?;
+          continue;
+        }
         let observed = operation.execution_mode == crate::event::OperationExecutionMode::Observed;
         append_to_history(
           &transaction,
@@ -6669,6 +6694,102 @@ fn next_notification_attempt(
     }
     _ => Ok(None),
   }
+}
+
+struct RecoveredStateMutationSettlement {
+  metadata: Map<String, Value>,
+  result_bytes: u64,
+  result_digest: String,
+}
+
+/// A state mutation and its immutable result are committed together. If the
+/// process dies before appending operation_succeeded, recovery may use that
+/// settlement proof instead of incorrectly classifying the mutation itself as
+/// ambiguous. The script attempt still fails closed and is never replayed.
+fn recovered_state_mutation_settlement(
+  transaction: &Transaction<'_>,
+  operation: &OperationProjection,
+) -> Result<Option<RecoveredStateMutationSettlement>, DurableStoreError> {
+  if operation.capability != "state"
+    || operation.execution_mode != crate::event::OperationExecutionMode::Managed
+    || !matches!(
+      operation.operation.as_str(),
+      "set" | "delete" | "increment" | "set_if_absent"
+    )
+  {
+    return Ok(None);
+  }
+  let stored = transaction
+    .query_row(
+      "SELECT operation, key_digest, input_digest, result_json, result_digest,
+              committed_version
+       FROM woml_state_mutations WHERE operation_key = ?1",
+      [&operation.operation_key],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, String>(4)?,
+          row.get::<_, Option<u64>>(5)?,
+        ))
+      },
+    )
+    .optional()?;
+  let Some((stored_operation, key_digest, input_digest, result_json, result_digest, version)) =
+    stored
+  else {
+    return Ok(None);
+  };
+  let expected_key_digest = operation.metadata.get("keyDigest").and_then(Value::as_str);
+  let expected_input_digest = operation
+    .metadata
+    .get("inputDigest")
+    .and_then(Value::as_str);
+  let result: Value = serde_json::from_str(&result_json).map_err(|_| {
+    DurableStoreError::Contract("A settled state mutation contains invalid JSON.".to_string())
+  })?;
+  let canonical = canonical_json(&result)?;
+  let stored_result_digest = format!(
+    "sha256:{}",
+    hex::encode({
+      let mut hasher = Sha256::new();
+      hasher.update(b"woml.state-result\0v1\0");
+      hasher.update(&canonical);
+      hasher.finalize()
+    })
+  );
+  if stored_operation != operation.operation
+    || expected_key_digest != Some(key_digest.as_str())
+    || expected_input_digest != Some(input_digest.as_str())
+    || result_digest != stored_result_digest
+    || result.get("contract") != Some(&Value::String("woml.state".to_string()))
+    || result.get("contractVersion") != Some(&Value::from(1))
+    || result.get("kind") != Some(&Value::String("result".to_string()))
+    || result.get("operation") != Some(&Value::String(operation.operation.clone()))
+    || !crate::durable_state::valid_mutation_result(&operation.operation, &result, version)
+  {
+    return Err(DurableStoreError::Contract(
+      "A settled state mutation does not match its interrupted managed operation.".to_string(),
+    ));
+  }
+  let encoded = serde_json::to_vec(&result)?;
+  let mut metadata = operation.metadata.clone();
+  metadata.insert(
+    "outcome".to_string(),
+    Value::String("succeeded".to_string()),
+  );
+  metadata.insert("resultDigest".to_string(), Value::String(result_digest));
+  metadata.insert("durationMs".to_string(), Value::from(0.0));
+  if let Some(version) = version {
+    metadata.insert("version".to_string(), Value::from(version));
+  }
+  Ok(Some(RecoveredStateMutationSettlement {
+    metadata,
+    result_bytes: encoded.len() as u64,
+    result_digest: format!("sha256:{}", hex::encode(Sha256::digest(&encoded))),
+  }))
 }
 
 fn notification_request_all_failed(

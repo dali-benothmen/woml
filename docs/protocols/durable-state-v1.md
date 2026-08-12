@@ -1,8 +1,9 @@
 # WOML Durable User State v1 Contracts
 
 Status: frozen by DS0 on 2026-08-12. DS1 exposes the typed authoring surface,
-DS2 implements the transaction-tested Store v13 Rust authority, and DS3
-connects real WOML scripts through the managed capability path.
+DS2 implements the transaction-tested Store v13 Rust authority, DS3 connects
+real WOML scripts through the managed capability path, and DS4 hardens local
+concurrency, recovery, integrity, security, and performance.
 
 ## Public service contract
 
@@ -37,10 +38,13 @@ same mutation and canonical input returns its first durable result. Reusing an
 identity with another operation, key, or input fails with
 `WOML_STATE_OPERATION_IDENTITY_CONFLICT`.
 
-Store v13 must commit the value/version change, mutation input/result record,
-redacted audit metadata, and managed-operation settlement in one SQLite
+Store v13 commits the value/version change, mutation input/result record,
+redacted audit metadata, and the immutable settlement proof in one SQLite
 transaction. This makes increments retry-safe and compare-and-set atomic across
-processes.
+processes. The ordinary run event is appended immediately afterward. If the
+host stops in that narrow gap, recovery validates the settlement proof and
+appends the missing success event without replaying the state mutation; the
+interrupted script attempt still fails closed.
 
 The frozen physical authority uses three separate tables:
 
@@ -93,7 +97,8 @@ the unchanged Capability Call v1 schema, so neither protocol is versioned.
 7. Duplicate increments return their first stored result.
 8. Quota failure preserves every previous entry and never evicts.
 9. Raw keys and values are excluded from public operation metadata.
-10. Mutation, reattachment result, audit, and operation settlement are atomic.
+10. Mutation, reattachment result, audit, and the recovery settlement proof are
+    atomic; the ordinary success event is recoverable from that proof.
 11. Run-history retention does not own or delete workflow state.
 12. Capability Call v1 and Script Host v7 carry State v1 unchanged.
 13. Transparent encryption and remote authorization are explicitly deferred.

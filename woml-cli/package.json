@@ -60,6 +60,7 @@
     "test:ds1": "bun run test:ds0 && bun test ../woml/tests/durable-state-authoring.test.ts ../woml/tests/modules.test.ts tests/durable-state-cli.test.ts && bun test tests/script-host.test.ts --test-name-pattern 'DS1 Script Host v7' && bun run typecheck",
     "test:ds2": "bun run test:ds1 && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test ds2_durable_state --test rp2_runtime_policy_store --test lec2_lifecycle_authority && bun run typecheck",
     "test:ds3": "bun run test:ds2 && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test ds3_durable_state_runtime && bun run typecheck",
+    "test:ds4": "bun run test:ds3 && bun run build && bun test tests/ds4_durable_state_cli.test.ts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test ds4_durable_state_hardening && bun run typecheck",
     "test:storage": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc9_storage",
     "test:cache": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine cache::tests --lib && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc10_cache",
     "test:events": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc11_events --test t12_event_runtime",
@@ -69,6 +70,7 @@
     "benchmark:workflow-calls": "bun scripts/benchmark-wc7-workflow-calls.ts",
     "benchmark:lifecycle": "bun scripts/benchmark-lec8-lifecycle.ts",
     "benchmark:runtime-policies": "bun scripts/benchmark-rp7-runtime-policies.ts",
+    "benchmark:state": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test ds4_durable_state_hardening state_operation_latency_and_size_stay_within_ds4_budgets -- --exact --nocapture",
     "test:r3": "bun test tests/rust-executor.test.ts",
     "typecheck": "tsc --noEmit"
   },

@@ -4,6 +4,7 @@
 //! and through the managed capability runtime used by real WOML scripts.
 
 use std::{
+  collections::BTreeMap,
   fs,
   path::{Path, PathBuf},
   sync::{
@@ -37,6 +38,7 @@ pub const MAX_STATE_VALUE_BYTES: usize = 262_144;
 pub const DEFAULT_STATE_MAX_KEYS: u64 = 10_000;
 pub const DEFAULT_STATE_MAX_BYTES: u64 = 67_108_864;
 pub const MAX_STATE_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+pub const STATE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const STATE_OPERATIONS: [&str; 6] = ["get", "has", "set", "delete", "increment", "set_if_absent"];
 
 pub trait StateClock: Send + Sync + 'static {
@@ -259,6 +261,19 @@ impl std::fmt::Debug for ManagedDurableStateStore {
 
 impl ManagedDurableStateStore {
   pub fn configure_for_state(&self, state_path: &Path) -> Result<(), CapabilityFailure> {
+    let requested = absolute_lexical(state_path)
+      .map_err(|_| state_store_unavailable())?
+      .canonicalize()
+      .ok();
+    if self
+      .store
+      .lock()
+      .map_err(|_| state_store_unavailable())?
+      .as_ref()
+      .is_some_and(|store| requested.as_ref() == Some(&store.path))
+    {
+      return Ok(());
+    }
     let store = DurableStateStore::open(state_path).map_err(state_failure)?;
     *self.store.lock().map_err(|_| state_store_unavailable())? = Some(Arc::new(store));
     Ok(())
@@ -442,6 +457,7 @@ impl DurableStateStore {
       .map(drop)
       .map_err(map_durable_store_error)?;
     let canonical = fs::canonicalize(&path).map_err(|_| DurableStateError::StoreUnavailable)?;
+    harden_local_permissions(&canonical)?;
     let state_location_digest = digest(
       b"woml.state-location\0v1\0",
       canonical.to_string_lossy().as_bytes(),
@@ -452,8 +468,13 @@ impl DurableStateStore {
       clock,
       limits,
     };
-    let connection = store.connection()?;
-    validate_store(&connection)?;
+    let mut connection = store.connection()?;
+    let integrity_snapshot = connection
+      .transaction_with_behavior(TransactionBehavior::Deferred)
+      .map_err(sqlite_unavailable)?;
+    validate_store(&integrity_snapshot)?;
+    validate_store_integrity(&integrity_snapshot)?;
+    integrity_snapshot.commit().map_err(sqlite_unavailable)?;
     Ok(store)
   }
 
@@ -748,7 +769,10 @@ impl DurableStateStore {
     )
     .map_err(sqlite_unavailable)?;
     connection
-      .busy_timeout(Duration::from_secs(5))
+      // SQLite's bounded busy handler sleeps in increasing intervals until
+      // this total budget is exhausted. It serializes short state transactions
+      // across threads/processes without an unbounded workflow stall.
+      .busy_timeout(Duration::from_millis(STATE_BUSY_TIMEOUT_MS))
       .map_err(sqlite_unavailable)?;
     connection
       .execute_batch("PRAGMA foreign_keys = ON;")
@@ -1090,15 +1114,19 @@ fn validate_store(connection: &Connection) -> Result<(), DurableStateError> {
   if version.as_deref() != Some("13") {
     return Err(DurableStateError::StoreCorrupt);
   }
-  for table in [
-    "woml_state_entries",
-    "woml_state_mutations",
-    "woml_state_quotas",
+  for (object_type, name) in [
+    ("table", "woml_state_entries"),
+    ("index", "woml_state_entries_scope"),
+    ("table", "woml_state_mutations"),
+    ("index", "woml_state_mutations_scope_key"),
+    ("trigger", "woml_state_mutations_no_update"),
+    ("trigger", "woml_state_mutations_no_delete"),
+    ("table", "woml_state_quotas"),
   ] {
     let exists: bool = connection
       .query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
-        [table],
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+        [object_type, name],
         |row| row.get(0),
       )
       .map_err(sqlite_unavailable)?;
@@ -1106,6 +1134,279 @@ fn validate_store(connection: &Connection) -> Result<(), DurableStateError> {
       return Err(DurableStateError::StoreCorrupt);
     }
   }
+  Ok(())
+}
+
+/// Performs the more expensive startup-only validation. Individual calls
+/// still validate the frozen schema shape and every record they touch.
+fn validate_store_integrity(connection: &Connection) -> Result<(), DurableStateError> {
+  let quick_check: String = connection
+    .query_row("PRAGMA quick_check", [], |row| row.get(0))
+    .map_err(sqlite_unavailable)?;
+  if quick_check != "ok" {
+    return Err(DurableStateError::StoreCorrupt);
+  }
+  let foreign_key_failure: bool = connection
+    .query_row(
+      "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+      [],
+      |row| row.get(0),
+    )
+    .map_err(sqlite_unavailable)?;
+  if foreign_key_failure {
+    return Err(DurableStateError::StoreCorrupt);
+  }
+
+  let entries = {
+    let mut statement = connection
+      .prepare(
+        "SELECT scope_digest, key_digest, key_text, value_json, value_bytes, version, updated_at
+         FROM woml_state_entries ORDER BY scope_digest, key_text",
+      )
+      .map_err(sqlite_unavailable)?;
+    let rows = statement
+      .query_map([], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, u64>(4)?,
+          row.get::<_, u64>(5)?,
+          row.get::<_, String>(6)?,
+        ))
+      })
+      .map_err(sqlite_unavailable)?
+      .collect::<Result<Vec<_>, _>>()
+      .map_err(|_| DurableStateError::StoreCorrupt)?;
+    rows
+  };
+  let mut actual_quotas = BTreeMap::<String, (u64, u64)>::new();
+  let mut live_versions = BTreeMap::<(String, String), u64>::new();
+  for (scope, key_digest, key, value_json, value_bytes, version, updated_at) in entries {
+    let parsed: Value =
+      serde_json::from_str(&value_json).map_err(|_| DurableStateError::StoreCorrupt)?;
+    let canonical = canonical_string(&parsed).map_err(|_| DurableStateError::StoreCorrupt)?;
+    if !valid_digest(&scope)
+      || key.is_empty()
+      || key.len() > MAX_STATE_KEY_BYTES
+      || key_digest != digest(b"woml.state-key\0v1\0", key.as_bytes())
+      || canonical != value_json
+      || value_bytes != value_json.len() as u64
+      || value_bytes == 0
+      || value_bytes > MAX_STATE_VALUE_BYTES as u64
+      || version == 0
+      || version > MAX_STATE_SAFE_INTEGER as u64
+      || DateTime::parse_from_rfc3339(&updated_at).is_err()
+    {
+      return Err(DurableStateError::StoreCorrupt);
+    }
+    let quota = actual_quotas.entry(scope.clone()).or_default();
+    quota.0 = quota
+      .0
+      .checked_add(1)
+      .ok_or(DurableStateError::StoreCorrupt)?;
+    quota.1 = quota
+      .1
+      .checked_add(value_bytes)
+      .ok_or(DurableStateError::StoreCorrupt)?;
+    live_versions.insert((scope.clone(), key_digest), version);
+  }
+
+  let mutations = {
+    let mut statement = connection
+      .prepare(
+        "SELECT operation_key, scope_digest, operation_name, operation, key_digest,
+                input_digest, result_json, result_digest, committed_version, committed_at
+         FROM woml_state_mutations ORDER BY operation_key",
+      )
+      .map_err(sqlite_unavailable)?;
+    let rows = statement
+      .query_map([], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, String>(4)?,
+          row.get::<_, String>(5)?,
+          row.get::<_, String>(6)?,
+          row.get::<_, String>(7)?,
+          row.get::<_, Option<u64>>(8)?,
+          row.get::<_, String>(9)?,
+        ))
+      })
+      .map_err(sqlite_unavailable)?
+      .collect::<Result<Vec<_>, _>>()
+      .map_err(|_| DurableStateError::StoreCorrupt)?;
+    rows
+  };
+  let mut committed_versions = BTreeMap::<(String, String), u64>::new();
+  for (
+    operation_key,
+    scope,
+    operation_name,
+    operation,
+    key_digest,
+    input_digest,
+    result_json,
+    result_digest,
+    committed_version,
+    committed_at,
+  ) in mutations
+  {
+    let result: Value =
+      serde_json::from_str(&result_json).map_err(|_| DurableStateError::StoreCorrupt)?;
+    let expected_name_prefix = format!("state.{operation}.");
+    if !valid_digest(&operation_key)
+      || !valid_digest(&scope)
+      || !valid_digest(&key_digest)
+      || !valid_digest(&input_digest)
+      || !valid_digest(&result_digest)
+      || !STATE_OPERATIONS.contains(&operation.as_str())
+      || !is_mutation(&operation)
+      || operation_name
+        .strip_prefix(&expected_name_prefix)
+        .is_none_or(|name| !valid_operation_name(name))
+      || canonical_string(&result).map_err(|_| DurableStateError::StoreCorrupt)? != result_json
+      || canonical_digest(b"woml.state-result\0v1\0", &result)
+        .map_err(|_| DurableStateError::StoreCorrupt)?
+        != result_digest
+      || result.get("contract") != Some(&json!(STATE_CONTRACT))
+      || result.get("contractVersion") != Some(&json!(STATE_CONTRACT_VERSION))
+      || result.get("kind") != Some(&json!("result"))
+      || result.get("operation") != Some(&json!(operation))
+      || !valid_mutation_result(&operation, &result, committed_version)
+      || committed_version
+        .is_some_and(|version| version == 0 || version > MAX_STATE_SAFE_INTEGER as u64)
+      || DateTime::parse_from_rfc3339(&committed_at).is_err()
+    {
+      return Err(DurableStateError::StoreCorrupt);
+    }
+    if let Some(version) = committed_version {
+      committed_versions
+        .entry((scope, key_digest))
+        .and_modify(|current| *current = (*current).max(version))
+        .or_insert(version);
+    }
+  }
+  if live_versions
+    .iter()
+    .any(|(identity, version)| committed_versions.get(identity).copied() != Some(*version))
+  {
+    return Err(DurableStateError::StoreCorrupt);
+  }
+
+  let stored_quotas = {
+    let mut statement = connection
+      .prepare(
+        "SELECT scope_digest, live_keys, value_bytes
+         FROM woml_state_quotas ORDER BY scope_digest",
+      )
+      .map_err(sqlite_unavailable)?;
+    let rows = statement
+      .query_map([], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, u64>(1)?,
+          row.get::<_, u64>(2)?,
+        ))
+      })
+      .map_err(sqlite_unavailable)?
+      .collect::<Result<Vec<_>, _>>()
+      .map_err(|_| DurableStateError::StoreCorrupt)?;
+    rows
+  };
+  for (scope, live_keys, value_bytes) in stored_quotas {
+    if !valid_digest(&scope)
+      || live_keys > DEFAULT_STATE_MAX_KEYS
+      || value_bytes > DEFAULT_STATE_MAX_BYTES
+      || actual_quotas.remove(&scope).unwrap_or_default() != (live_keys, value_bytes)
+    {
+      return Err(DurableStateError::StoreCorrupt);
+    }
+  }
+  if !actual_quotas.is_empty() {
+    return Err(DurableStateError::StoreCorrupt);
+  }
+  Ok(())
+}
+
+fn valid_digest(value: &str) -> bool {
+  value.len() == 71
+    && value.starts_with("sha256:")
+    && value[7..]
+      .bytes()
+      .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(crate) fn valid_mutation_result(
+  operation: &str,
+  result: &Value,
+  committed_version: Option<u64>,
+) -> bool {
+  let Some(envelope) = result.as_object() else {
+    return false;
+  };
+  if envelope.len() != 5 {
+    return false;
+  }
+  let Some(data) = result.get("data").and_then(Value::as_object) else {
+    return false;
+  };
+  let version_matches = |value: Option<&Value>| {
+    value.and_then(Value::as_u64) == committed_version
+      && committed_version
+        .is_some_and(|version| version > 0 && version <= MAX_STATE_SAFE_INTEGER as u64)
+  };
+  let valid_time = |value: Option<&Value>| {
+    value
+      .and_then(Value::as_str)
+      .is_some_and(|timestamp| DateTime::parse_from_rfc3339(timestamp).is_ok())
+  };
+  match operation {
+    "set" => {
+      data.len() == 3
+        && data.get("stored") == Some(&Value::Bool(true))
+        && version_matches(data.get("version"))
+        && valid_time(data.get("updatedAt"))
+    }
+    "delete" => {
+      data.len() == 1
+        && data
+          .get("deleted")
+          .and_then(Value::as_bool)
+          .is_some_and(|deleted| deleted == committed_version.is_some())
+    }
+    "increment" => {
+      data.len() == 3
+        && data
+          .get("value")
+          .and_then(Value::as_i64)
+          .is_some_and(|value| (-MAX_STATE_SAFE_INTEGER..=MAX_STATE_SAFE_INTEGER).contains(&value))
+        && version_matches(data.get("version"))
+        && valid_time(data.get("updatedAt"))
+    }
+    "set_if_absent" => {
+      data.len() == 4
+        && data.get("stored").and_then(Value::as_bool).is_some()
+        && data.contains_key("value")
+        && version_matches(data.get("version"))
+        && valid_time(data.get("updatedAt"))
+    }
+    _ => false,
+  }
+}
+
+#[cfg(unix)]
+fn harden_local_permissions(path: &Path) -> Result<(), DurableStateError> {
+  use std::os::unix::fs::PermissionsExt;
+  fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+    .map_err(|_| DurableStateError::StoreUnavailable)
+}
+
+#[cfg(not(unix))]
+fn harden_local_permissions(_path: &Path) -> Result<(), DurableStateError> {
   Ok(())
 }
 

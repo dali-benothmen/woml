@@ -17,6 +17,8 @@ types automatically, including for local modules. DS3 routes every call from
 Bun through Capability Call v1 to Rust's workflow-scoped Store v13 authority;
 it never substitutes Cache v1 or process memory. The frozen boundary is
 documented in [Durable User State v1](protocols/durable-state-v1.md).
+Concurrency, backup, recovery, permissions, encryption, and corruption handling
+are covered in [Durable User State Operations](woml-durable-state.md).
 
 WOML scripts expose seven built-in services without installing
 an npm package:
@@ -159,4 +161,5 @@ stop the active runtime.
 - Internal events: `docs/woml-events-service.md`
 - Workflow Calls: `docs/protocols/workflow-calls-v1.md`
 - Workflow Calls author guide: `docs/woml-workflow-calls.md`
+- Durable User State operations: `docs/woml-durable-state.md`
 - SDK migration: `docs/woml-sdk-migration.md`

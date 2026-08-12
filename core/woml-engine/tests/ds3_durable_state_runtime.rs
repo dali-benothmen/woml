@@ -20,10 +20,8 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
   fn new(name: &str) -> Self {
-    let path = std::env::temp_dir().join(format!(
-      "woml-ds3-{name}-{}",
-      uuid::Uuid::new_v4().simple()
-    ));
+    let path =
+      std::env::temp_dir().join(format!("woml-ds3-{name}-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir(&path).unwrap();
     Self(path)
   }
@@ -326,7 +324,10 @@ async fn state_is_available_inside_selected_branches_and_parallel_children() {
   )
   .await
   .unwrap();
-  assert_eq!(branch_result.result, json!({ "message": "Final status: reviewed" }));
+  assert_eq!(
+    branch_result.result,
+    json!({ "message": "Final status: reviewed" })
+  );
 
   let mut parallel: CompiledWorkflowDefinition = serde_json::from_str(PARALLEL_MODEL).unwrap();
   promote_script_runtime_to_v8(&mut parallel);
@@ -367,7 +368,10 @@ async fn state_is_available_inside_lifecycle_scripts_and_local_modules() {
   let directory = TestDirectory::new("script-locations");
   let mut lifecycle: CompiledWorkflowDefinition = serde_json::from_str(LIFECYCLE_MODEL).unwrap();
   lifecycle.lifecycle.as_mut().unwrap().hooks.retain(|hook| {
-    matches!(hook.event, LifecycleEventName::RunStart | LifecycleEventName::RunComplete)
+    matches!(
+      hook.event,
+      LifecycleEventName::RunStart | LifecycleEventName::RunComplete
+    )
   });
   for hook in &mut lifecycle.lifecycle.as_mut().unwrap().hooks {
     let source = if hook.event == LifecycleEventName::RunStart {
@@ -409,13 +413,10 @@ async fn state_is_available_inside_lifecycle_scripts_and_local_modules() {
     function read(rows) { return rows; }
     export { read, removeEmptyRows };
   "#;
-  let source_map = r#"{"version":3,"sources":["memory.ts"],"sourcesContent":[""],"names":[],"mappings":""}"#;
+  let source_map =
+    r#"{"version":3,"sources":["memory.ts"],"sourcesContent":[""],"names":[],"mappings":""}"#;
   let mut module_workflow: CompiledWorkflowDefinition = serde_json::from_str(MODULE_MODEL).unwrap();
-  let binding = &mut module_workflow
-    .module_runtime
-    .as_mut()
-    .unwrap()
-    .modules[0];
+  let binding = &mut module_workflow.module_runtime.as_mut().unwrap().modules[0];
   binding.bundle_digest = sha256(bundle);
   binding.source_map_digest = sha256(source_map);
   let artifact = RuntimeModuleArtifact {
