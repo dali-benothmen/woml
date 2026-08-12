@@ -103,3 +103,13 @@ failure code, and the authored script location.
 
 Secrets and runtime capabilities are forbidden from the event log, folded
 context, progress protocol, errors, and durable step output.
+
+## Runtime Policy recovery
+
+Model v12 queue rows, rate indexes, claims, and run summaries are coordination
+state. Store v12 rebuilds them from immutable Event v11 histories and bound
+definitions. An expired scheduler lease permits ownership recovery but never
+makes an ambiguous started step safe to replay. Queued runs retain admission
+order after restart; rate history does not reset; and the timeout deadline
+remains the immutable first-start deadline. See
+[WOML Runtime Policies](woml-runtime-policies.md).

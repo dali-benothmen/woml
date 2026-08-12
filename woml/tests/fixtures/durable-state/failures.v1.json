@@ -1,0 +1,7 @@
+[
+  { "kind": "service_rejected", "code": "WOML_STATE_CONFLICT", "message": "The state version does not match.", "retryable": false, "ambiguous": false },
+  { "kind": "service_rejected", "code": "WOML_STATE_OPERATION_IDENTITY_CONFLICT", "message": "The state mutation name was reused with different input.", "retryable": false, "ambiguous": false },
+  { "kind": "service_rejected", "code": "WOML_STATE_QUOTA_EXCEEDED", "message": "The workflow state quota would be exceeded.", "retryable": false, "ambiguous": false },
+  { "kind": "interrupted", "code": "WOML_STATE_INTERRUPTED", "message": "The state mutation outcome is ambiguous.", "retryable": false, "ambiguous": true },
+  { "kind": "unsupported_capability", "code": "WOML_STATE_RUNTIME_UNAVAILABLE", "message": "Durable User State execution is not available until DS2 and DS3.", "retryable": false, "ambiguous": false }
+]

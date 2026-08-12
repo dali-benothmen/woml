@@ -390,6 +390,7 @@ const reservedModuleAliases = new Set([
   'events',
   'queue',
   'workflows',
+  'state',
   'context',
   'attempt',
   'services',
@@ -2487,6 +2488,7 @@ const builtInServiceNames = new Set([
   'cache',
   'events',
   'workflows',
+  'state',
 ]);
 
 function collectValidatedSteps(

@@ -1,8 +1,9 @@
 # WOML Runtime Policies v1 Contracts
 
-Status: frozen by RP0 on 2026-08-11. RP5 executes Model v12 concurrency,
-durable FIFO queueing, strict rolling-window rate limits, and total workflow
-timeouts.
+Status: frozen by RP0 on 2026-08-11 and publication-hardened by RP7 on
+2026-08-12. Model v12 concurrency, durable FIFO queueing, strict rolling-window
+rate limits, and total workflow timeouts execute through every supported run
+ingress.
 
 ## Frozen boundaries
 
@@ -106,6 +107,10 @@ remain immutable. RP1 emits Model v12 only when source contains `<config>`.
 RP6 activates Definition Package v7's exact compiled local-module artifacts
 without changing its frozen compilation identity. Model v12 policies and local
 modules therefore execute together through the Rust policy authority.
+
+RP7 adds the clean-package, adversarial contention/recovery, historical schema,
+performance-budget, package-audit, and secret-scan publication gate. Operational
+guidance is in [WOML Runtime Policies](../woml-runtime-policies.md).
 
 `<config queue>` is run-admission policy. It does not implement the postponed
 `services.queue` message producer/consumer feature.

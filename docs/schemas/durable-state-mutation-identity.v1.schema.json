@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/durable-state-mutation-identity/v1",
+  "title": "WOML Durable State Mutation Identity v1",
+  "x-status": "durable-user-state-ds0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "scopeDigest", "runId", "subjectId", "operationName", "operationKey", "inputDigest"],
+  "properties": {
+    "profile": { "const": "woml.state-mutation-identity/v1" },
+    "scopeDigest": { "$ref": "#/$defs/sha256" },
+    "runId": { "$ref": "#/$defs/id" },
+    "subjectId": { "$ref": "#/$defs/id" },
+    "operationName": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$" },
+    "operationKey": { "$ref": "#/$defs/sha256" },
+    "inputDigest": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

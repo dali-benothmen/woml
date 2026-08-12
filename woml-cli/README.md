@@ -183,10 +183,37 @@ woml cancel run_...
 ```
 
 Human-readable output is the default. Add `--json` to any command for the
-versioned `woml.run-list/v1`, `woml.run-inspection/v2`, or
-`woml.run-control.result/v1` contract. Inspection is deliberately redacted: it
-does not expose workflow context, payloads, results, secrets, credentials, or
-operation keys.
+versioned run-list, run-inspection, or `woml.run-control.result/v1` contract.
+Policy workflows use Run List v2 and Run Inspection v3; legacy runs retain v1
+and v2 compatibility. Inspection is deliberately redacted: it does not expose
+workflow context, payloads, results, secrets, credentials, or operation keys.
+
+## Control workflow runtime capacity
+
+Add optional workflow-level Runtime Policies with `<config>`:
+
+```xml
+<config concurrency="4" rate-limit="100/1m" timeout="10m" queue="orders" />
+```
+
+Rust applies the same durable admission, queueing, rate, and timeout behavior to
+manual, webhook, Slack, schedule, interval, event, Workflow Call, and Workflow
+Start runs. `woml list --status queued` shows waiting work; `woml get run_...`
+shows its redacted wait/deadline state. See
+[WOML Runtime Policies](../docs/woml-runtime-policies.md) for semantics,
+recovery, saturation, deployment, and the `bun run test:rp7` publication gate.
+
+## Author durable workflow memory
+
+`services.state` is the typed permanent-memory API for small JSON values shared
+by future runs of the same workflow ID. DS1 generates its declarations during
+normal `woml check` and `woml run` preparation, reserves the `state` module
+alias, and validates calls inside steps, lifecycle scripts, and local modules.
+
+The authoring surface is deliberately staged: calls currently fail with
+`WOML_STATE_RUNTIME_UNAVAILABLE` and never fall back to cache or in-memory
+storage. Rust Store v13 execution begins in DS2/DS3. See
+[Durable User State v1](../docs/protocols/durable-state-v1.md).
 
 Lifecycle syntax, cancellation races, recovery, security boundaries, and the
 production checklist are documented in

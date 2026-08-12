@@ -81,6 +81,9 @@ replace positional or “last result” access with the producing step's path:
     into `<lifecycle>`. Keep business-critical work as explicit steps.
 12. Replace custom local run administration with `woml list`, `woml get`, and
     `woml cancel`; use `--json` for the versioned redacted contracts.
+13. Replace SDK process-local concurrency/rate wrappers with one workflow-level
+    `<config concurrency="..." rate-limit="..." timeout="..." queue="..." />`.
+    Test burst admission and restart against the same explicit state path.
 
 ## Current parity boundary
 
@@ -91,11 +94,14 @@ interval, and named-event triggers are available through `woml run`.
 Native Fetch; the Rust-managed HTTP, database, storage, cache, and internal
 event services; local JavaScript/TypeScript modules; durable local Workflow
 Calls; workflow and step lifecycle hooks; informational Slack lifecycle
-notifications; and durable local cancellation are available. Queue, package
-modules, additional messaging services, cross-machine workflow routing, remote
-run control, and the hosted production runtime remain roadmap items. Keep an
-SDK workflow in place when it depends on those unavailable capabilities. The
-SDK is not retired merely because local lifecycle and control parity exists.
+notifications; durable local cancellation; and workflow-level Runtime Policies
+are available. The separate `services.queue` capability, package modules,
+additional messaging services, cross-machine workflow routing, remote run
+control, and the hosted production runtime remain roadmap items. Keep an SDK
+workflow in place when it depends on those unavailable capabilities. The SDK is
+not retired merely because local lifecycle and control parity exists.
 
 See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md) for
 hook ordering, warning semantics, cancellation races, and deployment guidance.
+Workflow-level concurrency, rate limiting, durable scheduling lanes, and total
+deadlines are documented in [WOML Runtime Policies](woml-runtime-policies.md).

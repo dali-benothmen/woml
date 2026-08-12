@@ -61,6 +61,100 @@ export interface WomlModuleResolverOptions {
   readonly projectRoot?: string;
 }
 
+export interface WomlModuleServiceUsageInspection {
+  readonly referencedServices: readonly string[];
+  readonly durableStateSources: readonly string[];
+}
+
+function staticModuleServiceReferences(
+  source: string,
+  mediaType: WomlDefinitionPackageSourceV1['mediaType']
+): { readonly references: readonly string[]; readonly dynamic: boolean } {
+  const javascript =
+    mediaType === 'text/typescript'
+      ? new Bun.Transpiler({ loader: 'ts' }).transformSync(source)
+      : source;
+  const program = parse(javascript, {
+    ecmaVersion: 'latest',
+    sourceType: 'module',
+  }) as unknown as Record<string, unknown>;
+  const references = new Set<string>();
+  let dynamic = false;
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (typeof value !== 'object' || value === null) return;
+    const node = value as Record<string, unknown>;
+    if (
+      node.type === 'MemberExpression' &&
+      typeof node.object === 'object' &&
+      node.object !== null &&
+      (node.object as Record<string, unknown>).type === 'Identifier' &&
+      (node.object as Record<string, unknown>).name === 'services' &&
+      node.computed === true
+    ) {
+      dynamic = true;
+    } else if (
+      node.type === 'MemberExpression' &&
+      node.computed !== true &&
+      typeof node.object === 'object' &&
+      node.object !== null &&
+      (node.object as Record<string, unknown>).type === 'Identifier' &&
+      (node.object as Record<string, unknown>).name === 'services' &&
+      typeof node.property === 'object' &&
+      node.property !== null &&
+      (node.property as Record<string, unknown>).type === 'Identifier' &&
+      typeof (node.property as Record<string, unknown>).name === 'string'
+    ) {
+      references.add((node.property as Record<string, unknown>).name as string);
+    }
+    for (const [key, child] of Object.entries(node)) {
+      if (key !== 'start' && key !== 'end') visit(child);
+    }
+  };
+  visit(program);
+  return { references: [...references].sort(), dynamic };
+}
+
+export function inspectWomlModuleServiceUsage(
+  document: WomlSourceDocument,
+  options: WomlModuleResolverOptions = {}
+): WomlModuleServiceUsageInspection {
+  const definition = buildWomlDefinitionPackage(document, options);
+  const sourcePath = resolve(options.sourcePath ?? document.file);
+  const projectRoot = realpathSync(resolve(options.projectRoot ?? dirname(sourcePath)));
+  const references = new Set<string>();
+  const durableStateSources: string[] = [];
+  for (const source of definition.sources) {
+    if (source.mediaType === 'application/woml+xml') continue;
+    const content = readFileSync(resolve(projectRoot, source.path), 'utf8');
+    const usage = staticModuleServiceReferences(
+      content,
+      source.mediaType
+    );
+    if (usage.dynamic) {
+      const file = new SourceFile(source.path, content);
+      const offset = Math.max(0, content.indexOf('services'));
+      throw compileDiagnostic(
+        source.path,
+        'WOML_SCRIPT_SERVICE_ACCESS_DYNAMIC',
+        'Computed service access is not supported in a WOML local module.',
+        file.span(offset, Math.min(content.length, offset + 8)),
+        'Use a static service name such as services.state.'
+      );
+    }
+    const names = usage.references;
+    for (const name of names) references.add(name);
+    if (names.includes('state')) durableStateSources.push(source.path);
+  }
+  return {
+    referencedServices: [...references].sort(),
+    durableStateSources: durableStateSources.sort(),
+  };
+}
+
 export interface WomlDefinitionPackageModuleV1 {
   readonly name: string;
   readonly entrypoint: string;

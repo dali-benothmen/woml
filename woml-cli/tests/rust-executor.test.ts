@@ -37,6 +37,74 @@ test('Lifecycle Progress v1 decoding preserves safe lifecycle identity', () => {
   ).toMatchObject({ phase: 'action_failed', code: 'WOML_SCRIPT_THROWN' });
 });
 
+describe('Runtime Policy Progress v1 decoding', () => {
+  test('accepts the frozen queued, eligible, started, and timed-out shapes', () => {
+    for (const value of [
+      {
+        profile: 'woml.runtime-policy-progress/v1',
+        runId: 'run_rp7',
+        workflowId: 'policy-demo',
+        phase: 'queued',
+        queue: 'orders',
+        waitingFor: 'concurrency',
+      },
+      {
+        profile: 'woml.runtime-policy-progress/v1',
+        runId: 'run_rp7',
+        workflowId: 'policy-demo',
+        phase: 'eligible',
+        queue: 'orders',
+        waitingFor: 'rate_limit',
+        eligibleAt: '2026-08-12T20:00:00.000Z',
+      },
+      {
+        profile: 'woml.runtime-policy-progress/v1',
+        runId: 'run_rp7',
+        workflowId: 'policy-demo',
+        phase: 'started',
+        queue: 'orders',
+      },
+      {
+        profile: 'woml.runtime-policy-progress/v1',
+        runId: 'run_rp7',
+        workflowId: 'policy-demo',
+        phase: 'timed_out',
+        queue: 'orders',
+        code: 'WOML_WORKFLOW_TIMED_OUT',
+      },
+    ] as const) {
+      expect(parseExecutionProgress(JSON.stringify(value))).toEqual(value);
+    }
+  });
+
+  test('rejects unknown fields and invalid timeout codes', () => {
+    expect(() =>
+      parseExecutionProgress(
+        JSON.stringify({
+          profile: 'woml.runtime-policy-progress/v1',
+          runId: 'run_rp7',
+          workflowId: 'policy-demo',
+          phase: 'timed_out',
+          queue: 'orders',
+          code: 'WOML_OTHER',
+        })
+      )
+    ).toThrow();
+    expect(() =>
+      parseExecutionProgress(
+        JSON.stringify({
+          profile: 'woml.runtime-policy-progress/v1',
+          runId: 'run_rp7',
+          workflowId: 'policy-demo',
+          phase: 'queued',
+          queue: 'orders',
+          ownerId: 'private-owner',
+        })
+      )
+    ).toThrow();
+  });
+});
+
 const packageRoot = resolve(import.meta.dir, '..');
 const stagedNativeCorePath = resolve(
   packageRoot,

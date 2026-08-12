@@ -156,6 +156,17 @@ function executeLifecycleV7(
   };
 }
 
+function executeStepV7(invocationId: string, source: string): ExecuteMessageV7 {
+  const base = executeV4(invocationId, source) as ExecuteMessageV4;
+  return {
+    ...base,
+    protocolVersion: 7,
+    mode: 'step',
+    handler: 'runtime.script',
+    modules: [],
+  };
+}
+
 function cancel(
   invocationId: string,
   protocolVersion: 2 | 3 = 3
@@ -2275,5 +2286,62 @@ describe('LEC3 Script Host v7 lifecycle mode', () => {
       'script_threw',
       'script_timed_out',
     ]);
+  });
+});
+
+describe('DS1 Script Host v7 Durable User State facade', () => {
+  test('is deeply read-only and fails with the staged code before emitting a call', async () => {
+    const result = await runHost(
+      [
+        executeStepV7(
+          'inv_ds1_state',
+          `
+            if (!Object.isFrozen(services.state)) throw new Error('state facade was mutable');
+            if (!Object.isFrozen(services.state.set)) throw new Error('state method was mutable');
+            await services.state.set('conversation:C123', { count: 1 }, {
+              name: 'remember-conversation',
+              ifVersion: 0
+            });
+          `
+        ),
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '7' }
+    );
+    expect(result.messages.some(message => message.messageType === 'capability_call')).toBe(false);
+    const completed = result.messages.find(
+      message => message.messageType === 'completed'
+    ) as CompletedMessage;
+    expect(completed.outcome).toMatchObject({
+      kind: 'failure',
+      error: {
+        kind: 'service_failed',
+        code: 'WOML_STATE_RUNTIME_UNAVAILABLE',
+        capability: 'state',
+        operation: 'set',
+        retryable: false,
+        ambiguous: false,
+      },
+    });
+  });
+
+  test('rejects invalid keys, values, versions, names, and argument counts locally', async () => {
+    const cases = [
+      `await services.state.get('');`,
+      `await services.state.set('key', undefined, { name: 'write' });`,
+      `await services.state.set('key', 1, { name: 'Write Bad' });`,
+      `await services.state.delete('key', { name: 'delete', ifVersion: -1 });`,
+      `await services.state.increment('key', 1.5, { name: 'increment' });`,
+      `await services.state.setIfAbsent('key', 1);`,
+    ];
+    const result = await runHost(
+      cases.map((source, index) => executeStepV7(`inv_ds1_invalid_${index}`, source)),
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '7' }
+    );
+    const completed = result.messages.filter(
+      message => message.messageType === 'completed'
+    ) as CompletedMessage[];
+    expect(completed).toHaveLength(cases.length);
+    expect(completed.every(message => message.outcome.kind === 'failure')).toBe(true);
+    expect(result.messages.some(message => message.messageType === 'capability_call')).toBe(false);
   });
 });

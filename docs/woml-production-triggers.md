@@ -195,6 +195,16 @@ Diagnostics never include raw request bodies rejected before admission or
 resolved credentials. Preserve stderr, the run ID, and the state database when
 investigating a failure.
 
+## Runtime Policy backpressure
+
+When a triggered workflow contains `<config>`, trigger admission enters the
+same Rust-owned durable queue used by manual runs and Workflow Calls. Webhooks
+return HTTP 503 plus `Retry-After` at the 10,000-run safety ceiling; Slack is
+left unacknowledged; schedule/interval cursors do not advance; and named-event
+subscriber delivery remains retryable. See
+[WOML Runtime Policies](woml-runtime-policies.md) for the complete policy and
+operator contract.
+
 ## Deployment checklist
 
 1. Validate every workflow and secret in the deployment environment.

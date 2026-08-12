@@ -1,6 +1,26 @@
 # WOML Services
 
-WOML scripts currently execute with six built-in services without installing
+## Durable workflow memory (`services.state`)
+
+DS0 and DS1 freeze and expose the authoring surface for small, permanent,
+workflow-owned JSON values:
+
+```js
+const previous = await services.state.get('previous-sales');
+await services.state.set('previous-sales', 700, {
+  name: 'remember-sales',
+  ifVersion: previous.found ? previous.version : 0
+});
+```
+
+Normal `woml check`/`woml run` preparation generates the `StateService` editor
+types automatically, including for local modules. Execution currently fails
+explicitly with `WOML_STATE_RUNTIME_UNAVAILABLE`; DS1 never substitutes Cache
+v1 or process memory. Store v13 is implemented in DS2 and connected end to end
+in DS3. The frozen boundary is documented in
+[Durable User State v1](protocols/durable-state-v1.md).
+
+WOML scripts expose seven built-in services without installing
 an npm package:
 
 ```js
@@ -10,6 +30,7 @@ services.storage
 services.cache
 services.events
 services.workflows
+services.state
 ```
 
 `services.workflows.call()` starts exactly one activated child workflow by ID,
@@ -55,6 +76,7 @@ step. See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
 | Start every workflow interested in a fact | `services.events.emit()` | Durable internal named-event fan-out |
 | Delegate work and use one workflow's answer | `services.workflows.call()` | One independently durable child run and direct JSON result |
 | Start exact background workflow work | `services.workflows.start()` | Durable child run ID without waiting for completion |
+| Small workflow-owned correctness data | `services.state` | Versioned durable JSON state; authoring is available in DS1 and execution begins in DS3 |
 
 Queue is deliberately unavailable. Durable triggers already create runs safely,
 and internal events cover fan-out. A queue will be added only when WOML has a

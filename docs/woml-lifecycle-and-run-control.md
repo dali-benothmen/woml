@@ -243,3 +243,13 @@ Hosted multi-node ownership, remote authenticated run control, cancellation
 propagation, compensation, retention automation, and distributed scheduling
 remain Production Runtime work rather than hidden behavior in this local
 profile.
+
+## Runtime Policy timeout interaction
+
+The workflow `timeout` in `<config>` begins at first execution start and
+includes subsequent lifecycle time and durable waits. If it wins before a
+business outcome, WOML records `WOML_WORKFLOW_TIMED_OUT`, runs workflow
+`on-failure`, then `on-complete`. Timeout remains failure, not cancellation, and
+a previously committed outcome wins the race. Waiting for approval, retry, or a
+synchronous child releases concurrency capacity without pausing the deadline.
+See [WOML Runtime Policies](woml-runtime-policies.md).

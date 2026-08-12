@@ -64,7 +64,7 @@ includes conditional branches and bounded parallel groups:
 | Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
 | Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
-| `<config>` runtime policy | RP0 contracts frozen; RP1 frontend completed | Validated and lowered to Model v12 by `woml check`; Rust enforcement is deliberately gated until RP2/RP3 |
+| `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
 | Lifecycle | LEC0–LEC8 completed and hardened | Workflow/step hooks, informational Slack notification, cancellation, and direct run management are executable and publishable through Model v11/Event v10/Store v11 |
 | Branch | Frozen | Executable and publishable |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |

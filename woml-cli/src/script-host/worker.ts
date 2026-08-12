@@ -746,6 +746,22 @@ const cacheOperations = new Set([
   'increment',
   'setIfAbsent',
 ]);
+const stateOperations = new Set([
+  'get',
+  'has',
+  'set',
+  'delete',
+  'increment',
+  'setIfAbsent',
+]);
+const stateWireOperations = new Set([
+  'get',
+  'has',
+  'set',
+  'delete',
+  'increment',
+  'set_if_absent',
+]);
 const cacheWireOperations = new Set([
   'get',
   'set',
@@ -960,6 +976,179 @@ function publicCacheResult(result: JsonValue, operation: string): JsonValue {
     throw new TypeError('Rust returned an invalid Cache v1 result.');
   }
   return object.data;
+}
+
+function stateKey(value: unknown, operation: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    Buffer.byteLength(value, 'utf8') > 256
+  ) {
+    throw new TypeError(
+      `services.state.${operation}() requires a non-empty key up to 256 UTF-8 bytes.`
+    );
+  }
+  return value;
+}
+
+function stateMutationOptions(
+  value: unknown,
+  acceptsVersion: boolean
+): { readonly callOptions: JsonObject; readonly ifVersion?: number } {
+  const object = plainObject(value);
+  const allowed = acceptsVersion ? ['name', 'ifVersion'] : ['name'];
+  if (
+    object === undefined ||
+    Object.keys(object).some(key => !allowed.includes(key)) ||
+    typeof object.name !== 'string' ||
+    !/^[a-z][a-z0-9._-]{0,127}$/.test(object.name) ||
+    (object.ifVersion !== undefined &&
+      (!Number.isSafeInteger(object.ifVersion) || Number(object.ifVersion) < 0))
+  ) {
+    throw new TypeError(
+      acceptsVersion
+        ? 'State mutation options require a stable name and optional non-negative ifVersion.'
+        : 'State mutation options require exactly one stable name.'
+    );
+  }
+  return {
+    callOptions: { name: object.name },
+    ...(object.ifVersion === undefined
+      ? {}
+      : { ifVersion: Number(object.ifVersion) }),
+  };
+}
+
+function stateValue(value: unknown): JsonValue {
+  const violation = findJsonViolation(value);
+  if (violation !== undefined) {
+    throw new TypeError(`State value ${violation.path}: ${violation.reason}`);
+  }
+  const encoded = JSON.stringify(value);
+  if (Buffer.byteLength(encoded, 'utf8') > 262_144) {
+    throw new TypeError('State values must not exceed 256 KiB of canonical JSON.');
+  }
+  return value as JsonValue;
+}
+
+function normalizeStateRequest(
+  operation: string,
+  args: readonly unknown[]
+): { readonly request: JsonObject; readonly callOptions?: JsonObject } {
+  if (!stateOperations.has(operation)) {
+    throw new TypeError(`Unknown Durable User State v1 operation "${operation}".`);
+  }
+  const key = stateKey(args[0], operation);
+  let input: JsonObject;
+  let callOptions: JsonObject | undefined;
+  const wireOperation = operation === 'setIfAbsent' ? 'set_if_absent' : operation;
+  if (operation === 'get' || operation === 'has') {
+    if (args.length !== 1) {
+      throw new TypeError(`services.state.${operation}() accepts only a key.`);
+    }
+    input = { key };
+  } else if (operation === 'delete') {
+    if (args.length !== 2) {
+      throw new TypeError('services.state.delete() requires key and mutation options.');
+    }
+    const options = stateMutationOptions(args[1], true);
+    input = { key, ...(options.ifVersion === undefined ? {} : { ifVersion: options.ifVersion }) };
+    callOptions = options.callOptions;
+  } else if (operation === 'set' || operation === 'setIfAbsent') {
+    if (args.length !== 3) {
+      throw new TypeError(
+        `services.state.${operation}() requires key, JSON value, and mutation options.`
+      );
+    }
+    const options = stateMutationOptions(args[2], operation === 'set');
+    input = {
+      key,
+      value: stateValue(args[1]),
+      ...(options.ifVersion === undefined ? {} : { ifVersion: options.ifVersion }),
+    };
+    callOptions = options.callOptions;
+  } else {
+    if (
+      args.length !== 3 ||
+      typeof args[1] !== 'number' ||
+      !Number.isSafeInteger(args[1])
+    ) {
+      throw new TypeError(
+        'services.state.increment() requires key, safe-integer amount, and mutation options.'
+      );
+    }
+    const options = stateMutationOptions(args[2], true);
+    input = {
+      key,
+      amount: args[1],
+      ...(options.ifVersion === undefined ? {} : { ifVersion: options.ifVersion }),
+    };
+    callOptions = options.callOptions;
+  }
+  return {
+    request: {
+      contract: 'woml.state',
+      contractVersion: 1,
+      kind: 'request',
+      operation: wireOperation,
+      input,
+    },
+    ...(callOptions === undefined ? {} : { callOptions }),
+  };
+}
+
+function publicStateResult(result: JsonValue, operation: string): JsonValue {
+  const object = plainObject(result);
+  const data = plainObject(object?.data);
+  const exact = (required: readonly string[], optional: readonly string[] = []) =>
+    data !== undefined &&
+    required.every(key => Object.hasOwn(data, key)) &&
+    Object.keys(data).every(key => required.includes(key) || optional.includes(key));
+  const version = (value: JsonValue | undefined) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+  const instant = (value: JsonValue | undefined) =>
+    typeof value === 'string' && Number.isFinite(Date.parse(value));
+  const validData =
+    operation === 'get'
+      ? (exact(['found']) && data?.found === false) ||
+        (exact(['found', 'value', 'version', 'updatedAt']) &&
+          data?.found === true &&
+          version(data.version) &&
+          instant(data.updatedAt))
+      : operation === 'has'
+        ? (exact(['present']) && data?.present === false) ||
+          (exact(['present', 'version']) &&
+            data?.present === true &&
+            version(data.version))
+        : operation === 'set'
+          ? exact(['stored', 'version', 'updatedAt']) &&
+            data?.stored === true &&
+            version(data.version) &&
+            instant(data.updatedAt)
+          : operation === 'delete'
+            ? exact(['deleted']) && typeof data?.deleted === 'boolean'
+            : operation === 'increment'
+              ? exact(['value', 'version', 'updatedAt']) &&
+                typeof data?.value === 'number' &&
+                Number.isSafeInteger(data.value) &&
+                version(data.version) &&
+                instant(data.updatedAt)
+              : operation === 'set_if_absent'
+                ? exact(['stored', 'value', 'version', 'updatedAt']) &&
+                  typeof data?.stored === 'boolean' &&
+                  version(data.version) &&
+                  instant(data.updatedAt)
+                : false;
+  if (
+    object?.contract !== 'woml.state' ||
+    object.contractVersion !== 1 ||
+    object.kind !== 'result' ||
+    object.operation !== operation ||
+    !validData
+  ) {
+    throw new TypeError('Rust returned an invalid Durable User State v1 result.');
+  }
+  return deepFreezeJson(data!);
 }
 
 function normalizeEventEmit(args: readonly unknown[]): {
@@ -1193,6 +1382,8 @@ function deeplyReadonlyServiceFacade(
       capability === 'storage' && storageOperations.has(operation);
     const managedCache =
       capability === 'cache' && cacheWireOperations.has(operation);
+    const managedState =
+      capability === 'state' && stateWireOperations.has(operation);
     const managedEvents =
       capability === 'events' && eventOperations.has(operation);
     const managedWorkflows =
@@ -1203,6 +1394,7 @@ function deeplyReadonlyServiceFacade(
       !managedDatabase &&
       !managedStorage &&
       !managedCache &&
+      !managedState &&
       !managedEvents &&
       !managedWorkflows &&
       callOptions !== undefined
@@ -1240,8 +1432,10 @@ function deeplyReadonlyServiceFacade(
         : managedStorage && (operation === 'put' || operation === 'delete');
     const cacheEffectful =
       managedCache && operation !== 'get' && operation !== 'has';
+    const stateEffectful =
+      managedState && operation !== 'get' && operation !== 'has';
     if (
-      (effectful || cacheEffectful || managedEvents) &&
+      (effectful || cacheEffectful || stateEffectful || managedEvents) &&
       identity.mode === 'automatic'
     ) {
       const key = `${capability}.${operation}`;
@@ -1300,6 +1494,16 @@ function deeplyReadonlyServiceFacade(
       },
       input,
     };
+    if (managedState) {
+      throw new ServiceCallError(capability, operation, id, {
+        kind: 'unsupported_capability',
+        code: 'WOML_STATE_RUNTIME_UNAVAILABLE',
+        message:
+          'Durable User State execution is not available until DS2 and DS3.',
+        retryable: false,
+        ambiguous: false,
+      });
+    }
     const result = await new Promise<JsonValue>((resolve, reject) => {
       pendingCalls.set(id, { capability, operation, resolve, reject });
       self.postMessage({
@@ -1315,6 +1519,8 @@ function deeplyReadonlyServiceFacade(
           ? publicStorageResult(result, operation)
           : managedCache
             ? publicCacheResult(result, operation)
+            : managedState
+              ? publicStateResult(result, operation)
             : managedEvents
               ? publicEventResult(result)
               : managedWorkflows
@@ -1418,6 +1624,35 @@ function deeplyReadonlyServiceFacade(
         });
         capabilityCache.set(capabilityProperty, cache);
         return cache;
+      }
+      if (capabilityProperty === 'state') {
+        const operationCache = new Map<string, unknown>();
+        const state = new Proxy(Object.freeze({}), {
+          get(_stateTarget, operationProperty) {
+            if (typeof operationProperty !== 'string') return undefined;
+            const known = operationCache.get(operationProperty);
+            if (known !== undefined) return known;
+            if (!stateOperations.has(operationProperty)) return undefined;
+            const invoke = async (...args: unknown[]): Promise<JsonValue> => {
+              const normalized = normalizeStateRequest(operationProperty, args);
+              const wireOperation = String(normalized.request.operation);
+              return invokeCapability(
+                'state',
+                wireOperation,
+                normalized.request,
+                normalized.callOptions
+              );
+            };
+            Object.freeze(invoke);
+            operationCache.set(operationProperty, invoke);
+            return invoke;
+          },
+          set: () => false,
+          defineProperty: () => false,
+          deleteProperty: () => false,
+        });
+        capabilityCache.set(capabilityProperty, state);
+        return state;
       }
       if (capabilityProperty === 'events') {
         const emit = async (...args: unknown[]): Promise<JsonValue> => {

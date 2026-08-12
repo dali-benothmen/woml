@@ -9,6 +9,7 @@ export {
   buildWomlDefinitionPackage,
   buildWomlExecutableDefinitionPackage,
   buildWomlRuntimeDefinitionPackage,
+  inspectWomlModuleServiceUsage,
   canonicalizeWomlDefinitionPackage,
   WOML_DEFINITION_PACKAGE_PROFILE,
   WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
@@ -30,6 +31,7 @@ export {
   type WomlDefinitionPackageV6,
   type WomlDefinitionPackageV7,
   type WomlModuleResolverOptions,
+  type WomlModuleServiceUsageInspection,
 } from './modules';
 export {
   inspectCompiledWorkflowGraph,

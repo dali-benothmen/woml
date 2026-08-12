@@ -86,3 +86,8 @@ When the deployment uses lifecycle hooks or local run control, also run
 `bun run test:lec8`. That gate adds cancellation/recovery races, notification
 separation, clean installation, schema compatibility, package auditing, and
 the lifecycle/run-control performance budgets.
+
+For workflows with `<config>`, queue admission may return HTTP 503 with
+`Retry-After: 1` and `WOML_POLICY_QUEUE_FULL`; callers should retry using the
+same idempotency key and payload. Run `bun run test:rp7` before publishing that
+runtime and follow [WOML Runtime Policies](woml-runtime-policies.md).

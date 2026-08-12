@@ -14,6 +14,7 @@ import {
   compileWoml,
   generateWomlEditorDeclarations,
   inspectWomlModuleUsage,
+  inspectWomlModuleServiceUsage,
   isWomlElement,
   parseWoml,
   WomlDiagnosticError,
@@ -1067,6 +1068,9 @@ async function compileWorkflowSources(
       sourcePath: filePath,
       projectRoot,
     });
+    if (inspected.modules.length > 0) {
+      inspectWomlModuleServiceUsage(document, { sourcePath: filePath, projectRoot });
+    }
     const executablePackage =
       inspected.modules.length > 0
         ? await buildWomlExecutableDefinitionPackage(document, {
@@ -1153,7 +1157,6 @@ async function refreshEditorTypes(
   }[],
   io: CliIo
 ): Promise<void> {
-  if (modules.length === 0) return;
   let outputPath = join(dirname(inputPath), 'woml-env.d.ts');
   try {
     outputPath = editorTypesPath(
@@ -1226,6 +1229,13 @@ async function runCheckCommand(
       definitionPackage.schemaVersion === 1
         ? compileWoml(document)
         : definitionPackage.workflow.model;
+    const moduleServiceUsage =
+      definitionPackage.modules.length === 0
+        ? undefined
+        : inspectWomlModuleServiceUsage(document, {
+            sourcePath: filePath,
+            projectRoot: moduleProjectRoot(filePath),
+          });
     await refreshEditorTypes(filePath, definitionPackage.modules, io);
     if (options[0] === '--json') {
       io.stdout(`${JSON.stringify(definitionPackage, null, 2)}\n`);
@@ -1241,6 +1251,11 @@ async function runCheckCommand(
     for (const module of definitionPackage.modules) {
       io.stdout(
         `services.${module.name} -> ${module.entrypoint} (${module.exports.join(', ')})\n`
+      );
+    }
+    if ((moduleServiceUsage?.durableStateSources.length ?? 0) > 0) {
+      io.stdout(
+        `Durable state usage: ${moduleServiceUsage!.durableStateSources.length} local module source(s).\n`
       );
     }
     const usage = inspectWomlModuleUsage(document);

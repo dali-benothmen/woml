@@ -136,6 +136,15 @@ Retries and duplicate transports reconnect to the original child when the
 logical operation identity and payload match. Repeated calls to the same target
 from one step need stable, different `{ name: "..." }` values.
 
+## Runtime Policies on parent and child
+
+A called or started workflow is admitted through its own Model v12 policy. Its
+workflow ID owns its concurrency/rate history; the parent does not lend the
+child capacity. A synchronous `call()` releases the parent's execution slot
+while waiting and reacquires it before the parent continues. Queue saturation
+is a retryable managed-operation failure and never creates a phantom child run.
+See [WOML Runtime Policies](woml-runtime-policies.md).
+
 The frozen non-blocking contract is documented in
 `docs/protocols/workflow-start-v1.md`.
 

@@ -1,16 +1,23 @@
 # WOML Runtime Policies and Durable User State Implementation Plan
 
-Status: RP0 through RP6 completed on 2026-08-12. Runtime Policy v1, Model v12,
-Event v11, Store v12 coordination, public inspection/progress, and Definition
-Package v7 contracts are frozen. `<config>` validates and lowers outside the
-DAG. Rust now durably executes concurrency, work-conserving FIFO queueing,
-strict rolling-window rate limits, and immutable total workflow deadlines across
-every run ingress. `woml run` and `woml test` execute all four Runtime Policy v1
+Status: RP0 through RP7 and DS0 through DS1 completed on 2026-08-12. Runtime
+Policy v1, Model v12, Event v11, Store v12 coordination, public
+inspection/progress, and Definition Package v7 contracts are frozen. Durable
+User State v1, Mutation Identity v1, State Operation Metadata v1, and the Store
+v13 contract are also frozen. `<config>` validates and lowers outside the DAG.
+Rust now durably executes concurrency, work-conserving FIFO queueing, strict
+rolling-window rate limits, and immutable total workflow deadlines across every
+run ingress. `woml run` and `woml test` execute all four Runtime Policy v1
 fields, including workflows that use local modules.
-No durable-user-state execution code begins until the later DS0 gate is
-reviewed. Runtime Policies and Durable User State are one roadmap milestone,
-delivered as two independently reviewable releases: RP0-RP7 first, then
-DS0-DS5.
+Runtime Policies are publication-hardened through the clean-package,
+compatibility, adversarial durability, performance-budget, package-audit, and
+secret-scan `bun run test:rp7` gate.
+`services.state` is now a protected, typed authoring surface in scripts and
+local modules. Calls fail explicitly with `WOML_STATE_RUNTIME_UNAVAILABLE` and
+never fall back to cache or process memory until the Store v13 authority is
+built in DS2 and connected in DS3. Runtime Policies and Durable User State are
+one roadmap milestone, delivered as two independently reviewable releases:
+RP0-RP7 first, then DS0-DS5.
 
 ## 1. Product Outcome
 
@@ -785,6 +792,8 @@ WOML_STATE_INTEGER_OVERFLOW
 WOML_STATE_STORE_UNAVAILABLE
 WOML_STATE_STORE_CORRUPT
 WOML_STATE_CANCELLED
+WOML_STATE_INTERRUPTED
+WOML_STATE_RUNTIME_UNAVAILABLE
 ```
 
 A missing key, deleting a missing key, or losing `setIfAbsent` is a successful
@@ -836,9 +845,9 @@ changing underneath it.
 | RP4 (complete) | Execute strict rolling-window rate limits.                                  | Starts are durably paced without resetting after restart.                                              |
 | RP5 (complete) | Execute workflow timeouts.                                                  | Overdue runs fail truthfully and run their failure lifecycle.                                          |
 | RP6 (complete) | Integrate all trigger/call paths, cancellation, inspection, and progress.   | Policies behave consistently everywhere users can create or control a run.                             |
-| RP7            | Harden, migrate, benchmark, document, and publish Runtime Policies.         | `<config>` becomes a supported executable WOML feature.                                                |
-| DS0            | Freeze State v1, mutation identity, Store v13, and reviewed fixtures.       | Durable state semantics are reviewable before a mutable authority is added.                            |
-| DS1            | Add frontend discovery, editor types, and the Bun `services.state` facade.  | Scripts and modules receive a typed service surface; runtime calls remain deliberately gated.          |
+| RP7 (complete) | Harden, migrate, benchmark, document, and publish Runtime Policies.         | `<config>` becomes a supported executable WOML feature.                                                |
+| DS0 (complete) | Freeze State v1, mutation identity, Store v13, and reviewed fixtures.       | Durable state semantics are reviewable before a mutable authority is added.                            |
+| DS1 (complete) | Add frontend discovery, editor types, and the Bun `services.state` facade.  | Scripts and modules receive a typed service surface; runtime calls remain deliberately gated.          |
 | DS2            | Build Store v13's transactional state authority.                            | Rust can perform atomic, versioned, idempotent state operations without Bun execution.                 |
 | DS3            | Connect State v1 through the managed capability path.                       | Real `.woml` scripts can read and mutate durable state end to end.                                     |
 | DS4            | Add contention, retry, recovery, quota, security, and inspection hardening. | State remains correct under concurrent runs, crashes, migrations, and adversarial input.               |
@@ -1150,7 +1159,7 @@ Completed implementation:
 - The concurrency, rate-limit, timeout, and mixed-policy examples are the RP6
   manual suite. `bun run test:rp6` is the integrated release gate.
 
-### RP7 — Harden and publish Runtime Policies
+### RP7 — Harden and publish Runtime Policies (completed)
 
 Changes:
 
@@ -1177,7 +1186,29 @@ The clean-package release matrix passes on supported platforms, all old model
 and event fixtures remain compatible, performance budgets pass, and no mutable
 queue index is required to reconstruct durable run truth.
 
-### DS0 — Freeze Durable User State contracts
+Completed implementation:
+
+- A 1,000-run reconstruction test proves queue/summaries are rebuildable from
+  Event v11 truth after deliberate index damage; repeated recovery is
+  idempotent and a 24-process contention test cannot oversubscribe capacity.
+- The packaged CLI is installed into a clean consumer and proves `<config>`
+  check, execution, Run List v2, and redacted Run Inspection v3 behavior.
+- Runtime Policy Progress v1 decoding rejects unknown/private fields and
+  accepts only the frozen queue, eligibility, start, and timeout shapes.
+- `benchmark:runtime-policies` publishes a versioned local report for the
+  no-`<config>` baseline, policy overhead, shared durable bursts, list/get,
+  rate eligibility, timeout detection, and bounded long-lived memory growth.
+- The operator guide now connects language syntax, architecture, every trigger,
+  Workflow Calls, lifecycle, recovery, webhook deployment, SDK migration, and
+  CLI usage to one production contract.
+- `verify-rp7.ts` compiles all schemas, validates historical fixtures, enforces
+  benchmark budgets, audits the package allowlist, and scans built artifacts
+  for active WOML secrets.
+- `bun run test:rp7` builds and installs the release package, runs frontend/CLI
+  and Rust adversarial suites, checks TypeScript and strict Rust Clippy, then
+  runs the publication verifier. The gate passes on 2026-08-12.
+
+### DS0 — Freeze Durable User State contracts (completed)
 
 Changes:
 
@@ -1202,7 +1233,25 @@ Gate:
 Every DS0 schema/fixture passes, the DS0 Review Gate in Section 19 is answered,
 and no cache guarantee is silently promoted into durable state.
 
-### DS1 — Add frontend discovery, types, and Bun facade
+Completed implementation:
+
+- Durable User State v1 freezes the six methods, exact result unions, JSON and
+  key bounds, monotonic versions, conditional writes, missing-key behavior,
+  quotas, workflow scope, and stable failures.
+- Mutation Identity v1 freezes how named writes reattach safely, while State
+  Operation Metadata v1 proves that operation records contain no raw keys or
+  values.
+- Store v13 freezes the logical entry, mutation-result, and quota records plus
+  its transactional Store v12 migration. It does not claim encryption that the
+  local profile does not yet provide.
+- Reviewed success, conflict, duplicate, interruption, quota, redaction, editor
+  declaration, and generic Capability Call v1 fixtures are validated together.
+- Capability Call v1 and Script Host v7 require no shape change: State v1 fits
+  their existing versioned generic operation boundary.
+- `docs/protocols/durable-state-v1.md` answers all 14 DS0 review questions, and
+  `bun run test:ds0` is the contract gate. No user value is stored by DS0.
+
+### DS1 — Add frontend discovery, types, and Bun facade (completed)
 
 Changes:
 
@@ -1225,6 +1274,21 @@ Gate:
 TypeScript/JavaScript/module fixtures cover method types, immutable facade,
 aliases, dynamic access, invalid arguments, and no accidental `context` or
 `secrets` widening.
+
+Completed implementation:
+
+- `state` is a protected built-in name and cannot be shadowed by a local module.
+- Static discovery covers step and lifecycle scripts plus imported JavaScript
+  and TypeScript modules; computed `services[...]` access in modules is rejected
+  with an actionable diagnostic.
+- Normal `woml check` and `woml run` preparation generates the reviewed
+  `StateService` types even when the workflow imports no modules.
+- Bun exposes one deeply frozen facade with strict method, key, value, option,
+  and future result validation.
+- Every call is deliberately rejected with
+  `WOML_STATE_RUNTIME_UNAVAILABLE` before a capability request is emitted, so
+  DS1 cannot accidentally mutate cache, memory, or an undeclared backend.
+- `bun run test:ds1` is the authoring-surface gate.
 
 ### DS2 — Build Store v13 transactional state authority
 
@@ -1507,7 +1571,9 @@ No durable user value is stored until DS0 answers and tests:
 14. Does `services.state` avoid expanding `context.run` or injecting state into
     context automatically?
 
-Once those artifacts are reviewed, DS1 may begin with the authoring surface.
+Those questions are answered by the frozen DS0 schemas, fixtures, and
+`docs/protocols/durable-state-v1.md`. DS1 has completed; DS2 may now build the
+transactional Rust/SQLite authority without changing the public contract.
 
 ## 20. Definition of Done
 
