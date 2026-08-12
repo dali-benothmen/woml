@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-instance/v1",
+  "title": "WOML Runtime Instance v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "deploymentId", "activationId", "runtimeInstanceId", "runtimeVersion", "nativeVersion", "lifecycle", "startedAt", "heartbeatAt", "leaseExpiresAt"],
+  "properties": {
+    "profile": { "const": "woml.runtime-instance/v1" },
+    "deploymentId": { "$ref": "#/$defs/id" }, "activationId": { "$ref": "#/$defs/digest" },
+    "runtimeInstanceId": { "$ref": "#/$defs/id" }, "runtimeVersion": { "$ref": "#/$defs/version" }, "nativeVersion": { "$ref": "#/$defs/version" },
+    "lifecycle": { "enum": ["starting", "recovering", "ready", "degraded", "draining", "stopped", "failed"] },
+    "startedAt": { "type": "string", "format": "date-time" }, "heartbeatAt": { "type": "string", "format": "date-time" }, "leaseExpiresAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$", "maxLength": 64 }
+  }
+}

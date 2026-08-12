@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-log-record/v1",
+  "title": "WOML Runtime Log Record v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "timestamp", "level", "code", "message", "runtimeInstanceId", "deploymentId"],
+  "properties": {
+    "profile": { "const": "woml.runtime-log-record/v1" }, "timestamp": { "type": "string", "format": "date-time" },
+    "level": { "enum": ["error", "warn", "info", "debug"] }, "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$", "maxLength": 128 },
+    "message": { "type": "string", "minLength": 1, "maxLength": 2048 }, "runtimeInstanceId": { "$ref": "#/$defs/id" }, "deploymentId": { "$ref": "#/$defs/id" },
+    "workflowId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" }, "triggerId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" }, "provider": { "$ref": "#/$defs/id" }
+  },
+  "$defs": { "id": { "type": "string", "minLength": 1, "maxLength": 320 } }
+}

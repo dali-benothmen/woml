@@ -90,6 +90,12 @@ import {
   slackTriggerStartupError,
   type SlackTriggerProtocolMessage,
 } from './slack-trigger';
+import {
+  preflightRuntimeConfiguration,
+  resolveRuntimeConfiguration,
+  type ResolvedRuntimeConfigurationV1,
+  type RuntimePreflightV1,
+} from './runtime-config';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -147,7 +153,7 @@ function emitUsage(): string {
 }
 
 function checkUsage(): string {
-  return 'Usage: woml check <workflow.woml> [--json]';
+  return 'Usage: woml check <workflow.woml|directory>... [--config <path>] [--json]';
 }
 
 function typesUsage(): string {
@@ -1176,7 +1182,7 @@ async function refreshEditorTypes(
   }
 }
 
-async function runCheckCommand(
+async function runSingleCheckCommand(
   args: readonly string[],
   io: CliIo
 ): Promise<number> {
@@ -1290,6 +1296,195 @@ async function runCheckCommand(
     io.stderr(`${formatError(error, filePath, document)}\n`);
     return 1;
   }
+}
+
+interface CheckArguments {
+  readonly inputPaths: readonly string[];
+  readonly configPath?: string;
+  readonly json: boolean;
+}
+
+function parseCheckArguments(args: readonly string[]): CheckArguments {
+  if (args[0] !== 'check') {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+  }
+  const inputPaths: string[] = [];
+  let configPath: string | undefined;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === '--json') {
+      if (json) throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+      json = true;
+      continue;
+    }
+    if (argument === '--config') {
+      const value = args[index + 1];
+      if (configPath !== undefined || value === undefined || value.startsWith('--')) {
+        throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+      }
+      configPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith('--')) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+    }
+    inputPaths.push(resolve(argument));
+  }
+  if (inputPaths.length === 0) {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+  }
+  return {
+    inputPaths,
+    ...(configPath === undefined ? {} : { configPath }),
+    json,
+  };
+}
+
+function validateDeploymentRoutes(
+  sources: readonly CompiledWorkflowSource[]
+): void {
+  const claimed = new Map<string, { readonly workflowId: string; readonly triggerId: string }>();
+  for (const source of sources) {
+    for (const route of webhookRouteSummaries(source.workflow)) {
+      const previous = claimed.get(route.path);
+      if (previous !== undefined) {
+        throw new CliInputError(
+          'WOML_WEBHOOK_ROUTE_CONFLICT',
+          `webhook route "${route.path}" is claimed by ${previous.workflowId}/${previous.triggerId} and ${source.workflow.workflowId}/${route.triggerId}.`
+        );
+      }
+      claimed.set(route.path, {
+        workflowId: source.workflow.workflowId,
+        triggerId: route.triggerId,
+      });
+    }
+  }
+}
+
+interface ProductionPreflightReportV1 {
+  readonly profile: 'woml.production-preflight/v1';
+  readonly status: 'passed';
+  readonly configuration?: ResolvedRuntimeConfigurationV1;
+  readonly environment?: RuntimePreflightV1;
+  readonly secretProvider?: string;
+  readonly workflows: readonly {
+    readonly workflowId: string;
+    readonly sourcePath: string;
+    readonly definitionHash: string;
+    readonly triggerCount: number;
+    readonly moduleCount: number;
+    readonly requiredSecrets: readonly string[];
+  }[];
+}
+
+async function runDeploymentCheckCommand(
+  parsed: CheckArguments,
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<number> {
+  const displayPath = parsed.inputPaths[0];
+  try {
+    const sources = await compileWorkflowInputs(parsed.inputPaths);
+    validateDeploymentRoutes(sources);
+    for (const source of sources) {
+      await refreshEditorTypes(source.filePath, source.runtimeModules, io);
+    }
+
+    let configuration: ResolvedRuntimeConfigurationV1 | undefined;
+    let environment: RuntimePreflightV1 | undefined;
+    let secretProvider: string | undefined;
+    if (parsed.configPath !== undefined) {
+      configuration = await resolveRuntimeConfiguration(parsed.configPath);
+      environment = await preflightRuntimeConfiguration(configuration);
+      const store = dependencies.createSecretStore();
+      secretProvider = store.provider;
+      await preflightSecretReferences(
+        sources.flatMap(source => [...workflowSecretReferences(source.workflow)]),
+        store
+      );
+    }
+
+    const report: ProductionPreflightReportV1 = {
+      profile: 'woml.production-preflight/v1',
+      status: 'passed',
+      ...(configuration === undefined ? {} : { configuration }),
+      ...(environment === undefined ? {} : { environment }),
+      ...(secretProvider === undefined ? {} : { secretProvider }),
+      workflows: sources.map(source => ({
+        workflowId: source.workflow.workflowId,
+        sourcePath: source.filePath,
+        definitionHash: compiledDefinitionHash(source.workflow),
+        triggerCount: source.workflow.triggers.length,
+        moduleCount: source.runtimeModules.length,
+        requiredSecrets: [
+          ...new Set(
+            [...workflowSecretReferences(source.workflow)].map(
+              reference => reference.name
+            )
+          ),
+        ].sort(),
+      })),
+    };
+    if (parsed.json) {
+      io.stdout(`${JSON.stringify(report, null, 2)}\n`);
+      return 0;
+    }
+    io.stdout(
+      `WOML production check passed for ${sources.length} workflow${sources.length === 1 ? '' : 's'}.\n`
+    );
+    for (const workflow of report.workflows) {
+      io.stdout(
+        `Workflow ${workflow.workflowId}: ${workflow.triggerCount} trigger${workflow.triggerCount === 1 ? '' : 's'}, ${workflow.moduleCount} module${workflow.moduleCount === 1 ? '' : 's'}, ${workflow.requiredSecrets.length} required secret${workflow.requiredSecrets.length === 1 ? '' : 's'}.\n`
+      );
+    }
+    if (configuration !== undefined && environment !== undefined) {
+      io.stdout(`Deployment: ${configuration.deploymentName}.\n`);
+      io.stdout(`State: ${configuration.statePath}.\n`);
+      io.stdout(
+        `Listeners: public ${environment.ports.public}; admin ${environment.ports.admin}.\n`
+      );
+      io.stdout(
+        `Environment: writable storage, ${Math.floor(environment.state.availableBytes / (1024 * 1024))} MiB available, secrets ready through ${secretProvider}.\n`
+      );
+      io.stdout('Activation: not started; no trigger or provider was opened.\n');
+    } else {
+      io.stdout(
+        'Environment: not checked; pass --config <path> for production storage, listener, and secret preflight.\n'
+      );
+    }
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error, displayPath)}\n`);
+    return 1;
+  }
+}
+
+async function runCheckCommand(
+  args: readonly string[],
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<number> {
+  let parsed: CheckArguments;
+  try {
+    parsed = parseCheckArguments(args);
+  } catch (error) {
+    if (error instanceof CliInputError && error.message === checkUsage()) {
+      io.stderr(`${checkUsage()}\n`);
+      return 2;
+    }
+    io.stderr(`${formatError(error)}\n`);
+    return 2;
+  }
+
+  if (parsed.inputPaths.length === 1 && parsed.configPath === undefined) {
+    return await runSingleCheckCommand(
+      ['check', parsed.inputPaths[0]!, ...(parsed.json ? ['--json'] : [])],
+      io
+    );
+  }
+  return await runDeploymentCheckCommand(parsed, io, dependencies);
 }
 
 async function runTypesCommand(
@@ -2587,7 +2782,7 @@ export async function runCli(
   }
 
   if (args[0] === 'check') {
-    return await runCheckCommand(args, io);
+    return await runCheckCommand(args, io, dependencies);
   }
 
   if (args[0] === 'types') {

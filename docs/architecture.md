@@ -274,6 +274,17 @@ performance gates publish the boundary. See [Durable User State v1](protocols/du
 [Durable User State Operations](woml-durable-state.md), and the
 [data choice guide](woml-data-guide.md).
 
+Production Runtime and Operations PRO0 freezes the single-machine production
+boundary without adding a public build artifact: users continue to pass direct
+`.woml` files and directories. Runtime Configuration v1 is optional. PRO1
+extends `woml check` to validate multiple workflows as one deployment and, with
+`--config`, preflight writable storage, disk headroom, listener separation, and
+all required symbolic secrets without opening ingress or creating a run.
+Atomic activation, background `woml run -d`, `woml stop`, Store v14 ownership,
+observability, `woml top`, backup, and retention remain gated to PRO2–PRO8. See
+[Production Runtime and Operations](woml-production-runtime.md) and the
+[Production Runtime v1 contracts](protocols/production-runtime-operations-v1.md).
+
 ## Legacy Cronflow Architecture (Migration Context)
 
 The remainder of this document describes the original JavaScript-chaining SDK.

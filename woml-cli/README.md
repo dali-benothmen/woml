@@ -24,6 +24,21 @@ woml check path/to/workflow.woml
 woml check path/to/workflow.woml --json
 ```
 
+Check several files or a directory as one deployment. Add optional Runtime
+Configuration v1 for strict production-environment preflight:
+
+```bash
+woml check workflows/
+woml check workflows/ --config woml.runtime.json
+woml check workflows/ --config woml.runtime.json --json
+```
+
+This checks cross-workflow IDs/routes, writable storage, disk headroom,
+listener configuration, and all referenced secret names without opening ports,
+connecting providers, or creating runs. Runtime configuration is optional;
+ordinary `woml check workflow.woml` and `woml run workflows/` remain valid.
+See [Production Runtime and Operations](../docs/woml-production-runtime.md).
+
 For imported modules, the JSON form is the deterministic Definition Package
 v3 containing Model v9, exact ESM bundles, canonical source maps, and generated
 declarations. It is marked `runtimeReady: true`; `woml run` and `woml test`

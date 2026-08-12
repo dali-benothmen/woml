@@ -1,6 +1,6 @@
 # WOML Runtime Policies and Durable User State Implementation Plan
 
-Status: RP0 through RP7 and DS0 through DS2 completed on 2026-08-12. Runtime
+Status: RP0 through RP7 and DS0 through DS5 completed on 2026-08-12. Runtime
 Policy v1, Model v12, Event v11, Store v12 coordination, public
 inspection/progress, and Definition Package v7 contracts are frozen. Durable
 User State v1, Mutation Identity v1, State Operation Metadata v1, and the Store
@@ -12,13 +12,11 @@ fields, including workflows that use local modules.
 Runtime Policies are publication-hardened through the clean-package,
 compatibility, adversarial durability, performance-budget, package-audit, and
 secret-scan `bun run test:rp7` gate.
-`services.state` is now a protected, typed authoring surface in scripts and
-local modules. Calls fail explicitly with `WOML_STATE_RUNTIME_UNAVAILABLE` and
-never fall back to cache or process memory. The Store v13 authority is built and
-transaction-tested in DS2; calls remain gated until it is connected to scripts
-in DS3. Runtime Policies and Durable User State are one roadmap milestone,
-delivered as two independently reviewable releases: RP0-RP7 first, then
-DS0-DS5.
+`services.state` is now a published, protected, typed authoring and runtime
+surface in scripts and local modules. Calls execute through the Store v13 Rust
+authority and never fall back to cache or process memory. Runtime Policies and
+Durable User State are one roadmap milestone, delivered as two independently
+reviewable releases: RP0-RP7 first, then DS0-DS5.
 
 ## 1. Product Outcome
 
@@ -1593,27 +1591,31 @@ that expansion.
 
 ## 17. Global Roadmap After Runtime Policies and Durable User State
 
-1. **Production Runtime and Operations** — hosting, deployment, multi-node
-   ownership, remote run-control authorization, cross-machine workflow routing,
-   service identity, OS-level isolation, observability, retention,
-   administration, scaling, and distributed policy/state backends.
-2. **Complete the postponed Module System phases** — MS5 locked third-party
+1. **Production Runtime and Operations** — atomic direct `.woml` activation,
+   foreground/background hosting, graceful `woml stop`, single-machine runtime
+   ownership, production secrets, safe local administration, observability,
+   `woml top`, backup/restore, retention, upgrades, and operational publication.
+2. **Distributed Runtime and Hosted Control Plane** — multi-node ownership,
+   remote workers, cross-machine workflow routing, high availability,
+   distributed policy/state backends, tenant identity, authenticated remote
+   administration, and a future web dashboard.
+3. **Complete the postponed Module System phases** — MS5 locked third-party
    packages, remaining MS6 permissions/security, MS7 portable distribution,
    and MS8 hardening/publication.
-3. **WOML Package Registry and Community Ecosystem** — signed publication,
+4. **WOML Package Registry and Community Ecosystem** — signed publication,
    discovery, provenance, moderation, compatibility, and deprecation.
-4. **Additional Infrastructure Adapters** — postponed `services.queue` plus its
+5. **Additional Infrastructure Adapters** — postponed `services.queue` plus its
    queue trigger/dead-letter contract, document databases, external object
    storage, distributed caches, and external durable-state backends according
    to demand.
-5. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
+6. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when justified.
-6. **Advanced Workflow Control** — keyed concurrency, priority/delayed queues,
+7. **Advanced Workflow Control** — keyed concurrency, priority/delayed queues,
    configurable overflow, explicit pause/resume, cancellation propagation,
    compensation/sagas, long approval-waiting synchronous child calls, state
    transactions, and remote control APIs after their durable boundaries are
    reviewed.
-7. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
+8. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
 Completed roadmap milestones—Retries and Idempotency, Production Triggers,

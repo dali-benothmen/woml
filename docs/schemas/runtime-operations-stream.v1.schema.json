@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-operations-stream/v1",
+  "title": "WOML Runtime Operations Stream v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "runtimeInstanceId", "sequence", "occurredAt", "kind", "subject"],
+  "properties": {
+    "profile": { "const": "woml.runtime-operations-stream/v1" }, "runtimeInstanceId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 1 }, "occurredAt": { "type": "string", "format": "date-time" },
+    "kind": { "enum": ["runtime", "workflow", "run", "trigger", "approval", "retry", "workflow_call", "policy", "provider", "storage", "maintenance", "alert"] },
+    "subject": { "type": "object", "additionalProperties": false, "required": ["id", "status"], "properties": { "id": { "$ref": "#/$defs/id" }, "status": { "type": "string", "minLength": 1, "maxLength": 64 }, "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" } } }
+  },
+  "$defs": { "id": { "type": "string", "minLength": 1, "maxLength": 320 } }
+}

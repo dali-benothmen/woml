@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-operations-snapshot/v1",
+  "title": "WOML Runtime Operations Snapshot v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "runtimeInstanceId", "sequence", "capturedAt", "lifecycle", "ready", "uptimeMs", "workflows", "runs", "components", "alerts"],
+  "properties": {
+    "profile": { "const": "woml.runtime-operations-snapshot/v1" }, "runtimeInstanceId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 0 }, "capturedAt": { "type": "string", "format": "date-time" },
+    "lifecycle": { "enum": ["starting", "recovering", "ready", "degraded", "draining", "stopped", "failed"] }, "ready": { "type": "boolean" },
+    "uptimeMs": { "type": "integer", "minimum": 0 },
+    "workflows": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/workflow" } },
+    "runs": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/run" } },
+    "components": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/component" } },
+    "alerts": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/alert" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "workflow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workflowId", "definitionHash", "active", "queued", "waiting", "failed", "triggerTypes"],
+      "properties": {
+        "workflowId": { "$ref": "#/$defs/id" }, "definitionHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "active": { "type": "integer", "minimum": 0 }, "queued": { "type": "integer", "minimum": 0 }, "waiting": { "type": "integer", "minimum": 0 }, "failed": { "type": "integer", "minimum": 0 },
+        "triggerTypes": { "type": "array", "uniqueItems": true, "maxItems": 16, "items": { "enum": ["manual", "webhook", "slack", "schedule", "interval", "event"] } }
+      }
+    },
+    "run": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runId", "workflowId", "status", "durationMs"],
+      "properties": {
+        "runId": { "$ref": "#/$defs/id" }, "workflowId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["queued", "running", "waiting", "retrying", "succeeded", "failed", "cancelled"] },
+        "currentNodeId": { "$ref": "#/$defs/id" }, "parentRunId": { "$ref": "#/$defs/id" },
+        "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "component": {
+      "type": "object", "additionalProperties": false, "required": ["name", "kind", "status"],
+      "properties": { "name": { "$ref": "#/$defs/id" }, "kind": { "enum": ["store", "trigger", "provider", "worker", "backup", "retention"] }, "status": { "enum": ["ready", "degraded", "unready", "stopped"] }, "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" } }
+    },
+    "alert": {
+      "type": "object", "additionalProperties": false, "required": ["at", "level", "code", "message"],
+      "properties": { "at": { "type": "string", "format": "date-time" }, "level": { "enum": ["warn", "error"] }, "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }, "message": { "type": "string", "minLength": 1, "maxLength": 1024 } }
+    }
+  }
+}
