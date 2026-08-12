@@ -87,8 +87,8 @@ fn started_store() -> DurableEventStore {
 }
 
 #[test]
-fn model_v11_maps_to_event_v10_and_store_v11() {
-  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 11);
+fn model_v11_maps_to_event_v10_while_current_store_is_v12() {
+  assert_eq!(DURABLE_STORE_SCHEMA_VERSION, 12);
   assert_eq!(woml_engine::run_event_schema_version_for_model(11), 10);
   assert_eq!(
     started_store().events("run_lec2").unwrap()[0].event_schema_version,
@@ -99,11 +99,7 @@ fn model_v11_maps_to_event_v10_and_store_v11() {
 #[test]
 fn run_listing_applies_workflow_status_and_limit_filters_in_the_store() {
   let store = started_store();
-  let workflow_id = store
-    .projection("run_lec2")
-    .unwrap()
-    .workflow_id
-    .unwrap();
+  let workflow_id = store.projection("run_lec2").unwrap().workflow_id.unwrap();
   assert_eq!(
     store
       .list_runs_filtered(20, Some(&workflow_id), Some("running"))
@@ -182,7 +178,7 @@ fn lifecycle_free_v11_terminal_admission_uses_outcome_and_finalized_events() {
 }
 
 #[test]
-fn store_v10_migrates_to_v11_and_rebuilds_summary_rows_from_events() {
+fn store_v10_migrates_through_v11_to_v12_and_rebuilds_summaries() {
   let path = std::env::temp_dir().join(format!(
     "woml-lec2-store-migration-{}.sqlite",
     uuid::Uuid::new_v4().simple()
@@ -237,7 +233,7 @@ fn store_v10_migrates_to_v11_and_rebuilds_summary_rows_from_events() {
       |row| row.get(0),
     )
     .unwrap();
-  assert_eq!(version, "11");
+  assert_eq!(version, DURABLE_STORE_SCHEMA_VERSION.to_string());
   std::fs::remove_file(path).unwrap();
 }
 

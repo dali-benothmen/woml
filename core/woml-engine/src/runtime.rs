@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::{poll_fn, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::Poll;
 use std::time::Duration;
 
@@ -51,9 +52,10 @@ use crate::{
   DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
   InformationalNotificationDeliverMessage, IssuedApprovalToken, NotificationCredentials,
   NotificationHostClient, NotificationHostClientError, NotificationHostOutcome,
-  NotificationHostProcessOptions, OperationStatus, RecoveryReport, RunEvent, RunEventPayload,
-  RunFailure, RunProjection, RunStatus, ScriptHostClient, ScriptHostClientError,
-  ScriptHostModuleArtifact, ScriptHostProcessOptions, StepFailureDisposition, WorkflowContext,
+  NotificationHostProcessOptions, OperationStatus, PolicyExecutionClaimResult, PolicyWaitingFor,
+  RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection, RunStatus,
+  SchedulerClaimV1, ScriptHostClient, ScriptHostClientError, ScriptHostModuleArtifact,
+  ScriptHostProcessOptions, StepFailureDisposition, TriggerAdmissionRequest, WorkflowContext,
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION, NOTIFICATION_PROVIDER_PROTOCOL,
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
@@ -141,6 +143,32 @@ pub struct LifecycleProgress {
 
 pub type LifecycleProgressReporter = Arc<dyn Fn(LifecycleProgress) + Send + Sync>;
 
+pub const RUNTIME_POLICY_PROGRESS_PROFILE: &str = "woml.runtime-policy-progress/v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePolicyProgressPhase {
+  Queued,
+  Eligible,
+  Started,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimePolicyProgress {
+  pub profile: &'static str,
+  pub run_id: String,
+  pub workflow_id: String,
+  pub phase: RuntimePolicyProgressPhase,
+  pub queue: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub waiting_for: Option<PolicyWaitingFor>,
+}
+
+pub type RuntimePolicyProgressReporter = Arc<dyn Fn(RuntimePolicyProgress) + Send + Sync>;
+pub(crate) type PolicyExecutionRegistry =
+  Arc<tokio::sync::RwLock<HashMap<String, std::sync::Weak<PolicyExecutionCoordinator>>>>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeModuleArtifact {
@@ -191,6 +219,7 @@ pub struct RuntimeExecutionOptions {
   pub schedule_progress_reporter: Option<ScheduleProgressReporter>,
   pub interval_progress_reporter: Option<IntervalProgressReporter>,
   pub workflow_call_progress_reporter: Option<WorkflowCallProgressReporter>,
+  pub runtime_policy_progress_reporter: Option<RuntimePolicyProgressReporter>,
   pub resolved_secrets: Arc<BTreeMap<String, String>>,
   pub capability_registry: Arc<CapabilityRegistry>,
   pub runtime_modules: Arc<Vec<RuntimeModuleArtifact>>,
@@ -198,6 +227,8 @@ pub struct RuntimeExecutionOptions {
   managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
   managed_storage_store: Option<Arc<crate::ManagedStorageStore>>,
   managed_cache_store: Option<Arc<crate::ManagedCacheStore>>,
+  policy_execution: Option<Arc<PolicyExecutionCoordinator>>,
+  policy_execution_registry: PolicyExecutionRegistry,
 }
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
@@ -299,6 +330,7 @@ impl RuntimeExecutionOptions {
       schedule_progress_reporter: None,
       interval_progress_reporter: None,
       workflow_call_progress_reporter: None,
+      runtime_policy_progress_reporter: None,
       resolved_secrets: Arc::new(BTreeMap::new()),
       capability_registry,
       runtime_modules: Arc::new(Vec::new()),
@@ -306,6 +338,8 @@ impl RuntimeExecutionOptions {
       managed_database_pool: Some(managed_database_pool),
       managed_storage_store: Some(managed_storage_store),
       managed_cache_store: Some(managed_cache_store),
+      policy_execution: None,
+      policy_execution_registry: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     }
   }
 
@@ -380,6 +414,14 @@ impl RuntimeExecutionOptions {
     self
   }
 
+  pub fn with_runtime_policy_progress_reporter(
+    mut self,
+    reporter: RuntimePolicyProgressReporter,
+  ) -> Self {
+    self.runtime_policy_progress_reporter = Some(reporter);
+    self
+  }
+
   pub(crate) fn report_schedule(&self, progress: ScheduleProgress) {
     if let Some(reporter) = &self.schedule_progress_reporter {
       reporter(progress);
@@ -388,6 +430,12 @@ impl RuntimeExecutionOptions {
 
   pub(crate) fn report_interval(&self, progress: IntervalProgress) {
     if let Some(reporter) = &self.interval_progress_reporter {
+      reporter(progress);
+    }
+  }
+
+  fn report_runtime_policy(&self, progress: RuntimePolicyProgress) {
+    if let Some(reporter) = &self.runtime_policy_progress_reporter {
       reporter(progress);
     }
   }
@@ -401,6 +449,51 @@ impl RuntimeExecutionOptions {
   fn report_lifecycle(&self, progress: LifecycleProgress) {
     if let Some(reporter) = &self.lifecycle_progress_reporter {
       reporter(progress);
+    }
+  }
+
+  async fn release_policy_execution_slot(&self) -> Result<(), RuntimeExecutionError> {
+    let Some(coordinator) = &self.policy_execution else {
+      return Ok(());
+    };
+    let lease = coordinator.lease.lock().await.take();
+    if let Some(lease) = lease {
+      lease.release().await?;
+    }
+    Ok(())
+  }
+
+  pub(crate) async fn suspend_policy_execution_slot(&self) -> Result<(), RuntimeExecutionError> {
+    let Some(coordinator) = &self.policy_execution else {
+      return Ok(());
+    };
+    coordinator.suspend().await
+  }
+
+  pub(crate) fn policy_execution_registry(&self) -> PolicyExecutionRegistry {
+    Arc::clone(&self.policy_execution_registry)
+  }
+
+  async fn ensure_policy_execution_slot(&self) -> Result<(), RuntimeExecutionError> {
+    let Some(coordinator) = &self.policy_execution else {
+      return Ok(());
+    };
+    let mut current = coordinator.lease.lock().await;
+    if let Some(lease) = current.as_mut() {
+      lease.resume().await?;
+      return Ok(());
+    }
+    match acquire_policy_execution_lease(&coordinator.database_path, &coordinator.run_id, self)
+      .await?
+    {
+      PolicyClaimAcquisition::Claimed(lease) => {
+        *current = Some(lease);
+        Ok(())
+      }
+      PolicyClaimAcquisition::Recovered => Err(RuntimeExecutionError::Stalled(format!(
+        "run {:?} required fail-closed recovery while reacquiring a policy slot",
+        coordinator.run_id
+      ))),
     }
   }
 }
@@ -660,6 +753,311 @@ pub async fn execute_workflow(
   succeeded_execution(execute_with_engine(engine, trigger, options).await?)
 }
 
+const POLICY_CLAIM_LEASE: Duration = Duration::from_secs(15);
+const POLICY_CLAIM_HEARTBEAT: Duration = Duration::from_secs(5);
+const POLICY_QUEUE_RECHECK: Duration = Duration::from_millis(250);
+
+fn policy_wakeup(database_path: &std::path::Path) -> Arc<tokio::sync::Notify> {
+  static WAKEUPS: OnceLock<
+    std::sync::Mutex<HashMap<PathBuf, std::sync::Weak<tokio::sync::Notify>>>,
+  > = OnceLock::new();
+  let wakeups = WAKEUPS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+  let mut wakeups = wakeups
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  if let Some(wakeup) = wakeups
+    .get(database_path)
+    .and_then(std::sync::Weak::upgrade)
+  {
+    return wakeup;
+  }
+  let wakeup = Arc::new(tokio::sync::Notify::new());
+  wakeups.insert(database_path.to_path_buf(), Arc::downgrade(&wakeup));
+  wakeup
+}
+
+async fn wait_for_policy_wakeup(database_path: &std::path::Path) {
+  let wakeup = policy_wakeup(database_path);
+  tokio::select! {
+    _ = wakeup.notified() => {}
+    _ = tokio::time::sleep(POLICY_QUEUE_RECHECK) => {}
+  }
+}
+
+struct PolicyExecutionLease {
+  database_path: PathBuf,
+  claim: SchedulerClaimV1,
+  stop: Option<tokio::sync::oneshot::Sender<()>>,
+  heartbeat: tokio::task::JoinHandle<()>,
+  lost: Arc<AtomicBool>,
+  suspended: bool,
+}
+
+pub(crate) struct PolicyExecutionCoordinator {
+  database_path: PathBuf,
+  run_id: String,
+  lease: tokio::sync::Mutex<Option<PolicyExecutionLease>>,
+}
+
+impl PolicyExecutionCoordinator {
+  pub(crate) async fn suspend(&self) -> Result<(), RuntimeExecutionError> {
+    let mut lease = self.lease.lock().await;
+    if let Some(lease) = lease.as_mut() {
+      lease.suspend()?;
+    }
+    Ok(())
+  }
+
+  pub(crate) async fn resume(&self) -> Result<(), RuntimeExecutionError> {
+    let mut lease = self.lease.lock().await;
+    if let Some(lease) = lease.as_mut() {
+      lease.resume().await?;
+    }
+    Ok(())
+  }
+}
+
+impl PolicyExecutionLease {
+  fn start(database_path: PathBuf, claim: SchedulerClaimV1) -> Self {
+    let (stop, mut stopped) = tokio::sync::oneshot::channel();
+    let heartbeat_path = database_path.clone();
+    let heartbeat_claim = claim.clone();
+    let lost = Arc::new(AtomicBool::new(false));
+    let heartbeat_lost = Arc::clone(&lost);
+    let heartbeat = tokio::spawn(async move {
+      loop {
+        tokio::select! {
+          _ = &mut stopped => break,
+          _ = tokio::time::sleep(POLICY_CLAIM_HEARTBEAT) => {
+            let renewed = DurableEventStore::open(heartbeat_path.clone()).and_then(|mut store| {
+              store.renew_policy_claim(
+                &heartbeat_claim.run_id,
+                &heartbeat_claim.owner_id,
+                &heartbeat_claim.claim_id,
+                chrono::Utc::now(),
+                POLICY_CLAIM_LEASE,
+              )
+            });
+            if renewed.is_err() {
+              heartbeat_lost.store(true, Ordering::Release);
+              break;
+            }
+          }
+        }
+      }
+    });
+    Self {
+      database_path,
+      claim,
+      stop: Some(stop),
+      heartbeat,
+      lost,
+      suspended: false,
+    }
+  }
+
+  fn suspend(&mut self) -> Result<(), RuntimeExecutionError> {
+    if self.suspended {
+      return Ok(());
+    }
+    let mut store = DurableEventStore::open(self.database_path.clone())?;
+    if !store.suspend_policy_claim(
+      &self.claim.run_id,
+      &self.claim.owner_id,
+      &self.claim.claim_id,
+    )? {
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "scheduler ownership was lost for run {:?}",
+        self.claim.run_id
+      )));
+    }
+    self.suspended = true;
+    policy_wakeup(&self.database_path).notify_waiters();
+    Ok(())
+  }
+
+  async fn resume(&mut self) -> Result<(), RuntimeExecutionError> {
+    while self.suspended {
+      if self.lost.load(Ordering::Acquire) {
+        return Err(RuntimeExecutionError::Stalled(format!(
+          "scheduler ownership was lost for run {:?}",
+          self.claim.run_id
+        )));
+      }
+      let resumed = DurableEventStore::open(self.database_path.clone())?.resume_policy_claim(
+        &self.claim.run_id,
+        &self.claim.owner_id,
+        &self.claim.claim_id,
+        chrono::Utc::now(),
+      )?;
+      if resumed {
+        self.suspended = false;
+        break;
+      }
+      wait_for_policy_wakeup(&self.database_path).await;
+    }
+    Ok(())
+  }
+
+  async fn release(mut self) -> Result<(), RuntimeExecutionError> {
+    if let Some(stop) = self.stop.take() {
+      let _ = stop.send(());
+    }
+    let _ = self.heartbeat.await;
+    let mut store = DurableEventStore::open(self.database_path.clone())?;
+    let released = store.release_policy_claim(
+      &self.claim.run_id,
+      &self.claim.owner_id,
+      &self.claim.claim_id,
+    )?;
+    if !released || self.lost.load(Ordering::Acquire) {
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "scheduler ownership was lost for run {:?}",
+        self.claim.run_id
+      )));
+    }
+    policy_wakeup(&self.database_path).notify_waiters();
+    Ok(())
+  }
+}
+
+enum PolicyClaimAcquisition {
+  Claimed(PolicyExecutionLease),
+  Recovered,
+}
+
+async fn acquire_policy_execution_lease(
+  database_path: &std::path::Path,
+  run_id: &str,
+  options: &RuntimeExecutionOptions,
+) -> Result<PolicyClaimAcquisition, RuntimeExecutionError> {
+  let owner_id = format!("scheduler_{}", Uuid::new_v4().simple());
+  let mut reported_wait = false;
+  loop {
+    let now = chrono::Utc::now();
+    let mut store = DurableEventStore::open(database_path.to_path_buf())?;
+    match store.try_claim_policy_run(run_id, &owner_id, now, POLICY_CLAIM_LEASE) {
+      Ok(PolicyExecutionClaimResult::Claimed { claim, .. }) => {
+        let binding = store.run_binding(run_id)?;
+        let queue = store
+          .definition(&binding.definition_hash)?
+          .runtime_policy_queue_name()
+          .ok_or_else(|| {
+            RuntimeExecutionError::InvalidConfiguration(
+              "Model v12 has no runtime policy queue".to_string(),
+            )
+          })?;
+        options.report_runtime_policy(RuntimePolicyProgress {
+          profile: RUNTIME_POLICY_PROGRESS_PROFILE,
+          run_id: run_id.to_string(),
+          workflow_id: claim.workflow_id.clone(),
+          phase: RuntimePolicyProgressPhase::Eligible,
+          queue: queue.clone(),
+          waiting_for: None,
+        });
+        options.report_runtime_policy(RuntimePolicyProgress {
+          profile: RUNTIME_POLICY_PROGRESS_PROFILE,
+          run_id: run_id.to_string(),
+          workflow_id: claim.workflow_id.clone(),
+          phase: RuntimePolicyProgressPhase::Started,
+          queue,
+          waiting_for: None,
+        });
+        return Ok(PolicyClaimAcquisition::Claimed(
+          PolicyExecutionLease::start(database_path.to_path_buf(), claim),
+        ));
+      }
+      Ok(PolicyExecutionClaimResult::Waiting {
+        workflow_id, queue, ..
+      }) => {
+        if !reported_wait {
+          options.report_runtime_policy(RuntimePolicyProgress {
+            profile: RUNTIME_POLICY_PROGRESS_PROFILE,
+            run_id: run_id.to_string(),
+            workflow_id,
+            phase: RuntimePolicyProgressPhase::Queued,
+            queue,
+            waiting_for: Some(PolicyWaitingFor::Concurrency),
+          });
+          reported_wait = true;
+        }
+      }
+      Err(DurableStoreError::SchedulerRecoveryRequired(_)) => {
+        store.recover_policy_run_after_lease_loss(run_id, now)?;
+        return Ok(PolicyClaimAcquisition::Recovered);
+      }
+      Err(error) => return Err(error.into()),
+    }
+    wait_for_policy_wakeup(database_path).await;
+  }
+}
+
+async fn execute_policy_run_durable(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  {
+    let store = DurableEventStore::open(database_path.clone())?;
+    let binding = store.run_binding(run_id)?;
+    let workflow = store.definition(&binding.definition_hash)?;
+    let policy = workflow.runtime_policy.as_ref().ok_or_else(|| {
+      RuntimeExecutionError::InvalidConfiguration(
+        "Model v12 execution requires a runtime policy".to_string(),
+      )
+    })?;
+    if policy.rate_limit.is_some() || policy.timeout_ms.is_some() {
+      return Err(RuntimeExecutionError::InvalidConfiguration(
+        "RP3 executes concurrency and durable FIFO queueing; rate limit and workflow timeout enforcement are not executable yet"
+          .to_string(),
+      ));
+    }
+    let projection = store.projection(run_id)?;
+    if matches!(
+      projection.status,
+      RunStatus::Waiting | RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled
+    ) {
+      let binding = store.run_binding(run_id)?;
+      let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
+      let engine = DurableDagEngine::resume(store, run_id)?;
+      return resume_with_engine(engine, run_id, options).await;
+    }
+  }
+  let acquisition = acquire_policy_execution_lease(&database_path, run_id, &options).await?;
+  let store = DurableEventStore::open(database_path.clone())?;
+  let binding = store.run_binding(run_id)?;
+  let mut options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
+  let engine = DurableDagEngine::resume(store, run_id)?;
+  match acquisition {
+    PolicyClaimAcquisition::Recovered => resume_with_engine(engine, run_id, options).await,
+    PolicyClaimAcquisition::Claimed(lease) => {
+      let coordinator = Arc::new(PolicyExecutionCoordinator {
+        database_path: database_path.clone(),
+        run_id: run_id.to_string(),
+        lease: tokio::sync::Mutex::new(Some(lease)),
+      });
+      options.policy_execution = Some(Arc::clone(&coordinator));
+      options
+        .policy_execution_registry
+        .write()
+        .await
+        .insert(run_id.to_string(), Arc::downgrade(&coordinator));
+      let outcome = resume_with_engine(engine, run_id, options.clone()).await;
+      let released = options.release_policy_execution_slot().await;
+      options
+        .policy_execution_registry
+        .write()
+        .await
+        .remove(run_id);
+      match (outcome, released) {
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Err(error), Ok(())) => Err(error),
+        (_, Err(error)) => Err(error),
+      }
+    }
+  }
+}
+
 pub async fn execute_workflow_durable(
   workflow: CompiledWorkflowDefinition,
   definition_hash: String,
@@ -702,7 +1100,34 @@ async fn execute_workflow_durable_internal(
   database_path: PathBuf,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let options = attach_durable_capability_authority(options, &database_path)?;
-  let mut store = DurableEventStore::open(database_path)?;
+  let mut store = DurableEventStore::open(database_path.clone())?;
+  if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    store.register_definition_module_artifacts(
+      &workflow,
+      &definition_hash,
+      options.runtime_modules.as_ref(),
+    )?;
+    let trigger_definition = workflow
+      .triggers
+      .iter()
+      .find(|candidate| candidate.handler == "trigger.manual")
+      .ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(
+          "a direct Model v12 run requires a manual trigger".to_string(),
+        )
+      })?;
+    let admission = store.admit_trigger_occurrence(TriggerAdmissionRequest {
+      workflow_id: workflow.workflow_id.clone(),
+      definition_hash,
+      trigger_id: trigger_definition.id.clone(),
+      trigger_handler: trigger_definition.handler.clone(),
+      source_identity: format!("manual:{}", Uuid::new_v4().simple()),
+      payload: trigger,
+      received_at: options.clock.now(),
+    })?;
+    drop(store);
+    return execute_policy_run_durable(database_path, &admission.run_id, options).await;
+  }
   store.recover_interrupted_runs()?;
   store.register_definition_module_artifacts(
     &workflow,
@@ -750,8 +1175,13 @@ pub async fn execute_admitted_trigger_run_durable(
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let options = attach_durable_capability_authority(options, &database_path)?;
-  let store = DurableEventStore::open(database_path)?;
+  let store = DurableEventStore::open(database_path.clone())?;
   let binding = store.run_binding(run_id)?;
+  let workflow = store.definition(&binding.definition_hash)?;
+  if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    drop(store);
+    return execute_policy_run_durable(database_path, run_id, options).await;
+  }
   let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
   let engine = DurableDagEngine::resume(store, run_id)?;
   resume_with_engine(engine, run_id, options).await
@@ -764,12 +1194,10 @@ async fn resume_workflow_durable_internal(
   approval_outcome_api: Option<bool>,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let options = attach_durable_capability_authority(options, &database_path)?;
-  let mut store = DurableEventStore::open(database_path)?;
-  store.recover_interrupted_runs()?;
+  let mut store = DurableEventStore::open(database_path.clone())?;
   let binding = store.run_binding(run_id)?;
-  let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
-  let engine = DurableDagEngine::resume(store, run_id)?;
-  let has_approval = workflow_has_approval(engine.workflow());
+  let workflow = store.definition(&binding.definition_hash)?;
+  let has_approval = workflow_has_approval(&workflow);
   if approval_outcome_api == Some(true) && !has_approval {
     return Err(RuntimeExecutionError::InvalidConfiguration(
       "the approval runtime outcome API requires a model-v4 approval workflow".to_string(),
@@ -780,6 +1208,13 @@ async fn resume_workflow_durable_internal(
       "durable approval workflows require resume_workflow_durable_outcome".to_string(),
     ));
   }
+  if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    drop(store);
+    return execute_policy_run_durable(database_path, run_id, options).await;
+  }
+  store.recover_interrupted_runs()?;
+  let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
+  let engine = DurableDagEngine::resume(store, run_id)?;
   resume_with_engine(engine, run_id, options).await
 }
 
@@ -1038,9 +1473,9 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
     RunStatus::Waiting => {
       return engine.reissue_waiting_outcome(run_id, options.clock.now());
     }
-    RunStatus::NotStarted => {
+    RunStatus::NotStarted | RunStatus::Queued => {
       return Err(RuntimeExecutionError::Stalled(
-        "stored run has no run_started event".to_string(),
+        "stored run has not entered execution".to_string(),
       ));
     }
   }
@@ -1798,7 +2233,10 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
   options: &RuntimeExecutionOptions,
   host: &mut Option<ScriptHostClient>,
 ) -> Result<(), RuntimeExecutionError> {
-  if engine.workflow().schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+  if !matches!(
+    engine.workflow().schema_version,
+    crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+  ) {
     return Ok(());
   }
   loop {
@@ -2297,6 +2735,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
   loop {
     let current = engine.projection(run_id)?;
     if current.status == RunStatus::Cancelling {
+      options.ensure_policy_execution_slot().await?;
       settle_cancelling_run(engine, run_id, options.clock.now())?;
       return Err(cancelled_run_error(engine, run_id)?);
     }
@@ -2330,6 +2769,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         )?));
       }
       if projection.status == RunStatus::Running && !projection.pending_retries.is_empty() {
+        options.suspend_policy_execution_slot().await?;
         let scheduled_at = projection
           .pending_retries
           .values()
@@ -2351,6 +2791,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         "no node is ready before the run reached a terminal state".to_string(),
       ));
     };
+    options.ensure_policy_execution_slot().await?;
     if let Some(group) = engine.workflow().parallel_group_for_child(node_id) {
       if ready.iter().any(|ready_id| {
         engine
@@ -4033,7 +4474,10 @@ impl RuntimeDagEngine for InMemoryDagEngine {
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError> {
     let event_schema_version = self.event_schema_version();
-    let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+    let payloads = if matches!(
+      event_schema_version,
+      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+    ) {
       crate::durable::expand_model_v11_payload(self.workflow(), run_id, payload)?
     } else {
       vec![payload]

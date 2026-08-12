@@ -2,15 +2,17 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use serde_json_canonicalizer::to_vec as canonical_json;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V10,
-  COMPILED_MODEL_SCHEMA_VERSION_V11, COMPILED_MODEL_SCHEMA_VERSION_V2,
-  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
-  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
-  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
-  COMPILED_MODEL_SCHEMA_VERSION_V9,
+  COMPILED_MODEL_SCHEMA_VERSION_V11, COMPILED_MODEL_SCHEMA_VERSION_V12,
+  COMPILED_MODEL_SCHEMA_VERSION_V2, COMPILED_MODEL_SCHEMA_VERSION_V3,
+  COMPILED_MODEL_SCHEMA_VERSION_V4, COMPILED_MODEL_SCHEMA_VERSION_V5,
+  COMPILED_MODEL_SCHEMA_VERSION_V6, COMPILED_MODEL_SCHEMA_VERSION_V7,
+  COMPILED_MODEL_SCHEMA_VERSION_V8, COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,6 +28,49 @@ pub struct CompiledWorkflowDefinition {
   pub module_runtime: Option<CompiledModuleRuntime>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub lifecycle: Option<CompiledLifecycleDefinition>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub runtime_policy: Option<CompiledRuntimePolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledRuntimePolicy {
+  pub profile_version: u32,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub concurrency: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub timeout_ms: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub rate_limit: Option<CompiledRateLimitPolicy>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub queue: Option<CompiledQueuePolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledRateLimitPolicy {
+  pub count: u32,
+  pub window_ms: u64,
+  pub algorithm: RateLimitAlgorithm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateLimitAlgorithm {
+  RollingWindow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledQueuePolicy {
+  pub name: String,
+  pub discipline: QueueDiscipline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueDiscipline {
+  WorkConservingFifo,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -327,6 +372,8 @@ pub enum ModelIssueCode {
   InvalidScriptRuntime,
   InvalidModuleRuntime,
   InvalidLifecycle,
+  InvalidRuntimePolicy,
+  UnsupportedRuntimePolicyExecution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1000,10 +1047,13 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
   let Some(lifecycle) = &workflow.lifecycle else {
     return;
   };
-  if workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V11 {
+  if !matches!(
+    workflow.schema_version,
+    COMPILED_MODEL_SCHEMA_VERSION_V11 | COMPILED_MODEL_SCHEMA_VERSION_V12
+  ) {
     issues.push(issue(
       ModelIssueCode::InvalidLifecycle,
-      "lifecycle is unavailable before compiled Model v11.",
+      "lifecycle is available only in compiled Model v11 or v12.",
     ));
     return;
   }
@@ -1087,6 +1137,80 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
         issues,
       );
     }
+  }
+}
+
+fn valid_policy_queue_name(value: &str) -> bool {
+  if value.is_empty() || value.len() > 128 {
+    return false;
+  }
+  let mut chars = value.chars();
+  if !matches!(chars.next(), Some(first) if first.is_ascii_lowercase()) {
+    return false;
+  }
+  let mut separator = false;
+  for character in chars {
+    if matches!(character, '.' | '_' | '-') {
+      if separator {
+        return false;
+      }
+      separator = true;
+    } else if character.is_ascii_lowercase() || character.is_ascii_digit() {
+      separator = false;
+    } else {
+      return false;
+    }
+  }
+  !separator
+}
+
+fn inspect_runtime_policy_contract(
+  workflow: &CompiledWorkflowDefinition,
+  issues: &mut Vec<ModelIssue>,
+) {
+  match (workflow.schema_version, &workflow.runtime_policy) {
+    (COMPILED_MODEL_SCHEMA_VERSION_V12, Some(policy)) => {
+      let has_policy = policy.concurrency.is_some()
+        || policy.timeout_ms.is_some()
+        || policy.rate_limit.is_some()
+        || policy.queue.is_some();
+      let concurrency_valid = policy
+        .concurrency
+        .is_none_or(|value| (1..=1_000_000).contains(&value));
+      let timeout_valid = policy
+        .timeout_ms
+        .is_none_or(|value| (1..=31_536_000_000).contains(&value));
+      let rate_valid = policy.rate_limit.as_ref().is_none_or(|rate| {
+        (1..=1_000_000).contains(&rate.count)
+          && (1..=31_536_000_000).contains(&rate.window_ms)
+          && rate.algorithm == RateLimitAlgorithm::RollingWindow
+      });
+      let queue_valid = policy.queue.as_ref().is_none_or(|queue| {
+        valid_policy_queue_name(&queue.name)
+          && queue.discipline == QueueDiscipline::WorkConservingFifo
+      });
+      if policy.profile_version != 1
+        || !has_policy
+        || !concurrency_valid
+        || !timeout_valid
+        || !rate_valid
+        || !queue_valid
+      {
+        issues.push(issue(
+          ModelIssueCode::InvalidRuntimePolicy,
+          "Model v12 runtimePolicy does not match the frozen Runtime Policy v1 contract.",
+        ));
+      }
+    }
+    (COMPILED_MODEL_SCHEMA_VERSION_V12, None) => issues.push(issue(
+      ModelIssueCode::InvalidRuntimePolicy,
+      "Compiled Model v12 requires runtimePolicy.",
+    )),
+    (_, Some(_)) => issues.push(issue(
+      ModelIssueCode::InvalidRuntimePolicy,
+      "runtimePolicy is unavailable before compiled Model v12.",
+    )),
+    _ => {}
   }
 }
 
@@ -1575,6 +1699,23 @@ fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
 }
 
 impl CompiledWorkflowDefinition {
+  pub fn runtime_policy_hash(&self) -> Option<String> {
+    let policy = self.runtime_policy.as_ref()?;
+    let bytes = canonical_json(policy).ok()?;
+    Some(format!("sha256:{:x}", Sha256::digest(bytes)))
+  }
+
+  pub fn runtime_policy_queue_name(&self) -> Option<String> {
+    let policy = self.runtime_policy.as_ref()?;
+    Some(policy.queue.as_ref().map_or_else(
+      || {
+        let digest = Sha256::digest(self.workflow_id.as_bytes());
+        format!("workflow-{:x}", digest)
+      },
+      |queue| queue.name.clone(),
+    ))
+  }
+
   pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
     serde_json::from_str(json)
   }
@@ -1749,7 +1890,7 @@ impl CompiledWorkflowDefinition {
 
   pub fn validate_for_execution(&self) -> Result<(), ModelValidationError> {
     let mut issues = self.inspect_structure();
-    self.inspect_executable_profile(&mut issues, false, false);
+    self.inspect_executable_profile(&mut issues, false, false, false);
     if issues.is_empty() {
       Ok(())
     } else {
@@ -1759,7 +1900,7 @@ impl CompiledWorkflowDefinition {
 
   pub fn validate_for_durable_execution(&self) -> Result<(), ModelValidationError> {
     let mut issues = self.inspect_structure();
-    self.inspect_executable_profile(&mut issues, true, true);
+    self.inspect_executable_profile(&mut issues, true, true, true);
     if issues.is_empty() {
       Ok(())
     } else {
@@ -1791,6 +1932,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V9
         | COMPILED_MODEL_SCHEMA_VERSION_V10
         | COMPILED_MODEL_SCHEMA_VERSION_V11
+        | COMPILED_MODEL_SCHEMA_VERSION_V12
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1825,7 +1967,8 @@ impl CompiledWorkflowDefinition {
       (
         COMPILED_MODEL_SCHEMA_VERSION_V9
         | COMPILED_MODEL_SCHEMA_VERSION_V10
-        | COMPILED_MODEL_SCHEMA_VERSION_V11,
+        | COMPILED_MODEL_SCHEMA_VERSION_V11
+        | COMPILED_MODEL_SCHEMA_VERSION_V12,
         Some(runtime),
       ) => {
         let reserved = [
@@ -1883,7 +2026,9 @@ impl CompiledWorkflowDefinition {
     if self.triggers.is_empty()
       && !matches!(
         self.schema_version,
-        COMPILED_MODEL_SCHEMA_VERSION_V10 | COMPILED_MODEL_SCHEMA_VERSION_V11
+        COMPILED_MODEL_SCHEMA_VERSION_V10
+          | COMPILED_MODEL_SCHEMA_VERSION_V11
+          | COMPILED_MODEL_SCHEMA_VERSION_V12
       )
     {
       issues.push(issue(
@@ -1898,6 +2043,7 @@ impl CompiledWorkflowDefinition {
       ));
     }
     inspect_lifecycle_contract(self, &mut issues);
+    inspect_runtime_policy_contract(self, &mut issues);
     let mut trigger_ids = HashSet::new();
     for trigger in &self.triggers {
       if !valid_id(&trigger.id)
@@ -2232,7 +2378,14 @@ impl CompiledWorkflowDefinition {
     issues: &mut Vec<ModelIssue>,
     allow_approval: bool,
     allow_retry: bool,
+    durable: bool,
   ) {
+    if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V12 && !durable {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedRuntimePolicyExecution,
+        "Compiled Model v12 requires the durable runtime-policy scheduler.",
+      ));
+    }
     for trigger in &self.triggers {
       let is_empty_object = matches!(
           &trigger.config,

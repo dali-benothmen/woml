@@ -1026,10 +1026,14 @@ async function compileWorkflowSources(
         : undefined;
     const frontendWorkflow =
       runtimePackage?.workflow.model ?? compileWoml(document);
-    if (frontendWorkflow.schemaVersion === 12) {
+    if (
+      frontendWorkflow.schemaVersion === 12 &&
+      (frontendWorkflow.runtimePolicy.timeoutMs !== undefined ||
+        frontendWorkflow.runtimePolicy.rateLimit !== undefined)
+    ) {
       throw new CliInputError(
         'WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE',
-        'runtime-policy syntax is valid, but durable policy enforcement begins in RP2 and RP3. Use `woml check` to review this Model v12 workflow.'
+        'concurrency and durable FIFO queueing are executable in RP3, but workflow timeout and rate-limit enforcement arrive in RP4 and RP5. Remove timeout/rate-limit for now or use `woml check` to review the full Model v12 workflow.'
       );
     }
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
@@ -1203,7 +1207,7 @@ async function runCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasRuntimePolicy
-        ? 'Execution: runtime policy is compiled as Model v12; enforcement begins in RP2 and RP3, so woml run is intentionally gated during RP1.\n'
+        ? 'Execution: Model v12 concurrency and durable FIFO queueing are executable; rate limits and workflow timeout remain staged for RP4 and RP5.\n'
         : hasLifecycle
           ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
           : workflowCallsFrontendOnly
@@ -1614,7 +1618,8 @@ async function executeOneShot(
     workflow.schemaVersion !== 6 &&
     workflow.schemaVersion !== 8 &&
     workflow.schemaVersion !== 9 &&
-    workflow.schemaVersion !== 11
+    workflow.schemaVersion !== 11 &&
+    workflow.schemaVersion !== 12
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -1639,7 +1644,8 @@ async function executeOneShot(
     workflow.schemaVersion === 6 ||
     workflow.schemaVersion === 8 ||
     workflow.schemaVersion === 9 ||
-    workflow.schemaVersion === 11
+    workflow.schemaVersion === 11 ||
+    workflow.schemaVersion === 12
   ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);

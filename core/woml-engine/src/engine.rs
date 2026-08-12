@@ -192,9 +192,11 @@ pub(crate) fn ready_node_ids_for_projection_at(
   if projection.status != RunStatus::Running {
     return Ok(Vec::new());
   }
-  if projection.workflow_id.as_deref() != Some(workflow.workflow_id.as_str())
-    || projection.definition_hash.as_deref() != Some(definition_hash)
-  {
+  let workflow_identity_matches = projection.workflow_id.as_deref()
+    == Some(workflow.workflow_id.as_str())
+    || (projection.event_schema_version == Some(crate::RUN_EVENT_SCHEMA_VERSION_V11)
+      && projection.workflow_id.is_none());
+  if !workflow_identity_matches || projection.definition_hash.as_deref() != Some(definition_hash) {
     return Err("The run is not bound to this compiled workflow definition.".to_string());
   }
 
@@ -490,6 +492,51 @@ pub(crate) fn validate_payload_against_definition(
   payload: &RunEventPayload,
 ) -> Result<(), String> {
   match payload {
+    RunEventPayload::RunAdmitted(data) => {
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        || data.definition_hash != definition_hash
+        || workflow.runtime_policy_hash().as_deref() != Some(data.policy_hash.as_str())
+        || workflow.runtime_policy_queue_name().as_deref() != Some(data.queue.name.as_str())
+      {
+        return Err(
+          "run_admitted does not match the compiled definition and immutable policy identity."
+            .to_string(),
+        );
+      }
+      let trigger = workflow.trigger(&data.trigger.id).ok_or_else(|| {
+        format!(
+          "run_admitted references unknown trigger {:?}.",
+          data.trigger.id
+        )
+      })?;
+      if trigger.handler != data.trigger.handler {
+        return Err("run_admitted trigger identity does not match the definition.".to_string());
+      }
+    }
+    RunEventPayload::RunExecutionStarted(data) => {
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+        return Err("Event v11 runtime-policy events require compiled Model v12.".to_string());
+      }
+      let expected_timeout = workflow
+        .runtime_policy
+        .as_ref()
+        .and_then(|policy| policy.timeout_ms)
+        .map(|timeout_ms| {
+          data.started_at
+            + chrono::Duration::milliseconds(i64::try_from(timeout_ms).unwrap_or(i64::MAX))
+        });
+      if data.timeout_at != expected_timeout {
+        return Err(
+          "run_execution_started timeoutAt does not match the compiled workflow timeout."
+            .to_string(),
+        );
+      }
+    }
+    RunEventPayload::RunTimeoutReached(_) => {
+      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+        return Err("Event v11 runtime-policy events require compiled Model v12.".to_string());
+      }
+    }
     RunEventPayload::RunStarted(data) => {
       if data.workflow_id != workflow.workflow_id || data.definition_hash != definition_hash {
         return Err(
@@ -806,8 +853,8 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunSucceeded(data) => {
-      if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
-        return Err("Model v11 finalizes with run_outcome_decided and run_finalized.".to_string());
+      if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+        return Err("Model v11+ finalizes with run_outcome_decided and run_finalized.".to_string());
       }
       if workflow.terminal_node_id() != Some(data.terminal_node_id.as_str()) {
         return Err(format!(
@@ -828,13 +875,19 @@ pub(crate) fn validate_payload_against_definition(
     RunEventPayload::RunCancellationRequested(_)
     | RunEventPayload::RunOutcomeDecided(_)
     | RunEventPayload::RunFinalized(_) => {
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
-        return Err("Lifecycle and run-control events require compiled Model v11.".to_string());
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      ) {
+        return Err("Lifecycle and run-control events require compiled Model v11+.".to_string());
       }
     }
     RunEventPayload::LifecycleHookRequested(data) => {
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
-        return Err("Lifecycle hook events require compiled Model v11.".to_string());
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      ) {
+        return Err("Lifecycle hook events require compiled Model v11+.".to_string());
       }
       let hook = workflow.lifecycle_hook(&data.hook_id).ok_or_else(|| {
         format!(
@@ -862,8 +915,12 @@ pub(crate) fn validate_payload_against_definition(
               .any(|action| action.action_id == data.action_id)
         })
       });
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 || !action_exists {
-        return Err("Lifecycle action event references an unknown Model v11 action.".to_string());
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      ) || !action_exists
+      {
+        return Err("Lifecycle action event references an unknown Model v11+ action.".to_string());
       }
     }
     RunEventPayload::LifecycleActionFailed(data) => {
@@ -874,23 +931,31 @@ pub(crate) fn validate_payload_against_definition(
           .flat_map(|hook| &hook.actions)
           .any(|action| action.action_id == data.action_id)
       });
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 || !action_exists {
-        return Err("Lifecycle action failure references an unknown Model v11 action.".to_string());
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      ) || !action_exists
+      {
+        return Err(
+          "Lifecycle action failure references an unknown Model v11+ action.".to_string(),
+        );
       }
     }
     RunEventPayload::LifecycleHookCompleted(data) => {
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11
-        || workflow.lifecycle.is_none()
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      ) || workflow.lifecycle.is_none()
         || !crate::event::is_definition_hash(&data.hook_invocation_id)
       {
         return Err(
-          "Lifecycle hook completion requires a Model v11 lifecycle binding.".to_string(),
+          "Lifecycle hook completion requires a Model v11+ lifecycle binding.".to_string(),
         );
       }
     }
     RunEventPayload::RunFailed(data) => {
-      if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
-        return Err("Model v11 finalizes with run_outcome_decided and run_finalized.".to_string());
+      if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+        return Err("Model v11+ finalizes with run_outcome_decided and run_finalized.".to_string());
       }
       if let RunFailedData::V5(RunFailedDataV5::Notification {
         approval_id,
@@ -1381,7 +1446,10 @@ pub(crate) fn validate_event_history_against_definition(
           );
         }
       }
-      RunEventPayload::RunStarted(_)
+      RunEventPayload::RunAdmitted(_)
+      | RunEventPayload::RunExecutionStarted(_)
+      | RunEventPayload::RunTimeoutReached(_)
+      | RunEventPayload::RunStarted(_)
       | RunEventPayload::BranchSelected(_)
       | RunEventPayload::NotificationDeliveryRequested(_)
       | RunEventPayload::NotificationDeliveryAttemptStarted(_)

@@ -5,10 +5,10 @@ use thiserror::Error;
 
 use crate::{
   capability::{validate_safe_metadata, CapabilityFailure},
-  RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V2,
-  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
-  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
-  RUN_EVENT_SCHEMA_VERSION_V9,
+  RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V11,
+  RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
+  RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
+  RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,6 +26,9 @@ pub struct RunEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum RunEventPayload {
+  RunAdmitted(RunAdmittedData),
+  RunExecutionStarted(RunExecutionStartedData),
+  RunTimeoutReached(RunTimeoutReachedData),
   RunStarted(RunStartedData),
   StepAttemptStarted(StepAttemptStartedData),
   StepAttemptSucceeded(StepAttemptSucceededData),
@@ -58,6 +61,47 @@ pub enum RunEventPayload {
   RunFinalized(RunFinalizedData),
   RunSucceeded(RunSucceededData),
   RunFailed(RunFailedData),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunAdmissionTrigger {
+  pub id: String,
+  pub handler: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunAdmissionQueue {
+  pub name: String,
+  pub discipline: crate::model::QueueDiscipline,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunAdmittedData {
+  pub definition_hash: String,
+  pub policy_hash: String,
+  pub trigger: RunAdmissionTrigger,
+  pub payload: Map<String, Value>,
+  pub queue: RunAdmissionQueue,
+  pub admitted_at: DateTime<Utc>,
+  pub occurrence_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunExecutionStartedData {
+  pub started_at: DateTime<Utc>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub timeout_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunTimeoutReachedData {
+  pub deadline_at: DateTime<Utc>,
+  pub code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -898,7 +942,10 @@ fn validate_operation_base(
 ) -> Result<(), EventValidationError> {
   if !matches!(
     event_schema_version,
-    RUN_EVENT_SCHEMA_VERSION_V8 | RUN_EVENT_SCHEMA_VERSION_V9 | RUN_EVENT_SCHEMA_VERSION_V10
+    RUN_EVENT_SCHEMA_VERSION_V8
+      | RUN_EVENT_SCHEMA_VERSION_V9
+      | RUN_EVENT_SCHEMA_VERSION_V10
+      | RUN_EVENT_SCHEMA_VERSION_V11
   ) {
     return Err(EventValidationError::Invalid(
       "Operation events are available only in run-event schema v8 or later.".to_string(),
@@ -1164,6 +1211,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V8
         | RUN_EVENT_SCHEMA_VERSION_V9
         | RUN_EVENT_SCHEMA_VERSION_V10
+        | RUN_EVENT_SCHEMA_VERSION_V11
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -1175,7 +1223,49 @@ impl RunEvent {
       ));
     }
     match &self.payload {
+      RunEventPayload::RunAdmitted(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V11
+          || !is_definition_hash(&data.definition_hash)
+          || !is_definition_hash(&data.policy_hash)
+          || !valid_id(&data.trigger.id)
+          || !valid_trigger_handler(&data.trigger.handler)
+          || data.queue.name.is_empty()
+          || data.queue.name.len() > 128
+          || data.admitted_at != self.occurred_at
+        {
+          return Err(EventValidationError::Invalid(
+            "run_admitted does not match the Event v11 admission contract.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::RunExecutionStarted(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V11
+          || data.started_at != self.occurred_at
+          || data
+            .timeout_at
+            .is_some_and(|deadline| deadline <= data.started_at)
+        {
+          return Err(EventValidationError::Invalid(
+            "run_execution_started does not match the Event v11 start contract.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::RunTimeoutReached(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V11
+          || data.deadline_at != self.occurred_at
+          || data.code != "WOML_WORKFLOW_TIMED_OUT"
+        {
+          return Err(EventValidationError::Invalid(
+            "run_timeout_reached does not match the Event v11 timeout contract.".to_string(),
+          ));
+        }
+      }
       RunEventPayload::RunStarted(data) => {
+        if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V11 {
+          return Err(EventValidationError::Invalid(
+            "Event v11 starts with run_admitted, not run_started.".to_string(),
+          ));
+        }
         if !valid_id(&data.workflow_id) || !is_definition_hash(&data.definition_hash) {
           return Err(EventValidationError::Invalid(
             "run_started requires a valid workflowId and definitionHash.".to_string(),
@@ -1282,6 +1372,7 @@ impl RunEvent {
               | RUN_EVENT_SCHEMA_VERSION_V8
               | RUN_EVENT_SCHEMA_VERSION_V9
               | RUN_EVENT_SCHEMA_VERSION_V10
+              | RUN_EVENT_SCHEMA_VERSION_V11
           )
         {
           return Err(EventValidationError::Invalid(
@@ -1314,6 +1405,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) {
           return Err(EventValidationError::Invalid(
             "branch_selected is available only in run-event schema v2 or later.".to_string(),
@@ -1338,6 +1430,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !valid_public_structural_id(&data.parallel_id)
         {
           return Err(EventValidationError::Invalid(
@@ -1356,6 +1449,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !valid_public_structural_id(&data.parallel_id)
           || !valid_ordered_id_lists(&data.failed_node_ids, &data.cancelled_node_ids)
           || (data.outcome == ParallelGroupOutcome::Succeeded
@@ -1379,6 +1473,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !valid_public_structural_id(&data.approval_id)
           || !is_approval_request_id(&data.request_id)
           || data
@@ -1401,6 +1496,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !valid_public_structural_id(&data.approval_id)
           || !is_approval_request_id(&data.request_id)
         {
@@ -1421,6 +1517,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || data.provider != "slack"
           || data.destination.is_empty()
         {
@@ -1440,6 +1537,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
           || !valid_sha256(&data.idempotency_key)
@@ -1459,6 +1557,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
           || !valid_provider_message(&data.provider_message)
@@ -1479,6 +1578,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
           || (!data.final_ && (!data.failure.retryable || data.attempt == 3))
@@ -1502,6 +1602,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || data.provider != "slack"
           || !valid_prefixed_id(&data.provider_actor_id, "U", 9)
         {
@@ -1520,6 +1621,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
         {
           return Err(EventValidationError::Invalid(
@@ -1538,6 +1640,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
           || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
@@ -1558,6 +1661,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V8
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
+            | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !valid_prefixed_id(&data.update_id, "nupdate_", 11)
           || !(1..=3).contains(&data.attempt)
           || !valid_prefixed_id(&data.attempt_id, "nattempt_", 12)
@@ -1627,7 +1731,10 @@ impl RunEvent {
           .map_err(EventValidationError::Invalid)?;
       }
       RunEventPayload::RunCancellationRequested(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V10 || !valid_id(&data.request_id)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !valid_id(&data.request_id)
         {
           return Err(EventValidationError::Invalid(
             "run_cancellation_requested requires Event v10 and a valid requestId.".to_string(),
@@ -1637,8 +1744,10 @@ impl RunEvent {
       RunEventPayload::LifecycleHookRequested(data) => {
         let subject_matches_event =
           data.event.is_step() == matches!(data.subject.kind, LifecycleSubjectKind::Step);
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V10
-          || !valid_sha256(&data.hook_invocation_id)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !valid_sha256(&data.hook_invocation_id)
           || !valid_id(&data.hook_id)
           || !valid_id(&data.subject.id)
           || !subject_matches_event
@@ -1651,26 +1760,28 @@ impl RunEvent {
       }
       RunEventPayload::LifecycleActionAttemptStarted(data)
       | RunEventPayload::LifecycleActionSucceeded(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V10
-          || !valid_lifecycle_action_identity(
-            &data.hook_invocation_id,
-            &data.action_id,
-            data.attempt,
-          )
-        {
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !valid_lifecycle_action_identity(
+          &data.hook_invocation_id,
+          &data.action_id,
+          data.attempt,
+        ) {
           return Err(EventValidationError::Invalid(
             "Lifecycle action events require Event v10 and a valid attempt-1 identity.".to_string(),
           ));
         }
       }
       RunEventPayload::LifecycleActionFailed(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V10
-          || !valid_lifecycle_action_identity(
-            &data.hook_invocation_id,
-            &data.action_id,
-            data.attempt,
-          )
-          || !valid_lifecycle_failure(&data.failure)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !valid_lifecycle_action_identity(
+          &data.hook_invocation_id,
+          &data.action_id,
+          data.attempt,
+        ) || !valid_lifecycle_failure(&data.failure)
         {
           return Err(EventValidationError::Invalid(
             "lifecycle_action_failed has an invalid Event v10 identity or safe failure."
@@ -1679,8 +1790,10 @@ impl RunEvent {
         }
       }
       RunEventPayload::LifecycleHookCompleted(data) => {
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V10
-          || !valid_sha256(&data.hook_invocation_id)
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !valid_sha256(&data.hook_invocation_id)
           || data.failed_actions > 64
           || (data.status == LifecycleHookCompletionStatus::Completed && data.failed_actions != 0)
           || (data.status == LifecycleHookCompletionStatus::CompletedWithWarnings
@@ -1699,7 +1812,11 @@ impl RunEvent {
             cancellation_request_id,
           } => valid_id(cancellation_request_id),
         };
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V10 || !valid {
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !valid
+        {
           return Err(EventValidationError::Invalid(
             "run_outcome_decided has an invalid Event v10 outcome payload.".to_string(),
           ));
@@ -1721,8 +1838,10 @@ impl RunEvent {
                 .is_none_or(|value| value.len() <= 256)
               && warning.code.starts_with("WOML_")
           });
-        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V10
-          || !warnings_valid
+        if !matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !warnings_valid
           || (data.lifecycle_status == FinalLifecycleStatus::Completed && !data.warnings.is_empty())
           || (data.lifecycle_status == FinalLifecycleStatus::CompletedWithWarnings
             && data.warnings.is_empty())
@@ -1733,8 +1852,10 @@ impl RunEvent {
         }
       }
       RunEventPayload::RunSucceeded(data) => {
-        if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V10
-          || !valid_id(&data.terminal_node_id)
+        if matches!(
+          self.event_schema_version,
+          RUN_EVENT_SCHEMA_VERSION_V10 | RUN_EVENT_SCHEMA_VERSION_V11
+        ) || !valid_id(&data.terminal_node_id)
         {
           return Err(EventValidationError::Invalid(
             "run_succeeded requires a valid terminalNodeId.".to_string(),

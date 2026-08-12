@@ -23,7 +23,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('RP1 runtime-policy CLI staging', () => {
+describe('RP3 runtime-policy CLI execution boundary', () => {
   test('woml check accepts config and explains the enforcement boundary', async () => {
     const result = await invoke([
       'check',
@@ -32,8 +32,8 @@ describe('RP1 runtime-policy CLI staging', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('WOML check passed');
-    expect(result.stdout).toContain('runtime policy is compiled as Model v12');
-    expect(result.stdout).toContain('enforcement begins in RP2 and RP3');
+    expect(result.stdout).toContain('Model v12 concurrency and durable FIFO queueing are executable');
+    expect(result.stdout).toContain('remain staged for RP4 and RP5');
   });
 
   test('woml check --json exposes Definition Package v7 and Model v12 for modules', async () => {
@@ -57,7 +57,7 @@ describe('RP1 runtime-policy CLI staging', () => {
     });
   });
 
-  test('woml run/test reject Model v12 instead of dropping or ignoring config', async () => {
+  test('woml run/test reject the RP4/RP5 policy fields instead of ignoring them', async () => {
     for (const command of ['run', 'test'] as const) {
       const result = await invoke([
         command,
@@ -69,7 +69,7 @@ describe('RP1 runtime-policy CLI staging', () => {
         'WOML input error [WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE]'
       );
       expect(result.stderr, command).toContain(
-        'enforcement begins in RP2 and RP3'
+        'workflow timeout and rate-limit enforcement arrive in RP4 and RP5'
       );
     }
   });

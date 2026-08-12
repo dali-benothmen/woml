@@ -1,7 +1,8 @@
 # WOML Runtime Policies v1 Contracts
 
-Status: frozen by RP0 on 2026-08-11. RP1 compiles `<config>` into Model v12;
-policy execution remains deliberately unavailable until RP2 and RP3.
+Status: frozen by RP0 on 2026-08-11. RP3 executes Model v12 concurrency and
+durable FIFO queueing. Rolling-window rate limits and workflow timeouts remain
+deliberately unavailable until RP4 and RP5.
 
 ## Frozen boundaries
 
@@ -95,13 +96,15 @@ The bounded local queue ceiling uses one frozen fail-closed mapping:
 No run is created when the safety ceiling itself prevents admission. The
 existing occurrence/source identity remains the deduplication key for a retry.
 
-## Compatibility and RP1 staging
+## Compatibility and staged execution
 
 Models v1-v11, Events v1-v10, Store v11, Run List v1, and Run Inspection v2
 remain immutable. RP1 emits Model v12 only when source contains `<config>`.
 `woml check` can review it, including Definition Package v7 for local modules.
-`woml run` and `woml test` return `WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE`
-until the Event v11/Store v12 authority and scheduler are implemented.
+`woml run` executes policies containing concurrency/queue only. It returns
+`WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE` when `rate-limit` or `timeout` is
+present until RP4/RP5 can enforce those contracts truthfully. Definition
+Package v7 local-module runtime promotion remains staged for RP6 integration.
 
 `<config queue>` is run-admission policy. It does not implement the postponed
 `services.queue` message producer/consumer feature.

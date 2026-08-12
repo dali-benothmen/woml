@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
 
 export interface RustRunEvent {
-  readonly eventSchemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  readonly eventSchemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
@@ -1389,7 +1389,7 @@ function executionResult(value: unknown): value is RustWorkflowExecutionResult {
       ]) &&
       Number.isSafeInteger(event.eventSchemaVersion) &&
       Number(event.eventSchemaVersion) >= 1 &&
-      Number(event.eventSchemaVersion) <= 10 &&
+      Number(event.eventSchemaVersion) <= 11 &&
       typeof event.eventId === 'string' &&
       typeof event.runId === 'string' &&
       Number.isSafeInteger(event.sequence) &&

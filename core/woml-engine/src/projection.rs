@@ -20,6 +20,7 @@ use crate::event::{
 pub enum RunStatus {
   #[default]
   NotStarted,
+  Queued,
   Running,
   Waiting,
   Cancelling,
@@ -273,6 +274,13 @@ pub struct RunProjection {
   pub run_id: Option<String>,
   pub workflow_id: Option<String>,
   pub definition_hash: Option<String>,
+  pub policy_hash: Option<String>,
+  pub queue: Option<String>,
+  pub occurrence_sequence: Option<u64>,
+  pub admitted_at: Option<DateTime<Utc>>,
+  pub started_at: Option<DateTime<Utc>>,
+  pub timeout_at: Option<DateTime<Utc>>,
+  pub timeout_reached_at: Option<DateTime<Utc>>,
   pub trigger_id: Option<String>,
   pub trigger_handler: Option<String>,
   pub trigger_occurrence_id: Option<String>,
@@ -467,6 +475,45 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
     }
 
     match &event.payload {
+      RunEventPayload::RunAdmitted(data) => {
+        if index != 0 || projection.status != RunStatus::NotStarted {
+          return Err(FoldError::InvalidHistory(
+            "run_admitted must be the first and only admission event.".to_string(),
+          ));
+        }
+        projection.run_id = Some(event.run_id.clone());
+        projection.event_schema_version = Some(event.event_schema_version);
+        projection.definition_hash = Some(data.definition_hash.clone());
+        projection.policy_hash = Some(data.policy_hash.clone());
+        projection.trigger_id = Some(data.trigger.id.clone());
+        projection.trigger_handler = Some(data.trigger.handler.clone());
+        projection.context.trigger = data.payload.clone();
+        projection.queue = Some(data.queue.name.clone());
+        projection.occurrence_sequence = Some(data.occurrence_sequence);
+        projection.admitted_at = Some(data.admitted_at);
+        projection.status = RunStatus::Queued;
+      }
+      RunEventPayload::RunExecutionStarted(data) => {
+        if projection.status != RunStatus::Queued || projection.started_at.is_some() {
+          return Err(FoldError::InvalidHistory(
+            "run_execution_started requires one queued admission.".to_string(),
+          ));
+        }
+        projection.started_at = Some(data.started_at);
+        projection.timeout_at = data.timeout_at;
+        projection.status = RunStatus::Running;
+      }
+      RunEventPayload::RunTimeoutReached(data) => {
+        if !matches!(projection.status, RunStatus::Running | RunStatus::Waiting)
+          || projection.timeout_at != Some(data.deadline_at)
+          || projection.timeout_reached_at.is_some()
+        {
+          return Err(FoldError::InvalidHistory(
+            "run_timeout_reached must match the active run deadline exactly once.".to_string(),
+          ));
+        }
+        projection.timeout_reached_at = Some(data.deadline_at);
+      }
       RunEventPayload::RunStarted(data) => {
         if index != 0 || projection.status != RunStatus::NotStarted {
           return Err(FoldError::InvalidHistory(
@@ -482,6 +529,7 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         projection.trigger_occurrence_id = data.trigger_occurrence_id.clone();
         projection.ingress = data.ingress.clone();
         projection.context.trigger = data.trigger.clone();
+        projection.started_at = Some(event.occurred_at);
         projection.status = RunStatus::Running;
       }
       RunEventPayload::StepAttemptStarted(data) => {
@@ -1201,7 +1249,10 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         };
       }
       RunEventPayload::RunCancellationRequested(data) => {
-        if !matches!(projection.status, RunStatus::Running | RunStatus::Waiting) {
+        if !matches!(
+          projection.status,
+          RunStatus::Queued | RunStatus::Running | RunStatus::Waiting
+        ) {
           return Err(FoldError::InvalidHistory(
             "Cancellation may only be requested before business outcome is decided.".to_string(),
           ));
@@ -1218,7 +1269,11 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         if projection.run_id.is_none()
           || matches!(
             projection.status,
-            RunStatus::NotStarted | RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled
+            RunStatus::NotStarted
+              | RunStatus::Queued
+              | RunStatus::Succeeded
+              | RunStatus::Failed
+              | RunStatus::Cancelled
           )
           || projection
             .lifecycle_hooks

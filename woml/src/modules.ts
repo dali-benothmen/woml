@@ -1203,9 +1203,9 @@ export async function buildWomlRuntimeDefinitionPackage(
     throw compileDiagnostic(
       document.file,
       'WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE',
-      'Runtime-policy syntax compiled successfully, but durable policy enforcement begins in RP2 and RP3.',
+      'Runtime-policy syntax compiled successfully, but Model v12 local-module runtime packaging is not available yet.',
       document.root.openTagSpan,
-      'Use `woml check` to review the Model v12 definition during RP1.'
+      'Use `woml check` to review Definition Package v7; runtime-package integration is scheduled for RP6.'
     );
   }
   if (compiled.schemaVersion === 6) {

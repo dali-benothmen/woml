@@ -1,9 +1,11 @@
 # WOML Runtime Policies and Durable User State Implementation Plan
 
-Status: RP0 and RP1 completed on 2026-08-11. Runtime Policy v1, Model v12,
+Status: RP0 through RP3 completed on 2026-08-12. Runtime Policy v1, Model v12,
 Event v11, Store v12 coordination, public inspection/progress, and Definition
 Package v7 contracts are frozen. `<config>` now validates and lowers outside the
-DAG, while `woml run` remains explicitly gated until RP2/RP3 enforce the policy.
+DAG. Rust now durably schedules and executes `concurrency` and work-conserving
+FIFO `queue` policies through the existing DAG runtime. `woml run` accepts that
+RP3 subset; `rate-limit` and `timeout` remain explicitly gated until RP4/RP5.
 No durable-user-state execution code begins until the later DS0 gate is
 reviewed. Runtime Policies and Durable User State are one roadmap milestone,
 delivered as two independently reviewable releases: RP0-RP7 first, then
@@ -828,8 +830,8 @@ changing underneath it.
 | -------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | RP0 (complete) | Freeze policy/model/event/store/inspection contracts and reviewed fixtures. | Every frontend, Rust, CLI, and persistence boundary agrees before code changes behavior.               |
 | RP1 (complete) | Validate `<config>` and lower it into Model v12.                            | Authors can check policy syntax and inspect deterministic compiled policy, but it is not executed yet. |
-| RP2            | Add Event v11 admission and Store v12 scheduling authority.                 | Rust can durably represent queued versus started runs without dispatching by policy yet.               |
-| RP3            | Execute concurrency limits and durable FIFO queueing.                       | Bursts wait safely and start as capacity becomes available across processes/restarts.                  |
+| RP2 (complete) | Add Event v11 admission and Store v12 scheduling authority.                 | Rust can durably represent queued versus started runs without dispatching by policy yet.               |
+| RP3 (complete) | Execute concurrency limits and durable FIFO queueing.                       | Bursts wait safely and start as capacity becomes available across processes/restarts.                  |
 | RP4            | Execute strict rolling-window rate limits.                                  | Starts are durably paced without resetting after restart.                                              |
 | RP5            | Execute workflow timeouts.                                                  | Overdue runs fail truthfully and run their failure lifecycle.                                          |
 | RP6            | Integrate all trigger/call paths, cancellation, inspection, and progress.   | Policies behave consistently everywhere users can create or control a run.                             |
@@ -900,7 +902,7 @@ Result:
 
 Users can author and validate `<config>`, and its compiled JSON exactly matches
 the reviewed Model v12 fixture. Running policy-bearing source remains explicitly
-gated until RP2/RP3 rather than silently ignoring limits.
+gated until RP3 rather than silently ignoring limits.
 
 Gate:
 
@@ -925,7 +927,7 @@ Completed implementation:
 - `examples/runtimePolicyWorkflow.woml` is the manual RP1 authoring fixture and
   `bun run test:rp1` is the focused contract/frontend/CLI gate.
 
-### RP2 — Build durable Event v11 admission and Store v12
+### RP2 — Build durable Event v11 admission and Store v12 (completed)
 
 Changes:
 
@@ -952,7 +954,29 @@ Event/store tests cover atomic admission, duplicate occurrence, queue rebuild,
 lease expiry, definition-policy conflict, v11-to-v12 migration, corruption,
 unknown future versions, and compatibility inspection.
 
-### RP3 — Execute concurrency and durable FIFO queueing
+Completed implementation:
+
+- Rust now validates Model v12 Runtime Policy v1 and Event v11's distinct
+  `run_admitted`, `run_execution_started`, and `run_timeout_reached` facts.
+- Event v11 folds admission to `queued`; execution begins only after the one
+  durable execution-start fact, and timeout deadlines must match the compiled
+  policy.
+- Store v12 transactionally migrates the run-summary authority, binds policy
+  and queue identities during trigger admission, and rebuilds queue, start,
+  and summary indexes from immutable events on startup.
+- Expiring Scheduler Claim v1 records coordinate ownership without becoming
+  run truth. Claims can be reclaimed after expiry, but RP2 never dispatches a
+  policy run.
+- Run List v2 and Run Inspection v3 Rust authorities expose queued/admitted,
+  optional started, queue, wait, eligibility, and timeout fields without
+  leaking payloads or scheduler credentials. Legacy Run List v1 and Run
+  Inspection v2 remain available for Event v1-v10 runs.
+- Focused RP2 tests cover atomic/duplicate admission, queued folding, index
+  rebuild, lease expiry, definition-policy conflict, start/timeout folding,
+  v11-to-v12 migration, corrupt shapes, unknown future versions, and legacy
+  inspection/list compatibility.
+
+### RP3 — Execute concurrency and durable FIFO queueing (completed)
 
 Changes:
 
@@ -978,6 +1002,33 @@ Gate:
 Tests cover sequential/parallel work, approval, retry, call/start, cancellation,
 two processes, owner crash, lease expiry, fairness, no lost wake-up, and no
 slot leak or oversubscription.
+
+Completed implementation:
+
+- Model v12 admissions now flow through a Rust-owned durable scheduler before
+  the existing DAG executor. Claim acquisition and the one
+  `run_execution_started` fact commit atomically.
+- Store v12 enforces the workflow-ID concurrency ceiling across independent
+  connections and preserves deterministic, work-conserving FIFO selection in
+  shared queue lanes.
+- Scheduler ownership is heartbeated and fail-closed. An expired owner may
+  resume unambiguous work, while an active attempt with an unknown outcome is
+  durably failed instead of replayed.
+- Approval pauses release their claim. Retry delays and synchronous Workflow
+  Calls retain a lightweight live-owner lease while releasing concurrency
+  capacity, then reacquire capacity before business execution resumes.
+- Queued cancellation claims only lifecycle/finalization capacity: it never
+  writes a false execution-start fact and never executes a business step.
+- Trigger-host startup rediscovers queued and ownerless Model v12 work, so runs
+  survive process restarts. Bounded Runtime Policy Progress v1 reports queued,
+  eligible, and started transitions.
+- The CLI now executes the RP3 subset and continues to reject rate-limit or
+  workflow-timeout policies with an actionable RP4/RP5 message rather than
+  silently ignoring them.
+- Definition Package v7 workflows that combine local modules with Model v12
+  remain explicitly gated for the all-ingress/package integration in RP6.
+- `examples/runtimePolicyConcurrencyWorkflow.woml` is the manual RP3 example;
+  `bun run test:rp3` is the focused Rust/frontend/CLI gate.
 
 ### RP4 — Execute rolling-window rate limits
 

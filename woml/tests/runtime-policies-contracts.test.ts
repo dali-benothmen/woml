@@ -287,7 +287,7 @@ describe('RP1 runtime-policy frontend', () => {
     expect(compiled).not.toHaveProperty('runtimePolicy');
   });
 
-  test('emits Definition Package v7 for local modules and keeps runtime execution gated', async () => {
+  test('emits Definition Package v7 and keeps Model v12 module runtime packaging staged', async () => {
     const file = resolve(fixtureRoot, 'runtime-policy-module.woml');
     const document = parseWoml(readFileSync(file, 'utf8'), { file });
     const definitionPackage = await buildWomlExecutableDefinitionPackage(

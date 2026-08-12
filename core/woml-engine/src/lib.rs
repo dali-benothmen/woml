@@ -54,12 +54,14 @@ pub use durable::{
   IntervalCursor, IntervalCursorRegistration, IntervalCursorRegistrationOutcome,
   IssuedApprovalToken, NotificationDeliveryWork, NotificationDispatchReport,
   NotificationProviderAdapter, NotificationProviderDeliveryResult,
-  NotificationProviderUpdateResult, NotificationUpdateWork, PublicRunStatus, RecoveryReport,
+  NotificationProviderUpdateResult, NotificationUpdateWork, PolicyClaimWaitReason,
+  PolicyExecutionClaimResult, PolicyWaitingFor, PublicRunStatus, RecoveryReport,
   RunCancellationCode, RunCancellationResult, RunCancellationStatus, RunDefinitionBinding,
-  RunInspectionCancellationV2, RunInspectionHookV2, RunInspectionV2, RunListV1, RunSummaryV1,
-  ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, StepFailureCommit,
-  StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest, TriggerOccurrence,
-  TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
+  RunInspectionCancellationV2, RunInspectionHookV2, RunInspectionPolicyV3, RunInspectionV2,
+  RunInspectionV3, RunListV1, RunListV2, RunSummaryV1, RunSummaryV2, ScheduleCursor,
+  ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, SchedulerClaimV1,
+  StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest,
+  TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
 };
 pub use engine::{step_effect_idempotency_key, EngineError, InMemoryDagEngine};
 pub use event::{
@@ -77,10 +79,11 @@ pub use event::{
   NotificationRunFailure, NotificationSafeFailure, OperationExecutionMode, OperationFailedData,
   OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
   ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData,
-  ProviderMessageIdentity, RunCancellationRequestedData, RunEvent, RunEventPayload, RunFailedData,
+  ProviderMessageIdentity, RunAdmissionQueue, RunAdmissionTrigger, RunAdmittedData,
+  RunCancellationRequestedData, RunEvent, RunEventPayload, RunExecutionStartedData, RunFailedData,
   RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5,
   RunFinalizedData, RunIngress, RunOutcomeDecidedData, RunStartedData, RunSucceededData,
-  StepRetryScheduledData,
+  RunTimeoutReachedData, StepRetryScheduledData,
 };
 pub use events_service::{
   EventServiceAcceptedRun, EventServiceRunDispatcher, EventServiceSubscriber, ManagedEventsHandler,
@@ -96,8 +99,10 @@ pub use interval::{
 };
 pub use model::{
   CompiledLifecycleAction, CompiledLifecycleDefinition, CompiledLifecycleHook,
-  CompiledModuleBinding, CompiledModuleRuntime, CompiledWorkflowDefinition, LifecycleEventName,
-  ModelIssue, ModelIssueCode, ModelValidationError, NotificationDefinition, ScriptRuntimeBindings,
+  CompiledModuleBinding, CompiledModuleRuntime, CompiledQueuePolicy, CompiledRateLimitPolicy,
+  CompiledRuntimePolicy, CompiledWorkflowDefinition, LifecycleEventName, ModelIssue,
+  ModelIssueCode, ModelValidationError, NotificationDefinition, QueueDiscipline,
+  RateLimitAlgorithm, ScriptRuntimeBindings,
 };
 pub use notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
@@ -131,9 +136,10 @@ pub use runtime::{
   ExecutionProgress, ExecutionProgressReporter, FailedApprovalDetails, FailedNotificationDetails,
   FailedParallelDetails, FixedEngineClock, LifecycleProgress, LifecycleProgressPhase,
   LifecycleProgressReporter, RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact,
+  RuntimePolicyProgress, RuntimePolicyProgressPhase, RuntimePolicyProgressReporter,
   SystemEngineClock, WaitingWorkflowApproval, WorkflowExecutionResult, WorkflowRuntimeOutcome,
   EXECUTION_PROGRESS_CONTRACT, EXECUTION_PROGRESS_VERSION, LIFECYCLE_PROGRESS_PROFILE,
-  RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION,
+  RUNTIME_OUTCOME_CONTRACT, RUNTIME_OUTCOME_VERSION, RUNTIME_POLICY_PROGRESS_PROFILE,
 };
 pub use schedule::{
   ScheduleClock, ScheduleError, ScheduleMisfirePolicy, ScheduleProgress, ScheduleProgressReason,
@@ -172,7 +178,8 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V8: u32 = 8;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V9: u32 = 9;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V10: u32 = 10;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V11: u32 = 11;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V11;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V12: u32 = 12;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V12;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
@@ -183,10 +190,13 @@ pub const RUN_EVENT_SCHEMA_VERSION_V7: u32 = 7;
 pub const RUN_EVENT_SCHEMA_VERSION_V8: u32 = 8;
 pub const RUN_EVENT_SCHEMA_VERSION_V9: u32 = 9;
 pub const RUN_EVENT_SCHEMA_VERSION_V10: u32 = 10;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V10;
+pub const RUN_EVENT_SCHEMA_VERSION_V11: u32 = 11;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V11;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V11 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    RUN_EVENT_SCHEMA_VERSION_V11
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V11 {
     RUN_EVENT_SCHEMA_VERSION_V10
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V10 {
     RUN_EVENT_SCHEMA_VERSION_V9

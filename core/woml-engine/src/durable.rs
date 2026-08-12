@@ -26,9 +26,10 @@ use crate::event::{
   NotificationMessageUpdateAttemptStartedData, NotificationMessageUpdateFailedData,
   NotificationMessageUpdatedData, NotificationRunFailure, NotificationSafeFailure,
   OperationFailedData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
-  ParallelGroupOutcome, ProviderMessageIdentity, RunCancellationRequestedData, RunFailedData,
-  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunIngress,
-  RunStartedData, RunSucceededData, StepAttemptFailedData, StepRetryScheduledData,
+  ParallelGroupOutcome, ProviderMessageIdentity, RunAdmissionQueue, RunAdmissionTrigger,
+  RunAdmittedData, RunCancellationRequestedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
+  RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunIngress, RunStartedData, RunSucceededData,
+  StepAttemptFailedData, StepRetryScheduledData,
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, NotificationDeliveryStatus,
@@ -43,13 +44,13 @@ use crate::workflow_calls::{
 use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
-  RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
-  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
-  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
-  RUN_EVENT_SCHEMA_VERSION_V9,
+  RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V11,
+  RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
+  RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
+  RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 11;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 12;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -61,6 +62,7 @@ const STORE_SCHEMA_VERSION_V8: &str = "8";
 const STORE_SCHEMA_VERSION_V9: &str = "9";
 const STORE_SCHEMA_VERSION_V10: &str = "10";
 const STORE_SCHEMA_VERSION_V11: &str = "11";
+const STORE_SCHEMA_VERSION_V12: &str = "12";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_RUN_SUMMARY_SCHEMA_V11: &str = r#"
@@ -75,6 +77,84 @@ CREATE TABLE IF NOT EXISTS woml_run_summaries (
 
 CREATE INDEX IF NOT EXISTS woml_run_summaries_updated
   ON woml_run_summaries(updated_at DESC, run_id DESC);
+"#;
+
+const MIGRATE_RUNTIME_POLICY_SCHEMA_V12: &str = r#"
+ALTER TABLE woml_run_summaries RENAME TO woml_run_summaries_v11;
+DROP INDEX woml_run_summaries_updated;
+
+CREATE TABLE woml_run_summaries (
+  run_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  admitted_at TEXT NOT NULL,
+  started_at TEXT,
+  updated_at TEXT NOT NULL,
+  queue_name TEXT,
+  waiting_for TEXT CHECK (waiting_for IS NULL OR waiting_for IN ('concurrency', 'rate_limit')),
+  eligible_at TEXT,
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_run_summaries_updated
+  ON woml_run_summaries(updated_at DESC, run_id DESC);
+
+DROP TABLE IF EXISTS woml_scheduler_claims;
+DROP TABLE IF EXISTS woml_runtime_policy_starts;
+DROP TABLE IF EXISTS woml_runtime_policy_queue;
+DROP TABLE IF EXISTS woml_runtime_policy_bindings;
+
+CREATE TABLE woml_runtime_policy_bindings (
+  run_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  definition_hash TEXT NOT NULL,
+  policy_hash TEXT NOT NULL,
+  queue_name TEXT NOT NULL,
+  admitted_at TEXT NOT NULL,
+  occurrence_sequence INTEGER NOT NULL CHECK (occurrence_sequence >= 0),
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id),
+  FOREIGN KEY (definition_hash) REFERENCES woml_definitions(definition_hash)
+);
+
+CREATE INDEX woml_runtime_policy_bindings_workflow
+  ON woml_runtime_policy_bindings(workflow_id, admitted_at, occurrence_sequence, run_id);
+
+CREATE TABLE woml_runtime_policy_queue (
+  run_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  queue_name TEXT NOT NULL,
+  admitted_at TEXT NOT NULL,
+  occurrence_sequence INTEGER NOT NULL CHECK (occurrence_sequence >= 0),
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_runtime_policy_queue_order
+  ON woml_runtime_policy_queue(queue_name, admitted_at, occurrence_sequence, run_id);
+
+CREATE TABLE woml_runtime_policy_starts (
+  run_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_runtime_policy_starts_window
+  ON woml_runtime_policy_starts(workflow_id, started_at);
+
+CREATE TABLE woml_scheduler_claims (
+  run_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  claim_id TEXT NOT NULL UNIQUE,
+  claimed_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES woml_runs(run_id)
+);
+
+CREATE INDEX woml_scheduler_claims_expiry
+  ON woml_scheduler_claims(expires_at);
+
+DROP TABLE woml_run_summaries_v11;
 "#;
 
 const CREATE_SCHEMA: &str = r#"
@@ -418,6 +498,8 @@ CREATE INDEX woml_workflow_runtime_routes_runtime
   ON woml_workflow_runtime_routes(runtime_id);
 "#;
 
+const SUSPENDED_POLICY_WORKFLOW_ID: &str = "__woml_policy_wait__";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDefinitionBinding {
   pub run_id: String,
@@ -671,6 +753,7 @@ pub struct RecoveryReport {
 #[serde(rename_all = "snake_case")]
 pub enum PublicRunStatus {
   NotStarted,
+  Queued,
   Running,
   Waiting,
   Cancelling,
@@ -684,6 +767,7 @@ impl PublicRunStatus {
   const fn as_str(self) -> &'static str {
     match self {
       Self::NotStarted => "not_started",
+      Self::Queued => "queued",
       Self::Running => "running",
       Self::Waiting => "waiting",
       Self::Cancelling => "cancelling",
@@ -697,6 +781,7 @@ impl PublicRunStatus {
   fn parse(value: &str) -> Option<Self> {
     Some(match value {
       "not_started" => Self::NotStarted,
+      "queued" => Self::Queued,
       "running" => Self::Running,
       "waiting" => Self::Waiting,
       "cancelling" => Self::Cancelling,
@@ -713,6 +798,7 @@ impl From<RunStatus> for PublicRunStatus {
   fn from(value: RunStatus) -> Self {
     match value {
       RunStatus::NotStarted => Self::NotStarted,
+      RunStatus::Queued => Self::Queued,
       RunStatus::Running => Self::Running,
       RunStatus::Waiting => Self::Waiting,
       RunStatus::Cancelling => Self::Cancelling,
@@ -739,6 +825,48 @@ pub struct RunSummaryV1 {
 pub struct RunListV1 {
   pub profile: &'static str,
   pub runs: Vec<RunSummaryV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyWaitingFor {
+  Concurrency,
+  RateLimit,
+}
+
+impl PolicyWaitingFor {
+  fn parse(value: &str) -> Option<Self> {
+    match value {
+      "concurrency" => Some(Self::Concurrency),
+      "rate_limit" => Some(Self::RateLimit),
+      _ => None,
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummaryV2 {
+  pub run_id: String,
+  pub workflow_id: String,
+  pub status: PublicRunStatus,
+  pub admitted_at: DateTime<Utc>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub started_at: Option<DateTime<Utc>>,
+  pub updated_at: DateTime<Utc>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub queue: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub waiting_for: Option<PolicyWaitingFor>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub eligible_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunListV2 {
+  pub profile: &'static str,
+  pub runs: Vec<RunSummaryV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -771,6 +899,69 @@ pub struct RunInspectionV2 {
   pub hooks: Vec<RunInspectionHookV2>,
   pub warnings: Vec<crate::event::LifecycleWarning>,
   pub cancellation: RunInspectionCancellationV2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionPolicyV3 {
+  pub queue: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub waiting_for: Option<PolicyWaitingFor>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub eligible_at: Option<DateTime<Utc>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub timeout_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionV3 {
+  pub profile: &'static str,
+  pub run_id: String,
+  pub workflow_id: String,
+  pub status: PublicRunStatus,
+  pub business_outcome: InspectedBusinessOutcome,
+  pub lifecycle_status: crate::projection::LifecycleStatus,
+  pub hooks: Vec<RunInspectionHookV2>,
+  pub warnings: Vec<crate::event::LifecycleWarning>,
+  pub cancellation: RunInspectionCancellationV2,
+  pub policy: RunInspectionPolicyV3,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerClaimV1 {
+  pub profile: &'static str,
+  pub run_id: String,
+  pub workflow_id: String,
+  pub owner_id: String,
+  pub claim_id: String,
+  pub claimed_at: DateTime<Utc>,
+  pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyClaimWaitReason {
+  Concurrency,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PolicyExecutionClaimResult {
+  Claimed {
+    claim: SchedulerClaimV1,
+    #[serde(rename = "firstStart")]
+    first_start: bool,
+  },
+  Waiting {
+    #[serde(rename = "runId")]
+    run_id: String,
+    #[serde(rename = "workflowId")]
+    workflow_id: String,
+    queue: String,
+    reason: PolicyClaimWaitReason,
+  },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -854,6 +1045,12 @@ pub enum DurableStoreError {
   TriggerHandlerMismatch,
   #[error("the trigger source identity is already bound to a different payload")]
   TriggerIdempotencyConflict,
+  #[error("workflow {0:?} has an active run bound to a different definition or runtime policy")]
+  RuntimePolicyDefinitionConflict(String),
+  #[error("run {0:?} already has a live scheduler claim")]
+  SchedulerClaimConflict(String),
+  #[error("run {0:?} requires fail-closed recovery before it can be scheduled")]
+  SchedulerRecoveryRequired(String),
   #[error("the internal event publication identity is already bound to different data")]
   InternalEventIdempotencyConflict,
   #[error("the internal event would repeat a subscriber already present in its lineage")]
@@ -1128,7 +1325,6 @@ fn migrate_store_v9_to_v10(connection: &mut Connection) -> Result<(), DurableSto
 fn migrate_store_v10_to_v11(connection: &mut Connection) -> Result<(), DurableStoreError> {
   let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
   transaction.execute_batch(CREATE_RUN_SUMMARY_SCHEMA_V11)?;
-  rebuild_run_summary_index(&transaction)?;
   let changed = transaction.execute(
     "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
     [STORE_SCHEMA_VERSION_V11, STORE_SCHEMA_VERSION_V10],
@@ -1136,6 +1332,24 @@ fn migrate_store_v10_to_v11(connection: &mut Connection) -> Result<(), DurableSt
   if changed != 1 {
     return Err(DurableStoreError::Contract(
       "Store v10-to-v11 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
+fn migrate_store_v11_to_v12(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(MIGRATE_RUNTIME_POLICY_SCHEMA_V12)?;
+  rebuild_run_summary_index(&transaction)?;
+  rebuild_runtime_policy_indexes(&transaction)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V12, STORE_SCHEMA_VERSION_V11],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v11-to-v12 migration could not update the schema version atomically.".to_string(),
     ));
   }
   transaction.commit()?;
@@ -1376,6 +1590,73 @@ fn validate_store_v11_schema(connection: &Connection) -> Result<(), DurableStore
   Ok(())
 }
 
+fn validate_store_v12_schema(connection: &Connection) -> Result<(), DurableStoreError> {
+  validate_store_v10_schema(connection)?;
+  for (object_type, name) in [
+    ("table", "woml_run_summaries"),
+    ("index", "woml_run_summaries_updated"),
+    ("table", "woml_runtime_policy_bindings"),
+    ("index", "woml_runtime_policy_bindings_workflow"),
+    ("table", "woml_runtime_policy_queue"),
+    ("index", "woml_runtime_policy_queue_order"),
+    ("table", "woml_runtime_policy_starts"),
+    ("index", "woml_runtime_policy_starts_window"),
+    ("table", "woml_scheduler_claims"),
+    ("index", "woml_scheduler_claims_expiry"),
+  ] {
+    let exists: bool = connection.query_row(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+      [object_type, name],
+      |row| row.get(0),
+    )?;
+    if !exists {
+      return Err(DurableStoreError::Contract(format!(
+        "Store v12 is missing required {object_type} {name:?}."
+      )));
+    }
+  }
+  let mut statement = connection.prepare("PRAGMA table_info(woml_run_summaries)")?;
+  let actual_columns = statement
+    .query_map([], |row| row.get::<_, String>(1))?
+    .collect::<Result<Vec<_>, _>>()?;
+  let expected_columns = [
+    "run_id",
+    "workflow_id",
+    "status",
+    "admitted_at",
+    "started_at",
+    "updated_at",
+    "queue_name",
+    "waiting_for",
+    "eligible_at",
+  ];
+  if actual_columns != expected_columns {
+    return Err(DurableStoreError::Contract(format!(
+      "Store v12 woml_run_summaries columns do not match the frozen schema: expected {expected_columns:?}, found {actual_columns:?}."
+    )));
+  }
+  Ok(())
+}
+
+fn runtime_policy_indexes_need_rebuild(connection: &Connection) -> Result<bool, DurableStoreError> {
+  let count = |sql: &str| -> Result<i64, DurableStoreError> {
+    Ok(connection.query_row(sql, [], |row| row.get(0))?)
+  };
+  Ok(
+    count("SELECT COUNT(*) FROM woml_runs")? != count("SELECT COUNT(*) FROM woml_run_summaries")?
+      || count(
+        "SELECT COUNT(*) FROM woml_run_events
+         WHERE sequence = 1 AND event_schema_version = 11",
+      )? != count("SELECT COUNT(*) FROM woml_runtime_policy_bindings")?
+      || count("SELECT COUNT(*) FROM woml_run_summaries WHERE status = 'queued'")?
+        != count("SELECT COUNT(*) FROM woml_runtime_policy_queue")?
+      || count(
+        "SELECT COUNT(*) FROM woml_run_summaries
+         WHERE queue_name IS NOT NULL AND started_at IS NOT NULL",
+      )? != count("SELECT COUNT(*) FROM woml_runtime_policy_starts")?,
+  )
+}
+
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
     let connection = Connection::open(path)?;
@@ -1399,6 +1680,7 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
+      Some(STORE_SCHEMA_VERSION_V12) => validate_store_v12_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V11) => validate_store_v11_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V10) => validate_store_v10_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V9) => validate_store_v9_schema(&connection)?,
@@ -1499,7 +1781,25 @@ impl DurableEventStore {
     if current_version == STORE_SCHEMA_VERSION_V10 {
       migrate_store_v10_to_v11(&mut connection)?;
     }
-    validate_store_v11_schema(&connection)?;
+    let current_version: String = connection.query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )?;
+    if current_version == STORE_SCHEMA_VERSION_V11 {
+      migrate_store_v11_to_v12(&mut connection)?;
+    }
+    validate_store_v12_schema(&connection)?;
+    if runtime_policy_indexes_need_rebuild(&connection)? {
+      let recovery = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+      rebuild_runtime_policy_indexes(&recovery)?;
+      rebuild_run_summary_index(&recovery)?;
+      recovery.commit()?;
+    }
+    connection.execute(
+      "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
+      [Utc::now().to_rfc3339()],
+    )?;
     Ok(Self { connection })
   }
 
@@ -2636,18 +2936,34 @@ impl DurableEventStore {
   pub fn recover_undispatched_trigger_runs(
     &self,
   ) -> Result<Vec<TriggerRecoveryWork>, DurableStoreError> {
+    let now = Utc::now().to_rfc3339();
     let mut statement = self.connection.prepare(
       "SELECT occurrences.occurrence_id
        FROM woml_trigger_occurrences AS occurrences
        JOIN woml_runs AS runs ON runs.run_id = occurrences.run_id
-       WHERE (
-         SELECT COUNT(*) FROM woml_run_events AS events
-         WHERE events.run_id = occurrences.run_id
-       ) = 1
+       JOIN woml_run_summaries AS summaries ON summaries.run_id = occurrences.run_id
+       WHERE
+         (
+           SELECT COUNT(*) FROM woml_run_events AS events
+           WHERE events.run_id = occurrences.run_id
+         ) = 1
+         OR (
+           EXISTS (
+             SELECT 1 FROM woml_run_events AS events
+             WHERE events.run_id = occurrences.run_id
+               AND events.event_schema_version = 11
+           )
+           AND summaries.status IN ('queued', 'running', 'cancelling', 'finalizing')
+           AND NOT EXISTS (
+             SELECT 1 FROM woml_scheduler_claims AS claims
+             WHERE claims.run_id = occurrences.run_id
+               AND claims.expires_at > ?1
+           )
+         )
        ORDER BY occurrences.received_at, occurrences.occurrence_id",
     )?;
     let occurrence_ids = statement
-      .query_map([], |row| row.get::<_, String>(0))?
+      .query_map([now], |row| row.get::<_, String>(0))?
       .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
 
@@ -2769,7 +3085,10 @@ impl DurableEventStore {
     let mut events = load_events(&transaction, &run_id)?;
     let workflow = definition_for_run(&transaction, &run_id)?;
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
-    let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+    let payloads = if matches!(
+      event_schema_version,
+      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+    ) {
       expand_model_v11_payload(&workflow, &run_id, payload)?
     } else {
       vec![payload]
@@ -2843,7 +3162,10 @@ impl DurableEventStore {
     let workflow = definition_for_run(&transaction, run_id)?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
     for (event_id, occurred_at, payload) in payloads {
-      let translated = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+      let translated = if matches!(
+        event_schema_version,
+        crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      ) {
         expand_model_v11_payload(&workflow, run_id, payload)?
       } else {
         vec![payload]
@@ -2884,13 +3206,29 @@ impl DurableEventStore {
     let workflow = self.definition(&binding.definition_hash)?;
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
-    Ok(fold_events(&events)?)
+    let mut projection = fold_events(&events)?;
+    if projection.event_schema_version == Some(RUN_EVENT_SCHEMA_VERSION_V11)
+      && projection.workflow_id.is_none()
+    {
+      projection.workflow_id = Some(binding.workflow_id);
+    }
+    Ok(projection)
   }
 
   pub fn rebuild_run_summaries(&mut self) -> Result<(), DurableStoreError> {
     let transaction = self
       .connection
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    rebuild_run_summary_index(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+  }
+
+  pub fn rebuild_runtime_policy_indexes(&mut self) -> Result<(), DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    rebuild_runtime_policy_indexes(&transaction)?;
     rebuild_run_summary_index(&transaction)?;
     transaction.commit()?;
     Ok(())
@@ -2928,6 +3266,8 @@ impl DurableEventStore {
        FROM woml_run_summaries
        WHERE (?2 IS NULL OR workflow_id = ?2)
          AND (?3 IS NULL OR status = ?3)
+         AND started_at IS NOT NULL
+         AND status != 'queued'
        ORDER BY updated_at DESC, run_id DESC
        LIMIT ?1",
     )?;
@@ -2967,6 +3307,64 @@ impl DurableEventStore {
     })
   }
 
+  pub fn list_runs_v2(&self, limit: usize) -> Result<RunListV2, DurableStoreError> {
+    if !(1..=200).contains(&limit) {
+      return Err(DurableStoreError::Contract(
+        "Run list limit must be between 1 and 200.".to_string(),
+      ));
+    }
+    let mut statement = self.connection.prepare(
+      "SELECT run_id, workflow_id, status, admitted_at, started_at, updated_at,
+              queue_name, waiting_for, eligible_at
+       FROM woml_run_summaries
+       ORDER BY updated_at DESC, run_id DESC
+       LIMIT ?1",
+    )?;
+    let rows = statement
+      .query_map([i64::try_from(limit).unwrap_or(200)], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, Option<String>>(4)?,
+          row.get::<_, String>(5)?,
+          row.get::<_, Option<String>>(6)?,
+          row.get::<_, Option<String>>(7)?,
+          row.get::<_, Option<String>>(8)?,
+        ))
+      })?
+      .collect::<Result<Vec<_>, _>>()?;
+    let mut runs = Vec::with_capacity(rows.len());
+    for row in rows {
+      runs.push(RunSummaryV2 {
+        run_id: row.0,
+        workflow_id: row.1,
+        status: PublicRunStatus::parse(&row.2).ok_or_else(|| {
+          DurableStoreError::Contract("Stored run summary status is invalid.".to_string())
+        })?,
+        admitted_at: parse_stored_timestamp(&row.3)?,
+        started_at: row.4.as_deref().map(parse_stored_timestamp).transpose()?,
+        updated_at: parse_stored_timestamp(&row.5)?,
+        queue: row.6,
+        waiting_for: row
+          .7
+          .as_deref()
+          .map(|value| {
+            PolicyWaitingFor::parse(value).ok_or_else(|| {
+              DurableStoreError::Contract("Stored policy wait reason is invalid.".to_string())
+            })
+          })
+          .transpose()?,
+        eligible_at: row.8.as_deref().map(parse_stored_timestamp).transpose()?,
+      });
+    }
+    Ok(RunListV2 {
+      profile: "woml.run-list/v2",
+      runs,
+    })
+  }
+
   pub fn inspect_run_v2(&self, run_id: &str) -> Result<RunInspectionV2, DurableStoreError> {
     let projection = self.projection(run_id)?;
     let run_id = projection.run_id.clone().ok_or_else(|| {
@@ -3002,6 +3400,436 @@ impl DurableEventStore {
     })
   }
 
+  pub fn inspect_run_v3(&self, run_id: &str) -> Result<RunInspectionV3, DurableStoreError> {
+    let binding = self.run_binding(run_id)?;
+    let projection = self.projection(run_id)?;
+    let run_id = projection.run_id.clone().ok_or_else(|| {
+      DurableStoreError::Contract("Run inspection requires an admission event.".to_string())
+    })?;
+    let queue = projection.queue.clone().ok_or_else(|| {
+      DurableStoreError::Contract(
+        "Run Inspection v3 is available only for Event v11 policy runs.".to_string(),
+      )
+    })?;
+    let (waiting_for, eligible_at): (Option<String>, Option<String>) = self.connection.query_row(
+      "SELECT waiting_for, eligible_at FROM woml_run_summaries WHERE run_id = ?1",
+      [&run_id],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let hooks = projection
+      .lifecycle_hooks
+      .values()
+      .map(|hook| RunInspectionHookV2 {
+        hook_id: hook.hook_id.clone(),
+        subject_kind: hook.subject.kind,
+        subject_id: hook.subject.id.clone(),
+        status: hook.status,
+        failed_actions: hook.failed_actions,
+      })
+      .collect();
+    Ok(RunInspectionV3 {
+      profile: "woml.run-inspection/v3",
+      run_id,
+      workflow_id: binding.workflow_id,
+      status: projection.status.into(),
+      business_outcome: projection.business_outcome.into(),
+      lifecycle_status: projection.lifecycle_status,
+      hooks,
+      warnings: projection.lifecycle_warnings,
+      cancellation: RunInspectionCancellationV2 {
+        requested: projection.cancellation_request_id.is_some(),
+        request_id: projection.cancellation_request_id,
+      },
+      policy: RunInspectionPolicyV3 {
+        queue,
+        waiting_for: waiting_for
+          .as_deref()
+          .map(|value| {
+            PolicyWaitingFor::parse(value).ok_or_else(|| {
+              DurableStoreError::Contract("Stored policy wait reason is invalid.".to_string())
+            })
+          })
+          .transpose()?,
+        eligible_at: eligible_at
+          .as_deref()
+          .map(parse_stored_timestamp)
+          .transpose()?,
+        timeout_at: projection.timeout_at,
+      },
+    })
+  }
+
+  pub fn claim_policy_run(
+    &mut self,
+    run_id: &str,
+    owner_id: &str,
+    now: DateTime<Utc>,
+    lease_duration: Duration,
+  ) -> Result<SchedulerClaimV1, DurableStoreError> {
+    match self.try_claim_policy_run(run_id, owner_id, now, lease_duration)? {
+      PolicyExecutionClaimResult::Claimed { claim, .. } => Ok(claim),
+      PolicyExecutionClaimResult::Waiting { .. } => Err(DurableStoreError::SchedulerClaimConflict(
+        run_id.to_string(),
+      )),
+    }
+  }
+
+  pub fn try_claim_policy_run(
+    &mut self,
+    run_id: &str,
+    owner_id: &str,
+    now: DateTime<Utc>,
+    lease_duration: Duration,
+  ) -> Result<PolicyExecutionClaimResult, DurableStoreError> {
+    if owner_id.is_empty() || owner_id.len() > 320 || lease_duration.is_zero() {
+      return Err(DurableStoreError::Contract(
+        "A scheduler claim requires a valid owner and positive lease.".to_string(),
+      ));
+    }
+    let expires_at = now
+      + chrono::Duration::from_std(lease_duration).map_err(|_| {
+        DurableStoreError::Contract("Scheduler lease duration is out of range.".to_string())
+      })?;
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
+      "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
+      [now.to_rfc3339()],
+    )?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let policy = workflow.runtime_policy.as_ref().ok_or_else(|| {
+      DurableStoreError::Contract("Scheduler claims require compiled Model v12.".to_string())
+    })?;
+    let queue = workflow.runtime_policy_queue_name().ok_or_else(|| {
+      DurableStoreError::Contract("Model v12 has no runtime policy queue.".to_string())
+    })?;
+    let events = load_events(&transaction, run_id)?;
+    validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+      .map_err(DurableStoreError::Contract)?;
+    let projection = fold_events(&events)?;
+    if matches!(
+      projection.status,
+      RunStatus::NotStarted
+        | RunStatus::Waiting
+        | RunStatus::Succeeded
+        | RunStatus::Failed
+        | RunStatus::Cancelled
+    ) {
+      return Err(DurableStoreError::Contract(
+        "Only an executable Event v11 policy run may acquire a scheduler claim.".to_string(),
+      ));
+    }
+    let existing: Option<(String, String, String, String)> = transaction
+      .query_row(
+        "SELECT owner_id, claim_id, claimed_at, expires_at
+         FROM woml_scheduler_claims WHERE run_id = ?1",
+        [run_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+      )
+      .optional()?;
+    if let Some((existing_owner, claim_id, claimed_at, expires_at)) = existing {
+      if existing_owner != owner_id {
+        return Ok(PolicyExecutionClaimResult::Waiting {
+          run_id: run_id.to_string(),
+          workflow_id: binding.workflow_id,
+          queue,
+          reason: PolicyClaimWaitReason::Concurrency,
+        });
+      }
+      return Ok(PolicyExecutionClaimResult::Claimed {
+        claim: SchedulerClaimV1 {
+          profile: "woml.scheduler-claim/v1",
+          run_id: run_id.to_string(),
+          workflow_id: binding.workflow_id,
+          owner_id: existing_owner,
+          claim_id,
+          claimed_at: parse_durable_timestamp(&claimed_at, "scheduler claim instant")?,
+          expires_at: parse_durable_timestamp(&expires_at, "scheduler claim expiry")?,
+        },
+        first_start: false,
+      });
+    }
+    let has_ambiguous_work = projection
+      .attempts
+      .iter()
+      .any(|attempt| attempt.status == AttemptStatus::Started)
+      || projection
+        .operations
+        .values()
+        .any(|operation| operation.status == crate::projection::OperationStatus::Started)
+      || projection.lifecycle_hooks.values().any(|hook| {
+        hook
+          .actions
+          .values()
+          .any(|action| action.status == crate::projection::LifecycleActionStatus::Started)
+      });
+    if has_ambiguous_work {
+      return Err(DurableStoreError::SchedulerRecoveryRequired(
+        run_id.to_string(),
+      ));
+    }
+    if !workflow_has_policy_capacity(&transaction, &binding.workflow_id, policy.concurrency)?
+      || (projection.status == RunStatus::Queued
+        && earlier_eligible_policy_run_exists(
+          &transaction,
+          run_id,
+          &queue,
+          projection.admitted_at.ok_or_else(|| {
+            DurableStoreError::Contract("Queued policy run has no admittedAt.".to_string())
+          })?,
+          projection.occurrence_sequence.unwrap_or(0),
+        )?)
+    {
+      transaction.execute(
+        "UPDATE woml_run_summaries
+         SET waiting_for = 'concurrency', eligible_at = NULL, updated_at = ?1
+         WHERE run_id = ?2",
+        params![now.to_rfc3339(), run_id],
+      )?;
+      transaction.commit()?;
+      return Ok(PolicyExecutionClaimResult::Waiting {
+        run_id: run_id.to_string(),
+        workflow_id: binding.workflow_id,
+        queue,
+        reason: PolicyClaimWaitReason::Concurrency,
+      });
+    }
+    let claim_id = format!("claim_{}", Uuid::new_v4().simple());
+    transaction.execute(
+      "INSERT INTO woml_scheduler_claims(
+         run_id, workflow_id, owner_id, claim_id, claimed_at, expires_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      params![
+        run_id,
+        binding.workflow_id,
+        owner_id,
+        claim_id,
+        now.to_rfc3339(),
+        expires_at.to_rfc3339(),
+      ],
+    )?;
+    let first_start = projection.started_at.is_none() && projection.status == RunStatus::Queued;
+    if first_start {
+      let timeout_at = policy.timeout_ms.map(|timeout_ms| {
+        now + chrono::Duration::milliseconds(i64::try_from(timeout_ms).unwrap_or(i64::MAX))
+      });
+      let mut events = events;
+      append_to_history(
+        &transaction,
+        &mut events,
+        run_id,
+        generated_event_id(),
+        now,
+        RUN_EVENT_SCHEMA_VERSION_V11,
+        RunEventPayload::RunExecutionStarted(crate::event::RunExecutionStartedData {
+          started_at: now,
+          timeout_at,
+        }),
+      )?;
+      validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+        .map_err(DurableStoreError::Contract)?;
+    }
+    transaction.execute(
+      "UPDATE woml_run_summaries
+       SET waiting_for = NULL, eligible_at = NULL, updated_at = ?1
+       WHERE run_id = ?2",
+      params![now.to_rfc3339(), run_id],
+    )?;
+    transaction.commit()?;
+    Ok(PolicyExecutionClaimResult::Claimed {
+      claim: SchedulerClaimV1 {
+        profile: "woml.scheduler-claim/v1",
+        run_id: run_id.to_string(),
+        workflow_id: binding.workflow_id,
+        owner_id: owner_id.to_string(),
+        claim_id,
+        claimed_at: now,
+        expires_at,
+      },
+      first_start,
+    })
+  }
+
+  pub fn renew_policy_claim(
+    &mut self,
+    run_id: &str,
+    owner_id: &str,
+    claim_id: &str,
+    now: DateTime<Utc>,
+    lease_duration: Duration,
+  ) -> Result<SchedulerClaimV1, DurableStoreError> {
+    let expires_at = now
+      + chrono::Duration::from_std(lease_duration).map_err(|_| {
+        DurableStoreError::Contract("Scheduler lease duration is out of range.".to_string())
+      })?;
+    let changed = self.connection.execute(
+      "UPDATE woml_scheduler_claims SET claimed_at = ?1, expires_at = ?2
+       WHERE run_id = ?3 AND owner_id = ?4 AND claim_id = ?5 AND expires_at > ?1",
+      params![
+        now.to_rfc3339(),
+        expires_at.to_rfc3339(),
+        run_id,
+        owner_id,
+        claim_id,
+      ],
+    )?;
+    if changed != 1 {
+      return Err(DurableStoreError::SchedulerClaimConflict(
+        run_id.to_string(),
+      ));
+    }
+    let workflow_id = self.run_binding(run_id)?.workflow_id;
+    Ok(SchedulerClaimV1 {
+      profile: "woml.scheduler-claim/v1",
+      run_id: run_id.to_string(),
+      workflow_id,
+      owner_id: owner_id.to_string(),
+      claim_id: claim_id.to_string(),
+      claimed_at: now,
+      expires_at,
+    })
+  }
+
+  pub fn suspend_policy_claim(
+    &mut self,
+    run_id: &str,
+    owner_id: &str,
+    claim_id: &str,
+  ) -> Result<bool, DurableStoreError> {
+    Ok(
+      self.connection.execute(
+        "UPDATE woml_scheduler_claims SET workflow_id = ?1
+         WHERE run_id = ?2 AND owner_id = ?3 AND claim_id = ?4",
+        params![SUSPENDED_POLICY_WORKFLOW_ID, run_id, owner_id, claim_id],
+      )? == 1,
+    )
+  }
+
+  pub fn resume_policy_claim(
+    &mut self,
+    run_id: &str,
+    owner_id: &str,
+    claim_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<bool, DurableStoreError> {
+    let transaction = self
+      .connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
+      "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
+      [now.to_rfc3339()],
+    )?;
+    let binding = run_binding_in_transaction(&transaction, run_id)?;
+    let workflow = definition_for_run(&transaction, run_id)?;
+    let concurrency = workflow
+      .runtime_policy
+      .as_ref()
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Policy resume requires compiled Model v12.".to_string())
+      })?
+      .concurrency;
+    let owned: bool = transaction.query_row(
+      "SELECT EXISTS(
+         SELECT 1 FROM woml_scheduler_claims
+         WHERE run_id = ?1 AND owner_id = ?2 AND claim_id = ?3
+           AND workflow_id = ?4 AND expires_at > ?5
+       )",
+      params![
+        run_id,
+        owner_id,
+        claim_id,
+        SUSPENDED_POLICY_WORKFLOW_ID,
+        now.to_rfc3339(),
+      ],
+      |row| row.get(0),
+    )?;
+    if !owned {
+      return Err(DurableStoreError::SchedulerClaimConflict(
+        run_id.to_string(),
+      ));
+    }
+    if !workflow_has_policy_capacity(&transaction, &binding.workflow_id, concurrency)? {
+      transaction.commit()?;
+      return Ok(false);
+    }
+    let changed = transaction.execute(
+      "UPDATE woml_scheduler_claims SET workflow_id = ?1
+       WHERE run_id = ?2 AND owner_id = ?3 AND claim_id = ?4
+         AND workflow_id = ?5",
+      params![
+        binding.workflow_id,
+        run_id,
+        owner_id,
+        claim_id,
+        SUSPENDED_POLICY_WORKFLOW_ID,
+      ],
+    )?;
+    transaction.commit()?;
+    Ok(changed == 1)
+  }
+
+  pub fn release_policy_claim(
+    &mut self,
+    run_id: &str,
+    owner_id: &str,
+    claim_id: &str,
+  ) -> Result<bool, DurableStoreError> {
+    Ok(
+      self.connection.execute(
+        "DELETE FROM woml_scheduler_claims
+         WHERE run_id = ?1 AND owner_id = ?2 AND claim_id = ?3",
+        params![run_id, owner_id, claim_id],
+      )? == 1,
+    )
+  }
+
+  pub fn active_policy_claim_count(
+    &self,
+    workflow_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<u32, DurableStoreError> {
+    let count: i64 = self.connection.query_row(
+      "SELECT COUNT(*) FROM woml_scheduler_claims
+       WHERE workflow_id = ?1 AND expires_at > ?2",
+      params![workflow_id, now.to_rfc3339()],
+      |row| row.get(0),
+    )?;
+    u32::try_from(count)
+      .map_err(|_| DurableStoreError::Contract("Scheduler claim count exceeded u32.".to_string()))
+  }
+
+  /// Applies the normal fail-closed recovery policy after a scheduler owner
+  /// disappeared. A live owner can never be recovered by another process.
+  pub fn recover_policy_run_after_lease_loss(
+    &mut self,
+    run_id: &str,
+    now: DateTime<Utc>,
+  ) -> Result<bool, DurableStoreError> {
+    self.connection.execute(
+      "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
+      [now.to_rfc3339()],
+    )?;
+    let live_claim: bool = self.connection.query_row(
+      "SELECT EXISTS(
+         SELECT 1 FROM woml_scheduler_claims
+         WHERE run_id = ?1 AND expires_at > ?2
+       )",
+      params![run_id, now.to_rfc3339()],
+      |row| row.get(0),
+    )?;
+    if live_claim {
+      return Err(DurableStoreError::SchedulerClaimConflict(
+        run_id.to_string(),
+      ));
+    }
+    Ok(matches!(
+      self.recover_run(run_id)?,
+      RunRecovery::Recovered { .. }
+    ))
+  }
+
   pub fn request_run_cancellation(
     &mut self,
     run_id: &str,
@@ -3030,7 +3858,10 @@ impl DurableEventStore {
       ));
     };
     let workflow = definition_by_hash(&transaction, &binding.definition_hash)?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+    if !matches!(
+      workflow.schema_version,
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+    ) {
       return Ok(result(
         RunCancellationStatus::Rejected,
         Some(RunCancellationCode::WomlRunControlVersionUnsupported),
@@ -3118,9 +3949,12 @@ impl DurableEventStore {
     ensure_run_exists(&transaction, run_id)?;
     let workflow = definition_for_run(&transaction, run_id)?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+    if !matches!(
+      workflow.schema_version,
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+    ) {
       return Err(DurableStoreError::Contract(
-        "Business-outcome authority requires compiled Model v11.".to_string(),
+        "Business-outcome authority requires compiled Model v11+.".to_string(),
       ));
     }
     let mut events = load_events(&transaction, run_id)?;
@@ -3203,9 +4037,12 @@ impl DurableEventStore {
     ensure_run_exists(&transaction, run_id)?;
     let workflow = definition_for_run(&transaction, run_id)?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
+    if !matches!(
+      workflow.schema_version,
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+    ) {
       return Err(DurableStoreError::Contract(
-        "Run finalization authority requires compiled Model v11.".to_string(),
+        "Run finalization authority requires compiled Model v11+.".to_string(),
       ));
     }
     let mut events = load_events(&transaction, run_id)?;
@@ -4588,6 +5425,7 @@ impl DurableEventStore {
         RunStatus::Failed | RunStatus::Cancelled | RunStatus::Waiting => Some("failed"),
         RunStatus::Running if stored_state == "running" => Some("admitted"),
         RunStatus::NotStarted
+        | RunStatus::Queued
         | RunStatus::Running
         | RunStatus::Cancelling
         | RunStatus::Finalizing => None,
@@ -4624,7 +5462,10 @@ impl DurableEventStore {
     let event_schema_version = projection.event_schema_version.ok_or_else(|| {
       DurableStoreError::Contract("A stored run has no event schema version.".to_string())
     })?;
-    if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+    if matches!(
+      event_schema_version,
+      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+    ) {
       let ambiguous_actions = projection
         .lifecycle_hooks
         .values()
@@ -4975,7 +5816,10 @@ impl DurableEventStore {
           invocation_id: attempt.invocation_id.clone(),
           failure: failure.clone(),
         });
-        let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10 {
+        let payloads = if matches!(
+          event_schema_version,
+          crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        ) {
           expand_model_v11_payload(&workflow, run_id, payload)?
         } else {
           vec![payload]
@@ -4992,21 +5836,32 @@ impl DurableEventStore {
           )?;
         }
       }
-      append_to_history(
-        &transaction,
-        &mut events,
-        run_id,
-        generated_event_id(),
-        Utc::now(),
+      let run_failure = RunEventPayload::RunFailed(attempt_run_failed_data(
         event_schema_version,
-        RunEventPayload::RunFailed(attempt_run_failed_data(
+        first.node_id,
+        first.attempt,
+        first.invocation_id,
+        failure,
+      ));
+      let run_failure_payloads = if matches!(
+        event_schema_version,
+        crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      ) {
+        expand_model_v11_payload(&workflow, run_id, run_failure)?
+      } else {
+        vec![run_failure]
+      };
+      for payload in run_failure_payloads {
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          Utc::now(),
           event_schema_version,
-          first.node_id,
-          first.attempt,
-          first.invocation_id,
-          failure,
-        )),
-      )?;
+          payload,
+        )?;
+      }
       validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
         .map_err(DurableStoreError::Contract)?;
       transaction.commit()?;
@@ -5193,21 +6048,32 @@ impl DurableEventStore {
       {
         return Ok(RunRecovery::Resumable);
       }
-      append_to_history(
-        &transaction,
-        &mut events,
-        run_id,
-        generated_event_id(),
-        Utc::now(),
+      let run_failure = RunEventPayload::RunFailed(attempt_run_failed_data(
         event_schema_version,
-        RunEventPayload::RunFailed(attempt_run_failed_data(
+        identity.node_id,
+        identity.attempt,
+        identity.invocation_id,
+        failure,
+      ));
+      let run_failure_payloads = if matches!(
+        event_schema_version,
+        crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      ) {
+        expand_model_v11_payload(&workflow, run_id, run_failure)?
+      } else {
+        vec![run_failure]
+      };
+      for payload in run_failure_payloads {
+        append_to_history(
+          &transaction,
+          &mut events,
+          run_id,
+          generated_event_id(),
+          Utc::now(),
           event_schema_version,
-          identity.node_id,
-          identity.attempt,
-          identity.invocation_id,
-          failure,
-        )),
-      )?;
+          payload,
+        )?;
+      }
       transaction.commit()?;
       return Ok(RunRecovery::Recovered {
         interrupted_attempts: 0,
@@ -5783,6 +6649,75 @@ fn validate_trigger_admission_request(
   Ok(())
 }
 
+fn workflow_has_policy_capacity(
+  connection: &Connection,
+  workflow_id: &str,
+  concurrency: Option<u32>,
+) -> Result<bool, DurableStoreError> {
+  let Some(limit) = concurrency else {
+    return Ok(true);
+  };
+  let active: i64 = connection.query_row(
+    "SELECT COUNT(*) FROM woml_scheduler_claims WHERE workflow_id = ?1",
+    [workflow_id],
+    |row| row.get(0),
+  )?;
+  Ok(active < i64::from(limit))
+}
+
+fn earlier_eligible_policy_run_exists(
+  connection: &Connection,
+  run_id: &str,
+  queue: &str,
+  admitted_at: DateTime<Utc>,
+  occurrence_sequence: u64,
+) -> Result<bool, DurableStoreError> {
+  let occurrence_sequence = i64::try_from(occurrence_sequence).map_err(|_| {
+    DurableStoreError::Contract("occurrenceSequence exceeds SQLite integer range".to_string())
+  })?;
+  let earlier = {
+    let mut statement = connection.prepare(
+      "SELECT run_id, workflow_id
+       FROM woml_runtime_policy_queue
+       WHERE queue_name = ?1 AND run_id != ?2
+         AND (
+           admitted_at < ?3
+           OR (admitted_at = ?3 AND occurrence_sequence < ?4)
+           OR (admitted_at = ?3 AND occurrence_sequence = ?4 AND run_id < ?2)
+         )
+       ORDER BY admitted_at, occurrence_sequence, run_id",
+    )?;
+    let rows = statement
+      .query_map(
+        params![queue, run_id, admitted_at.to_rfc3339(), occurrence_sequence],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+      )?
+      .collect::<Result<Vec<_>, _>>()?;
+    rows
+  };
+  for (earlier_run_id, workflow_id) in earlier {
+    let definition_hash: String = connection.query_row(
+      "SELECT definition_hash FROM woml_runtime_policy_bindings WHERE run_id = ?1",
+      [&earlier_run_id],
+      |row| row.get(0),
+    )?;
+    let model_json: String = connection.query_row(
+      "SELECT model_json FROM woml_definitions WHERE definition_hash = ?1",
+      [&definition_hash],
+      |row| row.get(0),
+    )?;
+    let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
+    let concurrency = workflow
+      .runtime_policy
+      .as_ref()
+      .and_then(|policy| policy.concurrency);
+    if workflow_has_policy_capacity(connection, &workflow_id, concurrency)? {
+      return Ok(true);
+    }
+  }
+  Ok(false)
+}
+
 fn admit_trigger_occurrence_in_transaction(
   transaction: &Transaction<'_>,
   request: &TriggerAdmissionRequest,
@@ -5815,6 +6750,36 @@ fn admit_trigger_occurrence_in_transaction(
     return Err(DurableStoreError::TriggerHandlerMismatch);
   }
 
+  let runtime_policy_identity =
+    if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+      let policy_hash = workflow.runtime_policy_hash().ok_or_else(|| {
+        DurableStoreError::Contract("Model v12 is missing its runtime policy identity.".to_string())
+      })?;
+      let queue_name = workflow.runtime_policy_queue_name().ok_or_else(|| {
+        DurableStoreError::Contract("Model v12 is missing its runtime policy queue.".to_string())
+      })?;
+      let conflict: bool = transaction.query_row(
+        "SELECT EXISTS(
+         SELECT 1
+         FROM woml_runtime_policy_bindings AS bindings
+         JOIN woml_run_summaries AS summaries ON summaries.run_id = bindings.run_id
+         WHERE bindings.workflow_id = ?1
+           AND summaries.status IN ('queued', 'running', 'waiting', 'cancelling', 'finalizing')
+           AND (bindings.definition_hash != ?2 OR bindings.policy_hash != ?3)
+       )",
+        params![request.workflow_id, request.definition_hash, policy_hash],
+        |row| row.get(0),
+      )?;
+      if conflict {
+        return Err(DurableStoreError::RuntimePolicyDefinitionConflict(
+          request.workflow_id.clone(),
+        ));
+      }
+      Some((policy_hash, queue_name))
+    } else {
+      None
+    };
+
   if let Some(existing) = load_trigger_occurrence_by_identity(
     transaction,
     &request.workflow_id,
@@ -5845,15 +6810,33 @@ fn admit_trigger_occurrence_in_transaction(
     ],
   )?;
 
-  let payload = RunEventPayload::RunStarted(RunStartedData {
-    workflow_id: request.workflow_id.clone(),
-    definition_hash: request.definition_hash.clone(),
-    trigger_id: Some(request.trigger_id.clone()),
-    trigger_handler: Some(request.trigger_handler.clone()),
-    trigger_occurrence_id: Some(occurrence_id.clone()),
-    ingress: None,
-    trigger: request.payload.clone(),
-  });
+  let payload = if let Some((policy_hash, queue_name)) = runtime_policy_identity {
+    RunEventPayload::RunAdmitted(RunAdmittedData {
+      definition_hash: request.definition_hash.clone(),
+      policy_hash,
+      trigger: RunAdmissionTrigger {
+        id: request.trigger_id.clone(),
+        handler: request.trigger_handler.clone(),
+      },
+      payload: request.payload.clone(),
+      queue: RunAdmissionQueue {
+        name: queue_name,
+        discipline: crate::model::QueueDiscipline::WorkConservingFifo,
+      },
+      admitted_at: request.received_at,
+      occurrence_sequence: 0,
+    })
+  } else {
+    RunEventPayload::RunStarted(RunStartedData {
+      workflow_id: request.workflow_id.clone(),
+      definition_hash: request.definition_hash.clone(),
+      trigger_id: Some(request.trigger_id.clone()),
+      trigger_handler: Some(request.trigger_handler.clone()),
+      trigger_occurrence_id: Some(occurrence_id.clone()),
+      ingress: None,
+      trigger: request.payload.clone(),
+    })
+  };
   validate_payload_against_definition(&workflow, &request.definition_hash, &payload)
     .map_err(DurableStoreError::Contract)?;
   let mut events = Vec::new();
@@ -6323,38 +7306,50 @@ fn validate_trigger_occurrence_history(
   })?;
   validate_event_history_against_definition(&workflow, &occurrence.definition_hash, &events)
     .map_err(DurableStoreError::TriggerHistoryInvalid)?;
-  let Some(RunEvent {
-    event_schema_version,
-    occurred_at,
-    payload: RunEventPayload::RunStarted(start),
-    ..
-  }) = events.first()
-  else {
+  let Some(first) = events.first() else {
     return Err(DurableStoreError::TriggerHistoryInvalid(
-      "occurrence run does not begin with run_started v7 or v8".to_string(),
+      "occurrence run has no admission event".to_string(),
     ));
   };
-  if !matches!(
-    *event_schema_version,
-    RUN_EVENT_SCHEMA_VERSION_V7 | RUN_EVENT_SCHEMA_VERSION_V8
-  ) {
+  let payload = match &first.payload {
+    RunEventPayload::RunAdmitted(admission)
+      if first.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V11
+        && admission.definition_hash == occurrence.definition_hash
+        && admission.trigger.id == occurrence.trigger_id
+        && admission.trigger.handler == occurrence.trigger_handler
+        && first.occurred_at == occurrence.received_at
+        && admission.admitted_at == occurrence.received_at =>
+    {
+      &admission.payload
+    }
+    RunEventPayload::RunStarted(start)
+      if matches!(
+        first.event_schema_version,
+        RUN_EVENT_SCHEMA_VERSION_V7
+          | RUN_EVENT_SCHEMA_VERSION_V8
+          | RUN_EVENT_SCHEMA_VERSION_V9
+          | crate::RUN_EVENT_SCHEMA_VERSION_V10
+      ) && start.workflow_id == occurrence.workflow_id
+        && start.definition_hash == occurrence.definition_hash
+        && start.trigger_id.as_deref() == Some(occurrence.trigger_id.as_str())
+        && start.trigger_handler.as_deref() == Some(occurrence.trigger_handler.as_str())
+        && start.trigger_occurrence_id.as_deref() == Some(occurrence.occurrence_id.as_str())
+        && first.occurred_at == occurrence.received_at =>
+    {
+      &start.trigger
+    }
+    _ => {
+      return Err(DurableStoreError::TriggerHistoryInvalid(
+        "occurrence fields contradict its durable admission event".to_string(),
+      ));
+    }
+  };
+  if canonical_payload_hash(payload)? != occurrence.payload_hash {
     return Err(DurableStoreError::TriggerHistoryInvalid(
-      "occurrence run does not begin with run_started v7 or v8".to_string(),
+      "occurrence payload contradicts its durable admission event".to_string(),
     ));
   }
-  if start.workflow_id != occurrence.workflow_id
-    || start.definition_hash != occurrence.definition_hash
-    || start.trigger_id.as_deref() != Some(occurrence.trigger_id.as_str())
-    || start.trigger_handler.as_deref() != Some(occurrence.trigger_handler.as_str())
-    || start.trigger_occurrence_id.as_deref() != Some(occurrence.occurrence_id.as_str())
-    || occurred_at != &occurrence.received_at
-    || canonical_payload_hash(&start.trigger)? != occurrence.payload_hash
-  {
-    return Err(DurableStoreError::TriggerHistoryInvalid(
-      "occurrence fields contradict its durable run_started event".to_string(),
-    ));
-  }
-  Ok(start.trigger.clone())
+  Ok(payload.clone())
 }
 
 fn run_binding_in_transaction(
@@ -6691,26 +7686,127 @@ fn write_run_summary(
     return Ok(());
   };
   let projection = fold_events(events)?;
-  let workflow_id = projection.workflow_id.as_deref().ok_or_else(|| {
-    DurableStoreError::Contract("A run summary requires a started workflow.".to_string())
-  })?;
+  let workflow_id: String = connection.query_row(
+    "SELECT workflow_id FROM woml_runs WHERE run_id = ?1",
+    [&first.run_id],
+    |row| row.get(0),
+  )?;
   let updated_at = events.last().unwrap().occurred_at;
   connection.execute(
-    "INSERT INTO woml_run_summaries(run_id, workflow_id, status, started_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5)
+    "INSERT INTO woml_run_summaries(
+       run_id, workflow_id, status, admitted_at, started_at, updated_at,
+       queue_name, waiting_for, eligible_at
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL)
      ON CONFLICT(run_id) DO UPDATE SET
        workflow_id = excluded.workflow_id,
        status = excluded.status,
+       admitted_at = excluded.admitted_at,
        started_at = excluded.started_at,
-       updated_at = excluded.updated_at",
+       updated_at = excluded.updated_at,
+       queue_name = excluded.queue_name",
     params![
       first.run_id,
       workflow_id,
       PublicRunStatus::from(projection.status).as_str(),
       first.occurred_at.to_rfc3339(),
+      projection.started_at.map(|value| value.to_rfc3339()),
       updated_at.to_rfc3339(),
+      projection.queue,
     ],
   )?;
+  Ok(())
+}
+
+fn write_runtime_policy_indexes_for_run(
+  connection: &Connection,
+  events: &[RunEvent],
+) -> Result<(), DurableStoreError> {
+  let Some(RunEvent {
+    run_id,
+    payload: RunEventPayload::RunAdmitted(admission),
+    ..
+  }) = events.first()
+  else {
+    return Ok(());
+  };
+  let workflow_id: String = connection.query_row(
+    "SELECT workflow_id FROM woml_runs WHERE run_id = ?1",
+    [run_id],
+    |row| row.get(0),
+  )?;
+  let occurrence_sequence = i64::try_from(admission.occurrence_sequence).map_err(|_| {
+    DurableStoreError::Contract("occurrenceSequence exceeds SQLite integer range".to_string())
+  })?;
+  connection.execute(
+    "INSERT INTO woml_runtime_policy_bindings(
+       run_id, workflow_id, definition_hash, policy_hash, queue_name, admitted_at,
+       occurrence_sequence
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+     ON CONFLICT(run_id) DO UPDATE SET
+       workflow_id = excluded.workflow_id,
+       definition_hash = excluded.definition_hash,
+       policy_hash = excluded.policy_hash,
+       queue_name = excluded.queue_name,
+       admitted_at = excluded.admitted_at,
+       occurrence_sequence = excluded.occurrence_sequence",
+    params![
+      run_id,
+      workflow_id,
+      admission.definition_hash,
+      admission.policy_hash,
+      admission.queue.name,
+      admission.admitted_at.to_rfc3339(),
+      occurrence_sequence,
+    ],
+  )?;
+  connection.execute(
+    "DELETE FROM woml_runtime_policy_queue WHERE run_id = ?1",
+    [run_id],
+  )?;
+  connection.execute(
+    "DELETE FROM woml_runtime_policy_starts WHERE run_id = ?1",
+    [run_id],
+  )?;
+  let projection = fold_events(events)?;
+  if projection.status == RunStatus::Queued {
+    connection.execute(
+      "INSERT INTO woml_runtime_policy_queue(
+         run_id, workflow_id, queue_name, admitted_at, occurrence_sequence
+       ) VALUES (?1, ?2, ?3, ?4, ?5)",
+      params![
+        run_id,
+        workflow_id,
+        admission.queue.name,
+        admission.admitted_at.to_rfc3339(),
+        occurrence_sequence,
+      ],
+    )?;
+  }
+  if let Some(started_at) = projection.started_at {
+    connection.execute(
+      "INSERT INTO woml_runtime_policy_starts(run_id, workflow_id, started_at)
+       VALUES (?1, ?2, ?3)",
+      params![run_id, workflow_id, started_at.to_rfc3339()],
+    )?;
+  }
+  Ok(())
+}
+
+fn rebuild_runtime_policy_indexes(connection: &Connection) -> Result<(), DurableStoreError> {
+  connection.execute("DELETE FROM woml_runtime_policy_queue", [])?;
+  connection.execute("DELETE FROM woml_runtime_policy_starts", [])?;
+  connection.execute("DELETE FROM woml_runtime_policy_bindings", [])?;
+  let run_ids = {
+    let mut statement = connection.prepare("SELECT run_id FROM woml_runs ORDER BY run_id")?;
+    let rows = statement
+      .query_map([], |row| row.get::<_, String>(0))?
+      .collect::<Result<Vec<_>, _>>()?;
+    rows
+  };
+  for run_id in run_ids {
+    let events = load_events(connection, &run_id)?;
+    write_runtime_policy_indexes_for_run(connection, &events)?;
+  }
   Ok(())
 }
 
@@ -6739,11 +7835,13 @@ fn append_to_history(
   event_schema_version: u32,
   payload: RunEventPayload,
 ) -> Result<RunEvent, DurableStoreError> {
-  let payloads = if event_schema_version == crate::RUN_EVENT_SCHEMA_VERSION_V10
-    && matches!(
-      payload,
-      RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
-    ) {
+  let payloads = if matches!(
+    event_schema_version,
+    crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+  ) && matches!(
+    payload,
+    RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
+  ) {
     expand_model_v11_payload(&definition_for_run(transaction, run_id)?, run_id, payload)?
   } else {
     vec![payload]
@@ -6807,6 +7905,7 @@ fn append_single_to_history(
   )?;
   events.push(event.clone());
   write_run_summary(transaction, events)?;
+  write_runtime_policy_indexes_for_run(transaction, events)?;
   Ok(event)
 }
 
@@ -6852,7 +7951,8 @@ fn attempt_run_failed_data(
     | RUN_EVENT_SCHEMA_VERSION_V7
     | RUN_EVENT_SCHEMA_VERSION_V8
     | RUN_EVENT_SCHEMA_VERSION_V9
-    | crate::RUN_EVENT_SCHEMA_VERSION_V10 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V10
+    | crate::RUN_EVENT_SCHEMA_VERSION_V11 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -6992,13 +8092,13 @@ impl DurableDagEngine {
     payload: RunEventPayload,
   ) -> Result<RunProjection, DurableEngineError> {
     let event_id = event_id.into();
-    if run_event_schema_version_for_model(self.workflow.schema_version)
-      == crate::RUN_EVENT_SCHEMA_VERSION_V10
-      && matches!(
-        &payload,
-        RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
-      )
-    {
+    if matches!(
+      run_event_schema_version_for_model(self.workflow.schema_version),
+      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+    ) && matches!(
+      &payload,
+      RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
+    ) {
       let translated = expand_model_v11_payload(&self.workflow, run_id, payload)?;
       return Ok(
         self.store.append_payloads_atomically(

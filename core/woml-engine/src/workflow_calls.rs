@@ -23,6 +23,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::runtime::PolicyExecutionRegistry;
+
 use crate::{
   capability::CapabilityIdentityMode, event::is_definition_hash,
   execute_admitted_trigger_run_durable, AttemptFailureKind, CapabilityCallRequest,
@@ -386,6 +388,7 @@ struct WorkflowCallExecutionConfig {
   workflow_call_progress_reporter: Option<WorkflowCallProgressReporter>,
   resolved_secrets: Arc<BTreeMap<String, String>>,
   capability_registry: Weak<CapabilityRegistry>,
+  policy_execution_registry: PolicyExecutionRegistry,
 }
 
 impl WorkflowCallExecutionConfig {
@@ -402,6 +405,7 @@ impl WorkflowCallExecutionConfig {
       workflow_call_progress_reporter: options.workflow_call_progress_reporter.clone(),
       resolved_secrets: Arc::clone(&options.resolved_secrets),
       capability_registry: Arc::downgrade(&options.capability_registry),
+      policy_execution_registry: options.policy_execution_registry(),
     }
   }
 
@@ -772,27 +776,43 @@ async fn execute_child_and_wait(
 ) -> Result<Value, CapabilityFailure> {
   let admission = outcome.admission;
   let progress_reporter = execution.workflow_call_progress_reporter.clone();
-  match route {
-    PreparedWorkflowCallRoute::Local => {
-      dispatch_admitted_workflow_call(
-        database_path.clone(),
-        admission.clone(),
-        execution.runtime_options()?,
-      )
-      .await?;
-    }
-    PreparedWorkflowCallRoute::Remote(route) => {
-      wake_remote_workflow_call(&database_path, &route, &admission).await?;
-    }
+  let parent_policy = execution
+    .policy_execution_registry
+    .read()
+    .await
+    .get(&admission.parent_run_id)
+    .and_then(Weak::upgrade);
+  if let Some(policy) = &parent_policy {
+    policy.suspend().await.map_err(policy_slot_failure)?;
   }
-  observe_existing_child(
-    &database_path,
-    &admission,
-    timeout_ms,
-    &cancellation,
-    progress_reporter.as_ref(),
-  )
-  .await
+  let result = async {
+    match route {
+      PreparedWorkflowCallRoute::Local => {
+        dispatch_admitted_workflow_call(
+          database_path.clone(),
+          admission.clone(),
+          execution.runtime_options()?,
+        )
+        .await?;
+      }
+      PreparedWorkflowCallRoute::Remote(route) => {
+        wake_remote_workflow_call(&database_path, &route, &admission).await?;
+      }
+    }
+    observe_existing_child(
+      &database_path,
+      &admission,
+      timeout_ms,
+      &cancellation,
+      progress_reporter.as_ref(),
+    )
+    .await
+  }
+  .await;
+  if let Some(policy) = &parent_policy {
+    policy.resume().await.map_err(policy_slot_failure)?;
+  }
+  result
 }
 
 fn report_workflow_call_admitted(
@@ -1029,6 +1049,7 @@ async fn observe_existing_child(
       }
       RunStatus::Cancelled => return Err(workflow_call_child_failed(admission)),
       RunStatus::NotStarted
+      | RunStatus::Queued
       | RunStatus::Running
       | RunStatus::Cancelling
       | RunStatus::Finalizing => {}
@@ -1244,6 +1265,15 @@ fn workflow_call_unavailable() -> CapabilityFailure {
     CapabilityFailureKind::ServiceRejected,
     "WOML_WORKFLOW_TARGET_UNAVAILABLE",
     "The durable workflow call authority is unavailable.",
+    true,
+  )
+}
+
+fn policy_slot_failure(error: crate::RuntimeExecutionError) -> CapabilityFailure {
+  workflow_call_failure(
+    CapabilityFailureKind::ServiceRejected,
+    "WOML_POLICY_SLOT_UNAVAILABLE",
+    &format!("The parent workflow could not transition its execution slot: {error}"),
     true,
   )
 }
