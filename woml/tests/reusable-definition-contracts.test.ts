@@ -4,6 +4,12 @@ import { resolve } from 'node:path';
 
 import Ajv2020 from 'ajv/dist/2020';
 
+import {
+  buildWomlReusableDefinitionPackage,
+  parseWoml,
+  resolveWomlReusableDefinitionGraph,
+} from '../src';
+
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const schemaRoot = resolve(repositoryRoot, 'docs/schemas');
 const fixtureRoot = resolve(import.meta.dir, 'fixtures/reusable-definitions');
@@ -50,6 +56,29 @@ function expectValid(validate: any, value: unknown): void {
 }
 
 describe('frozen reusable definition contracts', () => {
+  test('validates a compiler-produced reusable-step package', async () => {
+    const path = resolve(fixtureRoot, 'custom-step-workflow.woml');
+    const document = parseWoml(readFileSync(path, 'utf8'), { file: path });
+    const graph = resolveWomlReusableDefinitionGraph(document, {
+      sourcePath: path,
+      projectRoot: fixtureRoot,
+    });
+    const definitionPackage = await buildWomlReusableDefinitionPackage(
+      document,
+      graph,
+      { sourcePath: path, projectRoot: fixtureRoot }
+    );
+    const ajv = validators();
+    expectValid(
+      ajv.getSchema('https://cronflow.dev/schemas/compiled-workflow-model/v14'),
+      definitionPackage.workflow.model
+    );
+    expectValid(
+      ajv.getSchema('https://woml.dev/schemas/woml-definition-package.v9.schema.json'),
+      definitionPackage
+    );
+  });
+
   test('validates Model v14 and Definition Package v9 reviewed artifacts', () => {
     const ajv = validators();
     const model = fixture('model-v14.reviewed.json');

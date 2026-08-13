@@ -19,8 +19,10 @@ import {
 import { parse } from 'acorn';
 
 import {
+  compilePreparedReusableWorkflow,
   compileWomlWithModules,
   inspectValidatedWomlDocument,
+  prepareResolvedReusableWorkflow,
   type ValidatedModuleDeclaration,
 } from './compiler';
 import type {
@@ -32,6 +34,7 @@ import type {
   CompiledWorkflowDefinitionV14,
   CompiledWorkflowDefinitionV9,
 } from './model';
+import type { WomlReusableDefinitionGraph } from './reusable-definitions';
 import {
   SourceFile,
   WomlCompileError,
@@ -352,7 +355,21 @@ export interface WomlDefinitionPackageV9
     readonly modelDigest: string;
     readonly model: CompiledWorkflowDefinitionV14;
   };
-  readonly definitions: readonly [];
+  readonly definitions: readonly WomlDefinitionPackageReusableDefinitionV9[];
+}
+
+export interface WomlDefinitionPackageReusableDefinitionV9 {
+  readonly alias: string;
+  readonly kind: 'reusable-step' | 'notification-provider';
+  readonly source: string;
+  readonly digest: string;
+  readonly dependencies: readonly string[];
+  readonly props: readonly {
+    readonly name: string;
+    readonly bindingName: string;
+    readonly required: boolean;
+    readonly secret: boolean;
+  }[];
 }
 
 interface AstNode {
@@ -1334,6 +1351,217 @@ export async function buildWomlExecutableDefinitionPackage(
     profile: WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE,
     ...common,
     workflow: { ...common.workflow, model },
+  };
+  return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+}
+
+/**
+ * Builds the immutable SCP3 package for workflows that invoke reusable steps.
+ * Imported WOML definitions stay source artifacts; their operation scripts
+ * and definition-local modules receive stable, package-local identities.
+ */
+export async function buildWomlReusableDefinitionPackage(
+  document: WomlSourceDocument,
+  graph: WomlReusableDefinitionGraph,
+  options: WomlModuleResolverOptions = {}
+): Promise<WomlDefinitionPackageV9> {
+  if (graph.root.kind !== 'workflow') {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_DEFINITION_NOT_RUNNABLE',
+      'A reusable definition package requires a workflow entry document.',
+      graph.root.definition.openTagSpan
+    );
+  }
+  const provider = graph.definitions.find(
+    definition => definition.kind === 'notification-provider'
+  );
+  if (provider !== undefined) {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_CUSTOM_PROVIDER_COMPILATION_UNAVAILABLE',
+      `Notification provider <${provider.alias}> is valid source, but provider lowering begins in SCP5.`,
+      graph.root.definition.openTagSpan
+    );
+  }
+  const sourcePath = resolve(options.sourcePath ?? document.file);
+  const projectRoot = realpathSync(
+    resolve(options.projectRoot ?? dirname(sourcePath))
+  );
+  const prepared = prepareResolvedReusableWorkflow(document, graph, {
+    projectRoot,
+  });
+  if (prepared.invocations.length === 0) {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_REUSABLE_STEP_USAGE_REQUIRED',
+      'Definition Package v9 reusable-step compilation requires at least one custom-step invocation.',
+      graph.root.definition.openTagSpan
+    );
+  }
+
+  const inspected = buildWomlDefinitionPackage(prepared.document, {
+    sourcePath,
+    projectRoot,
+  });
+  const basePackage = inspected.modules.length > 0
+    ? await buildWomlExecutableDefinitionPackage(prepared.document, {
+        sourcePath,
+        projectRoot,
+      })
+    : undefined;
+  const moduleRuntime = basePackage?.workflow.model.moduleRuntime;
+  const model = compilePreparedReusableWorkflow(prepared, moduleRuntime);
+  const modelContent = canonicalJson(model);
+  const modelDigest = sha256(modelContent);
+
+  const baseSources = new Map(
+    (basePackage?.sources ?? inspected.sources).map(source => [source.path, source])
+  );
+  const rootDefinitionPaths = prepared.definitions.map(item => item.source).sort();
+  const definitionByPath = new Map(
+    prepared.definitions.map(item => [item.source, item])
+  );
+  const sources: WomlDefinitionPackageSourceV1[] = graph.sources
+    .map(source => {
+      const existing = baseSources.get(source.path);
+      const definition = definitionByPath.get(source.path);
+      const dependencies = source.path === prepared.rootSource
+        ? [...new Set([...(existing?.dependencies ?? []), ...rootDefinitionPaths])].sort()
+        : definition === undefined
+          ? existing?.dependencies ?? []
+          : definition.imports
+              .map(item =>
+                relative(
+                  projectRoot,
+                  resolve(dirname(sourcePath), item.from)
+                ).split(sep).join('/')
+              )
+              .sort();
+      return {
+        path: source.path,
+        mediaType: source.kind === 'script-module'
+          ? source.path.endsWith('.ts')
+            ? 'text/typescript' as const
+            : 'text/javascript' as const
+          : 'application/woml+xml' as const,
+        digest: source.digest,
+        dependencies,
+      };
+    })
+    .sort((left, right) => left.path.localeCompare(right.path));
+
+  const moduleArtifacts = (basePackage?.artifacts ?? []).filter(
+    artifact => artifact.kind === 'module-bundle' || artifact.kind === 'source-map'
+  );
+  const scriptArtifacts: WomlDefinitionPackageArtifactV2[] = prepared.definitions.map(
+    definition => ({
+      path: `definitions/${definition.scriptArtifactId}.js`,
+      kind: 'module-bundle' as const,
+      mediaType: 'text/javascript' as const,
+      digest: sha256(definition.scriptSource),
+      content: definition.scriptSource,
+    })
+  );
+  const lifecycleArtifacts: WomlDefinitionPackageArtifactV2[] = prepared.invocations.flatMap(
+    invocation => {
+      const definition = prepared.definitions.find(
+        item => item.alias === invocation.alias
+      )!;
+      return definition.lifecycleScripts.map(script => ({
+        path: `definitions/${invocation.invocationId}.${script.hook}.${script.index}.js`,
+        kind: 'module-bundle' as const,
+        mediaType: 'text/javascript' as const,
+        digest: sha256(script.source),
+        content: script.source,
+      }));
+    }
+  );
+  const declarations = [
+    '// Generated by WOML reusable definitions SCP3. Do not edit.',
+    ...prepared.definitions.flatMap(definition => [
+      `export interface ${definition.alias.replace(/(^|-)([a-z0-9])/g, (_, _dash: string, value: string) => value.toUpperCase())}Props {`,
+      ...definition.props.map(prop =>
+        `  readonly ${JSON.stringify(prop.bindingName)}${prop.required ? '' : '?'}: string;`
+      ),
+      '}',
+    ]),
+    '',
+  ].join('\n');
+  const artifacts: WomlDefinitionPackageArtifactV2[] = ([
+    {
+      path: 'workflow.compiled.v14.json',
+      kind: 'workflow-model',
+      mediaType: 'application/json',
+      digest: modelDigest,
+      content: modelContent,
+    },
+    ...moduleArtifacts,
+    ...scriptArtifacts,
+    ...lifecycleArtifacts,
+    {
+      path: 'types/props.generated.d.ts',
+      kind: 'type-declarations',
+      mediaType: 'text/typescript',
+      digest: sha256(declarations),
+      content: declarations,
+    },
+  ] satisfies WomlDefinitionPackageArtifactV2[]).sort((left, right) =>
+    left.path.localeCompare(right.path)
+  );
+  const definitions: WomlDefinitionPackageReusableDefinitionV9[] = prepared.definitions
+    .map(definition => ({
+      alias: definition.alias,
+      kind: 'reusable-step' as const,
+      source: definition.source,
+      digest: definition.digest,
+      dependencies: sources.find(source => source.path === definition.source)?.dependencies ?? [],
+      props: definition.props.map(prop => ({
+        name: prop.name,
+        bindingName: prop.bindingName,
+        required: prop.required,
+        secret: prop.secret,
+      })),
+    }))
+    .sort((left, right) => left.alias.localeCompare(right.alias));
+  const secrets = [...new Set(
+    prepared.invocations.flatMap(invocation =>
+      invocation.props.flatMap(prop =>
+        prop.expression.kind === 'secret' ? [prop.expression.name] : []
+      )
+    )
+  )].sort();
+  const unsigned = {
+    schemaVersion: 9 as const,
+    profile: WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE,
+    executable: true as const,
+    runtimeReady: false,
+    workflow: {
+      id: model.workflowId,
+      source: prepared.rootSource,
+      modelDigest,
+      model,
+    },
+    definitions,
+    modules: basePackage?.modules ?? [],
+    sources,
+    artifacts,
+    compiler: basePackage?.compiler ?? {
+      name: 'woml' as const,
+      version: '0.1.0' as const,
+      resolverProfile: WOML_MODULE_RESOLVER_PROFILE,
+      bundler: {
+        name: 'bun' as const,
+        version: Bun.version,
+        target: 'bun' as const,
+        format: 'esm' as const,
+        sourceMap: 'external' as const,
+      },
+    },
+    permissions: {
+      secrets,
+      networkOrigins: basePackage?.permissions.networkOrigins ?? [],
+    },
   };
   return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
 }

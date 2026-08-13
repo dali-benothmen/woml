@@ -73,6 +73,47 @@ describe('reusable definition CLI authoring', () => {
     ]));
   });
 
+  test('check compiles a custom-step-only workflow while run remains gated', async () => {
+    const path = resolve(fixtureRoot, 'custom-step-workflow.woml');
+    const checked = await invoke(['check', path, '--json']);
+    expect(checked.exitCode).toBe(0);
+    expect(checked.stderr).toBe('');
+    const definitionPackage = JSON.parse(checked.stdout);
+    expect(definitionPackage).toMatchObject({
+      schemaVersion: 9,
+      profile: 'woml.definition-package/v9',
+      runtimeReady: false,
+      workflow: { model: { schemaVersion: 14 } },
+    });
+
+    const run = await invoke(['run', path]);
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toContain('WOML_REUSABLE_EXECUTION_UNAVAILABLE');
+    expect(run.stderr).toContain('durable custom-step execution begins in SCP4');
+  });
+
+  test('package identity is stable across different directories and timestamps', async () => {
+    const otherRoot = await mkdtemp(resolve(tmpdir(), 'woml-reusable-copy-'));
+    try {
+      await cp(sourceRoot, otherRoot, { recursive: true });
+      const first = await invoke([
+        'check',
+        resolve(fixtureRoot, 'custom-step-workflow.woml'),
+        '--json',
+      ]);
+      const second = await invoke([
+        'check',
+        resolve(otherRoot, 'custom-step-workflow.woml'),
+        '--json',
+      ]);
+      expect(first.exitCode).toBe(0);
+      expect(second.exitCode).toBe(0);
+      expect(JSON.parse(second.stdout)).toEqual(JSON.parse(first.stdout));
+    } finally {
+      await rm(otherRoot, { recursive: true, force: true });
+    }
+  });
+
   test('explains direct definition runs and gates workflow execution until lowering', async () => {
     const direct = await invoke([
       'run',

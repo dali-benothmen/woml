@@ -1,4 +1,6 @@
 import Ajv2020 from 'ajv/dist/2020';
+import { readFileSync } from 'node:fs';
+import { dirname, relative, resolve, sep } from 'node:path';
 
 import {
   inspectCompiledWorkflowGraph,
@@ -8,6 +10,7 @@ import {
   type CompiledLifecycleHookV1,
   type CompiledModuleRuntimeV1,
   type CompiledRuntimePolicyV1,
+  type CompiledReusableStepInvocationV1,
   type CompiledControlChoiceV1,
   type CompiledContextVisibilityV1,
   type CompiledForkV1,
@@ -35,9 +38,11 @@ import {
 } from './model';
 import {
   analyzeWomlLifecycleScript,
+  analyzeWomlReusableScript,
   analyzeWomlScript,
   type ScriptAnalysis,
 } from './script-analysis';
+import { parseWoml } from './parser';
 import {
   SourceFile,
   WomlCompileError,
@@ -59,6 +64,7 @@ import { parseSecretReference, requireSecretReference } from './secrets';
 import {
   assertWomlDocumentRunnable,
   inspectWomlDocument,
+  type WomlDocumentInspection,
   type WomlReusableDefinitionGraph,
 } from './reusable-definitions';
 
@@ -5371,9 +5377,337 @@ export function validateResolvedReusableWorkflow(
   validateDocument({ ...document, root });
 }
 
+export interface PreparedReusableStepDefinition {
+  readonly alias: string;
+  readonly source: string;
+  readonly digest: string;
+  readonly scriptArtifactId: string;
+  readonly scriptSource: string;
+  readonly lifecycleScripts: readonly {
+    readonly hook: 'on-success' | 'on-error' | 'on-complete';
+    readonly index: number;
+    readonly source: string;
+  }[];
+  readonly imports: readonly {
+    readonly name: string;
+    readonly runtimeName: string;
+    readonly from: string;
+  }[];
+  readonly props: WomlDocumentInspection['props'];
+}
+
+export interface PreparedReusableWorkflow {
+  readonly document: WomlSourceDocument;
+  readonly rootSource: string;
+  readonly definitions: readonly PreparedReusableStepDefinition[];
+  readonly invocations: readonly CompiledReusableStepInvocationV1[];
+  readonly invocationAttributes: ReadonlyMap<string, Readonly<Record<string, WomlSourceAttribute>>>;
+}
+
+function reusableRuntimeName(alias: string, moduleName: string): string {
+  const upper = (value: string): string =>
+    value
+      .split('-')
+      .filter(Boolean)
+      .map(part => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
+      .join('');
+  return `reusable${upper(alias)}${upper(moduleName)}`;
+}
+
+function portableRelative(fromDirectory: string, target: string): string {
+  const value = relative(fromDirectory, target).split(sep).join('/');
+  return value.startsWith('.') ? value : `./${value}`;
+}
+
+function syntheticAttribute(
+  name: string,
+  value: string,
+  span: SourceSpan
+): WomlSourceAttribute {
+  return { name, value, span, nameSpan: span, valueSpan: span };
+}
+
+function reusableLifecycleIds(
+  invocationId: string,
+  lifecycle: WomlSourceElement | undefined
+): CompiledReusableStepInvocationV1['lifecycle'] | undefined {
+  if (lifecycle === undefined) return undefined;
+  const result: {
+    onSuccess?: readonly string[];
+    onError?: readonly string[];
+    onComplete?: readonly string[];
+  } = {};
+  for (const child of lifecycle.children) {
+    if (child.kind !== 'element') continue;
+    const ids = child.children
+      .filter((action): action is WomlSourceElement => action.kind === 'element')
+      .map((_, index) => `${invocationId}:${child.name}:${index}`);
+    if (child.name === 'on-success') result.onSuccess = ids;
+    if (child.name === 'on-error') result.onError = ids;
+    if (child.name === 'on-complete') result.onComplete = ids;
+  }
+  return Object.keys(result).length === 0 ? undefined : result;
+}
+
+/**
+ * Replaces each resolved reusable-step tag with an ordinary workflow step.
+ * The returned document is an internal compiler view only: source provenance
+ * stays attached to the Model v14 descriptor and the user's source is never
+ * rewritten on disk.
+ */
+export function prepareResolvedReusableWorkflow(
+  document: WomlSourceDocument,
+  graph: WomlReusableDefinitionGraph,
+  options: { readonly projectRoot: string }
+): PreparedReusableWorkflow {
+  if (graph.root.kind !== 'workflow') {
+    failCompile(
+      document,
+      'WOML_DEFINITION_NOT_RUNNABLE',
+      'Only a workflow document can be lowered into a reusable-step workflow.',
+      graph.root.definition.openTagSpan
+    );
+  }
+  validateResolvedReusableWorkflow(document, graph);
+  const rootDirectory = dirname(resolve(document.file));
+  const directDefinitions = new Map(
+    graph.root.imports
+      .filter(item => item.kind === 'reusable-definition')
+      .map(item => [
+        item.name,
+        relative(
+          options.projectRoot,
+          resolve(dirname(document.file), item.from)
+        ).split(sep).join('/'),
+      ])
+  );
+  const definitions = new Map<string, {
+    prepared: PreparedReusableStepDefinition;
+    inspection: WomlDocumentInspection;
+    script: WomlSourceElement;
+  }>();
+  for (const resolvedDefinition of graph.definitions) {
+    if (
+      resolvedDefinition.kind !== 'reusable-step' ||
+      directDefinitions.get(resolvedDefinition.alias) !== resolvedDefinition.sourcePath ||
+      definitions.has(resolvedDefinition.alias)
+    ) continue;
+    const absolutePath = resolve(options.projectRoot, resolvedDefinition.sourcePath);
+    const definitionDocument = parseWoml(readFileSync(absolutePath, 'utf8'), {
+      file: absolutePath,
+    });
+    const inspection = inspectWomlDocument(definitionDocument);
+    if (inspection.kind !== 'reusable-step') continue;
+    const script = inspection.definition.children.find(
+      (child): child is WomlSourceElement =>
+        child.kind === 'element' && child.name === 'script'
+    )!;
+    const raw = script.children[0];
+    const originalSource = raw?.kind === 'raw' ? raw.value : '';
+    const analysis = analyzeWomlReusableScript(originalSource);
+    if (analysis.issue !== undefined) {
+      const sourceFile = new SourceFile(definitionDocument.file, definitionDocument.source);
+      const start = script.children[0].span.start.offset + analysis.issue.start;
+      throw new WomlCompileError({
+        phase: 'compile',
+        code: analysis.issue.code,
+        message: analysis.issue.message,
+        file: definitionDocument.file,
+        location: sourceFile.span(
+          start,
+          start + Math.max(1, analysis.issue.end - analysis.issue.start)
+        ),
+        ...(analysis.issue.hint === undefined ? {} : { hint: analysis.issue.hint }),
+      });
+    }
+    const moduleImports = inspection.imports
+      .filter(item => item.kind === 'script-module')
+      .map(item => ({
+        name: item.name,
+        runtimeName: reusableRuntimeName(resolvedDefinition.alias, item.name),
+        from: portableRelative(
+          rootDirectory,
+          resolve(dirname(absolutePath), item.from)
+        ),
+      }));
+    const rewriteServices = (value: string): string => {
+      let rewritten = value;
+      for (const imported of moduleImports) {
+        rewritten = rewritten.replace(
+          new RegExp(`\\bservices\\.${imported.name}\\b`, 'g'),
+          `services.${imported.runtimeName}`
+        );
+      }
+      return rewritten;
+    };
+    const scriptSource = rewriteServices(originalSource);
+    const scriptArtifactId = `reusable_${resolvedDefinition.alias.replaceAll('-', '_')}_${resolvedDefinition.digest.slice(7, 23)}`;
+    const lifecycleScripts = inspection.lifecycle?.children.flatMap(hook => {
+      if (hook.kind !== 'element') return [];
+      return hook.children.flatMap((action, index) => {
+        if (action.kind !== 'element' || action.name !== 'script') return [];
+        const body = action.children[0];
+        const source = body?.kind === 'raw' ? body.value : '';
+        const analysis = analyzeWomlLifecycleScript(source);
+        if (analysis.issue !== undefined) {
+          const sourceFile = new SourceFile(definitionDocument.file, definitionDocument.source);
+          const start = (body?.span.start.offset ?? action.openTagSpan.start.offset) + analysis.issue.start;
+          throw new WomlCompileError({
+            phase: 'compile',
+            code: analysis.issue.code,
+            message: analysis.issue.message,
+            file: definitionDocument.file,
+            location: sourceFile.span(
+              start,
+              start + Math.max(1, analysis.issue.end - analysis.issue.start)
+            ),
+            ...(analysis.issue.hint === undefined ? {} : { hint: analysis.issue.hint }),
+          });
+        }
+        return [{
+          hook: hook.name as 'on-success' | 'on-error' | 'on-complete',
+          index,
+          source: rewriteServices(source),
+        }];
+      });
+    }) ?? [];
+    const prepared: PreparedReusableStepDefinition = {
+      alias: resolvedDefinition.alias,
+      source: resolvedDefinition.sourcePath,
+      digest: resolvedDefinition.digest,
+      scriptArtifactId,
+      scriptSource,
+      lifecycleScripts,
+      imports: moduleImports,
+      props: inspection.props,
+    };
+    definitions.set(resolvedDefinition.alias, { prepared, inspection, script });
+  }
+
+  const invocations: CompiledReusableStepInvocationV1[] = [];
+  const invocationAttributes = new Map<string, Readonly<Record<string, WomlSourceAttribute>>>();
+  const transform = (element: WomlSourceElement): WomlSourceElement => {
+    const found = definitions.get(element.name);
+    if (found !== undefined) {
+      const invocationId = element.attributes.id!.value;
+      const definitionAttributes = found.inspection.definition.attributes;
+      const attributes: Record<string, WomlSourceAttribute> = {};
+      for (const name of [
+        'id',
+        'name',
+        'description',
+        'retry',
+        'retry-delay',
+        'retry-backoff',
+        'retry-max-delay',
+      ]) {
+        const attribute = element.attributes[name] ??
+          (name === 'name' || name === 'description'
+            ? definitionAttributes[name]
+            : undefined);
+        if (attribute !== undefined) attributes[name] = attribute;
+      }
+      const boundProps = found.prepared.props.flatMap(prop => {
+        const attribute = element.attributes[prop.name];
+        if (attribute === undefined) return [];
+        const secret = /^\{\{secrets\.([A-Z][A-Z0-9_]*)\}\}$/.exec(attribute.value);
+        const context = /^\{\{context\.(.+)\}\}$/.exec(attribute.value);
+        return [{
+          name: prop.name,
+          bindingName: prop.bindingName,
+          secret: prop.secret,
+          expression: secret !== null
+            ? { kind: 'secret' as const, name: secret[1] }
+            : context !== null
+              ? { kind: 'context' as const, path: context[1] }
+              : { kind: 'literal' as const, value: attribute.value },
+        }];
+      });
+      invocations.push({
+        kind: 'step',
+        invocationId,
+        nodeId: invocationId,
+        alias: found.prepared.alias,
+        definitionDigest: found.prepared.digest,
+        source: found.prepared.source,
+        scriptArtifactId: found.prepared.scriptArtifactId,
+        props: boundProps,
+        ...(found.inspection.lifecycle === undefined
+          ? {}
+          : { lifecycle: reusableLifecycleIds(invocationId, found.inspection.lifecycle) }),
+      });
+      invocationAttributes.set(invocationId, element.attributes);
+      const raw: WomlSourceRawText = {
+        kind: 'raw',
+        value: found.prepared.scriptSource,
+        span: found.script.children[0].span,
+      };
+      const script: WomlSourceElement = {
+        ...found.script,
+        children: [raw],
+      };
+      return { ...element, name: 'step', attributes, children: [script] };
+    }
+    return {
+      ...element,
+      children: element.children.map(child =>
+        child.kind === 'element' ? transform(child) : child
+      ),
+    };
+  };
+
+  let root = transform(document.root);
+  const imports = root.children.find(
+    (child): child is WomlSourceElement =>
+      child.kind === 'element' && child.name === 'imports'
+  );
+  const moduleChildren = [
+    ...(imports?.children.filter(
+      (child): child is WomlSourceElement =>
+        child.kind === 'element' &&
+        child.attributes.from?.value.endsWith('.woml') !== true
+    ) ?? []),
+    ...[...definitions.values()].flatMap(({ prepared, inspection }) =>
+      prepared.imports.map(imported => {
+        const declaration = inspection.imports.find(item => item.name === imported.name)!;
+        return {
+          ...declaration.element,
+          attributes: {
+            name: syntheticAttribute('name', imported.runtimeName, declaration.element.openTagSpan),
+            from: syntheticAttribute('from', imported.from, declaration.element.openTagSpan),
+          },
+        };
+      })
+    ),
+  ];
+  const children = root.children.filter(
+    child => child.kind !== 'element' || child.name !== 'imports'
+  );
+  if (moduleChildren.length > 0) {
+    const span = imports?.openTagSpan ?? root.openTagSpan;
+    children.unshift({
+      kind: 'element',
+      name: 'imports',
+      attributes: {},
+      children: moduleChildren,
+      span,
+      openTagSpan: span,
+    });
+  }
+  root = { ...root, children };
+  return {
+    document: { ...document, root },
+    rootSource: relative(options.projectRoot, resolve(document.file)).split(sep).join('/'),
+    definitions: [...definitions.values()].map(value => value.prepared),
+    invocations,
+    invocationAttributes,
+  };
+}
+
 function compileValidatedWoml(
   document: WomlSourceDocument,
-  moduleRuntime?: CompiledModuleRuntimeV1
+  moduleRuntime?: CompiledModuleRuntimeV1,
+  forceModelV14 = false
 ): CompiledWorkflowDefinition {
   assertWomlDocumentRunnable(document);
   const {
@@ -5386,7 +5720,7 @@ function compileValidatedWoml(
     lifecycle,
     runtimePolicy,
   } = validateDocument(document);
-  const usesModelV14 = flow.firstSwitch !== undefined;
+  const usesModelV14 = forceModelV14 || flow.firstSwitch !== undefined;
   const usesStructuredGraph =
     usesModelV14 ||
     flow.firstFork !== undefined ||
@@ -5636,6 +5970,75 @@ function compileValidatedWoml(
   }
 
   return compiled;
+}
+
+export function compilePreparedReusableWorkflow(
+  prepared: PreparedReusableWorkflow,
+  moduleRuntime?: CompiledModuleRuntimeV1
+): CompiledWorkflowDefinitionV14 {
+  const compiled = compileValidatedWoml(
+    prepared.document,
+    moduleRuntime,
+    true
+  );
+  if (compiled.schemaVersion !== 14) {
+    throw new Error('reusable-step lowering did not produce Model v14');
+  }
+  const invocationsByNode = new Map(
+    prepared.invocations.map(invocation => [invocation.nodeId, invocation])
+  );
+  const nodes = compiled.graph.nodes.map(node => {
+    const invocation = invocationsByNode.get(node.id);
+    if (invocation === undefined) return node;
+    const requiredSecrets = invocation.props
+      .flatMap(prop =>
+        prop.expression.kind === 'secret' ? [prop.expression.name] : []
+      )
+      .sort();
+    return {
+      ...node,
+      scriptRuntime: {
+        bindingVersion: 3 as const,
+        bindings: ['props', 'context', 'attempt', 'services'] as const,
+        requiredSecrets,
+      },
+      metadata: {
+        ...(node.metadata ?? {}),
+        reusableDefinition: {
+          alias: invocation.alias,
+          invocationSource: prepared.rootSource,
+          definitionSource: invocation.source,
+          definitionDigest: invocation.definitionDigest,
+        },
+      },
+    };
+  });
+  const visibility = new Map(
+    (compiled.graph.contextVisibility ?? []).map(item => [item.nodeId, item.stepIds])
+  );
+  for (const invocation of prepared.invocations) {
+    const available = new Set(visibility.get(invocation.nodeId) ?? []);
+    for (const prop of invocation.props) {
+      if (prop.expression.kind !== 'context' || !prop.expression.path.startsWith('steps.')) {
+        continue;
+      }
+      const referencedId = prop.expression.path.split('.')[1];
+      if (available.has(referencedId)) continue;
+      const attribute = prepared.invocationAttributes.get(invocation.invocationId)?.[prop.name];
+      failCompile(
+        prepared.document,
+        'WOML_REUSABLE_PROP_CONTEXT_UNAVAILABLE',
+        `Prop "${prop.name}" on <${invocation.alias}> cannot read step "${referencedId}" from this graph position.`,
+        attribute?.valueSpan ?? prepared.document.root.openTagSpan,
+        'Reference context.payload or a step that is guaranteed to be visible before this invocation.'
+      );
+    }
+  }
+  return {
+    ...compiled,
+    graph: { ...compiled.graph, nodes },
+    reusableDefinitions: prepared.invocations,
+  };
 }
 
 export function compileWoml(

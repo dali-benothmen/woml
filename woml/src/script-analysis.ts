@@ -298,7 +298,7 @@ function parseIssue(
 
 function analyzeScript(
   source: string,
-  mode: 'step' | 'lifecycle'
+  mode: 'step' | 'lifecycle' | 'reusable-step'
 ): ScriptAnalysis {
   let program: AstNode;
   try {
@@ -582,7 +582,8 @@ function analyzeScript(
     for (const identifier of declaredIdentifiers(node)) {
       if (
         identifier.name !== undefined &&
-        reservedBindings.has(identifier.name)
+        (reservedBindings.has(identifier.name) ||
+          (mode === 'reusable-step' && identifier.name === 'props'))
       ) {
         fail(
           issueAt(
@@ -650,12 +651,29 @@ function analyzeScript(
     }
 
     if (
+      mode === 'reusable-step' &&
+      node.type === 'MemberExpression' &&
+      memberRootIdentifier(node)?.name === 'props' &&
+      isWriteTarget(node, parent)
+    ) {
+      fail(
+        issueAt(
+          node,
+          source.length,
+          'WOML_REUSABLE_PROPS_READ_ONLY',
+          'The reusable props binding is immutable.',
+          'Read props values without replacing, deleting, or updating them.'
+        )
+      );
+    }
+
+    if (
       node.type === 'Identifier' &&
       node.name !== undefined &&
       !isNonValueIdentifier(node, parent)
     ) {
       if (node.name === 'lifecycle') {
-        if (mode === 'step') {
+        if (mode !== 'lifecycle') {
           fail(
             issueAt(
               node,
@@ -675,7 +693,29 @@ function analyzeScript(
             )
           );
         }
+      } else if (node.name === 'props' && mode === 'reusable-step') {
+        if (isWriteTarget(node, parent)) {
+          fail(
+            issueAt(
+              node,
+              source.length,
+              'WOML_REUSABLE_PROPS_READ_ONLY',
+              'The reusable props binding is immutable.'
+            )
+          );
+        }
       } else if (node.name === 'secrets') {
+        if (mode === 'reusable-step') {
+          fail(
+            issueAt(
+              node,
+              source.length,
+              'WOML_REUSABLE_SECRET_ACCESS_FORBIDDEN',
+              'Reusable step scripts cannot access secrets directly.',
+              'Declare a secret prop and pass one exact {{secrets.NAME}} reference at the invocation.'
+            )
+          );
+        }
         if (parent?.type === 'MemberExpression' && parent.object === node) {
           if (isWriteTarget(parent, grandparent)) {
             fail(
@@ -849,4 +889,8 @@ export function analyzeWomlScript(source: string): ScriptAnalysis {
 
 export function analyzeWomlLifecycleScript(source: string): ScriptAnalysis {
   return analyzeScript(source, 'lifecycle');
+}
+
+export function analyzeWomlReusableScript(source: string): ScriptAnalysis {
+  return analyzeScript(source, 'reusable-step');
 }

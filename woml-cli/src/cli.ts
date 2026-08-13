@@ -19,6 +19,7 @@ import packageMetadata from '../package.json' with { type: 'json' };
 import {
   buildWomlDefinitionPackage,
   buildWomlExecutableDefinitionPackage,
+  buildWomlReusableDefinitionPackage,
   buildWomlRuntimeDefinitionPackage,
   compileWoml,
   assertWomlDocumentRunnable,
@@ -1648,8 +1649,22 @@ async function runSingleCheckCommand(
         generateWomlReusableCustomData(reusableGraph),
         io
       );
+      const reusablePackage =
+        reusableGraph.root.kind === 'workflow' &&
+        reusableGraph.definitions.length > 0 &&
+        reusableGraph.definitions.every(
+          definition => definition.kind === 'reusable-step'
+        )
+          ? await buildWomlReusableDefinitionPackage(
+              document,
+              reusableGraph,
+              { sourcePath: filePath, projectRoot }
+            )
+          : undefined;
       if (options[0] === '--json') {
-        io.stdout(`${JSON.stringify(reusableGraph, null, 2)}\n`);
+        io.stdout(
+          `${JSON.stringify(reusablePackage ?? reusableGraph, null, 2)}\n`
+        );
         return 0;
       }
       if (reusableGraph.root.kind !== 'workflow') {
@@ -1669,8 +1684,10 @@ async function runSingleCheckCommand(
         );
       }
       io.stdout(
-        reusableGraph.root.kind === 'workflow'
-          ? 'Execution: reusable source is validated; custom steps begin in SCP3 and custom notification providers begin in SCP5.\n'
+        reusablePackage !== undefined
+          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom-step artifacts are ready; durable execution begins in SCP4.\n`
+          : reusableGraph.root.kind === 'workflow'
+            ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
           : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
       );
       return 0;

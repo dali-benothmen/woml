@@ -464,6 +464,9 @@ describe('MS3 runtime definition package', () => {
       executable: true,
       runtimeReady: true,
     });
+    if (actual.schemaVersion !== 3) {
+      throw new Error('expected Definition Package v3');
+    }
     expect(actual.compilationRootHash).not.toBe(actual.rootHash);
     expect({
       schemaVersion: actual.schemaVersion,

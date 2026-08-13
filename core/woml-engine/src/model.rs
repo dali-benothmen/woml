@@ -31,6 +31,8 @@ pub struct CompiledWorkflowDefinition {
   pub lifecycle: Option<CompiledLifecycleDefinition>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub runtime_policy: Option<CompiledRuntimePolicy>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub reusable_definitions: Option<Vec<CompiledReusableInvocation>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +261,67 @@ pub struct ScriptRuntimeBindings {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CompiledReusableInvocation {
+  Step {
+    #[serde(rename = "invocationId")]
+    invocation_id: String,
+    #[serde(rename = "nodeId")]
+    node_id: String,
+    alias: String,
+    #[serde(rename = "definitionDigest")]
+    definition_digest: String,
+    source: String,
+    #[serde(rename = "scriptArtifactId")]
+    script_artifact_id: String,
+    props: Vec<CompiledReusableBoundProp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<CompiledReusableLifecycle>,
+  },
+  NotificationProvider {
+    #[serde(rename = "providerId")]
+    provider_id: String,
+    alias: String,
+    #[serde(rename = "definitionDigest")]
+    definition_digest: String,
+    source: String,
+    #[serde(rename = "scriptArtifactId")]
+    script_artifact_id: String,
+    props: Vec<CompiledReusableBoundProp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<CompiledReusableLifecycle>,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledReusableBoundProp {
+  pub name: String,
+  pub binding_name: String,
+  pub secret: bool,
+  pub expression: CompiledReusablePropExpression,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum CompiledReusablePropExpression {
+  Literal { value: String },
+  Context { path: String },
+  Secret { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledReusableLifecycle {
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub on_success: Option<Vec<String>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub on_error: Option<Vec<String>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub on_complete: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledWorkflowEdge {
   pub id: String,
@@ -445,6 +508,8 @@ pub enum ModelIssueCode {
   InvalidContextVisibility,
   InvalidWorkflowSettlement,
   UnsupportedForkExecution,
+  InvalidReusableDefinition,
+  UnsupportedReusableExecution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -498,6 +563,207 @@ fn valid_secret_name(value: &str) -> bool {
     && characters.all(|character| {
       character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
     })
+}
+
+fn valid_reusable_alias(value: &str) -> bool {
+  let mut parts = value.split('-');
+  parts.clone().all(|part| {
+    !part.is_empty()
+      && matches!(part.chars().next(), Some(first) if first.is_ascii_lowercase())
+      && part
+        .chars()
+        .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+  }) && parts.next().is_some()
+    && value.len() <= 128
+}
+
+fn valid_sha256(value: &str) -> bool {
+  value.len() == 71
+    && value.starts_with("sha256:")
+    && value[7..]
+      .bytes()
+      .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_portable_path(value: &str) -> bool {
+  !value.is_empty()
+    && value.len() <= 1024
+    && !value.starts_with('/')
+    && !value.contains('\\')
+    && !value.split('/').any(|part| part == ".." || part.is_empty())
+}
+
+fn valid_reusable_context_path(path: &str) -> bool {
+  let identifiers_valid = |segments: &[&str]| {
+    segments.iter().all(|segment| {
+      let mut chars = segment.chars();
+      matches!(chars.next(), Some(first) if first == '_' || first == '$' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character == '$' || character.is_ascii_alphanumeric())
+    })
+  };
+  let segments = path.split('.').collect::<Vec<_>>();
+  match segments.as_slice() {
+    ["payload", rest @ ..] => identifiers_valid(rest),
+    ["steps", step, rest @ ..] => valid_public_structural_id(step) && identifiers_valid(rest),
+    _ => false,
+  }
+}
+
+fn reusable_prop_secrets(
+  props: &[CompiledReusableBoundProp],
+  subject: &str,
+  issues: &mut Vec<ModelIssue>,
+) -> Vec<String> {
+  let mut names = HashSet::new();
+  let mut bindings = HashSet::new();
+  let mut secrets = Vec::new();
+  for prop in props {
+    let valid_binding = {
+      let mut chars = prop.binding_name.chars();
+      matches!(chars.next(), Some(first) if first.is_ascii_lowercase())
+        && chars.all(|character| character.is_ascii_alphanumeric())
+        && prop.binding_name.len() <= 128
+    };
+    let expression_valid = match &prop.expression {
+      CompiledReusablePropExpression::Literal { value } => !prop.secret && value.len() <= 65_536,
+      CompiledReusablePropExpression::Context { path } => {
+        !prop.secret && path.len() <= 1024 && valid_reusable_context_path(path)
+      }
+      CompiledReusablePropExpression::Secret { name } => {
+        if prop.secret && valid_secret_name(name) && name.len() <= 128 {
+          secrets.push(name.clone());
+          true
+        } else {
+          false
+        }
+      }
+    };
+    if !valid_reusable_alias(&prop.name)
+      || !valid_binding
+      || !names.insert(prop.name.as_str())
+      || !bindings.insert(prop.binding_name.as_str())
+      || !expression_valid
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidReusableDefinition,
+        format!(
+          "Reusable operation {subject} has an invalid or duplicate prop {:?}.",
+          prop.name
+        ),
+      ));
+    }
+  }
+  secrets.sort();
+  secrets.dedup();
+  secrets
+}
+
+fn valid_reusable_lifecycle(lifecycle: &CompiledReusableLifecycle) -> bool {
+  [
+    &lifecycle.on_success,
+    &lifecycle.on_error,
+    &lifecycle.on_complete,
+  ]
+  .into_iter()
+  .flatten()
+  .all(|ids| !ids.is_empty() && ids.iter().all(|id| valid_id(id)))
+}
+
+fn inspect_reusable_contract(
+  workflow: &CompiledWorkflowDefinition,
+  issues: &mut Vec<ModelIssue>,
+) -> HashSet<String> {
+  let Some(definitions) = &workflow.reusable_definitions else {
+    return HashSet::new();
+  };
+  if workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V14
+    || definitions.is_empty()
+    || definitions.len() > 256
+  {
+    issues.push(issue(
+      ModelIssueCode::InvalidReusableDefinition,
+      "reusableDefinitions requires between 1 and 256 entries on Model v14 only.",
+    ));
+  }
+  let nodes = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| (node.id.as_str(), node))
+    .collect::<HashMap<_, _>>();
+  let mut identities = HashSet::new();
+  let mut step_nodes = HashSet::new();
+  for definition in definitions {
+    match definition {
+      CompiledReusableInvocation::Step {
+        invocation_id,
+        node_id,
+        alias,
+        definition_digest,
+        source,
+        script_artifact_id,
+        props,
+        lifecycle,
+      } => {
+        let identity = format!("step:{invocation_id}");
+        let secrets = reusable_prop_secrets(props, &identity, issues);
+        let runtime_valid = nodes.get(node_id.as_str()).is_some_and(|node| {
+          node.handler == "runtime.script"
+            && node.script_runtime.as_ref().is_some_and(|runtime| {
+              runtime.binding_version == 3
+                && runtime.bindings == ["props", "context", "attempt", "services"]
+                && runtime.required_secrets == secrets
+            })
+        });
+        if !identities.insert(identity)
+          || !step_nodes.insert(node_id.clone())
+          || !valid_public_structural_id(invocation_id)
+          || invocation_id != node_id
+          || !valid_reusable_alias(alias)
+          || !valid_sha256(definition_digest)
+          || !valid_portable_path(source)
+          || !valid_id(script_artifact_id)
+          || lifecycle
+            .as_ref()
+            .is_some_and(|value| !valid_reusable_lifecycle(value))
+          || !runtime_valid
+        {
+          issues.push(issue(
+            ModelIssueCode::InvalidReusableDefinition,
+            format!("Reusable step invocation {invocation_id:?} does not match the frozen Model v14 contract."),
+          ));
+        }
+      }
+      CompiledReusableInvocation::NotificationProvider {
+        provider_id,
+        alias,
+        definition_digest,
+        source,
+        script_artifact_id,
+        props,
+        lifecycle,
+      } => {
+        let identity = format!("provider:{provider_id}");
+        reusable_prop_secrets(props, &identity, issues);
+        if !identities.insert(identity)
+          || !valid_id(provider_id)
+          || !valid_reusable_alias(alias)
+          || !valid_sha256(definition_digest)
+          || !valid_portable_path(source)
+          || !valid_id(script_artifact_id)
+          || lifecycle
+            .as_ref()
+            .is_some_and(|value| !valid_reusable_lifecycle(value))
+        {
+          issues.push(issue(
+            ModelIssueCode::InvalidReusableDefinition,
+            format!("Reusable notification provider {provider_id:?} does not match the frozen Model v14 contract."),
+          ));
+        }
+      }
+    }
+  }
+  step_nodes
 }
 
 fn object_fields(expression: &ValueExpression) -> Option<&BTreeMap<String, ValueExpression>> {
@@ -2585,6 +2851,7 @@ impl CompiledWorkflowDefinition {
       ));
     }
 
+    let reusable_step_nodes = inspect_reusable_contract(self, &mut issues);
     let mut node_ids = HashSet::new();
     for node in &self.graph.nodes {
       if !valid_id(&node.id) || node.handler.is_empty() || node.handler.chars().count() > 512 {
@@ -2661,7 +2928,12 @@ impl CompiledWorkflowDefinition {
         (version, "runtime.script", Some(runtime))
           if version >= COMPILED_MODEL_SCHEMA_VERSION_V8 =>
         {
-          let expected = ["context", "attempt", "services", "secrets"];
+          let reusable = reusable_step_nodes.contains(&node.id);
+          let expected: &[&str] = if reusable {
+            &["props", "context", "attempt", "services"]
+          } else {
+            &["context", "attempt", "services", "secrets"]
+          };
           let valid_secrets = runtime.required_secrets.len() <= 64
             && runtime
               .required_secrets
@@ -2675,14 +2947,18 @@ impl CompiledWorkflowDefinition {
                 })
                 && name.len() <= 128
             });
-          if runtime.binding_version != 1
-            || runtime.bindings.iter().map(String::as_str).ne(expected)
+          if runtime.binding_version != if reusable { 3 } else { 1 }
+            || runtime
+              .bindings
+              .iter()
+              .map(String::as_str)
+              .ne(expected.iter().copied())
             || !valid_secrets
           {
             issues.push(issue(
               ModelIssueCode::InvalidScriptRuntime,
               format!(
-                "Node {:?} does not match the frozen Model v8 scriptRuntime contract.",
+                "Node {:?} does not match its frozen scriptRuntime contract.",
                 node.id
               ),
             ));
@@ -2870,6 +3146,16 @@ impl CompiledWorkflowDefinition {
     allow_retry: bool,
     durable: bool,
   ) {
+    if self
+      .reusable_definitions
+      .as_ref()
+      .is_some_and(|items| !items.is_empty())
+    {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedReusableExecution,
+        "Model v14 reusable operations are compiled and validated, but durable execution begins in SCP4.",
+      ));
+    }
     if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
       if !durable {
         issues.push(issue(

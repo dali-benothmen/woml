@@ -129,7 +129,7 @@ export interface CompiledWorkflowNode {
   readonly inputs: ValueExpression;
   readonly timeoutMs?: number;
   readonly retryPolicy?: RetryPolicy;
-  readonly scriptRuntime?: ScriptRuntimeBindingsV1;
+  readonly scriptRuntime?: ScriptRuntimeBindingsV1 | ScriptRuntimeBindingsV3;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -150,6 +150,57 @@ export interface ScriptRuntimeBindingsV2 {
   ];
   readonly requiredSecrets: readonly string[];
 }
+
+export interface ScriptRuntimeBindingsV3 {
+  readonly bindingVersion: 3;
+  readonly bindings: readonly ['props', 'context', 'attempt', 'services'];
+  readonly requiredSecrets: readonly string[];
+}
+
+export type ReusablePropExpressionV1 =
+  | { readonly kind: 'literal'; readonly value: string }
+  | { readonly kind: 'context'; readonly path: string }
+  | { readonly kind: 'secret'; readonly name: string };
+
+export interface CompiledReusableBoundPropV1 {
+  readonly name: string;
+  readonly bindingName: string;
+  readonly secret: boolean;
+  readonly expression: ReusablePropExpressionV1;
+}
+
+export interface CompiledReusableLifecycleV1 {
+  readonly onSuccess?: readonly string[];
+  readonly onError?: readonly string[];
+  readonly onComplete?: readonly string[];
+}
+
+export interface CompiledReusableStepInvocationV1 {
+  readonly kind: 'step';
+  readonly invocationId: string;
+  readonly nodeId: string;
+  readonly alias: string;
+  readonly definitionDigest: string;
+  readonly source: string;
+  readonly scriptArtifactId: string;
+  readonly props: readonly CompiledReusableBoundPropV1[];
+  readonly lifecycle?: CompiledReusableLifecycleV1;
+}
+
+export interface CompiledReusableNotificationProviderV1 {
+  readonly kind: 'notification-provider';
+  readonly providerId: string;
+  readonly alias: string;
+  readonly definitionDigest: string;
+  readonly source: string;
+  readonly scriptArtifactId: string;
+  readonly props: readonly CompiledReusableBoundPropV1[];
+  readonly lifecycle?: CompiledReusableLifecycleV1;
+}
+
+export type CompiledReusableInvocationV1 =
+  | CompiledReusableStepInvocationV1
+  | CompiledReusableNotificationProviderV1;
 
 export type LifecycleEventName =
   | 'run_start'
@@ -374,6 +425,7 @@ export interface CompiledWorkflowDefinitionV14
   readonly moduleRuntime?: CompiledModuleRuntimeV1;
   readonly lifecycle?: CompiledLifecycleDefinitionV1;
   readonly runtimePolicy: CompiledRuntimePolicyV1;
+  readonly reusableDefinitions?: readonly CompiledReusableInvocationV1[];
 }
 
 export type CompiledWorkflowDefinition =

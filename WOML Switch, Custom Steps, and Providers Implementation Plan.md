@@ -1,10 +1,11 @@
 # WOML Switch, Custom Steps, and Providers Implementation Plan
 
-Status: SCP0, SCP1, and SCP2 completed on 2026-08-14; source contracts,
+Status: SCP0, SCP1, SCP2, and SCP3 completed on 2026-08-14; source contracts,
 versioned interfaces, reusable document recognition, dependency resolution,
 diagnostics, folder classification, editor metadata, and durable exact-string
-switch execution are implemented. Reusable-definition execution remains gated
-to SCP3-SCP6.
+switch execution are implemented. Custom steps now compile into deterministic
+Model v14/Definition Package v9 operations; durable custom-step and provider
+execution remains gated to SCP4-SCP6.
 
 ## 1. Product Outcome
 
@@ -1114,8 +1115,8 @@ or secret values.
 | --- | --- | --- |
 | SCP0 — completed | Freeze syntax, props, switch, model, event, provider protocol, lifecycle, errors, and reviewed fixtures. | Every layer targets one approved design before code changes. |
 | SCP1 — completed | Add the three document profiles, `.woml` import resolution, prop declarations, and source diagnostics. | WOML can understand reusable definitions and reject invalid usage without executing them. |
-| SCP2 | Implement official `<switch>` validation, lowering, durable selection, results, and recovery. | Authors can run readable string-based routing through the existing Rust choice engine. |
-| SCP3 | Compile reusable-step imports into Model v14 and Definition Package v9 with immutable props and provenance. | A custom step becomes one deterministic engine-ready operation. |
+| SCP2 — completed | Implement official `<switch>` validation, lowering, durable selection, results, and recovery. | Authors can run readable string-based routing through the existing Rust choice engine. |
+| SCP3 — completed | Compile reusable-step imports into Model v14 and Definition Package v9 with immutable props and provenance. | A custom step becomes one deterministic engine-ready operation. |
 | SCP4 | Execute custom steps with retries, services, secrets, results, lifecycle hooks, and recovery. | Imported custom steps work like native durable steps. |
 | SCP5 | Compile custom notification providers and freeze the provider-worker boundary. | Custom provider tags lower to generic supervised delivery definitions. |
 | SCP6 | Execute custom providers for approvals and lifecycle notifications with shared decisions and safe retries. | A real user-authored notification provider works end to end. |
@@ -1205,7 +1206,7 @@ Valid source graphs classify deterministically; invalid structure, props,
 aliases, paths, and cycles fail at the responsible source token; existing
 JS/TS module imports remain unchanged.
 
-### SCP2 — Build official switch execution
+### SCP2 — Build official switch execution — completed
 
 Changes:
 
@@ -1233,7 +1234,7 @@ Case, default, merged-result, nested composition, failure, cancellation, and
 recovery tests pass through the packaged Rust engine. Reversed timing cannot
 change selection or result.
 
-### SCP3 — Compile reusable custom steps
+### SCP3 — Compile reusable custom steps — completed
 
 Changes:
 

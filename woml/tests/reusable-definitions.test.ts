@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 
 import {
   assertWomlDocumentRunnable,
+  analyzeWomlReusableScript,
+  buildWomlReusableDefinitionPackage,
   generateWomlReusableCustomData,
   inspectWomlDocument,
   parseWoml,
@@ -32,6 +34,18 @@ function validationCode(source: string): string {
 }
 
 describe('reusable WOML document contracts', () => {
+  test('freezes immutable props and denies direct secret access in binding v3', () => {
+    expect(analyzeWomlReusableScript('props.price = 1;').issue?.code).toBe(
+      'WOML_REUSABLE_PROPS_READ_ONLY'
+    );
+    expect(
+      analyzeWomlReusableScript('return secrets.PRIVATE_TOKEN;').issue?.code
+    ).toBe('WOML_REUSABLE_SECRET_ACCESS_FORBIDDEN');
+    expect(
+      analyzeWomlReusableScript('const props = {}; return props;').issue?.code
+    ).toBe('WOML_SCRIPT_BINDING_SHADOWED');
+  });
+
   test('classifies workflow, reusable step, and notification provider documents', () => {
     expect(inspectWomlDocument(fixture('workflow.woml')).kind).toBe('workflow');
     const step = inspectWomlDocument(fixture('calculate-discount.woml'));
@@ -93,6 +107,93 @@ describe('reusable WOML document contracts', () => {
 });
 
 describe('reusable definition graph resolution', () => {
+  test('lowers custom steps into a pinned Model v14 package', async () => {
+    const path = resolve(fixtureRoot, 'custom-step-workflow.woml');
+    const workflow = fixture('custom-step-workflow.woml');
+    const graph = resolveWomlReusableDefinitionGraph(workflow, {
+      sourcePath: path,
+      projectRoot: fixtureRoot,
+    });
+    const definitionPackage = await buildWomlReusableDefinitionPackage(
+      workflow,
+      graph,
+      { sourcePath: path, projectRoot: fixtureRoot }
+    );
+
+    expect(definitionPackage).toMatchObject({
+      schemaVersion: 9,
+      profile: 'woml.definition-package/v9',
+      executable: true,
+      runtimeReady: false,
+      workflow: {
+        id: 'custom-step-compilation',
+        model: { schemaVersion: 14 },
+      },
+    });
+    expect(definitionPackage.definitions).toEqual([
+      expect.objectContaining({
+        alias: 'calculate-discount',
+        kind: 'reusable-step',
+        dependencies: ['pricing.ts'],
+      }),
+    ]);
+    expect(definitionPackage.modules.map(module => module.name)).toEqual([
+      'reusableCalculateDiscountPricing',
+    ]);
+    const invocation = definitionPackage.workflow.model.reusableDefinitions?.[0];
+    expect(invocation).toMatchObject({
+      kind: 'step',
+      invocationId: 'discount',
+      nodeId: 'discount',
+      alias: 'calculate-discount',
+      props: [
+        { name: 'price', expression: { kind: 'context', path: 'steps.order.price' } },
+        { name: 'percentage', expression: { kind: 'context', path: 'steps.order.percentage' } },
+      ],
+    });
+    expect(
+      definitionPackage.workflow.model.graph.nodes.find(node => node.id === 'discount')
+    ).toMatchObject({
+      handler: 'runtime.script',
+      retryPolicy: { maxAttempts: 3 },
+      scriptRuntime: {
+        bindingVersion: 3,
+        bindings: ['props', 'context', 'attempt', 'services'],
+      },
+      metadata: {
+        name: 'Calculate discount',
+        description: 'Calculate a final price',
+      },
+    });
+    expect(JSON.stringify(definitionPackage)).not.toContain(fixtureRoot);
+  });
+
+  test('rejects a prop reference that is not visible at the invocation', async () => {
+    const sourcePath = resolve(fixtureRoot, 'custom-step-workflow.woml');
+    const source = readFileSync(sourcePath, 'utf8').replace(
+      '{{context.steps.order.price}}',
+      '{{context.steps.finish.price}}'
+    );
+    const document = parseWoml(source, { file: sourcePath });
+    const graph = resolveWomlReusableDefinitionGraph(document, {
+      sourcePath,
+      projectRoot: fixtureRoot,
+    });
+    try {
+      await buildWomlReusableDefinitionPackage(document, graph, {
+        sourcePath,
+        projectRoot: fixtureRoot,
+      });
+      throw new Error('Expected unavailable context to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WomlCompileError);
+      expect((error as WomlCompileError).diagnostic.code).toBe(
+        'WOML_REUSABLE_PROP_CONTEXT_UNAVAILABLE'
+      );
+    }
+  });
+
+
   test('resolves and validates custom step/provider props deterministically', () => {
     const workflow = fixture('workflow.woml');
     const first = resolveWomlReusableDefinitionGraph(workflow, {
