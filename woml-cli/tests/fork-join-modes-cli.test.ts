@@ -14,6 +14,7 @@ const nativeCorePath = resolve(
   import.meta.dir,
   `../dist/woml-core.${process.platform}-${process.arch}.node`
 );
+const projectRoot = resolve(import.meta.dir, '../..');
 
 async function invoke(args: readonly string[]) {
   let stdout = '';
@@ -35,6 +36,27 @@ async function invoke(args: readonly string[]) {
 }
 
 describe('selected and non-blocking fork joins in the CLI', () => {
+  test('a main-route condition waits for the selected join before workflow settlement', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-fork-main-choice-cli-'));
+    try {
+      const result = await invoke([
+        'test',
+        join(projectRoot, 'examples/manualForkWorkflow.woml'),
+        '--state',
+        join(directory, 'state.sqlite'),
+      ]);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        orderId: 'order-42',
+        inventory: 'items-reserved',
+        payment: { paid: true, amount: 120 },
+        fulfillment: { status: 'ready-to-ship', orderId: 'order-42' },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test('selected join executes only after its named branches and publishes their outputs', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'woml-selected-join-cli-'));
     try {

@@ -224,6 +224,8 @@ pub(crate) fn ready_node_ids_for_projection_at(
       .filter(|node| {
         active.contains(node.id.as_str())
           && !node_is_complete(workflow, node, projection)
+          && (node.handler != "engine.workflow-settlement"
+            || workflow_settlement_can_decide(workflow, projection))
           && match projection.latest_attempt(&node.id) {
             None => true,
             Some(attempt)
@@ -257,6 +259,68 @@ pub(crate) fn ready_node_ids_for_projection_at(
       .map(|node| node.id.clone())
       .collect(),
   )
+}
+
+fn workflow_settlement_can_decide(
+  workflow: &CompiledWorkflowDefinition,
+  projection: &RunProjection,
+) -> bool {
+  let Some(settlement) = workflow.graph.settlement.as_ref() else {
+    return false;
+  };
+  if projection
+    .context
+    .steps
+    .contains_key(&settlement.main_result_node_id)
+  {
+    return true;
+  }
+
+  projection.attempts.iter().rev().any(|attempt| {
+    let is_final_failure = projection
+      .latest_attempt(&attempt.identity.node_id)
+      .is_some_and(|latest| latest.identity == attempt.identity)
+      && matches!(
+        attempt.status,
+        crate::projection::AttemptStatus::Failed { .. }
+      )
+      && !projection
+        .pending_retries
+        .contains_key(&attempt.identity.node_id);
+    is_final_failure && failure_can_inactivate_main_route(workflow, &attempt.identity.node_id)
+  })
+}
+
+fn failure_can_inactivate_main_route(
+  workflow: &CompiledWorkflowDefinition,
+  failed_node_id: &str,
+) -> bool {
+  for fork in workflow.graph.forks.as_deref().unwrap_or_default() {
+    for branch in &fork.branches {
+      let mut visited = HashSet::new();
+      let mut pending = VecDeque::from([branch.entry_node_id.as_str()]);
+      while let Some(node_id) = pending.pop_front() {
+        if !visited.insert(node_id) {
+          continue;
+        }
+        if node_id == failed_node_id {
+          return fork.joined_branch_ids.contains(&branch.branch_id);
+        }
+        if node_id == branch.terminal_node_id {
+          continue;
+        }
+        pending.extend(
+          workflow
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.from == node_id)
+            .map(|edge| edge.to.as_str()),
+        );
+      }
+    }
+  }
+  true
 }
 
 fn active_node_ids<'a>(

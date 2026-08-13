@@ -3175,9 +3175,9 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
       continue;
     }
     if ready.len() != 1 {
-      return Err(RuntimeExecutionError::Stalled(
-        "the current runtime received more than one ready node".to_string(),
-      ));
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "the current runtime received more than one ready node: {ready:?}"
+      )));
     }
 
     let (handler, inputs, source) = {
