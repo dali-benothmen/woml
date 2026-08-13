@@ -1,6 +1,6 @@
 # WOML v0.1 Fundamental Syntax
 
-Status: design catalog draft; sequential scripts, retries, conditional branches,
+Status: design catalog draft; sequential scripts, retries, conditional choices,
 and bounded parallel groups are executable and publishable through the
 Rust-backed CLI, including durable retry recovery, both parallel failure
 policies, and fail-fast Worker cancellation
@@ -50,13 +50,13 @@ WOML separates syntax design from executable availability:
 
 The CLI profile grows only through reviewed vertical milestones. The original
 walking skeleton proved sequential scripts; the current published profile also
-includes conditional branches and bounded parallel groups:
+includes conditional choices and bounded parallel groups:
 
 | Feature | Design status | Current CLI profile |
 |---|---|---|
 | Workflow `id`/`name`/`description`, manual trigger, sequential steps | Frozen | Executable and publishable |
 | `<script>` with `context.payload` and `context.steps` | Frozen | Executable and publishable |
-| `{{context...}}` attribute-reference grammar | Frozen | Executable for branch `test` and `result` |
+| `{{context...}}` attribute-reference grammar | Frozen | Executable for choice `test` and `result` |
 | Workflow `version` | Frozen | Executable as user-defined workflow metadata |
 | Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
 | Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
@@ -66,7 +66,7 @@ includes conditional branches and bounded parallel groups:
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
 | `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
 | Lifecycle | LEC0–LEC8 completed and hardened | Workflow/step hooks, informational Slack notification, cancellation, and direct run management are executable and publishable through Model v11/Event v10/Store v11 |
-| Branch | Frozen | Executable and publishable |
+| Conditional `<choose>` | Frozen; canonical source name introduced in FJ1 | Executable and publishable; legacy conditional `<branch>` remains compatible with a deprecation warning |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
@@ -256,7 +256,7 @@ Outside raw-content elements:
       </script>
     </step>
 
-    <branch
+    <choose
       id="reviewPath"
       name="Select review path"
       description="Choose human or automatic review">
@@ -320,7 +320,7 @@ Outside raw-content elements:
 
         <result value="{{context.steps.makeAutomaticDecision}}" />
       </otherwise>
-    </branch>
+    </choose>
   </steps>
 </workflow>
 </woml>
@@ -387,7 +387,7 @@ steps          := <steps> steps-item+ </steps>
 
 steps-item     := step
                 | parallel
-                | branch
+                | choose
                 | approval
 
 step           := <step step-attributes>
@@ -400,10 +400,10 @@ parallel       := <parallel parallel-attributes>
                     step+
                   </parallel>
 
-branch         := <branch branch-attributes>
+choose         := <choose choice-attributes>
                     when+
                     otherwise
-                  </branch>
+                  </choose>
 
 when           := <when test="context-reference">
                     steps-item+
@@ -465,12 +465,12 @@ Six identifier roles exist:
 - A trigger ID identifies a trigger within that definition.
 - A step ID identifies an executable DAG node and its output in context.
 - A parallel ID identifies a fork/join structure for diagnostics and events.
-- A branch ID identifies a conditional structure for diagnostics and events.
+- A choice ID identifies a conditional structure, its merged output, diagnostics, and events.
 - An approval ID identifies a durable waiting node, its decision, and its output
   in context.
 
 All IDs MUST be non-empty. Workflow IDs and trigger IDs MUST be unique within
-their respective namespaces. Step, parallel, branch, and approval IDs share one
+their respective namespaces. Step, parallel, choice, and approval IDs share one
 structural namespace and MUST be unique across the whole workflow.
 
 Step IDs are part of the JavaScript-facing API:
@@ -485,7 +485,7 @@ Approval IDs use the same JavaScript-facing output namespace:
 context.steps.humanApproval
 ```
 
-Trigger, step, parallel, branch, and approval IDs MUST be JavaScript-safe
+Trigger, step, parallel, choice, and approval IDs MUST be JavaScript-safe
 lower-camel identifiers matching:
 
 ```text
@@ -509,7 +509,7 @@ MUST NOT be used as durable step identities.
 
 ### 5.1 Structural name and description
 
-`<step>`, `<parallel>`, `<branch>`, and `<approval>` use optional `name` and
+`<step>`, `<parallel>`, result-producing `<choose>`, and `<approval>` use optional `name` and
 `description` attributes:
 
 ```xml
@@ -918,7 +918,7 @@ never written into WOML, Model v7, runtime events, or durable state.
 
 `<steps>` is the root executable container and contains one or more step items.
 The name describes the workflow's executable body; structural `<parallel>` and
-`<branch>` elements are valid step items even though they are not executable
+`<choose>` elements are valid step items even though they are not executable
 operations themselves.
 
 ```xml
@@ -934,7 +934,7 @@ Within any sequential steps container, document order creates dependency edges:
 first -> second
 ```
 
-`<steps>` has no attributes. It may contain `<step>`, `<parallel>`, `<branch>`,
+`<steps>` has no attributes. It may contain `<step>`, `<parallel>`, `<choose>`,
 and `<approval>` elements.
 
 Empty and control-only behavior is explicit:
@@ -942,15 +942,15 @@ Empty and control-only behavior is explicit:
 - `<steps></steps>` and a self-closing `<steps />` are invalid because the root
   container requires at least one step item.
 - Every `<when>` and `<otherwise>` arm requires at least one step item followed
-  by exactly one `<result>`. A branch whose cases are structurally empty is
+  by exactly one `<result>`. A result-producing choice whose cases are structurally empty is
   invalid.
 - Approval decision arms may be empty. After a decision, an empty selected arm
   is a successful no-op and execution continues after the approval.
 - A workflow whose only item is an approval is valid: it waits durably, records
   the decision output at `context.steps.<approvalId>`, runs the selected arm if
   non-empty, and then completes.
-- The first executable branch profile requires `<otherwise>`, so a successful
-  branch always selects one route and publishes one stable merged result.
+- The first executable result-choice profile requires `<otherwise>`, so a
+  successful choice always selects one route and publishes one stable merged result.
 - Structural containers do not need to contain a `<script>` specifically, but
   the lowered graph must contain at least one reachable executable or durable
   control node. A graph made only of grouping metadata is invalid.
@@ -1220,7 +1220,7 @@ The child order is fixed:
 3. Required `<when-rejected>`.
 
 Each decision arm is a sequential steps container and may contain zero or more
-`<step>`, `<parallel>`, `<branch>`, or nested `<approval>` items. Exactly one arm
+`<step>`, `<parallel>`, `<choose>`, or nested `<approval>` items. Exactly one arm
 runs. After the selected arm completes, execution continues after the approval.
 An empty arm is a valid no-op continuation.
 
@@ -1351,8 +1351,8 @@ Structural and data rules:
   when a computed branch list happens to contain one item.
 - Optional `name` and `description` attributes describe the group.
 - When present, `concurrency` MUST NOT exceed the number of child steps.
-- A parallel group may appear in root `<steps>` or inside a branch arm.
-- A direct parallel child cannot be a branch, parallel group, approval, or
+- A parallel group may appear in root `<steps>` or inside a choice arm.
+- A direct parallel child cannot be a choice, parallel group, approval, or
   other control container in this profile.
 - All children receive the same context view from immediately before the fork.
 - A child MUST NOT reference a sibling's output.
@@ -1365,7 +1365,7 @@ Structural and data rules:
 - After a successful join, every child output is available downstream.
 - A root parallel group cannot be the final workflow item in the current CLI
   profile because the group has no aggregate output. Authors add a downstream
-  result-building step. A group inside a branch arm may be followed by that
+  result-building step. A group inside a choice arm may be followed by that
   arm's `<result>` selecting a guaranteed child output.
 
 Error policies:
@@ -1388,15 +1388,16 @@ protocol-v2 cancellation terminates only the addressed active Workers while
 leaving unrelated invocations alive.
 
 Multi-step concurrent lanes are deferred. A future design may add an explicit
-`<sequence>` child, but `<branch>` is not used for that purpose.
+`<sequence>` child. Concurrent multi-step routes use the separately reviewed
+`<fork>` and `<branch>` vocabulary once that runtime milestone is executable.
 
-## 14. `<branch>`, `<when>`, and `<otherwise>`
+## 14. `<choose>`, `<when>`, and `<otherwise>`
 
-`<branch>` represents mutually exclusive conditional flow and replaces the
+`<choose>` represents mutually exclusive conditional flow and replaces the
 TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
 
 ```xml
-<branch
+<choose
   id="alertRoute"
   name="Select alert handling"
   description="Route the analysis by alert severity">
@@ -1429,10 +1430,10 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
 
     <result value="{{context.steps.acceptAutomatically}}" />
   </otherwise>
-</branch>
+</choose>
 ```
 
-### 14.1 Branch structure
+### 14.1 Choice structure
 
 | Attribute | Required | Type | Meaning |
 |---|---:|---|---|
@@ -1440,12 +1441,12 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
 | `name` | No | String | Human-readable display name. |
 | `description` | No | String | Human-readable description. |
 
-- `<branch>` requires an `id` attribute.
+- The currently executable result-producing `<choose>` requires an `id` attribute.
 - The ID is both the stable structural identity and the key of the merged
-  successful result at `context.steps.<branchId>`.
-- Optional `name` and `description` attributes describe the branch.
+  successful result at `context.steps.<choiceId>`.
+- Optional `name` and `description` attributes describe the choice.
 - It contains one or more `<when>` elements.
-- It contains exactly one `<otherwise>` in the first executable branch profile.
+- It contains exactly one `<otherwise>` in the first executable result-choice profile.
 - `<otherwise>` MUST be last.
 - Each `<when>` and `<otherwise>` contains one or more step items followed by
   exactly one `<result>`.
@@ -1455,7 +1456,7 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
 - `<otherwise>` is selected only when every `<when>` is false.
 - When no `<when>` matches, `<otherwise>` is selected.
 - The compiler derives deterministic internal identities for individual
-  `<when>` and `<otherwise>` arms from the stable branch ID and case ordinal in
+  `<when>` and `<otherwise>` arms from the stable choice ID and case ordinal in
   the immutable compiled definition. Source line/column values are diagnostic
   metadata only and never durable identities. Arm identities are not
   user-facing context keys.
@@ -1493,11 +1494,11 @@ Complex conditions belong in named script steps:
   </script>
 </step>
 
-<branch id="reviewRoute">
+<choose id="reviewRoute">
   <when test="{{context.steps.needsReview}}">
     ...
   </when>
-</branch>
+</choose>
 ```
 
 ### 14.3 Conditional outputs
@@ -1506,7 +1507,7 @@ Steps in unselected cases do not produce successful outputs in `context.steps`.
 Every arm therefore ends with a typed `<result>` reference:
 
 ```xml
-<branch id="decisionRoute">
+<choose id="decisionRoute">
   <when test="{{context.steps.needsReview}}">
     <step id="humanDecision">...</step>
     <result value="{{context.steps.humanDecision}}" />
@@ -1516,7 +1517,7 @@ Every arm therefore ends with a typed `<result>` reference:
     <step id="automaticDecision">...</step>
     <result value="{{context.steps.automaticDecision}}" />
   </otherwise>
-</branch>
+</choose>
 
 <step id="publishDecision">
   <script>
@@ -1526,53 +1527,53 @@ Every arm therefore ends with a typed `<result>` reference:
 ```
 
 `<result>` has one required `value` attribute and no children. In the first
-executable branch profile, `value` contains exactly one context reference and
+executable result-choice profile, `value` contains exactly one context reference and
 therefore preserves the referenced JSON type. Literal values, mixed templates,
 fallbacks, and arbitrary JavaScript are not accepted in `<result>`.
 
 The reference must be guaranteed to exist on the selected arm before the
-result. It may target a step or completed nested branch earlier in the same arm,
-or a value that dominates the outer branch. It may not target another arm.
+result. It may target a step or completed nested choice earlier in the same arm,
+or a value that dominates the outer choice. It may not target another arm.
 
 After the selected arm completes, the engine resolves the selected `<result>`
-and publishes that JSON value at `context.steps.<branchId>`. The branch ID is
+and publishes that JSON value at `context.steps.<choiceId>`. The choice ID is
 therefore the only output key that downstream declarative references can use
 unconditionally. Route-specific step outputs remain available to JavaScript but
 are not guaranteed across every route.
 
-The branch result is pure engine-owned derivation. It does not execute through
+The choice result is pure engine-owned derivation. It does not execute through
 Bun and cannot perform an external side effect.
 
 ### 14.4 Frozen lowering identities
 
-The WOML frontend lowers a branch into the language-neutral Compiled Workflow
+The WOML frontend lowers a result-producing choice into the language-neutral Compiled Workflow
 Model v2 using these identities:
 
 | Item | Frozen compiled identity |
 |---|---|
-| Selector node | `__woml_branch__<branchId>__select` |
+| Selector node | `__woml_branch__<choiceId>__select` (historical compiled identity retained for compatibility) |
 | Selector handler | `engine.branch-select` |
-| `<when>` arm and selector-edge ID | `<branchId>:when:<zeroBasedIndex>` |
-| `<otherwise>` arm and selector-edge ID | `<branchId>:otherwise` |
-| Result/join node ID | `<branchId>` |
+| `<when>` arm and selector-edge ID | `<choiceId>:when:<zeroBasedIndex>` |
+| `<otherwise>` arm and selector-edge ID | `<choiceId>:otherwise` |
+| Result/join node ID | `<choiceId>` |
 | Result/join handler | `engine.branch-result` |
 
 The selector's outgoing edges are ordered exactly like the source cases. Each
-`<when>` edge carries a strict `boolean` condition and the public `branchId`.
+`<when>` edge carries a strict `boolean` condition and the historical compiled `branchId` field.
 The final `<otherwise>` edge carries `condition.kind = "always"` and the same
-`branchId`. Ordinary sequencing and join edges do not carry a branch ID.
+historical `branchId` field. Ordinary sequencing and join edges do not carry it.
 
 The result node inputs are an object keyed by durable arm ID. Each value is the
 compiled context-reference expression from that arm's `<result>`. Generated
 selector and arm IDs occupy a namespace that user-authored JavaScript-safe IDs
 cannot enter.
 
-Optional branch `name` and `description` lower to descriptive metadata on the
+Optional choice `name` and `description` lower to descriptive metadata on the
 selector node. They never affect selection, identity, result publication, or
 the definition's event vocabulary.
 
 Source positions, display names, timestamps, and random values never become
-compiled or durable branch identities.
+compiled or durable choice identities.
 
 ## 15. Attribute Values and Context References
 
@@ -1640,7 +1641,7 @@ not WOML references. A referenced step must exist and dominate the consumer in
 the lowered DAG. A missing nested property at runtime produces
 `WOML_REFERENCE_NOT_AVAILABLE`; it never becomes `undefined` or an empty string.
 
-The published branch profile resolves exact references in `<when test>` and
+The published result-choice profile resolves exact references in `<when test>` and
 `<result value>` without passing them through JavaScript. Scripts continue to
 read `context.steps.<id>` directly through the injected JavaScript context.
 Mixed templates remain in the design catalog; their escaping rules must be
@@ -1665,11 +1666,11 @@ conditions hold.
 - `<parallel>` directly contains anything other than `<step>`.
 - A root workflow ends with `<parallel>` without a downstream result-building
   step.
-- `<branch>` has no `<when>`.
-- `<branch>` has no `<otherwise>` in the executable branch profile.
+- `<choose>` has no `<when>`.
+- `<choose>` has no `<otherwise>` in the executable result-choice profile.
 - A `<when>` or `<otherwise>` arm contains no step items.
 - `<otherwise>` is duplicated or is not last.
-- A branch arm has no `<result>`, has more than one `<result>`, or places
+- A result-choice arm has no `<result>`, has more than one `<result>`, or places
   `<result>` anywhere except last.
 - A step contains zero or multiple operations.
 - `<approval>` is missing `<when-approved>` or `<when-rejected>`, duplicates
@@ -1795,15 +1796,18 @@ Rules:
   inner location is unavailable. When Bun provides a reliable inner line and
   column, the runtime translates it back to the original WOML coordinates.
 
-The executable branch profile freezes these branch-specific diagnostic codes:
+The executable result-choice profile freezes these source diagnostics. Legacy
+conditional `<branch>` files retain their historical `WOML_BRANCH_*`
+validation codes and additionally receive
+`WOML_DEPRECATED_CONDITIONAL_BRANCH` as a warning:
 
 | Code | Phase | Meaning and primary location |
 |---|---|---|
-| `WOML_BRANCH_WHEN_REQUIRED` | validation | `<branch>` contains no `<when>`; points to the branch opening tag. |
-| `WOML_BRANCH_OTHERWISE_REQUIRED` | validation | `<branch>` has no fallback; points to the branch opening tag. |
-| `WOML_BRANCH_OTHERWISE_ORDER` | validation | `<otherwise>` is duplicated or not last; points to the offending tag. |
-| `WOML_BRANCH_RESULT_REQUIRED` | validation | An arm has zero or multiple `<result>` children; points to the arm or duplicate result. |
-| `WOML_BRANCH_RESULT_ORDER` | validation | `<result>` is not the final arm child; points to the misplaced result. |
+| `WOML_CHOOSE_WHEN_REQUIRED` | validation | `<choose>` contains no `<when>`; points to the choice opening tag. |
+| `WOML_CHOOSE_OTHERWISE_REQUIRED` | validation | `<choose>` has no fallback; points to the choice opening tag. |
+| `WOML_CHOOSE_OTHERWISE_ORDER` | validation | `<otherwise>` is duplicated or not last; points to the offending tag. |
+| `WOML_CHOOSE_RESULT_REQUIRED` | validation | An arm has zero or multiple `<result>` children; points to the arm or duplicate result. |
+| `WOML_CHOOSE_RESULT_ORDER` | validation | `<result>` is not the final arm child; points to the misplaced result. |
 | `WOML_INVALID_REFERENCE` | validation | `test` or `value` is not exactly one frozen WOML context reference; points to the attribute value. |
 | `WOML_UNKNOWN_REFERENCE` | compile | A reference names an unknown structural ID; points to that ID inside the attribute. |
 | `WOML_REFERENCE_NOT_DOMINATING` | compile | The referenced output is later, in another arm, or otherwise not guaranteed; points to that reference. |
@@ -1812,7 +1816,9 @@ The executable branch profile freezes these branch-specific diagnostic codes:
 | `WOML_BRANCH_SELECTION_INVALID` | runtime | The compiled/event branch identity is inconsistent; reported at the branch opening tag. |
 
 General diagnostics such as `WOML_DUPLICATE_ID`, `WOML_UNKNOWN_ATTRIBUTE`, and
-`WOML_INVALID_DAG` continue to apply and are not renamed for branches.
+`WOML_INVALID_DAG` continue to apply. Historical compiled handler and runtime
+error names containing `branch` remain unchanged so stored definitions and
+events do not change identity.
 
 The CLI renders the primary diagnostic in this stable form:
 

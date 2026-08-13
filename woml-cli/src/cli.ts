@@ -22,6 +22,7 @@ import {
   buildWomlRuntimeDefinitionPackage,
   compileWoml,
   generateWomlEditorDeclarations,
+  inspectWomlMigrationDiagnostics,
   inspectWomlModuleUsage,
   inspectWomlModuleServiceUsage,
   isWomlElement,
@@ -31,6 +32,7 @@ import {
   type JsonValue,
   type SecretReferenceExpression,
   type SourcePosition,
+  type WomlAdvisoryDiagnostic,
   type ValueExpression,
   type WomlSourceDocument,
   type WomlSourceElement,
@@ -828,7 +830,7 @@ function findBranch(
   while (pending.length > 0) {
     const element = pending.shift()!;
     if (
-      element.name === 'branch' &&
+      (element.name === 'branch' || element.name === 'choose') &&
       element.attributes.id?.value === branchId
     ) {
       return element;
@@ -901,12 +903,13 @@ function branchRuntimeSource(
   if (document === undefined || error.branchId === undefined) return undefined;
   const branch = findBranch(document, error.branchId);
   if (branch === undefined) return undefined;
+  const sourceKind = branch.name === 'choose' ? 'choice' : 'legacy branch';
 
   if (error.branchSite === 'selection') {
     return {
       position:
         branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
-      subject: `branch "${error.branchId}"`,
+      subject: `${sourceKind} "${error.branchId}"`,
     };
   }
 
@@ -921,14 +924,14 @@ function branchRuntimeSource(
     return {
       position:
         branch.attributes.id?.valueSpan.start ?? branch.openTagSpan.start,
-      subject: `branch "${error.branchId}"`,
+      subject: `${sourceKind} "${error.branchId}"`,
     };
   }
 
   if (error.branchSite === 'test') {
     return {
       position: arm.attributes.test?.valueSpan.start ?? arm.openTagSpan.start,
-      subject: `<when test> in branch "${error.branchId}"`,
+      subject: `<when test> in ${sourceKind} "${error.branchId}"`,
     };
   }
 
@@ -938,7 +941,7 @@ function branchRuntimeSource(
       result?.attributes.value?.valueSpan.start ??
       result?.openTagSpan.start ??
       arm.openTagSpan.start,
-    subject: `<result value> in branch "${error.branchId}"`,
+    subject: `<result value> in ${sourceKind} "${error.branchId}"`,
   };
 }
 
@@ -1026,6 +1029,24 @@ function formatError(
   }: ${message}`;
 }
 
+function formatAdvisoryDiagnostic(
+  diagnostic: WomlAdvisoryDiagnostic
+): string {
+  const location = `${diagnostic.file}:${diagnostic.location.start.line}:${diagnostic.location.start.column}`;
+  const hint =
+    diagnostic.hint === undefined ? '' : `\nHint: ${diagnostic.hint}`;
+  return `Warning [${diagnostic.code}] at ${location}: ${diagnostic.message}${hint}`;
+}
+
+function printMigrationDiagnostics(
+  io: CliIo,
+  diagnostics: readonly WomlAdvisoryDiagnostic[]
+): void {
+  for (const diagnostic of diagnostics) {
+    io.stderr(`${formatAdvisoryDiagnostic(diagnostic)}\n`);
+  }
+}
+
 function formatNotificationDeliveryFailures(
   diagnostics: NotificationJourneyDiagnostics | undefined
 ): string {
@@ -1090,6 +1111,7 @@ interface CompiledWorkflowSource {
   readonly definitionHash: string;
   readonly runtimeModules: readonly RustRuntimeModuleArtifact[];
   readonly sourceSnapshot: readonly SourceSnapshotEntry[];
+  readonly migrationDiagnostics: readonly WomlAdvisoryDiagnostic[];
 }
 
 export interface SourceSnapshotEntry {
@@ -1342,6 +1364,7 @@ async function compileWorkflowSources(
         path: resolve(projectRoot, item.path),
         digest: item.digest,
       })),
+      migrationDiagnostics: inspectWomlMigrationDiagnostics(document),
     });
   }
   const workflowIds = new Set<string>();
@@ -1500,6 +1523,7 @@ async function runSingleCheckCommand(
   try {
     const source = await readWorkflow(filePath);
     document = parseWoml(source, { file: filePath });
+    const migrationDiagnostics = inspectWomlMigrationDiagnostics(document);
     const inspectionPackage = buildWomlDefinitionPackage(document, {
       sourcePath: filePath,
       projectRoot: moduleProjectRoot(filePath),
@@ -1542,6 +1566,7 @@ async function runSingleCheckCommand(
             projectRoot: moduleProjectRoot(filePath),
           });
     await refreshEditorTypes(filePath, definitionPackage.modules, io);
+    printMigrationDiagnostics(io, migrationDiagnostics);
     if (options[0] === '--json') {
       io.stdout(`${JSON.stringify(definitionPackage, null, 2)}\n`);
       return 0;
@@ -1694,6 +1719,10 @@ async function runDeploymentCheckCommand(
   const displayPath = parsed.inputPaths[0];
   try {
     const sources = await compileWorkflowInputs(parsed.inputPaths);
+    printMigrationDiagnostics(
+      io,
+      sources.flatMap(source => source.migrationDiagnostics)
+    );
     validateDeploymentRoutes(sources);
     for (const source of sources) {
       await refreshEditorTypes(source.filePath, source.runtimeModules, io);
@@ -3900,6 +3929,10 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowInputs(inputPaths);
+    printMigrationDiagnostics(
+      io,
+      sources.flatMap(source => source.migrationDiagnostics)
+    );
     if (runArguments.command === 'test') {
       if ((await stat(filePath)).isDirectory()) {
         throw new CliInputError(

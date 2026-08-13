@@ -1,6 +1,7 @@
 export {
   compileWoml,
   compileWomlWithModules,
+  inspectWomlMigrationDiagnostics,
   inspectWomlModuleUsage,
   validateWoml,
   type WomlModuleUsageInspection,
@@ -105,6 +106,7 @@ export {
   type SourcePosition,
   type SourceSpan,
   type WomlDiagnostic,
+  type WomlAdvisoryDiagnostic,
   type WomlSourceAttribute,
   type WomlSourceDocument,
   type WomlSourceElement,

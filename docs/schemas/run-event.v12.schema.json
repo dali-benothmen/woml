@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v12",
+  "title": "WOML Run Event v12",
+  "description": "Append-only fork, selected-join, and control-only choice facts layered on the immutable Event v11 vocabulary.",
+  "x-status": "fork-branch-fj0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v11",
+  "x-invariants": [
+    "A fork opens once per run and a direct branch settles once per opened fork.",
+    "A successful join is recorded only after all joined branches succeed.",
+    "A failed or cancelled join identifies the joined branch that permanently inactivated the continuation.",
+    "Events contain identities and outcomes, never copied context, outputs, secrets, messages, or stacks."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 12 },
+    "eventId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_admitted", "run_execution_started", "run_timeout_reached",
+        "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled",
+        "branch_selected", "choice_selected", "parallel_group_started", "parallel_group_completed", "approval_requested",
+        "notification_delivery_requested", "notification_delivery_attempt_started", "notification_delivery_succeeded", "notification_delivery_failed",
+        "notification_decision_accepted", "notification_message_update_requested", "notification_message_update_attempt_started", "notification_message_updated", "notification_message_update_failed",
+        "approval_resolved", "operation_started", "operation_succeeded", "operation_failed",
+        "fork_opened", "fork_branch_settled", "fork_join_settled",
+        "run_cancellation_requested", "lifecycle_hook_requested", "lifecycle_action_attempt_started", "lifecycle_action_succeeded", "lifecycle_action_failed", "lifecycle_hook_completed", "run_outcome_decided", "run_finalized"
+      ]
+    },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "fork_opened" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/forkOpened" } } } },
+    { "if": { "properties": { "type": { "const": "fork_branch_settled" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/branchSettled" } } } },
+    { "if": { "properties": { "type": { "const": "fork_join_settled" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/joinSettled" } } } },
+    { "if": { "properties": { "type": { "const": "choice_selected" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/choiceSelected" } } } }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "publicId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 },
+    "forkOpened": {
+      "type": "object", "additionalProperties": false, "required": ["forkId"],
+      "properties": { "forkId": { "$ref": "#/$defs/publicId" } }
+    },
+    "branchSettled": {
+      "type": "object", "additionalProperties": false, "required": ["forkId", "branchId", "terminalNodeId", "outcome"],
+      "properties": {
+        "forkId": { "$ref": "#/$defs/publicId" },
+        "branchId": { "$ref": "#/$defs/publicId" },
+        "terminalNodeId": { "$ref": "#/$defs/id" },
+        "outcome": { "enum": ["succeeded", "failed", "cancelled"] }
+      }
+    },
+    "joinSettled": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["forkId", "outcome"],
+          "properties": { "forkId": { "$ref": "#/$defs/publicId" }, "outcome": { "const": "succeeded" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["forkId", "outcome", "blockingBranchId"],
+          "properties": {
+            "forkId": { "$ref": "#/$defs/publicId" },
+            "outcome": { "enum": ["failed", "cancelled"] },
+            "blockingBranchId": { "$ref": "#/$defs/publicId" }
+          }
+        }
+      ]
+    },
+    "choiceSelected": {
+      "type": "object", "additionalProperties": false, "required": ["choiceId", "armId"],
+      "properties": { "choiceId": { "$ref": "#/$defs/id" }, "armId": { "$ref": "#/$defs/id" } }
+    }
+  }
+}

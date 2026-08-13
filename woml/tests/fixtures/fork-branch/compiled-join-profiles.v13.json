@@ -1,0 +1,14 @@
+{
+  "all": {
+    "joinedBranchIds": ["instagram", "facebook", "analytics"],
+    "mainVisibleStepIds": ["prepare", "instagramOutcome", "publishFacebook", "recordAnalytics"]
+  },
+  "selected": {
+    "joinedBranchIds": ["instagram", "facebook"],
+    "mainVisibleStepIds": ["prepare", "instagramOutcome", "publishFacebook"]
+  },
+  "none": {
+    "joinedBranchIds": [],
+    "mainVisibleStepIds": ["prepare"]
+  }
+}

@@ -13,7 +13,7 @@
       </script>
     </step>
 
-    <choose
+    <branch
       id="decision"
       name="Choose review route"
       description="Send uncertain content to review">
@@ -42,7 +42,7 @@
 
         <result value="{{context.steps.acceptContent}}" />
       </otherwise>
-    </choose>
+    </branch>
 
     <step id="publishDecision">
       <script>

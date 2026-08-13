@@ -1,0 +1,29 @@
+{
+  "allSucceeded": [
+    { "eventSchemaVersion": 12, "eventId": "evt-1", "runId": "run-all", "sequence": 1, "occurredAt": "2026-08-13T10:00:00Z", "type": "fork_opened", "data": { "forkId": "distribution" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-2", "runId": "run-all", "sequence": 2, "occurredAt": "2026-08-13T10:00:01Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "facebook", "terminalNodeId": "__woml_fork__distribution__facebook__terminal", "outcome": "succeeded" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-3", "runId": "run-all", "sequence": 3, "occurredAt": "2026-08-13T10:00:02Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "instagram", "terminalNodeId": "__woml_fork__distribution__instagram__terminal", "outcome": "succeeded" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-4", "runId": "run-all", "sequence": 4, "occurredAt": "2026-08-13T10:00:03Z", "type": "fork_join_settled", "data": { "forkId": "distribution", "outcome": "succeeded" } }
+  ],
+  "joinedFailure": [
+    { "eventSchemaVersion": 12, "eventId": "evt-5", "runId": "run-joined-failure", "sequence": 1, "occurredAt": "2026-08-13T11:00:00Z", "type": "fork_opened", "data": { "forkId": "distribution" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-6", "runId": "run-joined-failure", "sequence": 2, "occurredAt": "2026-08-13T11:00:01Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "instagram", "terminalNodeId": "instagram-terminal", "outcome": "failed" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-7", "runId": "run-joined-failure", "sequence": 3, "occurredAt": "2026-08-13T11:00:02Z", "type": "fork_join_settled", "data": { "forkId": "distribution", "outcome": "failed", "blockingBranchId": "instagram" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-8", "runId": "run-joined-failure", "sequence": 4, "occurredAt": "2026-08-13T11:00:03Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "analytics", "terminalNodeId": "analytics-terminal", "outcome": "succeeded" } }
+  ],
+  "unjoinedFailureBeforeRelease": [
+    { "eventSchemaVersion": 12, "eventId": "evt-9", "runId": "run-unjoined-early", "sequence": 1, "occurredAt": "2026-08-13T12:00:00Z", "type": "fork_opened", "data": { "forkId": "distribution" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-10", "runId": "run-unjoined-early", "sequence": 2, "occurredAt": "2026-08-13T12:00:01Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "analytics", "terminalNodeId": "analytics-terminal", "outcome": "failed" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-11", "runId": "run-unjoined-early", "sequence": 3, "occurredAt": "2026-08-13T12:00:02Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "instagram", "terminalNodeId": "instagram-terminal", "outcome": "succeeded" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-12", "runId": "run-unjoined-early", "sequence": 4, "occurredAt": "2026-08-13T12:00:03Z", "type": "fork_join_settled", "data": { "forkId": "distribution", "outcome": "succeeded" } }
+  ],
+  "unjoinedFailureAfterRelease": [
+    { "eventSchemaVersion": 12, "eventId": "evt-13", "runId": "run-unjoined-late", "sequence": 1, "occurredAt": "2026-08-13T13:00:00Z", "type": "fork_opened", "data": { "forkId": "distribution" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-14", "runId": "run-unjoined-late", "sequence": 2, "occurredAt": "2026-08-13T13:00:01Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "instagram", "terminalNodeId": "instagram-terminal", "outcome": "succeeded" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-15", "runId": "run-unjoined-late", "sequence": 3, "occurredAt": "2026-08-13T13:00:02Z", "type": "fork_join_settled", "data": { "forkId": "distribution", "outcome": "succeeded" } },
+    { "eventSchemaVersion": 12, "eventId": "evt-16", "runId": "run-unjoined-late", "sequence": 4, "occurredAt": "2026-08-13T13:00:03Z", "type": "fork_branch_settled", "data": { "forkId": "distribution", "branchId": "analytics", "terminalNodeId": "analytics-terminal", "outcome": "failed" } }
+  ],
+  "controlChoice": [
+    { "eventSchemaVersion": 12, "eventId": "evt-17", "runId": "run-choice", "sequence": 1, "occurredAt": "2026-08-13T14:00:00Z", "type": "choice_selected", "data": { "choiceId": "__woml_choice__root_1", "armId": "__woml_choice__root_1:otherwise" } }
+  ]
+}

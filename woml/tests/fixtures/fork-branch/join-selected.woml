@@ -1,0 +1,29 @@
+<woml>
+<workflow id="distribution-selected" version="1.0.0">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="prepare"><script>return { instagramEnabled: true };</script></step>
+    <fork id="distribution" join="instagram facebook">
+      <branch id="instagram">
+        <choose id="instagramOutcome">
+          <when test="{{context.steps.prepare.instagramEnabled}}">
+            <step id="publishInstagram"><script>return { status: "published" };</script></step>
+            <result value="{{context.steps.publishInstagram}}" />
+          </when>
+          <otherwise>
+            <step id="skipInstagram"><script>return { status: "skipped" };</script></step>
+            <result value="{{context.steps.skipInstagram}}" />
+          </otherwise>
+        </choose>
+      </branch>
+      <branch id="facebook">
+        <step id="publishFacebook"><script>return { status: "published" };</script></step>
+      </branch>
+      <branch id="analytics">
+        <step id="recordAnalytics"><script>return { recorded: true };</script></step>
+      </branch>
+    </fork>
+    <step id="finish"><script>return { instagram: context.steps.instagramOutcome, facebook: context.steps.publishFacebook };</script></step>
+  </steps>
+</workflow>
+</woml>

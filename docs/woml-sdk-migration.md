@@ -18,7 +18,7 @@ sufficient parity and the relevant production features have migration paths.
 | Chained `.step(...)` | `<steps><step id="..."><script>...</script></step></steps>` |
 | `ctx.payload` | `context.payload` |
 | Implicit `ctx.last` | Explicit `context.steps.<stepId>` |
-| `.if()/.else()/.endIf()` | `<branch>`, `<when>`, and `<otherwise>` |
+| `.if()/.else()/.endIf()` | `<choose>`, `<when>`, and `<otherwise>` |
 | Parallel chaining | `<parallel>` with child workflow items |
 | Retry option/object | `retry` and backoff attributes on `<step>` |
 | Human-in-the-loop callback | `<approval>` with a durable HTTP/provider decision |
@@ -64,7 +64,7 @@ replace positional or “last result” access with the producing step's path:
    function.
 4. Replace `ctx.payload` with `context.payload` and every implicit previous
    result with `context.steps.<id>`.
-5. Express branches and parallel work structurally, then verify every referenced
+5. Express choices and parallel work structurally, then verify every referenced
    step is reachable in the DAG.
 6. Move retry configuration to `<step retry="...">` attributes. Use
    `attempt.idempotencyKey` for external APIs that support duplicate handling.
@@ -91,7 +91,7 @@ replace positional or “last result” access with the producing step's path:
 
 ## Current parity boundary
 
-Sequential scripts, branch, parallel, Human Approval, Slack approval
+Sequential scripts, conditional choice, parallel, Human Approval, Slack approval
 notifications, secrets, durable retry, and manual, webhook, Slack, schedule,
 interval, and named-event triggers are available through `woml run`.
 

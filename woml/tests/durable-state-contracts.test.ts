@@ -9,7 +9,9 @@ const fixtureRoot = resolve(import.meta.dir, 'fixtures/durable-state');
 
 async function validator() {
   const ajv = new Ajv2020({ strict: false, allErrors: true });
-  ajv.addFormat('date-time', { validate: value => Number.isFinite(Date.parse(value)) });
+  ajv.addFormat('date-time', {
+    validate: (value: string) => Number.isFinite(Date.parse(value)),
+  });
   for (const name of [
     'capability-call.v1.schema.json',
     'durable-state.v1.schema.json',

@@ -38,6 +38,7 @@ import {
   WomlValidationError,
   type SourceSpan,
   type WomlDiagnostic,
+  type WomlAdvisoryDiagnostic,
   type WomlSourceAttribute,
   type WomlSourceDocument,
   type WomlSourceElement,
@@ -81,6 +82,7 @@ interface ValidatedBranchArm {
 
 interface ValidatedBranch {
   readonly kind: 'branch';
+  readonly sourceElementName: 'branch' | 'choose';
   readonly id: string;
   readonly element: WomlSourceElement;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
@@ -274,6 +276,7 @@ const supportedElements = new Set([
   'step',
   'script',
   'branch',
+  'choose',
   'parallel',
   'when',
   'otherwise',
@@ -332,6 +335,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   script: { attributes: new Set() },
   branch: { attributes: new Set(['id', 'name', 'description']) },
+  choose: { attributes: new Set(['id', 'name', 'description']) },
   parallel: {
     attributes: new Set([
       'id',
@@ -622,7 +626,7 @@ function validateWorkflowId(
 function validateJavaScriptSafeId(
   document: WomlSourceDocument,
   attribute: WomlSourceAttribute,
-  role: 'trigger' | 'step' | 'branch' | 'parallel' | 'approval'
+  role: 'trigger' | 'step' | 'branch' | 'choose' | 'parallel' | 'approval'
 ): string {
   if (
     attribute.value.length > 256 ||
@@ -631,7 +635,7 @@ function validateJavaScriptSafeId(
     failValidation(
       document,
       'WOML_INVALID_ID',
-      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
+      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'choose' ? 'Choice' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
       attribute.valueSpan,
       'Use letters and numbers, start with a lowercase letter, and do not use hyphens.'
     );
@@ -1442,14 +1446,14 @@ function registerStructuralId(
   document: WomlSourceDocument,
   registry: Set<string>,
   attribute: WomlSourceAttribute,
-  role: 'step' | 'branch' | 'parallel' | 'approval'
+  role: 'step' | 'branch' | 'choose' | 'parallel' | 'approval'
 ): string {
   const id = validateJavaScriptSafeId(document, attribute, role);
   if (registry.has(id)) {
     failValidation(
       document,
       'WOML_DUPLICATE_ID',
-      `Structural ID "${id}" is duplicated across workflow steps, branches, parallel groups, and approvals.`,
+      `Structural ID "${id}" is duplicated across workflow steps, choices, parallel groups, and approvals.`,
       attribute.valueSpan
     );
   }
@@ -2659,8 +2663,11 @@ function lowerLifecycle(
 function validateBranchArm(
   document: WomlSourceDocument,
   arm: WomlSourceElement,
-  registry: Set<string>
+  registry: Set<string>,
+  sourceElementName: 'branch' | 'choose'
 ): ValidatedBranchArm {
+  const diagnosticPrefix =
+    sourceElementName === 'choose' ? 'WOML_CHOOSE' : 'WOML_BRANCH';
   const testReference =
     arm.name === 'when'
       ? parseExactReference(document, requiredAttribute(document, arm, 'test'))
@@ -2670,7 +2677,7 @@ function validateBranchArm(
   if (results.length !== 1) {
     failValidation(
       document,
-      'WOML_BRANCH_RESULT_REQUIRED',
+      `${diagnosticPrefix}_RESULT_REQUIRED`,
       `<${arm.name}> must contain exactly one <result>.`,
       results[1]?.openTagSpan ?? arm.openTagSpan
     );
@@ -2680,8 +2687,8 @@ function validateBranchArm(
   if (children.at(-1) !== result) {
     failValidation(
       document,
-      'WOML_BRANCH_RESULT_ORDER',
-      '<result> must be the final child of its branch arm.',
+      `${diagnosticPrefix}_RESULT_ORDER`,
+      `<result> must be the final child of its <${sourceElementName}> arm.`,
       result.openTagSpan
     );
   }
@@ -2727,11 +2734,14 @@ function validateBranch(
   branch: WomlSourceElement,
   registry: Set<string>
 ): ValidatedBranch {
+  const sourceElementName = branch.name as 'branch' | 'choose';
+  const diagnosticPrefix =
+    sourceElementName === 'choose' ? 'WOML_CHOOSE' : 'WOML_BRANCH';
   const id = registerStructuralId(
     document,
     registry,
     requiredAttribute(document, branch, 'id'),
-    'branch'
+    sourceElementName
   );
   const metadata = flowItemMetadata(document, branch);
 
@@ -2740,8 +2750,8 @@ function validateBranch(
   if (whenCount === 0) {
     failValidation(
       document,
-      'WOML_BRANCH_WHEN_REQUIRED',
-      `<branch id="${id}"> requires at least one <when>.`,
+      `${diagnosticPrefix}_WHEN_REQUIRED`,
+      `<${sourceElementName} id="${id}"> requires at least one <when>.`,
       branch.openTagSpan
     );
   }
@@ -2752,16 +2762,16 @@ function validateBranch(
   if (otherwiseIndexes.length === 0) {
     failValidation(
       document,
-      'WOML_BRANCH_OTHERWISE_REQUIRED',
-      `<branch id="${id}"> requires exactly one final <otherwise>.`,
+      `${diagnosticPrefix}_OTHERWISE_REQUIRED`,
+      `<${sourceElementName} id="${id}"> requires exactly one final <otherwise>.`,
       branch.openTagSpan
     );
   }
   if (otherwiseIndexes.length > 1) {
     failValidation(
       document,
-      'WOML_BRANCH_OTHERWISE_ORDER',
-      '<otherwise> may appear exactly once and must be the final branch case.',
+      `${diagnosticPrefix}_OTHERWISE_ORDER`,
+      `<otherwise> may appear exactly once and must be the final <${sourceElementName}> case.`,
       children[otherwiseIndexes[1]].openTagSpan
     );
   }
@@ -2769,8 +2779,8 @@ function validateBranch(
   if (otherwiseIndex !== children.length - 1) {
     failValidation(
       document,
-      'WOML_BRANCH_OTHERWISE_ORDER',
-      '<otherwise> must be the final child of <branch>.',
+      `${diagnosticPrefix}_OTHERWISE_ORDER`,
+      `<otherwise> must be the final child of <${sourceElementName}>.`,
       children[otherwiseIndex].openTagSpan
     );
   }
@@ -2780,7 +2790,7 @@ function validateBranch(
       failValidation(
         document,
         'WOML_INVALID_STRUCTURE',
-        `<branch> cannot contain <${children[index].name}> outside a <when> or <otherwise> arm.`,
+        `<${sourceElementName}> cannot contain <${children[index].name}> outside a <when> or <otherwise> arm.`,
         children[index].openTagSpan
       );
     }
@@ -2788,10 +2798,13 @@ function validateBranch(
 
   return {
     kind: 'branch',
+    sourceElementName,
     id,
     element: branch,
     metadata,
-    arms: children.map(arm => validateBranchArm(document, arm, registry)),
+    arms: children.map(arm =>
+      validateBranchArm(document, arm, registry, sourceElementName)
+    ),
   };
 }
 
@@ -2892,7 +2905,7 @@ function validateFlowItem(
   parent: string
 ): ValidatedFlowItem {
   if (element.name === 'step') return validateStep(document, element, registry);
-  if (element.name === 'branch') {
+  if (element.name === 'branch' || element.name === 'choose') {
     return validateBranch(document, element, registry);
   }
   if (element.name === 'parallel') {
@@ -3734,6 +3747,42 @@ export function inspectValidatedWomlDocument(
   document: WomlSourceDocument
 ): ValidatedWorkflow {
   return validateDocument(document);
+}
+
+/**
+ * Returns non-fatal source migration diagnostics after the document has been
+ * validated. Diagnostics never affect compiled identity or runtime stdout.
+ */
+export function inspectWomlMigrationDiagnostics(
+  document: WomlSourceDocument
+): readonly WomlAdvisoryDiagnostic[] {
+  validateDocument(document);
+  const diagnostics: WomlAdvisoryDiagnostic[] = [];
+
+  const visit = (
+    element: WomlSourceElement,
+    parentName: string | undefined
+  ): void => {
+    if (element.name === 'branch' && parentName !== 'fork') {
+      diagnostics.push({
+        severity: 'warning',
+        code: 'WOML_DEPRECATED_CONDITIONAL_BRANCH',
+        phase: 'validation',
+        message:
+          'Conditional <branch> is deprecated; use <choose> for mutually exclusive conditions.',
+        file: document.file,
+        location: element.openTagSpan,
+        hint:
+          'Rename the opening <branch> tag to <choose> and the matching closing </branch> tag to </choose>. The id, cases, result, and runtime behavior stay unchanged.',
+      });
+    }
+    for (const child of element.children) {
+      if (child.kind === 'element') visit(child, element.name);
+    }
+  };
+
+  visit(document.root, undefined);
+  return diagnostics;
 }
 
 export function validateWoml(document: WomlSourceDocument): void {

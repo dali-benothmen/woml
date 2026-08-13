@@ -106,19 +106,19 @@ describe('parseWoml', () => {
     );
   });
 
-  test('preserves branch case order, reference values, and source spans', () => {
+  test('preserves choice case order, reference values, and source spans', () => {
     const source = readFileSync(
       new URL('./fixtures/branch.woml', import.meta.url),
       'utf8'
     );
     const document = parseWoml(source, { file: 'branch.woml' });
     const [, steps] = elementChildren(workflowElement(document.root));
-    const branch = elementChildren(steps)[1];
-    const [when, otherwise] = elementChildren(branch);
+    const choice = elementChildren(steps)[1];
+    const [when, otherwise] = elementChildren(choice);
     const whenResult = elementChildren(when).at(-1);
 
-    expect(branch.name).toBe('branch');
-    expect(branch.attributes.id.value).toBe('decision');
+    expect(choice.name).toBe('choose');
+    expect(choice.attributes.id.value).toBe('decision');
     expect([when.name, otherwise.name]).toEqual(['when', 'otherwise']);
     expect(when.attributes.test.value).toBe(
       '{{context.steps.checkContent.needsReview}}'
@@ -127,7 +127,7 @@ describe('parseWoml', () => {
     expect(whenResult?.attributes.value.value).toBe(
       '{{context.steps.reviewContent}}'
     );
-    expect(branch.openTagSpan.start.offset).toBe(source.indexOf('<branch'));
+    expect(choice.openTagSpan.start.offset).toBe(source.indexOf('<choose'));
     expect(when.attributes.test.valueSpan.start.offset).toBe(
       source.indexOf('{{context.steps.checkContent.needsReview}}')
     );

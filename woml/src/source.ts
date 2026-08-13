@@ -20,6 +20,10 @@ export interface WomlDiagnostic {
   readonly hint?: string;
 }
 
+export interface WomlAdvisoryDiagnostic extends WomlDiagnostic {
+  readonly severity: 'warning';
+}
+
 export interface WomlSourceAttribute {
   readonly name: string;
   readonly value: string;

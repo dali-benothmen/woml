@@ -1,0 +1,12 @@
+<woml>
+<workflow id="root-first-fork" version="1.0.0">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <fork id="initialFanout" join="all">
+      <branch id="left"><step id="leftStep"><script>return { side: "left" };</script></step></branch>
+      <branch id="right"><step id="rightStep"><script>return { side: "right" };</script></step></branch>
+    </fork>
+    <step id="finish"><script>return { left: context.steps.leftStep, right: context.steps.rightStep };</script></step>
+  </steps>
+</workflow>
+</woml>
