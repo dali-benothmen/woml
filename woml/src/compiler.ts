@@ -17,6 +17,7 @@ import {
   type CompiledWorkflowDefinitionV11,
   type CompiledWorkflowDefinitionV12,
   type CompiledWorkflowDefinitionV13,
+  type CompiledWorkflowDefinitionV14,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowGraphV13,
@@ -103,6 +104,23 @@ interface ValidatedControlChoice {
   readonly arms: readonly ValidatedControlChoiceArm[];
 }
 
+interface ValidatedSwitchArm {
+  readonly kind: 'case' | 'default';
+  readonly element: WomlSourceElement;
+  readonly value?: string;
+  readonly items: readonly ValidatedFlowItem[];
+  readonly result?: ValidatedReference;
+}
+
+interface ValidatedSwitch {
+  readonly kind: 'switch';
+  readonly id?: string;
+  readonly element: WomlSourceElement;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+  readonly selector: ValidatedReference;
+  readonly arms: readonly ValidatedSwitchArm[];
+}
+
 interface ValidatedBranch {
   readonly kind: 'branch';
   readonly sourceElementName: 'branch' | 'choose';
@@ -161,6 +179,7 @@ type ValidatedFlowItem =
   | ValidatedStep
   | ValidatedBranch
   | ValidatedControlChoice
+  | ValidatedSwitch
   | ValidatedParallel
   | ValidatedApproval
   | ValidatedFork;
@@ -173,6 +192,7 @@ interface ValidatedFlow {
   readonly firstNotification?: WomlSourceElement;
   readonly firstFork?: WomlSourceElement;
   readonly firstControlChoice?: WomlSourceElement;
+  readonly firstSwitch?: WomlSourceElement;
 }
 
 interface FlowValidationContext {
@@ -338,6 +358,9 @@ const supportedElements = new Set([
   'script',
   'branch',
   'choose',
+  'switch',
+  'case',
+  'default',
   'fork',
   'parallel',
   'when',
@@ -398,6 +421,9 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   script: { attributes: new Set() },
   branch: { attributes: new Set(['id', 'name', 'description']) },
   choose: { attributes: new Set(['id', 'name', 'description']) },
+  switch: { attributes: new Set(['id', 'name', 'description', 'value']) },
+  case: { attributes: new Set(['value']) },
+  default: { attributes: new Set() },
   fork: { attributes: new Set(['id', 'join']) },
   parallel: {
     attributes: new Set([
@@ -694,6 +720,7 @@ function validateJavaScriptSafeId(
     | 'step'
     | 'branch'
     | 'choose'
+    | 'switch'
     | 'fork'
     | 'parallel'
     | 'approval'
@@ -705,7 +732,7 @@ function validateJavaScriptSafeId(
     failValidation(
       document,
       'WOML_INVALID_ID',
-      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'choose' ? 'Choice' : role === 'fork' ? 'Fork' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
+      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'choose' ? 'Choice' : role === 'switch' ? 'Switch' : role === 'fork' ? 'Fork' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
       attribute.valueSpan,
       'Use letters and numbers, start with a lowercase letter, and do not use hyphens.'
     );
@@ -1516,7 +1543,14 @@ function registerStructuralId(
   document: WomlSourceDocument,
   registry: Set<string>,
   attribute: WomlSourceAttribute,
-  role: 'step' | 'branch' | 'choose' | 'fork' | 'parallel' | 'approval'
+  role:
+    | 'step'
+    | 'branch'
+    | 'choose'
+    | 'switch'
+    | 'fork'
+    | 'parallel'
+    | 'approval'
 ): string {
   const id = validateJavaScriptSafeId(document, attribute, role);
   if (registry.has(id)) {
@@ -2561,7 +2595,7 @@ function collectScriptAnalyses(
       for (const arm of item.arms) collectScriptAnalyses(arm.items, analyses);
       continue;
     }
-    if (item.kind === 'controlChoice') {
+    if (item.kind === 'controlChoice' || item.kind === 'switch') {
       for (const arm of item.arms) collectScriptAnalyses(arm.items, analyses);
       continue;
     }
@@ -2598,7 +2632,7 @@ function collectValidatedSteps(
       steps.push(...item.children);
     } else if (item.kind === 'branch') {
       for (const arm of item.arms) collectValidatedSteps(arm.items, steps);
-    } else if (item.kind === 'controlChoice') {
+    } else if (item.kind === 'controlChoice' || item.kind === 'switch') {
       for (const arm of item.arms) collectValidatedSteps(arm.items, steps);
     } else if (item.kind === 'fork') {
       for (const branch of item.branches) {
@@ -3026,6 +3060,168 @@ function validateControlChoice(
   };
 }
 
+function validateSwitchArm(
+  document: WomlSourceDocument,
+  arm: WomlSourceElement,
+  registry: Set<string>,
+  context: FlowValidationContext,
+  resultProducing: boolean
+): ValidatedSwitchArm {
+  const children = elementChildren(document, arm);
+  const results = children.filter(child => child.name === 'result');
+  let result: ValidatedReference | undefined;
+  let flowChildren = children;
+  if (resultProducing) {
+    if (results.length !== 1) {
+      failValidation(
+        document,
+        'WOML_SWITCH_RESULT_REQUIRED',
+        `<${arm.name}> must contain exactly one final <result> because its <switch> has an id.`,
+        results[1]?.openTagSpan ?? arm.openTagSpan
+      );
+    }
+    if (children.at(-1) !== results[0]) {
+      failValidation(
+        document,
+        'WOML_SWITCH_RESULT_ORDER',
+        `<result> must be the final child of <${arm.name}>.`,
+        results[0].openTagSpan
+      );
+    }
+    ensureEmptyElement(document, results[0]);
+    result = parseExactReference(
+      document,
+      requiredAttribute(document, results[0], 'value')
+    );
+    flowChildren = children.slice(0, -1);
+  } else if (results.length > 0) {
+    failValidation(
+      document,
+      'WOML_SWITCH_RESULT_REQUIRES_ID',
+      'A control-only <switch> cannot contain <result>; add an id to publish one merged result.',
+      results[0].openTagSpan
+    );
+  }
+  if (flowChildren.length === 0) {
+    failValidation(
+      document,
+      'WOML_SWITCH_ARM_EMPTY',
+      `<${arm.name}> must contain at least one flow item${resultProducing ? ' before <result>' : ''}.`,
+      arm.openTagSpan
+    );
+  }
+  const items = flowChildren.map(child =>
+    validateFlowItem(document, child, registry, `<${arm.name}>`, context)
+  );
+  if (arm.name === 'case') {
+    const value = requiredAttribute(document, arm, 'value');
+    if (value.value.length === 0) {
+      failValidation(
+        document,
+        'WOML_SWITCH_CASE_VALUE_EMPTY',
+        '<case value="..."> requires a non-empty string.',
+        value.valueSpan
+      );
+    }
+    return {
+      kind: 'case',
+      element: arm,
+      value: value.value,
+      items,
+      ...(result === undefined ? {} : { result }),
+    };
+  }
+  return {
+    kind: 'default',
+    element: arm,
+    items,
+    ...(result === undefined ? {} : { result }),
+  };
+}
+
+function validateSwitch(
+  document: WomlSourceDocument,
+  element: WomlSourceElement,
+  registry: Set<string>,
+  context: FlowValidationContext
+): ValidatedSwitch {
+  const idAttribute = element.attributes.id;
+  const id =
+    idAttribute === undefined
+      ? undefined
+      : registerStructuralId(document, registry, idAttribute, 'switch');
+  const metadataAttribute =
+    element.attributes.name ?? element.attributes.description;
+  if (id === undefined && metadataAttribute !== undefined) {
+    failValidation(
+      document,
+      'WOML_SWITCH_METADATA_REQUIRES_ID',
+      `Attribute "${metadataAttribute.name}" is available only on a result-producing <switch id="...">.`,
+      metadataAttribute.nameSpan
+    );
+  }
+  const selector = parseExactReference(
+    document,
+    requiredAttribute(document, element, 'value')
+  );
+  const children = elementChildren(document, element);
+  const caseCount = children.filter(child => child.name === 'case').length;
+  if (caseCount === 0) {
+    failValidation(
+      document,
+      'WOML_SWITCH_CASE_REQUIRED',
+      '<switch> requires at least one <case>.',
+      element.openTagSpan
+    );
+  }
+  const defaults = children.flatMap((child, index) =>
+    child.name === 'default' ? [index] : []
+  );
+  if (defaults.length !== 1 || defaults[0] !== children.length - 1) {
+    failValidation(
+      document,
+      'WOML_SWITCH_DEFAULT_ORDER',
+      '<switch> requires exactly one final <default>.',
+      children[defaults[1] ?? defaults[0] ?? 0]?.openTagSpan ??
+        element.openTagSpan
+    );
+  }
+  const seen = new Set<string>();
+  for (let index = 0; index < children.length - 1; index += 1) {
+    const child = children[index];
+    if (child.name !== 'case') {
+      failValidation(
+        document,
+        'WOML_SWITCH_STRUCTURE_INVALID',
+        `<switch> accepts <case> children followed by one <default>; found <${child.name}>.`,
+        child.openTagSpan
+      );
+    }
+    const value = requiredAttribute(document, child, 'value');
+    if (seen.has(value.value)) {
+      failValidation(
+        document,
+        'WOML_SWITCH_CASE_DUPLICATE',
+        `Switch case value "${value.value}" is declared more than once.`,
+        value.valueSpan
+      );
+    }
+    seen.add(value.value);
+  }
+  return {
+    kind: 'switch',
+    ...(id === undefined ? {} : { id }),
+    element,
+    ...(id === undefined
+      ? {}
+      : { metadata: flowItemMetadata(document, element) }),
+    selector,
+    arms: children.map(arm =>
+      validateSwitchArm(document, arm, registry, context, id !== undefined)
+    ),
+  };
+}
+
 interface ForkJoinToken {
   readonly value: string;
   readonly span: SourceSpan;
@@ -3098,11 +3294,7 @@ function validateFork(
       }
     }
     const idAttribute = requiredAttribute(document, branch, 'id');
-    const branchId = validateJavaScriptSafeId(
-      document,
-      idAttribute,
-      'branch'
-    );
+    const branchId = validateJavaScriptSafeId(document, idAttribute, 'branch');
     if (branchId === 'all' || branchId === 'none') {
       failValidation(
         document,
@@ -3327,7 +3519,7 @@ function validateFlowItem(
       failValidation(
         document,
         'WOML_FORK_BRANCH_CHILD_INVALID',
-        'A fork-owned <branch> supports <step>, <choose>, <parallel>, and <approval> flow items; nested conditional flow uses <choose>.',
+        'A fork-owned <branch> supports <step>, <choose>, <switch>, <parallel>, and <approval> flow items; nested conditional flow uses <choose> or <switch>.',
         element.openTagSpan
       );
     }
@@ -3351,6 +3543,17 @@ function validateFlowItem(
     return element.attributes.id === undefined
       ? validateControlChoice(document, element, registry, context)
       : validateBranch(document, element, registry, context);
+  }
+  if (element.name === 'switch') {
+    return validateSwitch(document, element, registry, context);
+  }
+  if (element.name === 'case' || element.name === 'default') {
+    failValidation(
+      document,
+      'WOML_SWITCH_ARM_PLACEMENT_INVALID',
+      `<${element.name}> is valid only as a direct child of <switch>.`,
+      element.openTagSpan
+    );
   }
   if (element.name === 'fork') {
     if (context.insideForkBranch) {
@@ -3444,7 +3647,8 @@ function collectFlowOutputIds(
     } else if (item.kind === 'branch') {
       output.add(item.id);
       for (const arm of item.arms) collectFlowOutputIds(arm.items, output);
-    } else if (item.kind === 'controlChoice') {
+    } else if (item.kind === 'controlChoice' || item.kind === 'switch') {
+      if (item.kind === 'switch' && item.id !== undefined) output.add(item.id);
       for (const arm of item.arms) collectFlowOutputIds(arm.items, output);
     } else if (item.kind === 'approval') {
       output.add(item.id);
@@ -3565,6 +3769,36 @@ function validateReferenceAvailability(
       continue;
     }
 
+    if (item.kind === 'switch') {
+      assertReferenceAvailable(
+        document,
+        item.selector,
+        allIds,
+        available,
+        invisible
+      );
+      for (const arm of item.arms) {
+        const armAvailable = validateReferenceAvailability(
+          document,
+          arm.items,
+          allIds,
+          new Set(available),
+          new Set(invisible)
+        );
+        if (arm.result !== undefined) {
+          assertReferenceAvailable(
+            document,
+            arm.result,
+            allIds,
+            armAvailable,
+            invisible
+          );
+        }
+      }
+      if (item.id !== undefined) available.add(item.id);
+      continue;
+    }
+
     for (const arm of item.arms) {
       if (arm.test !== undefined) {
         assertReferenceAvailable(
@@ -3658,7 +3892,7 @@ function validateSteps(
       if (item.kind === 'branch') {
         return item.element;
       }
-      if (item.kind === 'controlChoice') {
+      if (item.kind === 'controlChoice' || item.kind === 'switch') {
         for (const arm of item.arms) {
           const nested = findFirstBranch(arm.items);
           if (nested !== undefined) return nested;
@@ -3690,7 +3924,7 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
-      if (item.kind === 'controlChoice') {
+      if (item.kind === 'controlChoice' || item.kind === 'switch') {
         for (const arm of item.arms) {
           const nested = findFirstParallel(arm.items);
           if (nested !== undefined) return nested;
@@ -3722,7 +3956,7 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
-      if (item.kind === 'controlChoice') {
+      if (item.kind === 'controlChoice' || item.kind === 'switch') {
         for (const arm of item.arms) {
           const nested = findFirstApproval(arm.items);
           if (nested !== undefined) return nested;
@@ -3747,7 +3981,7 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
-      if (item.kind === 'controlChoice') {
+      if (item.kind === 'controlChoice' || item.kind === 'switch') {
         for (const arm of item.arms) {
           const nested = findFirstNotification(arm.items);
           if (nested !== undefined) return nested;
@@ -3775,11 +4009,15 @@ function validateSteps(
   const firstNotification = findFirstNotification(items);
   const findFirstKind = (
     flowItems: readonly ValidatedFlowItem[],
-    kind: 'fork' | 'controlChoice'
+    kind: 'fork' | 'controlChoice' | 'switch'
   ): WomlSourceElement | undefined => {
     for (const item of flowItems) {
       if (item.kind === kind) return item.element;
-      if (item.kind === 'branch' || item.kind === 'controlChoice') {
+      if (
+        item.kind === 'branch' ||
+        item.kind === 'controlChoice' ||
+        item.kind === 'switch'
+      ) {
         for (const arm of item.arms) {
           const nested = findFirstKind(arm.items, kind);
           if (nested !== undefined) return nested;
@@ -3800,6 +4038,7 @@ function validateSteps(
   };
   const firstFork = findFirstKind(items, 'fork');
   const firstControlChoice = findFirstKind(items, 'controlChoice');
+  const firstSwitch = findFirstKind(items, 'switch');
 
   return {
     items,
@@ -3809,6 +4048,7 @@ function validateSteps(
     ...(firstNotification === undefined ? {} : { firstNotification }),
     ...(firstFork === undefined ? {} : { firstFork }),
     ...(firstControlChoice === undefined ? {} : { firstControlChoice }),
+    ...(firstSwitch === undefined ? {} : { firstSwitch }),
   };
 }
 
@@ -4122,10 +4362,7 @@ function lowerFlowItems(
   };
 }
 
-function v13EmptyEngineNode(
-  id: string,
-  handler: string
-): CompiledWorkflowNode {
+function v13EmptyEngineNode(id: string, handler: string): CompiledWorkflowNode {
   return {
     id,
     handler,
@@ -4258,9 +4495,7 @@ function lowerControlChoiceV13(
     )
   );
   const armIds = choice.arms.map((arm, index) =>
-    arm.kind === 'when'
-      ? `${choiceId}:when:${index}`
-      : `${choiceId}:otherwise`
+    arm.kind === 'when' ? `${choiceId}:when:${index}` : `${choiceId}:otherwise`
   );
   state.choices.push({ choiceId, selectorNodeId, joinNodeId, armIds });
   return {
@@ -4293,6 +4528,98 @@ function lowerControlChoiceV13(
       })),
     ],
     visibleAfter: new Set(visibleBefore),
+  };
+}
+
+function lowerSwitchV14(
+  switchItem: ValidatedSwitch,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const choiceId = `__woml_choice__${path}_switch`;
+  const selectorNodeId = `${choiceId}__select`;
+  const joinNodeId = `${choiceId}__join`;
+  const armFragments = switchItem.arms.map((arm, index) =>
+    lowerFlowItemsV13(
+      arm.items,
+      new Set(visibleBefore),
+      `${path}_arm_${index}`,
+      state
+    )
+  );
+  const armIds = switchItem.arms.map((arm, index) =>
+    arm.kind === 'case' ? `${choiceId}:case:${index}` : `${choiceId}:default`
+  );
+  const defaultArmIndex = switchItem.arms.findIndex(
+    arm => arm.kind === 'default'
+  );
+  const descriptor: CompiledControlChoiceV1 = {
+    choiceId,
+    selectorNodeId,
+    joinNodeId,
+    armIds,
+    stringSelector: referenceExpression(switchItem.selector),
+    stringCases: switchItem.arms.flatMap((arm, index) =>
+      arm.kind === 'case' ? [{ armId: armIds[index], value: arm.value! }] : []
+    ),
+    defaultArmId: armIds[defaultArmIndex],
+    ...(switchItem.id === undefined ? {} : { resultNodeId: switchItem.id }),
+  };
+  state.choices.push(descriptor);
+
+  const resultNode =
+    switchItem.id === undefined
+      ? undefined
+      : ({
+          id: switchItem.id,
+          handler: 'engine.choice-result',
+          inputs: {
+            kind: 'object',
+            fields: Object.fromEntries(
+              switchItem.arms.map((arm, index) => [
+                armIds[index],
+                referenceExpression(arm.result!),
+              ])
+            ),
+          },
+          ...(switchItem.metadata === undefined
+            ? {}
+            : { metadata: switchItem.metadata }),
+        } satisfies CompiledWorkflowNode);
+
+  return {
+    entryId: selectorNodeId,
+    exitId: resultNode?.id ?? joinNodeId,
+    nodes: [
+      v13EmptyEngineNode(selectorNodeId, 'engine.choice-select'),
+      ...armFragments.flatMap(fragment => fragment.nodes),
+      v13EmptyEngineNode(joinNodeId, 'engine.choice-join'),
+      ...(resultNode === undefined ? [] : [resultNode]),
+    ],
+    edges: [
+      ...switchItem.arms.map((_, index) => ({
+        id: armIds[index],
+        from: selectorNodeId,
+        to: armFragments[index].entryId,
+        condition: { kind: 'always' as const },
+      })),
+      ...armFragments.flatMap(fragment => fragment.edges),
+      ...armFragments.map((fragment, index) => ({
+        id: `${armIds[index]}:join`,
+        from: fragment.exitId,
+        to: joinNodeId,
+        condition: { kind: 'always' as const },
+      })),
+      ...(resultNode === undefined
+        ? []
+        : [alwaysEdge(joinNodeId, resultNode.id)]),
+    ],
+    visibleAfter:
+      switchItem.id === undefined
+        ? new Set(visibleBefore)
+        : new Set([...visibleBefore, switchItem.id]),
+    ...(switchItem.id === undefined ? {} : { lastResultNodeId: switchItem.id }),
   };
 }
 
@@ -4478,6 +4805,8 @@ function lowerFlowItemV13(
     return lowerResultChoiceV13(item, visibleBefore, path, state);
   if (item.kind === 'controlChoice')
     return lowerControlChoiceV13(item, visibleBefore, path, state);
+  if (item.kind === 'switch')
+    return lowerSwitchV14(item, visibleBefore, path, state);
   if (item.kind === 'approval')
     return lowerApprovalV13(item, visibleBefore, path, state);
   return lowerForkV13(item, visibleBefore, path, state);
@@ -4523,9 +4852,7 @@ function lowerFlowItemsV13(
   };
 }
 
-function lowerWorkflowV13(
-  items: readonly ValidatedFlowItem[]
-): {
+function lowerWorkflowV13(items: readonly ValidatedFlowItem[]): {
   readonly fragment: LoweredV13FlowFragment;
   readonly graph: CompiledWorkflowGraphV13;
 } {
@@ -4562,10 +4889,7 @@ function lowerWorkflowV13(
       entryNodeIds: [fragment.entryId],
       nodes: [
         ...fragment.nodes,
-        v13EmptyEngineNode(
-          settlementNodeId,
-          'engine.workflow-settlement'
-        ),
+        v13EmptyEngineNode(settlementNodeId, 'engine.workflow-settlement'),
       ],
       edges: [...fragment.edges, ...settlementEdges],
       forks: state.forks,
@@ -4910,8 +5234,7 @@ export function inspectWomlMigrationDiagnostics(
           'Conditional <branch> is deprecated; use <choose> for mutually exclusive conditions.',
         file: document.file,
         location: element.openTagSpan,
-        hint:
-          'Rename the opening <branch> tag to <choose> and the matching closing </branch> tag to </choose>. The id, cases, result, and runtime behavior stay unchanged.',
+        hint: 'Rename the opening <branch> tag to <choose> and the matching closing </branch> tag to </choose>. The id, cases, result, and runtime behavior stay unchanged.',
       });
     }
     for (const child of element.children) {
@@ -4972,8 +5295,13 @@ export function validateResolvedReusableWorkflow(
       const attributes = Object.fromEntries(
         Object.entries(element.attributes).filter(([name]) =>
           new Set([
-            'id', 'name', 'description', 'retry', 'retry-delay',
-            'retry-backoff', 'retry-max-delay',
+            'id',
+            'name',
+            'description',
+            'retry',
+            'retry-delay',
+            'retry-backoff',
+            'retry-max-delay',
           ]).has(name)
         )
       );
@@ -5058,8 +5386,11 @@ function compileValidatedWoml(
     lifecycle,
     runtimePolicy,
   } = validateDocument(document);
-  const usesModelV13 =
-    flow.firstFork !== undefined || flow.firstControlChoice !== undefined;
+  const usesModelV14 = flow.firstSwitch !== undefined;
+  const usesStructuredGraph =
+    usesModelV14 ||
+    flow.firstFork !== undefined ||
+    flow.firstControlChoice !== undefined;
   if (modules.length > 0 && moduleRuntime === undefined) {
     failCompile(
       document,
@@ -5130,7 +5461,7 @@ function compileValidatedWoml(
     }
   }
   if (
-    usesModelV13 &&
+    usesStructuredGraph &&
     !flow.items.some(
       item =>
         item.kind === 'step' ||
@@ -5138,16 +5469,19 @@ function compileValidatedWoml(
         item.kind === 'approval'
     )
   ) {
-    const source = flow.firstFork ?? flow.firstControlChoice!;
+    const source =
+      flow.firstFork ?? flow.firstControlChoice ?? flow.firstSwitch!;
     failCompile(
       document,
       'WOML_WORKFLOW_RESULT_REQUIRED',
-      'This Model v13 workflow has no deterministic value-producing item on its main route.',
+      `This Model v${usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
       source.openTagSpan,
-      'Add a main-route <step>, result-producing <choose id="...">, or <approval> before the terminal control structure.'
+      'Add a main-route <step>, result-producing <choose id="..."> or <switch id="...">, or <approval> before the terminal control structure.'
     );
   }
-  const loweredV13 = usesModelV13 ? lowerWorkflowV13(flow.items) : undefined;
+  const loweredV13 = usesStructuredGraph
+    ? lowerWorkflowV13(flow.items)
+    : undefined;
   const lowered = loweredV13?.fragment ?? lowerFlowItems(flow.items);
   const scriptAnalyses = collectScriptAnalyses(flow.items);
   const lifecycleScripts =
@@ -5196,7 +5530,7 @@ function compileValidatedWoml(
     );
   }
   const usesScriptRuntimeV1 =
-    usesModelV13 ||
+    usesStructuredGraph ||
     lifecycle !== undefined ||
     runtimePolicy !== undefined ||
     triggers.length === 0 ||
@@ -5237,16 +5571,26 @@ function compileValidatedWoml(
       ? {}
       : { runtimePolicy: runtimePolicy.value }),
   };
-  const compiled: CompiledWorkflowDefinition = usesModelV13
-    ? ({
-        schemaVersion: 13,
-        ...definition,
-        graph: baseGraph as CompiledWorkflowGraphV13,
-        runtimePolicy: runtimePolicy?.value ?? {
-          profileVersion: 1,
-          concurrency: 1,
-        },
-      } satisfies CompiledWorkflowDefinitionV13)
+  const compiled: CompiledWorkflowDefinition = usesStructuredGraph
+    ? usesModelV14
+      ? ({
+          schemaVersion: 14,
+          ...definition,
+          graph: baseGraph as CompiledWorkflowGraphV13,
+          runtimePolicy: runtimePolicy?.value ?? {
+            profileVersion: 1,
+            concurrency: 1,
+          },
+        } satisfies CompiledWorkflowDefinitionV14)
+      : ({
+          schemaVersion: 13,
+          ...definition,
+          graph: baseGraph as CompiledWorkflowGraphV13,
+          runtimePolicy: runtimePolicy?.value ?? {
+            profileVersion: 1,
+            concurrency: 1,
+          },
+        } satisfies CompiledWorkflowDefinitionV13)
     : runtimePolicy !== undefined
       ? {
           schemaVersion: 12,
@@ -5305,20 +5649,22 @@ export function compileWomlWithModules(
   moduleRuntime: CompiledModuleRuntimeV1
 ):
   | CompiledWorkflowDefinitionV9
-    | CompiledWorkflowDefinitionV10
-    | CompiledWorkflowDefinitionV11
-    | CompiledWorkflowDefinitionV12
-    | CompiledWorkflowDefinitionV13 {
+  | CompiledWorkflowDefinitionV10
+  | CompiledWorkflowDefinitionV11
+  | CompiledWorkflowDefinitionV12
+  | CompiledWorkflowDefinitionV13
+  | CompiledWorkflowDefinitionV14 {
   const compiled = compileValidatedWoml(document, moduleRuntime);
   if (
     compiled.schemaVersion !== 9 &&
     compiled.schemaVersion !== 10 &&
     compiled.schemaVersion !== 11 &&
     compiled.schemaVersion !== 12 &&
-    compiled.schemaVersion !== 13
+    compiled.schemaVersion !== 13 &&
+    compiled.schemaVersion !== 14
   ) {
     throw new Error(
-      'module compilation did not produce Model v9, v10, v11, v12, or v13'
+      'module compilation did not produce Model v9, v10, v11, v12, v13, or v14'
     );
   }
   return compiled;

@@ -41,8 +41,8 @@ replace the operation outcome.
 
 ## Versioned artifacts
 
-- Compiled Workflow Model v14 adds reusable invocation descriptors to the
-  unchanged Model v13 DAG.
+- Compiled Workflow Model v14 adds exact-string choices and reserves reusable
+  invocation descriptors on top of the Model v13 DAG.
 - Definition Package v9 pins every imported WOML definition and transitive
   JS/TS artifact.
 - Reusable Script Binding v3 freezes invocation-local `props` without changing

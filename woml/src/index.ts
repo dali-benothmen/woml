@@ -21,6 +21,7 @@ export {
   WOML_LIFECYCLE_DEFINITION_PACKAGE_PROFILE,
   WOML_RUNTIME_POLICY_DEFINITION_PACKAGE_PROFILE,
   WOML_FORK_DEFINITION_PACKAGE_PROFILE,
+  WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE,
   WOML_MODULE_RESOLVER_PROFILE,
   type WomlDefinitionPackageModuleV1,
   type WomlDefinitionPackageModuleV2,
@@ -34,6 +35,7 @@ export {
   type WomlDefinitionPackageV6,
   type WomlDefinitionPackageV7,
   type WomlDefinitionPackageV8,
+  type WomlDefinitionPackageV9,
   type WomlModuleResolverOptions,
   type WomlModuleServiceUsageInspection,
 } from './modules';
@@ -64,6 +66,7 @@ export {
   type CompiledWorkflowDefinitionV11,
   type CompiledWorkflowDefinitionV12,
   type CompiledWorkflowDefinitionV13,
+  type CompiledWorkflowDefinitionV14,
   type CompiledForkBranchV1,
   type CompiledForkV1,
   type CompiledControlChoiceV1,

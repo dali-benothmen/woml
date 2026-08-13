@@ -379,7 +379,10 @@ fn edge_is_active(edge: &crate::model::CompiledWorkflowEdge, projection: &RunPro
     return selected_arm_id == &edge.id || edge.id == format!("{selected_arm_id}:join");
   }
   if edge.id.starts_with("__woml_choice__")
-    && (edge.id.contains(":when:") || edge.id.ends_with(":otherwise"))
+    && (edge.id.contains(":when:")
+      || edge.id.ends_with(":otherwise")
+      || edge.id.contains(":case:")
+      || edge.id.ends_with(":default"))
   {
     return false;
   }
@@ -627,6 +630,42 @@ pub(crate) fn selected_choice_arm(
       path: None,
       kind: BranchEvaluationErrorKind::SelectionInvalid,
     })?;
+  if let Some(selector) = &choice.string_selector {
+    let path = match selector {
+      ValueExpression::ContextReference { path } => Some(path.clone()),
+      _ => None,
+    };
+    let value =
+      resolve_context_reference(selector, context).map_err(|error| BranchEvaluationError {
+        branch_id: choice.choice_id.clone(),
+        arm_id: None,
+        path: Some(error.path),
+        kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
+      })?;
+    let Value::String(value) = value else {
+      return Err(BranchEvaluationError {
+        branch_id: choice.choice_id.clone(),
+        arm_id: None,
+        path,
+        kind: BranchEvaluationErrorKind::NotString(json_value_type_name(&value).to_string()),
+      });
+    };
+    let arm_id = choice
+      .string_cases
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|case| case.value == value)
+      .map(|case| case.arm_id.clone())
+      .or_else(|| choice.default_arm_id.clone())
+      .ok_or_else(|| BranchEvaluationError {
+        branch_id: choice.choice_id.clone(),
+        arm_id: None,
+        path: None,
+        kind: BranchEvaluationErrorKind::SelectionInvalid,
+      })?;
+    return Ok((choice.choice_id.clone(), arm_id));
+  }
   for edge in workflow
     .graph
     .edges
@@ -690,6 +729,7 @@ pub(crate) struct BranchEvaluationError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BranchEvaluationErrorKind {
   NotBoolean(crate::JsonValueType),
+  NotString(String),
   ReferenceNotAvailable,
   SelectionInvalid,
 }
@@ -705,6 +745,17 @@ fn json_value_type(value: &Value) -> crate::JsonValueType {
   }
 }
 
+fn json_value_type_name(value: &Value) -> &'static str {
+  match value {
+    Value::Null => "null",
+    Value::Bool(_) => "boolean",
+    Value::Number(_) => "number",
+    Value::String(_) => "string",
+    Value::Array(_) => "array",
+    Value::Object(_) => "object",
+  }
+}
+
 pub(crate) fn validate_payload_against_definition(
   workflow: &CompiledWorkflowDefinition,
   definition_hash: &str,
@@ -714,7 +765,9 @@ pub(crate) fn validate_payload_against_definition(
     RunEventPayload::RunAdmitted(data) => {
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V12 | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) || data.definition_hash != definition_hash
         || workflow.runtime_policy_hash().as_deref() != Some(data.policy_hash.as_str())
         || workflow.runtime_policy_queue_name().as_deref() != Some(data.queue.name.as_str())
@@ -741,7 +794,9 @@ pub(crate) fn validate_payload_against_definition(
     RunEventPayload::RunExecutionStarted(data) => {
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V12 | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -763,7 +818,9 @@ pub(crate) fn validate_payload_against_definition(
     RunEventPayload::RunTimeoutReached(_) => {
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V12 | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -1203,6 +1260,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V11
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) {
         return Err("Lifecycle and run-control events require compiled Model v11+.".to_string());
       }
@@ -1213,6 +1271,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V11
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) {
         return Err("Lifecycle hook events require compiled Model v11+.".to_string());
       }
@@ -1247,6 +1306,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V11
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) || !action_exists
       {
         return Err("Lifecycle action event references an unknown Model v11+ action.".to_string());
@@ -1265,6 +1325,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V11
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) || !action_exists
       {
         return Err(
@@ -1278,6 +1339,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V11
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       ) || workflow.lifecycle.is_none()
         || !crate::event::is_definition_hash(&data.hook_invocation_id)
       {

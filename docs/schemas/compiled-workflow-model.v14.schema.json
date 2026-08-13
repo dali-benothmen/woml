@@ -2,18 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v14",
   "title": "WOML Reusable Definition Compiled Workflow Model v14",
-  "description": "Model v13 DAG plus immutable reusable step and notification-provider descriptors. Custom source tags never cross the frontend/core boundary.",
+  "description": "Model v13 DAG plus deterministic string choices and immutable reusable step and notification-provider descriptors. Source tags never cross the frontend/core boundary.",
   "x-status": "switch-custom-definitions-scp0-frozen",
   "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v13",
   "x-invariants": [
     "Every reusable step invocation identifies one existing runtime.script node.",
     "Every reusable definition digest identifies bytes pinned by Definition Package v9.",
     "Prop expressions contain literals, context references, or symbolic secret names, never resolved secrets.",
-    "Reusable lifecycle hooks are invocation-scoped and observational; they cannot change the committed operation outcome."
+    "Reusable lifecycle hooks are invocation-scoped and observational; they cannot change the committed operation outcome.",
+    "String choices select exactly one exact-match case or their required default and persist that arm through choice_selected."
   ],
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy", "reusableDefinitions"],
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy"],
   "properties": {
     "schemaVersion": { "const": 14 },
     "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
@@ -54,9 +55,39 @@
           { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoiceBooleanEdge" }
         ] } },
         "forks": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/fork" } },
-        "choices": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoice" } },
+        "choices": { "type": "array", "items": { "oneOf": [
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoice" },
+          { "$ref": "#/$defs/stringChoice" }
+        ] } },
         "contextVisibility": { "type": "array", "minItems": 1, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/contextVisibility" } },
         "settlement": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/settlement" }
+      }
+    },
+    "stringChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["choiceId", "selectorNodeId", "joinNodeId", "armIds", "stringSelector", "stringCases", "defaultArmId"],
+      "properties": {
+        "choiceId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "selectorNodeId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "joinNodeId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "armIds": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" } },
+        "stringSelector": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/contextReferenceExpression" },
+        "stringCases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["armId", "value"],
+            "properties": {
+              "armId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+              "value": { "type": "string", "minLength": 1, "maxLength": 65536 }
+            }
+          }
+        },
+        "defaultArmId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "resultNodeId": { "$ref": "#/$defs/publicId" }
       }
     },
     "reusableScriptNode": {

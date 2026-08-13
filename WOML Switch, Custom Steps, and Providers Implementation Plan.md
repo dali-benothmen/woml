@@ -1,9 +1,10 @@
 # WOML Switch, Custom Steps, and Providers Implementation Plan
 
-Status: SCP0 and SCP1 completed on 2026-08-13; source contracts, versioned
-interfaces, reusable document recognition, dependency resolution, diagnostics,
-folder classification, and editor metadata are implemented. Switch and
-reusable-definition execution remain gated to SCP2-SCP6.
+Status: SCP0, SCP1, and SCP2 completed on 2026-08-14; source contracts,
+versioned interfaces, reusable document recognition, dependency resolution,
+diagnostics, folder classification, editor metadata, and durable exact-string
+switch execution are implemented. Reusable-definition execution remains gated
+to SCP3-SCP6.
 
 ## 1. Product Outcome
 
@@ -869,10 +870,11 @@ runtime macro expander.
 
 SCP0 freezes the exact versioned artifacts before implementation:
 
-- **Compiled Workflow Model v14** extends Model v13 with reusable operation
-  descriptors, compiled prop expressions, definition provenance, and
-  invocation-scoped lifecycle definitions. Existing fork/choice/settlement
-  graph contracts remain unchanged.
+- **Compiled Workflow Model v14** extends Model v13 with exact-string choice
+  descriptors and reserves reusable operation descriptors, compiled prop
+  expressions, definition provenance, and invocation-scoped lifecycle
+  definitions. Existing fork/choice/settlement graph contracts remain
+  compatible.
 - **Definition Package v9** stores imported `.woml` definitions and their
   transitive JS/TS artifacts beside the root workflow.
 - **Script Runtime Bindings v3** adds immutable `props` for reusable step and
@@ -1235,7 +1237,8 @@ change selection or result.
 
 Changes:
 
-- Add Model v14 TypeScript and Rust types/validation.
+- Extend the existing Model v14 TypeScript and Rust switch profile with
+  reusable-operation validation.
 - Add Definition Package v9 reusable-definition artifacts and dependency
   manifests.
 - Lower each custom-step usage into one ordinary step node with compiled prop

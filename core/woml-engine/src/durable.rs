@@ -4271,7 +4271,7 @@ impl DurableEventStore {
     let base = self.inspect_run_v3(run_id)?;
     let binding = self.run_binding(run_id)?;
     let workflow = self.definition(&binding.definition_hash)?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
+    if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
       return Err(DurableStoreError::Contract(
         "Run Inspection v4 is available only for compiled Model v13 runs.".to_string(),
       ));
@@ -4373,7 +4373,7 @@ impl DurableEventStore {
   ) -> Result<ForkRecoveryWorkV1, DurableStoreError> {
     let binding = self.run_binding(run_id)?;
     let workflow = self.definition(&binding.definition_hash)?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
+    if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
       return Err(DurableStoreError::Contract(
         "Fork recovery work is available only for compiled Model v13 runs.".to_string(),
       ));
@@ -4929,6 +4929,7 @@ impl DurableEventStore {
       crate::COMPILED_MODEL_SCHEMA_VERSION_V11
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
     ) {
       return Ok(result(
         RunCancellationStatus::Rejected,
@@ -5022,6 +5023,7 @@ impl DurableEventStore {
       crate::COMPILED_MODEL_SCHEMA_VERSION_V11
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
     ) {
       return Err(DurableStoreError::Contract(
         "Business-outcome authority requires compiled Model v11+.".to_string(),
@@ -5210,7 +5212,7 @@ impl DurableEventStore {
     // Model v13 owns every opened fork branch until it reaches a durable
     // terminal boundary. A workflow timeout closes those boundaries before
     // deciding the run outcome so recovery cannot leave orphaned branch work.
-    if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
+    if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
       for fork in workflow.graph.forks.as_deref().unwrap_or_default() {
         let Some(projected) = projection.forks.get(&fork.fork_id) else {
           continue;
@@ -5326,6 +5328,7 @@ impl DurableEventStore {
       crate::COMPILED_MODEL_SCHEMA_VERSION_V11
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
     ) {
       return Err(DurableStoreError::Contract(
         "Run finalization authority requires compiled Model v11+.".to_string(),
@@ -9693,7 +9696,7 @@ impl DurableDagEngine {
       .is_some();
     let fork_child = self.workflow.fork_branch_owner(&failure.node_id).is_some();
     let projection = self.projection(run_id)?;
-    let fork_coordinated = self.workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+    let fork_coordinated = self.workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       && projection.forks.values().any(|fork| {
         fork.join_status == crate::projection::ForkJoinStatus::Pending
           || fork.branches.len()
@@ -9868,9 +9871,9 @@ impl DurableDagEngine {
     let node = self.workflow.node(node_id).ok_or_else(|| {
       DurableEngineError::Contract(format!("Unknown pure result node {node_id:?}."))
     })?;
-    if node.handler != "engine.branch-result" {
+    if node.handler != "engine.branch-result" && node.handler != "engine.choice-result" {
       return Err(DurableEngineError::Contract(format!(
-        "Node {node_id:?} is not an engine.branch-result operation."
+        "Node {node_id:?} is not a supported pure-result operation."
       )));
     }
     let ready = self.ready_node_ids(run_id)?;

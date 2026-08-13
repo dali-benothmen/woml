@@ -247,6 +247,13 @@ export interface CompiledControlChoiceV1 {
   readonly selectorNodeId: string;
   readonly joinNodeId: string;
   readonly armIds: readonly string[];
+  readonly stringSelector?: ContextReferenceExpression;
+  readonly stringCases?: readonly {
+    readonly armId: string;
+    readonly value: string;
+  }[];
+  readonly defaultArmId?: string;
+  readonly resultNodeId?: string;
 }
 
 export interface CompiledContextVisibilityV1 {
@@ -360,6 +367,15 @@ export interface CompiledWorkflowDefinitionV13
   readonly runtimePolicy: CompiledRuntimePolicyV1;
 }
 
+export interface CompiledWorkflowDefinitionV14
+  extends Omit<CompiledWorkflowDefinitionBase, 'graph'> {
+  readonly schemaVersion: 14;
+  readonly graph: CompiledWorkflowGraphV13;
+  readonly moduleRuntime?: CompiledModuleRuntimeV1;
+  readonly lifecycle?: CompiledLifecycleDefinitionV1;
+  readonly runtimePolicy: CompiledRuntimePolicyV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -373,7 +389,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV10
   | CompiledWorkflowDefinitionV11
   | CompiledWorkflowDefinitionV12
-  | CompiledWorkflowDefinitionV13;
+  | CompiledWorkflowDefinitionV13
+  | CompiledWorkflowDefinitionV14;
 
 export interface CompiledGraphIssue {
   readonly code:
@@ -1240,10 +1257,7 @@ function inspectForkGraph(
           continue;
         }
         for (const edge of outgoing.get(nodeId) ?? []) {
-          if (
-            edge.to !== fork.joinNodeId &&
-            edge.to !== settlement.nodeId
-          ) {
+          if (edge.to !== fork.joinNodeId && edge.to !== settlement.nodeId) {
             pending.push(edge.to);
           }
         }
@@ -1251,7 +1265,10 @@ function inspectForkGraph(
       valid &&= reachedTerminal;
       for (const nodeId of visited) {
         const owner = routeOwners.get(nodeId);
-        if (owner !== undefined && owner !== `${fork.forkId}:${branch.branchId}`) {
+        if (
+          owner !== undefined &&
+          owner !== `${fork.forkId}:${branch.branchId}`
+        ) {
           valid = false;
         }
         routeOwners.set(nodeId, `${fork.forkId}:${branch.branchId}`);
@@ -1267,7 +1284,9 @@ function inspectForkGraph(
       JSON.stringify(canonicalJoined) === JSON.stringify(fork.joinedBranchIds);
 
     const openEdges = outgoing.get(fork.openNodeId) ?? [];
-    const branchEntryIds = new Set(fork.branches.map(branch => branch.entryNodeId));
+    const branchEntryIds = new Set(
+      fork.branches.map(branch => branch.entryNodeId)
+    );
     valid &&= fork.branches.every(branch =>
       openEdges.some(
         edge =>
@@ -1302,9 +1321,11 @@ function inspectForkGraph(
 
   for (const node of graph.nodes) {
     if (
-      ['engine.fork-open', 'engine.fork-branch-terminal', 'engine.fork-join'].includes(
-        node.handler
-      ) &&
+      [
+        'engine.fork-open',
+        'engine.fork-branch-terminal',
+        'engine.fork-join',
+      ].includes(node.handler) &&
       !describedForkNodes.has(node.id)
     ) {
       issues.push({
@@ -1317,19 +1338,58 @@ function inspectForkGraph(
   const seenChoices = new Set<string>();
   const describedChoiceNodes = new Set<string>();
   for (const choice of choices) {
+    const isStringChoice = choice.stringSelector !== undefined;
+    const stringFieldsAreComplete = isStringChoice
+      ? choice.stringCases !== undefined &&
+        choice.defaultArmId !== undefined &&
+        choice.stringCases.length >= 1 &&
+        choice.stringCases.length === choice.armIds.length - 1 &&
+        isBranchContextReference(choice.stringSelector) &&
+        new Set(choice.stringCases.map(item => item.value)).size ===
+          choice.stringCases.length &&
+        choice.stringCases.every(
+          (item, index) =>
+            item.armId === choice.armIds[index] && item.value.length > 0
+        ) &&
+        choice.defaultArmId === choice.armIds.at(-1)
+      : choice.stringCases === undefined &&
+        choice.defaultArmId === undefined &&
+        choice.resultNodeId === undefined;
     const validChoiceId = /^__woml_choice__[a-z0-9_]+$/.test(choice.choiceId);
     let valid =
       validChoiceId &&
       !seenChoices.has(choice.choiceId) &&
       choice.selectorNodeId === `${choice.choiceId}__select` &&
       choice.joinNodeId === `${choice.choiceId}__join` &&
-      emptyEngineNode(nodes.get(choice.selectorNodeId), 'engine.choice-select') &&
+      emptyEngineNode(
+        nodes.get(choice.selectorNodeId),
+        'engine.choice-select'
+      ) &&
       emptyEngineNode(nodes.get(choice.joinNodeId), 'engine.choice-join') &&
       choice.armIds.length >= 2 &&
-      new Set(choice.armIds).size === choice.armIds.length;
+      new Set(choice.armIds).size === choice.armIds.length &&
+      stringFieldsAreComplete;
     seenChoices.add(choice.choiceId);
     describedChoiceNodes.add(choice.selectorNodeId);
     describedChoiceNodes.add(choice.joinNodeId);
+    if (choice.resultNodeId !== undefined) {
+      describedChoiceNodes.add(choice.resultNodeId);
+      const result = nodes.get(choice.resultNodeId);
+      const fields =
+        result?.inputs.kind === 'object' ? result.inputs.fields : {};
+      const resultIncoming = incoming.get(choice.resultNodeId) ?? [];
+      valid &&=
+        isStringChoice &&
+        publicStructuralIdPattern.test(choice.resultNodeId) &&
+        result?.handler === 'engine.choice-result' &&
+        result.retryPolicy === undefined &&
+        result.timeoutMs === undefined &&
+        Object.keys(fields).length === choice.armIds.length &&
+        choice.armIds.every(armId => isBranchContextReference(fields[armId])) &&
+        resultIncoming.length === 1 &&
+        resultIncoming[0].from === choice.joinNodeId &&
+        resultIncoming[0].condition.kind === 'always';
+    }
     const selectionEdges = outgoing.get(choice.selectorNodeId) ?? [];
     const joinEdges = incoming.get(choice.joinNodeId) ?? [];
     valid &&=
@@ -1344,9 +1404,11 @@ function inspectForkGraph(
         select.branchId === undefined &&
         select.parallelId === undefined &&
         select.approvalId === undefined &&
-        (index === choice.armIds.length - 1
+        (isStringChoice
           ? select.condition.kind === 'always'
-          : select.condition.kind === 'boolean') &&
+          : index === choice.armIds.length - 1
+            ? select.condition.kind === 'always'
+            : select.condition.kind === 'boolean') &&
         join?.id === `${armId}:join` &&
         join.to === choice.joinNodeId &&
         join.condition.kind === 'always';
@@ -1360,7 +1422,11 @@ function inspectForkGraph(
   }
   for (const node of graph.nodes) {
     if (
-      ['engine.choice-select', 'engine.choice-join'].includes(node.handler) &&
+      [
+        'engine.choice-select',
+        'engine.choice-join',
+        'engine.choice-result',
+      ].includes(node.handler) &&
       !describedChoiceNodes.has(node.id)
     ) {
       issues.push({

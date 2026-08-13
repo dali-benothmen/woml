@@ -2524,6 +2524,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
     crate::COMPILED_MODEL_SCHEMA_VERSION_V11
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
   ) {
     return Ok(());
   }
@@ -3257,13 +3258,12 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
       }
       "engine.choice-select" => {
         let context = engine.projection(run_id)?.context;
-        let (choice_id, arm_id) = selected_choice_arm(engine.workflow(), node_id, &context)
-          .map_err(|error| {
-            RuntimeExecutionError::Stalled(format!(
-              "choice {:?} could not select an arm: {:?}",
-              error.branch_id, error.kind
-            ))
-          })?;
+        let (choice_id, arm_id) = match selected_choice_arm(engine.workflow(), node_id, &context) {
+          Ok(selection) => selection,
+          Err(error) => {
+            return fail_choice(engine, run_id, error);
+          }
+        };
         engine.append_payload(
           run_id,
           RunEventPayload::ChoiceSelected(ChoiceSelectedData { choice_id, arm_id }),
@@ -3293,7 +3293,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         let output = match resolve_context_reference(expression, &projection.context) {
           Ok(output) => output,
           Err(error) => {
-            return fail_branch(
+            return fail_choice(
               engine,
               run_id,
               BranchEvaluationError {
@@ -3302,7 +3302,6 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
                 path: Some(error.path),
                 kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
               },
-              BranchFailureSite::Result,
             );
           }
         };
@@ -3312,6 +3311,72 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         // The last value-producing main-route step is the public result source,
         // but it is not permission to publish success while owned fork work may
         // still have failed or remain unsettled.
+        if node_id == &terminal_node_id && engine.workflow().graph.settlement.is_none() {
+          engine.append_payload(
+            run_id,
+            RunEventPayload::RunSucceeded(RunSucceededData {
+              terminal_node_id: terminal_node_id.clone(),
+              result: output,
+            }),
+          )?;
+          return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+            engine,
+            run_id,
+            execution_order.clone(),
+          )?));
+        }
+      }
+      "engine.choice-result" => {
+        let projection = engine.projection(run_id)?;
+        let choice = engine
+          .workflow()
+          .graph
+          .choices
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .find(|choice| choice.result_node_id.as_deref() == Some(node_id))
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "choice result {node_id:?} has no compiled choice descriptor"
+            ))
+          })?;
+        let arm_id = projection
+          .choice_selections
+          .get(&choice.choice_id)
+          .cloned()
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "choice result {node_id:?} became ready without a recorded selection"
+            ))
+          })?;
+        let ValueExpression::Object { fields } = &inputs else {
+          return Err(RuntimeExecutionError::Stalled(format!(
+            "choice result {node_id:?} has invalid compiled inputs"
+          )));
+        };
+        let expression = fields.get(&arm_id).ok_or_else(|| {
+          RuntimeExecutionError::Stalled(format!(
+            "choice result {node_id:?} has no value for selected arm {arm_id:?}"
+          ))
+        })?;
+        let output = match resolve_context_reference(expression, &projection.context) {
+          Ok(output) => output,
+          Err(error) => {
+            return fail_choice(
+              engine,
+              run_id,
+              BranchEvaluationError {
+                branch_id: choice.choice_id.clone(),
+                arm_id: Some(arm_id),
+                path: Some(error.path),
+                kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
+              },
+            );
+          }
+        };
+        engine.publish_pure_result(run_id, node_id, output.clone())?;
+        execution_order.push(node_id.clone());
         if node_id == &terminal_node_id && engine.workflow().graph.settlement.is_none() {
           engine.append_payload(
             run_id,
@@ -3936,13 +4001,13 @@ async fn execute_fork<E: RuntimeDagEngine>(
         }
         "engine.choice-select" => {
           let context = runtime_context_for_node(engine.workflow(), &projection, node_id);
-          let (choice_id, arm_id) = selected_choice_arm(engine.workflow(), node_id, &context)
-            .map_err(|error| {
-              RuntimeExecutionError::Stalled(format!(
-                "fork branch choice {:?} could not select an arm: {:?}",
-                error.branch_id, error.kind
-              ))
-            })?;
+          let (choice_id, arm_id) = match selected_choice_arm(engine.workflow(), node_id, &context)
+          {
+            Ok(selection) => selection,
+            Err(error) => {
+              return fail_choice(engine, run_id, error);
+            }
+          };
           engine.append_payload(
             run_id,
             RunEventPayload::ChoiceSelected(ChoiceSelectedData { choice_id, arm_id }),
@@ -4000,6 +4065,55 @@ async fn execute_fork<E: RuntimeDagEngine>(
             resolve_context_reference(expression, &projection.context).map_err(|error| {
               RuntimeExecutionError::Stalled(format!(
                 "branch result {node_id:?} cannot read {:?}",
+                error.path
+              ))
+            })?;
+          engine.publish_pure_result(run_id, node_id, output)?;
+          completion_order.push(node_id.clone());
+          pure_node_completed = true;
+          break;
+        }
+        "engine.choice-result" => {
+          let choice = engine
+            .workflow()
+            .graph
+            .choices
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .find(|choice| choice.result_node_id.as_deref() == Some(node_id))
+            .ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "choice result {node_id:?} has no compiled choice descriptor"
+              ))
+            })?;
+          let arm_id = projection
+            .choice_selections
+            .get(&choice.choice_id)
+            .cloned()
+            .ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "choice result {node_id:?} became ready without a recorded selection"
+              ))
+            })?;
+          let node = engine
+            .workflow()
+            .node(node_id)
+            .ok_or_else(|| RuntimeExecutionError::Stalled("ready node disappeared".to_string()))?;
+          let ValueExpression::Object { fields } = &node.inputs else {
+            return Err(RuntimeExecutionError::Stalled(format!(
+              "choice result {node_id:?} has invalid compiled inputs"
+            )));
+          };
+          let expression = fields.get(&arm_id).ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "choice result {node_id:?} has no value for selected arm {arm_id:?}"
+            ))
+          })?;
+          let output =
+            resolve_context_reference(expression, &projection.context).map_err(|error| {
+              RuntimeExecutionError::Stalled(format!(
+                "choice result {node_id:?} cannot read {:?}",
                 error.path
               ))
             })?;
@@ -5488,6 +5602,83 @@ fn settle_script_attempt_failure<E: RuntimeDagEngine>(
   )))
 }
 
+fn fail_choice<T, E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  error: BranchEvaluationError,
+) -> Result<T, RuntimeExecutionError> {
+  let BranchEvaluationError {
+    branch_id,
+    path,
+    kind,
+    ..
+  } = error;
+  let reference = path
+    .as_ref()
+    .map(|path| format!("context.{}", path.join(".")));
+  let (code, message) = match kind {
+    BranchEvaluationErrorKind::NotString(actual_type) => (
+      "WOML_SWITCH_VALUE_INVALID".to_string(),
+      format!(
+        "Switch value {} must resolve to a JSON string; received {actual_type}.",
+        reference.as_deref().unwrap_or("<unknown>")
+      ),
+    ),
+    BranchEvaluationErrorKind::ReferenceNotAvailable => (
+      "WOML_REFERENCE_NOT_AVAILABLE".to_string(),
+      format!(
+        "Switch reference {} is not available.",
+        reference.as_deref().unwrap_or("<unknown>")
+      ),
+    ),
+    BranchEvaluationErrorKind::SelectionInvalid => (
+      "WOML_SWITCH_SELECTION_INVALID".to_string(),
+      format!("Switch {branch_id:?} has no valid selectable case."),
+    ),
+    BranchEvaluationErrorKind::NotBoolean(_) => (
+      "WOML_SWITCH_SELECTION_INVALID".to_string(),
+      format!("Switch {branch_id:?} contains an invalid compiled selector."),
+    ),
+  };
+  let node_id = engine
+    .workflow()
+    .graph
+    .choices
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .find(|choice| choice.choice_id == branch_id)
+    .map(|choice| choice.selector_node_id.clone())
+    .unwrap_or(branch_id);
+  let failure = AttemptFailure {
+    kind: AttemptFailureKind::ServiceFailed,
+    code: code.clone(),
+    message: message.clone(),
+    details: None,
+    ..AttemptFailure::legacy_defaults()
+  };
+  engine.append_payload(
+    run_id,
+    RunEventPayload::RunFailed(RunFailedData::V2(RunFailedDataV2::Attempt {
+      node_id: node_id.clone(),
+      attempt: 1,
+      invocation_id: generated_id("inv"),
+      failure: failure.clone(),
+    })),
+  )?;
+  Err(RuntimeExecutionError::RunFailed(Box::new(
+    FailedRunDetails {
+      code,
+      message,
+      node_id: Some(node_id),
+      attempt: Some(1),
+      max_attempts: Some(1),
+      failure,
+      events: engine.events(run_id)?,
+    },
+  )))
+}
+
 fn fail_branch<T, E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
@@ -5511,6 +5702,10 @@ fn fail_branch<T, E: RuntimeDagEngine>(
         arm_id.as_deref().unwrap_or(&branch_id)
       ),
       actual_type,
+    },
+    BranchEvaluationErrorKind::NotString(_) => BranchFailure::BranchSelectionInvalid {
+      code: "WOML_BRANCH_SELECTION_INVALID".to_string(),
+      message: "A string switch reached the conditional-branch failure path.".to_string(),
     },
     BranchEvaluationErrorKind::ReferenceNotAvailable => BranchFailure::ReferenceNotAvailable {
       code: "WOML_REFERENCE_NOT_AVAILABLE".to_string(),
@@ -5691,13 +5886,20 @@ trait RuntimeDagEngine {
     output: Value,
   ) -> Result<(), RuntimeExecutionError> {
     let invocation_id = generated_id("inv");
+    let handler = self
+      .workflow()
+      .node(node_id)
+      .map(|node| node.handler.clone())
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!("pure result node {node_id:?} disappeared"))
+      })?;
     self.append_payload(
       run_id,
       RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
         node_id: node_id.to_string(),
         attempt: 1,
         invocation_id: invocation_id.clone(),
-        handler: "engine.branch-result".to_string(),
+        handler,
         idempotency_key: None,
       }),
     )?;

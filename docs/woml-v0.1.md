@@ -1,7 +1,7 @@
 # WOML v0.1 Fundamental Syntax
 
 Status: executable language profile; sequential scripts, retries, choices,
-parallel groups, and forked multi-step routes are publishable through the
+exact-string switches, parallel groups, and forked multi-step routes are publishable through the
 Rust-backed CLI with durable recovery
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
@@ -66,6 +66,7 @@ includes conditional choices and bounded parallel groups:
 | `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
 | Lifecycle | LEC0–LEC8 completed and hardened | Workflow/step hooks, informational Slack notification, cancellation, and direct run management are executable and publishable through Model v11/Event v10/Store v11 |
 | Conditional `<choose>` | Frozen; canonical source name introduced in FJ1 | Executable and publishable; legacy conditional `<branch>` remains compatible with a deprecation warning |
+| Exact-string `<switch>` | SCP2 completed | Executable and publishable through Model v14 and the existing durable `choice_selected` authority; supports control-only and merged-result profiles |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
 | `<fork>` with multi-item `<branch>` routes | Frozen; FJ0–FJ8 completed and hardened | Executable and publishable through Model v13, Event v12, Store v14, deterministic join visibility, recovery, and the Rust-backed CLI |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
@@ -410,6 +411,8 @@ steps          := <steps> steps-item+ </steps>
 steps-item     := step
                 | parallel
                 | choose
+                | switch
+                | fork
                 | approval
 
 step           := <step step-attributes>
@@ -436,6 +439,21 @@ otherwise      := <otherwise>
                     steps-item+
                     result
                   </otherwise>
+
+switch         := <switch switch-attributes>
+                    case+
+                    default
+                  </switch>
+
+case           := <case value="string">
+                    steps-item+
+                    result?
+                  </case>
+
+default        := <default>
+                    steps-item+
+                    result?
+                  </default>
 
 result         := <result value="context-reference" />
 
@@ -1670,6 +1688,52 @@ The complete executable example is
 [`examples/forkDistributionWorkflow.woml`](../examples/forkDistributionWorkflow.woml).
 Run it with `woml test examples/forkDistributionWorkflow.woml` for one result,
 or use it as part of a long-lived `woml run` deployment.
+
+### 14.6 Exact-string switch routing
+
+`<switch>` is the compact value-routing form. It compares one exact context
+reference against ordered string cases and executes exactly one route:
+
+```xml
+<switch id="delivery" value="{{context.steps.order.provider}}">
+  <case value="slack">
+    <step id="sendSlack">...</step>
+    <result value="{{context.steps.sendSlack}}" />
+  </case>
+
+  <case value="email">
+    <step id="sendEmail">...</step>
+    <result value="{{context.steps.sendEmail}}" />
+  </case>
+
+  <default>
+    <step id="unsupportedProvider">...</step>
+    <result value="{{context.steps.unsupportedProvider}}" />
+  </default>
+</switch>
+```
+
+- `value` is required and MUST contain exactly one available `context` reference.
+- The runtime value MUST be a JSON string. WOML performs no coercion,
+  trimming, or case folding. Other JSON types fail with
+  `WOML_SWITCH_VALUE_INVALID`.
+- One or more `<case>` arms are required. Their non-empty string values MUST be
+  unique; matching is exact and case-sensitive.
+- Exactly one final `<default>` is required. There is no fallthrough.
+- Every arm contains one or more ordinary flow items. Existing recursive
+  placement rules continue to govern nested choices, switches, parallels,
+  approvals, and forks.
+- Without `id`, the switch is control-only and its arms MUST NOT contain
+  `<result>`.
+- With `id`, optional `name` and `description` become available and every arm
+  MUST end in exactly one `<result>`. The selected JSON value is published at
+  `context.steps.<switchId>` for downstream steps.
+- The frontend lowers the selector to Model v14 `engine.choice-select`, stores
+  its selector and exact case table in the compiled choice descriptor, and
+  uses `engine.choice-result` only for the result-producing profile.
+- Rust records the selected arm through the existing durable
+  `choice_selected` event. Recovery reuses that event and never evaluates the
+  selector again.
 
 ## 15. Attribute Values and Context References
 

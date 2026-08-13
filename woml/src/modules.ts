@@ -29,6 +29,7 @@ import type {
   CompiledWorkflowDefinitionV11,
   CompiledWorkflowDefinitionV12,
   CompiledWorkflowDefinitionV13,
+  CompiledWorkflowDefinitionV14,
   CompiledWorkflowDefinitionV9,
 } from './model';
 import {
@@ -56,6 +57,8 @@ export const WOML_RUNTIME_POLICY_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v7' as const;
 export const WOML_FORK_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v8' as const;
+export const WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v9' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -127,16 +130,15 @@ export function inspectWomlModuleServiceUsage(
 ): WomlModuleServiceUsageInspection {
   const definition = buildWomlDefinitionPackage(document, options);
   const sourcePath = resolve(options.sourcePath ?? document.file);
-  const projectRoot = realpathSync(resolve(options.projectRoot ?? dirname(sourcePath)));
+  const projectRoot = realpathSync(
+    resolve(options.projectRoot ?? dirname(sourcePath))
+  );
   const references = new Set<string>();
   const durableStateSources: string[] = [];
   for (const source of definition.sources) {
     if (source.mediaType === 'application/woml+xml') continue;
     const content = readFileSync(resolve(projectRoot, source.path), 'utf8');
-    const usage = staticModuleServiceReferences(
-      content,
-      source.mediaType
-    );
+    const usage = staticModuleServiceReferences(content, source.mediaType);
     if (usage.dynamic) {
       const file = new SourceFile(source.path, content);
       const offset = Math.max(0, content.indexOf('services'));
@@ -334,6 +336,23 @@ export interface WomlDefinitionPackageV8
     readonly modelDigest: string;
     readonly model: CompiledWorkflowDefinitionV13;
   };
+}
+
+export interface WomlDefinitionPackageV9
+  extends Omit<
+    WomlDefinitionPackageV4,
+    'schemaVersion' | 'profile' | 'workflow' | 'runtimeReady'
+  > {
+  readonly schemaVersion: 9;
+  readonly profile: typeof WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE;
+  readonly runtimeReady: boolean;
+  readonly workflow: {
+    readonly id: string;
+    readonly source: string;
+    readonly modelDigest: string;
+    readonly model: CompiledWorkflowDefinitionV14;
+  };
+  readonly definitions: readonly [];
 }
 
 interface AstNode {
@@ -1097,6 +1116,7 @@ export async function buildWomlExecutableDefinitionPackage(
   | WomlDefinitionPackageV6
   | WomlDefinitionPackageV7
   | WomlDefinitionPackageV8
+  | WomlDefinitionPackageV9
 > {
   const resolved = buildWomlDefinitionPackage(document, options);
   if (resolved.modules.length === 0) {
@@ -1263,6 +1283,16 @@ export async function buildWomlExecutableDefinitionPackage(
     },
     permissions: resolved.permissions,
   };
+  if (model.schemaVersion === 14) {
+    const unsigned = {
+      schemaVersion: 9 as const,
+      profile: WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE,
+      ...common,
+      workflow: { ...common.workflow, model },
+      definitions: [] as const,
+    };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   if (model.schemaVersion === 13) {
     const unsigned = {
       schemaVersion: 8 as const,
@@ -1316,11 +1346,18 @@ export async function buildWomlExecutableDefinitionPackage(
 export async function buildWomlRuntimeDefinitionPackage(
   document: WomlSourceDocument,
   options: WomlModuleResolverOptions = {}
-): Promise<WomlDefinitionPackageV3 | WomlDefinitionPackageV5> {
+): Promise<
+  WomlDefinitionPackageV3 | WomlDefinitionPackageV5 | WomlDefinitionPackageV9
+> {
   const compiled = await buildWomlExecutableDefinitionPackage(
     document,
     options
   );
+  if (compiled.schemaVersion === 9) {
+    const { rootHash: _compilationRootHash, ...rest } = compiled;
+    const unsigned = { ...rest, runtimeReady: true as const };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   if (compiled.schemaVersion === 8) {
     throw compileDiagnostic(
       document.file,
@@ -1390,6 +1427,7 @@ export function canonicalizeWomlDefinitionPackage(
     | WomlDefinitionPackageV6
     | WomlDefinitionPackageV7
     | WomlDefinitionPackageV8
+    | WomlDefinitionPackageV9
 ): string {
   return canonicalJson(definitionPackage);
 }

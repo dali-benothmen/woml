@@ -41,6 +41,11 @@
     ] },
     { "name": "when", "description": "A conditional choice arm.", "attributes": [{ "name": "test" }] },
     { "name": "otherwise", "description": "The fallback choice arm." },
+    { "name": "switch", "description": "Selects one exact string case or its required default.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "value" }
+    ] },
+    { "name": "case", "description": "An exact string match inside switch.", "attributes": [{ "name": "value" }] },
+    { "name": "default", "description": "The required final fallback arm inside switch." },
     { "name": "result", "description": "Publishes a path-stable choice result.", "attributes": [{ "name": "value" }] },
     { "name": "parallel", "description": "Runs direct child steps concurrently and waits for all.", "attributes": [
       { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "concurrency" }, { "name": "on-error" }

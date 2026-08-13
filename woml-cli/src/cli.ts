@@ -45,6 +45,7 @@ import {
   type WomlDefinitionPackageV3,
   type WomlDefinitionPackageV5,
   type WomlDefinitionPackageV7,
+  type WomlDefinitionPackageV9,
 } from 'woml';
 import {
   compiledDefinitionHash,
@@ -994,12 +995,20 @@ function formatError(
     return `WOML run error [${error.code}]: ${error.message}`;
   }
 
-  if (error instanceof ProductionBackupError || error instanceof BackupOperationError) {
-    const operation = error.code.startsWith('WOML_RESTORE_') ? 'restore' : 'backup';
+  if (
+    error instanceof ProductionBackupError ||
+    error instanceof BackupOperationError
+  ) {
+    const operation = error.code.startsWith('WOML_RESTORE_')
+      ? 'restore'
+      : 'backup';
     return `WOML ${operation} error [${error.code}]: ${error.message}`;
   }
 
-  if (error instanceof ProductionRetentionError || error instanceof RetentionOperationError) {
+  if (
+    error instanceof ProductionRetentionError ||
+    error instanceof RetentionOperationError
+  ) {
     return `WOML retention error [${error.code}]: ${error.message}`;
   }
 
@@ -1035,9 +1044,7 @@ function formatError(
   }: ${message}`;
 }
 
-function formatAdvisoryDiagnostic(
-  diagnostic: WomlAdvisoryDiagnostic
-): string {
+function formatAdvisoryDiagnostic(diagnostic: WomlAdvisoryDiagnostic): string {
   const location = `${diagnostic.file}:${diagnostic.location.start.line}:${diagnostic.location.start.column}`;
   const hint =
     diagnostic.hint === undefined ? '' : `\nHint: ${diagnostic.hint}`;
@@ -1199,7 +1206,8 @@ function promoteForLifecycleAuthority(
   if (
     workflow.schemaVersion === 11 ||
     workflow.schemaVersion === 12 ||
-    workflow.schemaVersion === 13
+    workflow.schemaVersion === 13 ||
+    workflow.schemaVersion === 14
   ) {
     return workflow;
   }
@@ -1251,6 +1259,7 @@ function runtimeModulesFromPackage(
     | WomlDefinitionPackageV3
     | WomlDefinitionPackageV5
     | WomlDefinitionPackageV7
+    | WomlDefinitionPackageV9
 ): readonly RustRuntimeModuleArtifact[] {
   return definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
@@ -1450,7 +1459,11 @@ async function compileWorkflowInputs(
     const explicitFile = inputSnapshots.some(
       snapshot => !snapshot.directory && snapshot.files.includes(filePath)
     );
-    for (const source of await compileWorkflowSources(filePath, !explicitFile, io)) {
+    for (const source of await compileWorkflowSources(
+      filePath,
+      !explicitFile,
+      io
+    )) {
       compiled.push(source);
     }
   }
@@ -1590,7 +1603,9 @@ async function validateReusableModuleEntrypoints(
         declaration =>
           `<module name="${declaration.name}" from="${declaration.from}" />`
       )
-      .join('')}</imports><workflow id="reusable-module-check"><steps><step id="check"><script>return true;</script></step></steps></workflow></woml>`;
+      .join(
+        ''
+      )}</imports><workflow id="reusable-module-check"><steps><step id="check"><script>return true;</script></step></steps></workflow></woml>`;
     buildWomlDefinitionPackage(
       parseWoml(syntheticSource, { file: sourcePath }),
       { sourcePath, projectRoot }
@@ -1734,31 +1749,41 @@ async function runSingleCheckCommand(
     const hasLifecycle =
       (compiledWorkflow.schemaVersion === 11 ||
         compiledWorkflow.schemaVersion === 12 ||
-        compiledWorkflow.schemaVersion === 13) &&
+        compiledWorkflow.schemaVersion === 13 ||
+        compiledWorkflow.schemaVersion === 14) &&
       compiledWorkflow.lifecycle !== undefined;
     const hasRuntimePolicy =
       compiledWorkflow.schemaVersion === 12 ||
-      compiledWorkflow.schemaVersion === 13;
+      compiledWorkflow.schemaVersion === 13 ||
+      compiledWorkflow.schemaVersion === 14;
     const hasFork =
-      compiledWorkflow.schemaVersion === 13 &&
+      (compiledWorkflow.schemaVersion === 13 ||
+        compiledWorkflow.schemaVersion === 14) &&
       compiledWorkflow.graph.forks.length > 0;
+    const hasSwitch =
+      compiledWorkflow.schemaVersion === 14 &&
+      compiledWorkflow.graph.choices.some(
+        choice => choice.stringSelector !== undefined
+      );
     const workflowCallsFrontendOnly =
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      hasFork
-        ? 'Execution: Model v13 all, selected, and non-blocking fork joins are executable through the durable Rust runtime.\n'
-        : hasRuntimePolicy && definitionPackage.modules.length > 0
-        ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
-        : hasRuntimePolicy
-          ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
-          : hasLifecycle
-            ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
-            : workflowCallsFrontendOnly
-              ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
-              : definitionPackage.modules.length === 0
-                ? 'Execution: module-free workflow; woml run is available.\n'
-                : 'Execution: local modules are compiled and ready for woml run.\n'
+      hasSwitch
+        ? 'Execution: Model v14 exact-string switch routing and merged results are executable through the durable Rust runtime.\n'
+        : hasFork
+          ? 'Execution: Model v13 all, selected, and non-blocking fork joins are executable through the durable Rust runtime.\n'
+          : hasRuntimePolicy && definitionPackage.modules.length > 0
+            ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
+            : hasRuntimePolicy
+              ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
+              : hasLifecycle
+                ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
+                : workflowCallsFrontendOnly
+                  ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
+                  : definitionPackage.modules.length === 0
+                    ? 'Execution: module-free workflow; woml run is available.\n'
+                    : 'Execution: local modules are compiled and ready for woml run.\n'
     );
     return 0;
   } catch (error) {
@@ -1965,7 +1990,8 @@ async function runCheckCommand(
 
   const onlyInput = parsed.inputPaths[0];
   const onlyInputIsFile =
-    onlyInput !== undefined && (await stat(onlyInput).catch(() => undefined))?.isFile() === true;
+    onlyInput !== undefined &&
+    (await stat(onlyInput).catch(() => undefined))?.isFile() === true;
   if (
     parsed.inputPaths.length === 1 &&
     parsed.configPath === undefined &&
@@ -2376,7 +2402,8 @@ async function executeOneShot(
     workflow.schemaVersion !== 9 &&
     workflow.schemaVersion !== 11 &&
     workflow.schemaVersion !== 12 &&
-    workflow.schemaVersion !== 13
+    workflow.schemaVersion !== 13 &&
+    workflow.schemaVersion !== 14
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -2403,7 +2430,8 @@ async function executeOneShot(
     workflow.schemaVersion === 9 ||
     workflow.schemaVersion === 11 ||
     workflow.schemaVersion === 12 ||
-    workflow.schemaVersion === 13
+    workflow.schemaVersion === 13 ||
+    workflow.schemaVersion === 14
   ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);
@@ -2806,14 +2834,18 @@ async function durableStoreSize(path: string): Promise<number> {
       const entry = await stat(candidate);
       if (entry.isFile()) total += entry.size;
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+      if (
+        !(error instanceof Error && 'code' in error && error.code === 'ENOENT')
+      )
         throw error;
     }
   }
   return total;
 }
 
-function observedTriggerType(handler: string):
+function observedTriggerType(
+  handler: string
+):
   | 'manual'
   | 'webhook'
   | 'slack'
@@ -2822,8 +2854,21 @@ function observedTriggerType(handler: string):
   | 'event'
   | undefined {
   const type = handler.startsWith('trigger.') ? handler.slice(8) : handler;
-  return ['manual', 'webhook', 'slack', 'schedule', 'interval', 'event'].includes(type)
-    ? (type as 'manual' | 'webhook' | 'slack' | 'schedule' | 'interval' | 'event')
+  return [
+    'manual',
+    'webhook',
+    'slack',
+    'schedule',
+    'interval',
+    'event',
+  ].includes(type)
+    ? (type as
+        | 'manual'
+        | 'webhook'
+        | 'slack'
+        | 'schedule'
+        | 'interval'
+        | 'event')
     : undefined;
 }
 
@@ -3110,9 +3155,13 @@ async function activateWorkflows(
         metricsEnabled: args.observabilityMetrics,
         operations: {
           listRuns: () => {
-            listRunsWithRust(args.statePath, { limit: 1 }, {
-              nativeCorePath: dependencies.nativeCorePath,
-            });
+            listRunsWithRust(
+              args.statePath,
+              { limit: 1 },
+              {
+                nativeCorePath: dependencies.nativeCorePath,
+              }
+            );
           },
           getRun: runId => {
             inspectRunV2WithRust(args.statePath, runId, {
@@ -3214,7 +3263,12 @@ async function activateWorkflows(
             error instanceof RetentionOperationError
               ? error.code
               : 'WOML_RETENTION_FAILED';
-          observability?.setComponent('retention', 'retention', 'degraded', code);
+          observability?.setComponent(
+            'retention',
+            'retention',
+            'degraded',
+            code
+          );
           observability?.recordMaintenance('retention', 'failed', code);
           observability?.alert(code, formatError(error));
         },
@@ -3828,7 +3882,8 @@ export async function runCli(
       ...(dependencies.inspectorTerminal === undefined
         ? {}
         : { terminal: dependencies.inspectorTerminal }),
-      fetcher: (dependencies.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
+      fetcher: (dependencies.fetch ??
+        globalThis.fetch) as typeof globalThis.fetch,
     });
   }
 

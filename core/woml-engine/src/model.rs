@@ -9,11 +9,11 @@ use thiserror::Error;
 use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V10,
   COMPILED_MODEL_SCHEMA_VERSION_V11, COMPILED_MODEL_SCHEMA_VERSION_V12,
-  COMPILED_MODEL_SCHEMA_VERSION_V13, COMPILED_MODEL_SCHEMA_VERSION_V2,
-  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
-  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
-  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
-  COMPILED_MODEL_SCHEMA_VERSION_V9,
+  COMPILED_MODEL_SCHEMA_VERSION_V13, COMPILED_MODEL_SCHEMA_VERSION_V14,
+  COMPILED_MODEL_SCHEMA_VERSION_V2, COMPILED_MODEL_SCHEMA_VERSION_V3,
+  COMPILED_MODEL_SCHEMA_VERSION_V4, COMPILED_MODEL_SCHEMA_VERSION_V5,
+  COMPILED_MODEL_SCHEMA_VERSION_V6, COMPILED_MODEL_SCHEMA_VERSION_V7,
+  COMPILED_MODEL_SCHEMA_VERSION_V8, COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,13 +195,28 @@ pub struct CompiledFork {
   pub joined_branch_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledControlChoice {
   pub choice_id: String,
   pub selector_node_id: String,
   pub join_node_id: String,
   pub arm_ids: Vec<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub string_selector: Option<ValueExpression>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub string_cases: Option<Vec<CompiledStringChoiceCase>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub default_arm_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub result_node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledStringChoiceCase {
+  pub arm_id: String,
+  pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1117,6 +1132,7 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
     COMPILED_MODEL_SCHEMA_VERSION_V11
       | COMPILED_MODEL_SCHEMA_VERSION_V12
       | COMPILED_MODEL_SCHEMA_VERSION_V13
+      | COMPILED_MODEL_SCHEMA_VERSION_V14
   ) {
     issues.push(issue(
       ModelIssueCode::InvalidLifecycle,
@@ -1236,7 +1252,12 @@ fn inspect_runtime_policy_contract(
   issues: &mut Vec<ModelIssue>,
 ) {
   match (workflow.schema_version, &workflow.runtime_policy) {
-    (COMPILED_MODEL_SCHEMA_VERSION_V12 | COMPILED_MODEL_SCHEMA_VERSION_V13, Some(policy)) => {
+    (
+      COMPILED_MODEL_SCHEMA_VERSION_V12
+      | COMPILED_MODEL_SCHEMA_VERSION_V13
+      | COMPILED_MODEL_SCHEMA_VERSION_V14,
+      Some(policy),
+    ) => {
       let has_policy = policy.concurrency.is_some()
         || policy.timeout_ms.is_some()
         || policy.rate_limit.is_some()
@@ -1269,12 +1290,15 @@ fn inspect_runtime_policy_contract(
         ));
       }
     }
-    (COMPILED_MODEL_SCHEMA_VERSION_V12 | COMPILED_MODEL_SCHEMA_VERSION_V13, None) => {
-      issues.push(issue(
-        ModelIssueCode::InvalidRuntimePolicy,
-        "Compiled Model v12+ requires runtimePolicy.",
-      ))
-    }
+    (
+      COMPILED_MODEL_SCHEMA_VERSION_V12
+      | COMPILED_MODEL_SCHEMA_VERSION_V13
+      | COMPILED_MODEL_SCHEMA_VERSION_V14,
+      None,
+    ) => issues.push(issue(
+      ModelIssueCode::InvalidRuntimePolicy,
+      "Compiled Model v12+ requires runtimePolicy.",
+    )),
     (_, Some(_)) => issues.push(issue(
       ModelIssueCode::InvalidRuntimePolicy,
       "runtimePolicy is unavailable before compiled Model v12.",
@@ -1785,11 +1809,11 @@ fn inspect_fork_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec
     &workflow.graph.context_visibility,
     &workflow.graph.settlement,
   );
-  if workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V13 {
+  if workflow.schema_version < COMPILED_MODEL_SCHEMA_VERSION_V13 {
     if !matches!(descriptors, (None, None, None, None)) {
       issues.push(issue(
         ModelIssueCode::InvalidForkGraph,
-        "Fork graph metadata is available only in compiled Model v13.",
+        "Fork graph metadata is available only in compiled Model v13 and later.",
       ));
     }
     return;
@@ -1941,8 +1965,35 @@ fn inspect_fork_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec
   let mut choice_ids = HashSet::new();
   let mut described_choice_nodes = HashSet::new();
   for choice in choices {
+    let is_string_choice = choice.string_selector.is_some();
+    let string_contract_valid = if is_string_choice {
+      matches!(
+        choice.string_selector,
+        Some(ValueExpression::ContextReference { ref path }) if !path.is_empty()
+      ) && choice.string_cases.as_ref().is_some_and(|cases| {
+        cases.len() + 1 == choice.arm_ids.len()
+          && !cases.is_empty()
+          && cases
+            .iter()
+            .enumerate()
+            .all(|(index, case)| !case.value.is_empty() && case.arm_id == choice.arm_ids[index])
+          && cases
+            .iter()
+            .map(|case| case.value.as_str())
+            .collect::<HashSet<_>>()
+            .len()
+            == cases.len()
+      }) && choice.default_arm_id.as_deref() == choice.arm_ids.last().map(String::as_str)
+    } else {
+      choice.string_cases.is_none()
+        && choice.default_arm_id.is_none()
+        && choice.result_node_id.is_none()
+    };
     described_choice_nodes.insert(choice.selector_node_id.as_str());
     described_choice_nodes.insert(choice.join_node_id.as_str());
+    if let Some(result_node_id) = &choice.result_node_id {
+      described_choice_nodes.insert(result_node_id.as_str());
+    }
     let selection = outgoing
       .get(choice.selector_node_id.as_str())
       .map(Vec::as_slice)
@@ -1966,7 +2017,34 @@ fn inspect_fork_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec
       && choice.arm_ids.len() >= 2
       && choice.arm_ids.iter().collect::<HashSet<_>>().len() == choice.arm_ids.len()
       && selection.len() == choice.arm_ids.len()
-      && joins.len() == choice.arm_ids.len();
+      && joins.len() == choice.arm_ids.len()
+      && string_contract_valid;
+    if let Some(result_node_id) = &choice.result_node_id {
+      let result_node = nodes.get(result_node_id.as_str());
+      let result_fields = result_node.and_then(|node| match &node.inputs {
+        ValueExpression::Object { fields } => Some(fields),
+        _ => None,
+      });
+      let result_incoming = incoming
+        .get(result_node_id.as_str())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+      valid &= is_string_choice
+        && valid_public_structural_id(result_node_id)
+        && result_node.is_some_and(|node| node.handler == "engine.choice-result")
+        && result_fields.is_some_and(|fields| {
+          fields.len() == choice.arm_ids.len()
+            && choice.arm_ids.iter().all(|arm_id| {
+              matches!(
+                fields.get(arm_id),
+                Some(ValueExpression::ContextReference { .. })
+              )
+            })
+        })
+        && result_incoming.len() == 1
+        && result_incoming[0].from == choice.join_node_id
+        && matches!(result_incoming[0].condition, EdgeCondition::Always);
+    }
     for (index, arm_id) in choice.arm_ids.iter().enumerate() {
       let select = selection.get(index);
       let join = joins.get(index);
@@ -1976,7 +2054,9 @@ fn inspect_fork_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec
             && edge.branch_id.is_none()
             && edge.parallel_id.is_none()
             && edge.approval_id.is_none()
-            && if index + 1 == choice.arm_ids.len() {
+            && if is_string_choice {
+              matches!(edge.condition, EdgeCondition::Always)
+            } else if index + 1 == choice.arm_ids.len() {
               matches!(edge.condition, EdgeCondition::Always)
             } else {
               matches!(edge.condition, EdgeCondition::Boolean { .. })
@@ -2001,7 +2081,7 @@ fn inspect_fork_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec
   for node in &workflow.graph.nodes {
     if matches!(
       node.handler.as_str(),
-      "engine.choice-select" | "engine.choice-join"
+      "engine.choice-select" | "engine.choice-join" | "engine.choice-result"
     ) && !described_choice_nodes.contains(node.id.as_str())
     {
       issues.push(issue(
@@ -2337,6 +2417,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V11
         | COMPILED_MODEL_SCHEMA_VERSION_V12
         | COMPILED_MODEL_SCHEMA_VERSION_V13
+        | COMPILED_MODEL_SCHEMA_VERSION_V14
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -2373,7 +2454,8 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V10
         | COMPILED_MODEL_SCHEMA_VERSION_V11
         | COMPILED_MODEL_SCHEMA_VERSION_V12
-        | COMPILED_MODEL_SCHEMA_VERSION_V13,
+        | COMPILED_MODEL_SCHEMA_VERSION_V13
+        | COMPILED_MODEL_SCHEMA_VERSION_V14,
         Some(runtime),
       ) => {
         let reserved = [
@@ -2435,6 +2517,7 @@ impl CompiledWorkflowDefinition {
           | COMPILED_MODEL_SCHEMA_VERSION_V11
           | COMPILED_MODEL_SCHEMA_VERSION_V12
           | COMPILED_MODEL_SCHEMA_VERSION_V13
+          | COMPILED_MODEL_SCHEMA_VERSION_V14
       )
     {
       issues.push(issue(
@@ -2787,7 +2870,7 @@ impl CompiledWorkflowDefinition {
     allow_retry: bool,
     durable: bool,
   ) {
-    if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13 {
+    if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
       if !durable {
         issues.push(issue(
           ModelIssueCode::UnsupportedRuntimePolicyExecution,
@@ -2852,7 +2935,15 @@ impl CompiledWorkflowDefinition {
           | "engine.choice-select"
           | "engine.choice-join",
           ValueExpression::Object { fields },
-        ) if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13 => fields.is_empty(),
+        ) if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 => fields.is_empty(),
+        ("engine.choice-result", ValueExpression::Object { fields })
+          if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V14 =>
+        {
+          !fields.is_empty()
+            && fields
+              .values()
+              .all(|value| matches!(value, ValueExpression::ContextReference { .. }))
+        }
         (
           "runtime.script"
           | "engine.branch-select"
@@ -2908,7 +2999,7 @@ impl CompiledWorkflowDefinition {
     for edge in &self.graph.edges {
       let executable_condition = matches!(edge.condition, EdgeCondition::Always)
         || matches!(edge.condition, EdgeCondition::Boolean { .. })
-          && (edge.branch_id.is_some() || self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13)
+          && (edge.branch_id.is_some() || self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13)
         || allow_approval
           && matches!(edge.condition, EdgeCondition::Equals { .. })
           && edge.approval_id.is_some();
@@ -2945,7 +3036,7 @@ impl CompiledWorkflowDefinition {
         (incoming_count <= 1
           || node.handler == "engine.branch-result"
           || node.handler == "engine.parallel-join"
-          || self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13
+          || self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13
             && matches!(
               node.handler.as_str(),
               "engine.fork-join" | "engine.choice-join" | "engine.workflow-settlement"
@@ -2954,7 +3045,7 @@ impl CompiledWorkflowDefinition {
           && (outgoing_count <= 1
             || node.handler == "engine.branch-select"
             || node.handler == "engine.parallel-start"
-            || self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13
+            || self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13
               && matches!(
                 node.handler.as_str(),
                 "engine.fork-open" | "engine.fork-branch-terminal" | "engine.choice-select"
