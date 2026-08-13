@@ -96,7 +96,7 @@ describe('MS0 and MS1 Module System', () => {
     );
   });
 
-  test('freezes module aliases, paths, emptiness, and the code-only boundary', () => {
+  test('freezes module aliases, paths, emptiness, and extension-specific imports', () => {
     const workflow = (declaration: string) => `<woml>
   <imports>${declaration}</imports>
   <workflow id="shape-test">
@@ -113,9 +113,14 @@ describe('MS0 and MS1 Module System', () => {
     expect(
       validationCode(workflow('<module name="tools" from="https://example.test/tools.ts" />'))
     ).toBe('WOML_MODULE_PATH_INVALID');
-    expect(
-      validationCode(workflow('<module name="child" from="./child.woml" />'))
-    ).toBe('WOML_MODULE_WORKFLOW_UNSUPPORTED');
+    expect(() =>
+      validateWoml(
+        parseWoml(
+          workflow('<module name="child-step" from="./child.woml" />'),
+          { file: 'reusable-import.woml' }
+        )
+      )
+    ).not.toThrow();
     expect(
       validationCode(workflow('<module name="tools" from="./tools.ts">bad</module>'))
     ).toBe('WOML_INVALID_STRUCTURE');

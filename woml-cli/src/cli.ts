@@ -21,12 +21,17 @@ import {
   buildWomlExecutableDefinitionPackage,
   buildWomlRuntimeDefinitionPackage,
   compileWoml,
+  assertWomlDocumentRunnable,
   generateWomlEditorDeclarations,
+  generateWomlReusableCustomData,
   inspectWomlMigrationDiagnostics,
+  inspectWomlDocument,
   inspectWomlModuleUsage,
   inspectWomlModuleServiceUsage,
   isWomlElement,
   parseWoml,
+  resolveWomlReusableDefinitionGraph,
+  validateResolvedReusableWorkflow,
   WomlDiagnosticError,
   type CompiledWorkflowDefinition,
   type JsonValue,
@@ -36,6 +41,7 @@ import {
   type ValueExpression,
   type WomlSourceDocument,
   type WomlSourceElement,
+  type WomlReusableDefinitionGraph,
   type WomlDefinitionPackageV3,
   type WomlDefinitionPackageV5,
   type WomlDefinitionPackageV7,
@@ -1305,13 +1311,43 @@ async function workflowFilePaths(
 }
 
 async function compileWorkflowSources(
-  inputPath: string
+  inputPath: string,
+  skipReusableDefinitions = false,
+  io?: CliIo
 ): Promise<readonly CompiledWorkflowSource[]> {
   const compiled: CompiledWorkflowSource[] = [];
   for (const filePath of await workflowFilePaths(inputPath)) {
     const source = await readWorkflow(filePath);
     const document = parseWoml(source, { file: filePath });
     const projectRoot = moduleProjectRoot(filePath);
+    const reusableGraph = resolveWomlReusableDefinitionGraph(document, {
+      sourcePath: filePath,
+      projectRoot,
+    });
+    if (reusableGraph.root.kind !== 'workflow') {
+      if (skipReusableDefinitions) continue;
+      if (io !== undefined) {
+        await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
+        await refreshReusableEditorData(
+          filePath,
+          generateWomlReusableCustomData(reusableGraph),
+          io
+        );
+      }
+      assertWomlDocumentRunnable(document);
+    }
+    if (reusableGraph.definitions.length > 0) {
+      if (io !== undefined) {
+        await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
+        validateResolvedReusableWorkflow(document, reusableGraph);
+        await refreshReusableEditorData(
+          filePath,
+          generateWomlReusableCustomData(reusableGraph),
+          io
+        );
+      }
+      assertWomlDocumentRunnable(document);
+    }
     const inspected = buildWomlDefinitionPackage(document, {
       sourcePath: filePath,
       projectRoot,
@@ -1385,7 +1421,8 @@ async function compileWorkflowSources(
 }
 
 async function compileWorkflowInputs(
-  inputPaths: readonly string[]
+  inputPaths: readonly string[],
+  io?: CliIo
 ): Promise<readonly CompiledWorkflowSource[]> {
   const compiled: CompiledWorkflowSource[] = [];
   const seenFiles = new Set<string>();
@@ -1410,9 +1447,18 @@ async function compileWorkflowInputs(
   }
   filePaths.sort((left, right) => left.localeCompare(right));
   for (const filePath of filePaths) {
-    for (const source of await compileWorkflowSources(filePath)) {
+    const explicitFile = inputSnapshots.some(
+      snapshot => !snapshot.directory && snapshot.files.includes(filePath)
+    );
+    for (const source of await compileWorkflowSources(filePath, !explicitFile, io)) {
       compiled.push(source);
     }
+  }
+  if (compiled.length === 0) {
+    throw new CliInputError(
+      'WOML_RUNNABLE_WORKFLOW_REQUIRED',
+      'input contains reusable definitions but no runnable workflow document.'
+    );
   }
   const workflowIds = new Set<string>();
   for (const source of compiled) {
@@ -1508,6 +1554,50 @@ async function refreshEditorTypes(
   }
 }
 
+async function refreshReusableEditorData(
+  inputPath: string,
+  content: string,
+  io: CliIo
+): Promise<void> {
+  const outputPath = join(dirname(inputPath), 'woml-custom-data.json');
+  try {
+    await writeFile(outputPath, content, 'utf8');
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    io.stderr(
+      `Warning [WOML_EDITOR_DATA_WRITE_FAILED]: Could not refresh ${outputPath}: ${reason}\nWorkflow validation can continue.\n`
+    );
+  }
+}
+
+async function validateReusableModuleEntrypoints(
+  graph: WomlReusableDefinitionGraph,
+  projectRoot: string
+): Promise<void> {
+  for (const source of graph.sources) {
+    if (source.kind === 'script-module') continue;
+    const sourcePath = resolve(projectRoot, source.path);
+    const sourceText = await readFile(sourcePath, 'utf8');
+    const inspection = inspectWomlDocument(
+      parseWoml(sourceText, { file: sourcePath })
+    );
+    const scriptImports = inspection.imports.filter(
+      declaration => declaration.kind === 'script-module'
+    );
+    if (scriptImports.length === 0) continue;
+    const syntheticSource = `<woml><imports>${scriptImports
+      .map(
+        declaration =>
+          `<module name="${declaration.name}" from="${declaration.from}" />`
+      )
+      .join('')}</imports><workflow id="reusable-module-check"><steps><step id="check"><script>return true;</script></step></steps></workflow></woml>`;
+    buildWomlDefinitionPackage(
+      parseWoml(syntheticSource, { file: sourcePath }),
+      { sourcePath, projectRoot }
+    );
+  }
+}
+
 async function runSingleCheckCommand(
   args: readonly string[],
   io: CliIo
@@ -1527,10 +1617,53 @@ async function runSingleCheckCommand(
   try {
     const source = await readWorkflow(filePath);
     document = parseWoml(source, { file: filePath });
+    const projectRoot = moduleProjectRoot(filePath);
+    const reusableGraph = resolveWomlReusableDefinitionGraph(document, {
+      sourcePath: filePath,
+      projectRoot,
+    });
+    if (
+      reusableGraph.root.kind !== 'workflow' ||
+      reusableGraph.definitions.length > 0
+    ) {
+      await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
+      validateResolvedReusableWorkflow(document, reusableGraph);
+      await refreshReusableEditorData(
+        filePath,
+        generateWomlReusableCustomData(reusableGraph),
+        io
+      );
+      if (options[0] === '--json') {
+        io.stdout(`${JSON.stringify(reusableGraph, null, 2)}\n`);
+        return 0;
+      }
+      if (reusableGraph.root.kind !== 'workflow') {
+        io.stdout(
+          `WOML check passed for ${reusableGraph.root.kind === 'reusable-step' ? 'reusable step' : 'notification provider'} definition "${filePath}".\n`
+        );
+      } else {
+        io.stdout(`WOML check passed for workflow source "${filePath}".\n`);
+      }
+      io.stdout(`Reusable definition graph: ${reusableGraph.rootHash}\n`);
+      io.stdout(
+        `Definitions: ${reusableGraph.definitions.length}; pinned sources: ${reusableGraph.sources.length}.\n`
+      );
+      for (const definition of reusableGraph.definitions) {
+        io.stdout(
+          `<${definition.alias}> -> ${definition.sourcePath} (${definition.kind}).\n`
+        );
+      }
+      io.stdout(
+        reusableGraph.root.kind === 'workflow'
+          ? 'Execution: reusable source is validated; custom steps begin in SCP3 and custom notification providers begin in SCP5.\n'
+          : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
+      );
+      return 0;
+    }
     const migrationDiagnostics = inspectWomlMigrationDiagnostics(document);
     const inspectionPackage = buildWomlDefinitionPackage(document, {
       sourcePath: filePath,
-      projectRoot: moduleProjectRoot(filePath),
+      projectRoot,
     });
     const workflowElement = document.root.children.find(
       (child): child is WomlSourceElement =>
@@ -1552,11 +1685,11 @@ async function runSingleCheckCommand(
         : declaresLifecycle || declaresRuntimePolicy
           ? await buildWomlExecutableDefinitionPackage(document, {
               sourcePath: filePath,
-              projectRoot: moduleProjectRoot(filePath),
+              projectRoot,
             })
           : await buildWomlRuntimeDefinitionPackage(document, {
               sourcePath: filePath,
-              projectRoot: moduleProjectRoot(filePath),
+              projectRoot,
             });
     const compiledWorkflow =
       definitionPackage.schemaVersion === 1
@@ -1567,7 +1700,7 @@ async function runSingleCheckCommand(
         ? undefined
         : inspectWomlModuleServiceUsage(document, {
             sourcePath: filePath,
-            projectRoot: moduleProjectRoot(filePath),
+            projectRoot,
           });
     await refreshEditorTypes(filePath, definitionPackage.modules, io);
     printMigrationDiagnostics(io, migrationDiagnostics);
@@ -1730,7 +1863,7 @@ async function runDeploymentCheckCommand(
 ): Promise<number> {
   const displayPath = parsed.inputPaths[0];
   try {
-    const sources = await compileWorkflowInputs(parsed.inputPaths);
+    const sources = await compileWorkflowInputs(parsed.inputPaths, io);
     printMigrationDiagnostics(
       io,
       sources.flatMap(source => source.migrationDiagnostics)
@@ -3942,7 +4075,7 @@ export async function runCli(
 
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
-    sources = await compileWorkflowInputs(inputPaths);
+    sources = await compileWorkflowInputs(inputPaths, io);
     printMigrationDiagnostics(
       io,
       sources.flatMap(source => source.migrationDiagnostics)

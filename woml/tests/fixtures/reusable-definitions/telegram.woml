@@ -1,0 +1,25 @@
+<woml>
+  <props>
+    <prop name="bot-token" required="true" secret="true" />
+    <prop name="chat-id" required="true" />
+  </props>
+  <provider kind="notification">
+    <script>
+      return {
+        messageId: `${props.chatId}:${notification.deliveryId}`
+      };
+    </script>
+  </provider>
+  <lifecycle>
+    <on-error>
+      <script>
+        console.error(lifecycle.error.code);
+      </script>
+    </on-error>
+    <on-complete>
+      <script>
+        console.log(lifecycle.outcome);
+      </script>
+    </on-complete>
+  </lifecycle>
+</woml>

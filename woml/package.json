@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:reusable-definitions": "bun test tests/reusable-definition-contracts.test.ts tests/reusable-definitions.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -55,6 +55,11 @@ import {
   ScheduleCronSyntaxError,
 } from './schedule';
 import { parseSecretReference, requireSecretReference } from './secrets';
+import {
+  assertWomlDocumentRunnable,
+  inspectWomlDocument,
+  type WomlReusableDefinitionGraph,
+} from './reusable-definitions';
 
 interface ElementProfile {
   readonly attributes: ReadonlySet<string>;
@@ -4919,13 +4924,130 @@ export function inspectWomlMigrationDiagnostics(
 }
 
 export function validateWoml(document: WomlSourceDocument): void {
+  const inspection = inspectWomlDocument(document);
+  if (
+    inspection.kind !== 'workflow' ||
+    inspection.imports.some(item => item.kind === 'reusable-definition')
+  ) {
+    return;
+  }
   validateDocument(document);
+}
+
+function placeholderAttribute(
+  source: WomlSourceElement,
+  name: string,
+  value: string
+): WomlSourceAttribute {
+  return {
+    name,
+    value,
+    span: source.openTagSpan,
+    nameSpan: source.openTagSpan,
+    valueSpan: source.openTagSpan,
+  };
+}
+
+/**
+ * Runs the existing workflow grammar/DAG/reference validator after reusable
+ * tags have been resolved, without pretending those tags are executable.
+ * Placeholder nodes preserve custom-step IDs and route positions. The real
+ * Model v14 lowering remains gated until SCP3/SCP5.
+ */
+export function validateResolvedReusableWorkflow(
+  document: WomlSourceDocument,
+  graph: WomlReusableDefinitionGraph
+): void {
+  if (graph.root.kind !== 'workflow') return;
+  const definitions = new Map(
+    graph.definitions.map(definition => [definition.alias, definition.kind])
+  );
+
+  const transform = (
+    element: WomlSourceElement,
+    ancestors: readonly string[] = []
+  ): WomlSourceElement => {
+    const definitionKind = definitions.get(element.name);
+    if (definitionKind === 'reusable-step') {
+      const attributes = Object.fromEntries(
+        Object.entries(element.attributes).filter(([name]) =>
+          new Set([
+            'id', 'name', 'description', 'retry', 'retry-delay',
+            'retry-backoff', 'retry-max-delay',
+          ]).has(name)
+        )
+      );
+      const raw: WomlSourceRawText = {
+        kind: 'raw',
+        value: 'return null;',
+        span: element.openTagSpan,
+      };
+      const script: WomlSourceElement = {
+        kind: 'element',
+        name: 'script',
+        attributes: {},
+        children: [raw],
+        span: element.span,
+        openTagSpan: element.openTagSpan,
+      };
+      return { ...element, name: 'step', attributes, children: [script] };
+    }
+    if (definitionKind === 'notification-provider') {
+      const informational = ancestors.some(name => name.startsWith('on-'));
+      const attributes: Record<string, WomlSourceAttribute> = {
+        channels: placeholderAttribute(element, 'channels', '#custom-provider'),
+        'bot-token': placeholderAttribute(
+          element,
+          'bot-token',
+          '{{secrets.WOML_CUSTOM_PROVIDER_PLACEHOLDER}}'
+        ),
+        'app-token': placeholderAttribute(
+          element,
+          'app-token',
+          '{{secrets.WOML_CUSTOM_PROVIDER_PLACEHOLDER}}'
+        ),
+      };
+      if (informational) {
+        attributes.message =
+          element.attributes.message ??
+          placeholderAttribute(element, 'message', 'Custom notification');
+      }
+      return { ...element, name: 'slack', attributes, children: [] };
+    }
+
+    let children = element.children.map(child =>
+      child.kind === 'element'
+        ? transform(child, [...ancestors, element.name])
+        : child
+    );
+    if (element.name === 'imports') {
+      children = children.filter(
+        child =>
+          child.kind !== 'element' ||
+          child.attributes.from?.value.endsWith('.woml') !== true
+      );
+    }
+    return { ...element, children };
+  };
+
+  let root = transform(document.root);
+  root = {
+    ...root,
+    children: root.children.filter(
+      child =>
+        child.kind !== 'element' ||
+        child.name !== 'imports' ||
+        child.children.length > 0
+    ),
+  };
+  validateDocument({ ...document, root });
 }
 
 function compileValidatedWoml(
   document: WomlSourceDocument,
   moduleRuntime?: CompiledModuleRuntimeV1
 ): CompiledWorkflowDefinition {
+  assertWomlDocumentRunnable(document);
   const {
     element: workflow,
     modules,

@@ -51,6 +51,18 @@ compiled definition identity. Modules receive `services` only; workflow
 context, attempts, and individual secrets cross the boundary as explicit
 function arguments. Package permissions remain postponed with package imports.
 
+SCP0-SCP1 extend only the frontend source boundary with two reusable document
+profiles: a top-level `<step>` and a `<provider kind="notification">`. Local
+`.woml` imports resolve to empty custom tags with declared props, while local
+JS/TS imports remain `services.*` modules. The complete canonical dependency
+graph is content-hashed, `woml check` validates ordinary workflow structure as
+well as custom-tag placement, folder discovery activates workflows only, and
+editor custom data is refreshed automatically. Model v14, Definition Package
+v9, Reusable Script Binding v3, Custom Notification Provider Protocol v1,
+Event v13, and Inspection v5 are frozen review artifacts; neither Rust nor Bun
+executes these reusable definitions before SCP3-SCP6. Store v14 remains the
+approved persistence shape.
+
 Workflow Calls WC0 freezes `services.workflows.call()` as a managed capability,
 with an independent durable child run, exact workflow-ID routing, stable call
 identity, bounded JSON input/result, hidden lineage, and one versioned local

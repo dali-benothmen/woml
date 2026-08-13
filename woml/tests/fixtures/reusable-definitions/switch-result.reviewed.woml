@@ -1,0 +1,18 @@
+<woml>
+  <workflow id="switch-result-review">
+    <steps>
+      <step id="classify"><script>return { platform: "telegram" };</script></step>
+      <switch id="delivery" value="{{context.steps.classify.platform}}">
+        <case value="telegram">
+          <step id="sendTelegram"><script>return { sent: true };</script></step>
+          <result value="{{context.steps.sendTelegram}}" />
+        </case>
+        <default>
+          <step id="unsupported"><script>return { sent: false };</script></step>
+          <result value="{{context.steps.unsupported}}" />
+        </default>
+      </switch>
+      <step id="finish"><script>return context.steps.delivery;</script></step>
+    </steps>
+  </workflow>
+</woml>

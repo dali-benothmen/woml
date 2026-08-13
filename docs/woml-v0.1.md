@@ -73,6 +73,7 @@ includes conditional choices and bounded parallel groups:
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
 | Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC14 completed and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, workflow-scoped Cache v1, and internal Events Service v1 are executable and publishable; queue is postponed |
 | `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS4 plus essential MS6 DX completed | Canonical documents, safe local resolution, deterministic ESM bundles/maps, Definition Package v3, Model v9, isolated execution, durable recovery, Script Host v6, editor type generation, alias diagnostics, and mocked module tests are implemented; package support remains postponed |
+| Reusable `<step>` and `<provider kind="notification">` definition files | SCP0–SCP1 completed | Source profiles, props, local `.woml` dependency graphs, diagnostics, folder classification, and custom-tag editor metadata are accepted; compilation and execution remain explicitly unavailable until SCP3–SCP6 |
 | Call-only workflows and `services.workflows.call()` / `.start()` | Workflow Calls WC0–WC7 plus Workflow Start v1 implemented | Model v10 call-only definitions support waiting for a direct child result or continuing after durable background admission, with exact targeting, retry/duplicate reattachment, cycle protection, and local cross-process routing |
 | Queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
 | RAK | Deferred | Unavailable |
@@ -328,10 +329,11 @@ Outside raw-content elements:
 
 ## 4. Document Structure
 
-A WOML file contains exactly one `<woml>` root. It contains an optional
-`<imports>` block followed by exactly one `<workflow>`. The wrapper remains
-required when there are no imports, so tools never need to guess between two
-document shapes.
+A WOML file contains exactly one `<woml>` root. It contains exactly one
+runnable `<workflow>` or one reusable top-level `<step>` or `<provider>`
+definition. The wrapper remains required, so tools can classify a file before
+compilation. Only the workflow profile is runnable; reusable files are imported
+dependencies.
 
 The `<workflow>` children appear in this order:
 
@@ -346,10 +348,30 @@ points, and entry points are declared before executable steps.
 The structural grammar is:
 
 ```text
-document       := <woml> imports? workflow </woml>
+document       := workflow-document
+                | reusable-step-document
+                | provider-document
+
+workflow-document
+               := <woml> imports? workflow </woml>
+
+reusable-step-document
+               := <woml> imports? props? reusable-step reusable-lifecycle? </woml>
+
+provider-document
+               := <woml> imports? props? notification-provider reusable-lifecycle? </woml>
 
 imports        := <imports> module+ </imports>
-module         := <module name=module-alias from=relative-module-source />
+module         := <module name=module-alias from=relative-js-ts-or-woml-source />
+
+props          := <props> prop+ </props>
+prop           := <prop name=kebab-name required=boolean? secret=boolean? />
+
+reusable-step  := <step name=text? description=text?> script </step>
+notification-provider
+               := <provider kind="notification"> script </provider>
+reusable-lifecycle
+               := <lifecycle> on-success? on-error? on-complete? </lifecycle>
 
 workflow       := <workflow workflow-attributes>
                     config?

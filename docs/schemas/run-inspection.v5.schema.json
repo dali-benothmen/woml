@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-inspection/v5",
+  "title": "WOML Reusable Definition Safe Run Inspection v5",
+  "x-status": "switch-custom-definitions-scp0-frozen",
+  "x-forbiddenFields": ["context", "payload", "result", "props", "secret", "credentials", "message", "approvalUrl", "rejectUrl", "stack", "idempotencyKey"],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "runId", "workflowId", "status", "businessOutcome", "lifecycleStatus", "hooks", "warnings", "cancellation", "policy", "forks", "reusableDefinitions"],
+  "properties": {
+    "profile": { "const": "woml.run-inspection/v5" },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 320 }, "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "status": { "enum": ["not_started", "queued", "running", "waiting", "cancelling", "finalizing", "succeeded", "failed", "cancelled"] },
+    "businessOutcome": { "enum": ["undecided", "succeeded", "failed", "cancelled"] },
+    "lifecycleStatus": { "enum": ["idle", "running", "finalizing", "completed_with_warnings", "completed"] },
+    "hooks": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/hooks" },
+    "warnings": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/warnings" },
+    "cancellation": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/cancellation" },
+    "policy": { "$ref": "https://woml.dev/schemas/run-inspection/v3#/properties/policy" },
+    "forks": { "$ref": "https://woml.dev/schemas/run-inspection/v4#/$defs/forks" },
+    "reusableDefinitions": {
+      "type": "object", "additionalProperties": false, "required": ["counts", "items"],
+      "properties": {
+        "counts": { "$ref": "#/$defs/counts" },
+        "items": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/item" } }
+      }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "counts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pending", "running", "succeeded", "failed", "cancelled", "completedWithWarnings"],
+      "properties": { "pending": { "$ref": "#/$defs/count" }, "running": { "$ref": "#/$defs/count" }, "succeeded": { "$ref": "#/$defs/count" }, "failed": { "$ref": "#/$defs/count" }, "cancelled": { "$ref": "#/$defs/count" }, "completedWithWarnings": { "$ref": "#/$defs/count" } }
+    },
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["invocationId", "alias", "definitionDigestPrefix", "kind", "status", "lifecycleStatus"],
+      "properties": {
+        "invocationId": { "type": "string", "minLength": 1, "maxLength": 320 },
+        "alias": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+        "definitionDigestPrefix": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+        "kind": { "enum": ["step", "notification-provider"] },
+        "status": { "enum": ["pending", "running", "succeeded", "failed", "cancelled"] },
+        "lifecycleStatus": { "enum": ["idle", "running", "completed", "completed_with_warnings"] }
+      }
+    }
+  }
+}

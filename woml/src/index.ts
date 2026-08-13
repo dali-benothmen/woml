@@ -3,6 +3,7 @@ export {
   compileWomlWithModules,
   inspectWomlMigrationDiagnostics,
   inspectWomlModuleUsage,
+  validateResolvedReusableWorkflow,
   validateWoml,
   type WomlModuleUsageInspection,
 } from './compiler';
@@ -132,3 +133,16 @@ export {
   withWomlModuleTestRuntime,
   type WomlModuleTestRuntime,
 } from './module-testing';
+export {
+  assertWomlDocumentRunnable,
+  generateWomlReusableCustomData,
+  inspectWomlDocument,
+  resolveWomlReusableDefinitionGraph,
+  type WomlDocumentInspection,
+  type WomlDocumentKind,
+  type WomlImportDeclaration,
+  type WomlPropDeclaration,
+  type WomlResolvedReusableDefinition,
+  type WomlReusableDefinitionGraph,
+  type WomlReusableDefinitionResolverOptions,
+} from './reusable-definitions';

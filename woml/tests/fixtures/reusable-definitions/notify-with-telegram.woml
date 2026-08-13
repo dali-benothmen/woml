@@ -1,0 +1,20 @@
+<woml>
+  <imports>
+    <module name="telegram" from="./telegram.woml" />
+  </imports>
+  <step name="Send result">
+    <script>
+      return { sent: true };
+    </script>
+  </step>
+  <lifecycle>
+    <on-success>
+      <notify>
+        <telegram
+          bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          chat-id="finance-team"
+        />
+      </notify>
+    </on-success>
+  </lifecycle>
+</woml>

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v14",
+  "title": "WOML Reusable Definition Compiled Workflow Model v14",
+  "description": "Model v13 DAG plus immutable reusable step and notification-provider descriptors. Custom source tags never cross the frontend/core boundary.",
+  "x-status": "switch-custom-definitions-scp0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v13",
+  "x-invariants": [
+    "Every reusable step invocation identifies one existing runtime.script node.",
+    "Every reusable definition digest identifies bytes pinned by Definition Package v9.",
+    "Prop expressions contain literals, context references, or symbolic secret names, never resolved secrets.",
+    "Reusable lifecycle hooks are invocation-scoped and observational; they cannot change the committed operation outcome."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy", "reusableDefinitions"],
+  "properties": {
+    "schemaVersion": { "const": 14 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": { "type": "array", "maxItems": 64, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" } },
+    "graph": { "$ref": "#/$defs/workflowGraph" },
+    "moduleRuntime": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime" },
+    "lifecycle": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/lifecycle" },
+    "runtimePolicy": { "$ref": "https://woml.dev/schemas/runtime-policy/v1" },
+    "reusableDefinitions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/reusableInvocation" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "publicId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 },
+    "alias": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 128 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "portablePath": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$" },
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges", "forks", "choices", "contextVisibility", "settlement"],
+      "properties": {
+        "entryNodeIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "nodes": {
+          "type": "array", "minItems": 1,
+          "items": { "oneOf": [
+            { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowNode" },
+            { "$ref": "#/$defs/reusableScriptNode" }
+          ] }
+        },
+        "edges": { "type": "array", "items": { "oneOf": [
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/workflowEdge" },
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoiceBooleanEdge" }
+        ] } },
+        "forks": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/fork" } },
+        "choices": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoice" } },
+        "contextVisibility": { "type": "array", "minItems": 1, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/contextVisibility" } },
+        "settlement": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/settlement" }
+      }
+    },
+    "reusableScriptNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs", "scriptRuntime"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "handler": { "const": "runtime.script" },
+        "inputs": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/objectExpression" },
+        "metadata": { "type": "object", "additionalProperties": true },
+        "retryPolicy": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v6#/$defs/retryPolicy" },
+        "scriptRuntime": {
+          "type": "object", "additionalProperties": false,
+          "required": ["bindingVersion", "bindings", "requiredSecrets"],
+          "properties": {
+            "bindingVersion": { "const": 3 },
+            "bindings": { "const": ["props", "context", "attempt", "services"] },
+            "requiredSecrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" } }
+          }
+        }
+      }
+    },
+    "propExpression": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "type": "string", "maxLength": 65536 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "const": "context" }, "path": { "type": "string", "pattern": "^(payload(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\\.[a-z][A-Za-z0-9]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*)$", "maxLength": 1024 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": { "kind": { "const": "secret" }, "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } } }
+      ]
+    },
+    "boundProp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "bindingName", "secret", "expression"],
+      "properties": {
+        "name": { "$ref": "#/$defs/alias" },
+        "bindingName": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 128 },
+        "secret": { "type": "boolean" },
+        "expression": { "$ref": "#/$defs/propExpression" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "onSuccess": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "onError": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "onComplete": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } }
+      },
+      "minProperties": 1
+    },
+    "reusableInvocation": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "invocationId", "nodeId", "alias", "definitionDigest", "source", "scriptArtifactId", "props"],
+          "properties": {
+            "kind": { "const": "step" }, "invocationId": { "$ref": "#/$defs/publicId" }, "nodeId": { "$ref": "#/$defs/id" },
+            "alias": { "$ref": "#/$defs/alias" }, "definitionDigest": { "$ref": "#/$defs/sha256" }, "source": { "$ref": "#/$defs/portablePath" },
+            "scriptArtifactId": { "$ref": "#/$defs/id" }, "props": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/boundProp" } },
+            "lifecycle": { "$ref": "#/$defs/lifecycle" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "providerId", "alias", "definitionDigest", "source", "scriptArtifactId", "props"],
+          "properties": {
+            "kind": { "const": "notification-provider" }, "providerId": { "$ref": "#/$defs/id" },
+            "alias": { "$ref": "#/$defs/alias" }, "definitionDigest": { "$ref": "#/$defs/sha256" }, "source": { "$ref": "#/$defs/portablePath" },
+            "scriptArtifactId": { "$ref": "#/$defs/id" }, "props": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/boundProp" } },
+            "lifecycle": { "$ref": "#/$defs/lifecycle" }
+          }
+        }
+      ]
+    }
+  }
+}

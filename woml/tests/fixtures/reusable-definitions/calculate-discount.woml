@@ -1,0 +1,31 @@
+<woml>
+  <imports>
+    <module name="pricing" from="./pricing.ts" />
+  </imports>
+  <props>
+    <prop name="price" required="true" />
+    <prop name="percentage" required="true" />
+  </props>
+  <step name="Calculate discount" description="Calculate a final price">
+    <script>
+      return services.pricing.discount(props.price, props.percentage);
+    </script>
+  </step>
+  <lifecycle>
+    <on-success>
+      <script>
+        console.log(lifecycle.result);
+      </script>
+    </on-success>
+    <on-error>
+      <script>
+        console.error(lifecycle.error.code);
+      </script>
+    </on-error>
+    <on-complete>
+      <script>
+        console.log(lifecycle.outcome);
+      </script>
+    </on-complete>
+  </lifecycle>
+</woml>

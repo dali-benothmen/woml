@@ -2,6 +2,17 @@
   "version": 1.1,
   "tags": [
     { "name": "woml", "description": "WOML document root." },
+    { "name": "imports", "description": "Local JavaScript, TypeScript, and reusable WOML imports." },
+    { "name": "module", "description": "Imports one local source under a workflow-local name.", "attributes": [
+      { "name": "name" }, { "name": "from" }
+    ] },
+    { "name": "props", "description": "Props declared by a reusable step or notification provider." },
+    { "name": "prop", "description": "One reusable definition prop.", "attributes": [
+      { "name": "name" }, { "name": "required" }, { "name": "secret" }
+    ] },
+    { "name": "provider", "description": "A reusable notification provider definition.", "attributes": [
+      { "name": "kind", "description": "Only notification is supported in this milestone." }
+    ] },
     { "name": "workflow", "description": "One executable workflow definition.", "attributes": [
       { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "version" }
     ] },
@@ -13,6 +24,11 @@
       { "name": "retry-jitter" }
     ] },
     { "name": "script", "description": "JavaScript executed by an isolated Bun worker." },
+    { "name": "lifecycle", "description": "Workflow or reusable-definition lifecycle hooks." },
+    { "name": "on-success", "description": "Runs after successful workflow or reusable operation completion." },
+    { "name": "on-error", "description": "Runs after a reusable operation permanently fails." },
+    { "name": "on-complete", "description": "Runs after either reusable operation outcome." },
+    { "name": "notify", "description": "Contains one or more notification provider deliveries." },
     { "name": "fork", "description": "Starts independent concurrent branch routes.", "attributes": [
       { "name": "id" },
       { "name": "join", "description": "all, none, or a whitespace-separated list of branch IDs." }
