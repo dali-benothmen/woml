@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -67,6 +67,49 @@ describe('selected and non-blocking fork joins in the CLI', () => {
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ accepted: true });
       expect(result.stderr).not.toContain('UNSUPPORTED_FORK_EXECUTION');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('maps a failing branch step back to its WOML source location', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-fork-error-cli-'));
+    const workflowPath = join(directory, 'failing-branch.woml');
+    await writeFile(
+      workflowPath,
+      `<woml>
+<workflow id="fork-source-error" version="1.0.0">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="prepare"><script>return { ready: true };</script></step>
+    <fork id="distribution" join="all">
+      <branch id="instagram">
+        <step id="publishInstagram">
+          <script>throw new Error("Instagram unavailable");</script>
+        </step>
+      </branch>
+      <branch id="archive">
+        <step id="archive"><script>return { archived: true };</script></step>
+      </branch>
+    </fork>
+    <step id="finish"><script>return { done: true };</script></step>
+  </steps>
+</workflow>
+</woml>`
+    );
+    try {
+      const result = await invoke([
+        'test',
+        workflowPath,
+        '--state',
+        join(directory, 'state.sqlite'),
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('WOML runtime error [WOML_SCRIPT_FAILED]');
+      expect(result.stderr).toContain(`${workflowPath}:9:`);
+      expect(result.stderr).toContain('step "publishInstagram"');
+      expect(result.stderr).toContain('Instagram unavailable');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

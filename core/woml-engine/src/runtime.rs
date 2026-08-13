@@ -14,14 +14,14 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::engine::{
-  node_is_complete, resolve_context_reference, selected_branch_arm, step_effect_idempotency_key,
-  BranchEvaluationError, BranchEvaluationErrorKind,
+  node_is_complete, resolve_context_reference, selected_branch_arm, selected_choice_arm,
+  step_effect_idempotency_key, BranchEvaluationError, BranchEvaluationErrorKind,
 };
 use crate::event::{
   ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
-  FinalLifecycleStatus, ForkBranchOutcome, ForkBranchSettledData, ForkJoinOutcome,
-  ForkJoinSettledData, ForkOpenedData, LifecycleActionFailedData, LifecycleActionIdentityData,
-  LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
+  ChoiceSelectedData, FinalLifecycleStatus, ForkBranchOutcome, ForkBranchSettledData,
+  ForkJoinOutcome, ForkJoinSettledData, ForkOpenedData, LifecycleActionFailedData,
+  LifecycleActionIdentityData, LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
   LifecycleHookCompletionStatus, LifecycleHookRequestedData, LifecycleSubject,
   LifecycleSubjectKind, OperationExecutionMode, OperationFailedData, OperationStartedData,
   OperationSucceededData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
@@ -3128,7 +3128,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           .await?,
         );
       }
-      let completed = execute_fork(
+      let fork_progress = execute_fork(
         engine,
         run_id,
         fork,
@@ -3136,7 +3136,13 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         host.as_ref().expect("script host was initialized"),
       )
       .await?;
-      execution_order.extend(completed);
+      match fork_progress {
+        ForkRuntimeProgress::Continued(completed) => execution_order.extend(completed),
+        ForkRuntimeProgress::Waiting { completed, outcome } => {
+          execution_order.extend(completed);
+          return Ok(outcome);
+        }
+      }
       continue;
     }
     if ready.len() != 1 {
@@ -3220,6 +3226,20 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           }
         }
       }
+      "engine.choice-select" => {
+        let context = engine.projection(run_id)?.context;
+        let (choice_id, arm_id) = selected_choice_arm(engine.workflow(), node_id, &context)
+          .map_err(|error| {
+            RuntimeExecutionError::Stalled(format!(
+              "choice {:?} could not select an arm: {:?}",
+              error.branch_id, error.kind
+            ))
+          })?;
+        engine.append_payload(
+          run_id,
+          RunEventPayload::ChoiceSelected(ChoiceSelectedData { choice_id, arm_id }),
+        )?;
+      }
       "engine.branch-result" => {
         let projection = engine.projection(run_id)?;
         let arm_id = projection
@@ -3259,7 +3279,11 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         };
         engine.publish_pure_result(run_id, node_id, output.clone())?;
         execution_order.push(node_id.clone());
-        if node_id == &terminal_node_id {
+        // Model v13 workflows must pass through the explicit settlement node.
+        // The last value-producing main-route step is the public result source,
+        // but it is not permission to publish success while owned fork work may
+        // still have failed or remain unsettled.
+        if node_id == &terminal_node_id && engine.workflow().graph.settlement.is_none() {
           engine.append_payload(
             run_id,
             RunEventPayload::RunSucceeded(RunSucceededData {
@@ -3275,70 +3299,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         }
       }
       "engine.approval-wait" => {
-        let approval = engine.workflow().approval(node_id).ok_or_else(|| {
-          RuntimeExecutionError::Stalled(format!(
-            "approval node {node_id:?} has invalid compiled inputs"
-          ))
-        })?;
-        let occurred_at = options.clock.now();
-        let expires_at = approval
-          .timeout_ms
-          .map(|milliseconds| {
-            i64::try_from(milliseconds)
-              .map(chrono::Duration::milliseconds)
-              .map(|duration| occurred_at + duration)
-          })
-          .transpose()
-          .map_err(|_| {
-            RuntimeExecutionError::Stalled(format!(
-              "approval {:?} timeout exceeds the clock range",
-              approval.approval_id
-            ))
-          })?;
-        let on_timeout = match approval.on_timeout.as_str() {
-          "reject" => ApprovalTimeoutPolicy::Reject,
-          "fail" => ApprovalTimeoutPolicy::Fail,
-          _ => {
-            return Err(RuntimeExecutionError::Stalled(format!(
-              "approval {:?} has an unknown timeout policy",
-              approval.approval_id
-            )));
-          }
-        };
-        let request_id = generated_id("aprreq");
-        let workflow_deadline = engine.projection(run_id)?.timeout_at;
-        let waiting_expires_at = match (expires_at, workflow_deadline) {
-          (Some(approval), Some(workflow)) => Some(approval.min(workflow)),
-          (Some(approval), None) => Some(approval),
-          (None, Some(workflow)) => Some(workflow),
-          (None, None) => None,
-        };
-        let waiting_on_timeout = if workflow_deadline
-          .is_some_and(|workflow| expires_at.is_none_or(|approval| workflow <= approval))
-        {
-          ApprovalTimeoutPolicy::Fail
-        } else {
-          on_timeout
-        };
-        let token = engine.request_approval(
-          run_id,
-          occurred_at,
-          ApprovalRequestedData {
-            approval_id: approval.approval_id.clone(),
-            request_id: request_id.clone(),
-            expires_at,
-            on_timeout,
-          },
-        )?;
-        return Ok(waiting_outcome(
-          engine.workflow().workflow_id.clone(),
-          run_id.to_string(),
-          approval,
-          request_id,
-          waiting_expires_at,
-          waiting_on_timeout,
-          token,
-        ));
+        return request_approval_wait(engine, run_id, node_id, options);
       }
       "runtime.script" => {
         let source = source.ok_or_else(|| {
@@ -3349,7 +3310,10 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           continue;
         };
         execution_order.push(node_id.clone());
-        if node_id == &terminal_node_id {
+        // In Model v13 this is only the main route's value source. The
+        // workflow-settlement node decides whether all owned fork work permits
+        // that value to become a public success result.
+        if node_id == &terminal_node_id && engine.workflow().graph.settlement.is_none() {
           engine.append_payload(
             run_id,
             RunEventPayload::RunSucceeded(RunSucceededData {
@@ -3365,6 +3329,17 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         }
       }
       "engine.workflow-settlement" => {
+        let projection = engine.projection(run_id)?;
+        if let Some(failure) = final_workflow_attempt_failure(&projection) {
+          engine.append_payload(
+            run_id,
+            RunEventPayload::RunFailed(attempt_run_failed_data(
+              engine.event_schema_version(),
+              &failure,
+            )),
+          )?;
+          return Err(resumed_failure(engine, run_id, engine.projection(run_id)?)?);
+        }
         let settlement = engine.workflow().graph.settlement.as_ref().ok_or_else(|| {
           RuntimeExecutionError::Stalled(
             "workflow settlement node has no Model v13 descriptor".to_string(),
@@ -3423,6 +3398,78 @@ fn completed_terminal_approval_result(
     .strip_prefix("__woml_approval__")?
     .strip_suffix("__join")?;
   projection.context.steps.get(approval_id).cloned()
+}
+
+fn request_approval_wait<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  node_id: &str,
+  options: &RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let approval = engine.workflow().approval(node_id).ok_or_else(|| {
+    RuntimeExecutionError::Stalled(format!(
+      "approval node {node_id:?} has invalid compiled inputs"
+    ))
+  })?;
+  let occurred_at = options.clock.now();
+  let expires_at = approval
+    .timeout_ms
+    .map(|milliseconds| {
+      i64::try_from(milliseconds)
+        .map(chrono::Duration::milliseconds)
+        .map(|duration| occurred_at + duration)
+    })
+    .transpose()
+    .map_err(|_| {
+      RuntimeExecutionError::Stalled(format!(
+        "approval {:?} timeout exceeds the clock range",
+        approval.approval_id
+      ))
+    })?;
+  let on_timeout = match approval.on_timeout.as_str() {
+    "reject" => ApprovalTimeoutPolicy::Reject,
+    "fail" => ApprovalTimeoutPolicy::Fail,
+    _ => {
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "approval {:?} has an unknown timeout policy",
+        approval.approval_id
+      )));
+    }
+  };
+  let request_id = generated_id("aprreq");
+  let workflow_deadline = engine.projection(run_id)?.timeout_at;
+  let waiting_expires_at = match (expires_at, workflow_deadline) {
+    (Some(approval), Some(workflow)) => Some(approval.min(workflow)),
+    (Some(approval), None) => Some(approval),
+    (None, Some(workflow)) => Some(workflow),
+    (None, None) => None,
+  };
+  let waiting_on_timeout = if workflow_deadline
+    .is_some_and(|workflow| expires_at.is_none_or(|approval| workflow <= approval))
+  {
+    ApprovalTimeoutPolicy::Fail
+  } else {
+    on_timeout
+  };
+  let token = engine.request_approval(
+    run_id,
+    occurred_at,
+    ApprovalRequestedData {
+      approval_id: approval.approval_id.clone(),
+      request_id: request_id.clone(),
+      expires_at,
+      on_timeout,
+    },
+  )?;
+  Ok(waiting_outcome(
+    engine.workflow().workflow_id.clone(),
+    run_id.to_string(),
+    approval,
+    request_id,
+    waiting_expires_at,
+    waiting_on_timeout,
+    token,
+  ))
 }
 
 fn waiting_outcome(
@@ -3527,19 +3574,146 @@ fn runtime_context_for_node(
   context
 }
 
+fn final_attempt_failure_in_nodes(
+  projection: &RunProjection,
+  node_ids: &HashSet<String>,
+) -> Option<StepAttemptFailedData> {
+  projection.attempts.iter().rev().find_map(|attempt| {
+    if !node_ids.contains(&attempt.identity.node_id)
+      || projection
+        .context
+        .steps
+        .contains_key(&attempt.identity.node_id)
+      || projection
+        .pending_retries
+        .contains_key(&attempt.identity.node_id)
+    {
+      return None;
+    }
+    // Only the last attempt for a node can be a final failure. Looking at the
+    // latest projection directly also avoids treating an earlier failed retry
+    // as fatal after a later attempt succeeded.
+    let latest = projection.latest_attempt(&attempt.identity.node_id)?;
+    if latest.identity != attempt.identity {
+      return None;
+    }
+    let AttemptStatus::Failed { failure } = &attempt.status else {
+      return None;
+    };
+    Some(StepAttemptFailedData {
+      node_id: attempt.identity.node_id.clone(),
+      attempt: attempt.identity.attempt,
+      invocation_id: attempt.identity.invocation_id.clone(),
+      failure: failure.clone(),
+    })
+  })
+}
+
+fn final_workflow_attempt_failure(projection: &RunProjection) -> Option<StepAttemptFailedData> {
+  let node_ids = projection
+    .attempts
+    .iter()
+    .map(|attempt| attempt.identity.node_id.clone())
+    .collect::<HashSet<_>>();
+  final_attempt_failure_in_nodes(projection, &node_ids)
+}
+
+fn settle_open_fork_cancellation<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  fork: &crate::model::CompiledFork,
+) -> Result<(), RuntimeExecutionError> {
+  let mut projection = engine.projection(run_id)?;
+  for branch in &fork.branches {
+    if projection
+      .forks
+      .get(&fork.fork_id)
+      .is_some_and(|state| state.branches.contains_key(&branch.branch_id))
+    {
+      continue;
+    }
+    engine.append_payload(
+      run_id,
+      RunEventPayload::ForkBranchSettled(ForkBranchSettledData {
+        fork_id: fork.fork_id.clone(),
+        branch_id: branch.branch_id.clone(),
+        terminal_node_id: branch.terminal_node_id.clone(),
+        outcome: ForkBranchOutcome::Cancelled,
+      }),
+    )?;
+    projection = engine.projection(run_id)?;
+  }
+
+  if projection
+    .forks
+    .get(&fork.fork_id)
+    .is_some_and(|state| state.join_status == crate::ForkJoinStatus::Pending)
+  {
+    let join = if let Some(blocking_branch_id) = fork.joined_branch_ids.first() {
+      ForkJoinSettledData {
+        fork_id: fork.fork_id.clone(),
+        outcome: ForkJoinOutcome::Cancelled,
+        blocking_branch_id: Some(blocking_branch_id.clone()),
+      }
+    } else {
+      ForkJoinSettledData {
+        fork_id: fork.fork_id.clone(),
+        outcome: ForkJoinOutcome::Succeeded,
+        blocking_branch_id: None,
+      }
+    };
+    engine.append_payload(run_id, RunEventPayload::ForkJoinSettled(join))?;
+  }
+  Ok(())
+}
+
+enum ForkRuntimeProgress {
+  Continued(Vec<String>),
+  Waiting {
+    completed: Vec<String>,
+    outcome: WorkflowRuntimeOutcome,
+  },
+}
+
 async fn execute_fork<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
   fork: crate::model::CompiledFork,
   options: &RuntimeExecutionOptions,
   host: &ScriptHostClient,
-) -> Result<Vec<String>, RuntimeExecutionError> {
+) -> Result<ForkRuntimeProgress, RuntimeExecutionError> {
   let routes = fork_branch_routes(engine.workflow(), &fork);
   let mut active: Vec<ActiveParallelInvocation<'_>> = Vec::new();
   let mut completion_order = Vec::new();
+  let mut cancellation_sent = false;
 
   loop {
+    settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
     let mut projection = engine.projection(run_id)?;
+    if projection.timeout_reached_at.is_some() {
+      let invocation_ids = active
+        .iter()
+        .map(|invocation| invocation.invocation_id.clone())
+        .collect::<Vec<_>>();
+      for invocation_id in invocation_ids {
+        let _ = host.cancel_run(&invocation_id).await;
+      }
+      return Err(resumed_failure(engine, run_id, projection)?);
+    }
+    if projection.status == RunStatus::Cancelling && active.is_empty() {
+      settle_open_fork_cancellation(engine, run_id, &fork)?;
+      return Ok(ForkRuntimeProgress::Continued(completion_order));
+    }
+    if projection.status == RunStatus::Cancelling && !cancellation_sent {
+      cancellation_sent = true;
+      let invocation_ids = active
+        .iter()
+        .map(|invocation| invocation.invocation_id.clone())
+        .collect::<Vec<_>>();
+      for invocation_id in invocation_ids {
+        let _ = host.cancel_run(&invocation_id).await;
+      }
+    }
     let ready = engine.ready_node_ids(run_id)?;
 
     for branch in &fork.branches {
@@ -3562,10 +3736,53 @@ async fn execute_fork<E: RuntimeDagEngine>(
     }
 
     projection = engine.projection(run_id)?;
+    for branch in &fork.branches {
+      let branch_is_settled = projection
+        .forks
+        .get(&fork.fork_id)
+        .is_some_and(|state| state.branches.contains_key(&branch.branch_id));
+      if branch_is_settled {
+        continue;
+      }
+      let route = routes.get(&branch.branch_id).ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "fork {:?} lost branch route {:?}",
+          fork.fork_id, branch.branch_id
+        ))
+      })?;
+      let Some(failure) = final_attempt_failure_in_nodes(&projection, route) else {
+        continue;
+      };
+      let outcome = if failure.failure.kind == AttemptFailureKind::InvocationCancelled {
+        ForkBranchOutcome::Cancelled
+      } else {
+        ForkBranchOutcome::Failed
+      };
+      engine.append_payload(
+        run_id,
+        RunEventPayload::ForkBranchSettled(ForkBranchSettledData {
+          fork_id: fork.fork_id.clone(),
+          branch_id: branch.branch_id.clone(),
+          terminal_node_id: branch.terminal_node_id.clone(),
+          outcome,
+        }),
+      )?;
+    }
+
+    projection = engine.projection(run_id)?;
     let join_is_pending = projection
       .forks
       .get(&fork.fork_id)
       .is_some_and(|state| state.join_status == crate::ForkJoinStatus::Pending);
+    let joined_blocker = fork.joined_branch_ids.iter().find_map(|branch_id| {
+      projection
+        .forks
+        .get(&fork.fork_id)
+        .and_then(|state| state.branches.get(branch_id))
+        .and_then(|branch| branch.outcome)
+        .filter(|outcome| *outcome != ForkBranchOutcome::Succeeded)
+        .map(|outcome| (branch_id.clone(), outcome))
+    });
     let joined_branches_succeeded = fork.joined_branch_ids.iter().all(|branch_id| {
       projection
         .forks
@@ -3574,15 +3791,29 @@ async fn execute_fork<E: RuntimeDagEngine>(
         .and_then(|branch| branch.outcome)
         == Some(ForkBranchOutcome::Succeeded)
     });
-    if join_is_pending && joined_branches_succeeded {
-      engine.append_payload(
-        run_id,
-        RunEventPayload::ForkJoinSettled(ForkJoinSettledData {
+    if join_is_pending {
+      let join = if let Some((branch_id, outcome)) = joined_blocker {
+        Some(ForkJoinSettledData {
+          fork_id: fork.fork_id.clone(),
+          outcome: if outcome == ForkBranchOutcome::Cancelled {
+            ForkJoinOutcome::Cancelled
+          } else {
+            ForkJoinOutcome::Failed
+          },
+          blocking_branch_id: Some(branch_id),
+        })
+      } else if joined_branches_succeeded {
+        Some(ForkJoinSettledData {
           fork_id: fork.fork_id.clone(),
           outcome: ForkJoinOutcome::Succeeded,
           blocking_branch_id: None,
-        }),
-      )?;
+        })
+      } else {
+        None
+      };
+      if let Some(join) = join {
+        engine.append_payload(run_id, RunEventPayload::ForkJoinSettled(join))?;
+      }
     }
 
     projection = engine.projection(run_id)?;
@@ -3593,7 +3824,38 @@ async fn execute_fork<E: RuntimeDagEngine>(
         .is_some_and(|state| state.branches.contains_key(&branch.branch_id))
     });
     if every_branch_settled && active.is_empty() {
-      return Ok(completion_order);
+      if projection.status == RunStatus::Cancelling {
+        return Ok(ForkRuntimeProgress::Continued(completion_order));
+      }
+      if let Some(failure) = final_workflow_attempt_failure(&projection) {
+        let join_failed = projection
+          .forks
+          .get(&fork.fork_id)
+          .is_some_and(|state| state.join_status != crate::ForkJoinStatus::Succeeded);
+        let main_result_recorded =
+          engine
+            .workflow()
+            .graph
+            .settlement
+            .as_ref()
+            .is_some_and(|settlement| {
+              projection
+                .context
+                .steps
+                .contains_key(&settlement.main_result_node_id)
+            });
+        if join_failed || main_result_recorded {
+          engine.append_payload(
+            run_id,
+            RunEventPayload::RunFailed(attempt_run_failed_data(
+              engine.event_schema_version(),
+              &failure,
+            )),
+          )?;
+          return Err(resumed_failure(engine, run_id, engine.projection(run_id)?)?);
+        }
+      }
+      return Ok(ForkRuntimeProgress::Continued(completion_order));
     }
 
     let ready = engine.ready_node_ids(run_id)?;
@@ -3608,6 +3870,46 @@ async fn execute_fork<E: RuntimeDagEngine>(
         .map(|node| node.handler.as_str())
         .ok_or_else(|| RuntimeExecutionError::Stalled("ready node disappeared".to_string()))?;
       match handler {
+        "engine.approval-wait" if active.is_empty() => {
+          let outcome = request_approval_wait(engine, run_id, node_id, options)?;
+          return Ok(ForkRuntimeProgress::Waiting {
+            completed: completion_order,
+            outcome,
+          });
+        }
+        "engine.parallel-start" => {
+          let parallel_id = node_id
+            .strip_prefix("__woml_parallel__")
+            .and_then(|id| id.strip_suffix("__start"))
+            .ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "parallel start node {node_id:?} has no canonical group identity"
+              ))
+            })?
+            .to_string();
+          engine.append_payload(
+            run_id,
+            RunEventPayload::ParallelGroupStarted(ParallelGroupStartedData { parallel_id }),
+          )?;
+          pure_node_completed = true;
+          break;
+        }
+        "engine.choice-select" => {
+          let context = runtime_context_for_node(engine.workflow(), &projection, node_id);
+          let (choice_id, arm_id) = selected_choice_arm(engine.workflow(), node_id, &context)
+            .map_err(|error| {
+              RuntimeExecutionError::Stalled(format!(
+                "fork branch choice {:?} could not select an arm: {:?}",
+                error.branch_id, error.kind
+              ))
+            })?;
+          engine.append_payload(
+            run_id,
+            RunEventPayload::ChoiceSelected(ChoiceSelectedData { choice_id, arm_id }),
+          )?;
+          pure_node_completed = true;
+          break;
+        }
         "engine.branch-select" => {
           let arm_id = selected_branch_arm(engine.workflow(), node_id, &projection.context)
             .map_err(|error| {
@@ -3673,6 +3975,26 @@ async fn execute_fork<E: RuntimeDagEngine>(
       continue;
     }
 
+    if active.is_empty() {
+      if let Some(group) = ready.iter().find_map(|node_id| {
+        let group = engine.workflow().parallel_group_for_child(node_id)?;
+        routes
+          .values()
+          .any(|route| {
+            group
+              .child_node_ids
+              .iter()
+              .all(|child| route.contains(child))
+          })
+          .then_some(group)
+      }) {
+        let completed = execute_parallel_group(engine, run_id, group, options, host).await?;
+        completion_order.extend(completed);
+        continue;
+      }
+    }
+
+    options.ensure_policy_execution_slot().await?;
     for node_id in &ready {
       if !engine
         .workflow()
@@ -3779,12 +4101,72 @@ async fn execute_fork<E: RuntimeDagEngine>(
       });
     }
 
-    let Some(completion) = next_parallel_completion(&mut active).await else {
+    if active.is_empty() {
+      let projection = engine.projection(run_id)?;
+      if let Some(scheduled_at) = projection
+        .pending_retries
+        .values()
+        .map(|retry| retry.scheduled_at)
+        .min()
+      {
+        options.suspend_policy_execution_slot().await?;
+        let now = chrono::Utc::now();
+        if scheduled_at > now {
+          let wait = (scheduled_at - now).to_std().map_err(|_| {
+            RuntimeExecutionError::Stalled(
+              "fork retry schedule exceeds the runtime clock".to_string(),
+            )
+          })?;
+          tokio::time::sleep(wait.min(CANCELLATION_POLL_INTERVAL)).await;
+        }
+        continue;
+      }
+    }
+
+    let completion = loop {
+      tokio::select! {
+        completion = next_parallel_completion(&mut active) => break completion,
+        _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !cancellation_sent => {
+          settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
+          let current = engine.projection(run_id)?;
+          if current.timeout_reached_at.is_some() {
+            let invocation_ids = active
+              .iter()
+              .map(|invocation| invocation.invocation_id.clone())
+              .collect::<Vec<_>>();
+            for invocation_id in invocation_ids {
+              let _ = host.cancel_run(&invocation_id).await;
+            }
+            return Err(resumed_failure(engine, run_id, current)?);
+          }
+          if current.status == RunStatus::Cancelling {
+            cancellation_sent = true;
+            let invocation_ids = active
+              .iter()
+              .map(|invocation| invocation.invocation_id.clone())
+              .collect::<Vec<_>>();
+            for invocation_id in invocation_ids {
+              let _ = host.cancel_run(&invocation_id).await;
+            }
+          }
+        }
+      }
+    };
+    let Some(mut completion) = completion else {
       return Err(RuntimeExecutionError::Stalled(format!(
         "fork {:?} has unfinished owned work but no safe executable operation",
         fork.fork_id
       )));
     };
+    if cancellation_sent || engine.projection(run_id)?.status == RunStatus::Cancelling {
+      completion.outcome = Err(AttemptFailure {
+        kind: AttemptFailureKind::InvocationCancelled,
+        code: AttemptFailureKind::InvocationCancelled.code().to_string(),
+        message: "The fork branch invocation was cancelled with its workflow run.".to_string(),
+        details: None,
+        ..AttemptFailure::legacy_defaults()
+      });
+    }
     match completion.outcome {
       Ok(output) => {
         completion_order.push(completion.node_id.clone());
@@ -3800,27 +4182,43 @@ async fn execute_fork<E: RuntimeDagEngine>(
       }
       Err(failure) => {
         let code = failure.code.clone();
-        engine
-          .record_step_attempt_failure(
+        let disposition = engine.record_step_attempt_failure(
+          run_id,
+          options.clock.now(),
+          StepAttemptFailedData {
+            node_id: completion.node_id.clone(),
+            attempt: completion.attempt_number,
+            invocation_id: completion.invocation_id,
+            failure,
+          },
+        )?;
+        report_attempt_failed(
+          engine,
+          options,
+          run_id,
+          &completion.node_id,
+          completion.attempt_number,
+          code,
+        );
+        match disposition {
+          StepFailureDisposition::RetryScheduled {
+            next_attempt,
+            scheduled_at,
+          } => report_retry_scheduled(
+            engine,
+            options,
             run_id,
-            options.clock.now(),
-            StepAttemptFailedData {
-              node_id: completion.node_id.clone(),
-              attempt: completion.attempt_number,
-              invocation_id: completion.invocation_id,
-              failure,
-            },
-          )
-          .map_err(|record_error| {
-            RuntimeExecutionError::Stalled(format!(
-              "fork-owned step {:?} failed with {code}, and its terminal failure could not be recorded: {record_error}",
-              completion.node_id
-            ))
-          })?;
-        return Err(RuntimeExecutionError::Stalled(format!(
-          "fork branch step {:?} failed with {code}; full branch failure settlement begins in FJ7",
-          completion.node_id
-        )));
+            &completion.node_id,
+            next_attempt,
+            scheduled_at,
+          ),
+          StepFailureDisposition::StepFailed => {}
+          StepFailureDisposition::RunFailed => {
+            return Err(RuntimeExecutionError::Stalled(
+              "fork-coordinated work failed the run before all owned branches settled".to_string(),
+            ));
+          }
+        }
       }
     }
   }
@@ -4060,6 +4458,12 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             .then(|| idempotency_key.clone()),
         }),
       )?;
+      let invocation_context =
+        if engine.workflow().schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
+          runtime_context_for_node(engine.workflow(), &projection, &node_id)
+        } else {
+          fork_context.clone()
+        };
       active.push(ActiveParallelInvocation {
         node_id: node_id.clone(),
         invocation_id: invocation_id.clone(),
@@ -4070,7 +4474,7 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             node_id,
             invocation_id,
             source,
-            context: fork_context.clone(),
+            context: invocation_context,
             timeout_ms: options.script_timeout_ms,
             max_context_bytes: options.max_context_bytes,
             attempt_number,
@@ -4599,13 +5003,28 @@ fn resumed_failure<E: RuntimeDagEngine>(
       details: None,
       ..AttemptFailure::legacy_defaults()
     };
+    let identity = events.iter().rev().find_map(|event| match &event.payload {
+      RunEventPayload::StepAttemptFailed(data)
+        if data.failure.code == lifecycle_failure.code
+          && data.failure.message == lifecycle_failure.message =>
+      {
+        Some((data.node_id.clone(), data.attempt))
+      }
+      _ => None,
+    });
+    let (node_id, attempt, max_attempts) = identity
+      .map(|(node_id, attempt)| {
+        let maximum = retry_max_attempts(engine, &node_id);
+        (Some(node_id), Some(attempt), Some(maximum))
+      })
+      .unwrap_or((None, None, None));
     return Ok(RuntimeExecutionError::RunFailed(Box::new(
       FailedRunDetails {
         code: lifecycle_failure.code,
         message: lifecycle_failure.message,
-        node_id: None,
-        attempt: None,
-        max_attempts: None,
+        node_id,
+        attempt,
+        max_attempts,
         failure,
         events,
       },
@@ -4920,6 +5339,29 @@ fn settle_cancelling_run<E: RuntimeDagEngine>(
     )?;
   }
 
+  // A run may be cancelled while a fork is waiting on an approval, a retry,
+  // or queued branch work. Close every opened ownership boundary before the
+  // terminal cancellation event so replay and retention never see an orphaned
+  // branch.
+  let opened_forks = engine
+    .workflow()
+    .graph
+    .forks
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .filter(|fork| {
+      engine
+        .projection(run_id)
+        .ok()
+        .is_some_and(|projection| projection.forks.contains_key(&fork.fork_id))
+    })
+    .cloned()
+    .collect::<Vec<_>>();
+  for fork in opened_forks {
+    settle_open_fork_cancellation(engine, run_id, &fork)?;
+  }
+
   let projection = engine.projection(run_id)?;
   let cancellation_request_id = projection.cancellation_request_id.ok_or_else(|| {
     RuntimeExecutionError::Stalled("cancelling run has no durable request identity".to_string())
@@ -5093,7 +5535,9 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V7
     | crate::RUN_EVENT_SCHEMA_VERSION_V8
     | crate::RUN_EVENT_SCHEMA_VERSION_V9
-    | crate::RUN_EVENT_SCHEMA_VERSION_V10 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V10
+    | crate::RUN_EVENT_SCHEMA_VERSION_V11
+    | crate::RUN_EVENT_SCHEMA_VERSION_V12 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),

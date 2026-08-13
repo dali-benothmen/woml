@@ -1,0 +1,29 @@
+<woml>
+<workflow version="1.0.0" id="fork-approval-composition">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="prepare"><script>return { articleId: "article-1" };</script></step>
+    <fork id="reviewAndAudit" join="all">
+      <branch id="editorial">
+        <approval id="review" timeout="1h" on-timeout="reject">
+          <when-approved>
+            <step id="approved"><script>return { approved: true };</script></step>
+          </when-approved>
+          <when-rejected />
+        </approval>
+      </branch>
+      <branch id="audit">
+        <step id="recordAudit"><script>return { recorded: true };</script></step>
+      </branch>
+    </fork>
+    <step id="finish">
+      <script>
+        return {
+          decision: context.steps.review.decision,
+          audited: context.steps.recordAudit.recorded
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

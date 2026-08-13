@@ -253,6 +253,49 @@ describe('woml test Human Approval', () => {
     expect(stderr.match(/waiting for human approval/g)).toHaveLength(1);
   });
 
+  test('suspends and resumes an approval inside a joined fork branch', async () => {
+    const workflowPath = join(temporaryDirectory, 'fork-approval.woml');
+    const statePath = join(temporaryDirectory, 'fork-approval.sqlite');
+    await Bun.write(
+      workflowPath,
+      Bun.file(
+        join(
+          projectRoot,
+          'woml',
+          'tests',
+          'fixtures',
+          'fork-branch',
+          'approval-in-branch.woml'
+        )
+      )
+    );
+
+    const running = spawnApproval([
+      'run',
+      workflowPath,
+      '--state',
+      statePath,
+      '--approval-port',
+      String(await availablePort()),
+    ]);
+    const url = await running.url;
+    expect((await postDecision(url, 'approved')).status).toBe(200);
+    const [exitCode, stdout, stderr] = await Promise.all([
+      running.child.exited,
+      running.stdout,
+      running.stderr,
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(`fork approval execution failed:\n${stderr}`);
+    }
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({
+      decision: 'approved',
+      audited: true,
+    });
+    expect(stderr).toContain('waiting for human approval');
+  });
+
   test('recovers a stopped waiting run with a newly issued URL', async () => {
     const statePath = join(temporaryDirectory, 'resume.sqlite');
     const firstPort = await availablePort();

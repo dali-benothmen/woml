@@ -5207,6 +5207,59 @@ impl DurableEventStore {
         }),
       )?;
     }
+    // Model v13 owns every opened fork branch until it reaches a durable
+    // terminal boundary. A workflow timeout closes those boundaries before
+    // deciding the run outcome so recovery cannot leave orphaned branch work.
+    if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
+      for fork in workflow.graph.forks.as_deref().unwrap_or_default() {
+        let Some(projected) = projection.forks.get(&fork.fork_id) else {
+          continue;
+        };
+        for branch in &fork.branches {
+          if projected.branches.contains_key(&branch.branch_id) {
+            continue;
+          }
+          append_to_history(
+            &transaction,
+            &mut events,
+            run_id,
+            generated_event_id(),
+            now,
+            event_schema_version,
+            RunEventPayload::ForkBranchSettled(crate::event::ForkBranchSettledData {
+              fork_id: fork.fork_id.clone(),
+              branch_id: branch.branch_id.clone(),
+              terminal_node_id: branch.terminal_node_id.clone(),
+              outcome: crate::event::ForkBranchOutcome::Cancelled,
+            }),
+          )?;
+        }
+        if projected.join_status == crate::projection::ForkJoinStatus::Pending {
+          let (outcome, blocking_branch_id) =
+            if let Some(branch_id) = fork.joined_branch_ids.first() {
+              (
+                crate::event::ForkJoinOutcome::Cancelled,
+                Some(branch_id.clone()),
+              )
+            } else {
+              (crate::event::ForkJoinOutcome::Succeeded, None)
+            };
+          append_to_history(
+            &transaction,
+            &mut events,
+            run_id,
+            generated_event_id(),
+            now,
+            event_schema_version,
+            RunEventPayload::ForkJoinSettled(crate::event::ForkJoinSettledData {
+              fork_id: fork.fork_id.clone(),
+              outcome,
+              blocking_branch_id,
+            }),
+          )?;
+        }
+      }
+    }
     append_to_history(
       &transaction,
       &mut events,
@@ -9619,6 +9672,20 @@ impl DurableDagEngine {
       .is_some();
     let fork_child = self.workflow.fork_branch_owner(&failure.node_id).is_some();
     let projection = self.projection(run_id)?;
+    let fork_coordinated = self.workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+      && projection.forks.values().any(|fork| {
+        fork.join_status == crate::projection::ForkJoinStatus::Pending
+          || fork.branches.len()
+            < self
+              .workflow
+              .graph
+              .forks
+              .as_deref()
+              .unwrap_or_default()
+              .iter()
+              .find(|definition| definition.fork_id == fork.fork_id)
+              .map_or(0, |definition| definition.branches.len())
+      });
     if !matches!(
       projection.latest_attempt(&failure.node_id),
       Some(attempt)
@@ -9670,7 +9737,7 @@ impl DurableDagEngine {
           scheduled_at,
         },
       )
-    } else if parallel_child || fork_child || cancellation_settlement {
+    } else if parallel_child || fork_child || fork_coordinated || cancellation_settlement {
       (
         vec![(
           generated_event_id(),

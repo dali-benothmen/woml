@@ -2794,12 +2794,6 @@ impl CompiledWorkflowDefinition {
           "Compiled Model v13 requires the durable runtime-policy scheduler.",
         ));
       }
-      if !self.graph.choices.as_deref().unwrap_or_default().is_empty() {
-        issues.push(issue(
-          ModelIssueCode::UnsupportedForkExecution,
-          "Control-only choice execution inside Model v13 fork workflows begins in FJ7.",
-        ));
-      }
     }
     if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V12 && !durable {
       issues.push(issue(

@@ -312,7 +312,7 @@ fn edge_is_active(edge: &crate::model::CompiledWorkflowEdge, projection: &RunPro
     .iter()
     .find(|(choice_id, _)| edge.id.starts_with(&format!("{choice_id}:")))
   {
-    return selected_arm_id == &edge.id;
+    return selected_arm_id == &edge.id || edge.id == format!("{selected_arm_id}:join");
   }
   if edge.id.starts_with("__woml_choice__")
     && (edge.id.contains(":when:") || edge.id.ends_with(":otherwise"))
@@ -342,6 +342,23 @@ pub(crate) fn node_is_complete(
       .iter()
       .find(|choice| choice.selector_node_id == node.id)
       .is_some_and(|choice| projection.choice_selections.contains_key(&choice.choice_id));
+  }
+  if node.handler == "engine.choice-join" {
+    return workflow
+      .graph
+      .choices
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|choice| choice.join_node_id == node.id)
+      .and_then(|choice| {
+        let selected = projection.choice_selections.get(&choice.choice_id)?;
+        workflow.graph.edges.iter().find(|edge| {
+          edge.to == node.id && (edge.id == format!("{selected}:join") || edge.id == *selected)
+        })
+      })
+      .and_then(|edge| workflow.node(&edge.from))
+      .is_some_and(|predecessor| node_is_complete(workflow, predecessor, projection));
   }
   if node.handler == "engine.fork-open" {
     return workflow
@@ -522,6 +539,76 @@ pub(crate) fn selected_branch_arm(
   }
   Err(BranchEvaluationError {
     branch_id: branch_id.to_string(),
+    arm_id: None,
+    path: None,
+    kind: BranchEvaluationErrorKind::SelectionInvalid,
+  })
+}
+
+pub(crate) fn selected_choice_arm(
+  workflow: &CompiledWorkflowDefinition,
+  selector_id: &str,
+  context: &WorkflowContext,
+) -> Result<(String, String), BranchEvaluationError> {
+  let choice = workflow
+    .graph
+    .choices
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .find(|choice| choice.selector_node_id == selector_id)
+    .ok_or_else(|| BranchEvaluationError {
+      branch_id: selector_id.to_string(),
+      arm_id: None,
+      path: None,
+      kind: BranchEvaluationErrorKind::SelectionInvalid,
+    })?;
+  for edge in workflow
+    .graph
+    .edges
+    .iter()
+    .filter(|edge| edge.from == selector_id && choice.arm_ids.contains(&edge.id))
+  {
+    match &edge.condition {
+      EdgeCondition::Boolean { value: expression } => {
+        let condition_path = match expression {
+          ValueExpression::ContextReference { path } => Some(path.clone()),
+          _ => None,
+        };
+        let resolved = resolve_context_reference(expression, context).map_err(|error| {
+          BranchEvaluationError {
+            branch_id: choice.choice_id.clone(),
+            arm_id: Some(edge.id.clone()),
+            path: Some(error.path),
+            kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
+          }
+        })?;
+        match resolved {
+          Value::Bool(true) => return Ok((choice.choice_id.clone(), edge.id.clone())),
+          Value::Bool(false) => {}
+          value => {
+            return Err(BranchEvaluationError {
+              branch_id: choice.choice_id.clone(),
+              arm_id: Some(edge.id.clone()),
+              path: condition_path,
+              kind: BranchEvaluationErrorKind::NotBoolean(json_value_type(&value)),
+            });
+          }
+        }
+      }
+      EdgeCondition::Always => return Ok((choice.choice_id.clone(), edge.id.clone())),
+      _ => {
+        return Err(BranchEvaluationError {
+          branch_id: choice.choice_id.clone(),
+          arm_id: Some(edge.id.clone()),
+          path: None,
+          kind: BranchEvaluationErrorKind::SelectionInvalid,
+        });
+      }
+    }
+  }
+  Err(BranchEvaluationError {
+    branch_id: choice.choice_id.clone(),
     arm_id: None,
     path: None,
     kind: BranchEvaluationErrorKind::SelectionInvalid,
