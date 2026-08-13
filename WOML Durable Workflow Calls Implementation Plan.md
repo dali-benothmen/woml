@@ -696,26 +696,13 @@ admission.
 
 ## 17. Global Roadmap After Durable Workflow Calls
 
-1. **Lifecycle and Engine Controls** — cancellation, lifecycle hooks,
-   workflow-level concurrency/rate limits/timeouts, durable user state, and a
-   reviewed engine suspension boundary for long approval-waiting child calls.
-2. **Production Runtime and Operations** — hosting, deployment, multi-node
-   ownership, cross-machine workflow-call routing, service identity, OS-level
-   isolation, observability, retention, administration, and scaling.
-3. **Complete the postponed Module System phases** — MS5 locked third-party
-   packages, remaining MS6 package permissions/security, MS7 portable
-   distribution, and MS8 final hardening/publication.
-4. **WOML Package Registry and Community Ecosystem** — signed publication,
-   discovery, provenance, moderation, compatibility, and deprecation.
-5. **Additional Infrastructure Adapters** — postponed durable queue/external
-   broker support, document databases, external object storage, and distributed
-   caches according to demand.
-6. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
+1. **Fork and Branch Execution** — rename conditional source flow to
+   `<choose>` and add durable `<fork>`/`<branch>` routes with multi-step branch
+   bodies and selective main-route joins.
+2. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when justified.
-7. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
+3. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-Durable Workflow Calls WC0–WC7 are complete. The next roadmap feature is
-Lifecycle and Engine Controls. It must begin with reviewed cancellation,
-durable suspension, lifecycle-hook, and engine-control contracts rather than
-silently extending Workflow Calls v1.
+Completed milestones remain the product baseline and are not repeated as future
+work.

@@ -1,6 +1,6 @@
 # WOML Production Runtime and Operations Implementation Plan
 
-Status: PRO0 through PRO7 completed on 2026-08-12. The Production Runtime v1
+Status: PRO0 through PRO9 completed. The Production Runtime v1
 contracts, Runtime Configuration v1, whole-deployment preflight, atomic source
 activation, durable ownership, recovery, background operation, exact stop,
 graceful shutdown, security, observability, terminal inspection, and verified
@@ -1699,29 +1699,12 @@ security model.
 
 ## 18. Global Roadmap After Production Runtime and Operations
 
-1. **Distributed Runtime and Hosted Control Plane** — multi-node ownership,
-   leader election, remote workers, cross-machine Workflow Calls, high
-   availability, distributed policy/state backends, authenticated remote
-   administration, tenant identity, and a future web dashboard.
-2. **Complete the postponed Module System phases** — MS5 locked third-party
-   packages, remaining MS6 permissions/security, MS7 portable distribution,
-   and MS8 hardening/publication.
-3. **WOML Package Registry and Community Ecosystem** — signed publication,
-   discovery, provenance, moderation, compatibility, and deprecation.
-4. **Additional Infrastructure Adapters** — postponed `services.queue` plus its
-   queue trigger/dead-letter contract, document databases, external object
-   storage, distributed caches, and external durable-state backends according
-   to demand.
-5. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
+1. **Fork and Branch Execution** — rename conditional source flow to
+   `<choose>` and add durable `<fork>`/`<branch>` routes with multi-step branch
+   bodies and `join="all | none | branch-id-list"` main-route barriers.
+2. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when justified.
-6. **Advanced Workflow Control** — keyed concurrency, priority/delayed queues,
-   configurable overflow, explicit pause/resume, cancellation propagation,
-   compensation/sagas, long approval-waiting synchronous child calls, state
-   transactions, and reviewed remote control APIs.
-7. **Advanced Operations Experience** — optional web dashboard, historical
-   analytics, tracing integrations, audit export, managed secret-provider
-   adapters, remote artifact stores, and automated capacity recommendations.
-8. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
+3. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
 Completed roadmap milestones—Retries and Idempotency, Production Triggers,

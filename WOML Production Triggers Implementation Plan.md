@@ -1412,29 +1412,17 @@ trigger.
 
 ## 19. Global Roadmap After Production Triggers
 
-1. **Retries and idempotency** — completed in RI7.
-2. **Production triggers** — completed in T13: webhook, Slack, schedule,
-   interval, and event. Discord, WhatsApp, and Telegram later reuse the
-   provider-trigger boundary.
-3. **Services and capabilities** — HTTP, database, messaging, and other useful
-   registered operations that automatically receive the relevant effect key;
-   this includes outbound Slack messaging for conversational agents.
-4. **WOML module system** — import reusable `.woml` files and embed their
-   exported workflows/components with a React-like composition experience.
-   Exact module syntax, inputs, outputs, namespacing, packaging, and versioning
-   remain deliberately undesigned until that milestone.
-5. **Lifecycle and engine controls** — cancellation, hooks, workflow-level
-   concurrency, rate limiting, queues, timeouts, and durable user state.
-6. **Production runtime** — hosting, deployment, multi-node ownership,
-   observability, retention, and operational administration.
-7. **Additional communication providers** — Discord, WhatsApp, and Telegram
+1. **Fork and Branch Execution** — rename conditional source flow to
+   `<choose>` and add durable `<fork>`/`<branch>` routes with multi-step branch
+   bodies and selective main-route joins.
+2. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when product demand
    justifies them.
-8. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
+3. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-After T13, the next planning milestone is Services and Capabilities, beginning
-with a safe built-in HTTP operation.
+Completed milestones remain the product baseline and are not repeated as future
+work.
 
 ## 20. T0 Review Gate (Completed; CLI Naming Clarified After T3)
 

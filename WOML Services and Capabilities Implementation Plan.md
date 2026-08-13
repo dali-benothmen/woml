@@ -1166,39 +1166,16 @@ fan-out without exposing an undefined `context.run` contract.
 
 ## 17. Global Roadmap After Services and Capabilities
 
-1. **WOML Module System** — use the canonical `<woml>` document and
-   `<imports><module name="..." from="..." /></imports>` to load reproducible
-   JavaScript/TypeScript named exports under `services.*`; bundle dependencies,
-   pin artifacts, enforce permissions, and preserve recovery. Runnable `.woml`
-   workflows are not imports.
-2. **Durable Workflow Calls** — add
-   `services.workflows.call(workflowId, payload, options?)` to target exactly one
-   activated workflow by ID, pass payload through `context.payload`, wait
-   durably for its independent child run, and receive its final JSON result.
-   No `<call>` trigger tag is required. Same-runtime calls use direct Rust
-   routing; cross-process calls require authenticated discovery, stable call
-   identity, unique ownership, timeouts, cancellation, idempotency, cycle/depth
-   protection, and crash recovery. Explicit `return null` is an intentional
-   no-result success; missing return/`undefined` fails the child call.
-3. **Lifecycle and engine controls** — workflow cancellation, lifecycle hooks,
-   workflow-level concurrency/rate limits/timeouts, and durable user state.
-4. **Production runtime and operations** — hosting, deployment, multi-node
-   ownership, OS-level isolation, observability, retention, administration,
-   workflow-call routing, distributed storage/cache adapters, and scaling.
-5. **WOML package registry/community ecosystem** — signed publication,
-   discovery, trust/provenance, moderation, compatibility, and deprecation once
-   local/package artifacts are proven.
-6. **Additional infrastructure adapters** — document databases, external
-   object storage, distributed caches, and the postponed durable queue/external
-   broker profile according to demand.
-7. **Additional communication providers** — Discord, WhatsApp, and Telegram
+1. **Fork and Branch Execution** — rename conditional source flow to
+   `<choose>` and add durable `<fork>`/`<branch>` routes with multi-step branch
+   bodies and selective main-route joins.
+2. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when justified.
-8. **Retire the JavaScript chaining SDK** — only after WOML reaches sufficient
+3. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
-After SC14, the next design milestone is the WOML Module System. It reuses the
-capability registry and operation protocol built here rather than creating a
-second service architecture.
+Completed milestones remain the product baseline and are not repeated as future
+work.
 
 ## 18. SC0 Review Gate
 

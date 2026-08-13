@@ -1206,33 +1206,19 @@ failure.
 
 ## 16. Global Roadmap After Lifecycle and Engine Controls
 
-1. **Workflow Runtime Policies and Durable User State** — execute `<config>`
-   concurrency, rate limit, workflow timeout, and queue policies; define a
-   versioned durable state capability without making cache authoritative.
-2. **Production Runtime and Operations** — hosting, deployment, multi-node
-   ownership, remote run-control authorization, cross-machine workflow routing,
-   service identity, OS-level isolation, observability, retention,
-   administration, and scaling.
-3. **Complete the postponed Module System phases** — MS5 locked third-party
-   packages, remaining MS6 permissions/security, MS7 portable distribution,
-   and MS8 hardening/publication.
-4. **WOML Package Registry and Community Ecosystem** — signed publication,
-   discovery, provenance, moderation, compatibility, and deprecation.
-5. **Additional Infrastructure Adapters** — postponed durable queue/external
-   broker support, document databases, external object storage, and distributed
-   caches according to demand.
-6. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
+1. **Fork and Branch Execution** — rename conditional source flow to
+   `<choose>` and add durable `<fork>`/`<branch>` routes with multi-step branch
+   bodies and selective main-route joins.
+2. **Additional Communication Providers** — Discord, WhatsApp, and Telegram
    triggers, notifications, and messaging capabilities when justified.
-7. **Advanced Workflow Control** — explicit pause/resume, cancellation
-   propagation policies, compensation/sagas, long approval-waiting synchronous
-   child calls, and remote control APIs after their durable boundaries are
-   reviewed.
-8. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
+3. **Retire the JavaScript Chaining SDK** — only after WOML reaches sufficient
    parity and users have a supported migration path.
 
 Completed roadmap milestones—Retries and Idempotency, Production Triggers,
 Services and Capabilities, the essential Module System, Durable Workflow Calls,
-and Workflow Start—remain the baseline and are not repeated as future work.
+Workflow Start, Lifecycle and Engine Controls, Runtime Policies, Durable State,
+and Production Runtime and Operations—remain the baseline and are not repeated
+as future work.
 
 ## 17. LEC0 Review Gate
 
