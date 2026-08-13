@@ -211,6 +211,23 @@ its JSON result and exits:
 woml test woml/tests/fixtures/hello.woml
 ```
 
+## Fork work into independent routes
+
+Use `<fork>` when one workflow should start several independent, multi-step
+routes. Branches run concurrently, but steps inside one branch remain ordered.
+The `join` attribute controls which branches must finish before the main route
+continues: `all`, `none`, or a whitespace-separated list of branch IDs.
+
+```bash
+woml test examples/forkDistributionWorkflow.woml
+```
+
+The example prepares one campaign, publishes through TikTok, Instagram,
+Facebook, and Pinterest branches, waits for all four, and prints one summary.
+Fork progress is durable: completed work is not replayed after restart, and an
+ambiguous started effect fails closed. `woml get <runId>` exposes redacted fork
+and branch status without exposing payloads, outputs, or secrets.
+
 Inspect an asynchronously triggered durable run with:
 
 ```bash

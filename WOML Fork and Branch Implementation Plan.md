@@ -1,6 +1,6 @@
 # WOML Fork and Branch Implementation Plan
 
-Status: FJ0-FJ7 completed; hardening, packaging, and publication begin in FJ8
+Status: FJ0-FJ8 completed; fork and branch is a supported, publishable WOML feature
 
 ## 1. Product Outcome
 
@@ -821,7 +821,7 @@ publishable release.
 | FJ5 — completed | Execute concurrent branches and `join="all"` in Rust. | Multi-step branches run concurrently and the main route safely waits for all. |
 | FJ6 — completed | Execute selected joins and `join="none"` with deterministic context filtering. | The main route can continue early without seeing timing-dependent outputs. |
 | FJ7 — completed | Complete failure, cancellation, approval/retry/control-flow composition, CLI, and observability behavior. | Forks work inside real automations and remain operable in production. |
-| FJ8 | Harden recovery, compatibility, packaging, benchmarks, documentation, and release gates. | Forks and branches become a supported, publishable WOML language feature. |
+| FJ8 — completed | Harden recovery, compatibility, packaging, benchmarks, documentation, and release gates. | Forks and branches are a supported, publishable WOML language feature. |
 
 ### FJ0 — Freeze fork, branch, join, and choice contracts
 
@@ -1069,7 +1069,7 @@ Production integration tests cover failures, cancellation, approval waiting,
 retry waiting, lifecycle outcomes, runtime restart, inspection, backup/restore,
 and retention protection.
 
-### FJ8 — Harden, package, document, and publish
+### FJ8 — Harden, package, document, and publish — completed
 
 Changes:
 

@@ -1,9 +1,8 @@
 # WOML v0.1 Fundamental Syntax
 
-Status: design catalog draft; sequential scripts, retries, conditional choices,
-and bounded parallel groups are executable and publishable through the
-Rust-backed CLI, including durable retry recovery, both parallel failure
-policies, and fail-fast Worker cancellation
+Status: executable language profile; sequential scripts, retries, choices,
+parallel groups, and forked multi-step routes are publishable through the
+Rust-backed CLI with durable recovery
 Scope: fundamental workflow structure, triggers, script and approval steps,
 parallel flow, conditional flow, configuration, and lifecycle hooks
 
@@ -68,6 +67,7 @@ includes conditional choices and bounded parallel groups:
 | Lifecycle | LEC0–LEC8 completed and hardened | Workflow/step hooks, informational Slack notification, cancellation, and direct run management are executable and publishable through Model v11/Event v10/Store v11 |
 | Conditional `<choose>` | Frozen; canonical source name introduced in FJ1 | Executable and publishable; legacy conditional `<branch>` remains compatible with a deprecation warning |
 | Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
+| `<fork>` with multi-item `<branch>` routes | Frozen; FJ0–FJ8 completed and hardened | Executable and publishable through Model v13, Event v12, Store v14, deterministic join visibility, recovery, and the Rust-backed CLI |
 | Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
 | `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
 | `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
@@ -1635,8 +1635,19 @@ Compiled context visibility—not completion timing—determines which step outp
 each script can see. Event v12 fork-open, branch-settlement, and join-settlement
 facts persist in the existing append-only Store v14. Run Inspection v4 and the
 recovery work profile are rebuilt from those events and never expose payloads,
-context, outputs, or secrets. Model v13 control-only choices remain explicitly
-gated with `UNSUPPORTED_FORK_EXECUTION` until FJ7.
+context, outputs, or secrets. Control-only and result-producing choices execute
+identically on the main route and inside a branch. A failed or cancelled branch
+settles durably; joined failure prevents the continuation from running, while
+unjoined failure never blocks the selected join. The run itself becomes
+terminal only after every opened branch settles, so a partial main-route value
+is never printed as a successful result for a failed run. Recovery resumes safe
+pending work and fails a started effect without a terminal event closed rather
+than replaying it.
+
+The complete executable example is
+[`examples/forkDistributionWorkflow.woml`](../examples/forkDistributionWorkflow.woml).
+Run it with `woml test examples/forkDistributionWorkflow.woml` for one result,
+or use it as part of a long-lived `woml run` deployment.
 
 ## 15. Attribute Values and Context References
 

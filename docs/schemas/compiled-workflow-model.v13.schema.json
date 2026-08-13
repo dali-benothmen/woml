@@ -3,7 +3,7 @@
   "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v13",
   "title": "WOML Compiled Workflow Model v13",
   "description": "Language-neutral DAG contract for durable fork ownership, selected joins, deterministic context visibility, control-only choices, and workflow settlement.",
-  "x-status": "fork-branch-fj3-implemented",
+  "x-status": "fork-branch-fj8-published",
   "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v12",
   "x-invariants": [
     "Every branch belongs to exactly one fork and every branch entry is reachable only after its fork opens.",

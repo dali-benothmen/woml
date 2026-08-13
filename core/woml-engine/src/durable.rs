@@ -7151,6 +7151,27 @@ impl DurableEventStore {
           )?;
         }
       }
+      let has_unsettled_fork_work = workflow.schema_version
+        >= crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        && projection.forks.values().any(|fork| {
+          fork.join_status == crate::projection::ForkJoinStatus::Pending
+            || fork
+              .branches
+              .values()
+              .any(|branch| branch.outcome.is_none())
+        });
+      if has_unsettled_fork_work {
+        // The interrupted attempts are now durably failed, but Model v13 owns
+        // every opened branch until it settles. Let the resumed fork scheduler
+        // derive branch and join outcomes before it decides the run outcome;
+        // appending RunFailed here would create an impossible half-open fork.
+        validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
+          .map_err(DurableStoreError::Contract)?;
+        transaction.commit()?;
+        return Ok(RunRecovery::Recovered {
+          interrupted_attempts: started.len(),
+        });
+      }
       let run_failure = RunEventPayload::RunFailed(attempt_run_failed_data(
         event_schema_version,
         first.node_id,

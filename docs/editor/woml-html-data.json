@@ -1,0 +1,36 @@
+{
+  "version": 1.1,
+  "tags": [
+    { "name": "woml", "description": "WOML document root." },
+    { "name": "workflow", "description": "One executable workflow definition.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "version" }
+    ] },
+    { "name": "triggers", "description": "Workflow trigger declarations." },
+    { "name": "steps", "description": "The workflow's executable route." },
+    { "name": "step", "description": "A named executable operation.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "retry" },
+      { "name": "retry-delay" }, { "name": "retry-backoff" }, { "name": "retry-max-delay" },
+      { "name": "retry-jitter" }
+    ] },
+    { "name": "script", "description": "JavaScript executed by an isolated Bun worker." },
+    { "name": "fork", "description": "Starts independent concurrent branch routes.", "attributes": [
+      { "name": "id" },
+      { "name": "join", "description": "all, none, or a whitespace-separated list of branch IDs." }
+    ] },
+    { "name": "branch", "description": "A multi-item route owned by its direct fork.", "attributes": [
+      { "name": "id" }
+    ] },
+    { "name": "choose", "description": "Selects one conditional route.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }
+    ] },
+    { "name": "when", "description": "A conditional choice arm.", "attributes": [{ "name": "test" }] },
+    { "name": "otherwise", "description": "The fallback choice arm." },
+    { "name": "result", "description": "Publishes a path-stable choice result.", "attributes": [{ "name": "value" }] },
+    { "name": "parallel", "description": "Runs direct child steps concurrently and waits for all.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "concurrency" }, { "name": "on-error" }
+    ] },
+    { "name": "approval", "description": "Pauses durably for a human decision.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "timeout" }, { "name": "on-timeout" }
+    ] }
+  ]
+}

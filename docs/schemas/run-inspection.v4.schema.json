@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://woml.dev/schemas/run-inspection/v4",
   "title": "WOML Fork-Aware Safe Run Inspection v4",
-  "x-status": "fork-branch-fj4-implemented",
+  "x-status": "fork-branch-fj8-published",
   "x-forbiddenFields": ["context", "payload", "result", "secret", "credentials", "messageBody", "stack", "operationKey", "idempotencyKey", "ownerId", "claimId"],
   "type": "object",
   "additionalProperties": false,

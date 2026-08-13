@@ -3035,6 +3035,35 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
       return Err(cancelled_run_error(engine, run_id)?);
     }
     let ready = engine.ready_node_ids(run_id)?;
+    if ready.is_empty() {
+      if let Some(fork) = ready_fork(engine.workflow(), &current, &ready) {
+        if host.is_none() {
+          *host = Some(
+            ScriptHostClient::spawn_with_authority(
+              options.script_host.clone(),
+              options.capability_authority.clone(),
+            )
+            .await?,
+          );
+        }
+        let fork_progress = execute_fork(
+          engine,
+          run_id,
+          fork,
+          options,
+          host.as_ref().expect("script host was initialized"),
+        )
+        .await?;
+        match fork_progress {
+          ForkRuntimeProgress::Continued(completed) => execution_order.extend(completed),
+          ForkRuntimeProgress::Waiting { completed, outcome } => {
+            execution_order.extend(completed);
+            return Ok(outcome);
+          }
+        }
+        continue;
+      }
+    }
     let Some(node_id) = ready.first() else {
       let projection = engine.projection(run_id)?;
       if projection.status == RunStatus::Succeeded {
@@ -3539,16 +3568,27 @@ fn ready_fork(
     .unwrap_or_default()
     .iter()
     .find(|fork| {
-      projection
-        .forks
-        .get(&fork.fork_id)
-        .is_some_and(|state| state.join_status == crate::ForkJoinStatus::Pending)
-        && {
-          let routes = fork_branch_routes(workflow, fork);
-          ready.iter().any(|node_id| {
-            routes.values().any(|route| route.contains(node_id)) || node_id == &fork.join_node_id
-          })
-        }
+      let Some(state) = projection.forks.get(&fork.fork_id) else {
+        return false;
+      };
+      if state.join_status != crate::ForkJoinStatus::Pending {
+        return false;
+      }
+      let routes = fork_branch_routes(workflow, fork);
+      let has_ready_work = ready.iter().any(|node_id| {
+        routes.values().any(|route| route.contains(node_id)) || node_id == &fork.join_node_id
+      });
+      let has_recovered_failure = fork.branches.iter().any(|branch| {
+        !state.branches.contains_key(&branch.branch_id)
+          && routes
+            .get(&branch.branch_id)
+            .is_some_and(|route| final_attempt_failure_in_nodes(projection, route).is_some())
+      });
+      let needs_join_settlement = fork
+        .branches
+        .iter()
+        .all(|branch| state.branches.contains_key(&branch.branch_id));
+      has_ready_work || has_recovered_failure || needs_join_settlement
     })
     .cloned()
 }

@@ -3,7 +3,7 @@
   "$id": "https://cronflow.dev/schemas/run-event/v12",
   "title": "WOML Run Event v12",
   "description": "Append-only fork, selected-join, and control-only choice facts layered on the immutable Event v11 vocabulary.",
-  "x-status": "fork-branch-fj4-implemented",
+  "x-status": "fork-branch-fj8-published",
   "x-previousVersion": "https://cronflow.dev/schemas/run-event/v11",
   "x-invariants": [
     "A fork opens once per run and a direct branch settles once per opened fork.",

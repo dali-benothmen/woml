@@ -20,6 +20,7 @@ sufficient parity and the relevant production features have migration paths.
 | Implicit `ctx.last` | Explicit `context.steps.<stepId>` |
 | `.if()/.else()/.endIf()` | `<choose>`, `<when>`, and `<otherwise>` |
 | Parallel chaining | `<parallel>` with child workflow items |
+| Independent multi-step fan-out routes | `<fork>` containing named `<branch>` routes |
 | Retry option/object | `retry` and backoff attributes on `<step>` |
 | Human-in-the-loop callback | `<approval>` with a durable HTTP/provider decision |
 | Native SDK/Bun Fetch | Native `fetch()` inside `<script>` with durable redacted observation |
@@ -64,8 +65,9 @@ replace positional or “last result” access with the producing step's path:
    function.
 4. Replace `ctx.payload` with `context.payload` and every implicit previous
    result with `context.steps.<id>`.
-5. Express choices and parallel work structurally, then verify every referenced
-   step is reachable in the DAG.
+5. Express mutually exclusive decisions with `<choose>`, single-step bounded
+   fan-out with `<parallel>`, and independent multi-step routes with `<fork>`.
+   Verify every referenced step is visible on its compiled DAG route.
 6. Move retry configuration to `<step retry="...">` attributes. Use
    `attempt.idempotencyKey` for external APIs that support duplicate handling.
 7. Run the workflow with an explicit state path and test the printed recovery
@@ -88,10 +90,15 @@ replace positional or “last result” access with the producing step's path:
 14. Replace process memory or SDK-local key/value maps with `services.state`
     only when the data is small and owned by one workflow ID. Give every
     mutation a stable name and use `ifVersion` for read/modify/write races.
+15. Combine related distribution or processing routes in one `<fork>`. Use
+    `join="all"`, `join="none"`, or a whitespace-separated branch-ID list to
+    state exactly what the continuation waits for. Keep sibling outputs
+    isolated and reference only outputs from joined routes afterward.
 
 ## Current parity boundary
 
-Sequential scripts, conditional choice, parallel, Human Approval, Slack approval
+Sequential scripts, conditional choice, parallel, forked multi-step branches,
+Human Approval, Slack approval
 notifications, secrets, durable retry, and manual, webhook, Slack, schedule,
 interval, and named-event triggers are available through `woml run`.
 
@@ -105,6 +112,26 @@ additional messaging services, cross-machine workflow routing, remote run
 control, and the hosted production runtime remain roadmap items. Keep an SDK
 workflow in place when it depends on those unavailable capabilities. The SDK is
 not retired merely because local lifecycle and control parity exists.
+
+For example, migrate related social-post chains into one workflow when they
+share preparation but publish independently:
+
+```xml
+<fork id="distribution" join="all">
+  <branch id="tiktok">
+    <step id="formatTikTok">...</step>
+    <step id="publishTikTok">...</step>
+  </branch>
+  <branch id="instagram">
+    <step id="formatInstagram">...</step>
+    <step id="publishInstagram">...</step>
+  </branch>
+</fork>
+```
+
+Steps remain sequential inside each branch; branches become eligible
+concurrently. Use `<choose>` inside a branch for conditional work rather than
+putting a condition on `<branch>` itself.
 
 See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md) for
 hook ordering, warning semantics, cancellation races, and deployment guidance.
