@@ -40,7 +40,7 @@ describe('join-all fork CLI execution', () => {
     expect(checked.exitCode).toBe(0);
     expect(checked.stderr).toBe('');
     expect(checked.stdout).toContain(
-      'Model v13 join-all forks are executable through the durable Rust runtime'
+      'Model v13 all, selected, and non-blocking fork joins are executable through the durable Rust runtime'
     );
 
     const directory = await mkdtemp(join(tmpdir(), 'woml-fork-join-all-cli-'));

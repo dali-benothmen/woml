@@ -3118,7 +3118,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
       execution_order.extend(completed);
       continue;
     }
-    if let Some(fork) = ready_join_all_fork(engine.workflow(), &current, &ready) {
+    if let Some(fork) = ready_fork(engine.workflow(), &current, &ready) {
       if host.is_none() {
         *host = Some(
           ScriptHostClient::spawn_with_authority(
@@ -3128,7 +3128,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           .await?,
         );
       }
-      let completed = execute_join_all_fork(
+      let completed = execute_fork(
         engine,
         run_id,
         fork,
@@ -3480,7 +3480,7 @@ fn fork_branch_routes(
     .collect()
 }
 
-fn ready_join_all_fork(
+fn ready_fork(
   workflow: &CompiledWorkflowDefinition,
   projection: &RunProjection,
   ready: &[String],
@@ -3492,11 +3492,10 @@ fn ready_join_all_fork(
     .unwrap_or_default()
     .iter()
     .find(|fork| {
-      fork.joined_branch_ids.len() == fork.branches.len()
-        && projection
-          .forks
-          .get(&fork.fork_id)
-          .is_some_and(|state| state.join_status == crate::ForkJoinStatus::Pending)
+      projection
+        .forks
+        .get(&fork.fork_id)
+        .is_some_and(|state| state.join_status == crate::ForkJoinStatus::Pending)
         && {
           let routes = fork_branch_routes(workflow, fork);
           ready.iter().any(|node_id| {
@@ -3528,7 +3527,7 @@ fn runtime_context_for_node(
   context
 }
 
-async fn execute_join_all_fork<E: RuntimeDagEngine>(
+async fn execute_fork<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
   fork: crate::model::CompiledFork,
@@ -3541,7 +3540,7 @@ async fn execute_join_all_fork<E: RuntimeDagEngine>(
 
   loop {
     let mut projection = engine.projection(run_id)?;
-    let mut ready = engine.ready_node_ids(run_id)?;
+    let ready = engine.ready_node_ids(run_id)?;
 
     for branch in &fork.branches {
       if ready.contains(&branch.terminal_node_id)
@@ -3563,52 +3562,161 @@ async fn execute_join_all_fork<E: RuntimeDagEngine>(
     }
 
     projection = engine.projection(run_id)?;
-    if fork.branches.iter().all(|branch| {
+    let join_is_pending = projection
+      .forks
+      .get(&fork.fork_id)
+      .is_some_and(|state| state.join_status == crate::ForkJoinStatus::Pending);
+    let joined_branches_succeeded = fork.joined_branch_ids.iter().all(|branch_id| {
       projection
         .forks
         .get(&fork.fork_id)
-        .and_then(|state| state.branches.get(&branch.branch_id))
+        .and_then(|state| state.branches.get(branch_id))
         .and_then(|branch| branch.outcome)
         == Some(ForkBranchOutcome::Succeeded)
-    }) {
+    });
+    if join_is_pending && joined_branches_succeeded {
       engine.append_payload(
         run_id,
         RunEventPayload::ForkJoinSettled(ForkJoinSettledData {
-          fork_id: fork.fork_id,
+          fork_id: fork.fork_id.clone(),
           outcome: ForkJoinOutcome::Succeeded,
           blocking_branch_id: None,
         }),
       )?;
+    }
+
+    projection = engine.projection(run_id)?;
+    let every_branch_settled = fork.branches.iter().all(|branch| {
+      projection
+        .forks
+        .get(&fork.fork_id)
+        .is_some_and(|state| state.branches.contains_key(&branch.branch_id))
+    });
+    if every_branch_settled && active.is_empty() {
       return Ok(completion_order);
     }
 
-    ready = engine.ready_node_ids(run_id)?;
-    for branch in &fork.branches {
-      let route = routes.get(&branch.branch_id).ok_or_else(|| {
-        RuntimeExecutionError::Stalled(format!(
-          "fork {:?} lost branch route {:?}",
-          fork.fork_id, branch.branch_id
-        ))
-      })?;
-      let branch_is_settled = projection
-        .forks
-        .get(&fork.fork_id)
-        .is_some_and(|state| state.branches.contains_key(&branch.branch_id));
-      let branch_is_active = active
-        .iter()
-        .any(|invocation| route.contains(&invocation.node_id));
-      if branch_is_settled || branch_is_active {
+    let ready = engine.ready_node_ids(run_id)?;
+    let mut pure_node_completed = false;
+    for node_id in &ready {
+      if !routes.values().any(|route| route.contains(node_id)) {
         continue;
       }
-      let Some(node_id) = ready.iter().find(|node_id| {
-        route.contains(node_id.as_str())
-          && engine
+      let handler = engine
+        .workflow()
+        .node(node_id)
+        .map(|node| node.handler.as_str())
+        .ok_or_else(|| RuntimeExecutionError::Stalled("ready node disappeared".to_string()))?;
+      match handler {
+        "engine.branch-select" => {
+          let arm_id = selected_branch_arm(engine.workflow(), node_id, &projection.context)
+            .map_err(|error| {
+              RuntimeExecutionError::Stalled(format!(
+                "fork branch choice {:?} could not select an arm: {:?}",
+                error.branch_id, error.kind
+              ))
+            })?;
+          let branch_id = crate::engine::selector_branch_id(node_id)
+            .ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "selector node {node_id:?} has no canonical branch identity"
+              ))
+            })?
+            .to_string();
+          engine.append_payload(
+            run_id,
+            RunEventPayload::BranchSelected(BranchSelectedData { branch_id, arm_id }),
+          )?;
+          pure_node_completed = true;
+          break;
+        }
+        "engine.branch-result" => {
+          let arm_id = projection
+            .branch_selections
+            .get(node_id)
+            .cloned()
+            .ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "branch result {node_id:?} became ready without a recorded selection"
+              ))
+            })?;
+          let node = engine
             .workflow()
             .node(node_id)
-            .is_some_and(|node| node.handler == "runtime.script")
-      }) else {
+            .ok_or_else(|| RuntimeExecutionError::Stalled("ready node disappeared".to_string()))?;
+          let ValueExpression::Object { fields } = &node.inputs else {
+            return Err(RuntimeExecutionError::Stalled(format!(
+              "branch result {node_id:?} has invalid compiled inputs"
+            )));
+          };
+          let expression = fields.get(&arm_id).ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "branch result {node_id:?} has no value for selected arm {arm_id:?}"
+            ))
+          })?;
+          let output =
+            resolve_context_reference(expression, &projection.context).map_err(|error| {
+              RuntimeExecutionError::Stalled(format!(
+                "branch result {node_id:?} cannot read {:?}",
+                error.path
+              ))
+            })?;
+          engine.publish_pure_result(run_id, node_id, output)?;
+          completion_order.push(node_id.clone());
+          pure_node_completed = true;
+          break;
+        }
+        _ => {}
+      }
+    }
+    if pure_node_completed {
+      continue;
+    }
+
+    for node_id in &ready {
+      if !engine
+        .workflow()
+        .node(node_id)
+        .is_some_and(|node| node.handler == "runtime.script")
+      {
         continue;
-      };
+      }
+      let branch_owner = engine
+        .workflow()
+        .fork_branch_owner(node_id)
+        .map(|(owner_fork, branch)| (owner_fork.fork_id.clone(), branch.branch_id.clone()));
+      match branch_owner.as_ref() {
+        Some((fork_id, branch_id)) if fork_id == &fork.fork_id => {
+          let route = routes.get(branch_id).ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "fork {:?} lost branch route {:?}",
+              fork.fork_id, branch_id
+            ))
+          })?;
+          let branch_is_settled = projection
+            .forks
+            .get(&fork.fork_id)
+            .is_some_and(|state| state.branches.contains_key(branch_id));
+          let branch_is_active = active
+            .iter()
+            .any(|invocation| route.contains(&invocation.node_id));
+          if branch_is_settled || branch_is_active {
+            continue;
+          }
+        }
+        Some(_) => continue,
+        None => {
+          let main_is_active = active.iter().any(|invocation| {
+            engine
+              .workflow()
+              .fork_branch_owner(&invocation.node_id)
+              .is_none()
+          });
+          if main_is_active {
+            continue;
+          }
+        }
+      }
       let source = engine
         .workflow()
         .node(node_id)
@@ -3673,7 +3781,7 @@ async fn execute_join_all_fork<E: RuntimeDagEngine>(
 
     let Some(completion) = next_parallel_completion(&mut active).await else {
       return Err(RuntimeExecutionError::Stalled(format!(
-        "fork {:?} has unfinished branches but no safe executable work",
+        "fork {:?} has unfinished owned work but no safe executable operation",
         fork.fork_id
       )));
     };
@@ -3692,16 +3800,23 @@ async fn execute_join_all_fork<E: RuntimeDagEngine>(
       }
       Err(failure) => {
         let code = failure.code.clone();
-        engine.record_step_attempt_failure(
-          run_id,
-          options.clock.now(),
-          StepAttemptFailedData {
-            node_id: completion.node_id.clone(),
-            attempt: completion.attempt_number,
-            invocation_id: completion.invocation_id,
-            failure,
-          },
-        )?;
+        engine
+          .record_step_attempt_failure(
+            run_id,
+            options.clock.now(),
+            StepAttemptFailedData {
+              node_id: completion.node_id.clone(),
+              attempt: completion.attempt_number,
+              invocation_id: completion.invocation_id,
+              failure,
+            },
+          )
+          .map_err(|record_error| {
+            RuntimeExecutionError::Stalled(format!(
+              "fork-owned step {:?} failed with {code}, and its terminal failure could not be recorded: {record_error}",
+              completion.node_id
+            ))
+          })?;
         return Err(RuntimeExecutionError::Stalled(format!(
           "fork branch step {:?} failed with {code}; full branch failure settlement begins in FJ7",
           completion.node_id

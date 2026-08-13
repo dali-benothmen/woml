@@ -1,3 +1,4 @@
+use woml_engine::model::{CompiledWorkflowEdge, EdgeCondition};
 use woml_engine::{CompiledWorkflowDefinition, ModelIssueCode, COMPILED_MODEL_SCHEMA_VERSION_V13};
 
 const MODEL: &str =
@@ -67,17 +68,54 @@ fn rust_rejects_malformed_ownership_visibility_and_settlement() {
 }
 
 #[test]
-fn rust_executes_join_all_v13_but_keeps_selected_joins_gated_until_fj6() {
+fn rust_accepts_every_frozen_join_membership_profile() {
   let mut model = reviewed_model();
   model.validate_for_durable_execution().unwrap();
   model.graph.forks.as_mut().unwrap()[0]
     .joined_branch_ids
     .pop();
-  let error = model.validate_for_durable_execution().unwrap_err();
-  assert!(error
-    .issues
-    .iter()
-    .any(|issue| issue.code == ModelIssueCode::UnsupportedForkExecution));
+  model
+    .graph
+    .edges
+    .retain(|edge| edge.id != "distribution:join:facebook");
+  model
+    .graph
+    .context_visibility
+    .as_mut()
+    .unwrap()
+    .iter_mut()
+    .find(|visibility| visibility.node_id == "finish")
+    .unwrap()
+    .step_ids
+    .retain(|step_id| step_id != "publishFacebook");
+  model.validate_for_durable_execution().unwrap();
+  model.graph.forks.as_mut().unwrap()[0]
+    .joined_branch_ids
+    .clear();
+  model
+    .graph
+    .edges
+    .retain(|edge| edge.id != "distribution:join:instagram");
+  model.graph.edges.push(CompiledWorkflowEdge {
+    id: "distribution:join:none".to_string(),
+    from: "__woml_fork__distribution__open".to_string(),
+    to: "__woml_fork__distribution__join".to_string(),
+    condition: EdgeCondition::Always,
+    branch_id: None,
+    parallel_id: None,
+    approval_id: None,
+  });
+  model
+    .graph
+    .context_visibility
+    .as_mut()
+    .unwrap()
+    .iter_mut()
+    .find(|visibility| visibility.node_id == "finish")
+    .unwrap()
+    .step_ids
+    .retain(|step_id| step_id != "publishInstagram");
+  model.validate_for_durable_execution().unwrap();
 }
 
 #[test]

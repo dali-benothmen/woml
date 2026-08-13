@@ -9389,7 +9389,8 @@ fn attempt_run_failed_data(
     | RUN_EVENT_SCHEMA_VERSION_V8
     | RUN_EVENT_SCHEMA_VERSION_V9
     | crate::RUN_EVENT_SCHEMA_VERSION_V10
-    | crate::RUN_EVENT_SCHEMA_VERSION_V11 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V11
+    | crate::RUN_EVENT_SCHEMA_VERSION_V12 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,

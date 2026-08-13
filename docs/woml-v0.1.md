@@ -1625,14 +1625,18 @@ Compiled Workflow Model v13. The graph records deterministic fork ownership,
 branch terminals, selected join membership, per-script context visibility, and
 one workflow-settlement boundary while preserving the main-route result.
 `woml check` therefore succeeds for valid fork source. Rust independently
-validates the Model v13 graph and executes `join="all"` forks durably. Each
-branch remains sequential internally while ready branches overlap through the
-multiplexed Bun host. Event v12 fork-open, branch-settlement, and
-join-settlement facts persist in the existing append-only Store v14. Run
-Inspection v4 and the recovery work profile are rebuilt from those events and
-never expose payloads, context, outputs, or secrets. Selected joins and
-`join="none"` remain explicitly gated with `UNSUPPORTED_FORK_EXECUTION` until
-FJ6.
+validates the Model v13 graph and executes all three join profiles durably:
+`join="all"`, a selected list of branch IDs, and `join="none"`. Each branch
+remains sequential internally while ready branches overlap through the
+multiplexed Bun host. A selected or non-blocking join may release the main route
+while unjoined work continues, but the workflow-settlement boundary prevents a
+successful run outcome from being published until every owned branch settles.
+Compiled context visibility—not completion timing—determines which step outputs
+each script can see. Event v12 fork-open, branch-settlement, and join-settlement
+facts persist in the existing append-only Store v14. Run Inspection v4 and the
+recovery work profile are rebuilt from those events and never expose payloads,
+context, outputs, or secrets. Model v13 control-only choices remain explicitly
+gated with `UNSUPPORTED_FORK_EXECUTION` until FJ7.
 
 ## 15. Attribute Values and Context References
 

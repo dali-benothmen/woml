@@ -1614,7 +1614,7 @@ async function runSingleCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasFork
-        ? 'Execution: Model v13 join-all forks are executable through the durable Rust runtime.\n'
+        ? 'Execution: Model v13 all, selected, and non-blocking fork joins are executable through the durable Rust runtime.\n'
         : hasRuntimePolicy && definitionPackage.modules.length > 0
         ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
         : hasRuntimePolicy

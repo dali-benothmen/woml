@@ -2794,19 +2794,6 @@ impl CompiledWorkflowDefinition {
           "Compiled Model v13 requires the durable runtime-policy scheduler.",
         ));
       }
-      if self
-        .graph
-        .forks
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .any(|fork| fork.joined_branch_ids.len() != fork.branches.len())
-      {
-        issues.push(issue(
-          ModelIssueCode::UnsupportedForkExecution,
-          "FJ5 executes join-all forks; selected and non-blocking joins begin in FJ6.",
-        ));
-      }
       if !self.graph.choices.as_deref().unwrap_or_default().is_empty() {
         issues.push(issue(
           ModelIssueCode::UnsupportedForkExecution,
