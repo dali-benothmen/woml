@@ -1575,6 +1575,57 @@ the definition's event vocabulary.
 Source positions, display names, timestamps, and random values never become
 compiled or durable choice identities.
 
+### 14.5 FJ2 fork and branch authoring profile
+
+FJ2 accepts and validates the minimal concurrent-route syntax before enabling
+its Model v13 lowering or Rust execution:
+
+```xml
+<fork id="distribution" join="instagram facebook">
+  <branch id="tiktok">
+    <step id="publishTikTok">...</step>
+  </branch>
+
+  <branch id="instagram">
+    <step id="publishInstagram">...</step>
+  </branch>
+
+  <branch id="facebook">
+    <step id="publishFacebook">...</step>
+  </branch>
+</fork>
+```
+
+- `<fork>` requires `id` and accepts only the optional `join` attribute.
+- It contains one or more direct, non-empty `<branch>` elements.
+- Each branch requires an ID local to that fork and may contain multiple flow
+  items. Branch bodies currently accept steps, choices, parallel groups, and
+  approvals.
+- An omitted `join` and `join="all"` wait for every branch. `join="none"`
+  waits for none. A whitespace-separated branch-ID list waits only for those
+  branches. Selected IDs are canonicalized to document order.
+- A fork branch ID may be reused by a different fork. Executable and structural
+  IDs inside branch bodies remain unique across the workflow.
+- Nested forks are rejected anywhere inside a fork-owned branch subtree in the
+  first profile.
+- A branch can read context available before the fork and outputs created
+  earlier in that same branch. It cannot read a sibling branch output.
+- After the fork, only outputs guaranteed by joined branches are visible.
+  Unjoined outputs remain unavailable regardless of which branch finishes
+  first.
+- A terminal fork preserves the last earlier value-producing main-route
+  result. A workflow whose only terminal structure is a fork is rejected.
+
+FJ2 also accepts an ID-less control-only `<choose>` whose non-empty arms omit
+`<result>`. It controls execution but publishes no `context.steps` result. The
+existing `<choose id="...">` profile remains the form for a path-stable merged
+result.
+
+`validateWoml` accepts this authoring profile. `compileWoml`, `woml check`, and
+`woml run` report `WOML_MODEL_V13_REQUIRED` until FJ3 supplies the reviewed
+compiled DAG. This explicit gate prevents valid new markup from being lowered
+silently into an older execution model.
+
 ## 15. Attribute Values and Context References
 
 Every attribute has a declared type. WOML does not treat every resolved value as

@@ -8,6 +8,8 @@ import {
   compileWoml,
   inspectWomlMigrationDiagnostics,
   parseWoml,
+  validateWoml,
+  WomlCompileError,
   WomlValidationError,
 } from '../src';
 
@@ -324,5 +326,234 @@ describe('FJ1 canonical conditional choice migration', () => {
       return;
     }
     throw new Error('Expected canonical choice validation to fail.');
+  });
+});
+
+function fj2Workflow(body: string): string {
+  return `<woml><workflow id="fj2-test"><triggers><manual id="start" /></triggers><steps>${body}</steps></workflow></woml>`;
+}
+
+function fj2Diagnostic(source: string): string {
+  const document = parseWoml(source, { file: 'fj2-invalid.woml' });
+  try {
+    validateWoml(document);
+  } catch (error) {
+    if (error instanceof WomlValidationError || error instanceof WomlCompileError) {
+      return error.diagnostic.code;
+    }
+    throw error;
+  }
+  throw new Error('Expected FJ2 validation to fail.');
+}
+
+describe('FJ2 fork and branch authoring', () => {
+  test('accepts all reviewed forks, including omitted/all/selected/none joins, root-first, terminal, and multi-step branches', () => {
+    for (const name of [
+      'join-all.woml',
+      'join-selected.woml',
+      'join-none.woml',
+      'root-first.woml',
+      'terminal-fork.woml',
+    ]) {
+      const document = parseWoml(fixture(name), { file: name });
+      expect(() => validateWoml(document), name).not.toThrow();
+      try {
+        compileWoml(document);
+      } catch (error) {
+        expect(error).toBeInstanceOf(WomlCompileError);
+        expect((error as WomlCompileError).diagnostic.code).toBe(
+          'WOML_MODEL_V13_REQUIRED'
+        );
+        expect((error as WomlCompileError).diagnostic.location.start.offset).toBe(
+          fixture(name).indexOf('<fork')
+        );
+        continue;
+      }
+      throw new Error(`${name} bypassed the Model v13 execution gate.`);
+    }
+  });
+
+  test('accepts branch IDs reused in different forks and canonicalizes selected joins independently of attribute order', () => {
+    const source = fj2Workflow(`
+      <step id="before"><script>return true;</script></step>
+      <fork id="first" join="beta alpha">
+        <branch id="alpha"><step id="alphaOne"><script>return 1;</script></step></branch>
+        <branch id="beta"><step id="betaOne"><script>return 2;</script></step></branch>
+      </fork>
+      <fork id="second" join="all">
+        <branch id="alpha"><step id="alphaTwo"><script>return 3;</script></step></branch>
+      </fork>
+      <step id="finish"><script>return context.steps.alphaTwo;</script></step>`);
+    expect(() =>
+      validateWoml(parseWoml(source, { file: 'reused-branch-id.woml' }))
+    ).not.toThrow();
+  });
+
+  test('validates exact control-only choice shape and gates lowering at Model v13', () => {
+    const source = fj2Workflow(`
+      <step id="ready"><script>return true;</script></step>
+      <choose>
+        <when test="{{context.steps.ready}}"><step id="yes"><script>return 1;</script></step></when>
+        <otherwise><step id="no"><script>return 0;</script></step></otherwise>
+      </choose>
+      <step id="finish"><script>return context.steps.ready;</script></step>`);
+    const document = parseWoml(source, { file: 'control-choice.woml' });
+    expect(() => validateWoml(document)).not.toThrow();
+    try {
+      compileWoml(document);
+    } catch (error) {
+      expect(error).toBeInstanceOf(WomlCompileError);
+      expect((error as WomlCompileError).diagnostic.code).toBe(
+        'WOML_MODEL_V13_REQUIRED'
+      );
+      expect((error as WomlCompileError).diagnostic.location.start.offset).toBe(
+        source.indexOf('<choose>')
+      );
+      return;
+    }
+    throw new Error('Control-only choice bypassed the Model v13 gate.');
+  });
+
+  test('rejects malformed fork and branch structure at the responsible source', () => {
+    const cases = [
+      [
+        fj2Workflow('<fork><branch id="a"><step id="x"><script>return 1;</script></step></branch></fork><step id="end"><script>return 1;</script></step>'),
+        'WOML_MISSING_ATTRIBUTE',
+      ],
+      [
+        fj2Workflow('<fork id="empty"></fork><step id="end"><script>return 1;</script></step>'),
+        'WOML_FORK_EMPTY',
+      ],
+      [
+        fj2Workflow('<fork id="bad"><step id="x"><script>return 1;</script></step></fork><step id="end"><script>return 1;</script></step>'),
+        'WOML_FORK_CHILD_INVALID',
+      ],
+      [
+        fj2Workflow('<fork id="bad"><branch id="empty"></branch></fork><step id="end"><script>return 1;</script></step>'),
+        'WOML_FORK_BRANCH_EMPTY',
+      ],
+      [
+        fj2Workflow('<fork id="bad"><branch id="all"><step id="x"><script>return 1;</script></step></branch></fork><step id="end"><script>return 1;</script></step>'),
+        'WOML_FORK_BRANCH_ID_RESERVED',
+      ],
+      [
+        fj2Workflow('<fork id="bad"><branch id="a"><step id="x"><script>return 1;</script></step></branch><branch id="a"><step id="y"><script>return 2;</script></step></branch></fork><step id="end"><script>return 1;</script></step>'),
+        'WOML_FORK_BRANCH_ID_DUPLICATE',
+      ],
+      [
+        fj2Workflow('<fork id="bad"><branch id="a" name="No"><step id="x"><script>return 1;</script></step></branch></fork><step id="end"><script>return 1;</script></step>'),
+        'WOML_FORK_BRANCH_ATTRIBUTE_UNSUPPORTED',
+      ],
+      [
+        fj2Workflow('<branch id="route"><step id="x"><script>return 1;</script></step></branch>'),
+        'WOML_FORK_BRANCH_PLACEMENT_INVALID',
+      ],
+    ] as const;
+    for (const [source, code] of cases) {
+      expect(fj2Diagnostic(source), code).toBe(code);
+    }
+  });
+
+  test('rejects empty, mixed, duplicate, malformed, and unknown join values', () => {
+    const fork = (join: string) =>
+      fj2Workflow(`<fork id="distribution" join="${join}">
+        <branch id="instagram"><step id="ig"><script>return 1;</script></step></branch>
+        <branch id="facebook"><step id="fb"><script>return 2;</script></step></branch>
+      </fork><step id="finish"><script>return true;</script></step>`);
+    for (const [join, code] of [
+      ['', 'WOML_FORK_JOIN_INVALID'],
+      ['all instagram', 'WOML_FORK_JOIN_INVALID'],
+      ['none facebook', 'WOML_FORK_JOIN_INVALID'],
+      ['instagram instagram', 'WOML_FORK_JOIN_DUPLICATE'],
+      ['instagram tiktok', 'WOML_FORK_JOIN_UNKNOWN_BRANCH'],
+      ['instagram,facebook', 'WOML_FORK_JOIN_INVALID'],
+    ] as const) {
+      expect(fj2Diagnostic(fork(join)), join).toBe(code);
+    }
+  });
+
+  test('rejects a nested fork throughout a fork branch subtree', () => {
+    expect(fj2Diagnostic(fixture('nested-fork.invalid.woml'))).toBe(
+      'WOML_FORK_NESTED_UNSUPPORTED'
+    );
+    const approvalNested = fj2Workflow(`
+      <step id="before"><script>return true;</script></step>
+      <fork id="outer"><branch id="route">
+        <approval id="review"><when-approved>
+          <fork id="nested"><branch id="inside"><step id="x"><script>return 1;</script></step></branch></fork>
+        </when-approved><when-rejected /></approval>
+      </branch></fork>
+      <step id="finish"><script>return true;</script></step>`);
+    expect(fj2Diagnostic(approvalNested)).toBe(
+      'WOML_FORK_NESTED_UNSUPPORTED'
+    );
+  });
+
+  test('rejects invalid control-only choice results, metadata, and empty arms', () => {
+    const cases = [
+      [
+        fj2Workflow('<step id="ready"><script>return true;</script></step><choose><when test="{{context.steps.ready}}"><step id="x"><script>return 1;</script></step><result value="{{context.steps.x}}" /></when><otherwise><step id="y"><script>return 0;</script></step></otherwise></choose><step id="end"><script>return true;</script></step>'),
+        'WOML_CHOOSE_RESULT_REQUIRES_ID',
+      ],
+      [
+        fj2Workflow('<step id="ready"><script>return true;</script></step><choose name="Route"><when test="{{context.steps.ready}}"><step id="x"><script>return 1;</script></step></when><otherwise><step id="y"><script>return 0;</script></step></otherwise></choose><step id="end"><script>return true;</script></step>'),
+        'WOML_CHOOSE_METADATA_REQUIRES_ID',
+      ],
+      [
+        fj2Workflow('<step id="ready"><script>return true;</script></step><choose><when test="{{context.steps.ready}}"></when><otherwise><step id="y"><script>return 0;</script></step></otherwise></choose><step id="end"><script>return true;</script></step>'),
+        'WOML_CHOOSE_ARM_EMPTY',
+      ],
+    ] as const;
+    for (const [source, code] of cases) {
+      expect(fj2Diagnostic(source)).toBe(code);
+    }
+  });
+
+  test('enforces sibling and unjoined visibility while allowing joined outputs downstream', () => {
+    const siblingReference = fj2Workflow(`
+      <step id="ready"><script>return true;</script></step>
+      <fork id="distribution" join="all">
+        <branch id="instagram"><choose><when test="{{context.steps.facebookPost}}"><step id="ig"><script>return 1;</script></step></when><otherwise><step id="igSkip"><script>return 0;</script></step></otherwise></choose></branch>
+        <branch id="facebook"><step id="facebookPost"><script>return true;</script></step></branch>
+      </fork>
+      <step id="finish"><script>return true;</script></step>`);
+    expect(fj2Diagnostic(siblingReference)).toBe(
+      'WOML_FORK_REFERENCE_NOT_VISIBLE'
+    );
+
+    const unjoinedReference = fj2Workflow(`
+      <step id="ready"><script>return true;</script></step>
+      <fork id="distribution" join="instagram">
+        <branch id="instagram"><step id="instagramPost"><script>return true;</script></step></branch>
+        <branch id="analytics"><step id="analyticsPost"><script>return true;</script></step></branch>
+      </fork>
+      <choose><when test="{{context.steps.analyticsPost}}"><step id="yes"><script>return 1;</script></step></when><otherwise><step id="no"><script>return 0;</script></step></otherwise></choose>
+      <step id="finish"><script>return true;</script></step>`);
+    expect(fj2Diagnostic(unjoinedReference)).toBe(
+      'WOML_FORK_REFERENCE_NOT_VISIBLE'
+    );
+
+    const joinedReference = unjoinedReference
+      .replace('join="instagram"', 'join="all"')
+      .replace('context.steps.analyticsPost', 'context.steps.instagramPost');
+    expect(() =>
+      validateWoml(parseWoml(joinedReference, { file: 'joined.woml' }))
+    ).not.toThrow();
+  });
+
+  test('rejects a terminal fork without an earlier main result and keeps a reviewed terminal fork valid', () => {
+    const invalid = fj2Workflow(
+      '<fork id="only"><branch id="work"><step id="x"><script>return 1;</script></step></branch></fork>'
+    );
+    expect(fj2Diagnostic(invalid)).toBe(
+      'WOML_FORK_TERMINAL_RESULT_REQUIRED'
+    );
+    expect(() =>
+      validateWoml(
+        parseWoml(fixture('terminal-fork.woml'), {
+          file: 'terminal-fork.woml',
+        })
+      )
+    ).not.toThrow();
   });
 });

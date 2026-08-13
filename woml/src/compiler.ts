@@ -80,6 +80,19 @@ interface ValidatedBranchArm {
   readonly result: ValidatedReference;
 }
 
+interface ValidatedControlChoiceArm {
+  readonly kind: 'when' | 'otherwise';
+  readonly element: WomlSourceElement;
+  readonly test?: ValidatedReference;
+  readonly items: readonly ValidatedFlowItem[];
+}
+
+interface ValidatedControlChoice {
+  readonly kind: 'controlChoice';
+  readonly element: WomlSourceElement;
+  readonly arms: readonly ValidatedControlChoiceArm[];
+}
+
 interface ValidatedBranch {
   readonly kind: 'branch';
   readonly sourceElementName: 'branch' | 'choose';
@@ -111,6 +124,20 @@ interface ValidatedApproval {
   readonly rejectedItems: readonly ValidatedFlowItem[];
 }
 
+interface ValidatedForkBranch {
+  readonly id: string;
+  readonly element: WomlSourceElement;
+  readonly items: readonly ValidatedFlowItem[];
+}
+
+interface ValidatedFork {
+  readonly kind: 'fork';
+  readonly id: string;
+  readonly element: WomlSourceElement;
+  readonly branches: readonly ValidatedForkBranch[];
+  readonly joinedBranchIds: readonly string[];
+}
+
 interface ValidatedNotificationDelivery {
   readonly deliveryId: string;
   readonly provider: 'slack';
@@ -123,8 +150,10 @@ interface ValidatedNotificationDelivery {
 type ValidatedFlowItem =
   | ValidatedStep
   | ValidatedBranch
+  | ValidatedControlChoice
   | ValidatedParallel
-  | ValidatedApproval;
+  | ValidatedApproval
+  | ValidatedFork;
 
 interface ValidatedFlow {
   readonly items: readonly ValidatedFlowItem[];
@@ -132,7 +161,17 @@ interface ValidatedFlow {
   readonly firstParallel?: WomlSourceElement;
   readonly firstApproval?: WomlSourceElement;
   readonly firstNotification?: WomlSourceElement;
+  readonly firstFork?: WomlSourceElement;
+  readonly firstControlChoice?: WomlSourceElement;
 }
+
+interface FlowValidationContext {
+  readonly insideForkBranch: boolean;
+}
+
+const rootFlowValidationContext: FlowValidationContext = {
+  insideForkBranch: false,
+};
 
 interface ValidatedLifecycleScriptAction {
   readonly kind: 'script';
@@ -277,6 +316,7 @@ const supportedElements = new Set([
   'script',
   'branch',
   'choose',
+  'fork',
   'parallel',
   'when',
   'otherwise',
@@ -336,6 +376,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   script: { attributes: new Set() },
   branch: { attributes: new Set(['id', 'name', 'description']) },
   choose: { attributes: new Set(['id', 'name', 'description']) },
+  fork: { attributes: new Set(['id', 'join']) },
   parallel: {
     attributes: new Set([
       'id',
@@ -626,7 +667,14 @@ function validateWorkflowId(
 function validateJavaScriptSafeId(
   document: WomlSourceDocument,
   attribute: WomlSourceAttribute,
-  role: 'trigger' | 'step' | 'branch' | 'choose' | 'parallel' | 'approval'
+  role:
+    | 'trigger'
+    | 'step'
+    | 'branch'
+    | 'choose'
+    | 'fork'
+    | 'parallel'
+    | 'approval'
 ): string {
   if (
     attribute.value.length > 256 ||
@@ -635,7 +683,7 @@ function validateJavaScriptSafeId(
     failValidation(
       document,
       'WOML_INVALID_ID',
-      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'choose' ? 'Choice' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
+      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'choose' ? 'Choice' : role === 'fork' ? 'Fork' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
       attribute.valueSpan,
       'Use letters and numbers, start with a lowercase letter, and do not use hyphens.'
     );
@@ -1446,14 +1494,14 @@ function registerStructuralId(
   document: WomlSourceDocument,
   registry: Set<string>,
   attribute: WomlSourceAttribute,
-  role: 'step' | 'branch' | 'choose' | 'parallel' | 'approval'
+  role: 'step' | 'branch' | 'choose' | 'fork' | 'parallel' | 'approval'
 ): string {
   const id = validateJavaScriptSafeId(document, attribute, role);
   if (registry.has(id)) {
     failValidation(
       document,
       'WOML_DUPLICATE_ID',
-      `Structural ID "${id}" is duplicated across workflow steps, choices, parallel groups, and approvals.`,
+      `Structural ID "${id}" is duplicated across workflow steps, choices, forks, parallel groups, and approvals.`,
       attribute.valueSpan
     );
   }
@@ -1661,10 +1709,11 @@ function approvalTimeoutMs(
 function validateApprovalArm(
   document: WomlSourceDocument,
   arm: WomlSourceElement,
-  registry: Set<string>
+  registry: Set<string>,
+  context: FlowValidationContext
 ): readonly ValidatedFlowItem[] {
   return elementChildren(document, arm).map(child =>
-    validateFlowItem(document, child, registry, `<${arm.name}>`)
+    validateFlowItem(document, child, registry, `<${arm.name}>`, context)
   );
 }
 
@@ -1931,7 +1980,8 @@ function validateNotify(
 function validateApproval(
   document: WomlSourceDocument,
   approval: WomlSourceElement,
-  registry: Set<string>
+  registry: Set<string>,
+  context: FlowValidationContext
 ): ValidatedApproval {
   const id = registerStructuralId(
     document,
@@ -2008,8 +2058,18 @@ function validateApproval(
     onTimeout,
     notifications:
       notify.length === 0 ? [] : validateNotify(document, notify[0], id),
-    approvedItems: validateApprovalArm(document, approved[0], registry),
-    rejectedItems: validateApprovalArm(document, rejected[0], registry),
+    approvedItems: validateApprovalArm(
+      document,
+      approved[0],
+      registry,
+      context
+    ),
+    rejectedItems: validateApprovalArm(
+      document,
+      rejected[0],
+      registry,
+      context
+    ),
   };
 }
 
@@ -2479,6 +2539,16 @@ function collectScriptAnalyses(
       for (const arm of item.arms) collectScriptAnalyses(arm.items, analyses);
       continue;
     }
+    if (item.kind === 'controlChoice') {
+      for (const arm of item.arms) collectScriptAnalyses(arm.items, analyses);
+      continue;
+    }
+    if (item.kind === 'fork') {
+      for (const branch of item.branches) {
+        collectScriptAnalyses(branch.items, analyses);
+      }
+      continue;
+    }
     collectScriptAnalyses(item.approvedItems, analyses);
     collectScriptAnalyses(item.rejectedItems, analyses);
   }
@@ -2506,6 +2576,12 @@ function collectValidatedSteps(
       steps.push(...item.children);
     } else if (item.kind === 'branch') {
       for (const arm of item.arms) collectValidatedSteps(arm.items, steps);
+    } else if (item.kind === 'controlChoice') {
+      for (const arm of item.arms) collectValidatedSteps(arm.items, steps);
+    } else if (item.kind === 'fork') {
+      for (const branch of item.branches) {
+        collectValidatedSteps(branch.items, steps);
+      }
     } else {
       collectValidatedSteps(item.approvedItems, steps);
       collectValidatedSteps(item.rejectedItems, steps);
@@ -2664,7 +2740,8 @@ function validateBranchArm(
   document: WomlSourceDocument,
   arm: WomlSourceElement,
   registry: Set<string>,
-  sourceElementName: 'branch' | 'choose'
+  sourceElementName: 'branch' | 'choose',
+  context: FlowValidationContext
 ): ValidatedBranchArm {
   const diagnosticPrefix =
     sourceElementName === 'choose' ? 'WOML_CHOOSE' : 'WOML_BRANCH';
@@ -2705,7 +2782,7 @@ function validateBranchArm(
   }
 
   const items = flowChildren.map(child =>
-    validateFlowItem(document, child, registry, `<${arm.name}>`)
+    validateFlowItem(document, child, registry, `<${arm.name}>`, context)
   );
   const resultReference = parseExactReference(
     document,
@@ -2732,7 +2809,8 @@ function validateBranchArm(
 function validateBranch(
   document: WomlSourceDocument,
   branch: WomlSourceElement,
-  registry: Set<string>
+  registry: Set<string>,
+  context: FlowValidationContext
 ): ValidatedBranch {
   const sourceElementName = branch.name as 'branch' | 'choose';
   const diagnosticPrefix =
@@ -2803,8 +2881,324 @@ function validateBranch(
     element: branch,
     metadata,
     arms: children.map(arm =>
-      validateBranchArm(document, arm, registry, sourceElementName)
+      validateBranchArm(document, arm, registry, sourceElementName, context)
     ),
+  };
+}
+
+function validateControlChoiceArm(
+  document: WomlSourceDocument,
+  arm: WomlSourceElement,
+  registry: Set<string>,
+  context: FlowValidationContext
+): ValidatedControlChoiceArm {
+  const testReference =
+    arm.name === 'when'
+      ? parseExactReference(document, requiredAttribute(document, arm, 'test'))
+      : undefined;
+  const children = elementChildren(document, arm);
+  const result = children.find(child => child.name === 'result');
+  if (result !== undefined) {
+    failValidation(
+      document,
+      'WOML_CHOOSE_RESULT_REQUIRES_ID',
+      'A control-only <choose> must not contain <result>; add an id to the choice to publish a merged result.',
+      result.openTagSpan,
+      'Either remove every <result>, or add id="..." and end every arm with exactly one <result>.'
+    );
+  }
+  if (children.length === 0) {
+    failValidation(
+      document,
+      'WOML_CHOOSE_ARM_EMPTY',
+      `<${arm.name}> in a control-only <choose> must contain at least one flow item.`,
+      arm.openTagSpan
+    );
+  }
+  const items = children.map(child =>
+    validateFlowItem(document, child, registry, `<${arm.name}>`, context)
+  );
+  return arm.name === 'when'
+    ? {
+        kind: 'when',
+        element: arm,
+        test: testReference,
+        items,
+      }
+    : { kind: 'otherwise', element: arm, items };
+}
+
+function validateControlChoice(
+  document: WomlSourceDocument,
+  choice: WomlSourceElement,
+  registry: Set<string>,
+  context: FlowValidationContext
+): ValidatedControlChoice {
+  const metadataAttribute =
+    choice.attributes.name ?? choice.attributes.description;
+  if (metadataAttribute !== undefined) {
+    failValidation(
+      document,
+      'WOML_CHOOSE_METADATA_REQUIRES_ID',
+      `Attribute "${metadataAttribute.name}" is available only on a result-producing <choose id="...">.`,
+      metadataAttribute.nameSpan,
+      'Remove the display metadata or add an id and one final <result> to every arm.'
+    );
+  }
+
+  const children = elementChildren(document, choice);
+  const whenCount = children.filter(child => child.name === 'when').length;
+  if (whenCount === 0) {
+    failValidation(
+      document,
+      'WOML_CHOOSE_WHEN_REQUIRED',
+      '<choose> requires at least one <when>.',
+      choice.openTagSpan
+    );
+  }
+  const otherwiseIndexes = children.flatMap((child, index) =>
+    child.name === 'otherwise' ? [index] : []
+  );
+  if (otherwiseIndexes.length === 0) {
+    failValidation(
+      document,
+      'WOML_CHOOSE_OTHERWISE_REQUIRED',
+      '<choose> requires exactly one final <otherwise>.',
+      choice.openTagSpan
+    );
+  }
+  if (otherwiseIndexes.length > 1) {
+    failValidation(
+      document,
+      'WOML_CHOOSE_OTHERWISE_ORDER',
+      '<otherwise> may appear exactly once and must be the final <choose> case.',
+      children[otherwiseIndexes[1]].openTagSpan
+    );
+  }
+  const otherwiseIndex = otherwiseIndexes[0];
+  if (otherwiseIndex !== children.length - 1) {
+    failValidation(
+      document,
+      'WOML_CHOOSE_OTHERWISE_ORDER',
+      '<otherwise> must be the final child of <choose>.',
+      children[otherwiseIndex].openTagSpan
+    );
+  }
+  for (let index = 0; index < otherwiseIndex; index += 1) {
+    if (children[index].name !== 'when') {
+      failValidation(
+        document,
+        'WOML_INVALID_STRUCTURE',
+        `<choose> cannot contain <${children[index].name}> outside a <when> or <otherwise> arm.`,
+        children[index].openTagSpan
+      );
+    }
+  }
+
+  return {
+    kind: 'controlChoice',
+    element: choice,
+    arms: children.map(arm =>
+      validateControlChoiceArm(document, arm, registry, context)
+    ),
+  };
+}
+
+interface ForkJoinToken {
+  readonly value: string;
+  readonly span: SourceSpan;
+}
+
+function forkJoinTokens(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute
+): readonly ForkJoinToken[] {
+  const sourceFile = new SourceFile(document.file, document.source);
+  const tokens = [...attribute.value.matchAll(/[^\t\n\r ]+/g)].map(match => {
+    const start = attribute.valueSpan.start.offset + (match.index ?? 0);
+    return {
+      value: match[0],
+      span: sourceFile.span(start, start + match[0].length),
+    };
+  });
+  if (tokens.length === 0) {
+    failValidation(
+      document,
+      'WOML_FORK_JOIN_INVALID',
+      'Fork join must be "all", "none", or one or more direct branch IDs.',
+      attribute.valueSpan
+    );
+  }
+  return tokens;
+}
+
+function validateFork(
+  document: WomlSourceDocument,
+  fork: WomlSourceElement,
+  registry: Set<string>
+): ValidatedFork {
+  const id = registerStructuralId(
+    document,
+    registry,
+    requiredAttribute(document, fork, 'id'),
+    'fork'
+  );
+  const children = elementChildren(document, fork);
+  if (children.length === 0) {
+    failValidation(
+      document,
+      'WOML_FORK_EMPTY',
+      `<fork id="${id}"> must contain at least one direct <branch>.`,
+      fork.openTagSpan
+    );
+  }
+  const invalidChild = children.find(child => child.name !== 'branch');
+  if (invalidChild !== undefined) {
+    failValidation(
+      document,
+      'WOML_FORK_CHILD_INVALID',
+      `<fork id="${id}"> accepts direct <branch> children only; found <${invalidChild.name}>.`,
+      invalidChild.openTagSpan
+    );
+  }
+
+  const branchIds = new Set<string>();
+  const branchContext: FlowValidationContext = { insideForkBranch: true };
+  const branches: ValidatedForkBranch[] = children.map(branch => {
+    for (const attribute of Object.values(branch.attributes)) {
+      if (attribute.name !== 'id') {
+        failValidation(
+          document,
+          'WOML_FORK_BRANCH_ATTRIBUTE_UNSUPPORTED',
+          `Fork branch <branch> accepts only "id"; found "${attribute.name}".`,
+          attribute.nameSpan
+        );
+      }
+    }
+    const idAttribute = requiredAttribute(document, branch, 'id');
+    const branchId = validateJavaScriptSafeId(
+      document,
+      idAttribute,
+      'branch'
+    );
+    if (branchId === 'all' || branchId === 'none') {
+      failValidation(
+        document,
+        'WOML_FORK_BRANCH_ID_RESERVED',
+        `Fork branch ID "${branchId}" is reserved by the join grammar.`,
+        idAttribute.valueSpan,
+        'Choose a descriptive branch ID such as instagram or analytics.'
+      );
+    }
+    if (branchIds.has(branchId)) {
+      failValidation(
+        document,
+        'WOML_FORK_BRANCH_ID_DUPLICATE',
+        `Fork branch ID "${branchId}" is duplicated inside <fork id="${id}">.`,
+        idAttribute.valueSpan
+      );
+    }
+    branchIds.add(branchId);
+    const body = elementChildren(document, branch);
+    if (body.length === 0) {
+      failValidation(
+        document,
+        'WOML_FORK_BRANCH_EMPTY',
+        `<branch id="${branchId}"> must contain at least one flow item.`,
+        branch.openTagSpan
+      );
+    }
+    return {
+      id: branchId,
+      element: branch,
+      items: body.map(item =>
+        validateFlowItem(
+          document,
+          item,
+          registry,
+          `<branch id="${branchId}">`,
+          branchContext
+        )
+      ),
+    };
+  });
+
+  const joinAttribute = fork.attributes.join;
+  if (joinAttribute === undefined) {
+    return {
+      kind: 'fork',
+      id,
+      element: fork,
+      branches,
+      joinedBranchIds: branches.map(branch => branch.id),
+    };
+  }
+
+  const tokens = forkJoinTokens(document, joinAttribute);
+  if (tokens.length === 1 && tokens[0].value === 'all') {
+    return {
+      kind: 'fork',
+      id,
+      element: fork,
+      branches,
+      joinedBranchIds: branches.map(branch => branch.id),
+    };
+  }
+  if (tokens.length === 1 && tokens[0].value === 'none') {
+    return {
+      kind: 'fork',
+      id,
+      element: fork,
+      branches,
+      joinedBranchIds: [],
+    };
+  }
+
+  const selected = new Set<string>();
+  for (const token of tokens) {
+    if (token.value === 'all' || token.value === 'none') {
+      failValidation(
+        document,
+        'WOML_FORK_JOIN_INVALID',
+        `Reserved join value "${token.value}" cannot be mixed with branch IDs.`,
+        token.span
+      );
+    }
+    if (!javascriptSafeIdPattern.test(token.value)) {
+      failValidation(
+        document,
+        'WOML_FORK_JOIN_INVALID',
+        `Fork join item "${token.value}" must be a JavaScript-safe branch ID.`,
+        token.span
+      );
+    }
+    if (!branchIds.has(token.value)) {
+      failValidation(
+        document,
+        'WOML_FORK_JOIN_UNKNOWN_BRANCH',
+        `Fork join names unknown direct branch "${token.value}".`,
+        token.span
+      );
+    }
+    if (selected.has(token.value)) {
+      failValidation(
+        document,
+        'WOML_FORK_JOIN_DUPLICATE',
+        `Fork join lists branch "${token.value}" more than once.`,
+        token.span
+      );
+    }
+    selected.add(token.value);
+  }
+
+  return {
+    kind: 'fork',
+    id,
+    element: fork,
+    branches,
+    joinedBranchIds: branches
+      .filter(branch => selected.has(branch.id))
+      .map(branch => branch.id),
   };
 }
 
@@ -2902,17 +3296,57 @@ function validateFlowItem(
   document: WomlSourceDocument,
   element: WomlSourceElement,
   registry: Set<string>,
-  parent: string
+  parent: string,
+  context: FlowValidationContext
 ): ValidatedFlowItem {
   if (element.name === 'step') return validateStep(document, element, registry);
-  if (element.name === 'branch' || element.name === 'choose') {
-    return validateBranch(document, element, registry);
+  if (element.name === 'branch') {
+    if (context.insideForkBranch) {
+      failValidation(
+        document,
+        'WOML_FORK_BRANCH_CHILD_INVALID',
+        'A fork-owned <branch> supports <step>, <choose>, <parallel>, and <approval> flow items; nested conditional flow uses <choose>.',
+        element.openTagSpan
+      );
+    }
+    const looksConditional = element.children.some(
+      child =>
+        child.kind === 'element' &&
+        (child.name === 'when' || child.name === 'otherwise')
+    );
+    if (!looksConditional) {
+      failValidation(
+        document,
+        'WOML_FORK_BRANCH_PLACEMENT_INVALID',
+        'A route <branch> is valid only as a direct child of <fork>. Conditional flow uses <choose>.',
+        element.openTagSpan,
+        'Wrap route branches in <fork>, or rename an intended conditional container to <choose>.'
+      );
+    }
+    return validateBranch(document, element, registry, context);
+  }
+  if (element.name === 'choose') {
+    return element.attributes.id === undefined
+      ? validateControlChoice(document, element, registry, context)
+      : validateBranch(document, element, registry, context);
+  }
+  if (element.name === 'fork') {
+    if (context.insideForkBranch) {
+      failValidation(
+        document,
+        'WOML_FORK_NESTED_UNSUPPORTED',
+        'A <fork> cannot appear anywhere inside a fork-owned branch in Fork v1.',
+        element.openTagSpan,
+        'Move the nested fan-out outside the branch or use <parallel> for direct concurrent steps.'
+      );
+    }
+    return validateFork(document, element, registry);
   }
   if (element.name === 'parallel') {
     return validateParallel(document, element, registry);
   }
   if (element.name === 'approval') {
-    return validateApproval(document, element, registry);
+    return validateApproval(document, element, registry, context);
   }
   if (element.name === 'when-approved' || element.name === 'when-rejected') {
     failValidation(
@@ -2944,7 +3378,8 @@ function assertReferenceAvailable(
   document: WomlSourceDocument,
   reference: ValidatedReference,
   allIds: ReadonlySet<string>,
-  availableIds: ReadonlySet<string>
+  availableIds: ReadonlySet<string>,
+  invisibleForkIds: ReadonlySet<string>
 ): void {
   const id = reference.structuralId;
   if (id === undefined) return;
@@ -2957,6 +3392,15 @@ function assertReferenceAvailable(
     );
   }
   if (!availableIds.has(id)) {
+    if (invisibleForkIds.has(id)) {
+      failCompile(
+        document,
+        'WOML_FORK_REFERENCE_NOT_VISIBLE',
+        `Output "${id}" belongs to an unjoined or sibling fork branch and is not visible on this route.`,
+        reference.span,
+        'Reference an output from the current branch, or include the producing branch in the fork join before reading it on the continuation route.'
+      );
+    }
     failCompile(
       document,
       'WOML_REFERENCE_NOT_DOMINATING',
@@ -2966,13 +3410,42 @@ function assertReferenceAvailable(
   }
 }
 
+function collectFlowOutputIds(
+  items: readonly ValidatedFlowItem[],
+  output = new Set<string>()
+): Set<string> {
+  for (const item of items) {
+    if (item.kind === 'step') {
+      output.add(item.id);
+    } else if (item.kind === 'parallel') {
+      for (const child of item.children) output.add(child.id);
+    } else if (item.kind === 'branch') {
+      output.add(item.id);
+      for (const arm of item.arms) collectFlowOutputIds(arm.items, output);
+    } else if (item.kind === 'controlChoice') {
+      for (const arm of item.arms) collectFlowOutputIds(arm.items, output);
+    } else if (item.kind === 'approval') {
+      output.add(item.id);
+      collectFlowOutputIds(item.approvedItems, output);
+      collectFlowOutputIds(item.rejectedItems, output);
+    } else {
+      for (const branch of item.branches) {
+        collectFlowOutputIds(branch.items, output);
+      }
+    }
+  }
+  return output;
+}
+
 function validateReferenceAvailability(
   document: WomlSourceDocument,
   items: readonly ValidatedFlowItem[],
   allIds: ReadonlySet<string>,
-  availableBefore: ReadonlySet<string> = new Set()
+  availableBefore: ReadonlySet<string> = new Set(),
+  invisibleBefore: ReadonlySet<string> = new Set()
 ): Set<string> {
   const available = new Set(availableBefore);
+  const invisible = new Set(invisibleBefore);
   for (const item of items) {
     if (item.kind === 'step') {
       available.add(item.id);
@@ -2991,29 +3464,109 @@ function validateReferenceAvailability(
         document,
         item.approvedItems,
         allIds,
-        armInput
+        armInput,
+        new Set(invisible)
       );
       validateReferenceAvailability(
         document,
         item.rejectedItems,
         allIds,
-        armInput
+        armInput,
+        new Set(invisible)
       );
       available.add(item.id);
       continue;
     }
 
+    if (item.kind === 'fork') {
+      const ownedIdsByBranch = new Map(
+        item.branches.map(branch => [
+          branch.id,
+          collectFlowOutputIds(branch.items),
+        ])
+      );
+      const allForkOutputIds = new Set(
+        [...ownedIdsByBranch.values()].flatMap(ids => [...ids])
+      );
+      const guaranteedByBranch = new Map<string, Set<string>>();
+      for (const branch of item.branches) {
+        const ownIds = ownedIdsByBranch.get(branch.id)!;
+        const siblingIds = new Set(invisible);
+        for (const forkOutputId of allForkOutputIds) {
+          if (!ownIds.has(forkOutputId)) siblingIds.add(forkOutputId);
+        }
+        guaranteedByBranch.set(
+          branch.id,
+          validateReferenceAvailability(
+            document,
+            branch.items,
+            allIds,
+            new Set(available),
+            siblingIds
+          )
+        );
+      }
+      const joined = new Set(item.joinedBranchIds);
+      for (const branch of item.branches) {
+        const owned = ownedIdsByBranch.get(branch.id)!;
+        if (joined.has(branch.id)) {
+          const guaranteed = guaranteedByBranch.get(branch.id)!;
+          for (const id of owned) {
+            if (guaranteed.has(id)) available.add(id);
+          }
+        } else {
+          for (const id of owned) invisible.add(id);
+        }
+      }
+      continue;
+    }
+
+    if (item.kind === 'controlChoice') {
+      for (const arm of item.arms) {
+        if (arm.test !== undefined) {
+          assertReferenceAvailable(
+            document,
+            arm.test,
+            allIds,
+            available,
+            invisible
+          );
+        }
+        validateReferenceAvailability(
+          document,
+          arm.items,
+          allIds,
+          new Set(available),
+          new Set(invisible)
+        );
+      }
+      continue;
+    }
+
     for (const arm of item.arms) {
       if (arm.test !== undefined) {
-        assertReferenceAvailable(document, arm.test, allIds, available);
+        assertReferenceAvailable(
+          document,
+          arm.test,
+          allIds,
+          available,
+          invisible
+        );
       }
       const armAvailable = validateReferenceAvailability(
         document,
         arm.items,
         allIds,
-        available
+        available,
+        new Set(invisible)
       );
-      assertReferenceAvailable(document, arm.result, allIds, armAvailable);
+      assertReferenceAvailable(
+        document,
+        arm.result,
+        allIds,
+        armAvailable,
+        invisible
+      );
     }
     available.add(item.id);
   }
@@ -3036,7 +3589,13 @@ function validateSteps(
 
   const structuralIds = new Set<string>();
   const items = children.map(child =>
-    validateFlowItem(document, child, structuralIds, '<steps>')
+    validateFlowItem(
+      document,
+      child,
+      structuralIds,
+      '<steps>',
+      rootFlowValidationContext
+    )
   );
   validateReferenceAvailability(document, items, structuralIds);
 
@@ -3050,6 +3609,25 @@ function validateSteps(
       'Add a downstream <step> that builds the workflow result.'
     );
   }
+  if (
+    terminal?.kind === 'fork' &&
+    !items
+      .slice(0, -1)
+      .some(
+        item =>
+          item.kind === 'step' ||
+          item.kind === 'branch' ||
+          item.kind === 'approval'
+      )
+  ) {
+    failValidation(
+      document,
+      'WOML_FORK_TERMINAL_RESULT_REQUIRED',
+      `Terminal <fork id="${terminal.id}"> has no earlier value-producing main-route item to preserve as the workflow result.`,
+      terminal.element.openTagSpan,
+      'Add a value-producing <step> before the terminal fork or add a result-building step after it.'
+    );
+  }
 
   const findFirstBranch = (
     flowItems: readonly ValidatedFlowItem[]
@@ -3057,6 +3635,18 @@ function validateSteps(
     for (const item of flowItems) {
       if (item.kind === 'branch') {
         return item.element;
+      }
+      if (item.kind === 'controlChoice') {
+        for (const arm of item.arms) {
+          const nested = findFirstBranch(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+      if (item.kind === 'fork') {
+        for (const branch of item.branches) {
+          const nested = findFirstBranch(branch.items);
+          if (nested !== undefined) return nested;
+        }
       }
       if (item.kind === 'approval') {
         const approved = findFirstBranch(item.approvedItems);
@@ -3075,6 +3665,18 @@ function validateSteps(
       if (item.kind === 'branch') {
         for (const arm of item.arms) {
           const nested = findFirstParallel(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+      if (item.kind === 'controlChoice') {
+        for (const arm of item.arms) {
+          const nested = findFirstParallel(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+      if (item.kind === 'fork') {
+        for (const branch of item.branches) {
+          const nested = findFirstParallel(branch.items);
           if (nested !== undefined) return nested;
         }
       }
@@ -3098,6 +3700,18 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
+      if (item.kind === 'controlChoice') {
+        for (const arm of item.arms) {
+          const nested = findFirstApproval(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+      if (item.kind === 'fork') {
+        for (const branch of item.branches) {
+          const nested = findFirstApproval(branch.items);
+          if (nested !== undefined) return nested;
+        }
+      }
     }
     return undefined;
   };
@@ -3108,6 +3722,18 @@ function validateSteps(
       if (item.kind === 'branch') {
         for (const arm of item.arms) {
           const nested = findFirstNotification(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+      if (item.kind === 'controlChoice') {
+        for (const arm of item.arms) {
+          const nested = findFirstNotification(arm.items);
+          if (nested !== undefined) return nested;
+        }
+      }
+      if (item.kind === 'fork') {
+        for (const branch of item.branches) {
+          const nested = findFirstNotification(branch.items);
           if (nested !== undefined) return nested;
         }
       }
@@ -3125,6 +3751,33 @@ function validateSteps(
   const firstParallel = findFirstParallel(items);
   const firstApproval = findFirstApproval(items);
   const firstNotification = findFirstNotification(items);
+  const findFirstKind = (
+    flowItems: readonly ValidatedFlowItem[],
+    kind: 'fork' | 'controlChoice'
+  ): WomlSourceElement | undefined => {
+    for (const item of flowItems) {
+      if (item.kind === kind) return item.element;
+      if (item.kind === 'branch' || item.kind === 'controlChoice') {
+        for (const arm of item.arms) {
+          const nested = findFirstKind(arm.items, kind);
+          if (nested !== undefined) return nested;
+        }
+      } else if (item.kind === 'approval') {
+        const approved = findFirstKind(item.approvedItems, kind);
+        if (approved !== undefined) return approved;
+        const rejected = findFirstKind(item.rejectedItems, kind);
+        if (rejected !== undefined) return rejected;
+      } else if (item.kind === 'fork') {
+        for (const branch of item.branches) {
+          const nested = findFirstKind(branch.items, kind);
+          if (nested !== undefined) return nested;
+        }
+      }
+    }
+    return undefined;
+  };
+  const firstFork = findFirstKind(items, 'fork');
+  const firstControlChoice = findFirstKind(items, 'controlChoice');
 
   return {
     items,
@@ -3132,6 +3785,8 @@ function validateSteps(
     ...(firstParallel === undefined ? {} : { firstParallel }),
     ...(firstApproval === undefined ? {} : { firstApproval }),
     ...(firstNotification === undefined ? {} : { firstNotification }),
+    ...(firstFork === undefined ? {} : { firstFork }),
+    ...(firstControlChoice === undefined ? {} : { firstControlChoice }),
   };
 }
 
@@ -3415,7 +4070,10 @@ function lowerFlowItem(item: ValidatedFlowItem): LoweredFlowFragment {
   if (item.kind === 'step') return lowerStep(item);
   if (item.kind === 'branch') return lowerBranch(item);
   if (item.kind === 'parallel') return lowerParallel(item);
-  return lowerApproval(item);
+  if (item.kind === 'approval') return lowerApproval(item);
+  throw new Error(
+    'Model v13 flow reached legacy lowering before the FJ3 feature gate.'
+  );
 }
 
 function lowerFlowItems(
@@ -3803,6 +4461,18 @@ function compileValidatedWoml(
     lifecycle,
     runtimePolicy,
   } = validateDocument(document);
+  const modelV13Source = flow.firstFork ?? flow.firstControlChoice;
+  if (modelV13Source !== undefined) {
+    failCompile(
+      document,
+      'WOML_MODEL_V13_REQUIRED',
+      modelV13Source.name === 'fork'
+        ? '<fork> is valid WOML authoring, but its Model v13 lowering and Rust execution begin in FJ3.'
+        : 'An ID-less control-only <choose> is valid WOML authoring, but its Model v13 lowering begins in FJ3.',
+      modelV13Source.openTagSpan,
+      'The source passed FJ2 validation. Execute it after the Model v13 implementation is installed.'
+    );
+  }
   if (modules.length > 0 && moduleRuntime === undefined) {
     failCompile(
       document,
