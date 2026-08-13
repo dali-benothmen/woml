@@ -425,6 +425,10 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
       edge("inner-to-outer", "inner", "outer"),
       edge("outerFallback-to-outer", "outerFallback", "outer"),
     ],
+    forks: None,
+    choices: None,
+    context_visibility: None,
+    settlement: None,
   };
   workflow.validate_for_execution().unwrap();
   workflow

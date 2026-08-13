@@ -1575,10 +1575,9 @@ the definition's event vocabulary.
 Source positions, display names, timestamps, and random values never become
 compiled or durable choice identities.
 
-### 14.5 FJ2 fork and branch authoring profile
+### 14.5 Fork and branch authoring and Model v13 compilation
 
-FJ2 accepts and validates the minimal concurrent-route syntax before enabling
-its Model v13 lowering or Rust execution:
+The frontend accepts and validates the minimal concurrent-route syntax:
 
 ```xml
 <fork id="distribution" join="instagram facebook">
@@ -1621,10 +1620,14 @@ FJ2 also accepts an ID-less control-only `<choose>` whose non-empty arms omit
 existing `<choose id="...">` profile remains the form for a path-stable merged
 result.
 
-`validateWoml` accepts this authoring profile. `compileWoml`, `woml check`, and
-`woml run` report `WOML_MODEL_V13_REQUIRED` until FJ3 supplies the reviewed
-compiled DAG. This explicit gate prevents valid new markup from being lowered
-silently into an older execution model.
+`validateWoml` accepts this authoring profile, and `compileWoml` lowers it to
+Compiled Workflow Model v13. The graph records deterministic fork ownership,
+branch terminals, selected join membership, per-script context visibility, and
+one workflow-settlement boundary while preserving the main-route result.
+`woml check` therefore succeeds for valid fork source. Rust independently
+validates the Model v13 graph but deliberately reports
+`UNSUPPORTED_FORK_EXECUTION` if execution is requested before FJ5. FJ4 first
+makes fork progress durable and recoverable.
 
 ## 15. Attribute Values and Context References
 

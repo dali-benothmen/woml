@@ -9,10 +9,11 @@ use thiserror::Error;
 use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V10,
   COMPILED_MODEL_SCHEMA_VERSION_V11, COMPILED_MODEL_SCHEMA_VERSION_V12,
-  COMPILED_MODEL_SCHEMA_VERSION_V2, COMPILED_MODEL_SCHEMA_VERSION_V3,
-  COMPILED_MODEL_SCHEMA_VERSION_V4, COMPILED_MODEL_SCHEMA_VERSION_V5,
-  COMPILED_MODEL_SCHEMA_VERSION_V6, COMPILED_MODEL_SCHEMA_VERSION_V7,
-  COMPILED_MODEL_SCHEMA_VERSION_V8, COMPILED_MODEL_SCHEMA_VERSION_V9,
+  COMPILED_MODEL_SCHEMA_VERSION_V13, COMPILED_MODEL_SCHEMA_VERSION_V2,
+  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
+  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
+  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
+  COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,6 +167,56 @@ pub struct CompiledWorkflowGraph {
   pub entry_node_ids: Vec<String>,
   pub nodes: Vec<CompiledWorkflowNode>,
   pub edges: Vec<CompiledWorkflowEdge>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub forks: Option<Vec<CompiledFork>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub choices: Option<Vec<CompiledControlChoice>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub context_visibility: Option<Vec<CompiledContextVisibility>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub settlement: Option<CompiledWorkflowSettlement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledForkBranch {
+  pub branch_id: String,
+  pub entry_node_id: String,
+  pub terminal_node_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledFork {
+  pub fork_id: String,
+  pub open_node_id: String,
+  pub join_node_id: String,
+  pub branches: Vec<CompiledForkBranch>,
+  pub joined_branch_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledControlChoice {
+  pub choice_id: String,
+  pub selector_node_id: String,
+  pub join_node_id: String,
+  pub arm_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledContextVisibility {
+  pub node_id: String,
+  pub step_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledWorkflowSettlement {
+  pub node_id: String,
+  pub main_result_node_id: String,
+  pub owned_branch_terminal_node_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -374,6 +425,11 @@ pub enum ModelIssueCode {
   InvalidLifecycle,
   InvalidRuntimePolicy,
   UnsupportedRuntimePolicyExecution,
+  InvalidForkGraph,
+  InvalidControlChoice,
+  InvalidContextVisibility,
+  InvalidWorkflowSettlement,
+  UnsupportedForkExecution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -787,6 +843,13 @@ fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut V
     .iter()
     .map(|node| (node.id.as_str(), Vec::new()))
     .collect();
+  let control_choice_arm_ids: HashSet<&str> = workflow
+    .graph
+    .choices
+    .iter()
+    .flatten()
+    .flat_map(|choice| choice.arm_ids.iter().map(String::as_str))
+    .collect();
   for edge in &workflow.graph.edges {
     adjacency
       .entry(edge.from.as_str())
@@ -824,7 +887,9 @@ fn inspect_branch_contract(workflow: &CompiledWorkflowDefinition, issues: &mut V
 
     if let Some(branch_id) = edge.branch_id.as_deref() {
       groups.entry(branch_id).or_default().push(edge);
-    } else if matches!(edge.condition, EdgeCondition::Boolean { .. }) {
+    } else if matches!(edge.condition, EdgeCondition::Boolean { .. })
+      && !control_choice_arm_ids.contains(edge.id.as_str())
+    {
       issues.push(issue(
         ModelIssueCode::InvalidBranchGroup,
         format!("Boolean edge {:?} must carry a branchId.", edge.id),
@@ -1049,11 +1114,13 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
   };
   if !matches!(
     workflow.schema_version,
-    COMPILED_MODEL_SCHEMA_VERSION_V11 | COMPILED_MODEL_SCHEMA_VERSION_V12
+    COMPILED_MODEL_SCHEMA_VERSION_V11
+      | COMPILED_MODEL_SCHEMA_VERSION_V12
+      | COMPILED_MODEL_SCHEMA_VERSION_V13
   ) {
     issues.push(issue(
       ModelIssueCode::InvalidLifecycle,
-      "lifecycle is available only in compiled Model v11 or v12.",
+      "lifecycle is available only in compiled Model v11 or later.",
     ));
     return;
   }
@@ -1169,7 +1236,7 @@ fn inspect_runtime_policy_contract(
   issues: &mut Vec<ModelIssue>,
 ) {
   match (workflow.schema_version, &workflow.runtime_policy) {
-    (COMPILED_MODEL_SCHEMA_VERSION_V12, Some(policy)) => {
+    (COMPILED_MODEL_SCHEMA_VERSION_V12 | COMPILED_MODEL_SCHEMA_VERSION_V13, Some(policy)) => {
       let has_policy = policy.concurrency.is_some()
         || policy.timeout_ms.is_some()
         || policy.rate_limit.is_some()
@@ -1198,14 +1265,16 @@ fn inspect_runtime_policy_contract(
       {
         issues.push(issue(
           ModelIssueCode::InvalidRuntimePolicy,
-          "Model v12 runtimePolicy does not match the frozen Runtime Policy v1 contract.",
+          "Model v12+ runtimePolicy does not match the frozen Runtime Policy v1 contract.",
         ));
       }
     }
-    (COMPILED_MODEL_SCHEMA_VERSION_V12, None) => issues.push(issue(
-      ModelIssueCode::InvalidRuntimePolicy,
-      "Compiled Model v12 requires runtimePolicy.",
-    )),
+    (COMPILED_MODEL_SCHEMA_VERSION_V12 | COMPILED_MODEL_SCHEMA_VERSION_V13, None) => {
+      issues.push(issue(
+        ModelIssueCode::InvalidRuntimePolicy,
+        "Compiled Model v12+ requires runtimePolicy.",
+      ))
+    }
     (_, Some(_)) => issues.push(issue(
       ModelIssueCode::InvalidRuntimePolicy,
       "runtimePolicy is unavailable before compiled Model v12.",
@@ -1698,6 +1767,308 @@ fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
   }
 }
 
+fn empty_control_node(node: Option<&&CompiledWorkflowNode>, handler: &str) -> bool {
+  node.is_some_and(|node| {
+    node.handler == handler
+      && node.timeout_ms.is_none()
+      && node.retry_policy.is_none()
+      && node.script_runtime.is_none()
+      && node.metadata.is_none()
+      && matches!(&node.inputs, ValueExpression::Object { fields } if fields.is_empty())
+  })
+}
+
+fn inspect_fork_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec<ModelIssue>) {
+  let descriptors = (
+    &workflow.graph.forks,
+    &workflow.graph.choices,
+    &workflow.graph.context_visibility,
+    &workflow.graph.settlement,
+  );
+  if workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V13 {
+    if !matches!(descriptors, (None, None, None, None)) {
+      issues.push(issue(
+        ModelIssueCode::InvalidForkGraph,
+        "Fork graph metadata is available only in compiled Model v13.",
+      ));
+    }
+    return;
+  }
+  let (Some(forks), Some(choices), Some(visibility), Some(settlement)) = descriptors else {
+    issues.push(issue(
+      ModelIssueCode::InvalidForkGraph,
+      "Model v13 requires forks, choices, contextVisibility, and settlement descriptors.",
+    ));
+    return;
+  };
+  let nodes: HashMap<&str, &CompiledWorkflowNode> = workflow
+    .graph
+    .nodes
+    .iter()
+    .map(|node| (node.id.as_str(), node))
+    .collect();
+  let mut incoming: HashMap<&str, Vec<&CompiledWorkflowEdge>> = HashMap::new();
+  let mut outgoing: HashMap<&str, Vec<&CompiledWorkflowEdge>> = HashMap::new();
+  for edge in &workflow.graph.edges {
+    incoming.entry(edge.to.as_str()).or_default().push(edge);
+    outgoing.entry(edge.from.as_str()).or_default().push(edge);
+  }
+  let mut fork_ids = HashSet::new();
+  let mut described_fork_nodes = HashSet::new();
+  let mut all_owned_terminals = Vec::new();
+  let mut all_branch_route_nodes = HashSet::new();
+  for fork in forks {
+    let expected_open = format!("__woml_fork__{}__open", fork.fork_id);
+    let expected_join = format!("__woml_fork__{}__join", fork.fork_id);
+    let mut valid = valid_public_structural_id(&fork.fork_id)
+      && fork_ids.insert(fork.fork_id.as_str())
+      && fork.open_node_id == expected_open
+      && fork.join_node_id == expected_join
+      && empty_control_node(nodes.get(fork.open_node_id.as_str()), "engine.fork-open")
+      && empty_control_node(nodes.get(fork.join_node_id.as_str()), "engine.fork-join")
+      && !fork.branches.is_empty();
+    described_fork_nodes.insert(fork.open_node_id.as_str());
+    described_fork_nodes.insert(fork.join_node_id.as_str());
+    let mut branch_ids = HashSet::new();
+    let mut terminal_by_branch = HashMap::new();
+    for branch in &fork.branches {
+      let expected_terminal = format!(
+        "__woml_fork__{}__{}__terminal",
+        fork.fork_id, branch.branch_id
+      );
+      valid &= valid_public_structural_id(&branch.branch_id)
+        && !matches!(branch.branch_id.as_str(), "all" | "none")
+        && branch_ids.insert(branch.branch_id.as_str())
+        && branch.terminal_node_id == expected_terminal
+        && nodes.contains_key(branch.entry_node_id.as_str())
+        && empty_control_node(
+          nodes.get(branch.terminal_node_id.as_str()),
+          "engine.fork-branch-terminal",
+        );
+      described_fork_nodes.insert(branch.terminal_node_id.as_str());
+      all_owned_terminals.push(branch.terminal_node_id.as_str());
+      terminal_by_branch.insert(branch.branch_id.as_str(), branch.terminal_node_id.as_str());
+      let entry_incoming = incoming
+        .get(branch.entry_node_id.as_str())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+      valid &= entry_incoming.len() == 1
+        && entry_incoming[0].from == fork.open_node_id
+        && matches!(entry_incoming[0].condition, EdgeCondition::Always);
+
+      let mut pending = vec![branch.entry_node_id.as_str()];
+      let mut route_nodes = HashSet::new();
+      let mut reached_terminal = false;
+      while let Some(node_id) = pending.pop() {
+        if !route_nodes.insert(node_id) {
+          continue;
+        }
+        if node_id == branch.terminal_node_id {
+          reached_terminal = true;
+          continue;
+        }
+        for edge in outgoing.get(node_id).into_iter().flatten() {
+          if edge.to != fork.join_node_id && edge.to != settlement.node_id {
+            pending.push(edge.to.as_str());
+          }
+        }
+      }
+      valid &= reached_terminal && all_branch_route_nodes.is_disjoint(&route_nodes);
+      all_branch_route_nodes.extend(route_nodes);
+    }
+    let canonical_joined: Vec<_> = fork
+      .branches
+      .iter()
+      .filter(|branch| fork.joined_branch_ids.contains(&branch.branch_id))
+      .map(|branch| branch.branch_id.as_str())
+      .collect();
+    let configured_joined: Vec<_> = fork.joined_branch_ids.iter().map(String::as_str).collect();
+    valid &= configured_joined == canonical_joined
+      && configured_joined.iter().collect::<HashSet<_>>().len() == configured_joined.len()
+      && configured_joined.iter().all(|id| branch_ids.contains(id));
+    let open_edges = outgoing
+      .get(fork.open_node_id.as_str())
+      .map(Vec::as_slice)
+      .unwrap_or_default();
+    valid &= fork.branches.iter().all(|branch| {
+      open_edges.iter().any(|edge| {
+        edge.to == branch.entry_node_id && matches!(edge.condition, EdgeCondition::Always)
+      })
+    });
+    let join_sources: Vec<_> = incoming
+      .get(fork.join_node_id.as_str())
+      .into_iter()
+      .flatten()
+      .map(|edge| edge.from.as_str())
+      .collect();
+    let expected_join_sources: Vec<_> = if configured_joined.is_empty() {
+      vec![fork.open_node_id.as_str()]
+    } else {
+      configured_joined
+        .iter()
+        .filter_map(|id| terminal_by_branch.get(id).copied())
+        .collect()
+    };
+    valid &= join_sources == expected_join_sources
+      && incoming
+        .get(fork.join_node_id.as_str())
+        .into_iter()
+        .flatten()
+        .all(|edge| matches!(edge.condition, EdgeCondition::Always));
+    if !valid {
+      issues.push(issue(
+        ModelIssueCode::InvalidForkGraph,
+        format!(
+          "Fork {:?} does not match the frozen Model v13 ownership, route, and join contract.",
+          fork.fork_id
+        ),
+      ));
+    }
+  }
+  for node in &workflow.graph.nodes {
+    if matches!(
+      node.handler.as_str(),
+      "engine.fork-open" | "engine.fork-branch-terminal" | "engine.fork-join"
+    ) && !described_fork_nodes.contains(node.id.as_str())
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidForkGraph,
+        format!("Fork control node {:?} has no owner descriptor.", node.id),
+      ));
+    }
+  }
+
+  let mut choice_ids = HashSet::new();
+  let mut described_choice_nodes = HashSet::new();
+  for choice in choices {
+    described_choice_nodes.insert(choice.selector_node_id.as_str());
+    described_choice_nodes.insert(choice.join_node_id.as_str());
+    let selection = outgoing
+      .get(choice.selector_node_id.as_str())
+      .map(Vec::as_slice)
+      .unwrap_or_default();
+    let joins = incoming
+      .get(choice.join_node_id.as_str())
+      .map(Vec::as_slice)
+      .unwrap_or_default();
+    let mut valid = choice.choice_id.starts_with("__woml_choice__")
+      && choice_ids.insert(choice.choice_id.as_str())
+      && choice.selector_node_id == format!("{}__select", choice.choice_id)
+      && choice.join_node_id == format!("{}__join", choice.choice_id)
+      && empty_control_node(
+        nodes.get(choice.selector_node_id.as_str()),
+        "engine.choice-select",
+      )
+      && empty_control_node(
+        nodes.get(choice.join_node_id.as_str()),
+        "engine.choice-join",
+      )
+      && choice.arm_ids.len() >= 2
+      && choice.arm_ids.iter().collect::<HashSet<_>>().len() == choice.arm_ids.len()
+      && selection.len() == choice.arm_ids.len()
+      && joins.len() == choice.arm_ids.len();
+    for (index, arm_id) in choice.arm_ids.iter().enumerate() {
+      let select = selection.get(index);
+      let join = joins.get(index);
+      valid &= arm_id.starts_with(&format!("{}:", choice.choice_id))
+        && select.is_some_and(|edge| {
+          edge.id == *arm_id
+            && edge.branch_id.is_none()
+            && edge.parallel_id.is_none()
+            && edge.approval_id.is_none()
+            && if index + 1 == choice.arm_ids.len() {
+              matches!(edge.condition, EdgeCondition::Always)
+            } else {
+              matches!(edge.condition, EdgeCondition::Boolean { .. })
+            }
+        })
+        && join.is_some_and(|edge| {
+          edge.id == format!("{arm_id}:join")
+            && edge.to == choice.join_node_id
+            && matches!(edge.condition, EdgeCondition::Always)
+        });
+    }
+    if !valid {
+      issues.push(issue(
+        ModelIssueCode::InvalidControlChoice,
+        format!(
+          "Control choice {:?} does not match the frozen selector, ordered-arm, and join contract.",
+          choice.choice_id
+        ),
+      ));
+    }
+  }
+  for node in &workflow.graph.nodes {
+    if matches!(
+      node.handler.as_str(),
+      "engine.choice-select" | "engine.choice-join"
+    ) && !described_choice_nodes.contains(node.id.as_str())
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidControlChoice,
+        format!("Control-choice node {:?} has no descriptor.", node.id),
+      ));
+    }
+  }
+
+  let script_nodes: Vec<_> = workflow
+    .graph
+    .nodes
+    .iter()
+    .filter(|node| node.handler == "runtime.script")
+    .collect();
+  let visibility_valid = visibility.len() == script_nodes.len()
+    && visibility.iter().zip(script_nodes).all(|(item, node)| {
+      item.node_id == node.id
+        && item.step_ids.iter().collect::<HashSet<_>>().len() == item.step_ids.len()
+        && item
+          .step_ids
+          .iter()
+          .all(|id| valid_public_structural_id(id) && nodes.contains_key(id.as_str()))
+    });
+  if !visibility_valid {
+    issues.push(issue(
+      ModelIssueCode::InvalidContextVisibility,
+      "Model v13 contextVisibility must describe every runtime.script node once in graph order.",
+    ));
+  }
+
+  let settlement_incoming = incoming
+    .get(settlement.node_id.as_str())
+    .map(Vec::as_slice)
+    .unwrap_or_default();
+  let owned: HashSet<_> = all_owned_terminals.iter().copied().collect();
+  let main_edges = settlement_incoming
+    .iter()
+    .filter(|edge| !owned.contains(edge.from.as_str()))
+    .count();
+  let settlement_valid = settlement.node_id == "__woml_workflow__settlement"
+    && empty_control_node(
+      nodes.get(settlement.node_id.as_str()),
+      "engine.workflow-settlement",
+    )
+    && nodes.contains_key(settlement.main_result_node_id.as_str())
+    && settlement
+      .owned_branch_terminal_node_ids
+      .iter()
+      .map(String::as_str)
+      .eq(all_owned_terminals.iter().copied())
+    && main_edges == 1
+    && settlement_incoming.len() == all_owned_terminals.len() + 1
+    && settlement_incoming
+      .iter()
+      .all(|edge| matches!(edge.condition, EdgeCondition::Always))
+    && outgoing
+      .get(settlement.node_id.as_str())
+      .is_none_or(Vec::is_empty);
+  if !settlement_valid {
+    issues.push(issue(
+      ModelIssueCode::InvalidWorkflowSettlement,
+      "Model v13 settlement must preserve one main result and depend on the main continuation plus every owned branch terminal.",
+    ));
+  }
+}
+
 impl CompiledWorkflowDefinition {
   pub fn runtime_policy_hash(&self) -> Option<String> {
     let policy = self.runtime_policy.as_ref()?;
@@ -1933,6 +2304,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V10
         | COMPILED_MODEL_SCHEMA_VERSION_V11
         | COMPILED_MODEL_SCHEMA_VERSION_V12
+        | COMPILED_MODEL_SCHEMA_VERSION_V13
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -1968,7 +2340,8 @@ impl CompiledWorkflowDefinition {
         COMPILED_MODEL_SCHEMA_VERSION_V9
         | COMPILED_MODEL_SCHEMA_VERSION_V10
         | COMPILED_MODEL_SCHEMA_VERSION_V11
-        | COMPILED_MODEL_SCHEMA_VERSION_V12,
+        | COMPILED_MODEL_SCHEMA_VERSION_V12
+        | COMPILED_MODEL_SCHEMA_VERSION_V13,
         Some(runtime),
       ) => {
         let reserved = [
@@ -2029,6 +2402,7 @@ impl CompiledWorkflowDefinition {
         COMPILED_MODEL_SCHEMA_VERSION_V10
           | COMPILED_MODEL_SCHEMA_VERSION_V11
           | COMPILED_MODEL_SCHEMA_VERSION_V12
+          | COMPILED_MODEL_SCHEMA_VERSION_V13
       )
     {
       issues.push(issue(
@@ -2370,6 +2744,7 @@ impl CompiledWorkflowDefinition {
     inspect_branch_contract(self, &mut issues);
     inspect_parallel_contract(self, &mut issues);
     inspect_approval_contract(self, &mut issues);
+    inspect_fork_contract(self, &mut issues);
     issues
   }
 
@@ -2380,6 +2755,13 @@ impl CompiledWorkflowDefinition {
     allow_retry: bool,
     durable: bool,
   ) {
+    if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13 {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedForkExecution,
+        "Compiled Model v13 passed structural validation, but fork execution begins in FJ5.",
+      ));
+      return;
+    }
     if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V12 && !durable {
       issues.push(issue(
         ModelIssueCode::UnsupportedRuntimePolicyExecution,

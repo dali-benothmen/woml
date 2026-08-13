@@ -8,13 +8,18 @@ import {
   type CompiledLifecycleHookV1,
   type CompiledModuleRuntimeV1,
   type CompiledRuntimePolicyV1,
+  type CompiledControlChoiceV1,
+  type CompiledContextVisibilityV1,
+  type CompiledForkV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowDefinitionV10,
   type CompiledWorkflowDefinitionV11,
   type CompiledWorkflowDefinitionV12,
+  type CompiledWorkflowDefinitionV13,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
+  type CompiledWorkflowGraphV13,
   type CompiledWorkflowMetadata,
   type CompiledWorkflowNode,
   type ContextReferenceExpression,
@@ -289,6 +294,18 @@ interface LoweredFlowFragment {
   readonly exitId: string;
   readonly nodes: readonly CompiledWorkflowNode[];
   readonly edges: readonly CompiledWorkflowEdge[];
+}
+
+interface LoweredV13FlowFragment extends LoweredFlowFragment {
+  readonly visibleAfter: ReadonlySet<string>;
+  readonly lastResultNodeId?: string;
+}
+
+interface V13LoweringState {
+  readonly forks: CompiledForkV1[];
+  readonly choices: CompiledControlChoiceV1[];
+  readonly contextVisibility: CompiledContextVisibilityV1[];
+  readonly ownedBranchTerminalNodeIds: string[];
 }
 
 const supportedElements = new Set([
@@ -4100,6 +4117,464 @@ function lowerFlowItems(
   };
 }
 
+function v13EmptyEngineNode(
+  id: string,
+  handler: string
+): CompiledWorkflowNode {
+  return {
+    id,
+    handler,
+    inputs: { kind: 'object', fields: {} },
+  };
+}
+
+function lowerStepV13(
+  step: ValidatedStep,
+  visibleBefore: ReadonlySet<string>,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  state.contextVisibility.push({
+    nodeId: step.id,
+    stepIds: [...visibleBefore],
+  });
+  const fragment = lowerStep(step);
+  return {
+    ...fragment,
+    visibleAfter: new Set([...visibleBefore, step.id]),
+    lastResultNodeId: step.id,
+  };
+}
+
+function lowerParallelV13(
+  parallel: ValidatedParallel,
+  visibleBefore: ReadonlySet<string>,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  for (const child of parallel.children) {
+    state.contextVisibility.push({
+      nodeId: child.id,
+      stepIds: [...visibleBefore],
+    });
+  }
+  const fragment = lowerParallel(parallel);
+  return {
+    ...fragment,
+    visibleAfter: new Set([
+      ...visibleBefore,
+      ...parallel.children.map(child => child.id),
+    ]),
+  };
+}
+
+function lowerResultChoiceV13(
+  choice: ValidatedBranch,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const selectorId = `__woml_branch__${choice.id}__select`;
+  const armFragments = choice.arms.map((arm, index) =>
+    lowerFlowItemsV13(
+      arm.items,
+      new Set(visibleBefore),
+      `${path}_arm_${index}`,
+      state
+    )
+  );
+  const armIds = choice.arms.map((arm, index) =>
+    arm.kind === 'when'
+      ? `${choice.id}:when:${index}`
+      : `${choice.id}:otherwise`
+  );
+  const selector: CompiledWorkflowNode = {
+    id: selectorId,
+    handler: 'engine.branch-select',
+    inputs: { kind: 'object', fields: {} },
+    ...(choice.metadata === undefined ? {} : { metadata: choice.metadata }),
+  };
+  const result: CompiledWorkflowNode = {
+    id: choice.id,
+    handler: 'engine.branch-result',
+    inputs: {
+      kind: 'object',
+      fields: Object.fromEntries(
+        choice.arms.map((arm, index) => [
+          armIds[index],
+          referenceExpression(arm.result),
+        ])
+      ),
+    },
+  };
+  const selectionEdges: CompiledWorkflowEdge[] = choice.arms.map(
+    (arm, index) => ({
+      id: armIds[index],
+      from: selectorId,
+      to: armFragments[index].entryId,
+      condition:
+        arm.kind === 'when'
+          ? { kind: 'boolean', value: referenceExpression(arm.test!) }
+          : { kind: 'always' },
+      branchId: choice.id,
+    })
+  );
+  return {
+    entryId: selectorId,
+    exitId: choice.id,
+    nodes: [
+      selector,
+      ...armFragments.flatMap(fragment => fragment.nodes),
+      result,
+    ],
+    edges: [
+      ...selectionEdges,
+      ...armFragments.flatMap(fragment => fragment.edges),
+      ...armFragments.map(fragment => alwaysEdge(fragment.exitId, choice.id)),
+    ],
+    visibleAfter: new Set([...visibleBefore, choice.id]),
+    lastResultNodeId: choice.id,
+  };
+}
+
+function lowerControlChoiceV13(
+  choice: ValidatedControlChoice,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const choiceId = `__woml_choice__${path}`;
+  const selectorNodeId = `${choiceId}__select`;
+  const joinNodeId = `${choiceId}__join`;
+  const armFragments = choice.arms.map((arm, index) =>
+    lowerFlowItemsV13(
+      arm.items,
+      new Set(visibleBefore),
+      `${path}_arm_${index}`,
+      state
+    )
+  );
+  const armIds = choice.arms.map((arm, index) =>
+    arm.kind === 'when'
+      ? `${choiceId}:when:${index}`
+      : `${choiceId}:otherwise`
+  );
+  state.choices.push({ choiceId, selectorNodeId, joinNodeId, armIds });
+  return {
+    entryId: selectorNodeId,
+    exitId: joinNodeId,
+    nodes: [
+      v13EmptyEngineNode(selectorNodeId, 'engine.choice-select'),
+      ...armFragments.flatMap(fragment => fragment.nodes),
+      v13EmptyEngineNode(joinNodeId, 'engine.choice-join'),
+    ],
+    edges: [
+      ...choice.arms.map((arm, index) => ({
+        id: armIds[index],
+        from: selectorNodeId,
+        to: armFragments[index].entryId,
+        condition:
+          arm.kind === 'when'
+            ? {
+                kind: 'boolean' as const,
+                value: referenceExpression(arm.test!),
+              }
+            : { kind: 'always' as const },
+      })),
+      ...armFragments.flatMap(fragment => fragment.edges),
+      ...armFragments.map((fragment, index) => ({
+        id: `${armIds[index]}:join`,
+        from: fragment.exitId,
+        to: joinNodeId,
+        condition: { kind: 'always' as const },
+      })),
+    ],
+    visibleAfter: new Set(visibleBefore),
+  };
+}
+
+function lowerApprovalV13(
+  approval: ValidatedApproval,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const joinId = `__woml_approval__${approval.id}__join`;
+  const armVisible = new Set([...visibleBefore, approval.id]);
+  const approved =
+    approval.approvedItems.length === 0
+      ? undefined
+      : lowerFlowItemsV13(
+          approval.approvedItems,
+          new Set(armVisible),
+          `${path}_approved`,
+          state
+        );
+  const rejected =
+    approval.rejectedItems.length === 0
+      ? undefined
+      : lowerFlowItemsV13(
+          approval.rejectedItems,
+          new Set(armVisible),
+          `${path}_rejected`,
+          state
+        );
+  const legacy = lowerApproval({
+    ...approval,
+    approvedItems: [],
+    rejectedItems: [],
+  });
+  const wait = legacy.nodes[0];
+  const join = legacy.nodes.at(-1)!;
+  const routeEdges = [
+    approvalRouteEdge(approval.id, 'approved', approved?.entryId ?? joinId),
+    approvalRouteEdge(approval.id, 'rejected', rejected?.entryId ?? joinId),
+  ];
+  const joinEdges: CompiledWorkflowEdge[] = [
+    ...(approved === undefined
+      ? []
+      : [
+          {
+            id: `${approval.id}:approved:join`,
+            from: approved.exitId,
+            to: joinId,
+            condition: { kind: 'always' as const },
+            approvalId: approval.id,
+          },
+        ]),
+    ...(rejected === undefined
+      ? []
+      : [
+          {
+            id: `${approval.id}:rejected:join`,
+            from: rejected.exitId,
+            to: joinId,
+            condition: { kind: 'always' as const },
+            approvalId: approval.id,
+          },
+        ]),
+  ];
+  return {
+    entryId: approval.id,
+    exitId: joinId,
+    nodes: [wait, ...(approved?.nodes ?? []), ...(rejected?.nodes ?? []), join],
+    edges: [
+      ...routeEdges,
+      ...(approved?.edges ?? []),
+      ...(rejected?.edges ?? []),
+      ...joinEdges,
+    ],
+    visibleAfter: new Set([...visibleBefore, approval.id]),
+    lastResultNodeId: approval.id,
+  };
+}
+
+function lowerForkV13(
+  fork: ValidatedFork,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const openNodeId = `__woml_fork__${fork.id}__open`;
+  const joinNodeId = `__woml_fork__${fork.id}__join`;
+  const branchFragments = fork.branches.map((branch, index) => ({
+    branch,
+    fragment: lowerFlowItemsV13(
+      branch.items,
+      new Set(visibleBefore),
+      `${path}_branch_${index}`,
+      state
+    ),
+    terminalNodeId: `__woml_fork__${fork.id}__${branch.id}__terminal`,
+  }));
+  const joined = new Set(fork.joinedBranchIds);
+  const descriptor: CompiledForkV1 = {
+    forkId: fork.id,
+    openNodeId,
+    joinNodeId,
+    branches: branchFragments.map(({ branch, fragment, terminalNodeId }) => ({
+      branchId: branch.id,
+      entryNodeId: fragment.entryId,
+      terminalNodeId,
+    })),
+    joinedBranchIds: fork.joinedBranchIds,
+  };
+  state.forks.push(descriptor);
+  state.ownedBranchTerminalNodeIds.push(
+    ...descriptor.branches.map(branch => branch.terminalNodeId)
+  );
+
+  const visibleAfter = new Set(visibleBefore);
+  for (const { branch, fragment } of branchFragments) {
+    if (!joined.has(branch.id)) continue;
+    const owned = collectFlowOutputIds(branch.items);
+    for (const id of owned) {
+      if (fragment.visibleAfter.has(id)) visibleAfter.add(id);
+    }
+  }
+
+  return {
+    entryId: openNodeId,
+    exitId: joinNodeId,
+    nodes: [
+      v13EmptyEngineNode(openNodeId, 'engine.fork-open'),
+      ...branchFragments.flatMap(({ fragment, terminalNodeId }) => [
+        ...fragment.nodes,
+        v13EmptyEngineNode(terminalNodeId, 'engine.fork-branch-terminal'),
+      ]),
+      v13EmptyEngineNode(joinNodeId, 'engine.fork-join'),
+    ],
+    edges: [
+      ...branchFragments.map(({ branch, fragment }) => ({
+        id: `${fork.id}:branch:${branch.id}`,
+        from: openNodeId,
+        to: fragment.entryId,
+        condition: { kind: 'always' as const },
+      })),
+      ...branchFragments.flatMap(({ branch, fragment, terminalNodeId }) => [
+        ...fragment.edges,
+        {
+          id: `${fork.id}:terminal:${branch.id}`,
+          from: fragment.exitId,
+          to: terminalNodeId,
+          condition: { kind: 'always' as const },
+        },
+      ]),
+      ...(fork.joinedBranchIds.length === 0
+        ? [
+            {
+              id: `${fork.id}:join:none`,
+              from: openNodeId,
+              to: joinNodeId,
+              condition: { kind: 'always' as const },
+            },
+          ]
+        : fork.joinedBranchIds.map(branchId => ({
+            id: `${fork.id}:join:${branchId}`,
+            from: descriptor.branches.find(
+              branch => branch.branchId === branchId
+            )!.terminalNodeId,
+            to: joinNodeId,
+            condition: { kind: 'always' as const },
+          }))),
+    ],
+    visibleAfter,
+  };
+}
+
+function lowerFlowItemV13(
+  item: ValidatedFlowItem,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  if (item.kind === 'step') return lowerStepV13(item, visibleBefore, state);
+  if (item.kind === 'parallel')
+    return lowerParallelV13(item, visibleBefore, state);
+  if (item.kind === 'branch')
+    return lowerResultChoiceV13(item, visibleBefore, path, state);
+  if (item.kind === 'controlChoice')
+    return lowerControlChoiceV13(item, visibleBefore, path, state);
+  if (item.kind === 'approval')
+    return lowerApprovalV13(item, visibleBefore, path, state);
+  return lowerForkV13(item, visibleBefore, path, state);
+}
+
+function lowerFlowItemsV13(
+  items: readonly ValidatedFlowItem[],
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const nodes: CompiledWorkflowNode[] = [];
+  const edges: CompiledWorkflowEdge[] = [];
+  let visible = new Set(visibleBefore);
+  let lastResultNodeId: string | undefined;
+  let entryId: string | undefined;
+  let exitId: string | undefined;
+  for (let index = 0; index < items.length; index += 1) {
+    const fragment = lowerFlowItemV13(
+      items[index],
+      visible,
+      `${path}_${index}`,
+      state
+    );
+    entryId ??= fragment.entryId;
+    if (exitId !== undefined) edges.push(alwaysEdge(exitId, fragment.entryId));
+    nodes.push(...fragment.nodes);
+    edges.push(...fragment.edges);
+    exitId = fragment.exitId;
+    visible = new Set(fragment.visibleAfter);
+    lastResultNodeId = fragment.lastResultNodeId ?? lastResultNodeId;
+  }
+  if (entryId === undefined || exitId === undefined) {
+    throw new Error('Model v13 lowering requires a non-empty flow.');
+  }
+  return {
+    entryId,
+    exitId,
+    nodes,
+    edges,
+    visibleAfter: visible,
+    ...(lastResultNodeId === undefined ? {} : { lastResultNodeId }),
+  };
+}
+
+function lowerWorkflowV13(
+  items: readonly ValidatedFlowItem[]
+): {
+  readonly fragment: LoweredV13FlowFragment;
+  readonly graph: CompiledWorkflowGraphV13;
+} {
+  const state: V13LoweringState = {
+    forks: [],
+    choices: [],
+    contextVisibility: [],
+    ownedBranchTerminalNodeIds: [],
+  };
+  const fragment = lowerFlowItemsV13(items, new Set(), 'root', state);
+  if (fragment.lastResultNodeId === undefined) {
+    throw new Error(
+      'Model v13 workflow has no deterministic value-producing main-route result.'
+    );
+  }
+  const settlementNodeId = '__woml_workflow__settlement';
+  const settlementEdges: CompiledWorkflowEdge[] = [
+    {
+      id: '__woml_workflow__:main:settlement',
+      from: fragment.exitId,
+      to: settlementNodeId,
+      condition: { kind: 'always' },
+    },
+    ...state.ownedBranchTerminalNodeIds.map(terminalNodeId => ({
+      id: `${terminalNodeId}:settlement`,
+      from: terminalNodeId,
+      to: settlementNodeId,
+      condition: { kind: 'always' as const },
+    })),
+  ];
+  return {
+    fragment,
+    graph: {
+      entryNodeIds: [fragment.entryId],
+      nodes: [
+        ...fragment.nodes,
+        v13EmptyEngineNode(
+          settlementNodeId,
+          'engine.workflow-settlement'
+        ),
+      ],
+      edges: [...fragment.edges, ...settlementEdges],
+      forks: state.forks,
+      choices: state.choices,
+      contextVisibility: state.contextVisibility,
+      settlement: {
+        nodeId: settlementNodeId,
+        mainResultNodeId: fragment.lastResultNodeId,
+        ownedBranchTerminalNodeIds: state.ownedBranchTerminalNodeIds,
+      },
+    },
+  };
+}
+
 function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
   if (trigger.kind === 'manual') {
     return {
@@ -4461,18 +4936,8 @@ function compileValidatedWoml(
     lifecycle,
     runtimePolicy,
   } = validateDocument(document);
-  const modelV13Source = flow.firstFork ?? flow.firstControlChoice;
-  if (modelV13Source !== undefined) {
-    failCompile(
-      document,
-      'WOML_MODEL_V13_REQUIRED',
-      modelV13Source.name === 'fork'
-        ? '<fork> is valid WOML authoring, but its Model v13 lowering and Rust execution begin in FJ3.'
-        : 'An ID-less control-only <choose> is valid WOML authoring, but its Model v13 lowering begins in FJ3.',
-      modelV13Source.openTagSpan,
-      'The source passed FJ2 validation. Execute it after the Model v13 implementation is installed.'
-    );
-  }
+  const usesModelV13 =
+    flow.firstFork !== undefined || flow.firstControlChoice !== undefined;
   if (modules.length > 0 && moduleRuntime === undefined) {
     failCompile(
       document,
@@ -4542,7 +5007,26 @@ function compileValidatedWoml(
       }
     }
   }
-  const lowered = lowerFlowItems(flow.items);
+  if (
+    usesModelV13 &&
+    !flow.items.some(
+      item =>
+        item.kind === 'step' ||
+        item.kind === 'branch' ||
+        item.kind === 'approval'
+    )
+  ) {
+    const source = flow.firstFork ?? flow.firstControlChoice!;
+    failCompile(
+      document,
+      'WOML_WORKFLOW_RESULT_REQUIRED',
+      'This Model v13 workflow has no deterministic value-producing item on its main route.',
+      source.openTagSpan,
+      'Add a main-route <step>, result-producing <choose id="...">, or <approval> before the terminal control structure.'
+    );
+  }
+  const loweredV13 = usesModelV13 ? lowerWorkflowV13(flow.items) : undefined;
+  const lowered = loweredV13?.fragment ?? lowerFlowItems(flow.items);
   const scriptAnalyses = collectScriptAnalyses(flow.items);
   const lifecycleScripts =
     lifecycle?.hooks.flatMap(hook =>
@@ -4590,6 +5074,7 @@ function compileValidatedWoml(
     );
   }
   const usesScriptRuntimeV1 =
+    usesModelV13 ||
     lifecycle !== undefined ||
     runtimePolicy !== undefined ||
     triggers.length === 0 ||
@@ -4603,15 +5088,25 @@ function compileValidatedWoml(
   const nodes = usesScriptRuntimeV1
     ? withScriptRuntimeBindings(lowered.nodes, scriptAnalyses)
     : lowered.nodes;
+  const baseGraph =
+    loweredV13 === undefined
+      ? ({
+          entryNodeIds: [lowered.entryId],
+          nodes,
+          edges: lowered.edges,
+        } satisfies CompiledWorkflowGraph)
+      : ({
+          ...loweredV13.graph,
+          nodes: withScriptRuntimeBindings(
+            loweredV13.graph.nodes,
+            scriptAnalyses
+          ),
+        } satisfies CompiledWorkflowGraphV13);
   const definition = {
     workflowId,
     ...(metadata === undefined ? {} : { metadata }),
     triggers: triggers.map(lowerTrigger),
-    graph: {
-      entryNodeIds: [lowered.entryId],
-      nodes,
-      edges: lowered.edges,
-    } satisfies CompiledWorkflowGraph,
+    graph: baseGraph,
     ...(moduleRuntime === undefined ? {} : { moduleRuntime }),
     ...(lifecycle === undefined
       ? {}
@@ -4620,8 +5115,17 @@ function compileValidatedWoml(
       ? {}
       : { runtimePolicy: runtimePolicy.value }),
   };
-  const compiled: CompiledWorkflowDefinition =
-    runtimePolicy !== undefined
+  const compiled: CompiledWorkflowDefinition = usesModelV13
+    ? ({
+        schemaVersion: 13,
+        ...definition,
+        graph: baseGraph as CompiledWorkflowGraphV13,
+        runtimePolicy: runtimePolicy?.value ?? {
+          profileVersion: 1,
+          concurrency: 1,
+        },
+      } satisfies CompiledWorkflowDefinitionV13)
+    : runtimePolicy !== undefined
       ? {
           schemaVersion: 12,
           ...definition,
@@ -4679,18 +5183,20 @@ export function compileWomlWithModules(
   moduleRuntime: CompiledModuleRuntimeV1
 ):
   | CompiledWorkflowDefinitionV9
-  | CompiledWorkflowDefinitionV10
-  | CompiledWorkflowDefinitionV11
-  | CompiledWorkflowDefinitionV12 {
+    | CompiledWorkflowDefinitionV10
+    | CompiledWorkflowDefinitionV11
+    | CompiledWorkflowDefinitionV12
+    | CompiledWorkflowDefinitionV13 {
   const compiled = compileValidatedWoml(document, moduleRuntime);
   if (
     compiled.schemaVersion !== 9 &&
     compiled.schemaVersion !== 10 &&
     compiled.schemaVersion !== 11 &&
-    compiled.schemaVersion !== 12
+    compiled.schemaVersion !== 12 &&
+    compiled.schemaVersion !== 13
   ) {
     throw new Error(
-      'module compilation did not produce Model v9, v10, v11, or v12'
+      'module compilation did not produce Model v9, v10, v11, v12, or v13'
     );
   }
   return compiled;

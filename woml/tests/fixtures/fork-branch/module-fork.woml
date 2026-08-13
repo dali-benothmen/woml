@@ -1,0 +1,17 @@
+<woml>
+  <imports>
+    <module name="spreadsheet" from="../modules/spreadsheet.ts" />
+  </imports>
+  <workflow id="module-fork" version="1.0.0">
+    <triggers><manual id="start" /></triggers>
+    <steps>
+      <step id="prepare"><script>return { rows: [] };</script></step>
+      <fork id="processors" join="all">
+        <branch id="cleanup">
+          <step id="cleanRows"><script>return services.spreadsheet.removeEmptyRows(context.steps.prepare.rows);</script></step>
+        </branch>
+      </fork>
+      <step id="finish"><script>return context.steps.cleanRows;</script></step>
+    </steps>
+  </workflow>
+</woml>

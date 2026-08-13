@@ -5,7 +5,10 @@ import { resolve } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020';
 
 import {
+  buildWomlExecutableDefinitionPackage,
+  canonicalizeWomlDefinitionPackage,
   compileWoml,
+  inspectCompiledWorkflowGraph,
   inspectWomlMigrationDiagnostics,
   parseWoml,
   validateWoml,
@@ -357,19 +360,7 @@ describe('FJ2 fork and branch authoring', () => {
     ]) {
       const document = parseWoml(fixture(name), { file: name });
       expect(() => validateWoml(document), name).not.toThrow();
-      try {
-        compileWoml(document);
-      } catch (error) {
-        expect(error).toBeInstanceOf(WomlCompileError);
-        expect((error as WomlCompileError).diagnostic.code).toBe(
-          'WOML_MODEL_V13_REQUIRED'
-        );
-        expect((error as WomlCompileError).diagnostic.location.start.offset).toBe(
-          fixture(name).indexOf('<fork')
-        );
-        continue;
-      }
-      throw new Error(`${name} bypassed the Model v13 execution gate.`);
+      expect(compileWoml(document).schemaVersion).toBe(13);
     }
   });
 
@@ -389,29 +380,25 @@ describe('FJ2 fork and branch authoring', () => {
     ).not.toThrow();
   });
 
-  test('validates exact control-only choice shape and gates lowering at Model v13', () => {
+  test('validates exact control-only choice shape for Model v13 lowering', () => {
     const source = fj2Workflow(`
       <step id="ready"><script>return true;</script></step>
       <choose>
         <when test="{{context.steps.ready}}"><step id="yes"><script>return 1;</script></step></when>
         <otherwise><step id="no"><script>return 0;</script></step></otherwise>
       </choose>
-      <step id="finish"><script>return context.steps.ready;</script></step>`);
+      <step id="finish"><script>return context.steps.ready;</script></step>`).replace(
+      'id="fj2-test"',
+      'id="control-choice"'
+    );
     const document = parseWoml(source, { file: 'control-choice.woml' });
     expect(() => validateWoml(document)).not.toThrow();
-    try {
-      compileWoml(document);
-    } catch (error) {
-      expect(error).toBeInstanceOf(WomlCompileError);
-      expect((error as WomlCompileError).diagnostic.code).toBe(
-        'WOML_MODEL_V13_REQUIRED'
-      );
-      expect((error as WomlCompileError).diagnostic.location.start.offset).toBe(
-        source.indexOf('<choose>')
-      );
-      return;
-    }
-    throw new Error('Control-only choice bypassed the Model v13 gate.');
+    const compiled = compileWoml(document);
+    expect(compiled.schemaVersion).toBe(13);
+    if (compiled.schemaVersion !== 13) throw new Error('Expected Model v13.');
+    expect(compiled.graph.choices[0].choiceId).toBe(
+      '__woml_choice__root_1'
+    );
   });
 
   test('rejects malformed fork and branch structure at the responsible source', () => {
@@ -555,5 +542,162 @@ describe('FJ2 fork and branch authoring', () => {
         })
       )
     ).not.toThrow();
+  });
+});
+
+describe('FJ3 Model v13 lowering', () => {
+  test('deep-equals the corrected reviewed join-all graph', () => {
+    const source = fixture('join-all.woml');
+    const compiled = compileWoml(
+      parseWoml(source, { file: 'join-all.woml' })
+    );
+    expect(compiled).toEqual(jsonFixture('join-all.compiled.v13.json'));
+    expect(inspectCompiledWorkflowGraph(compiled.graph, {
+      requireSingleTerminal: true,
+    })).toEqual([]);
+  });
+
+  test('lowers selected and none joins with deterministic visibility', () => {
+    const selected = compileWoml(
+      parseWoml(fixture('join-selected.woml'), {
+        file: 'join-selected.woml',
+      })
+    );
+    const none = compileWoml(
+      parseWoml(fixture('join-none.woml'), { file: 'join-none.woml' })
+    );
+    if (selected.schemaVersion !== 13 || none.schemaVersion !== 13) {
+      throw new Error('Expected Model v13.');
+    }
+    expect(selected.graph.forks[0].joinedBranchIds).toEqual([
+      'instagram',
+      'facebook',
+    ]);
+    expect(
+      selected.graph.contextVisibility.find(item => item.nodeId === 'finish')
+        ?.stepIds
+    ).toEqual(['prepare', 'instagramOutcome', 'publishFacebook']);
+    expect(none.graph.forks[0].joinedBranchIds).toEqual([]);
+    expect(
+      none.graph.edges.some(
+        edge =>
+          edge.from === '__woml_fork__analyticsFork__open' &&
+          edge.to === '__woml_fork__analyticsFork__join'
+      )
+    ).toBe(true);
+    expect(
+      none.graph.contextVisibility.find(item => item.nodeId === 'finish')
+        ?.stepIds
+    ).toEqual(['prepare']);
+  });
+
+  test('lowers control-only choice identities without publishing an output', () => {
+    const source = fj2Workflow(`
+      <step id="ready"><script>return true;</script></step>
+      <choose>
+        <when test="{{context.steps.ready}}"><step id="yes"><script>return 1;</script></step></when>
+        <otherwise><step id="no"><script>return 0;</script></step></otherwise>
+      </choose>
+      <step id="finish"><script>return context.steps.ready;</script></step>`).replace(
+      'id="fj2-test"',
+      'id="control-choice"'
+    );
+    const compiled = compileWoml(
+      parseWoml(source, { file: 'control-choice-v13.woml' })
+    );
+    if (compiled.schemaVersion !== 13) throw new Error('Expected Model v13.');
+    expect(compiled.graph.choices).toEqual([
+      {
+        choiceId: '__woml_choice__root_1',
+        selectorNodeId: '__woml_choice__root_1__select',
+        joinNodeId: '__woml_choice__root_1__join',
+        armIds: [
+          '__woml_choice__root_1:when:0',
+          '__woml_choice__root_1:otherwise',
+        ],
+      },
+    ]);
+    expect(
+      compiled.graph.contextVisibility.find(item => item.nodeId === 'finish')
+        ?.stepIds
+    ).toEqual(['ready']);
+    expect(compiled.graph.settlement.ownedBranchTerminalNodeIds).toEqual([]);
+    expect(inspectCompiledWorkflowGraph(compiled.graph, {
+      requireSingleTerminal: true,
+    })).toEqual([]);
+    const validateModel = contractValidators().getSchema(
+      'https://cronflow.dev/schemas/compiled-workflow-model/v13'
+    )!;
+    expect(
+      validateModel(compiled),
+      JSON.stringify(validateModel.errors, null, 2)
+    ).toBe(true);
+    expect(compiled).toEqual(
+      jsonFixture('control-choice.compiled.v13.json')
+    );
+  });
+
+  test('preserves root-first entry and a prior result for a terminal fork', () => {
+    const rootFirst = compileWoml(
+      parseWoml(fixture('root-first.woml'), { file: 'root-first.woml' })
+    );
+    const terminal = compileWoml(
+      parseWoml(fixture('terminal-fork.woml'), {
+        file: 'terminal-fork.woml',
+      })
+    );
+    if (rootFirst.schemaVersion !== 13 || terminal.schemaVersion !== 13) {
+      throw new Error('Expected Model v13.');
+    }
+    expect(rootFirst.graph.entryNodeIds).toEqual([
+      '__woml_fork__initialFanout__open',
+    ]);
+    expect(terminal.graph.settlement.mainResultNodeId).toBe('mainResult');
+    expect(
+      terminal.graph.edges.find(
+        edge => edge.id === '__woml_workflow__:main:settlement'
+      )?.from
+    ).toBe('__woml_fork__terminalDistribution__join');
+  });
+
+  test('rejects malformed ownership, visibility, choice, and settlement graphs', () => {
+    const compiled = compileWoml(
+      parseWoml(fixture('join-all.woml'), { file: 'join-all.woml' })
+    );
+    if (compiled.schemaVersion !== 13) throw new Error('Expected Model v13.');
+    const cases = [
+      ['INVALID_FORK_GRAPH', (graph: any) => graph.forks[0].joinedBranchIds.push('missing')],
+      ['INVALID_CONTEXT_VISIBILITY', (graph: any) => graph.contextVisibility.pop()],
+      ['INVALID_WORKFLOW_SETTLEMENT', (graph: any) => graph.settlement.mainResultNodeId = 'missing'],
+      ['INVALID_FORK_GRAPH', (graph: any) => graph.forks[0].branches[1].entryNodeId = 'publishInstagram'],
+    ] as const;
+    for (const [code, mutate] of cases) {
+      const graph = structuredClone(compiled.graph);
+      mutate(graph);
+      expect(
+        inspectCompiledWorkflowGraph(graph, { requireSingleTerminal: true }).some(
+          issue => issue.code === code
+        ),
+        code
+      ).toBe(true);
+    }
+  });
+
+  test('emits deterministic Definition Package v8 for module-backed forks', async () => {
+    const sourcePath = resolve(fixtureRoot, 'module-fork.woml');
+    const document = parseWoml(readFileSync(sourcePath, 'utf8'), {
+      file: sourcePath,
+    });
+    const options = { sourcePath, projectRoot: sharedFixtureRoot };
+    const first = await buildWomlExecutableDefinitionPackage(document, options);
+    const second = await buildWomlExecutableDefinitionPackage(document, options);
+    expect(first.schemaVersion).toBe(8);
+    expect(first.profile).toBe('woml.definition-package/v8');
+    expect(first.workflow.model.schemaVersion).toBe(13);
+    expect(first.runtimeReady).toBe(false);
+    expect(first.rootHash).toBe(second.rootHash);
+    expect(canonicalizeWomlDefinitionPackage(first)).toBe(
+      canonicalizeWomlDefinitionPackage(second)
+    );
   });
 });

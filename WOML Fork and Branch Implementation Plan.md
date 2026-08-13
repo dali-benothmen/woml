@@ -1,6 +1,6 @@
 # WOML Fork and Branch Implementation Plan
 
-Status: FJ0-FJ2 completed; Model v13 lowering begins in FJ3
+Status: FJ0-FJ3 completed; durable Event v12 state begins in FJ4
 
 ## 1. Product Outcome
 
@@ -816,7 +816,7 @@ publishable release.
 | FJ0 — completed | Freeze source, model, event, migration, context, error, and fixture contracts. | Every layer targets one reviewed fork/branch design before code changes. |
 | FJ1 — completed | Introduce canonical `<choose>` and the legacy conditional-source migration. | Conditions have the correct product name without breaking stored history or existing files abruptly. |
 | FJ2 — completed | Parse and validate minimal `<fork>`, `<branch>`, and `join` syntax. | WOML understands valid forks and explains invalid markup at the source. |
-| FJ3 | Lower forks into deterministic Model v13 DAGs with visibility and settlement boundaries. | TypeScript produces a complete engine-ready graph while Rust still gates execution. |
+| FJ3 — completed | Lower forks into deterministic Model v13 DAGs with visibility and settlement boundaries. | TypeScript produces a complete engine-ready graph while Rust still gates execution. |
 | FJ4 | Add Event v12, folding, persistence, inspection, and recovery projections. | Fork ownership and branch outcomes survive restart as durable truth. |
 | FJ5 | Execute concurrent branches and `join="all"` in Rust. | Multi-step branches run concurrently and the main route safely waits for all. |
 | FJ6 | Execute selected joins and `join="none"` with deterministic context filtering. | The main route can continue early without seeing timing-dependent outputs. |

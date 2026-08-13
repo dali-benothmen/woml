@@ -86,6 +86,7 @@
     "test:fj0": "bun test ../woml/tests/fork-branch-contracts.test.ts --test-name-pattern 'FJ0' && bun run typecheck",
     "test:fj1": "bun test ../woml/tests/fork-branch-contracts.test.ts tests/fj1-choose-cli.test.ts && bun test ../woml/tests/compiler.test.ts && bun run typecheck",
     "test:fj2": "bun test ../woml/tests/fork-branch-contracts.test.ts ../woml/tests/compiler.test.ts ../woml/tests/lifecycle-contracts.test.ts && bun test tests/fj1-choose-cli.test.ts tests/fj2-fork-cli.test.ts && bun run typecheck",
+    "test:fj3": "bun test ../woml/tests/fork-branch-contracts.test.ts ../woml/tests/compiler.test.ts ../woml/tests/lifecycle-contracts.test.ts && bun test tests/fj1-choose-cli.test.ts tests/fj2-fork-cli.test.ts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test fj3_fork_model && bun run typecheck",
     "test:production-release": "bun run test:pro9",
     "test:storage": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc9_storage",
     "test:cache": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine cache::tests --lib && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test sc10_cache",

@@ -3,7 +3,7 @@
   "$id": "https://woml.dev/schemas/woml-definition-package.v8.schema.json",
   "title": "WOML Fork and Branch Definition Package v8",
   "description": "Immutable compilation package carrying reviewed Model v13 fork contracts before runtime enablement.",
-  "x-status": "fork-branch-fj0-frozen",
+  "x-status": "fork-branch-fj3-implemented",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "profile", "executable", "runtimeReady", "workflow", "modules", "sources", "artifacts", "compiler", "permissions", "rootHash"],

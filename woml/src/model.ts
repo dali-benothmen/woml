@@ -228,10 +228,53 @@ export interface CompiledWorkflowEdge {
   readonly approvalId?: string;
 }
 
+export interface CompiledForkBranchV1 {
+  readonly branchId: string;
+  readonly entryNodeId: string;
+  readonly terminalNodeId: string;
+}
+
+export interface CompiledForkV1 {
+  readonly forkId: string;
+  readonly openNodeId: string;
+  readonly joinNodeId: string;
+  readonly branches: readonly CompiledForkBranchV1[];
+  readonly joinedBranchIds: readonly string[];
+}
+
+export interface CompiledControlChoiceV1 {
+  readonly choiceId: string;
+  readonly selectorNodeId: string;
+  readonly joinNodeId: string;
+  readonly armIds: readonly string[];
+}
+
+export interface CompiledContextVisibilityV1 {
+  readonly nodeId: string;
+  readonly stepIds: readonly string[];
+}
+
+export interface CompiledWorkflowSettlementV1 {
+  readonly nodeId: string;
+  readonly mainResultNodeId: string;
+  readonly ownedBranchTerminalNodeIds: readonly string[];
+}
+
 export interface CompiledWorkflowGraph {
   readonly entryNodeIds: readonly string[];
   readonly nodes: readonly CompiledWorkflowNode[];
   readonly edges: readonly CompiledWorkflowEdge[];
+  readonly forks?: readonly CompiledForkV1[];
+  readonly choices?: readonly CompiledControlChoiceV1[];
+  readonly contextVisibility?: readonly CompiledContextVisibilityV1[];
+  readonly settlement?: CompiledWorkflowSettlementV1;
+}
+
+export interface CompiledWorkflowGraphV13 extends CompiledWorkflowGraph {
+  readonly forks: readonly CompiledForkV1[];
+  readonly choices: readonly CompiledControlChoiceV1[];
+  readonly contextVisibility: readonly CompiledContextVisibilityV1[];
+  readonly settlement: CompiledWorkflowSettlementV1;
 }
 
 interface CompiledWorkflowDefinitionBase {
@@ -308,6 +351,15 @@ export interface CompiledWorkflowDefinitionV12
   readonly runtimePolicy: CompiledRuntimePolicyV1;
 }
 
+export interface CompiledWorkflowDefinitionV13
+  extends Omit<CompiledWorkflowDefinitionBase, 'graph'> {
+  readonly schemaVersion: 13;
+  readonly graph: CompiledWorkflowGraphV13;
+  readonly moduleRuntime?: CompiledModuleRuntimeV1;
+  readonly lifecycle?: CompiledLifecycleDefinitionV1;
+  readonly runtimePolicy: CompiledRuntimePolicyV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -320,7 +372,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV9
   | CompiledWorkflowDefinitionV10
   | CompiledWorkflowDefinitionV11
-  | CompiledWorkflowDefinitionV12;
+  | CompiledWorkflowDefinitionV12
+  | CompiledWorkflowDefinitionV13;
 
 export interface CompiledGraphIssue {
   readonly code:
@@ -337,7 +390,11 @@ export interface CompiledGraphIssue {
     | 'INVALID_BRANCH_RESULT'
     | 'INVALID_PARALLEL_GROUP'
     | 'INVALID_APPROVAL_GROUP'
-    | 'INVALID_NOTIFICATION_GROUP';
+    | 'INVALID_NOTIFICATION_GROUP'
+    | 'INVALID_FORK_GRAPH'
+    | 'INVALID_CONTROL_CHOICE'
+    | 'INVALID_CONTEXT_VISIBILITY'
+    | 'INVALID_WORKFLOW_SETTLEMENT';
   readonly message: string;
 }
 
@@ -470,6 +527,7 @@ export function inspectCompiledWorkflowGraph(
   inspectBranchGroups(graph, issues);
   inspectParallelGroups(graph, issues);
   inspectApprovalGroups(graph, issues);
+  inspectForkGraph(graph, issues);
 
   return issues;
 }
@@ -904,10 +962,16 @@ function inspectBranchGroups(
 ): void {
   const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const groups = new Map<string, CompiledWorkflowEdge[]>();
+  const controlChoiceEdges = new Set(
+    (graph.choices ?? []).flatMap(choice => choice.armIds)
+  );
 
   for (const edge of graph.edges) {
     if (edge.branchId === undefined) {
-      if (edge.condition.kind === 'boolean') {
+      if (
+        edge.condition.kind === 'boolean' &&
+        !controlChoiceEdges.has(edge.id)
+      ) {
         issues.push({
           code: 'INVALID_BRANCH_GROUP',
           message: `Boolean edge "${edge.id}" must carry a branchId.`,
@@ -1053,5 +1117,308 @@ function inspectBranchGroups(
         message: `Branch result "${node.id}" has no matching branch edge group.`,
       });
     }
+  }
+}
+
+function emptyEngineNode(
+  node: CompiledWorkflowNode | undefined,
+  handler: string
+): boolean {
+  return (
+    node?.handler === handler &&
+    node.timeoutMs === undefined &&
+    node.retryPolicy === undefined &&
+    node.scriptRuntime === undefined &&
+    node.metadata === undefined &&
+    node.inputs.kind === 'object' &&
+    Object.keys(node.inputs.fields).length === 0
+  );
+}
+
+function inspectForkGraph(
+  graph: CompiledWorkflowGraph,
+  issues: CompiledGraphIssue[]
+): void {
+  const forks = graph.forks;
+  const choices = graph.choices;
+  const visibility = graph.contextVisibility;
+  const settlement = graph.settlement;
+  const hasV13Node = graph.nodes.some(node =>
+    [
+      'engine.fork-open',
+      'engine.fork-branch-terminal',
+      'engine.fork-join',
+      'engine.choice-select',
+      'engine.choice-join',
+      'engine.workflow-settlement',
+    ].includes(node.handler)
+  );
+  const hasAnyDescriptor =
+    forks !== undefined ||
+    choices !== undefined ||
+    visibility !== undefined ||
+    settlement !== undefined;
+  if (!hasV13Node && !hasAnyDescriptor) return;
+  if (
+    forks === undefined ||
+    choices === undefined ||
+    visibility === undefined ||
+    settlement === undefined
+  ) {
+    issues.push({
+      code: 'INVALID_FORK_GRAPH',
+      message:
+        'Model v13 graph metadata requires forks, choices, contextVisibility, and settlement together.',
+    });
+    return;
+  }
+
+  const nodes = new Map(graph.nodes.map(node => [node.id, node]));
+  const outgoing = new Map<string, CompiledWorkflowEdge[]>();
+  const incoming = new Map<string, CompiledWorkflowEdge[]>();
+  for (const node of graph.nodes) {
+    outgoing.set(node.id, []);
+    incoming.set(node.id, []);
+  }
+  for (const edge of graph.edges) {
+    outgoing.get(edge.from)?.push(edge);
+    incoming.get(edge.to)?.push(edge);
+  }
+
+  const seenForkIds = new Set<string>();
+  const ownedTerminalIds: string[] = [];
+  const describedForkNodes = new Set<string>();
+  const routeOwners = new Map<string, string>();
+  for (const fork of forks) {
+    let valid =
+      publicStructuralIdPattern.test(fork.forkId) &&
+      !seenForkIds.has(fork.forkId) &&
+      fork.openNodeId === `__woml_fork__${fork.forkId}__open` &&
+      fork.joinNodeId === `__woml_fork__${fork.forkId}__join` &&
+      emptyEngineNode(nodes.get(fork.openNodeId), 'engine.fork-open') &&
+      emptyEngineNode(nodes.get(fork.joinNodeId), 'engine.fork-join') &&
+      fork.branches.length >= 1;
+    seenForkIds.add(fork.forkId);
+    describedForkNodes.add(fork.openNodeId);
+    describedForkNodes.add(fork.joinNodeId);
+
+    const branchIds = new Set<string>();
+    const terminalByBranch = new Map<string, string>();
+    for (const branch of fork.branches) {
+      const expectedTerminal = `__woml_fork__${fork.forkId}__${branch.branchId}__terminal`;
+      valid &&=
+        publicStructuralIdPattern.test(branch.branchId) &&
+        branch.branchId !== 'all' &&
+        branch.branchId !== 'none' &&
+        !branchIds.has(branch.branchId) &&
+        branch.terminalNodeId === expectedTerminal &&
+        nodes.has(branch.entryNodeId) &&
+        emptyEngineNode(
+          nodes.get(branch.terminalNodeId),
+          'engine.fork-branch-terminal'
+        );
+      branchIds.add(branch.branchId);
+      terminalByBranch.set(branch.branchId, branch.terminalNodeId);
+      ownedTerminalIds.push(branch.terminalNodeId);
+      describedForkNodes.add(branch.terminalNodeId);
+
+      const entryIncoming = incoming.get(branch.entryNodeId) ?? [];
+      valid &&=
+        entryIncoming.length === 1 &&
+        entryIncoming[0].from === fork.openNodeId &&
+        entryIncoming[0].condition.kind === 'always';
+
+      const pending = [branch.entryNodeId];
+      const visited = new Set<string>();
+      let reachedTerminal = false;
+      while (pending.length > 0) {
+        const nodeId = pending.pop()!;
+        if (visited.has(nodeId)) continue;
+        visited.add(nodeId);
+        if (nodeId === branch.terminalNodeId) {
+          reachedTerminal = true;
+          continue;
+        }
+        for (const edge of outgoing.get(nodeId) ?? []) {
+          if (
+            edge.to !== fork.joinNodeId &&
+            edge.to !== settlement.nodeId
+          ) {
+            pending.push(edge.to);
+          }
+        }
+      }
+      valid &&= reachedTerminal;
+      for (const nodeId of visited) {
+        const owner = routeOwners.get(nodeId);
+        if (owner !== undefined && owner !== `${fork.forkId}:${branch.branchId}`) {
+          valid = false;
+        }
+        routeOwners.set(nodeId, `${fork.forkId}:${branch.branchId}`);
+      }
+    }
+
+    const canonicalJoined = fork.branches
+      .filter(branch => fork.joinedBranchIds.includes(branch.branchId))
+      .map(branch => branch.branchId);
+    valid &&=
+      new Set(fork.joinedBranchIds).size === fork.joinedBranchIds.length &&
+      fork.joinedBranchIds.every(id => branchIds.has(id)) &&
+      JSON.stringify(canonicalJoined) === JSON.stringify(fork.joinedBranchIds);
+
+    const openEdges = outgoing.get(fork.openNodeId) ?? [];
+    const branchEntryIds = new Set(fork.branches.map(branch => branch.entryNodeId));
+    valid &&= fork.branches.every(branch =>
+      openEdges.some(
+        edge =>
+          edge.to === branch.entryNodeId && edge.condition.kind === 'always'
+      )
+    );
+    const joinSources = (incoming.get(fork.joinNodeId) ?? []).map(
+      edge => edge.from
+    );
+    const expectedJoinSources =
+      fork.joinedBranchIds.length === 0
+        ? [fork.openNodeId]
+        : fork.joinedBranchIds.map(id => terminalByBranch.get(id)!);
+    valid &&=
+      openEdges.every(
+        edge =>
+          branchEntryIds.has(edge.to) ||
+          (fork.joinedBranchIds.length === 0 && edge.to === fork.joinNodeId)
+      ) &&
+      JSON.stringify(joinSources) === JSON.stringify(expectedJoinSources) &&
+      (incoming.get(fork.joinNodeId) ?? []).every(
+        edge => edge.condition.kind === 'always'
+      );
+
+    if (!valid) {
+      issues.push({
+        code: 'INVALID_FORK_GRAPH',
+        message: `Fork "${fork.forkId}" does not match the frozen Model v13 ownership, route, and join contract.`,
+      });
+    }
+  }
+
+  for (const node of graph.nodes) {
+    if (
+      ['engine.fork-open', 'engine.fork-branch-terminal', 'engine.fork-join'].includes(
+        node.handler
+      ) &&
+      !describedForkNodes.has(node.id)
+    ) {
+      issues.push({
+        code: 'INVALID_FORK_GRAPH',
+        message: `Fork control node "${node.id}" is not owned by a fork descriptor.`,
+      });
+    }
+  }
+
+  const seenChoices = new Set<string>();
+  const describedChoiceNodes = new Set<string>();
+  for (const choice of choices) {
+    const validChoiceId = /^__woml_choice__[a-z0-9_]+$/.test(choice.choiceId);
+    let valid =
+      validChoiceId &&
+      !seenChoices.has(choice.choiceId) &&
+      choice.selectorNodeId === `${choice.choiceId}__select` &&
+      choice.joinNodeId === `${choice.choiceId}__join` &&
+      emptyEngineNode(nodes.get(choice.selectorNodeId), 'engine.choice-select') &&
+      emptyEngineNode(nodes.get(choice.joinNodeId), 'engine.choice-join') &&
+      choice.armIds.length >= 2 &&
+      new Set(choice.armIds).size === choice.armIds.length;
+    seenChoices.add(choice.choiceId);
+    describedChoiceNodes.add(choice.selectorNodeId);
+    describedChoiceNodes.add(choice.joinNodeId);
+    const selectionEdges = outgoing.get(choice.selectorNodeId) ?? [];
+    const joinEdges = incoming.get(choice.joinNodeId) ?? [];
+    valid &&=
+      selectionEdges.length === choice.armIds.length &&
+      joinEdges.length === choice.armIds.length;
+    choice.armIds.forEach((armId, index) => {
+      const select = selectionEdges[index];
+      const join = joinEdges[index];
+      valid &&=
+        armId.startsWith(`${choice.choiceId}:`) &&
+        select?.id === armId &&
+        select.branchId === undefined &&
+        select.parallelId === undefined &&
+        select.approvalId === undefined &&
+        (index === choice.armIds.length - 1
+          ? select.condition.kind === 'always'
+          : select.condition.kind === 'boolean') &&
+        join?.id === `${armId}:join` &&
+        join.to === choice.joinNodeId &&
+        join.condition.kind === 'always';
+    });
+    if (!valid) {
+      issues.push({
+        code: 'INVALID_CONTROL_CHOICE',
+        message: `Control choice "${choice.choiceId}" does not match the frozen selector, ordered-arm, and join contract.`,
+      });
+    }
+  }
+  for (const node of graph.nodes) {
+    if (
+      ['engine.choice-select', 'engine.choice-join'].includes(node.handler) &&
+      !describedChoiceNodes.has(node.id)
+    ) {
+      issues.push({
+        code: 'INVALID_CONTROL_CHOICE',
+        message: `Control-choice node "${node.id}" has no matching descriptor.`,
+      });
+    }
+  }
+
+  const runtimeScriptIds = graph.nodes
+    .filter(node => node.handler === 'runtime.script')
+    .map(node => node.id);
+  const visibleNodeIds = new Set<string>();
+  let visibilityValid = visibility.length === runtimeScriptIds.length;
+  visibility.forEach((item, index) => {
+    visibilityValid &&=
+      item.nodeId === runtimeScriptIds[index] &&
+      !visibleNodeIds.has(item.nodeId) &&
+      new Set(item.stepIds).size === item.stepIds.length &&
+      item.stepIds.every(
+        id => publicStructuralIdPattern.test(id) && nodes.has(id)
+      );
+    visibleNodeIds.add(item.nodeId);
+  });
+  if (!visibilityValid) {
+    issues.push({
+      code: 'INVALID_CONTEXT_VISIBILITY',
+      message:
+        'Model v13 contextVisibility must describe every runtime.script node once, in graph order, with existing public output IDs.',
+    });
+  }
+
+  const settlementIncoming = incoming.get(settlement.nodeId) ?? [];
+  const ownedInDocumentOrder = forks.flatMap(fork =>
+    fork.branches.map(branch => branch.terminalNodeId)
+  );
+  const ownedSet = new Set(ownedInDocumentOrder);
+  const nonBranchSettlementSources = settlementIncoming.filter(
+    edge => !ownedSet.has(edge.from)
+  );
+  const settlementValid =
+    settlement.nodeId === '__woml_workflow__settlement' &&
+    emptyEngineNode(
+      nodes.get(settlement.nodeId),
+      'engine.workflow-settlement'
+    ) &&
+    nodes.has(settlement.mainResultNodeId) &&
+    JSON.stringify(settlement.ownedBranchTerminalNodeIds) ===
+      JSON.stringify(ownedInDocumentOrder) &&
+    nonBranchSettlementSources.length === 1 &&
+    settlementIncoming.length === ownedInDocumentOrder.length + 1 &&
+    settlementIncoming.every(edge => edge.condition.kind === 'always') &&
+    (outgoing.get(settlement.nodeId)?.length ?? 0) === 0;
+  if (!settlementValid) {
+    issues.push({
+      code: 'INVALID_WORKFLOW_SETTLEMENT',
+      message:
+        'Model v13 settlement must preserve one main result and depend on the main continuation plus every owned branch terminal.',
+    });
   }
 }
