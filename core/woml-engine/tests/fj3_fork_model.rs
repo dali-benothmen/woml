@@ -67,14 +67,17 @@ fn rust_rejects_malformed_ownership_visibility_and_settlement() {
 }
 
 #[test]
-fn rust_structurally_accepts_v13_but_explicitly_gates_execution_until_fj5() {
-  let model = reviewed_model();
+fn rust_executes_join_all_v13_but_keeps_selected_joins_gated_until_fj6() {
+  let mut model = reviewed_model();
+  model.validate_for_durable_execution().unwrap();
+  model.graph.forks.as_mut().unwrap()[0]
+    .joined_branch_ids
+    .pop();
   let error = model.validate_for_durable_execution().unwrap_err();
-  assert_eq!(error.issues.len(), 1);
-  assert_eq!(
-    error.issues[0].code,
-    ModelIssueCode::UnsupportedForkExecution
-  );
+  assert!(error
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::UnsupportedForkExecution));
 }
 
 #[test]

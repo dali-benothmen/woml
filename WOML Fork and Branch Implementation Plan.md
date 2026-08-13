@@ -1,6 +1,6 @@
 # WOML Fork and Branch Implementation Plan
 
-Status: FJ0-FJ4 completed; concurrent fork execution begins in FJ5
+Status: FJ0-FJ5 completed; selected and non-blocking joins begin in FJ6
 
 ## 1. Product Outcome
 
@@ -818,7 +818,7 @@ publishable release.
 | FJ2 — completed | Parse and validate minimal `<fork>`, `<branch>`, and `join` syntax. | WOML understands valid forks and explains invalid markup at the source. |
 | FJ3 — completed | Lower forks into deterministic Model v13 DAGs with visibility and settlement boundaries. | TypeScript produces a complete engine-ready graph while Rust still gates execution. |
 | FJ4 — completed | Add Event v12, folding, persistence, inspection, and recovery projections. | Fork ownership and branch outcomes survive restart as durable truth. |
-| FJ5 | Execute concurrent branches and `join="all"` in Rust. | Multi-step branches run concurrently and the main route safely waits for all. |
+| FJ5 — completed | Execute concurrent branches and `join="all"` in Rust. | Multi-step branches run concurrently and the main route safely waits for all. |
 | FJ6 | Execute selected joins and `join="none"` with deterministic context filtering. | The main route can continue early without seeing timing-dependent outputs. |
 | FJ7 | Complete failure, cancellation, approval/retry/control-flow composition, CLI, and observability behavior. | Forks work inside real automations and remain operable in production. |
 | FJ8 | Harden recovery, compatibility, packaging, benchmarks, documentation, and release gates. | Forks and branches become a supported, publishable WOML language feature. |
@@ -980,7 +980,7 @@ Gate:
 Reviewed Event v12 histories round-trip through SQLite, fold identically after
 reopen, and recover to the same eligible work.
 
-### FJ5 — Execute concurrent branches and join all
+### FJ5 — Execute concurrent branches and join all — completed
 
 Changes:
 

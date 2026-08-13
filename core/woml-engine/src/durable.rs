@@ -2858,7 +2858,7 @@ impl DurableEventStore {
       return Err(DurableStoreError::WorkflowCallIdempotencyConflict);
     }
 
-    if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
       let queued: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM woml_runtime_policy_queue",
         [],
@@ -2879,7 +2879,7 @@ impl DurableEventStore {
         request.admitted_at.to_rfc3339(),
       ],
     )?;
-    let payload = if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    let payload = if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
       let policy_hash = workflow.runtime_policy_hash().ok_or_else(|| {
         DurableStoreError::Contract("Model v12 is missing its runtime policy identity.".to_string())
       })?;
@@ -3064,7 +3064,7 @@ impl DurableEventStore {
     workflow: &CompiledWorkflowDefinition,
     definition_hash: &str,
   ) -> Result<(), DurableStoreError> {
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
       return Ok(());
     }
     let policy_hash = workflow.runtime_policy_hash().ok_or_else(|| {
@@ -4657,13 +4657,19 @@ impl DurableEventStore {
         policy_now + chrono::Duration::milliseconds(i64::try_from(timeout_ms).unwrap_or(i64::MAX))
       });
       let mut events = events;
+      let event_schema_version = events
+        .first()
+        .map(|event| event.event_schema_version)
+        .ok_or_else(|| {
+          DurableStoreError::Contract("Policy run has no admission event.".to_string())
+        })?;
       append_to_history(
         &transaction,
         &mut events,
         run_id,
         generated_event_id(),
         policy_now,
-        RUN_EVENT_SCHEMA_VERSION_V11,
+        event_schema_version,
         RunEventPayload::RunExecutionStarted(crate::event::RunExecutionStartedData {
           started_at: policy_now,
           timeout_at,
@@ -4920,7 +4926,9 @@ impl DurableEventStore {
     let workflow = definition_by_hash(&transaction, &binding.definition_hash)?;
     if !matches!(
       workflow.schema_version,
-      crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
     ) {
       return Ok(result(
         RunCancellationStatus::Rejected,
@@ -5011,7 +5019,9 @@ impl DurableEventStore {
     let binding = run_binding_in_transaction(&transaction, run_id)?;
     if !matches!(
       workflow.schema_version,
-      crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
     ) {
       return Err(DurableStoreError::Contract(
         "Business-outcome authority requires compiled Model v11+.".to_string(),
@@ -5100,13 +5110,16 @@ impl DurableEventStore {
     ensure_run_exists(&transaction, run_id)?;
     let workflow = definition_for_run(&transaction, run_id)?;
     let binding = run_binding_in_transaction(&transaction, run_id)?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
       return Err(DurableStoreError::Contract(
         "Workflow timeout authority requires compiled Model v12.".to_string(),
       ));
     }
     let mut events = load_events(&transaction, run_id)?;
     let projection = fold_events(&events)?;
+    let event_schema_version = projection.event_schema_version.ok_or_else(|| {
+      DurableStoreError::Contract("Workflow timeout run has no event version.".to_string())
+    })?;
     let Some(deadline_at) = projection.timeout_at else {
       return Ok(RunTimeoutSettlement::NotConfigured);
     };
@@ -5128,7 +5141,7 @@ impl DurableEventStore {
       run_id,
       generated_event_id(),
       deadline_at,
-      crate::RUN_EVENT_SCHEMA_VERSION_V11,
+      event_schema_version,
       RunEventPayload::RunTimeoutReached(crate::event::RunTimeoutReachedData {
         deadline_at,
         code: "WOML_WORKFLOW_TIMED_OUT".to_string(),
@@ -5145,7 +5158,7 @@ impl DurableEventStore {
         run_id,
         generated_event_id(),
         now,
-        crate::RUN_EVENT_SCHEMA_VERSION_V11,
+        event_schema_version,
         RunEventPayload::OperationFailed(OperationFailedData {
           node_id: operation.node_id.clone(),
           attempt_number: operation.attempt_number,
@@ -5179,7 +5192,7 @@ impl DurableEventStore {
         run_id,
         generated_event_id(),
         now,
-        crate::RUN_EVENT_SCHEMA_VERSION_V11,
+        event_schema_version,
         RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
           node_id: attempt.identity.node_id.clone(),
           attempt: attempt.identity.attempt,
@@ -5200,7 +5213,7 @@ impl DurableEventStore {
       run_id,
       generated_event_id(),
       now,
-      crate::RUN_EVENT_SCHEMA_VERSION_V11,
+      event_schema_version,
       RunEventPayload::RunOutcomeDecided(crate::event::RunOutcomeDecidedData::Failed {
         failure: crate::event::LifecycleFailure {
           kind: crate::event::LifecycleFailureKind::TimedOut,
@@ -5223,7 +5236,7 @@ impl DurableEventStore {
         run_id,
         generated_event_id(),
         now,
-        crate::RUN_EVENT_SCHEMA_VERSION_V11,
+        event_schema_version,
         RunEventPayload::LifecycleHookRequested(LifecycleHookRequestedData {
           hook_invocation_id: derive_lifecycle_hook_invocation_id(
             run_id,
@@ -5257,7 +5270,9 @@ impl DurableEventStore {
     let binding = run_binding_in_transaction(&transaction, run_id)?;
     if !matches!(
       workflow.schema_version,
-      crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
     ) {
       return Err(DurableStoreError::Contract(
         "Run finalization authority requires compiled Model v11+.".to_string(),
@@ -8160,7 +8175,7 @@ fn admit_trigger_occurrence_in_transaction(
   }
 
   let runtime_policy_identity =
-    if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+    if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
       let policy_hash = workflow.runtime_policy_hash().ok_or_else(|| {
         DurableStoreError::Contract("Model v12 is missing its runtime policy identity.".to_string())
       })?;
@@ -9601,6 +9616,7 @@ impl DurableDagEngine {
       .workflow
       .parallel_group_for_child(&failure.node_id)
       .is_some();
+    let fork_child = self.workflow.fork_branch_owner(&failure.node_id).is_some();
     let projection = self.projection(run_id)?;
     if !matches!(
       projection.latest_attempt(&failure.node_id),
@@ -9653,7 +9669,7 @@ impl DurableDagEngine {
           scheduled_at,
         },
       )
-    } else if parallel_child || cancellation_settlement {
+    } else if parallel_child || fork_child || cancellation_settlement {
       (
         vec![(
           generated_event_id(),

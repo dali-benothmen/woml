@@ -1815,7 +1815,13 @@ pub fn inspect_woml_run_v2(event_store_path: String, run_id: String) -> napi::Re
   let workflow = store
     .definition(&binding.definition_hash)
     .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?;
-  let inspection = if workflow.schema_version >= 12 {
+  let inspection = if workflow.schema_version >= 13 {
+    serde_json::to_value(
+      store
+        .inspect_run_v4(&run_id)
+        .map_err(|error| native_run_management_error("WOML_RUN_INSPECTION_FAILED", error))?,
+    )
+  } else if workflow.schema_version >= 12 {
     serde_json::to_value(
       store
         .inspect_run_v3(&run_id)

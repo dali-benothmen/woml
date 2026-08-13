@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::{poll_fn, Future};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -19,14 +19,15 @@ use crate::engine::{
 };
 use crate::event::{
   ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
-  FinalLifecycleStatus, LifecycleActionFailedData, LifecycleActionIdentityData, LifecycleFailure,
-  LifecycleFailureKind, LifecycleHookCompletedData, LifecycleHookCompletionStatus,
-  LifecycleHookRequestedData, LifecycleSubject, LifecycleSubjectKind, OperationExecutionMode,
-  OperationFailedData, OperationStartedData, OperationSucceededData, ParallelFailure,
-  ParallelFailurePolicy, ParallelGroupCompletedData, ParallelGroupOutcome,
-  ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
-  RunFinalizedData, RunOutcomeDecidedData, RunSucceededData, StepAttemptFailedData,
-  StepAttemptStartedData, StepAttemptSucceededData,
+  FinalLifecycleStatus, ForkBranchOutcome, ForkBranchSettledData, ForkJoinOutcome,
+  ForkJoinSettledData, ForkOpenedData, LifecycleActionFailedData, LifecycleActionIdentityData,
+  LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
+  LifecycleHookCompletionStatus, LifecycleHookRequestedData, LifecycleSubject,
+  LifecycleSubjectKind, OperationExecutionMode, OperationFailedData, OperationStartedData,
+  OperationSucceededData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
+  RunFailedDataV3, RunFinalizedData, RunOutcomeDecidedData, RunSucceededData,
+  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
 };
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{
@@ -1287,7 +1288,7 @@ async fn execute_workflow_durable_internal(
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path.clone())?;
-  if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+  if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
     store.register_definition_module_artifacts(
       &workflow,
       &definition_hash,
@@ -1299,7 +1300,7 @@ async fn execute_workflow_durable_internal(
       .find(|candidate| candidate.handler == "trigger.manual")
       .ok_or_else(|| {
         RuntimeExecutionError::InvalidConfiguration(
-          "a direct Model v12 run requires a manual trigger".to_string(),
+          "a direct Model v12+ run requires a manual trigger".to_string(),
         )
       })?;
     let admission = store.admit_trigger_occurrence(TriggerAdmissionRequest {
@@ -1364,7 +1365,7 @@ pub async fn execute_admitted_trigger_run_durable(
   let store = DurableEventStore::open(database_path.clone())?;
   let binding = store.run_binding(run_id)?;
   let workflow = store.definition(&binding.definition_hash)?;
-  if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+  if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
     drop(store);
     return execute_policy_run_durable(database_path, run_id, options).await;
   }
@@ -1394,7 +1395,7 @@ async fn resume_workflow_durable_internal(
       "durable approval workflows require resume_workflow_durable_outcome".to_string(),
     ));
   }
-  if workflow.schema_version == crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
+  if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
     drop(store);
     return execute_policy_run_durable(database_path, run_id, options).await;
   }
@@ -1724,9 +1725,7 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
       ));
     }
   }
-  let terminal_node_id = engine
-    .workflow()
-    .terminal_node_id()
+  let terminal_node_id = runtime_result_node_id(engine.workflow())
     .ok_or_else(|| RuntimeExecutionError::Stalled("no terminal node exists".to_string()))?
     .to_string();
   continue_runtime(
@@ -1744,14 +1743,21 @@ async fn execute_runtime<E: RuntimeDagEngine>(
   trigger: Map<String, Value>,
   options: &RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
-  let terminal_node_id = engine
-    .workflow()
-    .terminal_node_id()
+  let terminal_node_id = runtime_result_node_id(engine.workflow())
     .ok_or_else(|| RuntimeExecutionError::Stalled("no terminal node exists".to_string()))?
     .to_string();
   let run_id = generated_id("run");
   engine.start_run(&run_id, trigger)?;
   continue_runtime(engine, &run_id, terminal_node_id, Vec::new(), options).await
+}
+
+fn runtime_result_node_id(workflow: &CompiledWorkflowDefinition) -> Option<&str> {
+  workflow
+    .graph
+    .settlement
+    .as_ref()
+    .map(|settlement| settlement.main_result_node_id.as_str())
+    .or_else(|| workflow.terminal_node_id())
 }
 
 async fn continue_runtime<E: RuntimeDagEngine>(
@@ -2515,7 +2521,9 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
 ) -> Result<(), RuntimeExecutionError> {
   if !matches!(
     engine.workflow().schema_version,
-    crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+    crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
   ) {
     return Ok(());
   }
@@ -3110,6 +3118,27 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
       execution_order.extend(completed);
       continue;
     }
+    if let Some(fork) = ready_join_all_fork(engine.workflow(), &current, &ready) {
+      if host.is_none() {
+        *host = Some(
+          ScriptHostClient::spawn_with_authority(
+            options.script_host.clone(),
+            options.capability_authority.clone(),
+          )
+          .await?,
+        );
+      }
+      let completed = execute_join_all_fork(
+        engine,
+        run_id,
+        fork,
+        options,
+        host.as_ref().expect("script host was initialized"),
+      )
+      .await?;
+      execution_order.extend(completed);
+      continue;
+    }
     if ready.len() != 1 {
       return Err(RuntimeExecutionError::Stalled(
         "the current runtime received more than one ready node".to_string(),
@@ -3129,6 +3158,27 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
     };
 
     match handler.as_str() {
+      "engine.fork-open" => {
+        let fork = engine
+          .workflow()
+          .graph
+          .forks
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .find(|fork| fork.open_node_id == *node_id)
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "fork open node {node_id:?} has no Model v13 descriptor"
+            ))
+          })?;
+        engine.append_payload(
+          run_id,
+          RunEventPayload::ForkOpened(ForkOpenedData {
+            fork_id: fork.fork_id.clone(),
+          }),
+        )?;
+      }
       "engine.parallel-start" => {
         let parallel_id = node_id
           .strip_prefix("__woml_parallel__")
@@ -3314,6 +3364,42 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
           )?));
         }
       }
+      "engine.workflow-settlement" => {
+        let settlement = engine.workflow().graph.settlement.as_ref().ok_or_else(|| {
+          RuntimeExecutionError::Stalled(
+            "workflow settlement node has no Model v13 descriptor".to_string(),
+          )
+        })?;
+        if settlement.node_id != *node_id {
+          return Err(RuntimeExecutionError::Stalled(format!(
+            "workflow settlement node {node_id:?} does not match Model v13"
+          )));
+        }
+        let result = engine
+          .projection(run_id)?
+          .context
+          .steps
+          .get(&settlement.main_result_node_id)
+          .cloned()
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "workflow settlement has no public main result from {:?}",
+              settlement.main_result_node_id
+            ))
+          })?;
+        engine.append_payload(
+          run_id,
+          RunEventPayload::RunSucceeded(RunSucceededData {
+            terminal_node_id: settlement.main_result_node_id.clone(),
+            result,
+          }),
+        )?;
+        return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+          engine,
+          run_id,
+          execution_order.clone(),
+        )?));
+      }
       _ => {
         return Err(RuntimeExecutionError::Stalled(format!(
           "ready node {node_id:?} uses unknown handler {handler:?}"
@@ -3366,6 +3452,265 @@ fn waiting_outcome(
   }
 }
 
+fn fork_branch_routes(
+  workflow: &CompiledWorkflowDefinition,
+  fork: &crate::model::CompiledFork,
+) -> BTreeMap<String, HashSet<String>> {
+  fork
+    .branches
+    .iter()
+    .map(|branch| {
+      let mut route = HashSet::new();
+      let mut pending = VecDeque::from([branch.entry_node_id.as_str()]);
+      while let Some(node_id) = pending.pop_front() {
+        if !route.insert(node_id.to_string()) || node_id == branch.terminal_node_id {
+          continue;
+        }
+        pending.extend(
+          workflow
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.from == node_id)
+            .map(|edge| edge.to.as_str()),
+        );
+      }
+      (branch.branch_id.clone(), route)
+    })
+    .collect()
+}
+
+fn ready_join_all_fork(
+  workflow: &CompiledWorkflowDefinition,
+  projection: &RunProjection,
+  ready: &[String],
+) -> Option<crate::model::CompiledFork> {
+  workflow
+    .graph
+    .forks
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .find(|fork| {
+      fork.joined_branch_ids.len() == fork.branches.len()
+        && projection
+          .forks
+          .get(&fork.fork_id)
+          .is_some_and(|state| state.join_status == crate::ForkJoinStatus::Pending)
+        && {
+          let routes = fork_branch_routes(workflow, fork);
+          ready.iter().any(|node_id| {
+            routes.values().any(|route| route.contains(node_id)) || node_id == &fork.join_node_id
+          })
+        }
+    })
+    .cloned()
+}
+
+fn runtime_context_for_node(
+  workflow: &CompiledWorkflowDefinition,
+  projection: &RunProjection,
+  node_id: &str,
+) -> WorkflowContext {
+  let mut context = projection.context.clone();
+  if let Some(visibility) = workflow
+    .graph
+    .context_visibility
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .find(|visibility| visibility.node_id == node_id)
+  {
+    context
+      .steps
+      .retain(|step_id, _| visibility.step_ids.contains(step_id));
+  }
+  context
+}
+
+async fn execute_join_all_fork<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  fork: crate::model::CompiledFork,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<Vec<String>, RuntimeExecutionError> {
+  let routes = fork_branch_routes(engine.workflow(), &fork);
+  let mut active: Vec<ActiveParallelInvocation<'_>> = Vec::new();
+  let mut completion_order = Vec::new();
+
+  loop {
+    let mut projection = engine.projection(run_id)?;
+    let mut ready = engine.ready_node_ids(run_id)?;
+
+    for branch in &fork.branches {
+      if ready.contains(&branch.terminal_node_id)
+        && projection
+          .forks
+          .get(&fork.fork_id)
+          .is_some_and(|state| !state.branches.contains_key(&branch.branch_id))
+      {
+        engine.append_payload(
+          run_id,
+          RunEventPayload::ForkBranchSettled(ForkBranchSettledData {
+            fork_id: fork.fork_id.clone(),
+            branch_id: branch.branch_id.clone(),
+            terminal_node_id: branch.terminal_node_id.clone(),
+            outcome: ForkBranchOutcome::Succeeded,
+          }),
+        )?;
+      }
+    }
+
+    projection = engine.projection(run_id)?;
+    if fork.branches.iter().all(|branch| {
+      projection
+        .forks
+        .get(&fork.fork_id)
+        .and_then(|state| state.branches.get(&branch.branch_id))
+        .and_then(|branch| branch.outcome)
+        == Some(ForkBranchOutcome::Succeeded)
+    }) {
+      engine.append_payload(
+        run_id,
+        RunEventPayload::ForkJoinSettled(ForkJoinSettledData {
+          fork_id: fork.fork_id,
+          outcome: ForkJoinOutcome::Succeeded,
+          blocking_branch_id: None,
+        }),
+      )?;
+      return Ok(completion_order);
+    }
+
+    ready = engine.ready_node_ids(run_id)?;
+    for branch in &fork.branches {
+      let route = routes.get(&branch.branch_id).ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "fork {:?} lost branch route {:?}",
+          fork.fork_id, branch.branch_id
+        ))
+      })?;
+      let branch_is_settled = projection
+        .forks
+        .get(&fork.fork_id)
+        .is_some_and(|state| state.branches.contains_key(&branch.branch_id));
+      let branch_is_active = active
+        .iter()
+        .any(|invocation| route.contains(&invocation.node_id));
+      if branch_is_settled || branch_is_active {
+        continue;
+      }
+      let Some(node_id) = ready.iter().find(|node_id| {
+        route.contains(node_id.as_str())
+          && engine
+            .workflow()
+            .node(node_id)
+            .is_some_and(|node| node.handler == "runtime.script")
+      }) else {
+        continue;
+      };
+      let source = engine
+        .workflow()
+        .node(node_id)
+        .and_then(|node| node.script_source())
+        .ok_or_else(|| {
+          RuntimeExecutionError::Stalled(format!("fork branch script {node_id:?} has no source"))
+        })?
+        .to_string();
+      let secrets = resolved_script_secrets(engine.workflow(), node_id, options)?;
+      let attempt_number = projection
+        .pending_retries
+        .get(node_id)
+        .map_or(1, |retry| retry.next_attempt);
+      let max_attempts = engine
+        .workflow()
+        .node(node_id)
+        .and_then(|node| node.retry_policy.as_ref())
+        .map_or(1, |policy| policy.max_attempts);
+      let invocation_id = generated_id("inv");
+      let idempotency_key = step_effect_idempotency_key(run_id, engine.definition_hash(), node_id);
+      let context = runtime_context_for_node(engine.workflow(), &projection, node_id);
+      engine.append_payload(
+        run_id,
+        RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+          node_id: node_id.clone(),
+          attempt: attempt_number,
+          invocation_id: invocation_id.clone(),
+          handler: "runtime.script".to_string(),
+          idempotency_key: Some(idempotency_key.clone()),
+        }),
+      )?;
+      active.push(ActiveParallelInvocation {
+        node_id: node_id.clone(),
+        invocation_id: invocation_id.clone(),
+        future: Box::pin(invoke_parallel_child(
+          host,
+          ParallelInvocationRequest {
+            run_id: run_id.to_string(),
+            node_id: node_id.clone(),
+            invocation_id,
+            source,
+            context,
+            timeout_ms: options.script_timeout_ms,
+            max_context_bytes: options.max_context_bytes,
+            attempt_number,
+            max_attempts,
+            idempotency_key,
+            secrets,
+            module_bindings: options
+              .runtime_modules
+              .iter()
+              .map(|module| RuntimeModuleBinding {
+                name: module.name.clone(),
+                bundle_digest: module.bundle_digest.clone(),
+                exports: module.exports.clone(),
+              })
+              .collect(),
+          },
+        )),
+      });
+    }
+
+    let Some(completion) = next_parallel_completion(&mut active).await else {
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "fork {:?} has unfinished branches but no safe executable work",
+        fork.fork_id
+      )));
+    };
+    match completion.outcome {
+      Ok(output) => {
+        completion_order.push(completion.node_id.clone());
+        engine.append_payload(
+          run_id,
+          RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+            node_id: completion.node_id,
+            attempt: completion.attempt_number,
+            invocation_id: completion.invocation_id,
+            output,
+          }),
+        )?;
+      }
+      Err(failure) => {
+        let code = failure.code.clone();
+        engine.record_step_attempt_failure(
+          run_id,
+          options.clock.now(),
+          StepAttemptFailedData {
+            node_id: completion.node_id.clone(),
+            attempt: completion.attempt_number,
+            invocation_id: completion.invocation_id,
+            failure,
+          },
+        )?;
+        return Err(RuntimeExecutionError::Stalled(format!(
+          "fork branch step {:?} failed with {code}; full branch failure settlement begins in FJ7",
+          completion.node_id
+        )));
+      }
+    }
+  }
+}
+
 #[derive(Debug)]
 struct ParallelInvocationCompletion {
   node_id: String,
@@ -3378,6 +3723,7 @@ type ParallelInvocationFuture<'a> =
   Pin<Box<dyn Future<Output = ParallelInvocationCompletion> + Send + 'a>>;
 
 struct ActiveParallelInvocation<'a> {
+  node_id: String,
   invocation_id: String,
   future: ParallelInvocationFuture<'a>,
 }
@@ -3600,6 +3946,7 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         }),
       )?;
       active.push(ActiveParallelInvocation {
+        node_id: node_id.clone(),
         invocation_id: invocation_id.clone(),
         future: Box::pin(invoke_parallel_child(
           host,
@@ -3923,7 +4270,8 @@ async fn execute_script_node<E: RuntimeDagEngine>(
     }),
   )?;
 
-  let context = engine.projection(run_id)?.context;
+  let projection = engine.projection(run_id)?;
+  let context = runtime_context_for_node(engine.workflow(), &projection, node_id);
   if let Some(limit) = options.max_context_bytes {
     let actual = serde_json::to_vec(&context)
       .map_err(|error| RuntimeExecutionError::Stalled(error.to_string()))?
@@ -4826,7 +5174,9 @@ impl RuntimeDagEngine for InMemoryDagEngine {
     let event_schema_version = self.event_schema_version();
     let payloads = if matches!(
       event_schema_version,
-      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      crate::RUN_EVENT_SCHEMA_VERSION_V10
+        | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        | crate::RUN_EVENT_SCHEMA_VERSION_V12
     ) {
       crate::durable::expand_model_v11_payload(self.workflow(), run_id, payload)?
     } else {

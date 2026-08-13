@@ -1049,7 +1049,9 @@ pub(crate) fn validate_payload_against_definition(
     | RunEventPayload::RunFinalized(_) => {
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       ) {
         return Err("Lifecycle and run-control events require compiled Model v11+.".to_string());
       }
@@ -1057,7 +1059,9 @@ pub(crate) fn validate_payload_against_definition(
     RunEventPayload::LifecycleHookRequested(data) => {
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       ) {
         return Err("Lifecycle hook events require compiled Model v11+.".to_string());
       }
@@ -1089,7 +1093,9 @@ pub(crate) fn validate_payload_against_definition(
       });
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       ) || !action_exists
       {
         return Err("Lifecycle action event references an unknown Model v11+ action.".to_string());
@@ -1105,7 +1111,9 @@ pub(crate) fn validate_payload_against_definition(
       });
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       ) || !action_exists
       {
         return Err(
@@ -1116,7 +1124,9 @@ pub(crate) fn validate_payload_against_definition(
     RunEventPayload::LifecycleHookCompleted(data) => {
       if !matches!(
         workflow.schema_version,
-        crate::COMPILED_MODEL_SCHEMA_VERSION_V11 | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V11
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       ) || workflow.lifecycle.is_none()
         || !crate::event::is_definition_hash(&data.hook_invocation_id)
       {

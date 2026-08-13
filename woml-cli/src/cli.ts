@@ -1190,7 +1190,11 @@ async function assertStableWorkflowInputSet(
 function promoteForLifecycleAuthority(
   workflow: CompiledWorkflowDefinition
 ): CompiledWorkflowDefinition {
-  if (workflow.schemaVersion === 11 || workflow.schemaVersion === 12) {
+  if (
+    workflow.schemaVersion === 11 ||
+    workflow.schemaVersion === 12 ||
+    workflow.schemaVersion === 13
+  ) {
     return workflow;
   }
   return {
@@ -1596,14 +1600,22 @@ async function runSingleCheckCommand(
     }
     const hasLifecycle =
       (compiledWorkflow.schemaVersion === 11 ||
-        compiledWorkflow.schemaVersion === 12) &&
+        compiledWorkflow.schemaVersion === 12 ||
+        compiledWorkflow.schemaVersion === 13) &&
       compiledWorkflow.lifecycle !== undefined;
-    const hasRuntimePolicy = compiledWorkflow.schemaVersion === 12;
+    const hasRuntimePolicy =
+      compiledWorkflow.schemaVersion === 12 ||
+      compiledWorkflow.schemaVersion === 13;
+    const hasFork =
+      compiledWorkflow.schemaVersion === 13 &&
+      compiledWorkflow.graph.forks.length > 0;
     const workflowCallsFrontendOnly =
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      hasRuntimePolicy && definitionPackage.modules.length > 0
+      hasFork
+        ? 'Execution: Model v13 join-all forks are executable through the durable Rust runtime.\n'
+        : hasRuntimePolicy && definitionPackage.modules.length > 0
         ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
         : hasRuntimePolicy
           ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
@@ -2230,7 +2242,8 @@ async function executeOneShot(
     workflow.schemaVersion !== 8 &&
     workflow.schemaVersion !== 9 &&
     workflow.schemaVersion !== 11 &&
-    workflow.schemaVersion !== 12
+    workflow.schemaVersion !== 12 &&
+    workflow.schemaVersion !== 13
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -2256,7 +2269,8 @@ async function executeOneShot(
     workflow.schemaVersion === 8 ||
     workflow.schemaVersion === 9 ||
     workflow.schemaVersion === 11 ||
-    workflow.schemaVersion === 12
+    workflow.schemaVersion === 12 ||
+    workflow.schemaVersion === 13
   ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);

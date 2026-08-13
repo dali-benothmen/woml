@@ -2240,6 +2240,38 @@ impl CompiledWorkflowDefinition {
     self.parallel_group(parallel_id)
   }
 
+  pub(crate) fn fork_branch_owner(
+    &self,
+    node_id: &str,
+  ) -> Option<(&CompiledFork, &CompiledForkBranch)> {
+    for fork in self.graph.forks.as_deref().unwrap_or_default() {
+      for branch in &fork.branches {
+        let mut visited = HashSet::new();
+        let mut pending = vec![branch.entry_node_id.as_str()];
+        while let Some(candidate) = pending.pop() {
+          if !visited.insert(candidate) {
+            continue;
+          }
+          if candidate == node_id {
+            return Some((fork, branch));
+          }
+          if candidate == branch.terminal_node_id {
+            continue;
+          }
+          pending.extend(
+            self
+              .graph
+              .edges
+              .iter()
+              .filter(|edge| edge.from == candidate)
+              .map(|edge| edge.to.as_str()),
+          );
+        }
+      }
+    }
+    None
+  }
+
   pub fn terminal_node_id(&self) -> Option<&str> {
     let mut outgoing: HashMap<&str, usize> = self
       .graph
@@ -2756,11 +2788,31 @@ impl CompiledWorkflowDefinition {
     durable: bool,
   ) {
     if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13 {
-      issues.push(issue(
-        ModelIssueCode::UnsupportedForkExecution,
-        "Compiled Model v13 passed structural validation, but fork execution begins in FJ5.",
-      ));
-      return;
+      if !durable {
+        issues.push(issue(
+          ModelIssueCode::UnsupportedRuntimePolicyExecution,
+          "Compiled Model v13 requires the durable runtime-policy scheduler.",
+        ));
+      }
+      if self
+        .graph
+        .forks
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|fork| fork.joined_branch_ids.len() != fork.branches.len())
+      {
+        issues.push(issue(
+          ModelIssueCode::UnsupportedForkExecution,
+          "FJ5 executes join-all forks; selected and non-blocking joins begin in FJ6.",
+        ));
+      }
+      if !self.graph.choices.as_deref().unwrap_or_default().is_empty() {
+        issues.push(issue(
+          ModelIssueCode::UnsupportedForkExecution,
+          "Control-only choice execution inside Model v13 fork workflows begins in FJ7.",
+        ));
+      }
     }
     if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V12 && !durable {
       issues.push(issue(
@@ -2811,6 +2863,15 @@ impl CompiledWorkflowDefinition {
         ("engine.approval-join", ValueExpression::Object { fields }) if allow_approval => {
           fields.is_empty()
         }
+        (
+          "engine.fork-open"
+          | "engine.fork-branch-terminal"
+          | "engine.fork-join"
+          | "engine.workflow-settlement"
+          | "engine.choice-select"
+          | "engine.choice-join",
+          ValueExpression::Object { fields },
+        ) if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13 => fields.is_empty(),
         (
           "runtime.script"
           | "engine.branch-select"
@@ -2865,7 +2926,8 @@ impl CompiledWorkflowDefinition {
 
     for edge in &self.graph.edges {
       let executable_condition = matches!(edge.condition, EdgeCondition::Always)
-        || matches!(edge.condition, EdgeCondition::Boolean { .. }) && edge.branch_id.is_some()
+        || matches!(edge.condition, EdgeCondition::Boolean { .. })
+          && (edge.branch_id.is_some() || self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13)
         || allow_approval
           && matches!(edge.condition, EdgeCondition::Equals { .. })
           && edge.approval_id.is_some();
@@ -2902,10 +2964,20 @@ impl CompiledWorkflowDefinition {
         (incoming_count <= 1
           || node.handler == "engine.branch-result"
           || node.handler == "engine.parallel-join"
+          || self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13
+            && matches!(
+              node.handler.as_str(),
+              "engine.fork-join" | "engine.choice-join" | "engine.workflow-settlement"
+            )
           || allow_approval && node.handler == "engine.approval-join")
           && (outgoing_count <= 1
             || node.handler == "engine.branch-select"
             || node.handler == "engine.parallel-start"
+            || self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V13
+              && matches!(
+                node.handler.as_str(),
+                "engine.fork-open" | "engine.fork-branch-terminal" | "engine.choice-select"
+              )
             || allow_approval && node.handler == "engine.approval-wait")
       });
     if !topology_is_sequential_or_branching {
