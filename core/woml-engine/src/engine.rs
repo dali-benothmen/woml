@@ -6,9 +6,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::event::{
-  is_definition_hash, ApprovalTimeoutPolicy, AttemptFailureKind, ParallelFailurePolicy,
-  ParallelGroupOutcome, RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3,
-  RunFailedDataV4, RunFailedDataV5, RunOutcomeDecidedData, RunStartedData,
+  is_definition_hash, ApprovalTimeoutPolicy, AttemptFailureKind, ForkBranchOutcome,
+  ForkJoinOutcome, ParallelFailurePolicy, ParallelGroupOutcome, RunEventPayload, RunFailedData,
+  RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunOutcomeDecidedData,
+  RunStartedData,
 };
 use crate::{
   model::{EdgeCondition, ValueExpression},
@@ -194,7 +195,9 @@ pub(crate) fn ready_node_ids_for_projection_at(
   }
   let workflow_identity_matches = projection.workflow_id.as_deref()
     == Some(workflow.workflow_id.as_str())
-    || (projection.event_schema_version == Some(crate::RUN_EVENT_SCHEMA_VERSION_V11)
+    || (projection
+      .event_schema_version
+      .is_some_and(|version| version >= crate::RUN_EVENT_SCHEMA_VERSION_V11)
       && projection.workflow_id.is_none());
   if !workflow_identity_matches || projection.definition_hash.as_deref() != Some(definition_hash) {
     return Err("The run is not bound to this compiled workflow definition.".to_string());
@@ -304,6 +307,18 @@ fn edge_is_active(edge: &crate::model::CompiledWorkflowEdge, projection: &RunPro
     }
     return false;
   }
+  if let Some((_, selected_arm_id)) = projection
+    .choice_selections
+    .iter()
+    .find(|(choice_id, _)| edge.id.starts_with(&format!("{choice_id}:")))
+  {
+    return selected_arm_id == &edge.id;
+  }
+  if edge.id.starts_with("__woml_choice__")
+    && (edge.id.contains(":when:") || edge.id.ends_with(":otherwise"))
+  {
+    return false;
+  }
   match edge.branch_id.as_deref() {
     Some(branch_id) => projection
       .branch_selections
@@ -318,6 +333,59 @@ pub(crate) fn node_is_complete(
   node: &crate::model::CompiledWorkflowNode,
   projection: &RunProjection,
 ) -> bool {
+  if node.handler == "engine.choice-select" {
+    return workflow
+      .graph
+      .choices
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|choice| choice.selector_node_id == node.id)
+      .is_some_and(|choice| projection.choice_selections.contains_key(&choice.choice_id));
+  }
+  if node.handler == "engine.fork-open" {
+    return workflow
+      .graph
+      .forks
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|fork| fork.open_node_id == node.id)
+      .is_some_and(|fork| projection.forks.contains_key(&fork.fork_id));
+  }
+  if node.handler == "engine.fork-branch-terminal" {
+    return workflow
+      .graph
+      .forks
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find_map(|fork| {
+        fork
+          .branches
+          .iter()
+          .find(|branch| branch.terminal_node_id == node.id)
+          .map(|branch| (fork, branch))
+      })
+      .is_some_and(|(fork, branch)| {
+        projection
+          .forks
+          .get(&fork.fork_id)
+          .and_then(|projected| projected.branches.get(&branch.branch_id))
+          .is_some()
+      });
+  }
+  if node.handler == "engine.fork-join" {
+    return workflow
+      .graph
+      .forks
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|fork| fork.join_node_id == node.id)
+      .and_then(|fork| projection.forks.get(&fork.fork_id))
+      .is_some_and(|fork| fork.join_status == crate::projection::ForkJoinStatus::Succeeded);
+  }
   if node.handler == "engine.branch-select" {
     return selector_branch_id(&node.id)
       .is_some_and(|branch_id| projection.branch_selections.contains_key(branch_id));
@@ -493,8 +561,10 @@ pub(crate) fn validate_payload_against_definition(
 ) -> Result<(), String> {
   match payload {
     RunEventPayload::RunAdmitted(data) => {
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12
-        || data.definition_hash != definition_hash
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V12 | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+      ) || data.definition_hash != definition_hash
         || workflow.runtime_policy_hash().as_deref() != Some(data.policy_hash.as_str())
         || workflow.runtime_policy_queue_name().as_deref() != Some(data.queue.name.as_str())
       {
@@ -518,8 +588,11 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunExecutionStarted(data) => {
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
-        return Err("Event v11 runtime-policy events require compiled Model v12.".to_string());
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V12 | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+      ) {
+        return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
       let expected_timeout = workflow
         .runtime_policy
@@ -537,8 +610,11 @@ pub(crate) fn validate_payload_against_definition(
       }
     }
     RunEventPayload::RunTimeoutReached(_) => {
-      if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
-        return Err("Event v11 runtime-policy events require compiled Model v12.".to_string());
+      if !matches!(
+        workflow.schema_version,
+        crate::COMPILED_MODEL_SCHEMA_VERSION_V12 | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+      ) {
+        return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
     }
     RunEventPayload::RunStarted(data) => {
@@ -682,6 +758,98 @@ pub(crate) fn validate_payload_against_definition(
         return Err(format!(
           "Arm {:?} is not selectable for branch {:?}.",
           data.arm_id, data.branch_id
+        ));
+      }
+    }
+    RunEventPayload::ChoiceSelected(data) => {
+      let choice = workflow
+        .graph
+        .choices
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|choice| choice.choice_id == data.choice_id)
+        .ok_or_else(|| {
+          format!(
+            "choice_selected references unknown choice {:?}.",
+            data.choice_id
+          )
+        })?;
+      if !choice.arm_ids.contains(&data.arm_id) {
+        return Err(format!(
+          "Arm {:?} is not selectable for choice {:?}.",
+          data.arm_id, data.choice_id
+        ));
+      }
+    }
+    RunEventPayload::ForkOpened(data) => {
+      if workflow
+        .graph
+        .forks
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .all(|fork| fork.fork_id != data.fork_id)
+      {
+        return Err(format!(
+          "fork_opened references unknown fork {:?}.",
+          data.fork_id
+        ));
+      }
+    }
+    RunEventPayload::ForkBranchSettled(data) => {
+      let fork = workflow
+        .graph
+        .forks
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|fork| fork.fork_id == data.fork_id)
+        .ok_or_else(|| {
+          format!(
+            "fork_branch_settled references unknown fork {:?}.",
+            data.fork_id
+          )
+        })?;
+      let branch = fork
+        .branches
+        .iter()
+        .find(|branch| branch.branch_id == data.branch_id)
+        .ok_or_else(|| {
+          format!(
+            "fork_branch_settled references unknown branch {:?} in fork {:?}.",
+            data.branch_id, data.fork_id
+          )
+        })?;
+      if branch.terminal_node_id != data.terminal_node_id {
+        return Err(format!(
+          "Fork branch {:?}.{:?} terminal does not match Model v13.",
+          data.fork_id, data.branch_id
+        ));
+      }
+    }
+    RunEventPayload::ForkJoinSettled(data) => {
+      let fork = workflow
+        .graph
+        .forks
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|fork| fork.fork_id == data.fork_id)
+        .ok_or_else(|| {
+          format!(
+            "fork_join_settled references unknown fork {:?}.",
+            data.fork_id
+          )
+        })?;
+      if data
+        .blocking_branch_id
+        .as_ref()
+        .is_some_and(|branch_id| !fork.joined_branch_ids.contains(branch_id))
+      {
+        return Err(format!(
+          "Fork {:?} join is blocked by an unjoined branch.",
+          data.fork_id
         ));
       }
     }
@@ -1115,6 +1283,124 @@ pub(crate) fn validate_event_history_against_definition(
   for (index, event) in events.iter().enumerate() {
     validate_payload_against_definition(workflow, definition_hash, &event.payload)?;
     match &event.payload {
+      RunEventPayload::ChoiceSelected(data) => {
+        let choice = workflow
+          .graph
+          .choices
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .find(|choice| choice.choice_id == data.choice_id)
+          .ok_or_else(|| format!("Unknown control choice {:?}.", data.choice_id))?;
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        if !ready.contains(&choice.selector_node_id) {
+          return Err(format!(
+            "Control choice {:?} was selected before its selector was ready.",
+            data.choice_id
+          ));
+        }
+      }
+      RunEventPayload::ForkOpened(data) => {
+        let fork = workflow
+          .graph
+          .forks
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .find(|fork| fork.fork_id == data.fork_id)
+          .ok_or_else(|| format!("Unknown fork {:?}.", data.fork_id))?;
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let ready = ready_node_ids_for_projection(workflow, definition_hash, &prefix)?;
+        if !ready.contains(&fork.open_node_id) {
+          return Err(format!(
+            "Fork {:?} opened before it was ready.",
+            data.fork_id
+          ));
+        }
+      }
+      RunEventPayload::ForkBranchSettled(data) => {
+        let fork = workflow
+          .graph
+          .forks
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .find(|fork| fork.fork_id == data.fork_id)
+          .ok_or_else(|| format!("Unknown fork {:?}.", data.fork_id))?;
+        let branch = fork
+          .branches
+          .iter()
+          .find(|branch| branch.branch_id == data.branch_id)
+          .ok_or_else(|| format!("Unknown fork branch {:?}.", data.branch_id))?;
+        if data.outcome == ForkBranchOutcome::Succeeded {
+          let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+          let terminal_ready = workflow
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.to == branch.terminal_node_id)
+            .all(|edge| {
+              workflow
+                .node(&edge.from)
+                .is_some_and(|node| node_is_complete(workflow, node, &prefix))
+            });
+          if !terminal_ready {
+            return Err(format!(
+              "Fork branch {:?}.{:?} succeeded before its terminal route completed.",
+              data.fork_id, data.branch_id
+            ));
+          }
+        }
+      }
+      RunEventPayload::ForkJoinSettled(data) => {
+        let fork = workflow
+          .graph
+          .forks
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .find(|fork| fork.fork_id == data.fork_id)
+          .ok_or_else(|| format!("Unknown fork {:?}.", data.fork_id))?;
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        let projected = prefix
+          .forks
+          .get(&data.fork_id)
+          .ok_or_else(|| format!("Fork {:?} join settled before opening.", data.fork_id))?;
+        if data.outcome == ForkJoinOutcome::Succeeded
+          && !fork.joined_branch_ids.iter().all(|branch_id| {
+            projected
+              .branches
+              .get(branch_id)
+              .and_then(|branch| branch.outcome)
+              == Some(ForkBranchOutcome::Succeeded)
+          })
+        {
+          return Err(format!(
+            "Fork {:?} join succeeded before every joined branch succeeded.",
+            data.fork_id
+          ));
+        }
+      }
+      RunEventPayload::RunOutcomeDecided(_) => {
+        let prefix = crate::fold_events(&events[..index]).map_err(|error| error.to_string())?;
+        for fork in workflow.graph.forks.as_deref().unwrap_or_default() {
+          let Some(projected) = prefix.forks.get(&fork.fork_id) else {
+            continue;
+          };
+          if projected.join_status == crate::projection::ForkJoinStatus::Pending
+            || fork
+              .branches
+              .iter()
+              .any(|branch| !projected.branches.contains_key(&branch.branch_id))
+          {
+            return Err(format!(
+              "Run outcome was decided before fork {:?} fully settled.",
+              fork.fork_id
+            ));
+          }
+        }
+      }
       RunEventPayload::ParallelGroupStarted(data) => {
         let group = workflow
           .parallel_group(&data.parallel_id)
@@ -1470,7 +1756,6 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::RunCancellationRequested(_)
       | RunEventPayload::LifecycleActionSucceeded(_)
       | RunEventPayload::LifecycleActionFailed(_)
-      | RunEventPayload::RunOutcomeDecided(_)
       | RunEventPayload::RunFinalized(_)
       | RunEventPayload::RunFailed(_) => {}
     }

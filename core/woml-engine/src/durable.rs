@@ -1034,6 +1034,93 @@ pub struct RunInspectionV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectedForkStatusV4 {
+  Active,
+  Waiting,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectedForkJoinModeV4 {
+  All,
+  Selected,
+  None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionForkCountsV4 {
+  pub opened: u32,
+  pub active: u32,
+  pub waiting: u32,
+  pub succeeded: u32,
+  pub failed: u32,
+  pub cancelled: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionForkJoinV4 {
+  pub mode: InspectedForkJoinModeV4,
+  pub branch_ids: Vec<String>,
+  pub status: crate::projection::ForkJoinStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionForkV4 {
+  pub fork_id: String,
+  pub status: InspectedForkStatusV4,
+  pub join: RunInspectionForkJoinV4,
+  pub branches: RunInspectionForkCountsV4,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionForksV4 {
+  pub counts: RunInspectionForkCountsV4,
+  pub items: Vec<RunInspectionForkV4>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionV4 {
+  pub profile: &'static str,
+  pub run_id: String,
+  pub workflow_id: String,
+  pub status: PublicRunStatus,
+  pub business_outcome: InspectedBusinessOutcome,
+  pub lifecycle_status: crate::projection::LifecycleStatus,
+  pub hooks: Vec<RunInspectionHookV2>,
+  pub warnings: Vec<crate::event::LifecycleWarning>,
+  pub cancellation: RunInspectionCancellationV2,
+  pub policy: RunInspectionPolicyV3,
+  pub forks: RunInspectionForksV4,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkRecoveryBranchV1 {
+  pub fork_id: String,
+  pub branch_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkRecoveryWorkV1 {
+  pub profile: &'static str,
+  pub openable_fork_ids: Vec<String>,
+  pub pending_branches: Vec<ForkRecoveryBranchV1>,
+  pub joinable_fork_ids: Vec<String>,
+  pub pending_choice_ids: Vec<String>,
+  pub ambiguous_active_node_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchedulerClaimV1 {
   pub profile: &'static str,
@@ -3584,6 +3671,49 @@ impl DurableEventStore {
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     let event_schema_version = match &payload {
+      RunEventPayload::RunAdmitted(data) => {
+        let existing: Option<String> = transaction
+          .query_row(
+            "SELECT run_id FROM woml_runs WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+          )
+          .optional()?;
+        if existing.is_some() {
+          return Err(DurableStoreError::RunAlreadyExists(run_id));
+        }
+        let registered: Option<(String, i64)> = transaction
+          .query_row(
+            "SELECT workflow_id, schema_version FROM woml_definitions WHERE definition_hash = ?1",
+            [&data.definition_hash],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+          )
+          .optional()?;
+        let (workflow_id, model_schema_version) = registered
+          .ok_or_else(|| DurableStoreError::DefinitionNotFound(data.definition_hash.clone()))?;
+        let model_schema_version = u32::try_from(model_schema_version).map_err(|_| {
+          DurableStoreError::Contract(
+            "Stored compiled-model schema version is invalid.".to_string(),
+          )
+        })?;
+        let event_schema_version = run_event_schema_version_for_model(model_schema_version);
+        if event_schema_version < RUN_EVENT_SCHEMA_VERSION_V11 {
+          return Err(DurableStoreError::Contract(
+            "run_admitted requires compiled Model v12 or later.".to_string(),
+          ));
+        }
+        transaction.execute(
+          "INSERT INTO woml_runs(run_id, workflow_id, definition_hash, created_at)
+           VALUES (?1, ?2, ?3, ?4)",
+          params![
+            run_id,
+            workflow_id,
+            data.definition_hash,
+            occurred_at.to_rfc3339(),
+          ],
+        )?;
+        event_schema_version
+      }
       RunEventPayload::RunStarted(data) => {
         let existing: Option<String> = transaction
           .query_row(
@@ -3645,7 +3775,9 @@ impl DurableEventStore {
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
     let payloads = if matches!(
       event_schema_version,
-      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      crate::RUN_EVENT_SCHEMA_VERSION_V10
+        | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        | crate::RUN_EVENT_SCHEMA_VERSION_V12
     ) {
       expand_model_v11_payload(&workflow, &run_id, payload)?
     } else {
@@ -3722,7 +3854,9 @@ impl DurableEventStore {
     for (event_id, occurred_at, payload) in payloads {
       let translated = if matches!(
         event_schema_version,
-        crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        crate::RUN_EVENT_SCHEMA_VERSION_V10
+          | crate::RUN_EVENT_SCHEMA_VERSION_V11
+          | crate::RUN_EVENT_SCHEMA_VERSION_V12
       ) {
         expand_model_v11_payload(&workflow, run_id, payload)?
       } else {
@@ -3765,7 +3899,9 @@ impl DurableEventStore {
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     let mut projection = fold_events(&events)?;
-    if projection.event_schema_version == Some(RUN_EVENT_SCHEMA_VERSION_V11)
+    if projection
+      .event_schema_version
+      .is_some_and(|version| version >= RUN_EVENT_SCHEMA_VERSION_V11)
       && projection.workflow_id.is_none()
     {
       projection.workflow_id = Some(binding.workflow_id);
@@ -4128,6 +4264,196 @@ impl DurableEventStore {
           .transpose()?,
         timeout_at: projection.timeout_at,
       },
+    })
+  }
+
+  pub fn inspect_run_v4(&self, run_id: &str) -> Result<RunInspectionV4, DurableStoreError> {
+    let base = self.inspect_run_v3(run_id)?;
+    let binding = self.run_binding(run_id)?;
+    let workflow = self.definition(&binding.definition_hash)?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
+      return Err(DurableStoreError::Contract(
+        "Run Inspection v4 is available only for compiled Model v13 runs.".to_string(),
+      ));
+    }
+    let projection = self.projection(run_id)?;
+    let mut items = Vec::new();
+    for fork in workflow.graph.forks.as_deref().unwrap_or_default() {
+      let Some(projected) = projection.forks.get(&fork.fork_id) else {
+        continue;
+      };
+      let mut branches = RunInspectionForkCountsV4 {
+        opened: u32::try_from(fork.branches.len()).unwrap_or(u32::MAX),
+        active: 0,
+        waiting: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+      };
+      for branch in &fork.branches {
+        match projected
+          .branches
+          .get(&branch.branch_id)
+          .and_then(|branch| branch.outcome)
+        {
+          None => branches.active += 1,
+          Some(crate::event::ForkBranchOutcome::Succeeded) => branches.succeeded += 1,
+          Some(crate::event::ForkBranchOutcome::Failed) => branches.failed += 1,
+          Some(crate::event::ForkBranchOutcome::Cancelled) => branches.cancelled += 1,
+        }
+      }
+      let status = if projected.join_status == crate::projection::ForkJoinStatus::Failed
+        || branches.failed > 0
+      {
+        InspectedForkStatusV4::Failed
+      } else if projected.join_status == crate::projection::ForkJoinStatus::Cancelled
+        || branches.cancelled > 0
+      {
+        InspectedForkStatusV4::Cancelled
+      } else if branches.active > 0 {
+        InspectedForkStatusV4::Active
+      } else if projected.join_status == crate::projection::ForkJoinStatus::Pending {
+        InspectedForkStatusV4::Waiting
+      } else {
+        InspectedForkStatusV4::Succeeded
+      };
+      let mode = if fork.joined_branch_ids.is_empty() {
+        InspectedForkJoinModeV4::None
+      } else if fork.joined_branch_ids.len() == fork.branches.len() {
+        InspectedForkJoinModeV4::All
+      } else {
+        InspectedForkJoinModeV4::Selected
+      };
+      items.push(RunInspectionForkV4 {
+        fork_id: fork.fork_id.clone(),
+        status,
+        join: RunInspectionForkJoinV4 {
+          mode,
+          branch_ids: fork.joined_branch_ids.clone(),
+          status: projected.join_status,
+        },
+        branches,
+      });
+    }
+    let mut counts = RunInspectionForkCountsV4 {
+      opened: u32::try_from(items.len()).unwrap_or(u32::MAX),
+      active: 0,
+      waiting: 0,
+      succeeded: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+    for fork in &items {
+      match fork.status {
+        InspectedForkStatusV4::Active => counts.active += 1,
+        InspectedForkStatusV4::Waiting => counts.waiting += 1,
+        InspectedForkStatusV4::Succeeded => counts.succeeded += 1,
+        InspectedForkStatusV4::Failed => counts.failed += 1,
+        InspectedForkStatusV4::Cancelled => counts.cancelled += 1,
+      }
+    }
+    Ok(RunInspectionV4 {
+      profile: "woml.run-inspection/v4",
+      run_id: base.run_id,
+      workflow_id: base.workflow_id,
+      status: base.status,
+      business_outcome: base.business_outcome,
+      lifecycle_status: base.lifecycle_status,
+      hooks: base.hooks,
+      warnings: base.warnings,
+      cancellation: base.cancellation,
+      policy: base.policy,
+      forks: RunInspectionForksV4 { counts, items },
+    })
+  }
+
+  pub fn fork_recovery_work_v1(
+    &self,
+    run_id: &str,
+  ) -> Result<ForkRecoveryWorkV1, DurableStoreError> {
+    let binding = self.run_binding(run_id)?;
+    let workflow = self.definition(&binding.definition_hash)?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V13 {
+      return Err(DurableStoreError::Contract(
+        "Fork recovery work is available only for compiled Model v13 runs.".to_string(),
+      ));
+    }
+    let projection = self.projection(run_id)?;
+    let ready = ready_node_ids_for_projection(&workflow, &binding.definition_hash, &projection)
+      .map_err(DurableStoreError::Contract)?;
+    let mut openable_fork_ids = Vec::new();
+    let mut pending_branches = Vec::new();
+    let mut joinable_fork_ids = Vec::new();
+    let mut pending_choice_ids = Vec::new();
+    let mut ambiguous_active_node_ids = projection
+      .active_attempt_node_ids()
+      .into_iter()
+      .map(str::to_string)
+      .collect::<Vec<_>>();
+    ambiguous_active_node_ids.sort();
+
+    for choice in workflow.graph.choices.as_deref().unwrap_or_default() {
+      if !projection.choice_selections.contains_key(&choice.choice_id)
+        && ready.contains(&choice.selector_node_id)
+      {
+        pending_choice_ids.push(choice.choice_id.clone());
+      }
+    }
+    for fork in workflow.graph.forks.as_deref().unwrap_or_default() {
+      let Some(projected) = projection.forks.get(&fork.fork_id) else {
+        if ready.contains(&fork.open_node_id) {
+          openable_fork_ids.push(fork.fork_id.clone());
+        }
+        continue;
+      };
+      for branch in &fork.branches {
+        if projected.branches.contains_key(&branch.branch_id) {
+          continue;
+        }
+        let mut route = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::from([branch.entry_node_id.as_str()]);
+        while let Some(node_id) = queue.pop_front() {
+          if !route.insert(node_id) || node_id == branch.terminal_node_id {
+            continue;
+          }
+          for edge in workflow
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.from == node_id)
+          {
+            queue.push_back(edge.to.as_str());
+          }
+        }
+        if !ambiguous_active_node_ids
+          .iter()
+          .any(|node_id| route.contains(node_id.as_str()))
+        {
+          pending_branches.push(ForkRecoveryBranchV1 {
+            fork_id: fork.fork_id.clone(),
+            branch_id: branch.branch_id.clone(),
+          });
+        }
+      }
+      if projected.join_status == crate::projection::ForkJoinStatus::Pending
+        && fork.joined_branch_ids.iter().all(|branch_id| {
+          projected
+            .branches
+            .get(branch_id)
+            .and_then(|branch| branch.outcome)
+            == Some(crate::event::ForkBranchOutcome::Succeeded)
+        })
+      {
+        joinable_fork_ids.push(fork.fork_id.clone());
+      }
+    }
+    Ok(ForkRecoveryWorkV1 {
+      profile: "woml.fork-recovery-work/v1",
+      openable_fork_ids,
+      pending_branches,
+      joinable_fork_ids,
+      pending_choice_ids,
+      ambiguous_active_node_ids,
     })
   }
 
@@ -6356,7 +6682,9 @@ impl DurableEventStore {
     })?;
     if matches!(
       event_schema_version,
-      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      crate::RUN_EVENT_SCHEMA_VERSION_V10
+        | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        | crate::RUN_EVENT_SCHEMA_VERSION_V12
     ) {
       let ambiguous_actions = projection
         .lifecycle_hooks
@@ -6735,7 +7063,9 @@ impl DurableEventStore {
         });
         let payloads = if matches!(
           event_schema_version,
-          crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+          crate::RUN_EVENT_SCHEMA_VERSION_V10
+            | crate::RUN_EVENT_SCHEMA_VERSION_V11
+            | crate::RUN_EVENT_SCHEMA_VERSION_V12
         ) {
           expand_model_v11_payload(&workflow, run_id, payload)?
         } else {
@@ -6762,7 +7092,9 @@ impl DurableEventStore {
       ));
       let run_failure_payloads = if matches!(
         event_schema_version,
-        crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        crate::RUN_EVENT_SCHEMA_VERSION_V10
+          | crate::RUN_EVENT_SCHEMA_VERSION_V11
+          | crate::RUN_EVENT_SCHEMA_VERSION_V12
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -6974,7 +7306,9 @@ impl DurableEventStore {
       ));
       let run_failure_payloads = if matches!(
         event_schema_version,
-        crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        crate::RUN_EVENT_SCHEMA_VERSION_V10
+          | crate::RUN_EVENT_SCHEMA_VERSION_V11
+          | crate::RUN_EVENT_SCHEMA_VERSION_V12
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -8923,7 +9257,9 @@ fn append_to_history(
 ) -> Result<RunEvent, DurableStoreError> {
   let payloads = if matches!(
     event_schema_version,
-    crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+    crate::RUN_EVENT_SCHEMA_VERSION_V10
+      | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      | crate::RUN_EVENT_SCHEMA_VERSION_V12
   ) && matches!(
     payload,
     RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -9188,7 +9524,9 @@ impl DurableDagEngine {
     let event_id = event_id.into();
     if matches!(
       run_event_schema_version_for_model(self.workflow.schema_version),
-      crate::RUN_EVENT_SCHEMA_VERSION_V10 | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      crate::RUN_EVENT_SCHEMA_VERSION_V10
+        | crate::RUN_EVENT_SCHEMA_VERSION_V11
+        | crate::RUN_EVENT_SCHEMA_VERSION_V12
     ) && matches!(
       &payload,
       RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)

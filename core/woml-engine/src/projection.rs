@@ -8,11 +8,12 @@ use thiserror::Error;
 use crate::event::{
   ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalResolution,
   ApprovalTimeoutPolicy, AttemptFailure, BranchFailure, BusinessOutcome, EventValidationError,
-  FinalLifecycleStatus, LifecycleFailure, LifecycleHookCompletionStatus, LifecycleSubject,
-  LifecycleWarning, NotificationResolution, NotificationSafeFailure, OperationExecutionMode,
-  ParallelFailure, ParallelFailurePolicy, ParallelGroupOutcome, ProviderMessageIdentity, RunEvent,
-  RunEventPayload, RunFailedData, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4,
-  RunFailedDataV5, RunOutcomeDecidedData, StepAttemptStartedData,
+  FinalLifecycleStatus, ForkBranchOutcome, ForkJoinOutcome, LifecycleFailure,
+  LifecycleHookCompletionStatus, LifecycleSubject, LifecycleWarning, NotificationResolution,
+  NotificationSafeFailure, OperationExecutionMode, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupOutcome, ProviderMessageIdentity, RunEvent, RunEventPayload, RunFailedData,
+  RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunOutcomeDecidedData,
+  StepAttemptStartedData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -162,6 +163,30 @@ pub struct ParallelGroupProjection {
   pub status: ParallelGroupStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForkJoinStatus {
+  Pending,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkBranchProjection {
+  pub branch_id: String,
+  pub terminal_node_id: Option<String>,
+  pub outcome: Option<ForkBranchOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkProjection {
+  pub fork_id: String,
+  pub branches: BTreeMap<String, ForkBranchProjection>,
+  pub join_status: ForkJoinStatus,
+  pub blocking_branch_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalRequestStatus {
   Waiting,
@@ -296,7 +321,9 @@ pub struct RunProjection {
   pub operations: BTreeMap<OperationIdentity, OperationProjection>,
   pub pending_retries: BTreeMap<String, RetryScheduleProjection>,
   pub branch_selections: BTreeMap<String, String>,
+  pub choice_selections: BTreeMap<String, String>,
   pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
+  pub forks: BTreeMap<String, ForkProjection>,
   pub approval_requests: BTreeMap<String, ApprovalRequestProjection>,
   pub notification_deliveries: BTreeMap<String, NotificationDeliveryProjection>,
   pub notification_updates: BTreeMap<String, NotificationMessageUpdateProjection>,
@@ -725,6 +752,97 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         projection
           .branch_selections
           .insert(data.branch_id.clone(), data.arm_id.clone());
+      }
+      RunEventPayload::ChoiceSelected(data) => {
+        require_running(&projection)?;
+        if projection.choice_selections.contains_key(&data.choice_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Choice {:?} was selected more than once.",
+            data.choice_id
+          )));
+        }
+        projection
+          .choice_selections
+          .insert(data.choice_id.clone(), data.arm_id.clone());
+      }
+      RunEventPayload::ForkOpened(data) => {
+        require_running(&projection)?;
+        if projection.forks.contains_key(&data.fork_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Fork {:?} was opened more than once.",
+            data.fork_id
+          )));
+        }
+        projection.forks.insert(
+          data.fork_id.clone(),
+          ForkProjection {
+            fork_id: data.fork_id.clone(),
+            branches: BTreeMap::new(),
+            join_status: ForkJoinStatus::Pending,
+            blocking_branch_id: None,
+          },
+        );
+      }
+      RunEventPayload::ForkBranchSettled(data) => {
+        require_running_or_cancelling(&projection)?;
+        let fork = projection.forks.get_mut(&data.fork_id).ok_or_else(|| {
+          FoldError::InvalidHistory(format!(
+            "Fork branch {:?}.{:?} settled before its fork opened.",
+            data.fork_id, data.branch_id
+          ))
+        })?;
+        if fork.branches.contains_key(&data.branch_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "Fork branch {:?}.{:?} settled more than once.",
+            data.fork_id, data.branch_id
+          )));
+        }
+        fork.branches.insert(
+          data.branch_id.clone(),
+          ForkBranchProjection {
+            branch_id: data.branch_id.clone(),
+            terminal_node_id: Some(data.terminal_node_id.clone()),
+            outcome: Some(data.outcome),
+          },
+        );
+      }
+      RunEventPayload::ForkJoinSettled(data) => {
+        require_running_or_cancelling(&projection)?;
+        let fork = projection.forks.get_mut(&data.fork_id).ok_or_else(|| {
+          FoldError::InvalidHistory(format!(
+            "Fork {:?} join settled before its fork opened.",
+            data.fork_id
+          ))
+        })?;
+        if fork.join_status != ForkJoinStatus::Pending {
+          return Err(FoldError::InvalidHistory(format!(
+            "Fork {:?} join settled more than once.",
+            data.fork_id
+          )));
+        }
+        if let Some(blocking_branch_id) = data.blocking_branch_id.as_deref() {
+          let matching_outcome = fork
+            .branches
+            .get(blocking_branch_id)
+            .and_then(|branch| branch.outcome)
+            .is_some_and(|outcome| match data.outcome {
+              ForkJoinOutcome::Failed => outcome == ForkBranchOutcome::Failed,
+              ForkJoinOutcome::Cancelled => outcome == ForkBranchOutcome::Cancelled,
+              ForkJoinOutcome::Succeeded => false,
+            });
+          if !matching_outcome {
+            return Err(FoldError::InvalidHistory(format!(
+              "Fork {:?} join outcome is not proven by blocking branch {:?}.",
+              data.fork_id, blocking_branch_id
+            )));
+          }
+        }
+        fork.join_status = match data.outcome {
+          ForkJoinOutcome::Succeeded => ForkJoinStatus::Succeeded,
+          ForkJoinOutcome::Failed => ForkJoinStatus::Failed,
+          ForkJoinOutcome::Cancelled => ForkJoinStatus::Cancelled,
+        };
+        fork.blocking_branch_id = data.blocking_branch_id.clone();
       }
       RunEventPayload::ParallelGroupStarted(data) => {
         require_running(&projection)?;
@@ -1401,6 +1519,17 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
         {
           return Err(FoldError::InvalidHistory(
             "A run business outcome may be decided exactly once.".to_string(),
+          ));
+        }
+        if projection.forks.values().any(|fork| {
+          fork.join_status == ForkJoinStatus::Pending
+            || fork
+              .branches
+              .values()
+              .any(|branch| branch.outcome.is_none())
+        }) {
+          return Err(FoldError::InvalidHistory(
+            "A run outcome cannot be decided while opened fork work remains unsettled.".to_string(),
           ));
         }
         match data {

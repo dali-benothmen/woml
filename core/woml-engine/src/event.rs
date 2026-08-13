@@ -6,9 +6,9 @@ use thiserror::Error;
 use crate::{
   capability::{validate_safe_metadata, CapabilityFailure},
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V11,
-  RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
-  RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
-  RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
+  RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3,
+  RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6,
+  RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +35,7 @@ pub enum RunEventPayload {
   StepAttemptFailed(StepAttemptFailedData),
   StepRetryScheduled(StepRetryScheduledData),
   BranchSelected(BranchSelectedData),
+  ChoiceSelected(ChoiceSelectedData),
   ParallelGroupStarted(ParallelGroupStartedData),
   ParallelGroupCompleted(ParallelGroupCompletedData),
   ApprovalRequested(ApprovalRequestedData),
@@ -51,6 +52,9 @@ pub enum RunEventPayload {
   OperationStarted(OperationStartedData),
   OperationSucceeded(OperationSucceededData),
   OperationFailed(OperationFailedData),
+  ForkOpened(ForkOpenedData),
+  ForkBranchSettled(ForkBranchSettledData),
+  ForkJoinSettled(ForkJoinSettledData),
   RunCancellationRequested(RunCancellationRequestedData),
   LifecycleHookRequested(LifecycleHookRequestedData),
   LifecycleActionAttemptStarted(LifecycleActionIdentityData),
@@ -368,6 +372,53 @@ pub struct StepRetryScheduledData {
 pub struct BranchSelectedData {
   pub branch_id: String,
   pub arm_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChoiceSelectedData {
+  pub choice_id: String,
+  pub arm_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForkOpenedData {
+  pub fork_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForkBranchOutcome {
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForkBranchSettledData {
+  pub fork_id: String,
+  pub branch_id: String,
+  pub terminal_node_id: String,
+  pub outcome: ForkBranchOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForkJoinOutcome {
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForkJoinSettledData {
+  pub fork_id: String,
+  pub outcome: ForkJoinOutcome,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub blocking_branch_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1212,6 +1263,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V9
         | RUN_EVENT_SCHEMA_VERSION_V10
         | RUN_EVENT_SCHEMA_VERSION_V11
+        | RUN_EVENT_SCHEMA_VERSION_V12
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -1221,6 +1273,19 @@ impl RunEvent {
       return Err(EventValidationError::Invalid(
         "Run events require valid eventId, runId, and sequence >= 1.".to_string(),
       ));
+    }
+    if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V12
+      && !matches!(
+        self.payload,
+        RunEventPayload::ChoiceSelected(_)
+          | RunEventPayload::ForkOpened(_)
+          | RunEventPayload::ForkBranchSettled(_)
+          | RunEventPayload::ForkJoinSettled(_)
+      )
+    {
+      let mut inherited = self.clone();
+      inherited.event_schema_version = RUN_EVENT_SCHEMA_VERSION_V11;
+      return inherited.validate();
     }
     match &self.payload {
       RunEventPayload::RunAdmitted(data) => {
@@ -1416,6 +1481,55 @@ impl RunEvent {
         {
           return Err(EventValidationError::Invalid(
             "branch_selected requires a valid branchId and matching canonical armId.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ChoiceSelected(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V12
+          || !valid_id(&data.choice_id)
+          || !data.arm_id.starts_with(&format!("{}:", data.choice_id))
+          || !valid_id(&data.arm_id)
+        {
+          return Err(EventValidationError::Invalid(
+            "choice_selected requires Event v12 and one canonical choice arm identity.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ForkOpened(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V12
+          || !valid_public_structural_id(&data.fork_id)
+        {
+          return Err(EventValidationError::Invalid(
+            "fork_opened requires Event v12 and a valid forkId.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ForkBranchSettled(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V12
+          || !valid_public_structural_id(&data.fork_id)
+          || !valid_public_structural_id(&data.branch_id)
+          || !valid_id(&data.terminal_node_id)
+        {
+          return Err(EventValidationError::Invalid(
+            "fork_branch_settled requires valid Event v12 fork, branch, terminal, and outcome fields."
+              .to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ForkJoinSettled(data) => {
+        let blocking_valid = match (data.outcome, data.blocking_branch_id.as_deref()) {
+          (ForkJoinOutcome::Succeeded, None) => true,
+          (ForkJoinOutcome::Failed | ForkJoinOutcome::Cancelled, Some(branch_id)) => {
+            valid_public_structural_id(branch_id)
+          }
+          _ => false,
+        };
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V12
+          || !valid_public_structural_id(&data.fork_id)
+          || !blocking_valid
+        {
+          return Err(EventValidationError::Invalid(
+            "fork_join_settled requires one closed Event v12 outcome shape.".to_string(),
           ));
         }
       }

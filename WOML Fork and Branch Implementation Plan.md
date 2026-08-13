@@ -1,6 +1,6 @@
 # WOML Fork and Branch Implementation Plan
 
-Status: FJ0-FJ3 completed; durable Event v12 state begins in FJ4
+Status: FJ0-FJ4 completed; concurrent fork execution begins in FJ5
 
 ## 1. Product Outcome
 
@@ -817,7 +817,7 @@ publishable release.
 | FJ1 — completed | Introduce canonical `<choose>` and the legacy conditional-source migration. | Conditions have the correct product name without breaking stored history or existing files abruptly. |
 | FJ2 — completed | Parse and validate minimal `<fork>`, `<branch>`, and `join` syntax. | WOML understands valid forks and explains invalid markup at the source. |
 | FJ3 — completed | Lower forks into deterministic Model v13 DAGs with visibility and settlement boundaries. | TypeScript produces a complete engine-ready graph while Rust still gates execution. |
-| FJ4 | Add Event v12, folding, persistence, inspection, and recovery projections. | Fork ownership and branch outcomes survive restart as durable truth. |
+| FJ4 — completed | Add Event v12, folding, persistence, inspection, and recovery projections. | Fork ownership and branch outcomes survive restart as durable truth. |
 | FJ5 | Execute concurrent branches and `join="all"` in Rust. | Multi-step branches run concurrently and the main route safely waits for all. |
 | FJ6 | Execute selected joins and `join="none"` with deterministic context filtering. | The main route can continue early without seeing timing-dependent outputs. |
 | FJ7 | Complete failure, cancellation, approval/retry/control-flow composition, CLI, and observability behavior. | Forks work inside real automations and remain operable in production. |
@@ -954,7 +954,7 @@ Gate:
 TypeScript and Rust independently accept the reviewed graphs, reject every
 malformed graph fixture, and reproduce stable definition hashes.
 
-### FJ4 — Make fork progress durable and recoverable
+### FJ4 — Make fork progress durable and recoverable — completed
 
 Changes:
 
