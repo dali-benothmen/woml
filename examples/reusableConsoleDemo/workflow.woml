@@ -1,0 +1,114 @@
+<woml>
+  <imports>
+    <module name="prepare-message" from="./prepare-message.woml" />
+    <module name="console" from="./console.woml" />
+  </imports>
+
+  <workflow
+    id="reusable-console-demo"
+    name="Reusable components and switch demo"
+    description="Tests a switch, a custom step, and a colored console provider"
+    version="1.0.0">
+    <lifecycle>
+      <on-success>
+        <notify>
+          <console
+            level="success"
+            message="{{context.steps.summary.message}}"
+          />
+        </notify>
+      </on-success>
+
+      <on-failure>
+        <notify>
+          <console
+            level="error"
+            message="Workflow failed with {{lifecycle.failure.code}}"
+          />
+        </notify>
+      </on-failure>
+
+      <on-complete>
+        <notify>
+          <console
+            level="info"
+            message="Workflow completed with {{lifecycle.workflow.outcome}}"
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+
+    <triggers>
+      <webhook
+        id="runDemo"
+        path="/webhooks/reusable-console-demo"
+        method="POST"
+        auth="none">
+        <schema>
+          {
+            "type": "object",
+            "required": ["name", "mode"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "mode": { "type": "string", "enum": ["success", "error"] }
+            },
+            "additionalProperties": false
+          }
+        </schema>
+      </webhook>
+    </triggers>
+
+    <steps>
+      <prepare-message
+        id="prepare"
+        person="{{context.payload.name}}"
+        mode="{{context.payload.mode}}"
+      />
+
+      <switch id="selectedRoute" value="{{context.steps.prepare.mode}}">
+        <case value="success">
+          <step id="successRoute" name="Successful route">
+            <script>
+              return {
+                status: "success",
+                message: `${context.steps.prepare.greeting}, the switch selected the green route.`
+              };
+            </script>
+          </step>
+          <result value="{{context.steps.successRoute}}" />
+        </case>
+
+        <case value="error">
+          <step id="errorRoute" name="Intentional error route">
+            <script>
+              throw new Error(`${context.steps.prepare.greeting}, this is the intentional error route.`);
+            </script>
+          </step>
+          <result value="{{context.steps.errorRoute}}" />
+        </case>
+
+        <default>
+          <step id="defaultRoute" name="Default route">
+            <script>
+              return {
+                status: "default",
+                message: "The switch selected its default route."
+              };
+            </script>
+          </step>
+          <result value="{{context.steps.defaultRoute}}" />
+        </default>
+      </switch>
+
+      <step id="summary" name="Build final result">
+        <script>
+          return {
+            name: context.steps.prepare.name,
+            route: context.steps.selectedRoute.status,
+            message: context.steps.selectedRoute.message
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

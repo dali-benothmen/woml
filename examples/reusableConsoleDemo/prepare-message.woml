@@ -1,0 +1,37 @@
+<woml>
+  <props>
+    <prop name="person" required="true" />
+    <prop name="mode" required="true" />
+  </props>
+
+  <step name="Prepare demo message" description="Normalizes the webhook payload for the workflow">
+    <script>
+      const name = String(props.person).trim();
+      const mode = String(props.mode).toLowerCase();
+
+      return {
+        name,
+        mode,
+        greeting: `Hello ${name}`
+      };
+    </script>
+  </step>
+
+  <lifecycle>
+    <on-success>
+      <script>
+        console.log(`Custom step prepared ${lifecycle.result.greeting}`);
+      </script>
+    </on-success>
+    <on-error>
+      <script>
+        console.error(`Custom step failed: ${lifecycle.error.code}`);
+      </script>
+    </on-error>
+    <on-complete>
+      <script>
+        console.log(`Custom step completed with ${lifecycle.outcome}`);
+      </script>
+    </on-complete>
+  </lifecycle>
+</woml>

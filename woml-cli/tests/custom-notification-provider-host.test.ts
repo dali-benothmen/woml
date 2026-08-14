@@ -23,6 +23,16 @@ async function runHost(
   source: string,
   messages: readonly CustomProviderExecuteMessage[]
 ): Promise<readonly CustomProviderOutbound[]> {
+  return (await runHostWithLogs(source, messages)).messages;
+}
+
+async function runHostWithLogs(
+  source: string,
+  messages: readonly CustomProviderExecuteMessage[]
+): Promise<{
+  readonly messages: readonly CustomProviderOutbound[];
+  readonly stderr: string;
+}> {
   const directory = await mkdtemp(resolve(tmpdir(), 'woml-provider-host-'));
   temporaryDirectories.push(directory);
   const manifest = resolve(directory, 'artifacts.json');
@@ -53,7 +63,7 @@ async function runHost(
   const decoder = new FrameDecoder();
   const decoded = decoder.push(new Uint8Array(stdout));
   decoder.finish();
-  return decoded as CustomProviderOutbound[];
+  return { messages: decoded as CustomProviderOutbound[], stderr };
 }
 
 function execute(
@@ -117,6 +127,27 @@ describe('custom notification provider host', () => {
     });
     expect(serialized).not.toContain('super-secret-value');
     expect(serialized).not.toContain('ncap_secret');
+  });
+
+  test('keeps colored provider logs off the framed protocol and redacts capabilities', async () => {
+    const result = await runHostWithLogs(
+      `
+        console.log('\u001b[32;1m[SUCCESS]', notification.message, '\u001b[0m');
+        console.error(props.token, notification.actions.approve.url);
+        return { messageId: 'console-42' };
+      `,
+      [execute('provider-console')]
+    );
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[1]).toMatchObject({
+      messageType: 'completed',
+      invocationId: 'provider-console',
+      outcome: { kind: 'succeeded', receipt: { messageId: 'console-42' } },
+    });
+    expect(result.stderr).toContain('\u001b[32;1m[SUCCESS]');
+    expect(result.stderr).toContain('Approve this?');
+    expect(result.stderr).not.toContain('super-secret-value');
+    expect(result.stderr).not.toContain('ncap_secret');
   });
 
   test('allows multiplexed invocations to complete out of order', async () => {

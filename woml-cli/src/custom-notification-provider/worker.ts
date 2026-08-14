@@ -61,6 +61,49 @@ function redact(
   return safe.slice(0, 1024);
 }
 
+function printable(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (
+    value === undefined ||
+    value === null ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint'
+  ) {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
+function managedConsole(
+  props: Readonly<Record<string, unknown>>,
+  notification: CustomNotificationRequest
+) {
+  const sensitive = sensitiveStrings({
+    props,
+    idempotencyKey: notification.idempotencyKey,
+    actions: notification.actions,
+  }).sort((left, right) => right.length - left.length);
+  const write = (...values: unknown[]) => {
+    let message = values.map(printable).join(' ');
+    for (const value of sensitive) {
+      message = message.split(value).join('[REDACTED]');
+    }
+    process.stderr.write(`${message.slice(0, 4096)}\n`);
+  };
+  return deepFreeze({
+    debug: write,
+    error: write,
+    info: write,
+    log: write,
+    warn: write,
+  });
+}
+
 function validReceipt(value: unknown): value is CustomProviderReceipt {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
@@ -187,13 +230,15 @@ async function execute(request: WorkerRequest): Promise<WorkerResponse> {
       'notification',
       'attempt',
       'services',
+      'console',
       `"use strict";\n${request.source}`
     );
     const result = await run(
       deepFreeze(structuredClone(request.props)),
       deepFreeze(structuredClone(request.notification)),
       deepFreeze(structuredClone(request.attempt)),
-      services
+      services,
+      managedConsole(request.props, request.notification)
     );
     if (!validReceipt(result)) {
       return {
