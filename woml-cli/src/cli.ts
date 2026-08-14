@@ -63,7 +63,9 @@ import {
   RustWorkflowExecutionError,
   runNotificationProviderJourneyWithRust,
   cancelRunWithRust,
+  inspectRunPresentationWithRust,
   inspectRunV2WithRust,
+  listRunPresentationsWithRust,
   listRunsWithRust,
   observeRuntimeWithRust,
   BackupOperationError,
@@ -71,7 +73,6 @@ import {
   RunManagementError,
   RunInspectionError,
   settleApprovalTimeoutWithRust,
-  inspectRunWithRust,
   inspectStoredRunRequirementsWithRust,
   resumeStoredRunWithRust,
   activateWebhookRuntimeWithRust,
@@ -132,6 +133,15 @@ import {
   type RuntimeControlHandle,
 } from './runtime-control';
 import { RuntimeObservability } from './runtime-observability';
+import { ForegroundPresentation } from './foreground-presentation';
+import {
+  renderRunPresentation,
+  renderWorkflowStartup,
+  type ColorMode,
+  type PresentationRenderOptions,
+  type TriggerPresentationV1,
+  type WorkflowPresentationV1,
+} from './terminal-presentation';
 import {
   inspectUsage,
   parseInspectArguments,
@@ -160,11 +170,15 @@ import {
 export interface CliIo {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
+  readonly isTTY?: boolean;
+  readonly columns?: number;
 }
 
 const processIo: CliIo = {
   stdout: text => process.stdout.write(text),
   stderr: text => process.stderr.write(text),
+  isTTY: process.stderr.isTTY === true,
+  columns: process.stderr.columns,
 };
 
 const WOML_CLI_VERSION = packageMetadata.version;
@@ -180,7 +194,7 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml|directory>... [--config <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--background|-d]';
+  return 'Usage: woml run <workflow.woml|directory>... [--config <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--json] [--verbose] [--color=auto|always|never] [--background|-d]';
 }
 
 function testUsage(): string {
@@ -251,6 +265,9 @@ interface RunArguments {
   readonly observabilityHealth: boolean;
   readonly observabilityMetrics: boolean;
   readonly retention?: AutomaticRetentionConfiguration;
+  readonly verbose: boolean;
+  readonly json: boolean;
+  readonly color: ColorMode;
 }
 
 function parseRunArguments(args: readonly string[]): RunArguments {
@@ -286,18 +303,40 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   let stateExplicit = false;
   let hostExplicit = false;
   let portExplicit = false;
+  let verbose = false;
+  let json = false;
+  let color: ColorMode = 'auto';
   const seen = new Set<string>();
-  for (let index = 0; index < options.length; index += 2) {
-    const option = options[index];
-    const value = options[index + 1];
+  for (let index = 0; index < options.length; index += 1) {
+    const rawOption = options[index]!;
+    const colorAssignment = rawOption.startsWith('--color=')
+      ? rawOption.slice('--color='.length)
+      : undefined;
+    const option = colorAssignment === undefined ? rawOption : '--color';
+    if (seen.has(option)) {
+      throw new CliInputError(
+        'WOML_CLI_ARGUMENTS_INVALID',
+        command === 'test' ? testUsage() : runUsage()
+      );
+    }
+    seen.add(option);
+    if (option === '--verbose' || option === '--json') {
+      if (command !== 'run') {
+        throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', testUsage());
+      }
+      if (option === '--verbose') verbose = true;
+      else json = true;
+      continue;
+    }
+    const value = colorAssignment ?? options[index + 1];
     if (
       value === undefined ||
-      seen.has(option) ||
       (option !== '--state' &&
         option !== '--config' &&
         option !== '--resume' &&
         option !== '--approval-port' &&
         option !== '--trigger' &&
+        option !== '--color' &&
         (command !== 'run' || (option !== '--host' && option !== '--port')))
     ) {
       throw new CliInputError(
@@ -305,7 +344,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         command === 'test' ? testUsage() : runUsage()
       );
     }
-    seen.add(option);
+    if (colorAssignment === undefined) index += 1;
     if (option === '--state') {
       if (value.length === 0) {
         throw new CliInputError(
@@ -363,6 +402,14 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       }
       port = parsedPort;
       portExplicit = true;
+    } else if (option === '--color') {
+      if (command !== 'run' || !['auto', 'always', 'never'].includes(value)) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--color must be auto, always, or never.'
+        );
+      }
+      color = value as ColorMode;
     } else {
       if (value.length === 0) {
         throw new CliInputError(
@@ -401,6 +448,9 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     observabilityEnabled: true,
     observabilityHealth: true,
     observabilityMetrics: true,
+    verbose,
+    json,
+    color,
   };
 }
 
@@ -781,18 +831,30 @@ function durableRetryProgress(
   args: RunArguments
 ): (progress: ExecutionProgressV1) => void {
   let recoveryPrinted = false;
+  const presentation = new ForegroundPresentation({
+    io,
+    render: presentationRenderOptions(args, io),
+    verbose: args.verbose,
+    inspectRun: () => {
+      throw new Error('Execution progress does not inspect settled runs.');
+    },
+  });
   return progress => {
-    io.stderr(`${formatExecutionProgress(progress)}\n`);
+    if (args.command === 'test') {
+      io.stderr(`${formatExecutionProgress(progress)}\n`);
+    } else {
+      presentation.execution(progress);
+    }
     if (
       'type' in progress &&
       progress.type === 'step_retry_scheduled' &&
       !recoveryPrinted
     ) {
       recoveryPrinted = true;
-      io.stderr(
+      presentation.verbose(
         `Recovery: woml run ${JSON.stringify(args.filePath)} --state ${JSON.stringify(
           args.statePath
-        )} --resume ${JSON.stringify(progress.runId)}\n`
+        )} --resume ${JSON.stringify(progress.runId)}`
       );
     }
   };
@@ -2212,8 +2274,7 @@ async function runApprovalWorkflow(
   const runtimeOptions = {
     nativeCorePath: dependencies.nativeCorePath,
     resolvedSecrets: secrets,
-    onProgress: (progress: ExecutionProgressV1) =>
-      io.stderr(`${formatExecutionProgress(progress)}\n`),
+    onProgress: durableRetryProgress(io, args),
     runtimeModules,
   };
   let outcome =
@@ -2249,7 +2310,13 @@ async function runApprovalWorkflow(
       runtimeOptions
     );
   }
-  io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
+  printSettledOneShot(
+    args,
+    io,
+    dependencies,
+    outcome.execution.runId,
+    outcome.execution.result
+  );
 }
 
 function collectSecretReferences(
@@ -2360,8 +2427,7 @@ async function runNotificationWorkflow(
     dependencies.createSecretStore()
   );
   await mkdir(dirname(args.statePath), { recursive: true });
-  const runtimeProgress = (progress: ExecutionProgressV1): void =>
-    io.stderr(`${formatExecutionProgress(progress)}\n`);
+  const runtimeProgress = durableRetryProgress(io, args);
   let outcome =
     args.resumeRunId === undefined
       ? await executeApprovalWorkflowWithRust(workflow, args.statePath, {
@@ -2460,7 +2526,13 @@ async function runNotificationWorkflow(
       }
     );
   }
-  io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
+  printSettledOneShot(
+    args,
+    io,
+    dependencies,
+    outcome.execution.runId,
+    outcome.execution.result
+  );
 }
 
 async function resolvedStoredRunSecrets(
@@ -2499,8 +2571,7 @@ async function resumeStoredRun(
   const runtimeOptions = {
     nativeCorePath: dependencies.nativeCorePath,
     resolvedSecrets: secrets,
-    onProgress: (progress: ExecutionProgressV1) =>
-      io.stderr(`${formatExecutionProgress(progress)}\n`),
+    onProgress: durableRetryProgress(io, args),
   };
 
   io.stderr(
@@ -2584,7 +2655,55 @@ async function resumeStoredRun(
       runtimeOptions
     );
   }
-  io.stdout(`${JSON.stringify(outcome.execution.result)}\n`);
+  printSettledOneShot(
+    args,
+    io,
+    dependencies,
+    outcome.execution.runId,
+    outcome.execution.result,
+    true
+  );
+}
+
+function presentationOutput(args: RunArguments, io: CliIo, text: string): void {
+  if (args.json) io.stdout(text);
+  else io.stderr(text);
+}
+
+function printSettledOneShot(
+  args: RunArguments,
+  io: CliIo,
+  dependencies: CliDependencies,
+  runId: string,
+  fallbackResult: JsonValue,
+  includeWorkflowHeader = false
+): void {
+  if (args.command === 'test') {
+    io.stdout(`${JSON.stringify(fallbackResult)}\n`);
+    return;
+  }
+  const render = presentationRenderOptions(args, io);
+  try {
+    const presentation = inspectRunPresentationWithRust(args.statePath, runId, {
+      nativeCorePath: dependencies.nativeCorePath,
+    });
+    if (includeWorkflowHeader) {
+      presentationOutput(
+        args,
+        io,
+        renderWorkflowStartup(presentation.workflow, render)
+      );
+    }
+    const rendered = renderRunPresentation(presentation, render);
+    presentationOutput(args, io, args.json ? rendered : `\n${rendered}`);
+  } catch (error) {
+    if (!args.json) {
+      io.stderr(
+        `Warning [WOML_RUN_PRESENTATION_UNAVAILABLE]: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    }
+    io.stdout(`${JSON.stringify(fallbackResult)}\n`);
+  }
 }
 
 async function executeOneShot(
@@ -2594,6 +2713,23 @@ async function executeOneShot(
   dependencies: CliDependencies,
   runtimeModules: readonly RustRuntimeModuleArtifact[] = []
 ): Promise<void> {
+  if (args.command === 'run') {
+    presentationOutput(
+      args,
+      io,
+      renderWorkflowStartup(
+        workflowPresentation(
+          workflow,
+          compiledDefinitionHash(workflow),
+          args.host,
+          args.port,
+          new Map(),
+          new Map()
+        ),
+        presentationRenderOptions(args, io)
+      )
+    );
+  }
   if (runtimeModules.length > 0) {
     const publicModules = runtimeModules.filter(
       module => !module.name.startsWith('__woml_')
@@ -2670,13 +2806,21 @@ async function executeOneShot(
               runtimeModules,
             }
           );
-    io.stdout(`${JSON.stringify(execution.result)}\n`);
+    printSettledOneShot(
+      args,
+      io,
+      dependencies,
+      execution.runId,
+      execution.result
+    );
     return;
   }
   const execution = await executeWorkflowWithRust(workflow, {
     nativeCorePath: dependencies.nativeCorePath,
     runtimeModules,
   });
+  // Historical pre-durable models have no event-backed presentation. Keep
+  // their established result contract until they are migrated.
   io.stdout(`${JSON.stringify(execution.result)}\n`);
 }
 
@@ -2724,6 +2868,62 @@ function literalString(
   return expression?.kind === 'literal' && typeof expression.value === 'string'
     ? expression.value
     : undefined;
+}
+
+function literalNumber(expression: ValueExpression | undefined): number | undefined {
+  return expression?.kind === 'literal' && typeof expression.value === 'number'
+    ? expression.value
+    : undefined;
+}
+
+function literalStringArray(expression: ValueExpression | undefined): readonly string[] {
+  if (expression?.kind !== 'array') return [];
+  return expression.items
+    .map(item => literalString(item))
+    .filter((item): item is string => item !== undefined);
+}
+
+function triggerPresentationType(handler: string): TriggerPresentationV1['type'] | undefined {
+  if (handler === 'trigger.manual') return 'manual';
+  if (handler === 'trigger.webhook') return 'webhook';
+  if (handler === 'trigger.slack') return 'slack';
+  if (handler === 'trigger.schedule') return 'schedule';
+  if (handler === 'trigger.interval') return 'interval';
+  if (handler === 'trigger.event') return 'event';
+  return undefined;
+}
+
+function readableInterval(milliseconds: number | undefined): string | undefined {
+  if (milliseconds === undefined) return undefined;
+  const units = [
+    ['d', 86_400_000],
+    ['h', 3_600_000],
+    ['m', 60_000],
+    ['s', 1_000],
+    ['ms', 1],
+  ] as const;
+  for (const [suffix, size] of units) {
+    if (milliseconds % size === 0) return `${milliseconds / size}${suffix}`;
+  }
+  return `${milliseconds}ms`;
+}
+
+function presentationRenderOptions(
+  args: RunArguments,
+  io: CliIo
+): PresentationRenderOptions {
+  return {
+    format: args.json ? 'json' : io.isTTY === true ? 'tty' : 'plain',
+    color: args.color,
+    isTTY: io.isTTY === true,
+    width: io.columns,
+    environment: process.env,
+    fullResultCommand: runId =>
+      `woml get ${runId} --state ${JSON.stringify(args.statePath)} --json`,
+    // TM4 removes this compatibility override when normal `woml run`
+    // manual admission becomes keyboard-driven.
+    manualInstruction: 'Runs once when the runtime starts',
+  };
 }
 
 interface WebhookRouteSummary {
@@ -2900,6 +3100,124 @@ export function eventCurlExample(
     .join('\n');
 }
 
+function dueIdentity(workflowId: string, triggerId: string): string {
+  return `${workflowId}\u0000${triggerId}`;
+}
+
+function workflowPresentation(
+  workflow: CompiledWorkflowDefinition,
+  definitionHash: string,
+  host: string,
+  port: number,
+  scheduleDue: ReadonlyMap<string, string>,
+  intervalDue: ReadonlyMap<string, string>,
+  slackWorkspace?: string
+): WorkflowPresentationV1 {
+  const webhookRoutes = new Map(
+    webhookRouteSummaries(workflow).map(route => [route.triggerId, route])
+  );
+  const eventRoutes = new Map(
+    eventRouteSummaries(workflow).map(route => [route.eventName, route])
+  );
+  const triggers: TriggerPresentationV1[] = [];
+  for (const trigger of workflow.triggers) {
+    const type = triggerPresentationType(trigger.handler);
+    if (type === undefined) continue;
+    const fields = objectFields(trigger.config);
+    if (type === 'webhook') {
+      const route = webhookRoutes.get(trigger.id);
+      triggers.push({
+        id: trigger.id,
+        type,
+        method: route?.method ?? 'POST',
+        ...(route === undefined
+          ? {}
+          : {
+              url: `http://${host}:${port}${route.path}`,
+              example: webhookCurlExample(route, host, port),
+              ...(route.authentication === 'none'
+                ? { warning: 'No authentication; this endpoint accepts unauthenticated requests.' }
+                : {}),
+            }),
+      });
+      continue;
+    }
+    if (type === 'event') {
+      const eventName = literalString(fields?.name) ?? trigger.id;
+      const route = eventRoutes.get(eventName);
+      triggers.push({
+        id: trigger.id,
+        type,
+        event: eventName,
+        ...(route?.publicEndpoint === true
+          ? {
+              url: `http://${host}:${port}/_woml/events/${eventName}`,
+              example: eventCurlExample(route, host, port),
+            }
+          : {}),
+      });
+      continue;
+    }
+    if (type === 'slack') {
+      const events = literalStringArray(fields?.events);
+      const channels = literalStringArray(fields?.channels);
+      const scope = [
+        events.length === 0 ? undefined : events.join(', '),
+        channels.length === 0 ? undefined : `channels: ${channels.join(', ')}`,
+      ].filter((value): value is string => value !== undefined).join(' · ');
+      triggers.push({
+        id: trigger.id,
+        type,
+        ...(slackWorkspace === undefined ? {} : { workspace: slackWorkspace }),
+        ...(scope.length === 0 ? {} : { scope }),
+      });
+      continue;
+    }
+    if (type === 'schedule') {
+      triggers.push({
+        id: trigger.id,
+        type,
+        ...(literalString(fields?.cron) === undefined
+          ? {}
+          : { schedule: literalString(fields?.cron)! }),
+        ...(literalString(fields?.timezone) === undefined
+          ? {}
+          : { timezone: literalString(fields?.timezone)! }),
+        ...(scheduleDue.get(dueIdentity(workflow.workflowId, trigger.id)) === undefined
+          ? {}
+          : { nextDueAt: scheduleDue.get(dueIdentity(workflow.workflowId, trigger.id))! }),
+      });
+      continue;
+    }
+    if (type === 'interval') {
+      const interval = readableInterval(literalNumber(fields?.everyMs));
+      const nextDueAt = intervalDue.get(dueIdentity(workflow.workflowId, trigger.id));
+      triggers.push({
+        id: trigger.id,
+        type,
+        ...(interval === undefined ? {} : { interval }),
+        ...(nextDueAt === undefined ? {} : { nextDueAt }),
+      });
+      continue;
+    }
+    triggers.push({ id: trigger.id, type });
+  }
+  return {
+    id: workflow.workflowId,
+    ...(workflow.metadata?.name === undefined
+      ? {}
+      : { name: workflow.metadata.name }),
+    ...(workflow.metadata?.description === undefined
+      ? {}
+      : { description: workflow.metadata.description }),
+    ...(workflow.metadata?.version === undefined
+      ? {}
+      : { version: workflow.metadata.version }),
+    definitionHash,
+    triggers,
+  };
+}
+
 async function resolvedSecrets(
   workflow: CompiledWorkflowDefinition,
   store: SecretStore
@@ -2969,36 +3287,6 @@ export function formatTriggerProgress(progress: TriggerProgressV1): string {
       ? progress.triggerHandler
       : `${progress.triggerHandler} "${progress.triggerId}"`;
   return `Rejected ${target} [${progress.code}]: ${progress.message}`;
-}
-
-function reportTriggerProgress(
-  progress: TriggerProgressV1,
-  statePath: string,
-  io: CliIo,
-  nativeCorePath?: string
-): void {
-  io.stderr(`${formatTriggerProgress(progress)}\n`);
-  if (progress.type !== 'run_terminal' || progress.status !== 'succeeded') {
-    return;
-  }
-  try {
-    const run = inspectRunWithRust(statePath, progress.runId, {
-      nativeCorePath,
-    });
-    if (run.result !== undefined) {
-      io.stderr(
-        `Run ${progress.runId} result: ${JSON.stringify(run.result)}\n`
-      );
-    }
-  } catch (error) {
-    const code =
-      error instanceof RunInspectionError
-        ? error.code
-        : 'WOML_RUN_INSPECTION_FAILED';
-    io.stderr(
-      `Run ${progress.runId} result is temporarily unavailable [${code}]. Inspect it with: woml get ${progress.runId} --state ${JSON.stringify(statePath)}\n`
-    );
-  }
 }
 
 export function formatScheduleProgress(progress: ScheduleProgressV1): string {
@@ -3183,6 +3471,18 @@ async function activateWorkflows(
   let observability: RuntimeObservability | undefined;
   let automaticRetention: AutomaticRetentionHandle | undefined;
   const pendingObservabilityProgress: unknown[] = [];
+  const scheduleDue = new Map<string, string>();
+  const intervalDue = new Map<string, string>();
+  let slackWorkspaceId: string | undefined;
+  const foregroundPresentation = new ForegroundPresentation({
+    io,
+    render: presentationRenderOptions(args, io),
+    verbose: args.verbose,
+    inspectRun: runId =>
+      inspectRunPresentationWithRust(args.statePath, runId, {
+        nativeCorePath: dependencies.nativeCorePath,
+      }),
+  });
   const observe = (progress: unknown): void => {
     if (observability === undefined) {
       if (pendingObservabilityProgress.length < 1024)
@@ -3206,7 +3506,7 @@ async function activateWorkflows(
             module => !module.name.startsWith('__woml_')
           );
           if (publicModules.length > 0) {
-            io.stderr(
+            foregroundPresentation.verbose(
               `WOML modules ready for ${source.workflow.workflowId}: ${publicModules.map(module => `services.${module.name}`).join(', ')}.\n`
             );
           }
@@ -3265,34 +3565,35 @@ async function activateWorkflows(
           startSuspended: true,
           onTriggerProgress: progress => {
             observe(progress);
-            if (args.logFormat === 'text') {
-              reportTriggerProgress(
-                progress,
-                args.statePath,
-                io,
-                dependencies.nativeCorePath
-              );
-            }
+            foregroundPresentation.trigger(progress);
           },
           onScheduleProgress: progress => {
             observe(progress);
-            if (args.logFormat === 'text')
-              io.stderr(`${formatScheduleProgress(progress)}\n`);
+            if (progress.type === 'next_due') {
+              scheduleDue.set(
+                dueIdentity(progress.workflowId, progress.triggerId),
+                progress.nextScheduledAt
+              );
+            }
+            foregroundPresentation.schedule(progress);
           },
           onIntervalProgress: progress => {
             observe(progress);
-            if (args.logFormat === 'text')
-              io.stderr(`${formatIntervalProgress(progress)}\n`);
+            if (progress.type === 'next_due') {
+              intervalDue.set(
+                dueIdentity(progress.workflowId, progress.triggerId),
+                progress.nextScheduledAt
+              );
+            }
+            foregroundPresentation.interval(progress);
           },
           onWorkflowCallProgress: progress => {
             observe(progress);
-            if (args.logFormat === 'text')
-              io.stderr(`${formatWorkflowCallProgress(progress)}\n`);
+            foregroundPresentation.workflowCall(progress);
           },
           onRuntimePolicyProgress: progress => {
             observe(progress);
-            if (args.logFormat === 'text')
-              io.stderr(`${formatExecutionProgress(progress)}\n`);
+            foregroundPresentation.execution(progress);
           },
           onRuntimeLifecycle: progress => {
             observe(progress);
@@ -3369,7 +3670,12 @@ async function activateWorkflows(
             }),
           storeSize: () => durableStoreSize(args.statePath),
           logFormat: args.logFormat,
-          emitLog: io.stderr,
+          emitLog:
+            args.verbose ||
+            args.logFormat === 'json' ||
+            process.env.WOML_BACKGROUND_LOG !== undefined
+              ? io.stderr
+              : () => {},
           components: componentRecords,
         });
         observability.setLifecycle('recovering');
@@ -3385,6 +3691,19 @@ async function activateWorkflows(
         observability,
         healthEnabled: args.observabilityHealth,
         metricsEnabled: args.observabilityMetrics,
+        presentations: {
+          run: runId =>
+            inspectRunPresentationWithRust(args.statePath, runId, {
+              nativeCorePath: dependencies.nativeCorePath,
+            }),
+          workflow: (workflowId, limit) =>
+            listRunPresentationsWithRust(
+              args.statePath,
+              workflowId,
+              limit,
+              { nativeCorePath: dependencies.nativeCorePath }
+            ),
+        },
         operations: {
           listRuns: () => {
             listRunsWithRust(
@@ -3412,21 +3731,23 @@ async function activateWorkflows(
       if (slackRegistrations.length > 0) {
         slackTransport =
           dependencies.createSlackTransport?.({
-            log: message => io.stderr(`[woml] ${message}\n`),
+            log: message => foregroundPresentation.verbose(message),
             onConnectionState: status => {
               if (status.state === 'reconnecting') {
-                io.stderr(
-                  `Slack Socket Mode reconnecting${status.retryAt === undefined ? '.' : ` at ${status.retryAt}.`}\n`
+                foregroundPresentation.warning(
+                  'WOML_SLACK_RECONNECTING',
+                  `Slack Socket Mode is reconnecting${status.retryAt === undefined ? '.' : ` at ${status.retryAt}.`}`
                 );
               }
             },
           }) ??
           new SharedSlackTransport({
-            log: message => io.stderr(`[woml] ${message}\n`),
+            log: message => foregroundPresentation.verbose(message),
             onConnectionState: status => {
               if (status.state === 'reconnecting') {
-                io.stderr(
-                  `Slack Socket Mode reconnecting${status.retryAt === undefined ? '.' : ` at ${status.retryAt}.`}\n`
+                foregroundPresentation.warning(
+                  'WOML_SLACK_RECONNECTING',
+                  `Slack Socket Mode is reconnecting${status.retryAt === undefined ? '.' : ` at ${status.retryAt}.`}`
                 );
               }
             },
@@ -3440,10 +3761,21 @@ async function activateWorkflows(
               nativeCorePath: dependencies.nativeCorePath,
             }),
           emit: message => {
+            if (message.messageType === 'connection') {
+              slackWorkspaceId = message.workspaceId;
+            }
             const formatted = formatSlackTriggerMessage(message);
-            if (formatted !== undefined) io.stderr(`${formatted}\n`);
+            if (message.messageType === 'failure') {
+              foregroundPresentation.warning(message.code, message.message);
+            } else if (formatted !== undefined) {
+              foregroundPresentation.verbose(formatted);
+            }
           },
-          diagnostic: message => io.stderr(`${message}\n`),
+          diagnostic: message =>
+            foregroundPresentation.warning(
+              'WOML_SLACK_TRIGGER_DIAGNOSTIC',
+              message
+            ),
         });
         try {
           await slackHost.start();
@@ -3473,8 +3805,8 @@ async function activateWorkflows(
         'WOML_RUNTIME_READY',
         `WOML runtime is ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.`
       );
-      io.stderr(
-        `WOML deployment activation ${currentActivationId.slice(7, 19)} ready with ${productionSources.length} workflow${productionSources.length === 1 ? '' : 's'}.\n`
+      foregroundPresentation.verbose(
+        `Deployment activation ${currentActivationId.slice(7, 19)} is ready with ${productionSources.length} workflow(s).`
       );
       automaticRetention = startAutomaticRetention({
         statePath: args.statePath,
@@ -3503,47 +3835,35 @@ async function activateWorkflows(
           );
           observability?.recordMaintenance('retention', 'failed', code);
           observability?.alert(code, formatError(error));
+          foregroundPresentation.warning(code, formatError(error));
         },
       });
       if (automaticRetention.nextRunAt !== undefined) {
-        io.stderr(
-          `Automatic retention is enabled; next maintenance at ${automaticRetention.nextRunAt}.\n`
+        foregroundPresentation.verbose(
+          `Automatic retention is enabled; next maintenance at ${automaticRetention.nextRunAt}.`
         );
       }
       descriptorPath = runtimeDescriptorPath(args.statePath);
       await runtimeControl.publishDescriptor(descriptorPath);
-      io.stderr(
-        `Inspect live runtime: woml inspect --state ${JSON.stringify(args.statePath)}\n`
+      foregroundPresentation.verbose(
+        `Inspect live runtime with woml inspect --state ${JSON.stringify(args.statePath)}.`
       );
       await dependencies.onRuntimeReady?.({
         runtimeInstanceId: runtime.runtimeId,
         descriptorPath,
         workflowCount: productionSources.length,
       });
-      if (hasHttpEndpoint) {
-        io.stderr(
-          `WOML workflow active at http://${runtime.host}:${runtime.port}.\n`
-        );
-      }
-      for (const route of uniqueEventRoutes) {
-        io.stderr(
-          `Event ${route.eventName}: POST http://${runtime.host}:${runtime.port}/_woml/events/${route.eventName}\n`
-        );
-        io.stderr(
-          `Try event ${route.eventName}:\n${eventCurlExample(route, runtime.host, runtime.port)}\n`
-        );
-      }
-      for (const route of routes) {
-        io.stderr(
-          `Webhook ${route.triggerId}: ${route.method} http://${runtime.host}:${runtime.port}${route.path}\n`
-        );
-        if (route.authentication === 'none') {
-          io.stderr(
-            `Warning: webhook ${route.triggerId} has auth="none" and accepts unauthenticated requests.\n`
-          );
-        }
-        io.stderr(
-          `Try webhook ${route.triggerId}:\n${webhookCurlExample(route, runtime.host, runtime.port)}\n`
+      for (const source of productionSources) {
+        foregroundPresentation.startup(
+          workflowPresentation(
+            source.workflow,
+            source.definitionHash,
+            runtime.host,
+            runtime.port,
+            scheduleDue,
+            intervalDue,
+            slackWorkspaceId
+          )
         );
       }
 
@@ -3558,7 +3878,11 @@ async function activateWorkflows(
       }
     }
 
-    io.stderr('WOML automation is active. Press Ctrl+C to stop.\n');
+    if (!args.json) {
+      // This stable readiness receipt is also consumed by background handoff
+      // and deployment supervisors.
+      io.stderr('WOML automation is active. Press Ctrl+C to stop.\n');
+    }
     await Promise.race([
       (dependencies.waitForShutdown ?? waitForShutdownSignal)(),
       runtimeUnavailable,

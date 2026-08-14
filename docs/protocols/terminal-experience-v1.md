@@ -1,6 +1,8 @@
 # WOML Terminal Experience Contracts v1
 
-Status: Frozen by TM0. Implementation begins in TM1.
+Status: Frozen by TM0. The renderer, durable Run Presentation projection, and
+foreground integration are implemented through TM3. Interactive manual
+admission and background log following remain later phases.
 
 This document freezes the interfaces shared by the future Rust projection,
 the Bun CLI renderers, manual-trigger input, and background log following. It
@@ -22,6 +24,7 @@ does not make terminal text part of workflow execution truth.
 The normative schemas are:
 
 - `docs/schemas/run-presentation.v1.schema.json`
+- `docs/schemas/run-presentation-list.v1.schema.json`
 - `docs/schemas/manual-trigger-admission.v1.schema.json`
 
 ## 2. Run Presentation v1
@@ -49,6 +52,11 @@ dependencies. The compiled DAG remains authoritative.
 `STEPS COMPLETED` is derived from business-node settlement. `RUN COMPLETED`
 is derived only after required lifecycle finalization settles. A renderer must
 not infer either fact from elapsed time or an empty progress stream.
+
+Lifecycle hook names cover the engine's complete existing vocabulary:
+`on-start`, `on-success`, `on-failure`, `on-cancel`, `on-complete`,
+`on-step-start`, `on-step-success`, `on-step-failure`, and
+`on-step-complete`.
 
 Historical snapshots use the definition bound to the run, never a currently
 edited `.woml` file.
@@ -102,6 +110,14 @@ an icon or ASCII marker.
 The renderer adapts to 32–160 columns, wraps descriptions, aligns durations
 when space permits, and uses the authored name with the authored ID as the
 fallback. Missing optional metadata is omitted cleanly.
+
+Foreground `woml run` accepts `--json`, `--verbose`, and
+`--color=auto|always|never`. Human mode prints an immediate admission receipt
+and one atomic durable block after settlement. JSON mode emits only reviewed
+workflow metadata and `woml.run-presentation/v1` snapshots on stdout; warnings
+and operational diagnostics remain on stderr. Raw trigger, scheduler, retry,
+provider, and lifecycle chatter is hidden by default and available through
+`--verbose` or structured background logging.
 
 The semantic palette is:
 
@@ -180,6 +196,23 @@ Stable viewer diagnostics are:
 - `WOML_LOG_RUNTIME_UNAVAILABLE`
 - `WOML_RUN_PRESENTATION_VERSION_UNSUPPORTED`
 
+The native projection boundary additionally uses
+`WOML_RUN_PRESENTATION_SIZE_LIMIT`, `WOML_RUN_PRESENTATION_LIMIT_INVALID`, and
+`WOML_RUN_PRESENTATION_FAILED`. A missing individual run retains the existing
+`WOML_RUN_NOT_FOUND` diagnostic.
+
+The active runtime exposes the same bounded projection through its existing
+loopback-only, capability-authenticated administration listener:
+
+- `GET /v1/presentations/runs/<run-id>` returns one
+  `woml.run-presentation/v1` snapshot; and
+- `GET /v1/presentations/workflows/<workflow-id>?limit=10` returns one
+  `woml.run-presentation-list/v1` value, with `limit` restricted to `1..10`.
+
+These routes read the durable store through the Rust projection. They do not
+parse runtime logs, expose a public network listener, or become a second source
+of workflow truth.
+
 Operational logging stays separate and ANSI-free. Background startup prints
 copyable `--logs` commands but does not persist decorative terminal frames.
 
@@ -187,7 +220,8 @@ copyable `--logs` commands but does not persist decorative terminal frames.
 
 - Model v14, Event v13, Store v14, and existing execution protocols are not
   changed by TM0 or TM1.
-- TM1 does not modify `cli.ts` or replace current runtime output.
+- TM3 replaces legacy foreground progress strings with the versioned renderer;
+  it does not change workflow execution semantics or durable events.
 - Existing JSON commands retain their current shapes. Run Presentation v1 is a
   new profile rather than a silent mutation of Run Inspection v5.
 - Permanent files, symbols, tests, and package commands use product names,

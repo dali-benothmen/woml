@@ -3,6 +3,13 @@ import { resolve } from 'node:path';
 
 import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
 
+import {
+  decodeRunPresentationListV1,
+  decodeRunPresentationV1,
+  type RunPresentationListV1,
+  type RunPresentationV1,
+} from './terminal-presentation';
+
 export interface RustRunEvent {
   readonly eventSchemaVersion:
     | 1
@@ -785,6 +792,15 @@ interface NativeCore {
     ingressJson: string
   ) => Promise<string>;
   readonly inspectWomlRun: (eventStorePath: string, runId: string) => string;
+  readonly inspectWomlRunPresentation: (
+    eventStorePath: string,
+    runId: string
+  ) => string;
+  readonly listWomlRunPresentations: (
+    eventStorePath: string,
+    workflowId: string,
+    limit: number
+  ) => string;
   readonly listWomlRuns: (
     eventStorePath: string,
     limit: number,
@@ -2553,6 +2569,57 @@ export function inspectRunWithRust(
     throw new Error('The native core returned invalid run inspection data.');
   }
   return value as unknown as RustRunInspection;
+}
+
+export function inspectRunPresentationWithRust(
+  eventStorePath: string,
+  runId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RunPresentationV1 {
+  if (eventStorePath.length === 0 || runId.length === 0) {
+    throw new Error('Run presentation requires a store path and run ID.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.inspectWomlRunPresentation !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose Run Presentation v1; rebuild the Rust addon.`
+    );
+  }
+  const value = callRunManagementNative(() =>
+    native.inspectWomlRunPresentation(eventStorePath, runId)
+  );
+  return decodeRunPresentationV1(JSON.stringify(value));
+}
+
+export function listRunPresentationsWithRust(
+  eventStorePath: string,
+  workflowId: string,
+  limit = 10,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RunPresentationListV1 {
+  if (
+    eventStorePath.length === 0 ||
+    workflowId.length === 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 10
+  ) {
+    throw new Error(
+      'Recent run presentations require a store path, workflow ID, and a limit from 1 through 10.'
+    );
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.listWomlRunPresentations !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose Run Presentation listing; rebuild the Rust addon.`
+    );
+  }
+  const value = callRunManagementNative(() =>
+    native.listWomlRunPresentations(eventStorePath, workflowId, limit)
+  );
+  return decodeRunPresentationListV1(JSON.stringify(value));
 }
 
 function callRunManagementNative(call: () => string): unknown {

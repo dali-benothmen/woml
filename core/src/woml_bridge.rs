@@ -16,20 +16,21 @@ use woml_engine::model::ValueExpression;
 use woml_engine::{
   create_online_backup, execute_retention, execute_workflow, execute_workflow_durable,
   execute_workflow_durable_outcome, inspect_backup_store, last_retention_result, plan_retention,
-  prepare_restored_store, record_verified_backup, recover_durable_runs,
-  resolve_human_approval_durable, resume_workflow_durable, resume_workflow_durable_any_outcome,
-  resume_workflow_durable_outcome, run_notification_provider_journey_with_custom,
+  prepare_restored_store, recent_run_presentations_from_store_v1, record_verified_backup,
+  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
+  resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
+  run_notification_provider_journey_with_custom, run_presentation_from_store_v1,
   settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome, BackupError,
   CompiledReusableInvocation, CompiledWorkflowDefinition, CustomNotificationJourneyOptions,
   CustomProviderScriptArtifact, DurableEventStore, DurableStoreError,
   ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter, LifecycleProgress,
   NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
   NotificationJourneyError, ParallelFailurePolicy, RetentionError, RetentionPolicyV1, RunFailure,
-  RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact,
-  RuntimePolicyProgress, RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
-  ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest, TriggerProgress,
-  TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
-  WomlWebhookServerConfig, WorkflowCallProgress, WorkflowCallProgressReporter,
+  RunPresentationError, RunStatus, RuntimeExecutionError, RuntimeExecutionOptions,
+  RuntimeModuleArtifact, RuntimePolicyProgress, RuntimePolicyProgressReporter, ScheduleProgress,
+  ScheduleProgressReporter, ScriptHostProcessOptions, SystemEngineClock, TriggerAdmissionRequest,
+  TriggerProgress, TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError,
+  WomlWebhookServer, WomlWebhookServerConfig, WorkflowCallProgress, WorkflowCallProgressReporter,
   WorkflowCallRunRelations,
 };
 
@@ -610,6 +611,18 @@ fn native_run_management_error(code: &'static str, error: DurableStoreError) -> 
   })
   .unwrap_or_else(|_| "WOML run management failed.".to_string());
   napi::Error::from_reason(reason)
+}
+
+fn native_run_presentation_error(error: RunPresentationError) -> napi::Error {
+  let code = match &error {
+    RunPresentationError::Store(DurableStoreError::RunNotFound(_)) => "WOML_RUN_NOT_FOUND",
+    RunPresentationError::TooLarge | RunPresentationError::TooMany(_) => {
+      "WOML_RUN_PRESENTATION_SIZE_LIMIT"
+    }
+    RunPresentationError::InvalidRecentLimit => "WOML_RUN_PRESENTATION_LIMIT_INVALID",
+    _ => "WOML_RUN_PRESENTATION_FAILED",
+  };
+  native_run_management_error(code, DurableStoreError::Contract(error.to_string()))
 }
 
 fn native_run_inspection_error(error: DurableStoreError) -> napi::Error {
@@ -1661,6 +1674,39 @@ pub fn inspect_woml_run(event_store_path: String, run_id: String) -> napi::Resul
   };
   serde_json::to_string(&inspection)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML run: {error}")))
+}
+
+#[napi]
+pub fn inspect_woml_run_presentation(
+  event_store_path: String,
+  run_id: String,
+) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_presentation_error(RunPresentationError::Store(error)))?;
+  let presentation =
+    run_presentation_from_store_v1(&store, &run_id).map_err(native_run_presentation_error)?;
+  serde_json::to_string(&presentation).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode WOML run presentation: {error}"))
+  })
+}
+
+#[napi]
+pub fn list_woml_run_presentations(
+  event_store_path: String,
+  workflow_id: String,
+  limit: u32,
+) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_presentation_error(RunPresentationError::Store(error)))?;
+  let presentations = recent_run_presentations_from_store_v1(
+    &store,
+    &workflow_id,
+    usize::try_from(limit).unwrap_or(usize::MAX),
+  )
+  .map_err(native_run_presentation_error)?;
+  serde_json::to_string(&presentations).map_err(|error| {
+    napi::Error::from_reason(format!("Could not encode WOML run presentations: {error}"))
+  })
 }
 
 #[napi]

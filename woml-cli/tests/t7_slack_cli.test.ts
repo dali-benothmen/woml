@@ -180,7 +180,7 @@ describe('T7 woml run Slack product journey', () => {
               });
               await waitFor(
                 () => stderr,
-                'result: {"type":"app-mention"'
+                'Final result'
               );
             },
           }
@@ -189,18 +189,14 @@ describe('T7 woml run Slack product journey', () => {
         if (exitCode !== 0) throw new Error(stderr);
         expect(exitCode).toBe(0);
         expect(stdout).toBe('');
-        expect(stderr).toContain('WOML Slack trigger host is ready.');
-        expect(stderr).toContain(
-          'Slack workspace T12345678 is ready for triggers.'
-        );
-        expect(stderr).toContain(
-          'Received Slack app-mention EvCli001 for trigger "agentMessage".'
-        );
-        expect(stderr).toContain(
-          'Accepted trigger.slack "agentMessage" for workflow "slack-trigger-contract"'
-        );
-        expect(stderr).toContain('Run run_');
-        expect(stderr).toContain('succeeded.');
+        expect(stderr).toContain('slack-trigger-contract');
+        expect(stderr).toContain('Workspace  T12345678');
+        expect(stderr).toContain('app-mention, direct-message');
+        expect(stderr).toContain('Accepted · slack · agentMessage');
+        expect(stderr).toContain('RUN  run_');
+        expect(stderr).toContain('RUN COMPLETED');
+        expect(stderr).toContain('Final result');
+        expect(stderr).not.toContain('WOML Slack trigger host is ready.');
         expect(stderr).toContain('WOML automation stopped.');
         expect(socket!.sent).toEqual([
           JSON.stringify({ envelope_id: 'env_cli_001' }),

@@ -43,6 +43,7 @@ interface ResolvedRenderOptions {
   readonly locale: string;
   readonly timeZone?: string;
   readonly fullResultCommand: (runId: string) => string;
+  readonly manualInstruction: string;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -66,6 +67,7 @@ function resolveOptions(options: PresentationRenderOptions = {}): ResolvedRender
     locale: options.locale ?? 'en-GB',
     timeZone: options.timeZone,
     fullResultCommand: options.fullResultCommand ?? (runId => `woml get ${runId} --json`),
+    manualInstruction: options.manualInstruction ?? 'Press Enter to start a run',
   };
 }
 
@@ -255,7 +257,7 @@ function statusGlyph(status: StepPresentationStatus | RunPresentationStatus, uni
   if (status === 'succeeded') return unicode ? '✓' : 'OK';
   if (status === 'failed' || status === 'timed_out') return unicode ? '✗' : 'X';
   if (status === 'cancelled' || status === 'skipped') return unicode ? '○' : '-';
-  if (status === 'waiting') return unicode ? '◐' : 'WAIT';
+  if (status === 'waiting' || status === 'cancelling') return unicode ? '◐' : 'WAIT';
   if (status === 'retrying') return unicode ? '↻' : 'RETRY';
   if (status === 'queued') return unicode ? '◇' : 'QUEUE';
   if (status === 'finalizing') return unicode ? '◌' : 'FINAL';
@@ -265,7 +267,7 @@ function statusGlyph(status: StepPresentationStatus | RunPresentationStatus, uni
 function statusColor(status: StepPresentationStatus | RunPresentationStatus): ColorName {
   if (status === 'succeeded') return 'green';
   if (status === 'failed' || status === 'timed_out') return 'red';
-  if (status === 'waiting' || status === 'retrying') return 'yellow';
+  if (status === 'waiting' || status === 'retrying' || status === 'cancelling') return 'yellow';
   if (status === 'running' || status === 'finalizing') return 'blue';
   if (status === 'queued') return 'magenta';
   return 'dim';
@@ -333,8 +335,11 @@ function triggerTitle(trigger: TriggerPresentationV1): string {
   return trigger.label ?? labels[trigger.type];
 }
 
-function triggerDetails(trigger: TriggerPresentationV1): string[] {
-  if (trigger.type === 'manual') return ['Press Enter to start a run'];
+function triggerDetails(
+  trigger: TriggerPresentationV1,
+  options: ResolvedRenderOptions
+): string[] {
+  if (trigger.type === 'manual') return [options.manualInstruction];
   if (trigger.type === 'webhook') return [
     `${trigger.method ?? 'POST'}  ${trigger.url ?? 'Address unavailable'}`,
     ...(trigger.example === undefined ? [] : ['', 'Try it', ...sanitizeTerminalText(trigger.example).split('\n')]),
@@ -375,7 +380,7 @@ export function renderWorkflowStartup(
   const lines = [...workflowBox(safe, options), '', paint(safe.triggers.length === 1 ? 'TRIGGER' : 'TRIGGERS', 'bold', options.color), ''];
   for (const trigger of safe.triggers) {
     lines.push(`  ${paint(options.unicode ? '●' : '*', 'blue', options.color)} ${paint(triggerTitle(trigger), 'bold', options.color)}`);
-    for (const detail of triggerDetails(trigger)) lines.push(detail.length === 0 ? '' : `    ${detail}`);
+    for (const detail of triggerDetails(trigger, options)) lines.push(detail.length === 0 ? '' : `    ${detail}`);
     if (trigger.warning !== undefined) lines.push(`    ${paint(`Warning: ${trigger.warning}`, 'yellow', options.color)}`);
     lines.push('');
   }
@@ -541,4 +546,58 @@ export function renderReadyPrompt(
   const hasManual = workflow.triggers.some(trigger => trigger.type === 'manual');
   if (!hasManual || options.format === 'json') return '';
   return `${paint(options.unicode ? '●' : '*', 'green', options.color)} ${paint('Ready', 'green', options.color)} · Press Enter to run again\n`;
+}
+
+export interface RunAdmissionPresentation {
+  readonly runId: string;
+  readonly admittedAt: string;
+  readonly workflowId: string;
+  readonly triggerId: string;
+  readonly triggerType: TriggerPresentationV1['type'];
+}
+
+/** Render the immediate receipt shown before durable execution settles. */
+export function renderRunAdmission(
+  admission: RunAdmissionPresentation,
+  renderOptions: PresentationRenderOptions = {}
+): string {
+  const options = resolveOptions(renderOptions);
+  const safeRunId = sanitizeTerminalText(admission.runId);
+  const safeWorkflowId = sanitizeTerminalText(admission.workflowId);
+  const safeTriggerId = sanitizeTerminalText(admission.triggerId);
+  const safeDate = formatDate(admission.admittedAt, options);
+  if (options.format === 'json') return '';
+  const title = alignEnds(
+    `${paint('RUN', 'bold', options.color)}  ${paint(safeRunId, 'cyan', options.color)}`,
+    safeDate,
+    options.width
+  );
+  const trigger = `${admission.triggerType} · ${safeTriggerId}`;
+  return `\n${title}\n  ${paint(options.unicode ? '●' : '*', 'blue', options.color)} ${paint('Accepted', 'blue', options.color)} · ${trigger} · ${safeWorkflowId}\n`;
+}
+
+export function renderRunNotice(
+  runId: string,
+  status: 'queued' | 'waiting' | 'retrying' | 'finalizing',
+  message: string,
+  renderOptions: PresentationRenderOptions = {}
+): string {
+  const options = resolveOptions(renderOptions);
+  const safeRunId = sanitizeTerminalText(runId);
+  const safeMessage = sanitizeTerminalText(message).replaceAll('\n', ' ');
+  if (options.format === 'json') return '';
+  const glyph = status === 'finalizing' ? (options.unicode ? '◇' : '*') : (options.unicode ? '○' : '*');
+  return `  ${paint(glyph, 'yellow', options.color)} ${paint(safeRunId, 'cyan', options.color)} · ${paint(status, 'yellow', options.color)} · ${safeMessage}\n`;
+}
+
+export function renderPresentationWarning(
+  code: string,
+  message: string,
+  renderOptions: PresentationRenderOptions = {}
+): string {
+  const options = resolveOptions(renderOptions);
+  const safeCode = sanitizeTerminalText(code).replaceAll('\n', ' ');
+  const safeMessage = sanitizeTerminalText(message).replaceAll('\n', ' ');
+  if (options.format === 'json') return '';
+  return `${paint(options.unicode ? '!' : 'WARN', 'yellow', options.color)} ${paint(safeCode, 'yellow', options.color)} · ${safeMessage}\n`;
 }

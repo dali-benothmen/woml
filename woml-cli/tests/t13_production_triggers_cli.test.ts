@@ -209,19 +209,15 @@ describe('T13 complete Production Triggers runtime', () => {
           'mixed-trigger runtime readiness'
         );
         expect(stderr).toContain(
-          'WOML runtime is ready with 5 registered triggers.'
+          `POST  http://127.0.0.1:${port}/t13/incoming`
         );
         expect(stderr).toContain(
-          `Webhook incoming: POST http://127.0.0.1:${port}/t13/incoming`
+          `POST   http://127.0.0.1:${port}/_woml/events/t13.received`
         );
-        expect(stderr).toContain(
-          `Event t13.received: POST http://127.0.0.1:${port}/_woml/events/t13.received`
-        );
-        expect(stderr).toContain('Schedule annual (UTC) next due at');
-        expect(stderr).toContain(
-          'Interval maintenance every 2592000000ms next due at'
-        );
-        expect(stderr).toContain('Slack workspace T12345678 is ready for triggers.');
+        expect(stderr).toContain('Schedule   0 0 1 1 *');
+        expect(stderr).toContain('Every      30d');
+        expect(stderr).toContain('Workspace  T12345678');
+        expect(stderr).not.toContain('WOML_RUNTIME_PROGRESS');
 
         const webhook = await fetch(
           `http://127.0.0.1:${port}/t13/incoming`,
@@ -234,7 +230,9 @@ describe('T13 complete Production Triggers runtime', () => {
         expect(webhook.status).toBe(202);
         const webhookRun = (await webhook.json()) as { runId: string };
         await waitUntil(
-          () => stderr.includes(`Run ${webhookRun.runId} result: {"source":"webhook"}`),
+          () =>
+            stderr.includes(`RUN  ${webhookRun.runId}`) &&
+            stderr.includes('{ source: "webhook" }'),
           'webhook-triggered result'
         );
 
@@ -257,7 +255,9 @@ describe('T13 complete Production Triggers runtime', () => {
         const eventRun = publication.deliveries[0]?.runId;
         expect(eventRun).toBeString();
         await waitUntil(
-          () => stderr.includes(`Run ${eventRun} result: {"source":"event"}`),
+          () =>
+            stderr.includes(`RUN  ${eventRun}`) &&
+            stderr.includes('{ source: "event" }'),
           'event-triggered result'
         );
 

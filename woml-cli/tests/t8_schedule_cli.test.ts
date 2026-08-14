@@ -53,14 +53,12 @@ describe('T9 schedule CLI boundary', () => {
 
       expect(exitCode).toBe(0);
       expect(stdout).toBe('');
-      expect(stderr).toContain(
-        'Schedule dailyReport (Europe/Berlin) next due at'
-      );
-      expect(stderr).toContain(
-        'WOML runtime is ready with 1 registered trigger.'
-      );
+      expect(stderr).toContain('Schedule   0 9 * * *');
+      expect(stderr).toContain('Timezone   Europe/Berlin');
+      expect(stderr).toContain('Next       ');
       expect(stderr).toContain('WOML automation is active.');
       expect(stderr).toContain('WOML automation stopped.');
+      expect(stderr).not.toContain('WOML_RUNTIME_PROGRESS');
       expect(stderr).not.toContain('WOML_TRIGGER_UNSUPPORTED');
       await rm(directory, { recursive: true, force: true });
     }

@@ -117,6 +117,8 @@
     "test:terminal-contracts": "bun test tests/terminal-presentation-contracts.test.ts",
     "test:terminal-renderer": "bun test tests/terminal-presentation-renderer.test.ts",
     "test:terminal-foundation": "bun run test:terminal-contracts && bun run test:terminal-renderer && bun run typecheck",
+    "test:run-presentation": "bun run build:native && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test run_presentation && bun test tests/terminal-presentation-contracts.test.ts tests/run-presentation-native.test.ts tests/run-presentation-admin.test.ts && bun run typecheck",
+    "test:foreground-output": "bun test tests/terminal-presentation-renderer.test.ts tests/foreground-presentation.test.ts tests/foreground-output-cli.test.ts tests/t4_trigger_cli.test.ts tests/t7_slack_cli.test.ts tests/t8_schedule_cli.test.ts tests/t10_interval_cli.test.ts tests/t13_production_triggers_cli.test.ts && bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

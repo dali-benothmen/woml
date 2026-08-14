@@ -1,9 +1,10 @@
 # WOML Terminal Experience and Manual Triggers Implementation Plan
 
-Status: TM0 and TM1 completed on 2026-08-14. The versioned presentation and
-manual-admission contracts, reviewed trigger/run fixtures, and pure
-color/plain/JSON terminal renderer are implemented. Runtime projection and CLI
-integration begin in TM2.
+Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 completed on
+2026-08-15. The versioned presentation contracts, pure color/plain/JSON
+renderer, durable Rust projection, native/TypeScript query boundary, and the
+professional foreground workflow/run output are implemented. TM4 is next and
+makes `<manual>` an Enter-driven trigger instead of a startup run.
 
 ## 1. Product Outcome
 
@@ -826,8 +827,8 @@ arrival, or infer selected routes by reevaluating conditions.
 | --- | --- | --- |
 | TM0 — completed | Freeze presentation, color, result, manual-admission, log-follow, error, security, and compatibility contracts with reviewed fixtures. | Every layer targets one approved terminal and runtime behavior before code changes. |
 | TM1 — completed | Build the pure terminal design system and render reviewed presentation fixtures in color/plain/JSON modes. | The approved output exists as a deterministic renderer independent of execution. |
-| TM2 | Add Rust Run Presentation v1 projection and native/TypeScript decoding. | One durable run can be queried with names, descriptions, steps, results, lifecycle, timing, and summaries. |
-| TM3 | Replace foreground trigger/run output with the professional renderer. | Webhook, Slack, schedule, interval, event, and existing one-shot runs are readable and organized. |
+| TM2 — completed | Add Rust Run Presentation v1 projection and native/TypeScript decoding. | One durable run can be queried with names, descriptions, steps, results, lifecycle, timing, and summaries. |
+| TM3 — completed | Replace foreground trigger/run output with the professional renderer. | Webhook, Slack, schedule, interval, event, and existing one-shot runs are readable and organized. |
 | TM4 | Implement explicit Rust manual admission and the Enter-driven foreground input loop. | `<manual>` waits for the user and can create repeated durable runs. |
 | TM5 | Add `woml <run-id|workflow-id> --logs` and background-runtime attachment. | Users can inspect and follow background execution safely from another terminal. |
 | TM6 | Complete complex control-flow, retry, approval, lifecycle, concurrency, and multi-run presentation. | Large real workflows remain organized instead of exposing internal engine noise. |
@@ -915,7 +916,7 @@ Golden tests cover every status and optional-field combination; stripping ANSI
 from colored output produces the same semantic text as plain mode; malicious
 names/descriptions/results cannot control the terminal.
 
-### TM2 — Build Run Presentation v1 in Rust
+### TM2 — Build Run Presentation v1 in Rust — completed
 
 Changes:
 
@@ -945,7 +946,7 @@ Rust/TypeScript conformance, historical store, restart, malformed/future
 version, limits, result redaction, selected-route, lifecycle, and timing tests
 pass.
 
-### TM3 — Replace foreground output
+### TM3 — Replace foreground output — completed
 
 Changes:
 
@@ -1250,7 +1251,16 @@ them.
 2. **Performance Profiling and Optimization** — establish end-to-end startup,
    compilation, N-API, serialization, worker-host, short-workflow,
    large-workflow, and concurrency profiles; optimize measured bottlenecks
-   without weakening durability or isolation.
+   without weakening durability or isolation. As an optional, benchmark-gated
+   investigation, prototype WOML XML parsing with Rust `quick-xml` and compare
+   it with the current Bun/TypeScript `fast-xml-parser` frontend using real
+   small, large, module-heavy, and control-flow-heavy workflows. Keep N-API as
+   the stable boundary. Adopt Rust parsing or compilation only when it produces
+   a meaningful end-to-end improvement while preserving exact diagnostics,
+   source locations, raw `<script>` behavior, modules, and compiled-model
+   conformance. TypeScript/Bun remains authoritative unless a reviewed complete
+   migration makes Rust the single compiler; WOML must never maintain two
+   competing compiler implementations.
 3. **Legacy Cronflow Core Audit and Removal Map** — produce a dependency-backed
    inventory of old JavaScript-chaining bridge, dispatcher, trigger executor,
    step orchestrator, state machine, database, and compatibility paths;

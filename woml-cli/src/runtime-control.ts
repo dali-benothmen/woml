@@ -54,6 +54,67 @@ export interface RuntimeAdminOperations {
   ) => string | undefined | Promise<string | undefined>;
 }
 
+export interface RuntimePresentationSurface {
+  readonly run: (runId: string) => unknown | Promise<unknown>;
+  readonly workflow: (
+    workflowId: string,
+    limit: number
+  ) => unknown | Promise<unknown>;
+}
+
+export async function queryRuntimePresentation(
+  url: URL,
+  presentations: RuntimePresentationSurface
+): Promise<unknown> {
+  const runPrefix = '/v1/presentations/runs/';
+  const workflowPrefix = '/v1/presentations/workflows/';
+  try {
+    if (url.pathname.startsWith(runPrefix)) {
+      const runId = decodeURIComponent(url.pathname.slice(runPrefix.length));
+      if (!/^run_[A-Za-z0-9_-]{1,252}$/.test(runId)) {
+        throw new RuntimeControlError(
+          'WOML_LOG_SUBJECT_INVALID',
+          'The run presentation subject is invalid.'
+        );
+      }
+      return await presentations.run(runId);
+    }
+    if (url.pathname.startsWith(workflowPrefix)) {
+      const workflowId = decodeURIComponent(
+        url.pathname.slice(workflowPrefix.length)
+      );
+      const limit = Number(url.searchParams.get('limit') ?? '10');
+      if (
+        workflowId.length < 1 ||
+        workflowId.length > 256 ||
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > 10
+      ) {
+        throw new RuntimeControlError(
+          'WOML_RUN_PRESENTATION_LIMIT_INVALID',
+          'A workflow presentation requires an ID and a history limit from 1 through 10.'
+        );
+      }
+      return await presentations.workflow(workflowId, limit);
+    }
+  } catch (error) {
+    if (error instanceof RuntimeControlError) throw error;
+    if (error instanceof URIError) {
+      throw new RuntimeControlError(
+        'WOML_LOG_SUBJECT_INVALID',
+        'The run presentation subject is invalid.',
+        { cause: error }
+      );
+    }
+    throw error;
+  }
+  throw new RuntimeControlError(
+    'WOML_LOG_SUBJECT_INVALID',
+    'The run presentation route is invalid.'
+  );
+}
+
 export class RuntimeControlError extends Error {
   readonly code: string;
 
@@ -201,6 +262,7 @@ export function startRuntimeControl(options: {
   readonly maxOperationsPerMinute?: number;
   readonly operations?: RuntimeAdminOperations;
   readonly observability?: RuntimeObservabilitySurface;
+  readonly presentations?: RuntimePresentationSurface;
   readonly healthEnabled?: boolean;
   readonly metricsEnabled?: boolean;
 }): RuntimeControlHandle {
@@ -319,6 +381,50 @@ export function startRuntimeControl(options: {
     port: options.port ?? 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (
+        request.method === 'GET' &&
+        (url.pathname.startsWith('/v1/presentations/runs/') ||
+          url.pathname.startsWith('/v1/presentations/workflows/'))
+      ) {
+        if (!authorized(request)) {
+          return Response.json(
+            { error: { code: 'WOML_ADMIN_UNAUTHORIZED' } },
+            { status: 401 }
+          );
+        }
+        if (options.presentations === undefined) {
+          return Response.json(
+            { error: { code: 'WOML_RUN_PRESENTATION_FAILED' } },
+            { status: 404 }
+          );
+        }
+        const limited = beginOperation();
+        if (limited !== undefined) return limited;
+        try {
+          return boundedJson(
+            await queryRuntimePresentation(url, options.presentations)
+          );
+        } catch (error) {
+          const candidate =
+            error instanceof Error && 'code' in error ? String(error.code) : '';
+          const code = /^WOML_[A-Z0-9_]{1,123}$/.test(candidate)
+            ? candidate
+            : 'WOML_RUN_PRESENTATION_FAILED';
+          return Response.json(
+            { error: { code } },
+            {
+              status: code === 'WOML_RUN_NOT_FOUND'
+                ? 404
+                : code === 'WOML_LOG_SUBJECT_INVALID' ||
+                    code === 'WOML_RUN_PRESENTATION_LIMIT_INVALID'
+                  ? 400
+                  : 503,
+            }
+          );
+        } finally {
+          inFlight -= 1;
+        }
+      }
       if (
         request.method === 'GET' &&
         (url.pathname === '/livez' || url.pathname === '/readyz')

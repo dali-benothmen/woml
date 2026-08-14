@@ -47,6 +47,7 @@ export type RunPresentationStatus =
   | 'running'
   | 'waiting'
   | 'retrying'
+  | 'cancelling'
   | 'finalizing'
   | 'succeeded'
   | 'failed'
@@ -105,9 +106,12 @@ export type LifecycleHookPresentation =
   | 'on-start'
   | 'on-success'
   | 'on-failure'
+  | 'on-cancel'
   | 'on-complete'
+  | 'on-step-start'
   | 'on-step-success'
-  | 'on-step-failure';
+  | 'on-step-failure'
+  | 'on-step-complete';
 
 export interface LifecyclePresentationV1 {
   readonly hook: LifecycleHookPresentation;
@@ -148,6 +152,12 @@ export interface RunPresentationV1 {
   readonly warnings: readonly PresentationFailureV1[];
 }
 
+export interface RunPresentationListV1 {
+  readonly profile: 'woml.run-presentation-list/v1';
+  readonly workflowId: string;
+  readonly runs: readonly RunPresentationV1[];
+}
+
 export type HumanPresentationFormat = 'tty' | 'plain';
 export type PresentationFormat = HumanPresentationFormat | 'json';
 export type ColorMode = 'auto' | 'always' | 'never';
@@ -162,4 +172,6 @@ export interface PresentationRenderOptions {
   readonly timeZone?: string;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly fullResultCommand?: (runId: string) => string;
+  /** Temporary/runtime-specific manual instruction; the frozen default is interactive. */
+  readonly manualInstruction?: string;
 }

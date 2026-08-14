@@ -3,6 +3,12 @@ import { resolve } from 'node:path';
 
 import Ajv2020 from 'ajv/dist/2020';
 
+import {
+  decodeRunPresentationListV1,
+  decodeRunPresentationV1,
+  RunPresentationDecodeError,
+} from '../src/terminal-presentation';
+
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const schemaRoot = resolve(repositoryRoot, 'docs/schemas');
 const fixtureRoot = resolve(import.meta.dir, 'fixtures/terminal-presentation');
@@ -12,13 +18,18 @@ async function validators() {
   ajv.addFormat('date-time', {
     validate: (value: string) => Number.isFinite(Date.parse(value)),
   });
-  const run = ajv.compile(
-    await Bun.file(resolve(schemaRoot, 'run-presentation.v1.schema.json')).json()
+  const runSchema = await Bun.file(
+    resolve(schemaRoot, 'run-presentation.v1.schema.json')
+  ).json();
+  ajv.addSchema(runSchema);
+  const run = ajv.getSchema('https://woml.dev/schemas/run-presentation/v1')!;
+  const runList = ajv.compile(
+    await Bun.file(resolve(schemaRoot, 'run-presentation-list.v1.schema.json')).json()
   );
   const manual = ajv.compile(
     await Bun.file(resolve(schemaRoot, 'manual-trigger-admission.v1.schema.json')).json()
   );
-  return { run, manual };
+  return { run, runList, manual };
 }
 
 describe('Run Presentation v1 contract', () => {
@@ -78,6 +89,36 @@ describe('Run Presentation v1 contract', () => {
     expect(workflow.triggers.map((trigger: { type: string }) => trigger.type)).toEqual([
       'manual', 'webhook', 'event', 'slack', 'schedule', 'interval',
     ]);
+  });
+
+  test('strictly decodes one presentation and a workflow-scoped recent list', async () => {
+    const validate = await validators();
+    const fixture = await Bun.file(resolve(fixtureRoot, 'success.v1.json')).json();
+    expect(decodeRunPresentationV1(JSON.stringify(fixture))).toEqual(fixture);
+    const list = {
+      profile: 'woml.run-presentation-list/v1' as const,
+      workflowId: fixture.workflow.id,
+      runs: [fixture],
+    };
+    expect(validate.runList(list), JSON.stringify(validate.runList.errors)).toBe(true);
+    expect(decodeRunPresentationListV1(JSON.stringify(list))).toEqual(list);
+  });
+
+  test('the decoder fails closed on future profiles, unknown fields, and mismatched lists', async () => {
+    const fixture = await Bun.file(resolve(fixtureRoot, 'success.v1.json')).json();
+    expect(() => decodeRunPresentationV1(JSON.stringify({
+      ...fixture,
+      profile: 'woml.run-presentation/v2',
+    }))).toThrow(RunPresentationDecodeError);
+    expect(() => decodeRunPresentationV1(JSON.stringify({
+      ...fixture,
+      privateRuntimeField: true,
+    }))).toThrow(RunPresentationDecodeError);
+    expect(() => decodeRunPresentationListV1(JSON.stringify({
+      profile: 'woml.run-presentation-list/v1',
+      workflowId: 'another-workflow',
+      runs: [fixture],
+    }))).toThrow(RunPresentationDecodeError);
   });
 });
 

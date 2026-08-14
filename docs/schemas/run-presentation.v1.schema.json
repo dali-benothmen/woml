@@ -69,6 +69,7 @@
         "running",
         "waiting",
         "retrying",
+        "cancelling",
         "finalizing",
         "succeeded",
         "failed",
@@ -188,9 +189,12 @@
             "on-start",
             "on-success",
             "on-failure",
+            "on-cancel",
             "on-complete",
+            "on-step-start",
             "on-step-success",
-            "on-step-failure"
+            "on-step-failure",
+            "on-step-complete"
           ]
         },
         "status": { "$ref": "#/$defs/stepStatus" },

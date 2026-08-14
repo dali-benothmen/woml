@@ -23,6 +23,7 @@ pub mod model;
 pub mod notification_host;
 pub mod notification_protocol;
 pub mod notification_runtime;
+pub mod presentation;
 pub mod projection;
 pub mod protocol;
 pub mod retention;
@@ -156,6 +157,16 @@ pub use notification_runtime::{
   run_notification_provider_journey, run_notification_provider_journey_with_custom,
   CustomNotificationJourneyOptions, NotificationDeliveryDiagnostic, NotificationJourneyDiagnostics,
   NotificationJourneyError, NotificationJourneyResult, NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION,
+};
+pub use presentation::{
+  project_run_presentation_v1, recent_run_presentations_from_store_v1,
+  run_presentation_from_store_v1, LifecyclePresentationV1, PresentationFailureV1,
+  PresentationLifecycleHook, PresentationRunStatus, PresentationStepKind, PresentationStepStatus,
+  PresentationTriggerType, RunPresentationError, RunPresentationListV1, RunPresentationSummaryV1,
+  RunPresentationTriggerV1, RunPresentationV1, StepPresentationV1, TriggerPresentationV1,
+  WorkflowPresentationV1, RUN_PRESENTATION_LIST_PROFILE, RUN_PRESENTATION_MAX_BYTES,
+  RUN_PRESENTATION_MAX_LIFECYCLE, RUN_PRESENTATION_MAX_STEPS, RUN_PRESENTATION_MAX_WARNINGS,
+  RUN_PRESENTATION_PROFILE, RUN_PRESENTATION_RECENT_LIMIT,
 };
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError, ForkBranchProjection,

@@ -76,8 +76,10 @@ describe('T4 long-lived WOML runtime', () => {
     expect(child.exitCode).toBeNull();
     child.kill('SIGINT');
     expect(await child.exited).toBe(0);
-    expect(await stdout).toBe('{"message":"Hello World"}\n');
+    expect(await stdout).toBe('');
     await stderrDone;
+    expect(stderr).toContain('Final result');
+    expect(stderr).toContain('{ message: "Hello World" }');
     expect(stderr).toContain('WOML automation stopped.');
   });
 
@@ -151,19 +153,15 @@ describe('T4 long-lived WOML runtime', () => {
         }
       );
       expect(rejected.status).toBe(400);
-      await waitFor('Rejected trigger.webhook "newOrder" [WOML_TRIGGER_SCHEMA_INVALID]');
+      await waitFor('WOML_TRIGGER_SCHEMA_INVALID');
       expect(stderr).not.toContain('must-not-appear');
 
       const first = await invoke('t4-first', 'order-1');
-      await waitFor(`Run ${first.runId} succeeded.`);
-      await waitFor(
-        `Run ${first.runId} result: {"message":"Received order order-1"}`
-      );
+      await waitFor(`RUN  ${first.runId}`);
+      await waitFor('{ message: "Received order order-1" }');
       const second = await invoke('t4-second', 'order-2');
-      await waitFor(`Run ${second.runId} succeeded.`);
-      await waitFor(
-        `Run ${second.runId} result: {"message":"Received order order-2"}`
-      );
+      await waitFor(`RUN  ${second.runId}`);
+      await waitFor('{ message: "Received order order-2" }');
       expect(first.runId).not.toBe(second.runId);
       const duplicate = await invoke('t4-second', 'order-2');
       expect(duplicate).toEqual({
@@ -171,10 +169,8 @@ describe('T4 long-lived WOML runtime', () => {
         status: 'accepted',
         duplicate: true,
       });
-      await waitFor(
-        `Recognized duplicate trigger.webhook "newOrder" for workflow "webhook-demo": ${second.runId}.`
-      );
-      expect(stderr).toContain(`Try webhook newOrder:\ncurl --request POST`);
+      await waitFor(`Duplicate trigger.webhook occurrence reused run ${second.runId}.`);
+      expect(stderr).toContain(`Try it\n    curl --request POST`);
       expect(stderr).toContain(
         `--data '{"orderId":"example"}'`
       );
@@ -198,7 +194,7 @@ describe('T4 long-lived WOML runtime', () => {
       );
       expect(missingInspection.exitCode).toBe(1);
       expect(missingInspection.stderr.toString()).toContain(
-        'WOML run error [WOML_RUN_NOT_FOUND]'
+        'WOML_RUN_NOT_FOUND'
       );
 
       child.kill('SIGINT');
