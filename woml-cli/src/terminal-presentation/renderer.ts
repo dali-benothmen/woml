@@ -548,6 +548,31 @@ export function renderReadyPrompt(
   return `${paint(options.unicode ? '●' : '*', 'green', options.color)} ${paint('Ready', 'green', options.color)} · Press Enter to run again\n`;
 }
 
+export interface ManualTargetPresentation {
+  readonly workflowId: string;
+  readonly triggerId: string;
+}
+
+export function renderManualTargetSelection(
+  targets: readonly ManualTargetPresentation[],
+  renderOptions: PresentationRenderOptions = {}
+): string {
+  if (targets.length === 0) return '';
+  const options = resolveOptions(renderOptions);
+  if (options.format === 'json') return '';
+  if (targets.length === 1) {
+    return `${paint(options.unicode ? '●' : '*', 'green', options.color)} ${paint('Ready', 'green', options.color)} · Press Enter to run\n`;
+  }
+  const lines = [paint('MANUAL TRIGGERS', 'bold', options.color), ''];
+  targets.forEach((target, index) => {
+    lines.push(
+      `  ${paint(String(index + 1).padStart(2, ' '), 'cyan', options.color)}  ${sanitizeTerminalText(target.workflowId)} / ${sanitizeTerminalText(target.triggerId)}`
+    );
+  });
+  lines.push('', '  Type a number and press Enter to run');
+  return `${lines.join('\n')}\n`;
+}
+
 export interface RunAdmissionPresentation {
   readonly runId: string;
   readonly admittedAt: string;

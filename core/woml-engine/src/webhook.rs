@@ -2602,20 +2602,33 @@ async fn run_external_ingress(
     let outcome = match admitted {
       Ok(Ok(outcome)) => outcome,
       Ok(Err(error)) => {
+        let manual = trigger_handler == "trigger.manual";
         let (code, message) = if matches!(error, DurableStoreError::TriggerIdempotencyConflict) {
           (
             "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
-            "This provider event is already bound to a different payload.",
+            if manual {
+              "This manual request identity is already bound to another run."
+            } else {
+              "This provider event is already bound to a different payload."
+            },
           )
         } else if matches!(error, DurableStoreError::RuntimePolicyQueueFull) {
           (
             "WOML_POLICY_QUEUE_FULL",
-            "The durable WOML policy queue is full; the provider may retry this event.",
+            if manual {
+              "The durable WOML policy queue is full; try the manual trigger again later."
+            } else {
+              "The durable WOML policy queue is full; the provider may retry this event."
+            },
           )
         } else {
           (
             "WOML_TRIGGER_UNAVAILABLE",
-            "The durable WOML trigger authority rejected the provider event.",
+            if manual {
+              "The durable WOML trigger authority rejected the manual request."
+            } else {
+              "The durable WOML trigger authority rejected the provider event."
+            },
           )
         };
         state.report(TriggerProgress::OccurrenceRejected {

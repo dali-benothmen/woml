@@ -1,10 +1,10 @@
 # WOML Terminal Experience and Manual Triggers Implementation Plan
 
-Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 completed on
+Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 and TM4 completed on
 2026-08-15. The versioned presentation contracts, pure color/plain/JSON
-renderer, durable Rust projection, native/TypeScript query boundary, and the
-professional foreground workflow/run output are implemented. TM4 is next and
-makes `<manual>` an Enter-driven trigger instead of a startup run.
+renderer, durable Rust projection, native/TypeScript query boundary,
+professional foreground output, and Enter-driven durable manual trigger are
+implemented. TM5 is next and adds background log following.
 
 ## 1. Product Outcome
 
@@ -745,6 +745,7 @@ New stable diagnostics include at least:
 | `WOML_MANUAL_TRIGGER_SELECTION_REQUIRED` | More than one manual target exists and no valid selection was made. |
 | `WOML_MANUAL_TRIGGER_BACKGROUND_UNAVAILABLE` | A manual-only detached runtime would have no input surface. |
 | `WOML_MANUAL_TRIGGER_ADMISSION_CLOSED` | Enter was pressed while admission was draining/stopped. |
+| `WOML_POLICY_QUEUE_FULL` | The shared durable policy queue cannot admit another manual occurrence yet. |
 | `WOML_LOG_SUBJECT_INVALID` | The value before `--logs` is neither a valid run ID nor workflow ID. |
 | `WOML_LOG_RUN_NOT_FOUND` | The requested retained run cannot be found. |
 | `WOML_LOG_WORKFLOW_NOT_FOUND` | No active or retained workflow matches the requested ID. |
@@ -829,7 +830,7 @@ arrival, or infer selected routes by reevaluating conditions.
 | TM1 — completed | Build the pure terminal design system and render reviewed presentation fixtures in color/plain/JSON modes. | The approved output exists as a deterministic renderer independent of execution. |
 | TM2 — completed | Add Rust Run Presentation v1 projection and native/TypeScript decoding. | One durable run can be queried with names, descriptions, steps, results, lifecycle, timing, and summaries. |
 | TM3 — completed | Replace foreground trigger/run output with the professional renderer. | Webhook, Slack, schedule, interval, event, and existing one-shot runs are readable and organized. |
-| TM4 | Implement explicit Rust manual admission and the Enter-driven foreground input loop. | `<manual>` waits for the user and can create repeated durable runs. |
+| TM4 — completed | Implement explicit Rust manual admission and the Enter-driven foreground input loop. | `<manual>` waits for the user and can create repeated durable runs. |
 | TM5 | Add `woml <run-id|workflow-id> --logs` and background-runtime attachment. | Users can inspect and follow background execution safely from another terminal. |
 | TM6 | Complete complex control-flow, retry, approval, lifecycle, concurrency, and multi-run presentation. | Large real workflows remain organized instead of exposing internal engine noise. |
 | TM7 | Harden accessibility, security, compatibility, retention, restart, and failure behavior. | Output remains safe and truthful across terminals, pipes, crashes, and historical stores. |
@@ -975,7 +976,7 @@ Packaged foreground acceptance covers webhook, Slack, schedule, interval,
 event, success, failure, lifecycle, warning, and Ctrl+C shutdown with colored,
 plain, and JSON snapshots.
 
-### TM4 — Make `<manual>` interactive
+### TM4 — Make `<manual>` interactive — completed
 
 Changes:
 
@@ -1005,6 +1006,21 @@ Gate:
 Real PTY acceptance proves no run exists before Enter, one Enter creates one
 run, repeated Enter creates distinct runs, policies still apply, invalid input
 does not admit, Ctrl+C drains, and `woml test` remains scriptable.
+
+Completion evidence:
+
+- The frozen Manual Trigger Admission v1 contract is implemented through the
+  native Rust runtime boundary; accepted occurrences use the same durable
+  scheduler and policy authority as every production trigger.
+- Single-target Enter, numbered multi-workflow selection, `--trigger`, empty
+  payload, repeated independent runs, queue notices, and ready-state return are
+  implemented in the foreground CLI.
+- Manual-only non-TTY and background activation fail with their stable,
+  actionable diagnostics before workflow admission; `woml test` remains the
+  explicit non-interactive one-shot surface.
+- The consolidated `test:manual-triggers` gate passes 22 contract,
+  native-runtime, renderer, packaged CLI, and real PTY tests with 91
+  assertions, followed by TypeScript and single-job Rust checks.
 
 ### TM5 — Add background log following
 

@@ -374,7 +374,14 @@ type NativeRuntimeInstanceReporter = Arc<dyn Fn(NativeRuntimeInstanceProgress) +
 struct NativeWebhookRuntimeThread {
   control: mpsc::Sender<NativeWebhookRuntimeCommand>,
   ingress: tokio::sync::mpsc::UnboundedSender<ExternalTriggerAdmissionCommand>,
+  manual_targets: BTreeMap<(String, String), NativeManualTarget>,
   join: JoinHandle<()>,
+}
+
+#[derive(Clone)]
+struct NativeManualTarget {
+  definition_hash: String,
+  admission_status: &'static str,
 }
 
 enum NativeWebhookRuntimeCommand {
@@ -427,6 +434,61 @@ struct NativeTriggerIngressFailure {
   code: &'static str,
   message: &'static str,
   retryable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeManualAdmissionRequest {
+  profile: String,
+  #[serde(rename = "type")]
+  message_type: String,
+  request_id: String,
+  workflow_id: String,
+  trigger_id: String,
+  payload: Map<String, Value>,
+  requested_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeManualAdmissionAccepted {
+  profile: &'static str,
+  #[serde(rename = "type")]
+  message_type: &'static str,
+  request_id: String,
+  occurrence_id: String,
+  run_id: String,
+  status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeManualAdmissionRejected {
+  profile: &'static str,
+  #[serde(rename = "type")]
+  message_type: &'static str,
+  request_id: String,
+  code: &'static str,
+  message: &'static str,
+}
+
+fn encode_manual_rejection(
+  request_id: String,
+  code: &'static str,
+  message: &'static str,
+) -> napi::Result<String> {
+  serde_json::to_string(&NativeManualAdmissionRejected {
+    profile: "woml.manual-trigger-admission/v1",
+    message_type: "rejected",
+    request_id,
+    code,
+    message,
+  })
+  .map_err(|error| {
+    napi::Error::from_reason(format!(
+      "Could not encode manual admission rejection: {error}"
+    ))
+  })
 }
 
 static WEBHOOK_RUNTIMES: OnceLock<Mutex<HashMap<String, NativeWebhookRuntimeThread>>> =
@@ -1335,6 +1397,34 @@ pub fn start_woml_webhook_runtime(
       }
     }
   }
+  let manual_targets = registrations
+    .iter()
+    .flat_map(|registration| {
+      registration
+        .workflow
+        .triggers
+        .iter()
+        .filter(|trigger| trigger.handler == "trigger.manual")
+        .map(|trigger| {
+          (
+            (
+              registration.workflow.workflow_id.clone(),
+              trigger.id.clone(),
+            ),
+            NativeManualTarget {
+              definition_hash: registration.definition_hash.clone(),
+              admission_status: if registration.workflow.schema_version
+                >= woml_engine::COMPILED_MODEL_SCHEMA_VERSION_V12
+              {
+                "queued"
+              } else {
+                "running"
+              },
+            },
+          )
+        })
+    })
+    .collect::<BTreeMap<_, _>>();
   let registrations = registrations
     .into_iter()
     .map(|registration| WebhookDefinitionRegistration {
@@ -1507,6 +1597,7 @@ pub fn start_woml_webhook_runtime(
         NativeWebhookRuntimeThread {
           control: control_sender,
           ingress: ingress_sender,
+          manual_targets,
           join,
         },
       );
@@ -1633,6 +1724,115 @@ pub async fn submit_woml_trigger_occurrence(
   json.map_err(|error| {
     napi::Error::from_reason(format!("Could not encode trigger ingress outcome: {error}"))
   })
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+pub async fn submit_woml_manual_trigger(
+  runtime_id: String,
+  request_json: String,
+) -> napi::Result<String> {
+  let request: NativeManualAdmissionRequest = serde_json::from_str(&request_json)
+    .map_err(|error| napi::Error::from_reason(format!("Invalid manual admission JSON: {error}")))?;
+  if request.profile != "woml.manual-trigger-admission/v1"
+    || request.message_type != "request"
+    || request.request_id.is_empty()
+    || request.request_id.len() > 256
+    || request.workflow_id.is_empty()
+    || request.workflow_id.len() > 256
+    || request.trigger_id.is_empty()
+    || request.trigger_id.len() > 256
+    || !request.payload.is_empty()
+  {
+    return Err(napi::Error::from_reason(
+      "Invalid Manual Trigger Admission v1 request.".to_string(),
+    ));
+  }
+
+  let request_id = request.request_id;
+  let target_key = (request.workflow_id.clone(), request.trigger_id.clone());
+  let runtime = webhook_runtimes()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("Trigger runtime registry is unavailable.".to_string()))?
+    .get(&runtime_id)
+    .map(|runtime| {
+      (
+        runtime.ingress.clone(),
+        runtime.manual_targets.get(&target_key).cloned(),
+      )
+    });
+  let Some((sender, target)) = runtime else {
+    return encode_manual_rejection(
+      request_id,
+      "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
+      "The runtime is draining and no longer accepts manual triggers.",
+    );
+  };
+  let Some(target) = target else {
+    return encode_manual_rejection(
+      request_id,
+      "WOML_MANUAL_TRIGGER_SELECTION_REQUIRED",
+      "Select one registered manual workflow trigger.",
+    );
+  };
+
+  let (response_sender, response_receiver) = tokio::sync::oneshot::channel();
+  if sender
+    .send(ExternalTriggerAdmissionCommand {
+      request: TriggerAdmissionRequest {
+        workflow_id: request.workflow_id,
+        definition_hash: target.definition_hash,
+        trigger_id: request.trigger_id,
+        trigger_handler: "trigger.manual".to_string(),
+        source_identity: format!("manual:{}", request_id),
+        payload: request.payload,
+        received_at: request.requested_at,
+      },
+      response: response_sender,
+    })
+    .is_err()
+  {
+    return encode_manual_rejection(
+      request_id,
+      "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
+      "The runtime is draining and no longer accepts manual triggers.",
+    );
+  }
+
+  let outcome = match response_receiver.await {
+    Ok(outcome) => outcome,
+    Err(_) => {
+      return encode_manual_rejection(
+        request_id,
+        "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
+        "The runtime stopped before the manual trigger could be admitted.",
+      );
+    }
+  };
+  match outcome {
+    Ok(outcome) => serde_json::to_string(&NativeManualAdmissionAccepted {
+      profile: "woml.manual-trigger-admission/v1",
+      message_type: "accepted",
+      request_id,
+      occurrence_id: outcome.occurrence_id,
+      run_id: outcome.run_id,
+      status: target.admission_status,
+    })
+    .map_err(|error| {
+      napi::Error::from_reason(format!(
+        "Could not encode manual admission outcome: {error}"
+      ))
+    }),
+    Err(DurableStoreError::RuntimePolicyQueueFull) => encode_manual_rejection(
+      request_id,
+      "WOML_POLICY_QUEUE_FULL",
+      "The durable workflow queue is full; try the manual trigger again later.",
+    ),
+    Err(_) => encode_manual_rejection(
+      request_id,
+      "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
+      "The durable runtime cannot accept this manual trigger right now.",
+    ),
+  }
 }
 
 #[napi(ts_return_type = "Promise<void>")]

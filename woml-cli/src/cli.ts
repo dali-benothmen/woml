@@ -79,6 +79,7 @@ import {
   startWebhookRuntimeWithRust,
   stopWebhookRuntimeWithRust,
   submitTriggerOccurrenceWithRust,
+  submitManualTriggerWithRust,
   TriggerRuntimeError,
   type IntervalProgressV1,
   type PublicRunStatus,
@@ -135,6 +136,11 @@ import {
 import { RuntimeObservability } from './runtime-observability';
 import { ForegroundPresentation } from './foreground-presentation';
 import {
+  createProcessManualLineInput,
+  type ManualLineInput,
+} from './manual-input';
+import {
+  renderManualTargetSelection,
   renderRunPresentation,
   renderWorkflowStartup,
   type ColorMode,
@@ -1304,33 +1310,6 @@ function promoteForLifecycleAuthority(
       ? { moduleRuntime: workflow.moduleRuntime }
       : {}),
   };
-}
-
-function workflowCallFrontendOnlySource(
-  source: CompiledWorkflowSource
-): boolean {
-  if (
-    source.workflow.schemaVersion === 14 &&
-    (source.workflow.reusableDefinitions?.length ?? 0) > 0
-  ) {
-    return (
-      source.workflow.triggers.length === 0 ||
-      source.workflow.graph.nodes.some(node =>
-        JSON.stringify(node.inputs).includes('services.workflows')
-      ) ||
-      source.runtimeModules.some(
-        module =>
-          module.name.startsWith('__woml_reusable__') &&
-          /\bservices\.workflows\.(?:call|start)\s*\(/.test(module.bundle)
-      )
-    );
-  }
-  return (
-    source.workflow.triggers.length === 0 ||
-    inspectWomlModuleUsage(source.document).referencedServices.includes(
-      'workflows'
-    )
-  );
 }
 
 function runtimeModulesFromPackage(
@@ -2856,6 +2835,52 @@ function selectedManualTrigger(
   return manualIds[0];
 }
 
+interface ActiveManualTarget {
+  readonly workflowId: string;
+  readonly triggerId: string;
+}
+
+function activeManualTargets(
+  sources: readonly CompiledWorkflowSource[],
+  requestedTriggerId: string | undefined
+): readonly ActiveManualTarget[] {
+  const targets = sources.flatMap(source =>
+    source.workflow.triggers
+      .filter(trigger => trigger.handler === 'trigger.manual')
+      .map(trigger => ({
+        workflowId: source.workflow.workflowId,
+        triggerId: trigger.id,
+      }))
+  );
+  if (requestedTriggerId === undefined) return targets;
+  const selected = targets.filter(
+    target => target.triggerId === requestedTriggerId
+  );
+  if (selected.length !== 1) {
+    throw new CliInputError(
+      'WOML_MANUAL_TRIGGER_NOT_FOUND',
+      `the loaded workflow has no unique manual trigger "${requestedTriggerId}".`
+    );
+  }
+  return selected;
+}
+
+function hasNonManualRuntimeIngress(
+  sources: readonly CompiledWorkflowSource[]
+): boolean {
+  return sources.some(source =>
+    source.workflow.triggers.some(trigger =>
+      [
+        'trigger.webhook',
+        'trigger.slack',
+        'trigger.schedule',
+        'trigger.interval',
+        'trigger.event',
+      ].includes(trigger.handler)
+    )
+  );
+}
+
 function objectFields(
   expression: ValueExpression | undefined
 ): Readonly<Record<string, ValueExpression>> | undefined {
@@ -2910,7 +2935,8 @@ function readableInterval(milliseconds: number | undefined): string | undefined 
 
 function presentationRenderOptions(
   args: RunArguments,
-  io: CliIo
+  io: CliIo,
+  manualInstruction?: string
 ): PresentationRenderOptions {
   return {
     format: args.json ? 'json' : io.isTTY === true ? 'tty' : 'plain',
@@ -2920,9 +2946,7 @@ function presentationRenderOptions(
     environment: process.env,
     fullResultCommand: runId =>
       `woml get ${runId} --state ${JSON.stringify(args.statePath)} --json`,
-    // TM4 removes this compatibility override when normal `woml run`
-    // manual admission becomes keyboard-driven.
-    manualInstruction: 'Runs once when the runtime starts',
+    ...(manualInstruction === undefined ? {} : { manualInstruction }),
   };
 }
 
@@ -3406,61 +3430,29 @@ async function activateWorkflows(
     );
   }
 
-  const hasProductionTrigger = sources.some(source =>
-    source.workflow.triggers.some(
-      trigger =>
-        trigger.handler === 'trigger.webhook' ||
-        trigger.handler === 'trigger.slack' ||
-        trigger.handler === 'trigger.schedule' ||
-        trigger.handler === 'trigger.interval' ||
-        trigger.handler === 'trigger.event'
-    )
-  );
-  const hasWorkflowCalls = sources.some(workflowCallFrontendOnlySource);
-  // A loaded automation directory is one runtime unit. Production triggers
-  // and Workflow Calls both require every definition to share one target and
-  // capability registry before a startup manual trigger runs.
-  const productionSources =
-    hasProductionTrigger || hasWorkflowCalls ? sources : [];
-  const oneShotSources = sources.filter(
-    source => !productionSources.includes(source)
-  );
-  const startupManualTriggers: Record<string, string> = {};
-  for (const source of sources) {
-    const manual = selectedManualTrigger(source.workflow, args.triggerId);
-    if (
-      manual !== undefined &&
-      args.resumeRunId === undefined &&
-      productionSources.includes(source)
-    ) {
-      startupManualTriggers[source.workflow.workflowId] = manual;
-    }
+  const productionSources = sources;
+  const manualTargets = activeManualTargets(sources, args.triggerId);
+  const hasOtherIngress = hasNonManualRuntimeIngress(sources);
+  const background = process.env.WOML_BACKGROUND_HANDOFF !== undefined;
+  let manualInput: ManualLineInput | undefined;
+  if (manualTargets.length > 0 && background && !hasOtherIngress) {
+    throw new CliInputError(
+      'WOML_MANUAL_TRIGGER_BACKGROUND_UNAVAILABLE',
+      'a manual-only workflow cannot run in the background because nobody can press Enter. Add another trigger or run it in the foreground.'
+    );
   }
-
-  for (const source of oneShotSources) {
-    try {
-      await executeOneShot(
-        source.workflow,
-        { ...args, filePath: source.filePath },
-        io,
-        dependencies,
-        source.runtimeModules
-      );
-    } catch (error) {
-      if (
-        args.command === 'run' &&
-        error instanceof RustWorkflowExecutionError &&
-        error.code === 'WOML_RUN_CANCELLED'
-      ) {
-        const runId = error.message.match(/^Workflow run "([^"]+)"/)?.[1];
-        io.stderr(
-          runId === undefined
-            ? 'Workflow run cancelled.\n'
-            : `Run ${runId} cancelled.\n`
+  if (manualTargets.length > 0 && !background) {
+    const candidate = dependencies.createManualInput?.();
+    if (candidate?.isTTY === true) {
+      manualInput = candidate;
+    } else {
+      candidate?.close();
+      if (!hasOtherIngress) {
+        throw new CliInputError(
+          'WOML_MANUAL_TRIGGER_TTY_REQUIRED',
+          'woml run needs an interactive terminal for a manual-only workflow. Use "woml test <workflow.woml>" for one non-interactive run.'
         );
-        continue;
       }
-      throw error;
     }
   }
 
@@ -3476,13 +3468,31 @@ async function activateWorkflows(
   let slackWorkspaceId: string | undefined;
   const foregroundPresentation = new ForegroundPresentation({
     io,
-    render: presentationRenderOptions(args, io),
+    render: presentationRenderOptions(
+      args,
+      io,
+      manualTargets.length > 0 && manualInput === undefined
+        ? 'Unavailable without an interactive foreground terminal'
+        : undefined
+    ),
     verbose: args.verbose,
     inspectRun: runId =>
       inspectRunPresentationWithRust(args.statePath, runId, {
         nativeCorePath: dependencies.nativeCorePath,
       }),
   });
+  const manualRunIds = new Set<string>();
+  const manualPromptOptions: PresentationRenderOptions = {
+    ...presentationRenderOptions(args, io),
+    format: io.isTTY === true ? 'tty' : 'plain',
+  };
+  const printManualPrompt = (): void => {
+    if (manualInput === undefined) return;
+    io.stderr(
+      `\n${renderManualTargetSelection(manualTargets, manualPromptOptions)}`
+    );
+  };
+  let manualInputTask: Promise<void> | undefined;
   const observe = (progress: unknown): void => {
     if (observability === undefined) {
       if (pendingObservabilityProgress.length < 1024)
@@ -3558,14 +3568,25 @@ async function activateWorkflows(
           nativeCorePath: dependencies.nativeCorePath,
           host: hasHttpEndpoint ? args.host : '127.0.0.1',
           port: hasHttpEndpoint ? args.port : 0,
-          startupManualTriggers,
           deploymentId: currentDeploymentId,
           activationId: currentActivationId,
           shutdownTimeoutMs: args.shutdownTimeoutMs,
           startSuspended: true,
           onTriggerProgress: progress => {
             observe(progress);
+            if (
+              progress.type === 'occurrence_accepted' &&
+              progress.triggerHandler === 'trigger.manual'
+            ) {
+              manualRunIds.add(progress.runId);
+            }
             foregroundPresentation.trigger(progress);
+            if (
+              progress.type === 'run_terminal' &&
+              manualRunIds.delete(progress.runId)
+            ) {
+              printManualPrompt();
+            }
           },
           onScheduleProgress: progress => {
             observe(progress);
@@ -3867,6 +3888,48 @@ async function activateWorkflows(
         );
       }
 
+      if (manualInput !== undefined) {
+        printManualPrompt();
+        manualInputTask = manualInput.run(async line => {
+          const value = line.trim();
+          let target: ActiveManualTarget | undefined;
+          if (manualTargets.length === 1) {
+            if (value.length === 0) target = manualTargets[0];
+          } else if (/^[1-9][0-9]*$/.test(value)) {
+            target = manualTargets[Number(value) - 1];
+          }
+          if (target === undefined) {
+            foregroundPresentation.warning(
+              'WOML_MANUAL_TRIGGER_SELECTION_REQUIRED',
+              manualTargets.length === 1
+                ? 'Press Enter without typing a value to run the manual workflow.'
+                : `Choose a manual trigger number from 1 through ${manualTargets.length}.`
+            );
+            printManualPrompt();
+            return;
+          }
+          const outcome = await submitManualTriggerWithRust(
+            runtime.runtimeId,
+            {
+              profile: 'woml.manual-trigger-admission/v1',
+              type: 'request',
+              requestId: `manual_request_${randomUUID().replaceAll('-', '')}`,
+              workflowId: target.workflowId,
+              triggerId: target.triggerId,
+              payload: {},
+              requestedAt: new Date().toISOString(),
+            },
+            { nativeCorePath: dependencies.nativeCorePath }
+          );
+          if (outcome.type === 'rejected') {
+            foregroundPresentation.warning(outcome.code, outcome.message);
+            if (outcome.code !== 'WOML_MANUAL_TRIGGER_ADMISSION_CLOSED') {
+              printManualPrompt();
+            }
+          }
+        });
+      }
+
       if (args.resumeRunId !== undefined) {
         const source = productionSources[0]!;
         await executeOneShot(
@@ -3887,8 +3950,10 @@ async function activateWorkflows(
       (dependencies.waitForShutdown ?? waitForShutdownSignal)(),
       runtimeUnavailable,
       ...(runtimeControl === undefined ? [] : [runtimeControl.stopRequested]),
+      ...(manualInputTask === undefined ? [] : [manualInputTask]),
     ]);
   } finally {
+    manualInput?.close();
     automaticRetention?.close();
     if (runtimeId !== undefined) {
       observability?.setLifecycle('draining');
@@ -3927,6 +3992,7 @@ export interface CliDependencies {
   ) => SharedSlackTransport;
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   readonly inspectorTerminal?: InspectorTerminal;
+  readonly createManualInput?: () => ManualLineInput;
   readonly onRuntimeReady?: (info: {
     readonly runtimeInstanceId: string;
     readonly descriptorPath: string;
@@ -3959,6 +4025,7 @@ function waitForShutdownSignal(): Promise<void> {
 const defaultDependencies: CliDependencies = {
   createSecretStore: () => createSecretStore(),
   readSecret: readSecretFromTerminal,
+  createManualInput: createProcessManualLineInput,
   waitForShutdown: waitForShutdownSignal,
   fetch: globalThis.fetch,
   onRuntimeReady: async info => {
@@ -4290,6 +4357,19 @@ async function runInBackground(
     return error instanceof CliInputError ? 2 : 1;
   }
   const statePath = parsed.statePath;
+  try {
+    const sources = await compileWorkflowInputs(parsed.inputPaths);
+    const manualTargets = activeManualTargets(sources, parsed.triggerId);
+    if (manualTargets.length > 0 && !hasNonManualRuntimeIngress(sources)) {
+      throw new CliInputError(
+        'WOML_MANUAL_TRIGGER_BACKGROUND_UNAVAILABLE',
+        'a manual-only workflow cannot run in the background because nobody can press Enter. Add another trigger or run it in the foreground.'
+      );
+    }
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
+    return error instanceof CliInputError ? 2 : 1;
+  }
   const descriptorPath = runtimeDescriptorPath(statePath);
   const logPath = runtimeLogPath(statePath, parsed.logDirectory);
   const handoffPath = join(

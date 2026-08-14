@@ -22,5 +22,12 @@
     "requestId": "manual_request_02",
     "code": "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
     "message": "The runtime is draining and no longer accepts manual triggers."
+  },
+  "queueFull": {
+    "profile": "woml.manual-trigger-admission/v1",
+    "type": "rejected",
+    "requestId": "manual_request_03",
+    "code": "WOML_POLICY_QUEUE_FULL",
+    "message": "The durable workflow queue is full; try the manual trigger again later."
   }
 }

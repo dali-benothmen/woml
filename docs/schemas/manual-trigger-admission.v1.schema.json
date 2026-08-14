@@ -47,7 +47,8 @@
         "code": {
           "enum": [
             "WOML_MANUAL_TRIGGER_SELECTION_REQUIRED",
-            "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED"
+            "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
+            "WOML_POLICY_QUEUE_FULL"
           ]
         },
         "message": { "type": "string", "minLength": 1, "maxLength": 2048 }

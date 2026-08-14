@@ -50,37 +50,17 @@ afterAll(async () => {
 });
 
 describe('T4 long-lived WOML runtime', () => {
-  test('woml run keeps a manual-only workflow active after its startup run', async () => {
+  test('woml run rejects a manual-only workflow without an interactive terminal', async () => {
     const child = Bun.spawn([cliPath, 'run', helloWorkflow], {
       cwd: projectRoot,
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const stdout = new Response(child.stdout).text();
-    let stderr = '';
-    const stderrDone = (async () => {
-      const reader = child.stderr.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        stderr += decoder.decode(chunk.value, { stream: true });
-      }
-      stderr += decoder.decode();
-    })();
-    const deadline = Date.now() + 10_000;
-    while (!stderr.includes('WOML automation is active.')) {
-      if (Date.now() >= deadline) throw new Error(stderr);
-      await Bun.sleep(10);
-    }
-    expect(child.exitCode).toBeNull();
-    child.kill('SIGINT');
-    expect(await child.exited).toBe(0);
-    expect(await stdout).toBe('');
-    await stderrDone;
-    expect(stderr).toContain('Final result');
-    expect(stderr).toContain('{ message: "Hello World" }');
-    expect(stderr).toContain('WOML automation stopped.');
+    expect(await child.exited).toBe(1);
+    expect(await new Response(child.stdout).text()).toBe('');
+    const stderr = await new Response(child.stderr).text();
+    expect(stderr).toContain('WOML_MANUAL_TRIGGER_TTY_REQUIRED');
+    expect(stderr).toContain('woml test');
   });
 
   test(

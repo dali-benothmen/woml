@@ -379,6 +379,36 @@ export type TriggerIngressOutcome =
       };
     };
 
+export interface ManualTriggerAdmissionRequestV1 {
+  readonly profile: 'woml.manual-trigger-admission/v1';
+  readonly type: 'request';
+  readonly requestId: string;
+  readonly workflowId: string;
+  readonly triggerId: string;
+  readonly payload: Readonly<Record<string, never>>;
+  readonly requestedAt: string;
+}
+
+export type ManualTriggerAdmissionOutcomeV1 =
+  | {
+      readonly profile: 'woml.manual-trigger-admission/v1';
+      readonly type: 'accepted';
+      readonly requestId: string;
+      readonly occurrenceId: string;
+      readonly runId: string;
+      readonly status: 'queued' | 'running';
+    }
+  | {
+      readonly profile: 'woml.manual-trigger-admission/v1';
+      readonly type: 'rejected';
+      readonly requestId: string;
+      readonly code:
+        | 'WOML_MANUAL_TRIGGER_SELECTION_REQUIRED'
+        | 'WOML_MANUAL_TRIGGER_ADMISSION_CLOSED'
+        | 'WOML_POLICY_QUEUE_FULL';
+      readonly message: string;
+    };
+
 export interface RustRunInspection {
   readonly runId: string;
   readonly workflowId: string;
@@ -790,6 +820,10 @@ interface NativeCore {
   readonly submitWomlTriggerOccurrence: (
     runtimeId: string,
     ingressJson: string
+  ) => Promise<string>;
+  readonly submitWomlManualTrigger: (
+    runtimeId: string,
+    requestJson: string
   ) => Promise<string>;
   readonly inspectWomlRun: (eventStorePath: string, runId: string) => string;
   readonly inspectWomlRunPresentation: (
@@ -2454,6 +2488,85 @@ export async function submitTriggerOccurrenceWithRust(
     return value as unknown as TriggerIngressOutcome;
   }
   throw new Error('The native core returned invalid trigger ingress data.');
+}
+
+export async function submitManualTriggerWithRust(
+  runtimeId: string,
+  request: ManualTriggerAdmissionRequestV1,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): Promise<ManualTriggerAdmissionOutcomeV1> {
+  if (
+    runtimeId.length === 0 ||
+    request.profile !== 'woml.manual-trigger-admission/v1' ||
+    request.type !== 'request' ||
+    request.requestId.length === 0 ||
+    request.requestId.length > 256 ||
+    request.workflowId.length === 0 ||
+    request.workflowId.length > 256 ||
+    request.triggerId.length === 0 ||
+    request.triggerId.length > 256 ||
+    Object.keys(request.payload).length !== 0 ||
+    !dateTime(request.requestedAt)
+  ) {
+    throw new Error('Manual Trigger Admission v1 request is invalid.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.submitWomlManualTrigger !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose manual trigger admission; rebuild the Rust addon.`
+    );
+  }
+  const resultJson = await native
+    .submitWomlManualTrigger(runtimeId, JSON.stringify(request))
+    .catch(decodeTriggerRuntimeError);
+  const value: unknown = JSON.parse(resultJson);
+  if (
+    !record(value) ||
+    value.profile !== 'woml.manual-trigger-admission/v1' ||
+    value.requestId !== request.requestId
+  ) {
+    throw new Error('The native core returned invalid manual admission data.');
+  }
+  if (
+    value.type === 'accepted' &&
+    exactKeys(value, [
+      'profile',
+      'type',
+      'requestId',
+      'occurrenceId',
+      'runId',
+      'status',
+    ]) &&
+    typeof value.occurrenceId === 'string' &&
+    value.occurrenceId.length > 0 &&
+    typeof value.runId === 'string' &&
+    /^run_[A-Za-z0-9_-]+$/.test(value.runId) &&
+    ['queued', 'running'].includes(String(value.status))
+  ) {
+    return value as unknown as ManualTriggerAdmissionOutcomeV1;
+  }
+  if (
+    value.type === 'rejected' &&
+    exactKeys(value, [
+      'profile',
+      'type',
+      'requestId',
+      'code',
+      'message',
+    ]) &&
+    [
+      'WOML_MANUAL_TRIGGER_SELECTION_REQUIRED',
+      'WOML_MANUAL_TRIGGER_ADMISSION_CLOSED',
+      'WOML_POLICY_QUEUE_FULL',
+    ].includes(String(value.code)) &&
+    typeof value.message === 'string' &&
+    value.message.length > 0 &&
+    value.message.length <= 2_048
+  ) {
+    return value as unknown as ManualTriggerAdmissionOutcomeV1;
+  }
+  throw new Error('The native core returned invalid manual admission data.');
 }
 
 export async function stopWebhookRuntimeWithRust(

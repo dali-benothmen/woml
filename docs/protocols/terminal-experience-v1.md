@@ -1,8 +1,8 @@
 # WOML Terminal Experience Contracts v1
 
-Status: Frozen by TM0. The renderer, durable Run Presentation projection, and
-foreground integration are implemented through TM3. Interactive manual
-admission and background log following remain later phases.
+Status: Frozen by TM0. The renderer, durable Run Presentation projection,
+foreground integration, and interactive manual admission are implemented
+through TM4. Background log following remains a later phase.
 
 This document freezes the interfaces shared by the future Rust projection,
 the Bun CLI renderers, manual-trigger input, and background log following. It
@@ -161,6 +161,8 @@ Stable manual diagnostics are:
 - `WOML_MANUAL_TRIGGER_SELECTION_REQUIRED`
 - `WOML_MANUAL_TRIGGER_BACKGROUND_UNAVAILABLE`
 - `WOML_MANUAL_TRIGGER_ADMISSION_CLOSED`
+- `WOML_POLICY_QUEUE_FULL` when the shared durable policy queue has reached its
+  hard safety ceiling
 
 Ctrl+C closes manual input, closes ingress, and starts the existing graceful
 drain. It does not fabricate a run.
