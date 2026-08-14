@@ -8,6 +8,8 @@ import type {
   JsonValue,
   LifecycleBindingV1,
   NativeFetchObservation,
+  ReusableLifecycleBindingV1,
+  ReusableScriptBindingV3,
   ScriptAttempt,
   ScriptBindingsV1,
   ScriptContext,
@@ -22,6 +24,8 @@ export interface ScriptWorkerRequest {
   readonly context: ScriptContext;
   readonly mode?: 'step' | 'lifecycle';
   readonly lifecycle?: LifecycleBindingV1;
+  readonly reusable?: ReusableScriptBindingV3;
+  readonly reusableLifecycle?: ReusableLifecycleBindingV1;
   readonly attempt?: ScriptAttempt;
   readonly bindings?: ScriptBindingsV1;
   readonly modules?: readonly ScriptWorkerModule[];
@@ -1914,8 +1918,20 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
         : (deepFreezeJson(
             request.lifecycle as unknown as JsonValue
           ) as unknown as LifecycleBindingV1);
+    const reusable =
+      request.reusable === undefined
+        ? undefined
+        : (deepFreezeJson(
+            request.reusable as unknown as JsonValue
+          ) as unknown as ReusableScriptBindingV3);
+    const reusableLifecycle =
+      request.reusableLifecycle === undefined
+        ? undefined
+        : (deepFreezeJson(
+            request.reusableLifecycle as unknown as JsonValue
+          ) as unknown as ReusableLifecycleBindingV1);
     secretValues = Object.values(request.bindings?.secrets ?? {});
-    const lifecycleConsole = Object.freeze({
+    const safeConsole = Object.freeze({
       log: (...values: unknown[]) =>
         globalThis.console.error(
           redactKnownSecrets(
@@ -1967,6 +1983,35 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
     const script =
       request.bindings === undefined
         ? new AsyncFunction('context', 'attempt', body)
+        : reusable !== undefined && reusableLifecycle !== undefined
+          ? reusable.definition.kind === 'step'
+            ? new AsyncFunction(
+                'props',
+                'context',
+                'lifecycle',
+                'services',
+                'fetch',
+                'console',
+                body
+              )
+            : new AsyncFunction(
+                'props',
+                'lifecycle',
+                'services',
+                'fetch',
+                'console',
+                body
+              )
+          : reusable !== undefined
+            ? new AsyncFunction(
+                'props',
+                'context',
+                'attempt',
+                'services',
+                'fetch',
+                'console',
+                body
+              )
         : request.mode === 'lifecycle'
           ? new AsyncFunction(
               'context',
@@ -1989,6 +2034,32 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
     let result =
       request.bindings === undefined
         ? await script(context, attempt, undefined, {}, globalThis.fetch)
+        : reusable !== undefined && reusableLifecycle !== undefined
+          ? reusable.definition.kind === 'step'
+            ? await script(
+                reusable.props,
+                context,
+                reusableLifecycle,
+                services,
+                nativeFetch,
+                safeConsole
+              )
+            : await script(
+                reusable.props,
+                reusableLifecycle,
+                services,
+                nativeFetch,
+                safeConsole
+              )
+          : reusable !== undefined
+            ? await script(
+                reusable.props,
+                context,
+                attempt,
+                services,
+                nativeFetch,
+                safeConsole
+              )
         : request.mode === 'lifecycle'
           ? await script(
               context,
@@ -1997,10 +2068,15 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
               services,
               secrets,
               nativeFetch,
-              lifecycleConsole
+              safeConsole
             )
           : await script(context, attempt, services, secrets, nativeFetch);
-    if (request.mode === 'lifecycle' && result === undefined) result = null;
+    if (
+      (request.mode === 'lifecycle' || reusableLifecycle !== undefined) &&
+      result === undefined
+    ) {
+      result = null;
+    }
     const violation = findJsonViolation(result);
     if (violation !== undefined) {
       self.postMessage({

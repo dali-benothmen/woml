@@ -1104,6 +1104,78 @@ pub struct RunInspectionV4 {
   pub forks: RunInspectionForksV4,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InspectedReusableKindV5 {
+  Step,
+  NotificationProvider,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectedReusableStatusV5 {
+  Pending,
+  Running,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectedReusableLifecycleStatusV5 {
+  Idle,
+  Running,
+  Completed,
+  CompletedWithWarnings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionReusableItemV5 {
+  pub invocation_id: String,
+  pub alias: String,
+  pub definition_digest_prefix: String,
+  pub kind: InspectedReusableKindV5,
+  pub status: InspectedReusableStatusV5,
+  pub lifecycle_status: InspectedReusableLifecycleStatusV5,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionReusableCountsV5 {
+  pub pending: u32,
+  pub running: u32,
+  pub succeeded: u32,
+  pub failed: u32,
+  pub cancelled: u32,
+  pub completed_with_warnings: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionReusableDefinitionsV5 {
+  pub counts: RunInspectionReusableCountsV5,
+  pub items: Vec<RunInspectionReusableItemV5>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionV5 {
+  pub profile: &'static str,
+  pub run_id: String,
+  pub workflow_id: String,
+  pub status: PublicRunStatus,
+  pub business_outcome: InspectedBusinessOutcome,
+  pub lifecycle_status: crate::projection::LifecycleStatus,
+  pub hooks: Vec<RunInspectionHookV2>,
+  pub warnings: Vec<crate::event::LifecycleWarning>,
+  pub cancellation: RunInspectionCancellationV2,
+  pub policy: RunInspectionPolicyV3,
+  pub forks: RunInspectionForksV4,
+  pub reusable_definitions: RunInspectionReusableDefinitionsV5,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForkRecoveryBranchV1 {
@@ -1339,17 +1411,32 @@ fn module_artifact_sha256(content: &str) -> String {
   format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
 }
 
+fn reusable_lifecycle_artifact_name(action_id: &str) -> String {
+  format!(
+    "__woml_lifecycle__{}",
+    module_artifact_sha256(action_id).trim_start_matches("sha256:")
+  )
+}
+
 fn validate_definition_module_artifacts(
   workflow: &CompiledWorkflowDefinition,
   artifacts: &[RuntimeModuleArtifact],
 ) -> Result<(), DurableStoreError> {
   let module_artifacts = artifacts
     .iter()
-    .filter(|artifact| !artifact.name.starts_with("__woml_provider__"))
+    .filter(|artifact| !artifact.name.starts_with("__woml_"))
     .collect::<Vec<_>>();
   let provider_artifacts = artifacts
     .iter()
     .filter(|artifact| artifact.name.starts_with("__woml_provider__"))
+    .collect::<Vec<_>>();
+  let reusable_step_artifacts = artifacts
+    .iter()
+    .filter(|artifact| artifact.name.starts_with("__woml_reusable__"))
+    .collect::<Vec<_>>();
+  let reusable_lifecycle_artifacts = artifacts
+    .iter()
+    .filter(|artifact| artifact.name.starts_with("__woml_lifecycle__"))
     .collect::<Vec<_>>();
   let runtime_bindings = workflow
     .module_runtime
@@ -1421,6 +1508,96 @@ fn validate_definition_module_artifacts(
   if provider_ids.len() != provider_descriptors.len() {
     return Err(DurableStoreError::Contract(
       "Stored provider artifacts do not match the compiled definition.".to_string(),
+    ));
+  }
+  let reusable_step_descriptors = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .filter_map(|definition| match definition {
+      crate::model::CompiledReusableInvocation::Step {
+        script_artifact_id, ..
+      } => Some(script_artifact_id.as_str()),
+      _ => None,
+    })
+    .collect::<HashSet<_>>();
+  let mut reusable_step_ids = HashSet::new();
+  for artifact in reusable_step_artifacts {
+    let artifact_id = artifact.name.trim_start_matches("__woml_reusable__");
+    total_bytes = total_bytes
+      .checked_add(artifact.bundle.len())
+      .and_then(|value| value.checked_add(artifact.source_map.len()))
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Custom-step artifact byte count overflowed.".to_string())
+      })?;
+    if !reusable_step_descriptors.contains(artifact_id)
+      || !reusable_step_ids.insert(artifact_id)
+      || !artifact.exports.is_empty()
+      || !artifact.source_map.is_empty()
+      || module_artifact_sha256(&artifact.bundle) != artifact.bundle_digest
+      || module_artifact_sha256("") != artifact.source_map_digest
+      || artifact.bundle.len() > MAX_MODULE_ARTIFACT_BYTES
+    {
+      return Err(DurableStoreError::Contract(format!(
+        "Custom-step artifact {artifact_id:?} failed its immutable identity or size contract."
+      )));
+    }
+  }
+  if reusable_step_ids.len() != reusable_step_descriptors.len() {
+    return Err(DurableStoreError::Contract(
+      "Stored custom-step artifacts do not match the compiled definition.".to_string(),
+    ));
+  }
+  let reusable_lifecycle_names = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .flat_map(|definition| match definition {
+      crate::model::CompiledReusableInvocation::Step { lifecycle, .. }
+      | crate::model::CompiledReusableInvocation::NotificationProvider { lifecycle, .. } => {
+        lifecycle
+          .iter()
+          .flat_map(|lifecycle| {
+            lifecycle
+              .on_success
+              .iter()
+              .chain(&lifecycle.on_error)
+              .chain(&lifecycle.on_complete)
+              .flat_map(|actions| actions.iter())
+              .map(|action_id| reusable_lifecycle_artifact_name(action_id))
+              .collect::<Vec<_>>()
+          })
+          .collect::<Vec<_>>()
+      }
+    })
+    .collect::<HashSet<_>>();
+  let mut found_lifecycle_names = HashSet::new();
+  for artifact in reusable_lifecycle_artifacts {
+    total_bytes = total_bytes
+      .checked_add(artifact.bundle.len())
+      .and_then(|value| value.checked_add(artifact.source_map.len()))
+      .ok_or_else(|| {
+        DurableStoreError::Contract(
+          "Reusable lifecycle artifact byte count overflowed.".to_string(),
+        )
+      })?;
+    if !reusable_lifecycle_names.contains(&artifact.name)
+      || !found_lifecycle_names.insert(artifact.name.as_str())
+      || !artifact.exports.is_empty()
+      || !artifact.source_map.is_empty()
+      || module_artifact_sha256(&artifact.bundle) != artifact.bundle_digest
+      || module_artifact_sha256("") != artifact.source_map_digest
+      || artifact.bundle.len() > MAX_MODULE_ARTIFACT_BYTES
+    {
+      return Err(DurableStoreError::Contract(format!(
+        "Reusable lifecycle artifact {:?} failed its immutable identity or size contract.",
+        artifact.name
+      )));
+    }
+  }
+  if found_lifecycle_names.len() != reusable_lifecycle_names.len() {
+    return Err(DurableStoreError::Contract(
+      "Stored reusable lifecycle artifacts do not match the compiled definition.".to_string(),
     ));
   }
   if total_bytes > MAX_MODULE_ARTIFACT_SET_BYTES {
@@ -3822,6 +3999,7 @@ impl DurableEventStore {
       crate::RUN_EVENT_SCHEMA_VERSION_V10
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
+        | crate::RUN_EVENT_SCHEMA_VERSION_V13
     ) {
       expand_model_v11_payload(&workflow, &run_id, payload)?
     } else {
@@ -3901,6 +4079,7 @@ impl DurableEventStore {
         crate::RUN_EVENT_SCHEMA_VERSION_V10
           | crate::RUN_EVENT_SCHEMA_VERSION_V11
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
+          | crate::RUN_EVENT_SCHEMA_VERSION_V13
       ) {
         expand_model_v11_payload(&workflow, run_id, payload)?
       } else {
@@ -4408,6 +4587,148 @@ impl DurableEventStore {
       cancellation: base.cancellation,
       policy: base.policy,
       forks: RunInspectionForksV4 { counts, items },
+    })
+  }
+
+  pub fn inspect_run_v5(&self, run_id: &str) -> Result<RunInspectionV5, DurableStoreError> {
+    let base = self.inspect_run_v4(run_id)?;
+    let binding = self.run_binding(run_id)?;
+    let workflow = self.definition(&binding.definition_hash)?;
+    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V14 {
+      return Err(DurableStoreError::Contract(
+        "Run Inspection v5 is available only for compiled Model v14 runs.".to_string(),
+      ));
+    }
+    let projection = self.projection(run_id)?;
+    let mut items = Vec::new();
+    for definition in workflow.reusable_definitions.iter().flatten() {
+      let (invocation_id, alias, definition_digest, kind, lifecycle, status) = match definition {
+        crate::model::CompiledReusableInvocation::Step {
+          invocation_id,
+          node_id,
+          alias,
+          definition_digest,
+          lifecycle,
+          ..
+        } => {
+          let status = match projection.latest_attempt(node_id) {
+            None => InspectedReusableStatusV5::Pending,
+            Some(attempt) => match &attempt.status {
+              AttemptStatus::Started => InspectedReusableStatusV5::Running,
+              AttemptStatus::Succeeded { .. } => InspectedReusableStatusV5::Succeeded,
+              AttemptStatus::Failed { failure }
+                if failure.kind == AttemptFailureKind::InvocationCancelled =>
+              {
+                InspectedReusableStatusV5::Cancelled
+              }
+              AttemptStatus::Failed { .. } => InspectedReusableStatusV5::Failed,
+            },
+          };
+          (
+            invocation_id,
+            alias,
+            definition_digest,
+            InspectedReusableKindV5::Step,
+            lifecycle,
+            status,
+          )
+        }
+        crate::model::CompiledReusableInvocation::NotificationProvider {
+          provider_id,
+          alias,
+          definition_digest,
+          lifecycle,
+          ..
+        } => {
+          let status = match projection.notification_deliveries.get(provider_id) {
+            None => InspectedReusableStatusV5::Pending,
+            Some(delivery) => match &delivery.status {
+              crate::projection::NotificationDeliveryStatus::Requested
+              | crate::projection::NotificationDeliveryStatus::AttemptStarted { .. } => {
+                InspectedReusableStatusV5::Running
+              }
+              crate::projection::NotificationDeliveryStatus::Succeeded { .. } => {
+                InspectedReusableStatusV5::Succeeded
+              }
+              crate::projection::NotificationDeliveryStatus::Failed { failure, .. }
+                if failure.kind == "cancelled" =>
+              {
+                InspectedReusableStatusV5::Cancelled
+              }
+              crate::projection::NotificationDeliveryStatus::Failed { .. } => {
+                InspectedReusableStatusV5::Failed
+              }
+            },
+          };
+          (
+            provider_id,
+            alias,
+            definition_digest,
+            InspectedReusableKindV5::NotificationProvider,
+            lifecycle,
+            status,
+          )
+        }
+      };
+      let lifecycle_hooks = projection
+        .reusable_lifecycle_hooks
+        .values()
+        .filter(|hook| hook.invocation_id == *invocation_id)
+        .collect::<Vec<_>>();
+      let lifecycle_status = if lifecycle.is_none() || lifecycle_hooks.is_empty() {
+        InspectedReusableLifecycleStatusV5::Idle
+      } else if lifecycle_hooks.iter().any(|hook| {
+        hook.status == crate::projection::ReusableLifecycleStatus::CompletedWithWarnings
+      }) {
+        InspectedReusableLifecycleStatusV5::CompletedWithWarnings
+      } else if lifecycle_hooks
+        .iter()
+        .all(|hook| hook.status == crate::projection::ReusableLifecycleStatus::Completed)
+      {
+        InspectedReusableLifecycleStatusV5::Completed
+      } else {
+        InspectedReusableLifecycleStatusV5::Running
+      };
+      items.push(RunInspectionReusableItemV5 {
+        invocation_id: invocation_id.clone(),
+        alias: alias.clone(),
+        definition_digest_prefix: definition_digest
+          .trim_start_matches("sha256:")
+          .chars()
+          .take(12)
+          .collect(),
+        kind,
+        status,
+        lifecycle_status,
+      });
+    }
+    items.sort_by(|left, right| left.invocation_id.cmp(&right.invocation_id));
+    let mut counts = RunInspectionReusableCountsV5::default();
+    for item in &items {
+      match item.status {
+        InspectedReusableStatusV5::Pending => counts.pending += 1,
+        InspectedReusableStatusV5::Running => counts.running += 1,
+        InspectedReusableStatusV5::Succeeded => counts.succeeded += 1,
+        InspectedReusableStatusV5::Failed => counts.failed += 1,
+        InspectedReusableStatusV5::Cancelled => counts.cancelled += 1,
+      }
+      if item.lifecycle_status == InspectedReusableLifecycleStatusV5::CompletedWithWarnings {
+        counts.completed_with_warnings += 1;
+      }
+    }
+    Ok(RunInspectionV5 {
+      profile: "woml.run-inspection/v5",
+      run_id: base.run_id,
+      workflow_id: base.workflow_id,
+      status: base.status,
+      business_outcome: base.business_outcome,
+      lifecycle_status: base.lifecycle_status,
+      hooks: base.hooks,
+      warnings: base.warnings,
+      cancellation: base.cancellation,
+      policy: base.policy,
+      forks: base.forks,
+      reusable_definitions: RunInspectionReusableDefinitionsV5 { counts, items },
     })
   }
 
@@ -6805,6 +7126,7 @@ impl DurableEventStore {
       crate::RUN_EVENT_SCHEMA_VERSION_V10
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
+        | crate::RUN_EVENT_SCHEMA_VERSION_V13
     ) {
       let ambiguous_actions = projection
         .lifecycle_hooks
@@ -7186,6 +7508,7 @@ impl DurableEventStore {
           crate::RUN_EVENT_SCHEMA_VERSION_V10
             | crate::RUN_EVENT_SCHEMA_VERSION_V11
             | crate::RUN_EVENT_SCHEMA_VERSION_V12
+            | crate::RUN_EVENT_SCHEMA_VERSION_V13
         ) {
           expand_model_v11_payload(&workflow, run_id, payload)?
         } else {
@@ -7236,6 +7559,7 @@ impl DurableEventStore {
         crate::RUN_EVENT_SCHEMA_VERSION_V10
           | crate::RUN_EVENT_SCHEMA_VERSION_V11
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
+          | crate::RUN_EVENT_SCHEMA_VERSION_V13
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -7450,6 +7774,7 @@ impl DurableEventStore {
         crate::RUN_EVENT_SCHEMA_VERSION_V10
           | crate::RUN_EVENT_SCHEMA_VERSION_V11
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
+          | crate::RUN_EVENT_SCHEMA_VERSION_V13
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -9401,6 +9726,7 @@ fn append_to_history(
     crate::RUN_EVENT_SCHEMA_VERSION_V10
       | crate::RUN_EVENT_SCHEMA_VERSION_V11
       | crate::RUN_EVENT_SCHEMA_VERSION_V12
+      | crate::RUN_EVENT_SCHEMA_VERSION_V13
   ) && matches!(
     payload,
     RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -9516,7 +9842,8 @@ fn attempt_run_failed_data(
     | RUN_EVENT_SCHEMA_VERSION_V9
     | crate::RUN_EVENT_SCHEMA_VERSION_V10
     | crate::RUN_EVENT_SCHEMA_VERSION_V11
-    | crate::RUN_EVENT_SCHEMA_VERSION_V12 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V12
+    | crate::RUN_EVENT_SCHEMA_VERSION_V13 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -9669,6 +9996,7 @@ impl DurableDagEngine {
       crate::RUN_EVENT_SCHEMA_VERSION_V10
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
+        | crate::RUN_EVENT_SCHEMA_VERSION_V13
     ) && matches!(
       &payload,
       RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)

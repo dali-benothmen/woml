@@ -73,7 +73,7 @@ describe('reusable definition CLI authoring', () => {
     ]));
   });
 
-  test('check compiles a custom-step-only workflow while run remains gated', async () => {
+  test('check compiles a runtime-ready custom-step workflow', async () => {
     const path = resolve(fixtureRoot, 'custom-step-workflow.woml');
     const checked = await invoke(['check', path, '--json']);
     expect(checked.exitCode).toBe(0);
@@ -82,14 +82,9 @@ describe('reusable definition CLI authoring', () => {
     expect(definitionPackage).toMatchObject({
       schemaVersion: 9,
       profile: 'woml.definition-package/v9',
-      runtimeReady: false,
+      runtimeReady: true,
       workflow: { model: { schemaVersion: 14 } },
     });
-
-    const run = await invoke(['run', path]);
-    expect(run.exitCode).toBe(1);
-    expect(run.stderr).toContain('WOML_REUSABLE_EXECUTION_UNAVAILABLE');
-    expect(run.stderr).toContain('durable custom-step execution is not available yet');
   });
 
   test('check compiles provider delivery while run rejects unavailable definition lifecycle', async () => {
@@ -119,7 +114,7 @@ describe('reusable definition CLI authoring', () => {
     expect(run.stderr).toContain(
       'WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE'
     );
-    expect(run.stderr).toContain('workflow lifecycle notifications remain executable');
+    expect(run.stderr).toContain('custom-step and workflow lifecycle hooks remain executable');
   });
 
   test('package identity is stable across different directories and timestamps', async () => {
@@ -144,7 +139,7 @@ describe('reusable definition CLI authoring', () => {
     }
   });
 
-  test('explains direct definition runs and gates workflow execution until lowering', async () => {
+  test('explains direct definition runs and keeps provider lifecycle fail-closed', async () => {
     const direct = await invoke([
       'run',
       resolve(fixtureRoot, 'calculate-discount.woml'),
@@ -158,7 +153,9 @@ describe('reusable definition CLI authoring', () => {
       resolve(fixtureRoot, 'workflow.woml'),
     ]);
     expect(workflow.exitCode).toBe(1);
-    expect(workflow.stderr).toContain('WOML_REUSABLE_EXECUTION_UNAVAILABLE');
+    expect(workflow.stderr).toContain(
+      'WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE'
+    );
     const editorData = JSON.parse(
       await readFile(resolve(fixtureRoot, 'woml-custom-data.json'), 'utf8')
     );

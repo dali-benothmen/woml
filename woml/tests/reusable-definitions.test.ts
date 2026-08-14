@@ -145,7 +145,7 @@ describe('reusable definition graph resolution', () => {
       schemaVersion: 9,
       profile: 'woml.definition-package/v9',
       executable: true,
-      runtimeReady: false,
+      runtimeReady: true,
       workflow: {
         id: 'custom-step-compilation',
         model: { schemaVersion: 14 },

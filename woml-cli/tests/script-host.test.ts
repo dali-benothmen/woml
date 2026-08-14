@@ -17,7 +17,9 @@ import type {
   ExecuteMessageV4,
   ExecuteMessageV6,
   ExecuteMessageV7,
+  ExecuteMessageV8,
   FetchObservationMessage,
+  JsonValue,
   ScriptAttempt,
   ScriptHostMessage,
 } from '../src/script-host/types';
@@ -164,6 +166,30 @@ function executeStepV7(invocationId: string, source: string): ExecuteMessageV7 {
     mode: 'step',
     handler: 'runtime.script',
     modules: [],
+  };
+}
+
+function executeReusableV8(
+  invocationId: string,
+  source: string,
+  props: Readonly<Record<string, JsonValue>>,
+  secrets: Readonly<Record<string, string>> = {}
+): ExecuteMessageV8 {
+  return {
+    ...executeStepV7(invocationId, source),
+    protocolVersion: 8,
+    bindings: { bindingVersion: 1, servicesVersion: 1, secrets },
+    reusable: {
+      profile: 'woml.reusable-script-binding/v3',
+      invocationId: 'discount',
+      definition: {
+        kind: 'step',
+        alias: 'calculate-discount',
+        digest: `sha256:${'1'.repeat(64)}`,
+        source: 'calculate-discount.woml',
+      },
+      props,
+    },
   };
 }
 
@@ -2286,6 +2312,74 @@ describe('LEC3 Script Host v7 lifecycle mode', () => {
       'script_threw',
       'script_timed_out',
     ]);
+  });
+});
+
+describe('Reusable custom-step Script Host v8', () => {
+  test('injects deeply read-only props and keeps invocation state isolated', async () => {
+    const first = executeReusableV8(
+      'inv_reusable_first',
+      `
+        globalThis.counter = (globalThis.counter ?? 0) + 1;
+        try { props.price = 999; } catch {}
+        return { total: props.price * props.quantity, counter: globalThis.counter };
+      `,
+      { price: 12, quantity: 3 }
+    );
+    const result = await runHost(
+      [first, { ...first, invocationId: 'inv_reusable_second' }],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '8' }
+    );
+    const completed = result.messages.filter(
+      message => message.messageType === 'completed'
+    ) as CompletedMessage[];
+    expect(completed.map(message => message.outcome)).toEqual([
+      { kind: 'success', value: { total: 36, counter: 1 } },
+      { kind: 'success', value: { total: 36, counter: 1 } },
+    ]);
+  });
+
+  test('injects reusable lifecycle state and prevents secret props from becoming results', async () => {
+    const lifecycle: ExecuteMessageV8 = {
+      ...executeReusableV8(
+        'inv_reusable_lifecycle',
+        `
+          if (!Object.isFrozen(props) || !Object.isFrozen(lifecycle)) throw new Error('mutable');
+          if (lifecycle.outcome !== 'succeeded' || lifecycle.result.total !== 36) throw new Error('binding');
+        `,
+        { price: 12, quantity: 3 }
+      ),
+      mode: 'lifecycle',
+      handler: 'runtime.lifecycle-script',
+      nodeId: 'discount:on-success:0',
+      reusableLifecycle: {
+        hook: 'on-success',
+        outcome: 'succeeded',
+        result: { total: 36 },
+      },
+    };
+    const secret = 'secret-v8-value';
+    const leaking = executeReusableV8(
+      'inv_reusable_secret',
+      `return { token: props.token };`,
+      { token: secret },
+      { API_TOKEN: secret }
+    );
+    const result = await runHost([lifecycle, leaking], {
+      WOML_SCRIPT_HOST_PROTOCOL_VERSION: '8',
+    });
+    const completed = result.messages.filter(
+      message => message.messageType === 'completed'
+    ) as CompletedMessage[];
+    const outcomes = byInvocation(completed);
+    expect(outcomes.get('inv_reusable_lifecycle')?.outcome).toEqual({
+      kind: 'success', value: null,
+    });
+    expect(outcomes.get('inv_reusable_secret')?.outcome).toMatchObject({
+      kind: 'failure',
+      error: { kind: 'invalid_script_result' },
+    });
+    expect(JSON.stringify(result.messages)).not.toContain(secret);
   });
 });
 

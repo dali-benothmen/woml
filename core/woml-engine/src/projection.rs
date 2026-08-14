@@ -77,6 +77,25 @@ pub struct LifecycleHookProjection {
   pub failed_actions: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReusableLifecycleStatus {
+  Requested,
+  Running,
+  Completed,
+  CompletedWithWarnings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReusableLifecycleProjection {
+  pub invocation_id: String,
+  pub definition_digest: String,
+  pub hook: crate::ReusableLifecycleHook,
+  pub status: ReusableLifecycleStatus,
+  pub active_action_id: Option<String>,
+  pub completed_action_ids: Vec<String>,
+  pub warning_codes: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WorkflowContext {
   pub trigger: Map<String, Value>,
@@ -315,6 +334,7 @@ pub struct RunProjection {
   pub lifecycle_status: LifecycleStatus,
   pub cancellation_request_id: Option<String>,
   pub lifecycle_hooks: BTreeMap<String, LifecycleHookProjection>,
+  pub reusable_lifecycle_hooks: BTreeMap<String, ReusableLifecycleProjection>,
   pub lifecycle_warnings: Vec<LifecycleWarning>,
   pub context: WorkflowContext,
   pub attempts: Vec<AttemptProjection>,
@@ -1508,6 +1528,111 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           LifecycleHookCompletionStatus::CompletedWithWarnings => {
             LifecycleHookStatus::CompletedWithWarnings
           }
+        };
+      }
+      RunEventPayload::ReusableLifecycleRequested(data) => {
+        let key = format!("{}:{:?}", data.invocation_id, data.hook);
+        if projection.reusable_lifecycle_hooks.contains_key(&key) {
+          return Err(FoldError::InvalidHistory(
+            "Reusable lifecycle hook was requested more than once.".to_string(),
+          ));
+        }
+        projection.reusable_lifecycle_hooks.insert(
+          key,
+          ReusableLifecycleProjection {
+            invocation_id: data.invocation_id.clone(),
+            definition_digest: data.definition_digest.clone(),
+            hook: data.hook,
+            status: ReusableLifecycleStatus::Requested,
+            active_action_id: None,
+            completed_action_ids: Vec::new(),
+            warning_codes: Vec::new(),
+          },
+        );
+      }
+      RunEventPayload::ReusableLifecycleActionStarted(data) => {
+        let key = format!("{}:{:?}", data.invocation_id, data.hook);
+        let hook = projection
+          .reusable_lifecycle_hooks
+          .get_mut(&key)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(
+              "Reusable lifecycle action started before its hook was requested.".to_string(),
+            )
+          })?;
+        if hook.definition_digest != data.definition_digest
+          || hook.active_action_id.is_some()
+          || hook.completed_action_ids.contains(&data.action_id)
+          || matches!(
+            hook.status,
+            ReusableLifecycleStatus::Completed | ReusableLifecycleStatus::CompletedWithWarnings
+          )
+        {
+          return Err(FoldError::InvalidHistory(
+            "Reusable lifecycle action has an invalid or duplicate identity.".to_string(),
+          ));
+        }
+        hook.active_action_id = Some(data.action_id.clone());
+        hook.status = ReusableLifecycleStatus::Running;
+      }
+      RunEventPayload::ReusableLifecycleActionSucceeded(data) => {
+        let key = format!("{}:{:?}", data.invocation_id, data.hook);
+        let hook = projection
+          .reusable_lifecycle_hooks
+          .get_mut(&key)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Unknown reusable lifecycle hook.".to_string())
+          })?;
+        if hook.definition_digest != data.definition_digest
+          || hook.active_action_id.as_deref() != Some(data.action_id.as_str())
+        {
+          return Err(FoldError::InvalidHistory(
+            "Reusable lifecycle success does not close its active action.".to_string(),
+          ));
+        }
+        hook.active_action_id = None;
+        hook.completed_action_ids.push(data.action_id.clone());
+      }
+      RunEventPayload::ReusableLifecycleActionFailed(data) => {
+        let key = format!("{}:{:?}", data.invocation_id, data.hook);
+        let hook = projection
+          .reusable_lifecycle_hooks
+          .get_mut(&key)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Unknown reusable lifecycle hook.".to_string())
+          })?;
+        if hook.definition_digest != data.definition_digest
+          || hook
+            .active_action_id
+            .as_deref()
+            .is_some_and(|active| active != data.action_id)
+          || hook.completed_action_ids.contains(&data.action_id)
+        {
+          return Err(FoldError::InvalidHistory(
+            "Reusable lifecycle failure does not close its active action.".to_string(),
+          ));
+        }
+        hook.active_action_id = None;
+        hook.completed_action_ids.push(data.action_id.clone());
+        hook.warning_codes.push(data.warning_code.clone());
+      }
+      RunEventPayload::ReusableLifecycleCompleted(data) => {
+        let key = format!("{}:{:?}", data.invocation_id, data.hook);
+        let hook = projection
+          .reusable_lifecycle_hooks
+          .get_mut(&key)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Unknown reusable lifecycle hook.".to_string())
+          })?;
+        if hook.definition_digest != data.definition_digest || hook.active_action_id.is_some() {
+          return Err(FoldError::InvalidHistory(
+            "Reusable lifecycle completion does not match its hook.".to_string(),
+          ));
+        }
+        hook.status = if data.outcome == crate::ReusableLifecycleOutcome::CompletedWithWarnings {
+          ReusableLifecycleStatus::CompletedWithWarnings
+        } else {
+          ReusableLifecycleStatus::Completed
         };
       }
       RunEventPayload::RunOutcomeDecided(data) => {

@@ -6,9 +6,10 @@ use thiserror::Error;
 use crate::{
   capability::{validate_safe_metadata, CapabilityFailure},
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V11,
-  RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3,
-  RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6,
-  RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
+  RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V13, RUN_EVENT_SCHEMA_VERSION_V2,
+  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
+  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
+  RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -61,6 +62,11 @@ pub enum RunEventPayload {
   LifecycleActionSucceeded(LifecycleActionIdentityData),
   LifecycleActionFailed(LifecycleActionFailedData),
   LifecycleHookCompleted(LifecycleHookCompletedData),
+  ReusableLifecycleRequested(ReusableLifecycleRequestedData),
+  ReusableLifecycleActionStarted(ReusableLifecycleActionStartedData),
+  ReusableLifecycleActionSucceeded(ReusableLifecycleActionSucceededData),
+  ReusableLifecycleActionFailed(ReusableLifecycleActionFailedData),
+  ReusableLifecycleCompleted(ReusableLifecycleCompletedData),
   RunOutcomeDecided(RunOutcomeDecidedData),
   RunFinalized(RunFinalizedData),
   RunSucceeded(RunSucceededData),
@@ -189,6 +195,69 @@ pub struct LifecycleHookCompletedData {
   pub hook_invocation_id: String,
   pub status: LifecycleHookCompletionStatus,
   pub failed_actions: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReusableLifecycleHook {
+  OnSuccess,
+  OnError,
+  OnComplete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReusableLifecycleOutcome {
+  Succeeded,
+  Failed,
+  CompletedWithWarnings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableLifecycleRequestedData {
+  pub invocation_id: String,
+  pub definition_digest: String,
+  pub hook: ReusableLifecycleHook,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableLifecycleActionStartedData {
+  pub invocation_id: String,
+  pub definition_digest: String,
+  pub hook: ReusableLifecycleHook,
+  pub action_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableLifecycleActionSucceededData {
+  pub invocation_id: String,
+  pub definition_digest: String,
+  pub hook: ReusableLifecycleHook,
+  pub action_id: String,
+  pub outcome: ReusableLifecycleOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableLifecycleActionFailedData {
+  pub invocation_id: String,
+  pub definition_digest: String,
+  pub hook: ReusableLifecycleHook,
+  pub action_id: String,
+  pub outcome: ReusableLifecycleOutcome,
+  pub warning_code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableLifecycleCompletedData {
+  pub invocation_id: String,
+  pub definition_digest: String,
+  pub hook: ReusableLifecycleHook,
+  pub outcome: ReusableLifecycleOutcome,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1264,6 +1333,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V10
         | RUN_EVENT_SCHEMA_VERSION_V11
         | RUN_EVENT_SCHEMA_VERSION_V12
+        | RUN_EVENT_SCHEMA_VERSION_V13
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -1273,6 +1343,20 @@ impl RunEvent {
       return Err(EventValidationError::Invalid(
         "Run events require valid eventId, runId, and sequence >= 1.".to_string(),
       ));
+    }
+    if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V13
+      && !matches!(
+        self.payload,
+        RunEventPayload::ReusableLifecycleRequested(_)
+          | RunEventPayload::ReusableLifecycleActionStarted(_)
+          | RunEventPayload::ReusableLifecycleActionSucceeded(_)
+          | RunEventPayload::ReusableLifecycleActionFailed(_)
+          | RunEventPayload::ReusableLifecycleCompleted(_)
+      )
+    {
+      let mut inherited = self.clone();
+      inherited.event_schema_version = RUN_EVENT_SCHEMA_VERSION_V12;
+      return inherited.validate();
     }
     if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V12
       && !matches!(
@@ -1915,6 +1999,67 @@ impl RunEvent {
         {
           return Err(EventValidationError::Invalid(
             "lifecycle_hook_completed has an invalid Event v10 completion summary.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ReusableLifecycleRequested(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V13
+          || !valid_id(&data.invocation_id)
+          || !valid_sha256(&data.definition_digest)
+        {
+          return Err(EventValidationError::Invalid(
+            "reusable_lifecycle_requested has an invalid Event v13 identity.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ReusableLifecycleActionStarted(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V13
+          || !valid_id(&data.invocation_id)
+          || !valid_sha256(&data.definition_digest)
+          || !valid_id(&data.action_id)
+        {
+          return Err(EventValidationError::Invalid(
+            "reusable_lifecycle_action_started has an invalid Event v13 identity.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ReusableLifecycleActionSucceeded(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V13
+          || !valid_id(&data.invocation_id)
+          || !valid_sha256(&data.definition_digest)
+          || !valid_id(&data.action_id)
+          || data.outcome != ReusableLifecycleOutcome::Succeeded
+        {
+          return Err(EventValidationError::Invalid(
+            "reusable_lifecycle_action_succeeded has an invalid Event v13 outcome.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ReusableLifecycleActionFailed(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V13
+          || !valid_id(&data.invocation_id)
+          || !valid_sha256(&data.definition_digest)
+          || !valid_id(&data.action_id)
+          || data.outcome != ReusableLifecycleOutcome::Failed
+          || !data.warning_code.starts_with("WOML_")
+          || data.warning_code.len() > 128
+        {
+          return Err(EventValidationError::Invalid(
+            "reusable_lifecycle_action_failed has an invalid Event v13 warning.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ReusableLifecycleCompleted(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V13
+          || !valid_id(&data.invocation_id)
+          || !valid_sha256(&data.definition_digest)
+          || !matches!(
+            data.outcome,
+            ReusableLifecycleOutcome::Succeeded | ReusableLifecycleOutcome::CompletedWithWarnings
+          )
+        {
+          return Err(EventValidationError::Invalid(
+            "reusable_lifecycle_completed has an invalid Event v13 outcome.".to_string(),
           ));
         }
       }

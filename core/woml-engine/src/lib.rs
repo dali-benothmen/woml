@@ -73,6 +73,7 @@ pub use durable::{
   ApprovalTimeoutSettlement, ApprovalTimeoutSettlementStatus, ApprovalTokenBinding,
   DurableDagEngine, DurableEngineError, DurableEventStore, DurableStoreError, ForkRecoveryBranchV1,
   ForkRecoveryWorkV1, InspectedBusinessOutcome, InspectedForkJoinModeV4, InspectedForkStatusV4,
+  InspectedReusableKindV5, InspectedReusableLifecycleStatusV5, InspectedReusableStatusV5,
   InternalEventAdmissionOutcome, InternalEventAdmissionRequest, IntervalCursor,
   IntervalCursorRegistration, IntervalCursorRegistrationOutcome, IssuedApprovalToken,
   NotificationDeliveryWork, NotificationDispatchReport, NotificationProviderAdapter,
@@ -81,11 +82,12 @@ pub use durable::{
   RecoveryReport, RunCancellationCode, RunCancellationResult, RunCancellationStatus,
   RunDefinitionBinding, RunInspectionCancellationV2, RunInspectionForkCountsV4,
   RunInspectionForkJoinV4, RunInspectionForkV4, RunInspectionForksV4, RunInspectionHookV2,
-  RunInspectionPolicyV3, RunInspectionV2, RunInspectionV3, RunInspectionV4, RunListV1, RunListV2,
-  RunSummaryV1, RunSummaryV2, RunTimeoutSettlement, RuntimeObservationV1, RuntimeOwnerLease,
-  ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, SchedulerClaimV1,
-  StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest,
-  TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
+  RunInspectionPolicyV3, RunInspectionReusableCountsV5, RunInspectionReusableDefinitionsV5,
+  RunInspectionReusableItemV5, RunInspectionV2, RunInspectionV3, RunInspectionV4, RunInspectionV5,
+  RunListV1, RunListV2, RunSummaryV1, RunSummaryV2, RunTimeoutSettlement, RuntimeObservationV1,
+  RuntimeOwnerLease, ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome,
+  SchedulerClaimV1, StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome,
+  TriggerAdmissionRequest, TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
   RUNTIME_POLICY_QUEUE_CEILING,
 };
 pub use durable_state::{
@@ -111,12 +113,14 @@ pub use event::{
   NotificationRunFailure, NotificationSafeFailure, OperationExecutionMode, OperationFailedData,
   OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
   ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData,
-  ProviderMessageIdentity, RunAdmissionQueue, RunAdmissionTrigger, RunAdmittedData,
-  RunCancellationRequestedData, RunEvent, RunEventPayload, RunExecutionStartedData, RunFailedData,
-  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFailedDataV4, RunFailedDataV5,
-  RunFinalizedData, RunIngress, RunOutcomeDecidedData, RunStartedData, RunSucceededData,
-  RunTimeoutReachedData, StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
-  StepRetryScheduledData,
+  ProviderMessageIdentity, ReusableLifecycleActionFailedData, ReusableLifecycleActionStartedData,
+  ReusableLifecycleActionSucceededData, ReusableLifecycleCompletedData, ReusableLifecycleHook,
+  ReusableLifecycleOutcome, ReusableLifecycleRequestedData, RunAdmissionQueue, RunAdmissionTrigger,
+  RunAdmittedData, RunCancellationRequestedData, RunEvent, RunEventPayload,
+  RunExecutionStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
+  RunFailedDataV4, RunFailedDataV5, RunFinalizedData, RunIngress, RunOutcomeDecidedData,
+  RunStartedData, RunSucceededData, RunTimeoutReachedData, StepAttemptFailedData,
+  StepAttemptStartedData, StepAttemptSucceededData, StepRetryScheduledData,
 };
 pub use events_service::{
   EventServiceAcceptedRun, EventServiceRunDispatcher, EventServiceSubscriber, ManagedEventsHandler,
@@ -159,8 +163,8 @@ pub use projection::{
   LifecycleHookProjection, LifecycleHookStatus, LifecycleStatus, NotificationDeliveryProjection,
   NotificationDeliveryStatus, NotificationMessageUpdateProjection, NotificationMessageUpdateStatus,
   OperationIdentity, OperationProjection, OperationStatus, ParallelGroupProjection,
-  ParallelGroupStatus, RetryScheduleProjection, RunFailure, RunProjection, RunStatus,
-  WorkflowContext,
+  ParallelGroupStatus, RetryScheduleProjection, ReusableLifecycleProjection,
+  ReusableLifecycleStatus, RunFailure, RunProjection, RunStatus, WorkflowContext,
 };
 pub use retention::{
   execute_retention, last_retention_result, plan_retention, RetentionError, RetentionExecutionV1,
@@ -232,10 +236,13 @@ pub const RUN_EVENT_SCHEMA_VERSION_V9: u32 = 9;
 pub const RUN_EVENT_SCHEMA_VERSION_V10: u32 = 10;
 pub const RUN_EVENT_SCHEMA_VERSION_V11: u32 = 11;
 pub const RUN_EVENT_SCHEMA_VERSION_V12: u32 = 12;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V12;
+pub const RUN_EVENT_SCHEMA_VERSION_V13: u32 = 13;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V13;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V14 {
+    RUN_EVENT_SCHEMA_VERSION_V13
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
     RUN_EVENT_SCHEMA_VERSION_V12
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V12 {
     RUN_EVENT_SCHEMA_VERSION_V11

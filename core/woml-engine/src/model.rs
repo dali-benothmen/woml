@@ -3289,16 +3289,6 @@ impl CompiledWorkflowDefinition {
     allow_retry: bool,
     durable: bool,
   ) {
-    if self.reusable_definitions.as_ref().is_some_and(|items| {
-      items
-        .iter()
-        .any(|item| matches!(item, CompiledReusableInvocation::Step { .. }))
-    }) {
-      issues.push(issue(
-        ModelIssueCode::UnsupportedReusableExecution,
-        "Model v14 custom steps are compiled and validated, but durable execution begins in SCP4.",
-      ));
-    }
     if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
       if !durable {
         issues.push(issue(

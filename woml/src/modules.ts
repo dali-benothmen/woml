@@ -1529,7 +1529,7 @@ export async function buildWomlReusableDefinitionPackage(
     schemaVersion: 9 as const,
     profile: WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE,
     executable: true as const,
-    runtimeReady: prepared.invocations.length === 0,
+    runtimeReady: true,
     workflow: {
       id: model.workflowId,
       source: prepared.rootSource,

@@ -495,7 +495,11 @@ export interface RustLifecycleWarning {
 }
 
 export interface RustRunInspectionV2 {
-  readonly profile: 'woml.run-inspection/v2' | 'woml.run-inspection/v3';
+  readonly profile:
+    | 'woml.run-inspection/v2'
+    | 'woml.run-inspection/v3'
+    | 'woml.run-inspection/v4'
+    | 'woml.run-inspection/v5';
   readonly runId: string;
   readonly workflowId: string;
   readonly status: PublicRunStatus;
@@ -527,6 +531,25 @@ export interface RustRunInspectionV2 {
     readonly waitingFor?: 'concurrency' | 'rate_limit';
     readonly eligibleAt?: string;
     readonly timeoutAt?: string;
+  };
+  readonly forks?: Record<string, unknown>;
+  readonly reusableDefinitions?: {
+    readonly counts: {
+      readonly pending: number;
+      readonly running: number;
+      readonly succeeded: number;
+      readonly failed: number;
+      readonly cancelled: number;
+      readonly completedWithWarnings: number;
+    };
+    readonly items: readonly {
+      readonly invocationId: string;
+      readonly alias: string;
+      readonly definitionDigestPrefix: string;
+      readonly kind: 'step' | 'notification-provider';
+      readonly status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+      readonly lifecycleStatus: 'idle' | 'running' | 'completed' | 'completed_with_warnings';
+    }[];
   };
 }
 
@@ -3111,6 +3134,34 @@ export function inspectRunV2WithRust(
       typeof candidate.provider === 'string') &&
     (candidate.destination === undefined ||
       typeof candidate.destination === 'string');
+  const reusableDefinitions = (candidate: unknown): boolean =>
+    record(candidate) &&
+    exactKeys(candidate, ['counts', 'items']) &&
+    record(candidate.counts) &&
+    exactKeys(candidate.counts, [
+      'pending', 'running', 'succeeded', 'failed', 'cancelled',
+      'completedWithWarnings',
+    ]) &&
+    Object.values(candidate.counts).every(
+      count => Number.isSafeInteger(count) && Number(count) >= 0
+    ) &&
+    Array.isArray(candidate.items) &&
+    candidate.items.length <= 256 &&
+    candidate.items.every(item =>
+      record(item) &&
+      exactKeys(item, [
+        'invocationId', 'alias', 'definitionDigestPrefix', 'kind', 'status',
+        'lifecycleStatus',
+      ]) &&
+      typeof item.invocationId === 'string' &&
+      typeof item.alias === 'string' &&
+      /^[a-f0-9]{12}$/.test(String(item.definitionDigestPrefix)) &&
+      ['step', 'notification-provider'].includes(String(item.kind)) &&
+      ['pending', 'running', 'succeeded', 'failed', 'cancelled'].includes(String(item.status)) &&
+      ['idle', 'running', 'completed', 'completed_with_warnings'].includes(
+        String(item.lifecycleStatus)
+      )
+    );
   if (
     !record(value) ||
     !exactKeys(
@@ -3126,9 +3177,12 @@ export function inspectRunV2WithRust(
         'warnings',
         'cancellation',
       ],
-      ['policy']
+      ['policy', 'forks', 'reusableDefinitions']
     ) ||
-    !['woml.run-inspection/v2', 'woml.run-inspection/v3'].includes(
+    ![
+      'woml.run-inspection/v2', 'woml.run-inspection/v3',
+      'woml.run-inspection/v4', 'woml.run-inspection/v5',
+    ].includes(
       String(value.profile)
     ) ||
     typeof value.runId !== 'string' ||
@@ -3155,7 +3209,7 @@ export function inspectRunV2WithRust(
     typeof value.cancellation.requested !== 'boolean' ||
     (value.cancellation.requestId !== undefined &&
       typeof value.cancellation.requestId !== 'string') ||
-    (value.profile === 'woml.run-inspection/v3' &&
+    (value.profile !== 'woml.run-inspection/v2' &&
       (!record(value.policy) ||
         !exactKeys(
           value.policy,
@@ -3171,7 +3225,12 @@ export function inspectRunV2WithRust(
           !dateTime(value.policy.eligibleAt)) ||
         (value.policy.timeoutAt !== undefined &&
           !dateTime(value.policy.timeoutAt)))) ||
-    (value.profile === 'woml.run-inspection/v2' && value.policy !== undefined)
+    (value.profile === 'woml.run-inspection/v2' && value.policy !== undefined) ||
+    (['woml.run-inspection/v4', 'woml.run-inspection/v5'].includes(String(value.profile)) &&
+      !record(value.forks)) ||
+    (value.profile === 'woml.run-inspection/v5' &&
+      !reusableDefinitions(value.reusableDefinitions)) ||
+    (value.profile !== 'woml.run-inspection/v5' && value.reusableDefinitions !== undefined)
   ) {
     throw new Error('The native core returned invalid run-inspection data.');
   }

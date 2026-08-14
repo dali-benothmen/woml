@@ -1348,6 +1348,46 @@ pub(crate) fn validate_payload_against_definition(
         );
       }
     }
+    RunEventPayload::ReusableLifecycleRequested(data) => {
+      validate_reusable_lifecycle_binding(
+        workflow,
+        &data.invocation_id,
+        &data.definition_digest,
+        None,
+      )?;
+    }
+    RunEventPayload::ReusableLifecycleActionStarted(data) => {
+      validate_reusable_lifecycle_binding(
+        workflow,
+        &data.invocation_id,
+        &data.definition_digest,
+        Some(&data.action_id),
+      )?;
+    }
+    RunEventPayload::ReusableLifecycleActionSucceeded(data) => {
+      validate_reusable_lifecycle_binding(
+        workflow,
+        &data.invocation_id,
+        &data.definition_digest,
+        Some(&data.action_id),
+      )?;
+    }
+    RunEventPayload::ReusableLifecycleActionFailed(data) => {
+      validate_reusable_lifecycle_binding(
+        workflow,
+        &data.invocation_id,
+        &data.definition_digest,
+        Some(&data.action_id),
+      )?;
+    }
+    RunEventPayload::ReusableLifecycleCompleted(data) => {
+      validate_reusable_lifecycle_binding(
+        workflow,
+        &data.invocation_id,
+        &data.definition_digest,
+        None,
+      )?;
+    }
     RunEventPayload::RunFailed(data) => {
       if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V11 {
         return Err("Model v11+ finalizes with run_outcome_decided and run_finalized.".to_string());
@@ -1979,8 +2019,64 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::RunCancellationRequested(_)
       | RunEventPayload::LifecycleActionSucceeded(_)
       | RunEventPayload::LifecycleActionFailed(_)
+      | RunEventPayload::ReusableLifecycleRequested(_)
+      | RunEventPayload::ReusableLifecycleActionStarted(_)
+      | RunEventPayload::ReusableLifecycleActionSucceeded(_)
+      | RunEventPayload::ReusableLifecycleActionFailed(_)
+      | RunEventPayload::ReusableLifecycleCompleted(_)
       | RunEventPayload::RunFinalized(_)
       | RunEventPayload::RunFailed(_) => {}
+    }
+  }
+  Ok(())
+}
+
+fn validate_reusable_lifecycle_binding(
+  workflow: &CompiledWorkflowDefinition,
+  invocation_id: &str,
+  definition_digest: &str,
+  action_id: Option<&str>,
+) -> Result<(), String> {
+  if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V14 {
+    return Err("Reusable lifecycle events require compiled Model v14.".to_string());
+  }
+  let descriptor = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .find(|definition| match definition {
+      crate::model::CompiledReusableInvocation::Step {
+        invocation_id: candidate,
+        definition_digest: digest,
+        ..
+      } => candidate == invocation_id && digest == definition_digest,
+      crate::model::CompiledReusableInvocation::NotificationProvider {
+        provider_id: candidate,
+        definition_digest: digest,
+        ..
+      } => candidate == invocation_id && digest == definition_digest,
+    })
+    .ok_or_else(|| {
+      "Reusable lifecycle event does not match an immutable Model v14 invocation.".to_string()
+    })?;
+  if let Some(action_id) = action_id {
+    let lifecycle = match descriptor {
+      crate::model::CompiledReusableInvocation::Step { lifecycle, .. }
+      | crate::model::CompiledReusableInvocation::NotificationProvider { lifecycle, .. } => {
+        lifecycle.as_ref()
+      }
+    };
+    let found = lifecycle.is_some_and(|lifecycle| {
+      lifecycle
+        .on_success
+        .iter()
+        .chain(&lifecycle.on_error)
+        .chain(&lifecycle.on_complete)
+        .flat_map(|actions| actions.iter())
+        .any(|candidate| candidate == action_id)
+    });
+    if !found {
+      return Err("Reusable lifecycle event references an unknown action.".to_string());
     }
   }
   Ok(())

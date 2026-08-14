@@ -36,11 +36,14 @@ use crate::model::{
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, LifecycleActionStatus, LifecycleHookProjection,
-  LifecycleHookStatus, ParallelGroupStatus,
+  LifecycleHookStatus, ParallelGroupStatus, ReusableLifecycleStatus,
 };
 use crate::protocol::{
   ExecuteMessage, HostOutcome, LifecycleBindingV1, LifecycleFailureBindingV1,
-  LifecycleStepBindingV1, LifecycleWorkflowBindingV1, RuntimeModuleBinding, ScriptAttempt,
+  LifecycleStepBindingV1, LifecycleWorkflowBindingV1, ReusableDefinitionBindingV3,
+  ReusableDefinitionKind, ReusableInvocationOutcome, ReusableLifecycleBindingV1,
+  ReusableLifecycleErrorV1, ReusableLifecycleHook as ProtocolReusableLifecycleHook,
+  ReusableScriptBindingV3, RuntimeModuleBinding, ScriptAttempt,
 };
 use crate::schedule::{
   ScheduleClock, ScheduleProgress, ScheduleProgressReporter, SystemScheduleClock,
@@ -413,7 +416,7 @@ impl RuntimeExecutionOptions {
   pub fn with_runtime_modules(mut self, modules: Vec<RuntimeModuleArtifact>) -> Self {
     self.script_host.module_artifacts = modules
       .iter()
-      .filter(|module| !module.name.starts_with("__woml_provider__"))
+      .filter(|module| !module.name.starts_with("__woml_"))
       .map(|module| ScriptHostModuleArtifact {
         bundle_digest: module.bundle_digest.clone(),
         bundle: module.bundle.clone(),
@@ -1631,6 +1634,13 @@ fn sha256_identity(content: &str) -> String {
   format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
 }
 
+fn reusable_lifecycle_artifact_name(action_id: &str) -> String {
+  format!(
+    "__woml_lifecycle__{}",
+    sha256_identity(action_id).trim_start_matches("sha256:")
+  )
+}
+
 fn validate_runtime_modules(
   workflow: &CompiledWorkflowDefinition,
   options: &RuntimeExecutionOptions,
@@ -1638,12 +1648,22 @@ fn validate_runtime_modules(
   let module_artifacts = options
     .runtime_modules
     .iter()
-    .filter(|artifact| !artifact.name.starts_with("__woml_provider__"))
+    .filter(|artifact| !artifact.name.starts_with("__woml_"))
     .collect::<Vec<_>>();
   let provider_artifacts = options
     .runtime_modules
     .iter()
     .filter(|artifact| artifact.name.starts_with("__woml_provider__"))
+    .collect::<Vec<_>>();
+  let reusable_step_artifacts = options
+    .runtime_modules
+    .iter()
+    .filter(|artifact| artifact.name.starts_with("__woml_reusable__"))
+    .collect::<Vec<_>>();
+  let reusable_lifecycle_artifacts = options
+    .runtime_modules
+    .iter()
+    .filter(|artifact| artifact.name.starts_with("__woml_lifecycle__"))
     .collect::<Vec<_>>();
   let runtime_bindings = workflow
     .module_runtime
@@ -1728,6 +1748,98 @@ fn validate_runtime_modules(
       "the custom-provider runtime artifacts do not match Model v14".to_string(),
     ));
   }
+  let reusable_step_descriptors = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .filter_map(|definition| match definition {
+      crate::model::CompiledReusableInvocation::Step {
+        script_artifact_id, ..
+      } => Some(script_artifact_id.as_str()),
+      _ => None,
+    })
+    .collect::<HashSet<_>>();
+  let mut reusable_step_ids = HashSet::new();
+  for artifact in reusable_step_artifacts {
+    let artifact_id = artifact.name.trim_start_matches("__woml_reusable__");
+    total_bytes = total_bytes
+      .checked_add(artifact.bundle.len())
+      .and_then(|value| value.checked_add(artifact.source_map.len()))
+      .ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(
+          "custom-step artifact byte count overflowed".to_string(),
+        )
+      })?;
+    if !reusable_step_descriptors.contains(artifact_id)
+      || !reusable_step_ids.insert(artifact_id)
+      || !artifact.exports.is_empty()
+      || !artifact.source_map.is_empty()
+      || sha256_identity(&artifact.bundle) != artifact.bundle_digest
+      || sha256_identity("") != artifact.source_map_digest
+      || artifact.bundle.len() > crate::durable::MAX_MODULE_ARTIFACT_BYTES
+    {
+      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+        "custom-step artifact {artifact_id:?} failed its immutable identity or size check"
+      )));
+    }
+  }
+  if reusable_step_ids.len() != reusable_step_descriptors.len() {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "the custom-step runtime artifacts do not match Model v14".to_string(),
+    ));
+  }
+  let reusable_lifecycle_names = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .flat_map(|definition| match definition {
+      crate::model::CompiledReusableInvocation::Step { lifecycle, .. }
+      | crate::model::CompiledReusableInvocation::NotificationProvider { lifecycle, .. } => {
+        lifecycle
+          .iter()
+          .flat_map(|lifecycle| {
+            lifecycle
+              .on_success
+              .iter()
+              .chain(&lifecycle.on_error)
+              .chain(&lifecycle.on_complete)
+              .flat_map(|actions| actions.iter())
+              .map(|action_id| reusable_lifecycle_artifact_name(action_id))
+              .collect::<Vec<_>>()
+          })
+          .collect::<Vec<_>>()
+      }
+    })
+    .collect::<HashSet<_>>();
+  let mut found_lifecycle_names = HashSet::new();
+  for artifact in reusable_lifecycle_artifacts {
+    total_bytes = total_bytes
+      .checked_add(artifact.bundle.len())
+      .and_then(|value| value.checked_add(artifact.source_map.len()))
+      .ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(
+          "reusable lifecycle artifact byte count overflowed".to_string(),
+        )
+      })?;
+    if !reusable_lifecycle_names.contains(&artifact.name)
+      || !found_lifecycle_names.insert(artifact.name.as_str())
+      || !artifact.exports.is_empty()
+      || !artifact.source_map.is_empty()
+      || sha256_identity(&artifact.bundle) != artifact.bundle_digest
+      || sha256_identity("") != artifact.source_map_digest
+      || artifact.bundle.len() > crate::durable::MAX_MODULE_ARTIFACT_BYTES
+    {
+      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+        "reusable lifecycle artifact {:?} failed its immutable identity or size check",
+        artifact.name
+      )));
+    }
+  }
+  if found_lifecycle_names.len() != reusable_lifecycle_names.len() {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "the reusable lifecycle runtime artifacts do not match Model v14".to_string(),
+    ));
+  }
   if total_bytes > crate::durable::MAX_MODULE_ARTIFACT_SET_BYTES {
     return Err(RuntimeExecutionError::InvalidConfiguration(
       "runtime module artifacts exceed the per-definition cache limit".to_string(),
@@ -1763,6 +1875,7 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
     }
     RunStatus::Finalizing => {
       let mut host = None;
+      drive_pending_reusable_step_lifecycles(&mut engine, run_id, &options, &mut host).await?;
       drive_workflow_lifecycle(&mut engine, run_id, &options, &mut host).await?;
       if let Some(host) = host {
         host.shutdown().await;
@@ -2033,6 +2146,401 @@ fn reusable_provider_descriptor<'a>(
     .find(|definition| {
       matches!(definition, CompiledReusableInvocation::NotificationProvider { provider_id: value, .. } if value == provider_id)
     })
+}
+
+fn reusable_step_descriptor<'a>(
+  workflow: &'a CompiledWorkflowDefinition,
+  node_id: &str,
+) -> Option<&'a CompiledReusableInvocation> {
+  workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .find(|definition| {
+      matches!(definition, CompiledReusableInvocation::Step { node_id: value, .. } if value == node_id)
+    })
+}
+
+fn resolved_reusable_props(
+  descriptor: &CompiledReusableInvocation,
+  context: &WorkflowContext,
+  secrets: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, Value>, RuntimeExecutionError> {
+  let props = match descriptor {
+    CompiledReusableInvocation::Step { props, .. }
+    | CompiledReusableInvocation::NotificationProvider { props, .. } => props,
+  };
+  props
+    .iter()
+    .map(|prop| {
+      let value = match &prop.expression {
+        crate::model::CompiledReusablePropExpression::Literal { value } => {
+          Value::String(value.clone())
+        }
+        crate::model::CompiledReusablePropExpression::Context { path } => {
+          let path = path
+            .split('.')
+            .map(|segment| {
+              if segment == "payload" {
+                "trigger".to_string()
+              } else {
+                segment.to_string()
+              }
+            })
+            .collect::<Vec<_>>();
+          resolve_context_reference(&ValueExpression::ContextReference { path }, context).map_err(
+            |_| {
+              RuntimeExecutionError::InvalidConfiguration(format!(
+                "Reusable prop {:?} is unavailable at this invocation.",
+                prop.name
+              ))
+            },
+          )?
+        }
+        crate::model::CompiledReusablePropExpression::Secret { name } => Value::String(
+          secrets
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+              RuntimeExecutionError::InvalidConfiguration(format!(
+                "Required reusable secret {name:?} is unavailable."
+              ))
+            })?,
+        ),
+      };
+      Ok((prop.binding_name.clone(), value))
+    })
+    .collect()
+}
+
+fn reusable_step_binding(
+  workflow: &CompiledWorkflowDefinition,
+  node_id: &str,
+  context: &WorkflowContext,
+  secrets: &BTreeMap<String, String>,
+) -> Result<Option<ReusableScriptBindingV3>, RuntimeExecutionError> {
+  let Some(descriptor) = reusable_step_descriptor(workflow, node_id) else {
+    return Ok(None);
+  };
+  let CompiledReusableInvocation::Step {
+    invocation_id,
+    alias,
+    definition_digest,
+    source,
+    ..
+  } = descriptor
+  else {
+    unreachable!()
+  };
+  Ok(Some(ReusableScriptBindingV3 {
+    profile: "woml.reusable-script-binding/v3".to_string(),
+    invocation_id: invocation_id.clone(),
+    definition: ReusableDefinitionBindingV3 {
+      kind: ReusableDefinitionKind::Step,
+      alias: alias.clone(),
+      digest: definition_digest.clone(),
+      source: source.clone(),
+    },
+    props: resolved_reusable_props(descriptor, context, secrets)?,
+  }))
+}
+
+async fn drive_reusable_step_lifecycle<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  node_id: &str,
+  outcome: ReusableInvocationOutcome,
+  result: Option<Value>,
+  error: Option<ReusableLifecycleErrorV1>,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<(), RuntimeExecutionError> {
+  let Some(descriptor) = reusable_step_descriptor(engine.workflow(), node_id).cloned() else {
+    return Ok(());
+  };
+  let CompiledReusableInvocation::Step {
+    invocation_id,
+    definition_digest,
+    lifecycle,
+    ..
+  } = &descriptor
+  else {
+    unreachable!()
+  };
+  let Some(lifecycle) = lifecycle else {
+    return Ok(());
+  };
+  let hooks = match outcome {
+    ReusableInvocationOutcome::Succeeded => vec![
+      (
+        ProtocolReusableLifecycleHook::OnSuccess,
+        crate::ReusableLifecycleHook::OnSuccess,
+        lifecycle.on_success.clone().unwrap_or_default(),
+      ),
+      (
+        ProtocolReusableLifecycleHook::OnComplete,
+        crate::ReusableLifecycleHook::OnComplete,
+        lifecycle.on_complete.clone().unwrap_or_default(),
+      ),
+    ],
+    ReusableInvocationOutcome::Failed => vec![
+      (
+        ProtocolReusableLifecycleHook::OnError,
+        crate::ReusableLifecycleHook::OnError,
+        lifecycle.on_error.clone().unwrap_or_default(),
+      ),
+      (
+        ProtocolReusableLifecycleHook::OnComplete,
+        crate::ReusableLifecycleHook::OnComplete,
+        lifecycle.on_complete.clone().unwrap_or_default(),
+      ),
+    ],
+    ReusableInvocationOutcome::Cancelled => vec![(
+      ProtocolReusableLifecycleHook::OnComplete,
+      crate::ReusableLifecycleHook::OnComplete,
+      lifecycle.on_complete.clone().unwrap_or_default(),
+    )],
+  };
+  let context = engine.projection(run_id)?.context;
+  let secrets = resolved_script_secrets(engine.workflow(), node_id, options)?;
+  let reusable = reusable_step_binding(engine.workflow(), node_id, &context, &secrets)?
+    .ok_or_else(|| {
+      RuntimeExecutionError::InvalidConfiguration(
+        "custom-step lifecycle lost its reusable binding".to_string(),
+      )
+    })?;
+  let modules = options
+    .runtime_modules
+    .iter()
+    .filter(|module| !module.name.starts_with("__woml_"))
+    .map(|module| RuntimeModuleBinding {
+      name: module.name.clone(),
+      bundle_digest: module.bundle_digest.clone(),
+      exports: module.exports.clone(),
+    })
+    .collect::<Vec<_>>();
+
+  for (protocol_hook, event_hook, actions) in hooks {
+    if actions.is_empty() {
+      continue;
+    }
+    let key = format!("{}:{:?}", invocation_id, event_hook);
+    let projected = engine
+      .projection(run_id)?
+      .reusable_lifecycle_hooks
+      .get(&key)
+      .cloned();
+    if projected.as_ref().is_some_and(|hook| {
+      matches!(
+        hook.status,
+        ReusableLifecycleStatus::Completed | ReusableLifecycleStatus::CompletedWithWarnings
+      )
+    }) {
+      continue;
+    }
+    if projected.is_none() {
+      engine.append_payload(
+        run_id,
+        RunEventPayload::ReusableLifecycleRequested(crate::ReusableLifecycleRequestedData {
+          invocation_id: invocation_id.clone(),
+          definition_digest: definition_digest.clone(),
+          hook: event_hook,
+        }),
+      )?;
+    }
+    let binding = ReusableLifecycleBindingV1 {
+      hook: protocol_hook,
+      outcome,
+      result: result.clone(),
+      error: error.clone(),
+    };
+    for action_id in actions {
+      let projected = engine
+        .projection(run_id)?
+        .reusable_lifecycle_hooks
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| {
+          RuntimeExecutionError::Stalled("reusable lifecycle request was not projected".to_string())
+        })?;
+      if projected.completed_action_ids.contains(&action_id) {
+        continue;
+      }
+      if projected.active_action_id.as_deref() == Some(action_id.as_str()) {
+        engine.append_payload(
+          run_id,
+          RunEventPayload::ReusableLifecycleActionFailed(
+            crate::ReusableLifecycleActionFailedData {
+              invocation_id: invocation_id.clone(),
+              definition_digest: definition_digest.clone(),
+              hook: event_hook,
+              action_id: action_id.clone(),
+              outcome: crate::ReusableLifecycleOutcome::Failed,
+              warning_code: "WOML_REUSABLE_LIFECYCLE_INTERRUPTED".to_string(),
+            },
+          ),
+        )?;
+        continue;
+      }
+      let artifact_name = reusable_lifecycle_artifact_name(&action_id);
+      let source = options
+        .runtime_modules
+        .iter()
+        .find(|artifact| artifact.name == artifact_name)
+        .map(|artifact| artifact.bundle.clone())
+        .ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(format!(
+            "reusable lifecycle artifact for {action_id:?} is unavailable"
+          ))
+        })?;
+      engine.append_payload(
+        run_id,
+        RunEventPayload::ReusableLifecycleActionStarted(
+          crate::ReusableLifecycleActionStartedData {
+            invocation_id: invocation_id.clone(),
+            definition_digest: definition_digest.clone(),
+            hook: event_hook,
+            action_id: action_id.clone(),
+          },
+        ),
+      )?;
+      let host_invocation_id = generated_id("rlcinv");
+      let idempotency_key =
+        step_effect_idempotency_key(run_id, engine.definition_hash(), &action_id);
+      let request = ExecuteMessage::reusable_lifecycle_script_with_modules(
+        &host_invocation_id,
+        run_id,
+        &action_id,
+        ScriptAttempt::new(1, 1, &idempotency_key).map_err(RuntimeExecutionError::Stalled)?,
+        options.script_timeout_ms,
+        &source,
+        &context,
+        &secrets,
+        &modules,
+        &reusable,
+        &binding,
+      );
+      let succeeded = host
+        .execute(&request)
+        .await
+        .is_ok_and(|completed| matches!(completed.outcome, HostOutcome::Success { .. }));
+      engine.append_payload(
+        run_id,
+        if succeeded {
+          RunEventPayload::ReusableLifecycleActionSucceeded(
+            crate::ReusableLifecycleActionSucceededData {
+              invocation_id: invocation_id.clone(),
+              definition_digest: definition_digest.clone(),
+              hook: event_hook,
+              action_id,
+              outcome: crate::ReusableLifecycleOutcome::Succeeded,
+            },
+          )
+        } else {
+          RunEventPayload::ReusableLifecycleActionFailed(crate::ReusableLifecycleActionFailedData {
+            invocation_id: invocation_id.clone(),
+            definition_digest: definition_digest.clone(),
+            hook: event_hook,
+            action_id,
+            outcome: crate::ReusableLifecycleOutcome::Failed,
+            warning_code: "WOML_REUSABLE_LIFECYCLE_ACTION_FAILED".to_string(),
+          })
+        },
+      )?;
+    }
+    let warnings = engine
+      .projection(run_id)?
+      .reusable_lifecycle_hooks
+      .get(&key)
+      .map_or(0, |hook| hook.warning_codes.len());
+    engine.append_payload(
+      run_id,
+      RunEventPayload::ReusableLifecycleCompleted(crate::ReusableLifecycleCompletedData {
+        invocation_id: invocation_id.clone(),
+        definition_digest: definition_digest.clone(),
+        hook: event_hook,
+        outcome: if warnings == 0 {
+          crate::ReusableLifecycleOutcome::Succeeded
+        } else {
+          crate::ReusableLifecycleOutcome::CompletedWithWarnings
+        },
+      }),
+    )?;
+  }
+  Ok(())
+}
+
+async fn drive_pending_reusable_step_lifecycles<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  options: &RuntimeExecutionOptions,
+  host: &mut Option<ScriptHostClient>,
+) -> Result<(), RuntimeExecutionError> {
+  let descriptors = engine
+    .workflow()
+    .reusable_definitions
+    .clone()
+    .unwrap_or_default();
+  for descriptor in descriptors {
+    let CompiledReusableInvocation::Step {
+      node_id,
+      lifecycle: Some(_),
+      ..
+    } = descriptor
+    else {
+      continue;
+    };
+    let projection = engine.projection(run_id)?;
+    let Some(attempt) = projection.latest_attempt(&node_id) else {
+      continue;
+    };
+    let (outcome, result, error) = match &attempt.status {
+      AttemptStatus::Started => continue,
+      AttemptStatus::Succeeded { output } => (
+        ReusableInvocationOutcome::Succeeded,
+        Some(output.clone()),
+        None,
+      ),
+      AttemptStatus::Failed { .. } if projection.pending_retries.contains_key(&node_id) => continue,
+      AttemptStatus::Failed { failure }
+        if failure.kind == AttemptFailureKind::InvocationCancelled =>
+      {
+        (ReusableInvocationOutcome::Cancelled, None, None)
+      }
+      AttemptStatus::Failed { failure } => (
+        ReusableInvocationOutcome::Failed,
+        None,
+        Some(ReusableLifecycleErrorV1 {
+          code: failure.code.clone(),
+          message: failure.message.clone(),
+        }),
+      ),
+    };
+    if host.is_none() {
+      *host = Some(
+        ScriptHostClient::spawn_with_authority(
+          options.script_host.clone(),
+          options.capability_authority.clone(),
+        )
+        .await?,
+      );
+    }
+    drive_reusable_step_lifecycle(
+      engine,
+      run_id,
+      &node_id,
+      outcome,
+      result,
+      error,
+      options,
+      host
+        .as_ref()
+        .expect("reusable lifecycle host was initialized"),
+    )
+    .await?;
+  }
+  Ok(())
 }
 
 fn custom_provider_runtime_artifacts(
@@ -3290,7 +3798,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
     let modules = options
       .runtime_modules
       .iter()
-      .filter(|module| !module.name.starts_with("__woml_provider__"))
+      .filter(|module| !module.name.starts_with("__woml_"))
       .map(|module| RuntimeModuleBinding {
         name: module.name.clone(),
         bundle_digest: module.bundle_digest.clone(),
@@ -3413,6 +3921,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   loop {
     settle_workflow_timeout_if_due(engine, run_id, options.clock.now(), options)?;
+    drive_pending_reusable_step_lifecycles(engine, run_id, options, host).await?;
     let current = engine.projection(run_id)?;
     if current.timeout_reached_at.is_some() {
       return Err(resumed_failure(engine, run_id, current)?);
@@ -4604,6 +5113,7 @@ async fn execute_fork<E: RuntimeDagEngine>(
       let invocation_id = generated_id("inv");
       let idempotency_key = step_effect_idempotency_key(run_id, engine.definition_hash(), node_id);
       let context = runtime_context_for_node(engine.workflow(), &projection, node_id);
+      let reusable = reusable_step_binding(engine.workflow(), node_id, &context, &secrets)?;
       engine.append_payload(
         run_id,
         RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
@@ -4634,13 +5144,14 @@ async fn execute_fork<E: RuntimeDagEngine>(
             module_bindings: options
               .runtime_modules
               .iter()
-              .filter(|module| !module.name.starts_with("__woml_provider__"))
+              .filter(|module| !module.name.starts_with("__woml_"))
               .map(|module| RuntimeModuleBinding {
                 name: module.name.clone(),
                 bundle_digest: module.bundle_digest.clone(),
                 exports: module.exports.clone(),
               })
               .collect(),
+            reusable,
           },
         )),
       });
@@ -4715,18 +5226,35 @@ async fn execute_fork<E: RuntimeDagEngine>(
     match completion.outcome {
       Ok(output) => {
         completion_order.push(completion.node_id.clone());
+        let completed_node_id = completion.node_id.clone();
         engine.append_payload(
           run_id,
           RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
             node_id: completion.node_id,
             attempt: completion.attempt_number,
             invocation_id: completion.invocation_id,
-            output,
+            output: output.clone(),
           }),
         )?;
+        drive_reusable_step_lifecycle(
+          engine,
+          run_id,
+          &completed_node_id,
+          ReusableInvocationOutcome::Succeeded,
+          Some(output),
+          None,
+          options,
+          host,
+        )
+        .await?;
       }
       Err(failure) => {
         let code = failure.code.clone();
+        let lifecycle_error = ReusableLifecycleErrorV1 {
+          code: failure.code.clone(),
+          message: failure.message.clone(),
+        };
+        let cancelled = failure.kind == AttemptFailureKind::InvocationCancelled;
         let disposition = engine.record_step_attempt_failure(
           run_id,
           options.clock.now(),
@@ -4757,7 +5285,23 @@ async fn execute_fork<E: RuntimeDagEngine>(
             next_attempt,
             scheduled_at,
           ),
-          StepFailureDisposition::StepFailed => {}
+          StepFailureDisposition::StepFailed => {
+            drive_reusable_step_lifecycle(
+              engine,
+              run_id,
+              &completion.node_id,
+              if cancelled {
+                ReusableInvocationOutcome::Cancelled
+              } else {
+                ReusableInvocationOutcome::Failed
+              },
+              None,
+              (!cancelled).then_some(lifecycle_error),
+              options,
+              host,
+            )
+            .await?;
+          }
           StepFailureDisposition::RunFailed => {
             return Err(RuntimeExecutionError::Stalled(
               "fork-coordinated work failed the run before all owned branches settled".to_string(),
@@ -4799,6 +5343,7 @@ struct ParallelInvocationRequest {
   idempotency_key: String,
   secrets: BTreeMap<String, String>,
   module_bindings: Vec<RuntimeModuleBinding>,
+  reusable: Option<ReusableScriptBindingV3>,
 }
 
 async fn next_parallel_completion(
@@ -4872,17 +5417,31 @@ async fn execute_parallel_request(
     details: None,
     ..AttemptFailure::legacy_defaults()
   })?;
-  let request = ExecuteMessage::runtime_script_with_modules(
-    &invocation.invocation_id,
-    &invocation.run_id,
-    &invocation.node_id,
-    attempt,
-    invocation.timeout_ms,
-    &invocation.source,
-    &invocation.context,
-    &invocation.secrets,
-    &invocation.module_bindings,
-  );
+  let request = match invocation.reusable.as_ref() {
+    Some(reusable) => ExecuteMessage::reusable_script_with_modules(
+      &invocation.invocation_id,
+      &invocation.run_id,
+      &invocation.node_id,
+      attempt,
+      invocation.timeout_ms,
+      &invocation.source,
+      &invocation.context,
+      &invocation.secrets,
+      &invocation.module_bindings,
+      reusable,
+    ),
+    None => ExecuteMessage::runtime_script_with_modules(
+      &invocation.invocation_id,
+      &invocation.run_id,
+      &invocation.node_id,
+      attempt,
+      invocation.timeout_ms,
+      &invocation.source,
+      &invocation.context,
+      &invocation.secrets,
+      &invocation.module_bindings,
+    ),
+  };
   match host.execute(&request).await {
     Ok(completed) => match completed.outcome {
       HostOutcome::Success { value } => Ok(value),
@@ -5009,6 +5568,8 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
         } else {
           fork_context.clone()
         };
+      let reusable =
+        reusable_step_binding(engine.workflow(), &node_id, &invocation_context, &secrets)?;
       active.push(ActiveParallelInvocation {
         node_id: node_id.clone(),
         invocation_id: invocation_id.clone(),
@@ -5029,13 +5590,14 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             module_bindings: options
               .runtime_modules
               .iter()
-              .filter(|module| !module.name.starts_with("__woml_provider__"))
+              .filter(|module| !module.name.starts_with("__woml_"))
               .map(|module| RuntimeModuleBinding {
                 name: module.name.clone(),
                 bundle_digest: module.bundle_digest.clone(),
                 exports: module.exports.clone(),
               })
               .collect(),
+            reusable,
           },
         )),
       });
@@ -5098,9 +5660,20 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             node_id: completion.node_id,
             attempt: completion.attempt_number,
             invocation_id: completion.invocation_id,
-            output,
+            output: output.clone(),
           }),
         )?;
+        drive_reusable_step_lifecycle(
+          engine,
+          run_id,
+          &completed_node_id,
+          ReusableInvocationOutcome::Succeeded,
+          Some(output),
+          None,
+          options,
+          host,
+        )
+        .await?;
         report_attempt_succeeded(
           engine,
           options,
@@ -5112,6 +5685,10 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
       Err(failure) => {
         let cancellation = failure.kind == AttemptFailureKind::InvocationCancelled;
         let failure_code = failure.code.clone();
+        let lifecycle_error = ReusableLifecycleErrorV1 {
+          code: failure.code.clone(),
+          message: failure.message.clone(),
+        };
         let disposition = engine.record_step_attempt_failure(
           run_id,
           options.clock.now(),
@@ -5143,6 +5720,21 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             scheduled_at,
           ),
           StepFailureDisposition::StepFailed => {
+            drive_reusable_step_lifecycle(
+              engine,
+              run_id,
+              &completion.node_id,
+              if cancellation {
+                ReusableInvocationOutcome::Cancelled
+              } else {
+                ReusableInvocationOutcome::Failed
+              },
+              None,
+              (!cancellation).then_some(lifecycle_error),
+              options,
+              host,
+            )
+            .await?;
             if !cancellation && policy == ParallelFailurePolicy::FailFast {
               fail_fast_closed = true;
               let active_invocation_ids = active
@@ -5355,12 +5947,14 @@ async fn execute_script_node<E: RuntimeDagEngine>(
       return settle_script_attempt_failure(
         engine,
         options,
+        host,
         run_id,
         node_id,
         attempt_number,
         &invocation_id,
         failure,
-      );
+      )
+      .await;
     }
   }
 
@@ -5376,6 +5970,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
         return settle_script_attempt_failure(
           engine,
           options,
+          host,
           run_id,
           node_id,
           attempt_number,
@@ -5387,7 +5982,8 @@ async fn execute_script_node<E: RuntimeDagEngine>(
             details: None,
             ..AttemptFailure::legacy_defaults()
           },
-        );
+        )
+        .await;
       }
     }
   }
@@ -5395,25 +5991,41 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   let module_bindings = options
     .runtime_modules
     .iter()
-    .filter(|module| !module.name.starts_with("__woml_provider__"))
+    .filter(|module| !module.name.starts_with("__woml_"))
     .map(|module| RuntimeModuleBinding {
       name: module.name.clone(),
       bundle_digest: module.bundle_digest.clone(),
       exports: module.exports.clone(),
     })
     .collect::<Vec<_>>();
-  let request = ExecuteMessage::runtime_script_with_modules(
-    &invocation_id,
-    run_id,
-    node_id,
-    ScriptAttempt::new(attempt_number, max_attempts, &idempotency_key)
-      .map_err(RuntimeExecutionError::Stalled)?,
-    options.script_timeout_ms,
-    source,
-    &context,
-    &secrets,
-    &module_bindings,
-  );
+  let attempt = ScriptAttempt::new(attempt_number, max_attempts, &idempotency_key)
+    .map_err(RuntimeExecutionError::Stalled)?;
+  let reusable = reusable_step_binding(engine.workflow(), node_id, &context, &secrets)?;
+  let request = match reusable.as_ref() {
+    Some(reusable) => ExecuteMessage::reusable_script_with_modules(
+      &invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      options.script_timeout_ms,
+      source,
+      &context,
+      &secrets,
+      &module_bindings,
+      reusable,
+    ),
+    None => ExecuteMessage::runtime_script_with_modules(
+      &invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      options.script_timeout_ms,
+      source,
+      &context,
+      &secrets,
+      &module_bindings,
+    ),
+  };
   let host_client = host.as_ref().expect("script host was initialized");
   let mut execution = Box::pin(host_client.execute(&request));
   let mut cancellation_sent = false;
@@ -5449,6 +6061,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
       return settle_script_attempt_failure(
         engine,
         options,
+        host,
         run_id,
         node_id,
         attempt_number,
@@ -5460,7 +6073,8 @@ async fn execute_script_node<E: RuntimeDagEngine>(
           details: None,
           ..AttemptFailure::legacy_defaults()
         },
-      );
+      )
+      .await;
     }
     Ok(completed) => completed.outcome,
     Err(error) => {
@@ -5474,12 +6088,14 @@ async fn execute_script_node<E: RuntimeDagEngine>(
       return settle_script_attempt_failure(
         engine,
         options,
+        host,
         run_id,
         node_id,
         attempt_number,
         &invocation_id,
         failure,
-      );
+      )
+      .await;
     }
   };
 
@@ -5494,18 +6110,33 @@ async fn execute_script_node<E: RuntimeDagEngine>(
           output: value.clone(),
         }),
       )?;
+      drive_reusable_step_lifecycle(
+        engine,
+        run_id,
+        node_id,
+        ReusableInvocationOutcome::Succeeded,
+        Some(value.clone()),
+        None,
+        options,
+        host.as_ref().expect("script host was initialized"),
+      )
+      .await?;
       report_attempt_succeeded(engine, options, run_id, node_id, attempt_number);
       Ok(ScriptNodeOutcome::Succeeded(value))
     }
-    HostOutcome::Failure { error } => settle_script_attempt_failure(
-      engine,
-      options,
-      run_id,
-      node_id,
-      attempt_number,
-      &invocation_id,
-      error.into_attempt_failure(),
-    ),
+    HostOutcome::Failure { error } => {
+      settle_script_attempt_failure(
+        engine,
+        options,
+        host,
+        run_id,
+        node_id,
+        attempt_number,
+        &invocation_id,
+        error.into_attempt_failure(),
+      )
+      .await
+    }
   }
 }
 
@@ -5916,9 +6547,10 @@ fn settle_cancelling_run<E: RuntimeDagEngine>(
   engine.decide_run_cancelled(run_id, cancellation_request_id, occurred_at)
 }
 
-fn settle_script_attempt_failure<E: RuntimeDagEngine>(
+async fn settle_script_attempt_failure<E: RuntimeDagEngine>(
   engine: &mut E,
   options: &RuntimeExecutionOptions,
+  host: &mut Option<ScriptHostClient>,
   run_id: &str,
   node_id: &str,
   attempt: u32,
@@ -5962,6 +6594,31 @@ fn settle_script_attempt_failure<E: RuntimeDagEngine>(
       )));
     }
     StepFailureDisposition::RunFailed => {}
+  }
+  if reusable_step_descriptor(engine.workflow(), node_id).is_some() && host.is_none() {
+    *host = Some(
+      ScriptHostClient::spawn_with_authority(
+        options.script_host.clone(),
+        options.capability_authority.clone(),
+      )
+      .await?,
+    );
+  }
+  if let Some(host) = host.as_ref() {
+    drive_reusable_step_lifecycle(
+      engine,
+      run_id,
+      node_id,
+      ReusableInvocationOutcome::Failed,
+      None,
+      Some(ReusableLifecycleErrorV1 {
+        code: failure.code.clone(),
+        message: failure.message.clone(),
+      }),
+      options,
+      host,
+    )
+    .await?;
   }
   Err(RuntimeExecutionError::RunFailed(Box::new(
     FailedRunDetails {
@@ -6165,7 +6822,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V9
     | crate::RUN_EVENT_SCHEMA_VERSION_V10
     | crate::RUN_EVENT_SCHEMA_VERSION_V11
-    | crate::RUN_EVENT_SCHEMA_VERSION_V12 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V12
+    | crate::RUN_EVENT_SCHEMA_VERSION_V13 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -6371,6 +7029,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
       crate::RUN_EVENT_SCHEMA_VERSION_V10
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
+        | crate::RUN_EVENT_SCHEMA_VERSION_V13
     ) {
       crate::durable::expand_model_v11_payload(self.workflow(), run_id, payload)?
     } else {

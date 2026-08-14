@@ -1297,10 +1297,9 @@ function runtimeModulesFromPackage(
   });
   if (definitionPackage.schemaVersion !== 9) return modules;
   const seen = new Set<string>();
-  const providerArtifacts = (definitionPackage.workflow.model.reusableDefinitions ?? [])
+  const reusableArtifacts = (definitionPackage.workflow.model.reusableDefinitions ?? [])
     .filter(
       definition =>
-        definition.kind === 'notification-provider' &&
         !seen.has(definition.scriptArtifactId) &&
         seen.add(definition.scriptArtifactId)
     )
@@ -1310,19 +1309,46 @@ function runtimeModulesFromPackage(
       );
       if (artifact?.kind !== 'module-bundle') {
         throw new Error(
-          `Custom provider artifact "${definition.scriptArtifactId}" is unavailable.`
+          `Reusable definition artifact "${definition.scriptArtifactId}" is unavailable.`
         );
       }
       return {
-        name: `__woml_provider__${definition.scriptArtifactId}`,
+        name: `${definition.kind === 'notification-provider' ? '__woml_provider__' : '__woml_reusable__'}${definition.scriptArtifactId}`,
         bundleDigest: artifact.digest,
         sourceMapDigest: sourceDigest(''),
         exports: [] as readonly string[],
         bundle: artifact.content,
-        sourceMap: '',
+      sourceMap: '',
       };
     });
-  return [...modules, ...providerArtifacts].sort((left, right) =>
+  const lifecycleArtifacts = (definitionPackage.workflow.model.reusableDefinitions ?? [])
+    .flatMap(definition => {
+      const ownerId = definition.kind === 'step'
+        ? definition.invocationId
+        : definition.providerId;
+      return [
+        ...((definition.lifecycle?.onSuccess ?? []).map(actionId => ({ actionId, hook: 'on-success' }))),
+        ...((definition.lifecycle?.onError ?? []).map(actionId => ({ actionId, hook: 'on-error' }))),
+        ...((definition.lifecycle?.onComplete ?? []).map(actionId => ({ actionId, hook: 'on-complete' }))),
+      ].map(({ actionId, hook }, indexWithinHook) => {
+        const actionIndex = Number(actionId.slice(actionId.lastIndexOf(':') + 1));
+        const artifact = definitionPackage.artifacts.find(
+          item => item.path === `definitions/${ownerId}.${hook}.${Number.isInteger(actionIndex) ? actionIndex : indexWithinHook}.js`
+        );
+        if (artifact?.kind !== 'module-bundle') {
+          throw new Error(`Reusable lifecycle artifact "${actionId}" is unavailable.`);
+        }
+        return {
+          name: `__woml_lifecycle__${sourceDigest(actionId).slice(7)}`,
+          bundleDigest: artifact.digest,
+          sourceMapDigest: sourceDigest(''),
+          exports: [] as readonly string[],
+          bundle: artifact.content,
+          sourceMap: '',
+        };
+      });
+    });
+  return [...modules, ...reusableArtifacts, ...lifecycleArtifacts].sort((left, right) =>
     left.name.localeCompare(right.name)
   );
 }
@@ -1397,13 +1423,6 @@ async function compileWorkflowSources(
           generateWomlReusableCustomData(reusableGraph),
           io
         );
-      }
-      if (
-        reusableGraph.definitions.some(
-          definition => definition.kind === 'reusable-step'
-        )
-      ) {
-        assertWomlDocumentRunnable(document);
       }
     }
     const inspected =
@@ -1578,7 +1597,7 @@ function assertReusableRuntimeSupported(
     if (definition !== undefined) {
       throw new CliInputError(
         'WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE',
-        `custom notification provider <${definition.alias}> declares reusable lifecycle hooks, whose durable execution authority is not available because the custom-step lifecycle phase was skipped. Remove the provider definition's <lifecycle> for now; workflow lifecycle notifications remain executable.`
+        `custom notification provider <${definition.alias}> declares definition-owned lifecycle hooks, but the notification journey is not connected to the reusable lifecycle host yet. Remove the provider definition's <lifecycle> for now; custom-step and workflow lifecycle hooks remain executable.`
       );
     }
   }
@@ -1763,7 +1782,7 @@ async function runSingleCheckCommand(
       }
       io.stdout(
         reusablePackage !== undefined
-          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom notification providers are runnable; reusable step execution remains unavailable.\n`
+          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom steps and notification providers are runnable.\n`
           : reusableGraph.root.kind === 'workflow'
             ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
           : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
@@ -2586,7 +2605,7 @@ async function executeOneShot(
 ): Promise<void> {
   if (runtimeModules.length > 0) {
     const publicModules = runtimeModules.filter(
-      module => !module.name.startsWith('__woml_provider__')
+      module => !module.name.startsWith('__woml_')
     );
     if (publicModules.length > 0) {
       io.stderr(
@@ -3178,7 +3197,7 @@ async function activateWorkflows(
       for (const source of productionSources) {
         if (source.runtimeModules.length > 0) {
           const publicModules = source.runtimeModules.filter(
-            module => !module.name.startsWith('__woml_provider__')
+            module => !module.name.startsWith('__woml_')
           );
           if (publicModules.length > 0) {
             io.stderr(

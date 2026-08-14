@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 7;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,7 +28,7 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v7 ready message.".to_string());
+      return Err("The child did not send a valid script-host v8 ready message.".to_string());
     }
     Ok(())
   }
@@ -83,6 +83,10 @@ pub struct ExecuteMessage<'a> {
   pub context: &'a WorkflowContext,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub lifecycle: Option<&'a LifecycleBindingV1>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub reusable: Option<&'a ReusableScriptBindingV3>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub reusable_lifecycle: Option<&'a ReusableLifecycleBindingV1>,
   pub bindings: ScriptBindings<'a>,
   pub modules: &'a [RuntimeModuleBinding],
 }
@@ -92,6 +96,67 @@ pub struct ExecuteMessage<'a> {
 pub enum ScriptExecutionMode {
   Step,
   Lifecycle,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableScriptBindingV3 {
+  pub profile: String,
+  pub invocation_id: String,
+  pub definition: ReusableDefinitionBindingV3,
+  pub props: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableDefinitionBindingV3 {
+  pub kind: ReusableDefinitionKind,
+  pub alias: String,
+  pub digest: String,
+  pub source: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReusableDefinitionKind {
+  Step,
+  NotificationProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableLifecycleBindingV1 {
+  pub hook: ReusableLifecycleHook,
+  pub outcome: ReusableInvocationOutcome,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub result: Option<Value>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub error: Option<ReusableLifecycleErrorV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReusableLifecycleHook {
+  #[serde(rename = "on-success")]
+  OnSuccess,
+  #[serde(rename = "on-error")]
+  OnError,
+  #[serde(rename = "on-complete")]
+  OnComplete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReusableInvocationOutcome {
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReusableLifecycleErrorV1 {
+  pub code: String,
+  pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,7 +273,7 @@ impl ModuleRegisteredMessage {
     if envelope && outcome {
       Ok(())
     } else {
-      Err("The child sent an invalid script-host v7 module registration response.".to_string())
+      Err("The child sent an invalid script-host v8 module registration response.".to_string())
     }
   }
 }
@@ -320,6 +385,8 @@ impl<'a> ExecuteMessage<'a> {
       source,
       context,
       lifecycle: None,
+      reusable: None,
+      reusable_lifecycle: None,
       bindings: ScriptBindings {
         binding_version: 1,
         services_version: 1,
@@ -356,6 +423,85 @@ impl<'a> ExecuteMessage<'a> {
       source,
       context,
       lifecycle: Some(lifecycle),
+      reusable: None,
+      reusable_lifecycle: None,
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    }
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn reusable_script_with_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: &'a ReusableScriptBindingV3,
+  ) -> Self {
+    Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      mode: ScriptExecutionMode::Step,
+      handler: "runtime.script",
+      timeout_ms,
+      source,
+      context,
+      lifecycle: None,
+      reusable: Some(reusable),
+      reusable_lifecycle: None,
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    }
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn reusable_lifecycle_script_with_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    action_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: &'a ReusableScriptBindingV3,
+    reusable_lifecycle: &'a ReusableLifecycleBindingV1,
+  ) -> Self {
+    Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id: action_id,
+      attempt,
+      mode: ScriptExecutionMode::Lifecycle,
+      handler: "runtime.lifecycle-script",
+      timeout_ms,
+      source,
+      context,
+      lifecycle: None,
+      reusable: Some(reusable),
+      reusable_lifecycle: Some(reusable_lifecycle),
       bindings: ScriptBindings {
         binding_version: 1,
         services_version: 1,
@@ -387,7 +533,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v7 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v8 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;
