@@ -416,6 +416,7 @@ pub struct NotificationDefinition {
   pub provider: String,
   pub destination: String,
   pub credentials: BTreeMap<String, String>,
+  pub provider_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -693,6 +694,7 @@ fn inspect_reusable_contract(
     .collect::<HashMap<_, _>>();
   let mut identities = HashSet::new();
   let mut step_nodes = HashSet::new();
+  let mut provider_ids = HashSet::new();
   for definition in definitions {
     match definition {
       CompiledReusableInvocation::Step {
@@ -746,6 +748,7 @@ fn inspect_reusable_contract(
         let identity = format!("provider:{provider_id}");
         reusable_prop_secrets(props, &identity, issues);
         if !identities.insert(identity)
+          || !provider_ids.insert(provider_id.clone())
           || !valid_id(provider_id)
           || !valid_reusable_alias(alias)
           || !valid_sha256(definition_digest)
@@ -763,7 +766,62 @@ fn inspect_reusable_contract(
       }
     }
   }
+  let mut used_provider_ids = Vec::new();
+  for node in &workflow.graph.nodes {
+    collect_custom_provider_ids(&node.inputs, &mut used_provider_ids);
+  }
+  if let Some(lifecycle) = &workflow.lifecycle {
+    for hook in &lifecycle.hooks {
+      for action in &hook.actions {
+        collect_custom_provider_ids(&action.inputs, &mut used_provider_ids);
+      }
+    }
+  }
+  for provider_id in &provider_ids {
+    if used_provider_ids
+      .iter()
+      .filter(|used| *used == provider_id)
+      .count()
+      != 1
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidReusableDefinition,
+        format!(
+          "Reusable notification provider {provider_id:?} must identify exactly one generic delivery."
+        ),
+      ));
+    }
+  }
+  for used_provider_id in used_provider_ids {
+    if !provider_ids.contains(&used_provider_id) {
+      issues.push(issue(
+        ModelIssueCode::InvalidReusableDefinition,
+        format!("Generic notification delivery references unknown provider {used_provider_id:?}."),
+      ));
+    }
+  }
   step_nodes
+}
+
+fn collect_custom_provider_ids(expression: &ValueExpression, result: &mut Vec<String>) {
+  match expression {
+    ValueExpression::Object { fields } => {
+      if literal_string(fields.get("provider")) == Some("custom") {
+        if let Some(provider_id) = literal_string(fields.get("providerId")) {
+          result.push(provider_id.to_string());
+        }
+      }
+      for value in fields.values() {
+        collect_custom_provider_ids(value, result);
+      }
+    }
+    ValueExpression::Array { items } => {
+      for value in items {
+        collect_custom_provider_ids(value, result);
+      }
+    }
+    _ => {}
+  }
 }
 
 fn object_fields(expression: &ValueExpression) -> Option<&BTreeMap<String, ValueExpression>> {
@@ -1362,7 +1420,66 @@ fn valid_lifecycle_script_inputs(inputs: &ValueExpression) -> bool {
   )
 }
 
-fn valid_lifecycle_notification_inputs(inputs: &ValueExpression) -> bool {
+fn reusable_provider_ids(workflow: &CompiledWorkflowDefinition) -> HashSet<&str> {
+  workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .filter_map(|definition| match definition {
+      CompiledReusableInvocation::NotificationProvider { provider_id, .. } => {
+        Some(provider_id.as_str())
+      }
+      CompiledReusableInvocation::Step { .. } => None,
+    })
+    .collect()
+}
+
+fn valid_custom_provider_delivery(
+  fields: &BTreeMap<String, ValueExpression>,
+  expected_domain: &str,
+  provider_ids: &HashSet<&str>,
+  message_required: bool,
+) -> bool {
+  let required_fields = if message_required { 7 } else { 6 };
+  if fields.len() < required_fields || fields.len() > 7 {
+    return false;
+  }
+  if fields.keys().any(|key| {
+    !matches!(
+      key.as_str(),
+      "deliveryId"
+        | "provider"
+        | "destination"
+        | "credentials"
+        | "providerId"
+        | "domain"
+        | "message"
+    )
+  }) {
+    return false;
+  }
+  let delivery_id = literal_string(fields.get("deliveryId"));
+  let provider_id = literal_string(fields.get("providerId"));
+  let message_valid = fields.get("message").is_none_or(|message| {
+    matches!(message, ValueExpression::Template { parts } if (1..=65).contains(&parts.len()) && parts.iter().all(|part| !matches!(part, TemplatePart::Text { text } if text.len() > 4096)))
+  });
+  literal_string(fields.get("provider")) == Some("custom")
+    && literal_string(fields.get("domain")) == Some(expected_domain)
+    && delivery_id.is_some_and(|value| valid_id(value) && Some(value) == provider_id)
+    && provider_id.is_some_and(|value| provider_ids.contains(value))
+    && literal_string(fields.get("destination")).is_some_and(valid_reusable_alias)
+    && fields
+      .get("credentials")
+      .and_then(object_fields)
+      .is_some_and(BTreeMap::is_empty)
+    && (!message_required || fields.contains_key("message"))
+    && message_valid
+}
+
+fn valid_lifecycle_notification_inputs(
+  inputs: &ValueExpression,
+  provider_ids: &HashSet<&str>,
+) -> bool {
   let Some(fields) = object_fields(inputs) else {
     return false;
   };
@@ -1375,6 +1492,9 @@ fn valid_lifecycle_notification_inputs(inputs: &ValueExpression) -> bool {
       let Some(fields) = object_fields(delivery) else {
         return false;
       };
+      if literal_string(fields.get("provider")) == Some("custom") {
+        return valid_custom_provider_delivery(fields, "informational", provider_ids, true);
+      }
       let credentials = fields.get("credentials").and_then(object_fields);
       fields.len() == 5
         && matches!(fields.get("deliveryId"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
@@ -1422,6 +1542,7 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
     .collect::<HashSet<_>>();
   let mut events = HashSet::new();
   let mut action_ids = HashSet::new();
+  let provider_ids = reusable_provider_ids(workflow);
   for hook in &lifecycle.hooks {
     let valid_steps = match (&hook.step_ids, hook.event.is_step()) {
       (None, true) => true,
@@ -1465,7 +1586,9 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
               .all(|name| valid_secret_name(name))
             && valid_lifecycle_script_inputs(&action.inputs)
         }
-        ("notification.informational", None) => valid_lifecycle_notification_inputs(&action.inputs),
+        ("notification.informational", None) => {
+          valid_lifecycle_notification_inputs(&action.inputs, &provider_ids)
+        }
         _ => false,
       };
       if action.action_id != expected_id
@@ -1739,6 +1862,7 @@ fn approval_join_id(value: &str) -> Option<&str> {
 fn approval_notifications(
   approval_id: &str,
   fields: &BTreeMap<String, ValueExpression>,
+  provider_ids: &HashSet<&str>,
 ) -> Option<Vec<NotificationDefinition>> {
   let Some(expression) = fields.get("notifications") else {
     return Some(Vec::new());
@@ -1757,13 +1881,6 @@ fn approval_notifications(
     let ValueExpression::Object { fields } = item else {
       return None;
     };
-    if fields.len() != 4
-      || !["deliveryId", "provider", "destination", "credentials"]
-        .iter()
-        .all(|key| fields.contains_key(*key))
-    {
-      return None;
-    }
     let ValueExpression::Literal { value: delivery } = fields.get("deliveryId")? else {
       return None;
     };
@@ -1782,9 +1899,6 @@ fn approval_notifications(
     let delivery_id = delivery.as_str()?;
     let provider = provider.as_str()?;
     let destination = destination.as_str()?;
-    if provider != "slack" || !valid_slack_destination(destination) || credentials.len() != 2 {
-      return None;
-    }
     let prefix = format!("{approval_id}:notify:");
     let (tag, channel) = delivery_id.strip_prefix(&prefix)?.split_once(":channel:")?;
     let tag = tag.parse::<usize>().ok()?;
@@ -1800,20 +1914,43 @@ fn approval_notifications(
     if !ordered {
       return None;
     }
-    let mut names = BTreeMap::new();
-    for key in ["botToken", "appToken"] {
-      let ValueExpression::SecretReference { name } = credentials.get(key)? else {
-        return None;
-      };
-      if !valid_secret_name(name) {
+    let (names, provider_id, duplicate_key) = if provider == "slack" {
+      if fields.len() != 4
+        || !["deliveryId", "provider", "destination", "credentials"]
+          .iter()
+          .all(|key| fields.contains_key(*key))
+        || !valid_slack_destination(destination)
+        || credentials.len() != 2
+      {
         return None;
       }
-      names.insert(key.to_string(), name.clone());
-    }
-    let duplicate_key = format!(
-      "{}\0{}\0{}",
-      names["botToken"], names["appToken"], destination
-    );
+      let mut names = BTreeMap::new();
+      for key in ["botToken", "appToken"] {
+        let ValueExpression::SecretReference { name } = credentials.get(key)? else {
+          return None;
+        };
+        if !valid_secret_name(name) {
+          return None;
+        }
+        names.insert(key.to_string(), name.clone());
+      }
+      let duplicate_key = format!(
+        "slack\0{}\0{}\0{}",
+        names["botToken"], names["appToken"], destination
+      );
+      (names, None, duplicate_key)
+    } else if provider == "custom"
+      && valid_custom_provider_delivery(fields, "approval", provider_ids, false)
+    {
+      let provider_id = literal_string(fields.get("providerId"))?.to_string();
+      (
+        BTreeMap::new(),
+        Some(provider_id.clone()),
+        format!("custom\0{provider_id}"),
+      )
+    } else {
+      return None;
+    };
     if !duplicate_keys.insert(duplicate_key) {
       return None;
     }
@@ -1822,6 +1959,7 @@ fn approval_notifications(
       provider: provider.to_string(),
       destination: destination.to_string(),
       credentials: names,
+      provider_id,
     });
     previous_tag = Some(tag);
     previous_channel = Some(channel);
@@ -1829,7 +1967,7 @@ fn approval_notifications(
   Some(notifications)
 }
 
-fn approval_wait_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
+fn approval_wait_inputs(node: Option<&CompiledWorkflowNode>, provider_ids: &HashSet<&str>) -> bool {
   let Some(node) = node else {
     return false;
   };
@@ -1873,7 +2011,7 @@ fn approval_wait_inputs(node: Option<&CompiledWorkflowNode>) -> bool {
         .values()
         .all(|value| value.as_str().is_some_and(|text| !text.is_empty()))
   });
-  let valid_notifications = approval_notifications(&node.id, fields).is_some();
+  let valid_notifications = approval_notifications(&node.id, fields, provider_ids).is_some();
   valid_timeout && valid_policy && valid_metadata && valid_notifications
 }
 
@@ -1906,6 +2044,7 @@ fn is_approval_decision_condition(
 }
 
 fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec<ModelIssue>) {
+  let provider_ids = reusable_provider_ids(workflow);
   let nodes: HashMap<&str, &CompiledWorkflowNode> = workflow
     .graph
     .nodes
@@ -2025,7 +2164,7 @@ fn inspect_approval_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
     }
 
     if !valid_public_structural_id(approval_id)
-      || !approval_wait_inputs(wait)
+      || !approval_wait_inputs(wait, &provider_ids)
       || !approval_join_inputs(join)
       || !routes_are_valid
       || edges.len() != expected_edges
@@ -2509,7 +2648,8 @@ impl CompiledWorkflowDefinition {
         ValueExpression::Literal { value } => value.as_str().map(str::to_string),
         _ => None,
       })?;
-    let notifications = approval_notifications(approval_id, fields)?;
+    let provider_ids = reusable_provider_ids(self);
+    let notifications = approval_notifications(approval_id, fields, &provider_ids)?;
     Some(ApprovalDefinition {
       approval_id: approval_id.to_string(),
       name: wait
@@ -3146,14 +3286,27 @@ impl CompiledWorkflowDefinition {
     allow_retry: bool,
     durable: bool,
   ) {
-    if self
-      .reusable_definitions
-      .as_ref()
-      .is_some_and(|items| !items.is_empty())
-    {
+    if self.reusable_definitions.as_ref().is_some_and(|items| {
+      items
+        .iter()
+        .any(|item| matches!(item, CompiledReusableInvocation::Step { .. }))
+    }) {
       issues.push(issue(
         ModelIssueCode::UnsupportedReusableExecution,
-        "Model v14 reusable operations are compiled and validated, but durable execution begins in SCP4.",
+        "Model v14 custom steps are compiled and validated, but durable execution begins in SCP4.",
+      ));
+    }
+    if self.reusable_definitions.as_ref().is_some_and(|items| {
+      items.iter().any(|item| {
+        matches!(
+          item,
+          CompiledReusableInvocation::NotificationProvider { .. }
+        )
+      })
+    }) {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedReusableExecution,
+        "Model v14 custom notification providers are compiled and validated, but durable execution begins in SCP6.",
       ));
     }
     if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
@@ -3191,6 +3344,7 @@ impl CompiledWorkflowDefinition {
       }
     }
 
+    let provider_ids = reusable_provider_ids(self);
     for node in &self.graph.nodes {
       let valid_inputs = match (node.handler.as_str(), &node.inputs) {
         ("runtime.script", ValueExpression::Object { fields }) if fields.len() == 1 => {
@@ -3208,7 +3362,7 @@ impl CompiledWorkflowDefinition {
         }
         ("engine.parallel-join", ValueExpression::Object { fields }) => fields.is_empty(),
         ("engine.approval-wait", ValueExpression::Object { .. }) if allow_approval => {
-          approval_wait_inputs(Some(node))
+          approval_wait_inputs(Some(node), &provider_ids)
         }
         ("engine.approval-join", ValueExpression::Object { fields }) if allow_approval => {
           fields.is_empty()

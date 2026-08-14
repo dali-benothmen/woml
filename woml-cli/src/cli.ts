@@ -1651,10 +1651,7 @@ async function runSingleCheckCommand(
       );
       const reusablePackage =
         reusableGraph.root.kind === 'workflow' &&
-        reusableGraph.definitions.length > 0 &&
-        reusableGraph.definitions.every(
-          definition => definition.kind === 'reusable-step'
-        )
+        reusableGraph.definitions.length > 0
           ? await buildWomlReusableDefinitionPackage(
               document,
               reusableGraph,
@@ -1685,7 +1682,7 @@ async function runSingleCheckCommand(
       }
       io.stdout(
         reusablePackage !== undefined
-          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom-step artifacts are ready; durable execution begins in SCP4.\n`
+          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: reusable artifacts are ready; custom steps execute from SCP4 and custom providers from SCP6.\n`
           : reusableGraph.root.kind === 'workflow'
             ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
           : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'

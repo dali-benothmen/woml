@@ -31,6 +31,43 @@
     }
   },
   "runtimePolicy": { "profileVersion": 1, "concurrency": 1 },
+  "lifecycle": {
+    "profileVersion": 1,
+    "hooks": [
+      {
+        "hookId": "lifecycle:run_success",
+        "event": "run_success",
+        "actions": [
+          {
+            "actionId": "lifecycle:run_success:action:0",
+            "handler": "notification.informational",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "deliveries": {
+                  "kind": "array",
+                  "items": [
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "deliveryId": { "kind": "literal", "value": "lifecycle:run_success:action:0:provider:0:channel:0" },
+                        "provider": { "kind": "literal", "value": "custom" },
+                        "destination": { "kind": "literal", "value": "telegram" },
+                        "credentials": { "kind": "object", "fields": {} },
+                        "providerId": { "kind": "literal", "value": "lifecycle:run_success:action:0:provider:0:channel:0" },
+                        "domain": { "kind": "literal", "value": "informational" },
+                        "message": { "kind": "template", "parts": [{ "kind": "text", "text": "Workflow completed." }] }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
   "reusableDefinitions": [
     {
       "kind": "step",
@@ -52,7 +89,7 @@
     },
     {
       "kind": "notification-provider",
-      "providerId": "review:notify:0",
+      "providerId": "lifecycle:run_success:action:0:provider:0:channel:0",
       "alias": "telegram",
       "definitionDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "source": "telegram.woml",

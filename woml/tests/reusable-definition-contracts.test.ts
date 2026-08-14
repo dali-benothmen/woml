@@ -79,6 +79,39 @@ describe('frozen reusable definition contracts', () => {
     );
   });
 
+  test('validates a compiler-produced custom-provider package', async () => {
+    const path = resolve(fixtureRoot, 'custom-provider-workflow.woml');
+    const document = parseWoml(readFileSync(path, 'utf8'), { file: path });
+    const graph = resolveWomlReusableDefinitionGraph(document, {
+      sourcePath: path,
+      projectRoot: fixtureRoot,
+    });
+    const definitionPackage = await buildWomlReusableDefinitionPackage(
+      document,
+      graph,
+      { sourcePath: path, projectRoot: fixtureRoot }
+    );
+    const ajv = validators();
+    expectValid(
+      ajv.getSchema('https://cronflow.dev/schemas/compiled-workflow-model/v14'),
+      definitionPackage.workflow.model
+    );
+    expectValid(
+      ajv.getSchema('https://woml.dev/schemas/woml-definition-package.v9.schema.json'),
+      definitionPackage
+    );
+    expect(definitionPackage.definitions).toContainEqual(
+      expect.objectContaining({
+        alias: 'telegram',
+        kind: 'notification-provider',
+      })
+    );
+    expect(definitionPackage.permissions.secrets).toContain(
+      'TELEGRAM_BOT_TOKEN'
+    );
+    expect(definitionPackage.runtimeReady).toBe(false);
+  });
+
   test('validates Model v14 and Definition Package v9 reviewed artifacts', () => {
     const ajv = validators();
     const model = fixture('model-v14.reviewed.json');

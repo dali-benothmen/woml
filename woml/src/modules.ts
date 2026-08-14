@@ -1373,17 +1373,6 @@ export async function buildWomlReusableDefinitionPackage(
       graph.root.definition.openTagSpan
     );
   }
-  const provider = graph.definitions.find(
-    definition => definition.kind === 'notification-provider'
-  );
-  if (provider !== undefined) {
-    throw compileDiagnostic(
-      document.file,
-      'WOML_CUSTOM_PROVIDER_COMPILATION_UNAVAILABLE',
-      `Notification provider <${provider.alias}> is valid source, but provider lowering begins in SCP5.`,
-      graph.root.definition.openTagSpan
-    );
-  }
   const sourcePath = resolve(options.sourcePath ?? document.file);
   const projectRoot = realpathSync(
     resolve(options.projectRoot ?? dirname(sourcePath))
@@ -1391,11 +1380,14 @@ export async function buildWomlReusableDefinitionPackage(
   const prepared = prepareResolvedReusableWorkflow(document, graph, {
     projectRoot,
   });
-  if (prepared.invocations.length === 0) {
+  if (
+    prepared.invocations.length === 0 &&
+    prepared.providerInvocations.length === 0
+  ) {
     throw compileDiagnostic(
       document.file,
       'WOML_REUSABLE_STEP_USAGE_REQUIRED',
-      'Definition Package v9 reusable-step compilation requires at least one custom-step invocation.',
+      'Definition Package v9 requires at least one custom-step or custom-provider invocation.',
       graph.root.definition.openTagSpan
     );
   }
@@ -1463,13 +1455,15 @@ export async function buildWomlReusableDefinitionPackage(
       content: definition.scriptSource,
     })
   );
-  const lifecycleArtifacts: WomlDefinitionPackageArtifactV2[] = prepared.invocations.flatMap(
-    invocation => {
+  const lifecycleArtifacts: WomlDefinitionPackageArtifactV2[] = [
+    ...prepared.invocations,
+    ...prepared.providerInvocations,
+  ].flatMap(invocation => {
       const definition = prepared.definitions.find(
         item => item.alias === invocation.alias
       )!;
       return definition.lifecycleScripts.map(script => ({
-        path: `definitions/${invocation.invocationId}.${script.hook}.${script.index}.js`,
+        path: `definitions/${invocation.kind === 'step' ? invocation.invocationId : invocation.providerId}.${script.hook}.${script.index}.js`,
         kind: 'module-bundle' as const,
         mediaType: 'text/javascript' as const,
         digest: sha256(script.source),
@@ -1512,7 +1506,7 @@ export async function buildWomlReusableDefinitionPackage(
   const definitions: WomlDefinitionPackageReusableDefinitionV9[] = prepared.definitions
     .map(definition => ({
       alias: definition.alias,
-      kind: 'reusable-step' as const,
+      kind: definition.kind,
       source: definition.source,
       digest: definition.digest,
       dependencies: sources.find(source => source.path === definition.source)?.dependencies ?? [],
@@ -1525,7 +1519,7 @@ export async function buildWomlReusableDefinitionPackage(
     }))
     .sort((left, right) => left.alias.localeCompare(right.alias));
   const secrets = [...new Set(
-    prepared.invocations.flatMap(invocation =>
+    [...prepared.invocations, ...prepared.providerInvocations].flatMap(invocation =>
       invocation.props.flatMap(prop =>
         prop.expression.kind === 'secret' ? [prop.expression.name] : []
       )

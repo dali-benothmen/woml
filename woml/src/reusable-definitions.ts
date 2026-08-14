@@ -1148,7 +1148,7 @@ export function assertWomlDocumentRunnable(
     failCompile(
       document,
       'WOML_REUSABLE_EXECUTION_UNAVAILABLE',
-      `Reusable definition <${reusable.name}> is valid, but durable custom-step execution begins in SCP4 and custom-provider execution begins in SCP5.`,
+      `Reusable definition <${reusable.name}> is valid, but durable custom-step execution begins in SCP4 and custom-provider execution begins in SCP6.`,
       reusable.element.openTagSpan,
       'Use `woml check` to compile and inspect the pinned Model v14 package.'
     );

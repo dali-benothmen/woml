@@ -7,6 +7,7 @@
 pub mod backup;
 pub mod cache;
 pub mod capability;
+pub mod custom_notification_provider_protocol;
 pub mod database;
 mod database_postgres;
 pub mod durable;
@@ -51,6 +52,15 @@ pub use capability::{
   CAPABILITY_CALL_CONTRACT, CAPABILITY_CALL_CONTRACT_VERSION, DEFAULT_CAPABILITY_FRAME_BYTES,
   DEFAULT_CAPABILITY_INPUT_BYTES, DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
   NATIVE_FETCH_OBSERVATION_CONTRACT, NATIVE_FETCH_OBSERVATION_CONTRACT_VERSION,
+};
+pub use custom_notification_provider_protocol::{
+  decode_custom_provider_frame, encode_custom_provider_frame, CustomNotificationAction,
+  CustomNotificationActions, CustomNotificationKind, CustomNotificationRequest,
+  CustomProviderAttempt, CustomProviderCancelMessage, CustomProviderCompletedMessage,
+  CustomProviderExecuteMessage, CustomProviderFailure, CustomProviderFailureKind,
+  CustomProviderLimits, CustomProviderOutcome, CustomProviderReadyMessage, CustomProviderReceipt,
+  CUSTOM_NOTIFICATION_PROVIDER_MAX_FRAME_BYTES, CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL,
+  CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
 pub use database::{ManagedDatabaseHandler, ManagedDatabasePool};
 pub use durable::{

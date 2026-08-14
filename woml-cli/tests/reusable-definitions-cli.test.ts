@@ -92,6 +92,34 @@ describe('reusable definition CLI authoring', () => {
     expect(run.stderr).toContain('durable custom-step execution begins in SCP4');
   });
 
+  test('check compiles custom providers while run remains gated until SCP6', async () => {
+    const path = resolve(fixtureRoot, 'custom-provider-workflow.woml');
+    const checked = await invoke(['check', path, '--json']);
+    expect(checked.exitCode).toBe(0);
+    expect(checked.stderr).toBe('');
+    const definitionPackage = JSON.parse(checked.stdout);
+    expect(definitionPackage).toMatchObject({
+      schemaVersion: 9,
+      runtimeReady: false,
+      definitions: [
+        expect.objectContaining({
+          alias: 'telegram',
+          kind: 'notification-provider',
+        }),
+      ],
+    });
+    expect(
+      definitionPackage.workflow.model.reusableDefinitions.filter(
+        (item: { kind: string }) => item.kind === 'notification-provider'
+      )
+    ).toHaveLength(2);
+
+    const run = await invoke(['run', path]);
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toContain('WOML_REUSABLE_EXECUTION_UNAVAILABLE');
+    expect(run.stderr).toContain('custom-provider execution begins in SCP6');
+  });
+
   test('package identity is stable across different directories and timestamps', async () => {
     const otherRoot = await mkdtemp(resolve(tmpdir(), 'woml-reusable-copy-'));
     try {

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 import {
   assertWomlDocumentRunnable,
+  analyzeWomlNotificationProviderScript,
   analyzeWomlReusableScript,
   buildWomlReusableDefinitionPackage,
   generateWomlReusableCustomData,
@@ -44,6 +45,26 @@ describe('reusable WOML document contracts', () => {
     expect(
       analyzeWomlReusableScript('const props = {}; return props;').issue?.code
     ).toBe('WOML_SCRIPT_BINDING_SHADOWED');
+  });
+
+  test('freezes provider scripts to props, notification, attempt, and services', () => {
+    expect(
+      analyzeWomlNotificationProviderScript(
+        'return { messageId: `${props.chatId}:${notification.deliveryId}` };'
+      ).issue
+    ).toBeUndefined();
+    expect(
+      analyzeWomlNotificationProviderScript('return context.steps.order;')
+        .issue?.code
+    ).toBe('WOML_PROVIDER_CONTEXT_UNAVAILABLE');
+    expect(
+      analyzeWomlNotificationProviderScript('notification.message = "changed";')
+        .issue?.code
+    ).toBe('WOML_PROVIDER_NOTIFICATION_READ_ONLY');
+    expect(
+      analyzeWomlNotificationProviderScript('return secrets.BOT_TOKEN;').issue
+        ?.code
+    ).toBe('WOML_REUSABLE_SECRET_ACCESS_FORBIDDEN');
   });
 
   test('classifies workflow, reusable step, and notification provider documents', () => {
@@ -166,6 +187,37 @@ describe('reusable definition graph resolution', () => {
       },
     });
     expect(JSON.stringify(definitionPackage)).not.toContain(fixtureRoot);
+  });
+
+  test('lowers approval and lifecycle providers into generic Model v14 deliveries', async () => {
+    const path = resolve(fixtureRoot, 'custom-provider-workflow.woml');
+    const workflow = fixture('custom-provider-workflow.woml');
+    const graph = resolveWomlReusableDefinitionGraph(workflow, {
+      sourcePath: path,
+      projectRoot: fixtureRoot,
+    });
+    const definitionPackage = await buildWomlReusableDefinitionPackage(
+      workflow,
+      graph,
+      { sourcePath: path, projectRoot: fixtureRoot }
+    );
+    const providers = definitionPackage.workflow.model.reusableDefinitions?.filter(
+      item => item.kind === 'notification-provider'
+    );
+    expect(providers).toHaveLength(2);
+    expect(providers?.map(item => item.providerId)).toEqual([
+      'lifecycle:0:action:0:provider:0:channel:0',
+      'review:notify:0:channel:0',
+    ]);
+    const serialized = JSON.stringify(definitionPackage.workflow.model);
+    expect(serialized).toContain('"provider":{"kind":"literal","value":"custom"}');
+    expect(serialized).toContain('"domain":{"kind":"literal","value":"approval"}');
+    expect(serialized).toContain('"domain":{"kind":"literal","value":"informational"}');
+    expect(serialized).not.toContain('WOML_CUSTOM_PROVIDER_PLACEHOLDER');
+    expect(definitionPackage.permissions.secrets).toEqual([
+      'TELEGRAM_BOT_TOKEN',
+    ]);
+    expect(definitionPackage.runtimeReady).toBe(false);
   });
 
   test('rejects a prop reference that is not visible at the invocation', async () => {

@@ -1118,7 +1118,7 @@ or secret values.
 | SCP2 — completed | Implement official `<switch>` validation, lowering, durable selection, results, and recovery. | Authors can run readable string-based routing through the existing Rust choice engine. |
 | SCP3 — completed | Compile reusable-step imports into Model v14 and Definition Package v9 with immutable props and provenance. | A custom step becomes one deterministic engine-ready operation. |
 | SCP4 | Execute custom steps with retries, services, secrets, results, lifecycle hooks, and recovery. | Imported custom steps work like native durable steps. |
-| SCP5 | Compile custom notification providers and freeze the provider-worker boundary. | Custom provider tags lower to generic supervised delivery definitions. |
+| SCP5 — completed | Compile custom notification providers and freeze the provider-worker boundary. | Custom provider tags lower to generic supervised delivery definitions. |
 | SCP6 | Execute custom providers for approvals and lifecycle notifications with shared decisions and safe retries. | A real user-authored notification provider works end to end. |
 | SCP7 | Complete composition, CLI, folder activation, operations, cancellation, backup, and compatibility. | The features work inside production automations rather than isolated demos. |
 | SCP8 | Harden, benchmark, document, package, and publish the milestone. | Switch, custom steps, and custom notification providers are supported WOML features. |
@@ -1293,7 +1293,7 @@ The acceptance custom step passes success, permanent failure, retry,
 idempotency, services, secret, lifecycle, cancellation, crash, and recovery
 tests with no secret or prop leakage.
 
-### SCP5 — Compile custom notification providers
+### SCP5 — Compile custom notification providers — completed
 
 Changes:
 

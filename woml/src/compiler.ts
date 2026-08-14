@@ -10,6 +10,7 @@ import {
   type CompiledLifecycleHookV1,
   type CompiledModuleRuntimeV1,
   type CompiledRuntimePolicyV1,
+  type CompiledReusableNotificationProviderV1,
   type CompiledReusableStepInvocationV1,
   type CompiledControlChoiceV1,
   type CompiledContextVisibilityV1,
@@ -38,6 +39,7 @@ import {
 } from './model';
 import {
   analyzeWomlLifecycleScript,
+  analyzeWomlNotificationProviderScript,
   analyzeWomlReusableScript,
   analyzeWomlScript,
   type ScriptAnalysis,
@@ -5378,6 +5380,7 @@ export function validateResolvedReusableWorkflow(
 }
 
 export interface PreparedReusableStepDefinition {
+  readonly kind: 'reusable-step' | 'notification-provider';
   readonly alias: string;
   readonly source: string;
   readonly digest: string;
@@ -5401,6 +5404,14 @@ export interface PreparedReusableWorkflow {
   readonly rootSource: string;
   readonly definitions: readonly PreparedReusableStepDefinition[];
   readonly invocations: readonly CompiledReusableStepInvocationV1[];
+  readonly providerInvocations: readonly CompiledReusableNotificationProviderV1[];
+  readonly providerDeliveries: readonly {
+    readonly providerId: string;
+    readonly domain: 'approval' | 'informational';
+    readonly ownerNodeId?: string;
+    readonly message?: ValueExpression;
+    readonly messageAttribute?: WomlSourceAttribute;
+  }[];
   readonly invocationAttributes: ReadonlyMap<string, Readonly<Record<string, WomlSourceAttribute>>>;
 }
 
@@ -5449,6 +5460,90 @@ function reusableLifecycleIds(
   return Object.keys(result).length === 0 ? undefined : result;
 }
 
+function parseProviderUsageMessage(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute
+): ValueExpression {
+  if (attribute.value.length === 0 || attribute.value.length > 16_384) {
+    failValidation(
+      document,
+      'WOML_PROVIDER_MESSAGE_INVALID',
+      'Custom provider messages must contain 1 through 16384 characters.',
+      attribute.valueSpan
+    );
+  }
+  const parts: ({ readonly kind: 'text'; readonly text: string } | ContextReferenceExpression)[] = [];
+  let cursor = 0;
+  let placeholders = 0;
+  for (const match of attribute.value.matchAll(/\{\{([^{}]+)\}\}/g)) {
+    const start = match.index ?? 0;
+    const preceding = attribute.value.slice(cursor, start);
+    if (preceding.includes('{{') || preceding.includes('}}')) {
+      failValidation(
+        document,
+        'WOML_PROVIDER_MESSAGE_INVALID',
+        'Custom provider message contains an unmatched WOML template delimiter.',
+        attribute.valueSpan
+      );
+    }
+    if (preceding.length > 0) parts.push({ kind: 'text', text: preceding });
+    const reference = match[1].trim();
+    const parsed = /^context\.(payload(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+|steps\.[a-z][A-Za-z0-9]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)$/.exec(reference);
+    if (parsed === null) {
+      failValidation(
+        document,
+        'WOML_PROVIDER_MESSAGE_INVALID',
+        `Unsupported custom provider message reference "${reference}".`,
+        attribute.valueSpan,
+        'Use scalar context.payload or context.steps references only.'
+      );
+    }
+    parts.push({
+      kind: 'contextReference',
+      path: parsed[1].split('.').map((segment, index) =>
+        index === 0 && segment === 'payload' ? 'trigger' : segment
+      ),
+    });
+    placeholders += 1;
+    cursor = start + match[0].length;
+  }
+  const tail = attribute.value.slice(cursor);
+  if (tail.includes('{{') || tail.includes('}}') || placeholders > 32) {
+    failValidation(
+      document,
+      'WOML_PROVIDER_MESSAGE_INVALID',
+      placeholders > 32
+        ? 'Custom provider messages may contain at most 32 placeholders.'
+        : 'Custom provider message contains an unmatched WOML template delimiter.',
+      attribute.valueSpan
+    );
+  }
+  if (tail.length > 0) parts.push({ kind: 'text', text: tail });
+  return { kind: 'template', parts };
+}
+
+function boundReusableProps(
+  props: WomlDocumentInspection['props'],
+  element: WomlSourceElement
+): CompiledReusableStepInvocationV1['props'] {
+  return props.flatMap(prop => {
+    const attribute = element.attributes[prop.name];
+    if (attribute === undefined) return [];
+    const secret = /^\{\{secrets\.([A-Z][A-Z0-9_]*)\}\}$/.exec(attribute.value);
+    const context = /^\{\{context\.(.+)\}\}$/.exec(attribute.value);
+    return [{
+      name: prop.name,
+      bindingName: prop.bindingName,
+      secret: prop.secret,
+      expression: secret !== null
+        ? { kind: 'secret' as const, name: secret[1] }
+        : context !== null
+          ? { kind: 'context' as const, path: context[1] }
+          : { kind: 'literal' as const, value: attribute.value },
+    }];
+  });
+}
+
 /**
  * Replaces each resolved reusable-step tag with an ordinary workflow step.
  * The returned document is an internal compiler view only: source provenance
@@ -5488,7 +5583,6 @@ export function prepareResolvedReusableWorkflow(
   }>();
   for (const resolvedDefinition of graph.definitions) {
     if (
-      resolvedDefinition.kind !== 'reusable-step' ||
       directDefinitions.get(resolvedDefinition.alias) !== resolvedDefinition.sourcePath ||
       definitions.has(resolvedDefinition.alias)
     ) continue;
@@ -5497,14 +5591,16 @@ export function prepareResolvedReusableWorkflow(
       file: absolutePath,
     });
     const inspection = inspectWomlDocument(definitionDocument);
-    if (inspection.kind !== 'reusable-step') continue;
+    if (inspection.kind === 'workflow') continue;
     const script = inspection.definition.children.find(
       (child): child is WomlSourceElement =>
         child.kind === 'element' && child.name === 'script'
     )!;
     const raw = script.children[0];
     const originalSource = raw?.kind === 'raw' ? raw.value : '';
-    const analysis = analyzeWomlReusableScript(originalSource);
+    const analysis = inspection.kind === 'reusable-step'
+      ? analyzeWomlReusableScript(originalSource)
+      : analyzeWomlNotificationProviderScript(originalSource);
     if (analysis.issue !== undefined) {
       const sourceFile = new SourceFile(definitionDocument.file, definitionDocument.source);
       const start = script.children[0].span.start.offset + analysis.issue.start;
@@ -5572,6 +5668,7 @@ export function prepareResolvedReusableWorkflow(
       });
     }) ?? [];
     const prepared: PreparedReusableStepDefinition = {
+      kind: inspection.kind,
       alias: resolvedDefinition.alias,
       source: resolvedDefinition.sourcePath,
       digest: resolvedDefinition.digest,
@@ -5585,10 +5682,80 @@ export function prepareResolvedReusableWorkflow(
   }
 
   const invocations: CompiledReusableStepInvocationV1[] = [];
+  const providerInvocations: CompiledReusableNotificationProviderV1[] = [];
+  const providerDeliveries: PreparedReusableWorkflow['providerDeliveries'][number][] = [];
   const invocationAttributes = new Map<string, Readonly<Record<string, WomlSourceAttribute>>>();
-  const transform = (element: WomlSourceElement): WomlSourceElement => {
+  const transform = (
+    element: WomlSourceElement,
+    ancestors: readonly WomlSourceElement[] = []
+  ): WomlSourceElement => {
     const found = definitions.get(element.name);
-    if (found !== undefined) {
+    if (found?.inspection.kind === 'notification-provider') {
+      const notify = ancestors.at(-1);
+      const providerIndex = notify?.children
+        .filter((child): child is WomlSourceElement => child.kind === 'element')
+        .indexOf(element) ?? -1;
+      const approval = [...ancestors].reverse().find(item => item.name === 'approval');
+      const lifecycle = ancestors.find(item => item.name === 'lifecycle');
+      const hook = lifecycle === undefined
+        ? undefined
+        : ancestors.find(item => item.name.startsWith('on-'));
+      const domain = approval === undefined ? 'informational' as const : 'approval' as const;
+      let providerId: string;
+      let ownerNodeId: string | undefined;
+      if (approval !== undefined) {
+        ownerNodeId = approval.attributes.id!.value;
+        providerId = `${ownerNodeId}:notify:${providerIndex}:channel:0`;
+      } else {
+        const hookIndex = lifecycle!.children
+          .filter((child): child is WomlSourceElement => child.kind === 'element')
+          .indexOf(hook!);
+        const actionIndex = hook!.children
+          .filter((child): child is WomlSourceElement => child.kind === 'element')
+          .indexOf(notify!);
+        providerId = `lifecycle:${hookIndex}:action:${actionIndex}:provider:${providerIndex}:channel:0`;
+      }
+      const messageAttribute = element.attributes.message;
+      providerInvocations.push({
+        kind: 'notification-provider',
+        providerId,
+        alias: found.prepared.alias,
+        definitionDigest: found.prepared.digest,
+        source: found.prepared.source,
+        scriptArtifactId: found.prepared.scriptArtifactId,
+        props: boundReusableProps(found.prepared.props, element),
+        ...(found.inspection.lifecycle === undefined
+          ? {}
+          : { lifecycle: reusableLifecycleIds(providerId, found.inspection.lifecycle) }),
+      });
+      providerDeliveries.push({
+        providerId,
+        domain,
+        ...(ownerNodeId === undefined ? {} : { ownerNodeId }),
+        ...(domain === 'approval' && messageAttribute !== undefined
+          ? {
+              message: parseProviderUsageMessage(document, messageAttribute),
+              messageAttribute,
+            }
+          : {}),
+      });
+      const attributes: Record<string, WomlSourceAttribute> = {
+        channels: syntheticAttribute('channels', '#custom-provider', element.openTagSpan),
+        'bot-token': syntheticAttribute(
+          'bot-token',
+          '{{secrets.WOML_CUSTOM_PROVIDER_PLACEHOLDER}}',
+          element.openTagSpan
+        ),
+        'app-token': syntheticAttribute(
+          'app-token',
+          '{{secrets.WOML_CUSTOM_PROVIDER_PLACEHOLDER}}',
+          element.openTagSpan
+        ),
+      };
+      if (domain === 'informational') attributes.message = messageAttribute!;
+      return { ...element, name: 'slack', attributes, children: [] };
+    }
+    if (found?.inspection.kind === 'reusable-step') {
       const invocationId = element.attributes.id!.value;
       const definitionAttributes = found.inspection.definition.attributes;
       const attributes: Record<string, WomlSourceAttribute> = {};
@@ -5607,22 +5774,7 @@ export function prepareResolvedReusableWorkflow(
             : undefined);
         if (attribute !== undefined) attributes[name] = attribute;
       }
-      const boundProps = found.prepared.props.flatMap(prop => {
-        const attribute = element.attributes[prop.name];
-        if (attribute === undefined) return [];
-        const secret = /^\{\{secrets\.([A-Z][A-Z0-9_]*)\}\}$/.exec(attribute.value);
-        const context = /^\{\{context\.(.+)\}\}$/.exec(attribute.value);
-        return [{
-          name: prop.name,
-          bindingName: prop.bindingName,
-          secret: prop.secret,
-          expression: secret !== null
-            ? { kind: 'secret' as const, name: secret[1] }
-            : context !== null
-              ? { kind: 'context' as const, path: context[1] }
-              : { kind: 'literal' as const, value: attribute.value },
-        }];
-      });
+      const boundProps = boundReusableProps(found.prepared.props, element);
       invocations.push({
         kind: 'step',
         invocationId,
@@ -5651,7 +5803,7 @@ export function prepareResolvedReusableWorkflow(
     return {
       ...element,
       children: element.children.map(child =>
-        child.kind === 'element' ? transform(child) : child
+        child.kind === 'element' ? transform(child, [...ancestors, element]) : child
       ),
     };
   };
@@ -5700,6 +5852,8 @@ export function prepareResolvedReusableWorkflow(
     rootSource: relative(options.projectRoot, resolve(document.file)).split(sep).join('/'),
     definitions: [...definitions.values()].map(value => value.prepared),
     invocations,
+    providerInvocations,
+    providerDeliveries,
     invocationAttributes,
   };
 }
@@ -6016,6 +6170,85 @@ export function compilePreparedReusableWorkflow(
   const visibility = new Map(
     (compiled.graph.contextVisibility ?? []).map(item => [item.nodeId, item.stepIds])
   );
+  const providerById = new Map(
+    prepared.providerInvocations.map(invocation => [invocation.providerId, invocation])
+  );
+  const deliveryById = new Map(
+    prepared.providerDeliveries.map(delivery => [delivery.providerId, delivery])
+  );
+  const nodeById = new Map(compiled.graph.nodes.map(node => [node.id, node]));
+  const visibilityMemo = new Map<string, ReadonlySet<string>>();
+  const visibleBeforeNode = (nodeId: string): ReadonlySet<string> => {
+    const explicit = visibility.get(nodeId);
+    if (explicit !== undefined) return new Set(explicit);
+    const cached = visibilityMemo.get(nodeId);
+    if (cached !== undefined) return cached;
+    // Break malformed cycles defensively; ordinary graph validation already
+    // rejects them before reusable lowering.
+    visibilityMemo.set(nodeId, new Set());
+    const predecessors = compiled.graph.edges
+      .filter(edge => edge.to === nodeId)
+      .map(edge => edge.from);
+    if (predecessors.length === 0) return new Set();
+    const predecessorSets = predecessors.map(predecessor => {
+      const result = new Set(visibleBeforeNode(predecessor));
+      const node = nodeById.get(predecessor);
+      if (
+        node?.handler === 'runtime.script' ||
+        node?.handler === 'engine.branch-result' ||
+        node?.handler === 'engine.choice-result' ||
+        node?.handler === 'engine.approval-join'
+      ) result.add(predecessor);
+      return result;
+    });
+    const guaranteed = new Set(
+      [...predecessorSets[0]].filter(id =>
+        predecessorSets.every(set => set.has(id))
+      )
+    );
+    visibilityMemo.set(nodeId, guaranteed);
+    return guaranteed;
+  };
+  const patchDeliveryExpression = (expression: ValueExpression): ValueExpression => {
+    if (expression.kind === 'array') {
+      return { ...expression, items: expression.items.map(patchDeliveryExpression) };
+    }
+    if (expression.kind !== 'object') return expression;
+    const deliveryId = expression.fields.deliveryId;
+    if (
+      deliveryId?.kind === 'literal' &&
+      typeof deliveryId.value === 'string' &&
+      deliveryById.has(deliveryId.value)
+    ) {
+      const delivery = deliveryById.get(deliveryId.value)!;
+      const provider = providerById.get(delivery.providerId)!;
+      return {
+        kind: 'object',
+        fields: {
+          deliveryId,
+          provider: { kind: 'literal', value: 'custom' },
+          destination: { kind: 'literal', value: provider.alias },
+          credentials: { kind: 'object', fields: {} },
+          providerId: { kind: 'literal', value: provider.providerId },
+          domain: { kind: 'literal', value: delivery.domain },
+          ...(delivery.message === undefined
+            ? expression.fields.message === undefined
+              ? {}
+              : { message: expression.fields.message }
+            : { message: delivery.message }),
+        },
+      };
+    }
+    return {
+      ...expression,
+      fields: Object.fromEntries(
+        Object.entries(expression.fields).map(([name, value]) => [
+          name,
+          patchDeliveryExpression(value),
+        ])
+      ),
+    };
+  };
   for (const invocation of prepared.invocations) {
     const available = new Set(visibility.get(invocation.nodeId) ?? []);
     for (const prop of invocation.props) {
@@ -6034,10 +6267,64 @@ export function compilePreparedReusableWorkflow(
       );
     }
   }
+  for (const provider of prepared.providerInvocations) {
+    const delivery = deliveryById.get(provider.providerId)!;
+    const available = new Set(
+      delivery.ownerNodeId === undefined
+        ? compiled.graph.nodes
+            .filter(node => node.handler === 'runtime.script')
+            .map(node => node.id)
+        : visibleBeforeNode(delivery.ownerNodeId)
+    );
+    const referencedPaths = [
+      ...provider.props.flatMap(prop =>
+        prop.expression.kind === 'context' ? [prop.expression.path] : []
+      ),
+      ...(delivery.message?.kind === 'template'
+        ? delivery.message.parts.flatMap(part =>
+            part.kind === 'contextReference'
+              ? [part.path.join('.')]
+              : []
+          )
+        : []),
+    ];
+    for (const path of referencedPaths) {
+      if (!path.startsWith('steps.')) continue;
+      const referencedId = path.split('.')[1];
+      if (available.has(referencedId)) continue;
+      failCompile(
+        prepared.document,
+        'WOML_REUSABLE_PROP_CONTEXT_UNAVAILABLE',
+        `Custom provider <${provider.alias}> cannot read step "${referencedId}" from this notification position.`,
+        delivery.messageAttribute?.valueSpan ?? prepared.document.root.openTagSpan,
+        'Pass context.payload or a step output available before this notification.'
+      );
+    }
+  }
+  const patchedNodes = nodes.map(node => ({
+    ...node,
+    inputs: patchDeliveryExpression(node.inputs),
+  }));
+  const patchedLifecycle = compiled.lifecycle === undefined
+    ? undefined
+    : {
+        ...compiled.lifecycle,
+        hooks: compiled.lifecycle.hooks.map(hook => ({
+          ...hook,
+          actions: hook.actions.map(action => ({
+            ...action,
+            inputs: patchDeliveryExpression(action.inputs),
+          })),
+        })),
+      };
   return {
     ...compiled,
-    graph: { ...compiled.graph, nodes },
-    reusableDefinitions: prepared.invocations,
+    graph: { ...compiled.graph, nodes: patchedNodes },
+    ...(patchedLifecycle === undefined ? {} : { lifecycle: patchedLifecycle }),
+    reusableDefinitions: [
+      ...prepared.invocations,
+      ...prepared.providerInvocations,
+    ],
   };
 }
 

@@ -109,6 +109,7 @@ export {
 } from './model';
 export {
   analyzeWomlLifecycleScript,
+  analyzeWomlNotificationProviderScript,
   analyzeWomlReusableScript,
   analyzeWomlScript,
   type ScriptAnalysis,

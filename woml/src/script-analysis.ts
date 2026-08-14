@@ -298,7 +298,7 @@ function parseIssue(
 
 function analyzeScript(
   source: string,
-  mode: 'step' | 'lifecycle' | 'reusable-step'
+  mode: 'step' | 'lifecycle' | 'reusable-step' | 'notification-provider'
 ): ScriptAnalysis {
   let program: AstNode;
   try {
@@ -583,7 +583,10 @@ function analyzeScript(
       if (
         identifier.name !== undefined &&
         (reservedBindings.has(identifier.name) ||
-          (mode === 'reusable-step' && identifier.name === 'props'))
+          ((mode === 'reusable-step' || mode === 'notification-provider') &&
+            (identifier.name === 'props' ||
+              (mode === 'notification-provider' &&
+                identifier.name === 'notification'))))
       ) {
         fail(
           issueAt(
@@ -651,18 +654,24 @@ function analyzeScript(
     }
 
     if (
-      mode === 'reusable-step' &&
+      (mode === 'reusable-step' || mode === 'notification-provider') &&
       node.type === 'MemberExpression' &&
-      memberRootIdentifier(node)?.name === 'props' &&
+      (memberRootIdentifier(node)?.name === 'props' ||
+        (mode === 'notification-provider' &&
+          memberRootIdentifier(node)?.name === 'notification')) &&
       isWriteTarget(node, parent)
     ) {
       fail(
         issueAt(
           node,
           source.length,
-          'WOML_REUSABLE_PROPS_READ_ONLY',
-          'The reusable props binding is immutable.',
-          'Read props values without replacing, deleting, or updating them.'
+          memberRootIdentifier(node)?.name === 'props'
+            ? 'WOML_REUSABLE_PROPS_READ_ONLY'
+            : 'WOML_PROVIDER_NOTIFICATION_READ_ONLY',
+          memberRootIdentifier(node)?.name === 'props'
+            ? 'The reusable props binding is immutable.'
+            : 'The provider notification binding is immutable.',
+          'Read provider bindings without replacing, deleting, or updating them.'
         )
       );
     }
@@ -693,7 +702,10 @@ function analyzeScript(
             )
           );
         }
-      } else if (node.name === 'props' && mode === 'reusable-step') {
+      } else if (
+        node.name === 'props' &&
+        (mode === 'reusable-step' || mode === 'notification-provider')
+      ) {
         if (isWriteTarget(node, parent)) {
           fail(
             issueAt(
@@ -704,14 +716,38 @@ function analyzeScript(
             )
           );
         }
+      } else if (
+        node.name === 'notification' &&
+        mode === 'notification-provider'
+      ) {
+        if (isWriteTarget(node, parent)) {
+          fail(
+            issueAt(
+              node,
+              source.length,
+              'WOML_PROVIDER_NOTIFICATION_READ_ONLY',
+              'The provider notification binding is immutable.'
+            )
+          );
+        }
+      } else if (node.name === 'context' && mode === 'notification-provider') {
+        fail(
+          issueAt(
+            node,
+            source.length,
+            'WOML_PROVIDER_CONTEXT_UNAVAILABLE',
+            'Notification provider scripts cannot access workflow context directly.',
+            'Pass required business values through declared props.'
+          )
+        );
       } else if (node.name === 'secrets') {
-        if (mode === 'reusable-step') {
+        if (mode === 'reusable-step' || mode === 'notification-provider') {
           fail(
             issueAt(
               node,
               source.length,
               'WOML_REUSABLE_SECRET_ACCESS_FORBIDDEN',
-              'Reusable step scripts cannot access secrets directly.',
+              'Reusable definition scripts cannot access secrets directly.',
               'Declare a secret prop and pass one exact {{secrets.NAME}} reference at the invocation.'
             )
           );
@@ -893,4 +929,10 @@ export function analyzeWomlLifecycleScript(source: string): ScriptAnalysis {
 
 export function analyzeWomlReusableScript(source: string): ScriptAnalysis {
   return analyzeScript(source, 'reusable-step');
+}
+
+export function analyzeWomlNotificationProviderScript(
+  source: string
+): ScriptAnalysis {
+  return analyzeScript(source, 'notification-provider');
 }

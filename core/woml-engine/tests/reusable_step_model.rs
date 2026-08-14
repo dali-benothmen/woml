@@ -33,10 +33,14 @@ fn durable_execution_stays_gated_until_scp4() {
   let error = reviewed_model()
     .validate_for_durable_execution()
     .unwrap_err();
-  assert!(error
+  let messages = error
     .issues
     .iter()
-    .any(|issue| issue.code == ModelIssueCode::UnsupportedReusableExecution));
+    .filter(|issue| issue.code == ModelIssueCode::UnsupportedReusableExecution)
+    .map(|issue| issue.message.as_str())
+    .collect::<Vec<_>>();
+  assert!(messages.iter().any(|message| message.contains("SCP4")));
+  assert!(messages.iter().any(|message| message.contains("SCP6")));
 }
 
 #[test]
@@ -83,6 +87,23 @@ fn rust_rejects_a_binding_v3_node_that_does_not_match_its_descriptor() {
     .as_mut()
     .unwrap()
     .binding_version = 1;
+
+  assert!(has_issue(
+    &workflow,
+    ModelIssueCode::InvalidReusableDefinition
+  ));
+}
+
+#[test]
+fn rust_requires_one_generic_delivery_for_each_provider_descriptor() {
+  let mut workflow = reviewed_model();
+  let definitions = workflow.reusable_definitions.as_mut().unwrap();
+  if let woml_engine::model::CompiledReusableInvocation::NotificationProvider {
+    provider_id, ..
+  } = &mut definitions[1]
+  {
+    *provider_id = "unknown-provider-delivery".to_string();
+  }
 
   assert!(has_issue(
     &workflow,
