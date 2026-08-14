@@ -1,0 +1,28 @@
+{
+  "profile": "woml.terminal-experience-semantics/v1",
+  "presentationAuthority": "durable_events_and_frozen_definition",
+  "terminalTextIsAuthority": false,
+  "colors": {
+    "autoOnlyForTty": true,
+    "noColorHonored": true,
+    "termDumbHonored": true,
+    "jsonContainsAnsi": false,
+    "plainContainsAnsi": false
+  },
+  "manual": {
+    "runBeforeInput": false,
+    "payload": {},
+    "oneAcceptedSubmissionCreates": "one_occurrence",
+    "repeatedSubmissionCreatesDistinctRuns": true,
+    "oneShotCommand": "woml test",
+    "manualOnlyBackgroundAllowed": false
+  },
+  "logs": {
+    "runCommand": "woml <run-id> --logs",
+    "workflowCommand": "woml <workflow-id> --logs",
+    "workflowHistoryLimit": 10,
+    "ctrlCStops": "viewer_only",
+    "parsesRuntimeLogText": false,
+    "operationalLogRemainsSeparate": true
+  }
+}

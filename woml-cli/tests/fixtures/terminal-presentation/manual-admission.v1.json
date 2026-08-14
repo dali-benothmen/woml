@@ -1,0 +1,26 @@
+{
+  "request": {
+    "profile": "woml.manual-trigger-admission/v1",
+    "type": "request",
+    "requestId": "manual_request_01",
+    "workflowId": "order-processing",
+    "triggerId": "start",
+    "payload": {},
+    "requestedAt": "2026-08-14T08:42:18.000Z"
+  },
+  "accepted": {
+    "profile": "woml.manual-trigger-admission/v1",
+    "type": "accepted",
+    "requestId": "manual_request_01",
+    "occurrenceId": "manual_occurrence_01",
+    "runId": "run_8f21c4",
+    "status": "running"
+  },
+  "rejected": {
+    "profile": "woml.manual-trigger-admission/v1",
+    "type": "rejected",
+    "requestId": "manual_request_02",
+    "code": "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
+    "message": "The runtime is draining and no longer accepts manual triggers."
+  }
+}

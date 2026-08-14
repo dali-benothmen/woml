@@ -114,6 +114,9 @@
     "benchmark:fork-branch": "bun scripts/benchmark-fork-branch.ts",
     "benchmark:reusable-definitions": "bun scripts/benchmark-reusable-definitions.ts",
     "test:r3": "bun test tests/rust-executor.test.ts",
+    "test:terminal-contracts": "bun test tests/terminal-presentation-contracts.test.ts",
+    "test:terminal-renderer": "bun test tests/terminal-presentation-renderer.test.ts",
+    "test:terminal-foundation": "bun run test:terminal-contracts && bun run test:terminal-renderer && bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

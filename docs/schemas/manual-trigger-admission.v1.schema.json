@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/manual-trigger-admission/v1",
+  "title": "WOML Manual Trigger Admission v1",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/accepted" },
+    { "$ref": "#/$defs/rejected" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "type", "requestId", "workflowId", "triggerId", "payload", "requestedAt"],
+      "properties": {
+        "profile": { "const": "woml.manual-trigger-admission/v1" },
+        "type": { "const": "request" },
+        "requestId": { "$ref": "#/$defs/id" },
+        "workflowId": { "$ref": "#/$defs/id" },
+        "triggerId": { "$ref": "#/$defs/id" },
+        "payload": { "type": "object", "maxProperties": 0 },
+        "requestedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
+      }
+    },
+    "accepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "type", "requestId", "occurrenceId", "runId", "status"],
+      "properties": {
+        "profile": { "const": "woml.manual-trigger-admission/v1" },
+        "type": { "const": "accepted" },
+        "requestId": { "$ref": "#/$defs/id" },
+        "occurrenceId": { "$ref": "#/$defs/id" },
+        "runId": { "type": "string", "pattern": "^run_[A-Za-z0-9_-]+$", "maxLength": 256 },
+        "status": { "enum": ["queued", "running"] }
+      }
+    },
+    "rejected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "type", "requestId", "code", "message"],
+      "properties": {
+        "profile": { "const": "woml.manual-trigger-admission/v1" },
+        "type": { "const": "rejected" },
+        "requestId": { "$ref": "#/$defs/id" },
+        "code": {
+          "enum": [
+            "WOML_MANUAL_TRIGGER_SELECTION_REQUIRED",
+            "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": "automation-triggers",
+  "name": "Automation Triggers",
+  "description": "Shows the activation instructions for every trigger currently supported by WOML.",
+  "version": "1.0.0",
+  "definitionHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "triggers": [
+    {
+      "id": "manualStart",
+      "type": "manual"
+    },
+    {
+      "id": "newOrder",
+      "type": "webhook",
+      "method": "POST",
+      "url": "http://127.0.0.1:3000/webhooks/orders",
+      "example": "curl --request POST 'http://127.0.0.1:3000/webhooks/orders'"
+    },
+    {
+      "id": "orderCreated",
+      "type": "event",
+      "event": "order.created",
+      "url": "http://127.0.0.1:3000/events/order.created",
+      "example": "curl --request POST 'http://127.0.0.1:3000/events/order.created'"
+    },
+    {
+      "id": "agentMessage",
+      "type": "slack",
+      "workspace": "T0BNLAP0DRT",
+      "scope": "#woml-testing · app mentions"
+    },
+    {
+      "id": "dailyDigest",
+      "type": "schedule",
+      "schedule": "0 9 * * *",
+      "timezone": "Europe/Berlin",
+      "nextDueAt": "2026-08-15T07:00:00.000Z"
+    },
+    {
+      "id": "pollInventory",
+      "type": "interval",
+      "interval": "5m",
+      "nextDueAt": "2026-08-14T08:47:18.000Z"
+    }
+  ]
+}

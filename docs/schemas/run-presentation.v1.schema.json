@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-presentation/v1",
+  "title": "WOML Run Presentation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "workflow",
+    "runId",
+    "trigger",
+    "status",
+    "admittedAt",
+    "steps",
+    "summary",
+    "lifecycle",
+    "warnings"
+  ],
+  "properties": {
+    "profile": { "const": "woml.run-presentation/v1" },
+    "workflow": { "$ref": "#/$defs/workflow" },
+    "runId": { "type": "string", "pattern": "^run_[A-Za-z0-9_-]+$", "maxLength": 256 },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/triggerType" }
+      }
+    },
+    "status": { "$ref": "#/$defs/runStatus" },
+    "admittedAt": { "$ref": "#/$defs/dateTime" },
+    "startedAt": { "$ref": "#/$defs/dateTime" },
+    "completedAt": { "$ref": "#/$defs/dateTime" },
+    "durationMs": { "$ref": "#/$defs/duration" },
+    "steps": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/$defs/step" }
+    },
+    "summary": { "$ref": "#/$defs/summary" },
+    "lifecycle": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/lifecycle" }
+    },
+    "result": { "$ref": "#/$defs/jsonValue" },
+    "resultTruncated": { "type": "boolean" },
+    "failure": { "$ref": "#/$defs/failure" },
+    "warnings": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/failure" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "shortText": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "message": { "type": "string", "minLength": 1, "maxLength": 8192 },
+    "dateTime": { "type": "string", "format": "date-time", "maxLength": 64 },
+    "duration": { "type": "integer", "minimum": 0, "maximum": 31536000000 },
+    "triggerType": {
+      "enum": ["manual", "webhook", "slack", "schedule", "interval", "event"]
+    },
+    "runStatus": {
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "retrying",
+        "finalizing",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out"
+      ]
+    },
+    "stepStatus": {
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "retrying",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "skipped"
+      ]
+    },
+    "stepKind": {
+      "enum": [
+        "step",
+        "script",
+        "custom_step",
+        "switch",
+        "choose",
+        "parallel",
+        "fork",
+        "branch",
+        "approval",
+        "workflow_call",
+        "workflow_start"
+      ]
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/triggerType" },
+        "label": { "$ref": "#/$defs/shortText" },
+        "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "url": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "example": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "schedule": { "$ref": "#/$defs/shortText" },
+        "timezone": { "$ref": "#/$defs/shortText" },
+        "nextDueAt": { "$ref": "#/$defs/dateTime" },
+        "interval": { "$ref": "#/$defs/shortText" },
+        "event": { "$ref": "#/$defs/shortText" },
+        "workspace": { "$ref": "#/$defs/shortText" },
+        "scope": { "$ref": "#/$defs/shortText" },
+        "warning": { "$ref": "#/$defs/message" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "definitionHash", "triggers"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/shortText" },
+        "description": { "$ref": "#/$defs/message" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "definitionHash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "triggers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/trigger" }
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]{1,123}$" },
+        "message": { "$ref": "#/$defs/message" },
+        "kind": { "$ref": "#/$defs/shortText" },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "depth", "attempts"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/shortText" },
+        "description": { "$ref": "#/$defs/message" },
+        "kind": { "$ref": "#/$defs/stepKind" },
+        "status": { "$ref": "#/$defs/stepStatus" },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "startedAt": { "$ref": "#/$defs/dateTime" },
+        "completedAt": { "$ref": "#/$defs/dateTime" },
+        "durationMs": { "$ref": "#/$defs/duration" },
+        "attempts": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "detail": { "$ref": "#/$defs/message" },
+        "result": { "$ref": "#/$defs/jsonValue" },
+        "resultTruncated": { "type": "boolean" },
+        "failure": { "$ref": "#/$defs/failure" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook", "status"],
+      "properties": {
+        "hook": {
+          "enum": [
+            "on-start",
+            "on-success",
+            "on-failure",
+            "on-complete",
+            "on-step-success",
+            "on-step-failure"
+          ]
+        },
+        "status": { "$ref": "#/$defs/stepStatus" },
+        "durationMs": { "$ref": "#/$defs/duration" },
+        "provider": { "$ref": "#/$defs/shortText" },
+        "detail": { "$ref": "#/$defs/message" },
+        "failure": { "$ref": "#/$defs/failure" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["succeeded", "failed", "skipped", "cancelled", "total"],
+      "properties": {
+        "succeeded": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "failed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "skipped": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "cancelled": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "total": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "jsonValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    }
+  }
+}

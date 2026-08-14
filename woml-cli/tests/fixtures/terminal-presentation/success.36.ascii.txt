@@ -1,0 +1,67 @@
+RUN  run_8f21c4   14 Aug 2026 · 08:…
+
+  01  OK  Prepare order        18 ms
+          Normalize and validate the
+          submitted order.
+          > Result
+            {
+              "orderId": "order-42",
+              "customer": "Dali",
+              "items": 3
+            }
+
+  02  OK  Calculate total      31 ms
+          Reusable step · Calculate
+          taxes and final price.
+          > Result
+            {
+              "subtotal": 120,
+              "tax": 24,
+              "total": 144
+            }
+
+  03  OK  Select delivery       4 ms
+          Switch · Selected case
+          "express".
+          > Result
+            {
+              "provider": "express",
+              "estimatedDays": 1
+            }
+
+  04  OK  Build confirmation   12 ms
+          Generate the final
+          customer response.
+          > Result
+            {
+              "message": "Order ord…
+              "total": 144
+            }
+
+
+STEPS COMPLETED
+
+  Duration    65 ms
+  Steps       4 succeeded · 0 failed
+              · 0 skipped
+
+
+LIFECYCLE
+
+  OK  on-success                6 ms
+     console · Workflow completed
+     successfully
+
+  OK  on-complete               2 ms
+     console · Final outcome:
+     succeeded
+
+
+OK RUN COMPLETED               73 ms
+
+  Final result
+  {
+    "message": "Order order-42 was …
+    "total": 144,
+    "delivery": "express"
+  }
