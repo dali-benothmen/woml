@@ -1595,24 +1595,6 @@ async function compileWorkflowInputs(
   return compiled.map(source => ({ ...source, activationInputPaths }));
 }
 
-function assertReusableRuntimeSupported(
-  sources: readonly CompiledWorkflowSource[]
-): void {
-  for (const source of sources) {
-    if (source.workflow.schemaVersion !== 14) continue;
-    const definition = source.workflow.reusableDefinitions?.find(
-      item =>
-        item.kind === 'notification-provider' && item.lifecycle !== undefined
-    );
-    if (definition !== undefined) {
-      throw new CliInputError(
-        'WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE',
-        `custom notification provider <${definition.alias}> declares definition-owned lifecycle hooks, but the notification journey is not connected to the reusable lifecycle host yet. Remove the provider definition's <lifecycle> for now; custom-step and workflow lifecycle hooks remain executable.`
-      );
-    }
-  }
-}
-
 export function activationIdentity(
   sources: readonly Pick<
     CompiledWorkflowSource,
@@ -4382,7 +4364,6 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowInputs(inputPaths, io);
-    assertReusableRuntimeSupported(sources);
     printMigrationDiagnostics(
       io,
       sources.flatMap(source => source.migrationDiagnostics)

@@ -1,9 +1,7 @@
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
-const relayPort = 7360;
-const approvalPort = 7361;
 const directory = await mkdtemp(
   resolve(tmpdir(), 'woml-custom-provider-acceptance-')
 );
@@ -23,7 +21,7 @@ async function approveWithRetry(url: string): Promise<void> {
 
 const relay = Bun.serve({
   hostname: '127.0.0.1',
-  port: relayPort,
+  port: 0,
   async fetch(request) {
     if (request.method !== 'POST' || new URL(request.url).pathname !== '/notify') {
       return new Response('Not found', { status: 404 });
@@ -39,16 +37,31 @@ const relay = Bun.serve({
   },
 });
 
+const approvalPortReservation = Bun.serve({
+  hostname: '127.0.0.1',
+  port: 0,
+  fetch: () => new Response('reserved', { status: 503 }),
+});
+const approvalPort = approvalPortReservation.port;
+approvalPortReservation.stop(true);
+
 try {
   const fixtureRoot = resolve(
     import.meta.dir,
     '../../woml/tests/fixtures/reusable-definitions'
   );
   const workflow = resolve(directory, 'local-provider-approval-workflow.woml');
+  const workflowTemplate = await readFile(
+    resolve(fixtureRoot, 'local-provider-approval-workflow.woml'),
+    'utf8'
+  );
   await Promise.all([
-    copyFile(
-      resolve(fixtureRoot, 'local-provider-approval-workflow.woml'),
-      workflow
+    writeFile(
+      workflow,
+      workflowTemplate.replaceAll(
+        'http://127.0.0.1:7360',
+        `http://127.0.0.1:${relay.port}`
+      )
     ),
     copyFile(
       resolve(fixtureRoot, 'local-approval-provider.woml'),
@@ -107,6 +120,16 @@ try {
   }
   if (!stderr.includes('WOML workflow is waiting for approval.')) {
     throw new Error('The approval journey was not observable in CLI output.');
+  }
+  for (const expected of [
+    'Provider review succeeded',
+    'Provider review complete',
+    'Provider completed succeeded',
+    'Provider completed complete',
+  ]) {
+    if (!stderr.includes(expected)) {
+      throw new Error(`Provider lifecycle did not execute ${JSON.stringify(expected)}.\nstderr:\n${stderr}`);
+    }
   }
   console.log('Custom notification provider acceptance passed.');
 } finally {

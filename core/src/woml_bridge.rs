@@ -1926,6 +1926,7 @@ pub async fn run_woml_notification_provider_journey(
   notification_host_path: String,
   interaction_timeout_ms: u32,
   custom_notification_host_path: Option<String>,
+  script_host_path: Option<String>,
   approval_base_url: Option<String>,
   resolved_secrets_json: Option<String>,
 ) -> napi::Result<String> {
@@ -1975,6 +1976,17 @@ pub async fn run_woml_notification_provider_journey(
     let host_script_path = custom_notification_host_path.ok_or_else(|| {
       napi::Error::from_reason("Custom notification provider host path is required.".to_string())
     })?;
+    let lifecycle_script_host_path = script_host_path.map(PathBuf::from).unwrap_or_else(|| {
+      let host = PathBuf::from(&host_script_path);
+      let extension = host
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("js");
+      host
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!("script-host.{extension}"))
+    });
     let approval_base_url = approval_base_url.ok_or_else(|| {
       napi::Error::from_reason("Custom provider approval base URL is required.".to_string())
     })?;
@@ -1985,6 +1997,7 @@ pub async fn run_woml_notification_provider_journey(
     Some(CustomNotificationJourneyOptions {
       bun_executable: PathBuf::from(&bun_executable),
       host_script_path: PathBuf::from(host_script_path),
+      script_host_path: lifecycle_script_host_path,
       approval_base_url,
       resolved_secrets,
       artifacts: custom_artifacts,

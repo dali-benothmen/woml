@@ -4,6 +4,11 @@ WOML modules let you write reusable JavaScript or TypeScript once and call it
 from workflow steps through `services.<name>`. Local modules require no npm
 package support and run inside the existing isolated Bun Worker.
 
+Use a JS/TS module for reusable functions. Use a reusable `.woml` definition
+when the reusable unit should appear as a custom step or notification-provider
+tag with declared props, durable attempts, results, and lifecycle. See
+[Reusable WOML Steps and Notification Providers](woml-reusable-definitions.md).
+
 ## Declare and call a module
 
 ```xml

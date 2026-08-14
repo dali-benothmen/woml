@@ -171,9 +171,10 @@ pub use retention::{
   RetentionPlanV1, RetentionPolicyV1, RetentionResultV1, TRIGGER_DEDUPLICATION_SAFETY_DAYS,
 };
 pub use runtime::{
-  execute_admitted_trigger_run_durable, execute_workflow, execute_workflow_durable,
-  execute_workflow_durable_outcome, recover_durable_runs, resolve_human_approval_durable,
-  resume_workflow_durable, resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
+  execute_admitted_trigger_run_durable, execute_reusable_provider_lifecycle_durable,
+  execute_workflow, execute_workflow_durable, execute_workflow_durable_outcome,
+  recover_durable_runs, resolve_human_approval_durable, resume_workflow_durable,
+  resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
   settle_approval_timeout_durable, BranchFailureSite, CancelledRunDetails, EngineClock,
   ExecutionProgress, ExecutionProgressReporter, FailedApprovalDetails, FailedNotificationDetails,
   FailedParallelDetails, FixedEngineClock, LifecycleProgress, LifecycleProgressPhase,

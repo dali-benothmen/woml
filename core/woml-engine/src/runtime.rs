@@ -1484,6 +1484,58 @@ fn runtime_modules_from_store(
   Ok(options)
 }
 
+/// Finalizes one custom notification provider's definition-owned lifecycle
+/// after its durable delivery outcome is known. Notification journeys use this
+/// adapter so provider hooks share the same Event v13 authority, immutable
+/// artifacts, managed services, and recovery rules as custom-step hooks.
+pub async fn execute_reusable_provider_lifecycle_durable(
+  database_path: PathBuf,
+  run_id: &str,
+  provider_id: &str,
+  outcome: ReusableInvocationOutcome,
+  result: Option<Value>,
+  error: Option<ReusableLifecycleErrorV1>,
+  options: RuntimeExecutionOptions,
+) -> Result<(), RuntimeExecutionError> {
+  let options = attach_durable_capability_authority(options, &database_path)?;
+  let store = DurableEventStore::open(database_path)?;
+  let binding = store.run_binding(run_id)?;
+  let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
+  let mut engine = DurableDagEngine::resume(store, run_id)?;
+  validate_runtime_modules(engine.workflow(), &options)?;
+  let descriptor_has_lifecycle = reusable_provider_descriptor(engine.workflow(), provider_id)
+    .is_some_and(|descriptor| {
+      matches!(
+        descriptor,
+        CompiledReusableInvocation::NotificationProvider {
+          lifecycle: Some(_),
+          ..
+        }
+      )
+    });
+  if !descriptor_has_lifecycle {
+    return Ok(());
+  }
+  let host = ScriptHostClient::spawn_with_authority(
+    options.script_host.clone(),
+    options.capability_authority.clone(),
+  )
+  .await?;
+  let lifecycle = drive_reusable_provider_lifecycle(
+    &mut engine,
+    run_id,
+    provider_id,
+    outcome,
+    result,
+    error,
+    &options,
+    &host,
+  )
+  .await;
+  host.shutdown().await;
+  lifecycle
+}
+
 fn workflow_has_approval(workflow: &CompiledWorkflowDefinition) -> bool {
   workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V4
     && workflow
@@ -2246,31 +2298,110 @@ fn reusable_step_binding(
   }))
 }
 
-async fn drive_reusable_step_lifecycle<E: RuntimeDagEngine>(
+fn reusable_definition_binding(
+  descriptor: &CompiledReusableInvocation,
+  context: &WorkflowContext,
+  secrets: &BTreeMap<String, String>,
+) -> Result<ReusableScriptBindingV3, RuntimeExecutionError> {
+  let (invocation_id, kind, alias, definition_digest, source) = match descriptor {
+    CompiledReusableInvocation::Step {
+      invocation_id,
+      alias,
+      definition_digest,
+      source,
+      ..
+    } => (
+      invocation_id,
+      ReusableDefinitionKind::Step,
+      alias,
+      definition_digest,
+      source,
+    ),
+    CompiledReusableInvocation::NotificationProvider {
+      provider_id,
+      alias,
+      definition_digest,
+      source,
+      ..
+    } => (
+      provider_id,
+      ReusableDefinitionKind::NotificationProvider,
+      alias,
+      definition_digest,
+      source,
+    ),
+  };
+  Ok(ReusableScriptBindingV3 {
+    profile: "woml.reusable-script-binding/v3".to_string(),
+    invocation_id: invocation_id.clone(),
+    definition: ReusableDefinitionBindingV3 {
+      kind,
+      alias: alias.clone(),
+      digest: definition_digest.clone(),
+      source: source.clone(),
+    },
+    props: resolved_reusable_props(descriptor, context, secrets)?,
+  })
+}
+
+fn resolved_reusable_descriptor_secrets(
+  descriptor: &CompiledReusableInvocation,
+  options: &RuntimeExecutionOptions,
+) -> Result<BTreeMap<String, String>, RuntimeExecutionError> {
+  let props = match descriptor {
+    CompiledReusableInvocation::Step { props, .. }
+    | CompiledReusableInvocation::NotificationProvider { props, .. } => props,
+  };
+  props
+    .iter()
+    .filter_map(|prop| match &prop.expression {
+      crate::model::CompiledReusablePropExpression::Secret { name } => Some(name),
+      _ => None,
+    })
+    .map(|name| {
+      options
+        .resolved_secrets
+        .get(name)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .map(|value| (name.clone(), value))
+        .ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(format!(
+            "reusable lifecycle requires unresolved secret {name:?}"
+          ))
+        })
+    })
+    .collect()
+}
+
+async fn drive_reusable_lifecycle<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
-  node_id: &str,
+  descriptor: &CompiledReusableInvocation,
   outcome: ReusableInvocationOutcome,
   result: Option<Value>,
   error: Option<ReusableLifecycleErrorV1>,
   options: &RuntimeExecutionOptions,
   host: &ScriptHostClient,
 ) -> Result<(), RuntimeExecutionError> {
-  let Some(descriptor) = reusable_step_descriptor(engine.workflow(), node_id).cloned() else {
-    return Ok(());
-  };
-  let CompiledReusableInvocation::Step {
-    invocation_id,
-    definition_digest,
-    lifecycle,
-    ..
-  } = &descriptor
-  else {
-    unreachable!()
+  let (invocation_id, definition_digest, lifecycle) = match descriptor {
+    CompiledReusableInvocation::Step {
+      invocation_id,
+      definition_digest,
+      lifecycle,
+      ..
+    } => (invocation_id, definition_digest, lifecycle),
+    CompiledReusableInvocation::NotificationProvider {
+      provider_id,
+      definition_digest,
+      lifecycle,
+      ..
+    } => (provider_id, definition_digest, lifecycle),
   };
   let Some(lifecycle) = lifecycle else {
     return Ok(());
   };
+
   let hooks = match outcome {
     ReusableInvocationOutcome::Succeeded => vec![
       (
@@ -2303,13 +2434,8 @@ async fn drive_reusable_step_lifecycle<E: RuntimeDagEngine>(
     )],
   };
   let context = engine.projection(run_id)?.context;
-  let secrets = resolved_script_secrets(engine.workflow(), node_id, options)?;
-  let reusable = reusable_step_binding(engine.workflow(), node_id, &context, &secrets)?
-    .ok_or_else(|| {
-      RuntimeExecutionError::InvalidConfiguration(
-        "custom-step lifecycle lost its reusable binding".to_string(),
-      )
-    })?;
+  let secrets = resolved_reusable_descriptor_secrets(descriptor, options)?;
+  let reusable = reusable_definition_binding(descriptor, &context, &secrets)?;
   let modules = options
     .runtime_modules
     .iter()
@@ -2469,6 +2595,59 @@ async fn drive_reusable_step_lifecycle<E: RuntimeDagEngine>(
     )?;
   }
   Ok(())
+}
+
+async fn drive_reusable_step_lifecycle<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  node_id: &str,
+  outcome: ReusableInvocationOutcome,
+  result: Option<Value>,
+  error: Option<ReusableLifecycleErrorV1>,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<(), RuntimeExecutionError> {
+  let Some(descriptor) = reusable_step_descriptor(engine.workflow(), node_id).cloned() else {
+    return Ok(());
+  };
+  drive_reusable_lifecycle(
+    engine,
+    run_id,
+    &descriptor,
+    outcome,
+    result,
+    error,
+    options,
+    host,
+  )
+  .await
+}
+
+async fn drive_reusable_provider_lifecycle<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  provider_id: &str,
+  outcome: ReusableInvocationOutcome,
+  result: Option<Value>,
+  error: Option<ReusableLifecycleErrorV1>,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<(), RuntimeExecutionError> {
+  let Some(descriptor) = reusable_provider_descriptor(engine.workflow(), provider_id).cloned()
+  else {
+    return Ok(());
+  };
+  drive_reusable_lifecycle(
+    engine,
+    run_id,
+    &descriptor,
+    outcome,
+    result,
+    error,
+    options,
+    host,
+  )
+  .await
 }
 
 async fn drive_pending_reusable_step_lifecycles<E: RuntimeDagEngine>(
@@ -3004,6 +3183,7 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
   };
   let action_key = step_effect_idempotency_key(run_id, engine.definition_hash(), &action.action_id);
   let mut failures = Vec::new();
+  let mut reusable_lifecycle_host: Option<ScriptHostClient> = None;
 
   for delivery in deliveries {
     let message = match render_lifecycle_notification_message(delivery.message, context, lifecycle)
@@ -3299,6 +3479,7 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
           receipt,
           mut metadata,
         } => {
+          let lifecycle_result = serde_json::from_slice::<Value>(&receipt).ok();
           metadata.insert(
             "provider".to_string(),
             Value::String(delivery.provider.to_string()),
@@ -3331,6 +3512,40 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
               code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
               message: error.to_string(),
             })?;
+          if let Some(descriptor) = custom_descriptor.as_ref() {
+            if reusable_lifecycle_host.is_none() {
+              reusable_lifecycle_host = Some(
+                ScriptHostClient::spawn_with_authority(
+                  options.script_host.clone(),
+                  options.capability_authority.clone(),
+                )
+                .await
+                .map_err(|error| LifecycleFailure {
+                  kind: LifecycleFailureKind::HostCrashed,
+                  code: "WOML_REUSABLE_LIFECYCLE_HOST_CRASHED".to_string(),
+                  message: error.to_string(),
+                })?,
+              );
+            }
+            drive_reusable_lifecycle(
+              engine,
+              run_id,
+              descriptor,
+              ReusableInvocationOutcome::Succeeded,
+              lifecycle_result,
+              None,
+              options,
+              reusable_lifecycle_host
+                .as_ref()
+                .expect("reusable provider lifecycle host"),
+            )
+            .await
+            .map_err(|error| LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: "WOML_REUSABLE_LIFECYCLE_FAILED".to_string(),
+              message: error.to_string(),
+            })?;
+          }
           delivered = true;
           break;
         }
@@ -3371,6 +3586,43 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
             .await;
             continue;
           }
+          if let Some(descriptor) = custom_descriptor.as_ref() {
+            if reusable_lifecycle_host.is_none() {
+              reusable_lifecycle_host = Some(
+                ScriptHostClient::spawn_with_authority(
+                  options.script_host.clone(),
+                  options.capability_authority.clone(),
+                )
+                .await
+                .map_err(|error| LifecycleFailure {
+                  kind: LifecycleFailureKind::HostCrashed,
+                  code: "WOML_REUSABLE_LIFECYCLE_HOST_CRASHED".to_string(),
+                  message: error.to_string(),
+                })?,
+              );
+            }
+            drive_reusable_lifecycle(
+              engine,
+              run_id,
+              descriptor,
+              ReusableInvocationOutcome::Failed,
+              None,
+              Some(ReusableLifecycleErrorV1 {
+                code: lifecycle.code.clone(),
+                message: lifecycle.message.clone(),
+              }),
+              options,
+              reusable_lifecycle_host
+                .as_ref()
+                .expect("reusable provider lifecycle host"),
+            )
+            .await
+            .map_err(|error| LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: "WOML_REUSABLE_LIFECYCLE_FAILED".to_string(),
+              message: error.to_string(),
+            })?;
+          }
           failures.push(lifecycle);
           break;
         }
@@ -3388,6 +3640,9 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
     host.shutdown().await;
   }
   if let Some(host) = custom_host {
+    host.shutdown().await;
+  }
+  if let Some(host) = reusable_lifecycle_host {
     host.shutdown().await;
   }
   if failures.is_empty() {

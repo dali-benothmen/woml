@@ -1,17 +1,14 @@
 # WOML Switch, Custom Steps, and Providers Implementation Plan
 
-Status: SCP0 through SCP5, the executable provider-delivery scope of SCP6,
-and the executable production-integration scope of SCP7 completed on
-2026-08-14; source contracts,
+Status: SCP0 through SCP8 completed on 2026-08-14; source contracts,
 versioned interfaces, reusable document recognition, dependency resolution,
 diagnostics, folder classification, editor metadata, and durable exact-string
 switch execution are implemented. Custom steps now compile into deterministic
 Model v14/Definition Package v9 operations and execute through the durable Rust
 runtime. Custom-step props, services, retries, results, Event v13 lifecycle,
 recovery projection, and safe Inspection v5 are implemented. Custom
-notification delivery runs end to end; wiring a provider definition's own
-lifecycle scripts into the notification journey remains fail-closed follow-up
-work in SCP6. SCP7 does not weaken or silently bypass that boundary.
+notification delivery and definition-owned provider lifecycle scripts run end
+to end through the same durable Event v13 authority.
 
 ## 1. Product Outcome
 
@@ -832,9 +829,11 @@ Hook action failures become durable warnings and do not replace the reusable
 operation's already decided outcome. Business-critical work belongs in an
 explicit step or provider operation, not an observational lifecycle hook.
 
-Reusable lifecycle hooks may contain existing `<script>` and `<notify>`
-actions. Import and notification cycles—including a provider whose failure hook
-directly or indirectly invokes itself—are compile errors.
+Reusable lifecycle hooks contain `<script>` actions in the frozen v1 profile.
+`<notify>` is rejected there because Model v14 does not carry a recoverable
+definition-owned notification-action payload. Custom providers remain usable
+inside workflow lifecycle `<notify>` actions. This explicit boundary avoids an
+accepted-but-unexecutable lifecycle shape.
 
 ## 6. Compilation and Packaging Contract
 
@@ -1125,9 +1124,9 @@ or secret values.
 | SCP3 — completed | Compile reusable-step imports into Model v14 and Definition Package v9 with immutable props and provenance. | A custom step becomes one deterministic engine-ready operation. |
 | SCP4 — completed | Execute custom steps with retries, services, secrets, results, lifecycle hooks, recovery, and safe inspection. | Imported custom steps work like native durable steps. |
 | SCP5 — completed | Compile custom notification providers and freeze the provider-worker boundary. | Custom provider tags lower to generic supervised delivery definitions. |
-| SCP6 — provider delivery completed | Execute custom providers for approvals and workflow lifecycle notifications with shared decisions and safe retries. Provider-owned lifecycle adapter wiring remains fail-closed. | A real user-authored notification provider works end to end without silently ignoring unsupported hooks. |
-| SCP7 | Complete composition, CLI, folder activation, operations, cancellation, backup, and compatibility. | The features work inside production automations rather than isolated demos. |
-| SCP8 | Harden, benchmark, document, package, and publish the milestone. | Switch, custom steps, and custom notification providers are supported WOML features. |
+| SCP6 — completed | Execute custom providers for approvals and workflow lifecycle notifications with shared decisions, safe retries, and provider-owned lifecycle scripts. | A real user-authored notification provider works end to end without silently ignoring hooks. |
+| SCP7 — completed | Complete composition, CLI, folder activation, operations, cancellation, backup, and compatibility. | The features work inside production automations rather than isolated demos. |
+| SCP8 — completed | Harden, benchmark, document, package, and publish the milestone. | Switch, custom steps, and custom notification providers are supported WOML features. |
 
 Phase labels are planning shorthand only. Permanent test names, fixture names,
 scripts, modules, and source symbols use descriptive product/behavior names—not
@@ -1327,17 +1326,13 @@ Protocol conformance fixtures cover multibyte text, literal CRLF content,
 out-of-order responses, cancellation, oversized messages, malformed receipts,
 unknown artifacts, and every failure kind.
 
-### SCP6 — Execute custom providers end to end — provider delivery completed
+### SCP6 — Execute custom providers end to end — completed
 
 Implementation note: approval delivery, workflow lifecycle delivery, durable
-decisions, retries, recovery primitives, redaction, and local/Telegram examples
-are implemented. A provider definition's own `on-success`, `on-error`, and
-`on-complete` actions now have the Event v13 authority delivered by SCP4, but
-the notification journey has not yet been connected to the general reusable
-lifecycle script host. `woml run` therefore continues to reject that provider
-profile with `WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE` instead of silently
-ignoring hooks. This is explicit remaining SCP6 adapter work, not missing
-custom-step execution.
+decisions, retries, recovery primitives, redaction, local/Telegram examples,
+and provider definition-owned lifecycle scripts are implemented. Approval and
+informational deliveries finalize `on-success`/`on-error`, then `on-complete`,
+through the same Event v13 lifecycle authority used by custom steps.
 
 Changes:
 
@@ -1368,10 +1363,7 @@ delivery fails, and never logs credentials or approval capabilities.
 
 ### SCP7 — Complete composition and production operations
 
-Status: Completed on 2026-08-14 for every currently executable reusable
-definition path. The provider-definition-owned lifecycle adapter withheld in
-SCP6 remains fail-closed and is therefore not claimed as an executable SCP7
-composition path.
+Status: Completed on 2026-08-14.
 
 Changes:
 
@@ -1418,14 +1410,16 @@ Implemented proof:
 - approval recovery accepts Event v13 outcomes and preserves exactly-once
   shared decisions across built-in and custom notification providers;
 - Inspection v5 and backup/restore preserve reusable attempts and results;
-- direct and transitive import cycles remain compile-time errors. A lifecycle
-  notification cycle that would require the withheld provider-owned lifecycle
-  adapter is rejected rather than partially executed;
+- direct and transitive import cycles remain compile-time errors; reusable
+  lifecycle `<notify>` is rejected explicitly by the v1 grammar rather than
+  partially compiled;
 - the focused production acceptance project exercises composition, calls,
   starts, approval, cancellation, timeout, inspection, backup, and restore
   through the packaged CLI.
 
 ### SCP8 — Harden, package, document, and publish
+
+Status: Completed on 2026-08-14.
 
 Changes:
 
@@ -1457,6 +1451,26 @@ Gate:
 Frontend, Rust, N-API, Bun hosts, protocol/schema conformance, typecheck,
 Clippy, clean-package, compatibility, recovery, security, secret scan, and
 performance gates pass without skipped native coverage.
+
+Implemented proof:
+
+- provider definition-owned lifecycle scripts execute after committed approval
+  and informational delivery outcomes;
+- adversarial suites cover many imports, repeated invocations, canonical alias
+  collisions, missing/deleted sources, immutable package identity, protocols,
+  source diagnostics, switches, and secret redaction;
+- an independent clean consumer installs the packed CLI, compiles a custom
+  provider, and executes a switch/choose/parallel/fork custom-step workflow
+  through the packaged Rust core and Bun hosts;
+- the reusable publication benchmark measures cold/repeated compilation,
+  switch and provider compilation, custom-step execution, and a 24-definition
+  graph against explicit budgets;
+- descriptive `test:reusable-hardening`, `test:reusable-package`,
+  `test:reusable-release`, and `benchmark:reusable-definitions` commands are
+  part of the package, and the full release gate includes the reusable release;
+- language, architecture, modules, lifecycle, notifications, migration,
+  security, CLI, and dedicated reusable-definition documentation describe the
+  published behavior and boundaries.
 
 ## 13. Verification Matrix
 
@@ -1497,6 +1511,8 @@ This milestone does not add:
 - native Telegram callback buttons that bypass the existing decision URLs;
 - custom-provider message editing after decision;
 - multi-destination delivery inside one custom-provider invocation;
+- `<notify>` actions inside a reusable definition lifecycle (workflow
+  lifecycle notifications remain supported);
 - default prop values or a prop type/schema language;
 - numeric, boolean, null, range, pattern, or expression switch cases;
 - JavaScript-style switch fallthrough;

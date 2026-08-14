@@ -87,7 +87,7 @@ describe('reusable definition CLI authoring', () => {
     });
   });
 
-  test('check compiles provider delivery while run rejects unavailable definition lifecycle', async () => {
+  test('check compiles provider delivery and definition-owned lifecycle artifacts', async () => {
     const path = resolve(fixtureRoot, 'custom-provider-workflow.woml');
     const checked = await invoke(['check', path, '--json']);
     expect(checked.exitCode).toBe(0);
@@ -108,13 +108,11 @@ describe('reusable definition CLI authoring', () => {
         (item: { kind: string }) => item.kind === 'notification-provider'
       )
     ).toHaveLength(2);
-
-    const run = await invoke(['run', path]);
-    expect(run.exitCode).toBe(1);
-    expect(run.stderr).toContain(
-      'WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE'
-    );
-    expect(run.stderr).toContain('custom-step and workflow lifecycle hooks remain executable');
+    expect(
+      definitionPackage.artifacts.filter((item: { path: string }) =>
+        item.path.includes('.on-')
+      )
+    ).toHaveLength(4);
   });
 
   test('package identity is stable across different directories and timestamps', async () => {
@@ -139,7 +137,7 @@ describe('reusable definition CLI authoring', () => {
     }
   });
 
-  test('explains direct definition runs and keeps provider lifecycle fail-closed', async () => {
+  test('explains direct definition runs and accepts provider lifecycle compilation', async () => {
     const direct = await invoke([
       'run',
       resolve(fixtureRoot, 'calculate-discount.woml'),
@@ -149,13 +147,11 @@ describe('reusable definition CLI authoring', () => {
 
     await rm(resolve(fixtureRoot, 'woml-custom-data.json'), { force: true });
     const workflow = await invoke([
-      'run',
+      'check',
       resolve(fixtureRoot, 'workflow.woml'),
     ]);
-    expect(workflow.exitCode).toBe(1);
-    expect(workflow.stderr).toContain(
-      'WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE'
-    );
+    expect(workflow.exitCode).toBe(0);
+    expect(workflow.stdout).toContain('Execution: custom steps and notification providers are runnable.');
     const editorData = JSON.parse(
       await readFile(resolve(fixtureRoot, 'woml-custom-data.json'), 'utf8')
     );

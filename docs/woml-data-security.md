@@ -35,6 +35,9 @@ machine.
 - Startup fails closed when Store v14 integrity (including State v1) contradicts its schema,
   digests, canonical results, versions, or quotas.
 - WOML does not silently copy the `secrets` object into workflow state.
+- Reusable definitions receive only secret props explicitly bound with an exact
+  `{{secrets.NAME}}` reference. Those values are omitted from Definition
+  Package v9, Event v13, Inspection v5, provider receipts, and normal logs.
 
 WOML cannot determine whether an arbitrary value authored by JavaScript is
 sensitive. If a script stores a secret in state, that secret is present in the

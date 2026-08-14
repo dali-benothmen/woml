@@ -63,6 +63,27 @@ woml run examples/moduleWorkflow.woml
 `woml test` remains available for automated tests and CI; it is not required
 for the normal authoring journey.
 
+## Reuse steps and notification providers
+
+Importing a local `.woml` definition creates a custom tag. A top-level reusable
+`<step>` becomes a normal durable step with an invocation `id`, retry policy,
+result, props, and definition-owned lifecycle. A
+`<provider kind="notification">` becomes a supervised approval or informational
+notification transport while Rust retains delivery and decision authority.
+
+```xml
+<imports>
+  <module name="calculate-discount" from="./calculate-discount.woml" />
+</imports>
+<steps>
+  <calculate-discount id="discount" price="{{context.payload.price}}" retry="3" />
+</steps>
+```
+
+Definitions are validated when their folder is activated but do not become
+workflow instances. See
+[Reusable WOML Steps and Notification Providers](../docs/woml-reusable-definitions.md).
+
 `woml run` and `woml check` automatically refresh self-contained editor types
 for built-in services and local module aliases. The explicit command is
 available only when a custom output path or manual refresh is useful:

@@ -1,7 +1,7 @@
 # WOML Reusable Definitions Contracts v1
 
-Status: frozen at SCP0; frontend recognition begins in SCP1, execution remains
-disabled until SCP3-SCP6.
+Status: published after SCP8; frontend, Rust, Bun hosts, durable recovery,
+inspection, and clean-package gates implement this contract.
 
 ## Frozen boundaries
 
@@ -37,7 +37,10 @@ Reusable steps receive deeply read-only `props`, `context`, `attempt`, and
 actions receive `props`, `lifecycle`, `services`, and `context` only for step
 definitions. Allowed reusable hooks are `on-success`, `on-error`, and
 `on-complete`, in that order. Hook failures are durable warnings and do not
-replace the operation outcome.
+replace the operation outcome. Reusable lifecycle actions are `<script>` only
+in v1. `<notify>` remains available in workflow lifecycle hooks, including with
+an imported custom provider, but is rejected inside a reusable definition
+lifecycle because Model v14 has no frozen recoverable payload for that scope.
 
 ## Versioned artifacts
 

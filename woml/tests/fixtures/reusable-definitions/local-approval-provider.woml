@@ -18,4 +18,16 @@
       return { messageId: `${props.label}:${notification.deliveryId}` };
     </script>
   </provider>
+  <lifecycle>
+    <on-success>
+      <script>
+        console.log(`Provider ${props.label} ${lifecycle.outcome}`);
+      </script>
+    </on-success>
+    <on-complete>
+      <script>
+        console.log(`Provider ${props.label} complete`);
+      </script>
+    </on-complete>
+  </lifecycle>
 </woml>

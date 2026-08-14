@@ -29,17 +29,10 @@ fn rust_accepts_the_reviewed_model_v14_reusable_operation_shape() {
 }
 
 #[test]
-fn durable_execution_stays_gated_until_scp4() {
-  let error = reviewed_model()
+fn reusable_steps_are_valid_for_durable_execution() {
+  reviewed_model()
     .validate_for_durable_execution()
-    .unwrap_err();
-  let messages = error
-    .issues
-    .iter()
-    .filter(|issue| issue.code == ModelIssueCode::UnsupportedReusableExecution)
-    .map(|issue| issue.message.as_str())
-    .collect::<Vec<_>>();
-  assert!(messages.iter().any(|message| message.contains("SCP4")));
+    .expect("the published reusable-step model must support durable execution");
 }
 
 #[test]

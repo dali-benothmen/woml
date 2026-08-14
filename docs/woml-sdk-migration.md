@@ -31,6 +31,8 @@ sufficient parity and the relevant production features have migration paths.
 | Small durable workflow-owned memory | `services.state` with named mutations and versions |
 | Internal workflow fan-out | `services.events.emit()` plus an `<event>` trigger |
 | Reusable local JavaScript helper package | `<imports><module name="..." from="..." /></imports>` and `services.<name>` |
+| Reusable SDK step/helper abstraction | Imported reusable `.woml` step used as a custom tag with explicit props |
+| Custom SDK notification adapter | Imported `<provider kind="notification">` used directly under `<notify>` |
 | Call one workflow and await its answer | `services.workflows.call(workflowId, payload)` |
 | Start one workflow and continue | `services.workflows.start(workflowId, payload)` |
 | SDK workflow callbacks/hooks | Workflow-owned `<lifecycle>` hooks |
@@ -94,6 +96,12 @@ replace positional or “last result” access with the producing step's path:
     `join="all"`, `join="none"`, or a whitespace-separated branch-ID list to
     state exactly what the continuation waits for. Keep sibling outputs
     isolated and reference only outputs from joined routes afterward.
+16. Move repeated script-backed operations into reusable step definition files.
+    Declare their inputs under top-level `<props>`, import the file, and give
+    every usage its own `id` and retry attributes.
+17. Move custom notification transports into reusable provider definitions.
+    Keep approval decisions in WOML; provider code transports only the bounded
+    notification envelope and capability URLs.
 
 ## Current parity boundary
 
@@ -112,6 +120,12 @@ additional messaging services, cross-machine workflow routing, remote run
 control, and the hosted production runtime remain roadmap items. Keep an SDK
 workflow in place when it depends on those unavailable capabilities. The SDK is
 not retired merely because local lifecycle and control parity exists.
+
+Exact-string `<switch>`, local reusable custom steps, and local reusable
+notification providers are also publishable. Their Model v14 definitions,
+Definition Package v9 artifacts, Event v13 lifecycle histories, and provider
+delivery histories recover without reading current project sources. See
+[Reusable WOML Steps and Notification Providers](woml-reusable-definitions.md).
 
 For example, migrate related social-post chains into one workflow when they
 share preparation but publish independently:

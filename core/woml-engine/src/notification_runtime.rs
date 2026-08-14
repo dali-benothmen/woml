@@ -36,15 +36,18 @@ use crate::notification_protocol::{
   NotificationHostOutcome, NotificationUpdateMessage, NOTIFICATION_PROVIDER_PROTOCOL,
   NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
+use crate::protocol::{ReusableInvocationOutcome, ReusableLifecycleErrorV1};
 use crate::{
-  ApprovalResolution, NotificationDeliveryStatus, NotificationMessageUpdateStatus,
-  NotificationResolution, NotificationSafeFailure, RunStatus,
+  execute_reusable_provider_lifecycle_durable, ApprovalResolution, NotificationDeliveryStatus,
+  NotificationMessageUpdateStatus, NotificationResolution, NotificationSafeFailure, RunStatus,
+  RuntimeExecutionOptions, ScriptHostProcessOptions,
 };
 
 #[derive(Debug, Clone)]
 pub struct CustomNotificationJourneyOptions {
   pub bun_executable: PathBuf,
   pub host_script_path: PathBuf,
+  pub script_host_path: PathBuf,
   pub approval_base_url: String,
   pub resolved_secrets: BTreeMap<String, String>,
   pub artifacts: Vec<CustomProviderScriptArtifact>,
@@ -122,7 +125,8 @@ pub async fn run_notification_provider_journey_with_custom(
   interaction_timeout: Duration,
   custom_options: Option<CustomNotificationJourneyOptions>,
 ) -> Result<NotificationJourneyResult, NotificationJourneyError> {
-  let mut store = DurableEventStore::open(event_store_path)?;
+  let event_store_path = event_store_path.as_ref().to_path_buf();
+  let mut store = DurableEventStore::open(&event_store_path)?;
   let binding = store.run_binding(run_id)?;
   let workflow = store.definition(&binding.definition_hash)?;
   let projection = store.projection(run_id)?;
@@ -244,6 +248,7 @@ pub async fn run_notification_provider_journey_with_custom(
         provider_result,
         NotificationProviderDeliveryResult::Succeeded(_)
       );
+      let lifecycle_result = provider_result.clone();
       let projection = store.complete_notification_delivery(&work, provider_result, Utc::now())?;
       delivery_report.attempted += 1;
       if succeeded {
@@ -252,6 +257,61 @@ pub async fn run_notification_provider_journey_with_custom(
         delivery_report.failed += 1;
       }
       delivery_report.run_failed = projection.status == RunStatus::Failed;
+      let delivery_is_final = projection
+        .notification_deliveries
+        .get(&work.delivery_id)
+        .is_some_and(|delivery| {
+          matches!(
+            delivery.status,
+            NotificationDeliveryStatus::Succeeded { .. }
+              | NotificationDeliveryStatus::Failed { final_: true, .. }
+          )
+        });
+      if work.provider == "custom" && delivery_is_final {
+        let provider_id = work.provider_id.as_deref().ok_or_else(|| {
+          NotificationJourneyError::Contract(
+            "Custom delivery has no provider lifecycle identity.".to_string(),
+          )
+        })?;
+        let custom = custom_options.as_ref().ok_or_else(|| {
+          NotificationJourneyError::Contract(
+            "Custom provider lifecycle options are unavailable.".to_string(),
+          )
+        })?;
+        let (outcome, result, error) = match lifecycle_result {
+          NotificationProviderDeliveryResult::Succeeded(provider_message) => (
+            ReusableInvocationOutcome::Succeeded,
+            Some(serde_json::json!({ "messageId": provider_message.message_id })),
+            None,
+          ),
+          NotificationProviderDeliveryResult::Failed(failure) => (
+            ReusableInvocationOutcome::Failed,
+            None,
+            Some(ReusableLifecycleErrorV1 {
+              code: failure.code,
+              message: failure.message,
+            }),
+          ),
+        };
+        execute_reusable_provider_lifecycle_durable(
+          event_store_path.clone(),
+          run_id,
+          provider_id,
+          outcome,
+          result,
+          error,
+          RuntimeExecutionOptions::new(
+            ScriptHostProcessOptions::new(
+              custom.bun_executable.clone(),
+              custom.script_host_path.clone(),
+            ),
+            30_000,
+          )
+          .with_resolved_secrets(custom.resolved_secrets.clone()),
+        )
+        .await
+        .map_err(|error| NotificationJourneyError::Contract(error.to_string()))?;
+      }
     }
     let projection = store.projection(run_id)?;
     if projection.status == RunStatus::Failed {

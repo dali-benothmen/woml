@@ -114,6 +114,14 @@ business run into a failed run or a cancelled run into a failure. A run remains
 `finalizing` until its required hook actions settle, then ends with lifecycle
 status `completed` or `completed_with_warnings`.
 
+Reusable step and notification-provider definitions have a narrower,
+invocation-owned lifecycle: `on-success`, `on-error`, then `on-complete`.
+Provider lifecycle scripts receive `props`, `lifecycle`, and managed services,
+but no workflow context. Their Event v13 action history settles after the
+provider delivery truth is committed, so an observational hook cannot change a
+successful or failed delivery. See
+[Reusable WOML Steps and Notification Providers](woml-reusable-definitions.md).
+
 ## Cancellation semantics
 
 Request cancellation with:

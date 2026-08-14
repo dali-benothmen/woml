@@ -572,16 +572,25 @@ function validateReusableLifecycle(
       failValidation(
         document,
         'WOML_LIFECYCLE_ACTION_REQUIRED',
-        `<${hook.name}> requires at least one <script> or <notify> action.`,
+        `<${hook.name}> requires at least one <script> action.`,
         hook.openTagSpan
       );
     }
     for (const action of actions) {
-      if (action.name !== 'script' && action.name !== 'notify') {
+      if (action.name === 'notify') {
+        failValidation(
+          document,
+          'WOML_REUSABLE_LIFECYCLE_NOTIFY_UNSUPPORTED',
+          'Reusable definition lifecycle hooks support script actions only in v1.',
+          action.openTagSpan,
+          'Use the custom provider from a workflow lifecycle <notify> action, where notification delivery is durable and recoverable.'
+        );
+      }
+      if (action.name !== 'script') {
         failValidation(
           document,
           'WOML_LIFECYCLE_ACTION_INVALID',
-          `<${hook.name}> supports <script> and <notify> actions only.`,
+          `<${hook.name}> supports <script> actions only.`,
           action.openTagSpan
         );
       }

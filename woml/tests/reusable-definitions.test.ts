@@ -125,6 +125,15 @@ describe('reusable WOML document contracts', () => {
       validationCode(`<woml><step><script>return true;</script></step><lifecycle><on-step-success><script>return;</script></on-step-success></lifecycle></woml>`)
     ).toBe('WOML_REUSABLE_STEP_HOOK_UNSUPPORTED');
   });
+
+  test('keeps reusable lifecycle actions script-only in the recoverable v1 profile', () => {
+    expect(
+      validationCode(`<woml>
+  <step><script>return true;</script></step>
+  <lifecycle><on-success><notify /></on-success></lifecycle>
+</woml>`)
+    ).toBe('WOML_REUSABLE_LIFECYCLE_NOTIFY_UNSUPPORTED');
+  });
 });
 
 describe('reusable definition graph resolution', () => {
@@ -361,17 +370,17 @@ describe('reusable definition graph resolution', () => {
     }
   });
 
-  test('requires a message for informational custom-provider usage', () => {
+  test('rejects notification actions inside reusable lifecycle scope', () => {
     try {
       resolveWomlReusableDefinitionGraph(fixture('notify-with-telegram.woml'), {
         sourcePath: resolve(fixtureRoot, 'notify-with-telegram.woml'),
         projectRoot: fixtureRoot,
       });
-      throw new Error('Expected informational provider validation to fail.');
+      throw new Error('Expected reusable lifecycle notification validation to fail.');
     } catch (error) {
       expect(error).toBeInstanceOf(WomlValidationError);
       expect((error as WomlValidationError).diagnostic.code).toBe(
-        'WOML_REUSABLE_PROVIDER_MESSAGE_REQUIRED'
+        'WOML_REUSABLE_LIFECYCLE_NOTIFY_UNSUPPORTED'
       );
     }
   });

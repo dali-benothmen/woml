@@ -920,6 +920,7 @@ interface NativeCore {
     notificationHostPath: string,
     interactionTimeoutMs: number,
     customNotificationHostPath?: string,
+    scriptHostPath?: string,
     approvalBaseUrl?: string,
     resolvedSecretsJson?: string
   ) => Promise<string>;
@@ -3515,6 +3516,7 @@ export async function runNotificationProviderJourneyWithRust(
   options: Pick<RustExecutorOptions, 'nativeCorePath' | 'bunExecutable'> & {
     readonly notificationHostPath?: string;
     readonly customNotificationHostPath?: string;
+    readonly scriptHostPath?: string;
     readonly approvalBaseUrl?: string;
     readonly resolvedSecrets?: Readonly<Record<string, string>>;
     readonly interactionTimeoutMs?: number;
@@ -3544,6 +3546,7 @@ export async function runNotificationProviderJourneyWithRust(
       timeoutMs,
       options.customNotificationHostPath ??
         defaultCustomNotificationHostPath(),
+      options.scriptHostPath ?? defaultScriptHostPath(),
       options.approvalBaseUrl,
       JSON.stringify(options.resolvedSecrets ?? {})
     )

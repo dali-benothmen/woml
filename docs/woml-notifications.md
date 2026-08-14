@@ -1,8 +1,8 @@
 # WOML Notifications
 
-WOML currently uses the shared Slack transport for two deliberately separate
-products: actionable Human Approval messages and informational lifecycle
-notifications. Sharing connection and channel-resolution code does not share
+WOML supports built-in Slack and local custom notification providers for two
+deliberately separate products: actionable Human Approval messages and
+informational lifecycle notifications. Sharing transport code does not share
 authority.
 
 ## Approval notifications
@@ -58,6 +58,19 @@ Messages may interpolate bounded scalar values from `context.*` and
 progress, inspection, and diagnostics contain provider/destination identities
 and safe error codes—not credentials or full message bodies.
 
+## Custom providers
+
+A project can import a reusable `.woml` file containing
+`<provider kind="notification">` and use its import name directly under
+`<notify>`. The provider receives explicit props and the bounded
+`notification` binding; Rust still owns durable delivery intent, safe retries,
+approval capabilities, and exactly-one shared decisions. Definition-owned
+`on-success`/`on-error` and `on-complete` scripts execute after the delivery
+outcome is committed and can only add lifecycle warnings.
+
+See [Reusable WOML Steps and Notification Providers](woml-reusable-definitions.md)
+for the complete authoring and security contract.
+
 ## Failure and cancellation behavior
 
 - Each delivery has a stable identity so restart does not intentionally create
@@ -70,6 +83,7 @@ and safe error codes—not credentials or full message bodies.
   approval-message state, so WOML does not falsely update cancellation as
   rejection. A visible cancelled update requires a later protocol version.
 
-Discord, WhatsApp, Telegram, custom webhooks, and additional provider adapters
-remain roadmap items. They must preserve the same separation between
-informational delivery and decision authority.
+Built-in Discord, WhatsApp, Telegram, custom webhooks, and additional adapters
+remain roadmap items. A user-authored local provider can integrate those APIs
+today, but it must preserve the same separation between transport and WOML's
+decision authority.
