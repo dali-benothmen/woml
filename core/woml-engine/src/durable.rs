@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -735,7 +735,7 @@ pub struct ApprovalTokenBinding {
   pub credential_expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NotificationDeliveryWork {
   pub run_id: String,
   pub approval_id: String,
@@ -744,6 +744,8 @@ pub struct NotificationDeliveryWork {
   pub provider: String,
   pub destination: String,
   pub credentials: BTreeMap<String, String>,
+  pub provider_id: Option<String>,
+  pub message: Option<crate::model::ValueExpression>,
   pub attempt: u32,
   pub attempt_id: String,
   pub idempotency_key: String,
@@ -1341,21 +1343,25 @@ fn validate_definition_module_artifacts(
   workflow: &CompiledWorkflowDefinition,
   artifacts: &[RuntimeModuleArtifact],
 ) -> Result<(), DurableStoreError> {
-  let Some(runtime) = &workflow.module_runtime else {
-    if artifacts.is_empty() {
-      return Ok(());
-    }
-    return Err(DurableStoreError::Contract(
-      "Module artifacts cannot be attached to a definition without moduleRuntime.".to_string(),
-    ));
-  };
-  if runtime.modules.len() != artifacts.len() {
+  let module_artifacts = artifacts
+    .iter()
+    .filter(|artifact| !artifact.name.starts_with("__woml_provider__"))
+    .collect::<Vec<_>>();
+  let provider_artifacts = artifacts
+    .iter()
+    .filter(|artifact| artifact.name.starts_with("__woml_provider__"))
+    .collect::<Vec<_>>();
+  let runtime_bindings = workflow
+    .module_runtime
+    .as_ref()
+    .map_or(&[][..], |runtime| runtime.modules.as_slice());
+  if runtime_bindings.len() != module_artifacts.len() {
     return Err(DurableStoreError::Contract(
       "Stored module artifacts do not match the compiled definition.".to_string(),
     ));
   }
   let mut total_bytes = 0usize;
-  for (binding, artifact) in runtime.modules.iter().zip(artifacts) {
+  for (binding, artifact) in runtime_bindings.iter().zip(module_artifacts) {
     let bundle_bytes = artifact.bundle.len();
     let source_map_bytes = artifact.source_map.len();
     total_bytes = total_bytes
@@ -1378,6 +1384,44 @@ fn validate_definition_module_artifacts(
         binding.name
       )));
     }
+  }
+  let provider_descriptors = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .filter_map(|definition| match definition {
+      crate::model::CompiledReusableInvocation::NotificationProvider {
+        script_artifact_id, ..
+      } => Some(script_artifact_id.as_str()),
+      _ => None,
+    })
+    .collect::<HashSet<_>>();
+  let mut provider_ids = HashSet::new();
+  for artifact in provider_artifacts {
+    let artifact_id = artifact.name.trim_start_matches("__woml_provider__");
+    total_bytes = total_bytes
+      .checked_add(artifact.bundle.len())
+      .and_then(|value| value.checked_add(artifact.source_map.len()))
+      .ok_or_else(|| {
+        DurableStoreError::Contract("Provider artifact byte count overflowed.".to_string())
+      })?;
+    if !provider_descriptors.contains(artifact_id)
+      || !provider_ids.insert(artifact_id)
+      || !artifact.exports.is_empty()
+      || !artifact.source_map.is_empty()
+      || module_artifact_sha256(&artifact.bundle) != artifact.bundle_digest
+      || module_artifact_sha256("") != artifact.source_map_digest
+      || artifact.bundle.len() > MAX_MODULE_ARTIFACT_BYTES
+    {
+      return Err(DurableStoreError::Contract(format!(
+        "Provider artifact {artifact_id:?} failed its immutable identity or size contract."
+      )));
+    }
+  }
+  if provider_ids.len() != provider_descriptors.len() {
+    return Err(DurableStoreError::Contract(
+      "Stored provider artifacts do not match the compiled definition.".to_string(),
+    ));
   }
   if total_bytes > MAX_MODULE_ARTIFACT_SET_BYTES {
     return Err(DurableStoreError::Contract(format!(
@@ -5486,6 +5530,8 @@ impl DurableEventStore {
       provider: definition.provider.clone(),
       destination: definition.destination.clone(),
       credentials: definition.credentials.clone(),
+      provider_id: definition.provider_id.clone(),
+      message: definition.message.clone(),
       attempt,
       attempt_id,
       idempotency_key,
@@ -5799,6 +5845,7 @@ impl DurableEventStore {
     for delivered in projection.notification_deliveries.values().filter(|item| {
       item.approval_id == approval_id
         && item.request_id == request_id
+        && item.provider == "slack"
         && matches!(item.status, NotificationDeliveryStatus::Succeeded { .. })
     }) {
       payloads.push(RunEventPayload::NotificationMessageUpdateRequested(
@@ -6337,6 +6384,7 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request_id
+          && delivery.provider == "slack"
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }
@@ -6466,6 +6514,7 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request.request_id
+          && delivery.provider == "slack"
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }

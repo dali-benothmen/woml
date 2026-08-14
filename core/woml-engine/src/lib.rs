@@ -7,6 +7,7 @@
 pub mod backup;
 pub mod cache;
 pub mod capability;
+pub mod custom_notification_host;
 pub mod custom_notification_provider_protocol;
 pub mod database;
 mod database_postgres;
@@ -52,6 +53,10 @@ pub use capability::{
   CAPABILITY_CALL_CONTRACT, CAPABILITY_CALL_CONTRACT_VERSION, DEFAULT_CAPABILITY_FRAME_BYTES,
   DEFAULT_CAPABILITY_INPUT_BYTES, DEFAULT_CAPABILITY_RESULT_BYTES, DEFAULT_CAPABILITY_TIMEOUT_MS,
   NATIVE_FETCH_OBSERVATION_CONTRACT, NATIVE_FETCH_OBSERVATION_CONTRACT_VERSION,
+};
+pub use custom_notification_host::{
+  CustomNotificationHostClient, CustomNotificationHostClientError,
+  CustomNotificationHostProcessOptions, CustomProviderScriptArtifact,
 };
 pub use custom_notification_provider_protocol::{
   decode_custom_provider_frame, encode_custom_provider_frame, CustomNotificationAction,
@@ -128,9 +133,9 @@ pub use interval::{
 pub use model::{
   CompiledLifecycleAction, CompiledLifecycleDefinition, CompiledLifecycleHook,
   CompiledModuleBinding, CompiledModuleRuntime, CompiledQueuePolicy, CompiledRateLimitPolicy,
-  CompiledRuntimePolicy, CompiledWorkflowDefinition, LifecycleEventName, ModelIssue,
-  ModelIssueCode, ModelValidationError, NotificationDefinition, QueueDiscipline,
-  RateLimitAlgorithm, ScriptRuntimeBindings,
+  CompiledReusableInvocation, CompiledRuntimePolicy, CompiledWorkflowDefinition,
+  LifecycleEventName, ModelIssue, ModelIssueCode, ModelValidationError, NotificationDefinition,
+  QueueDiscipline, RateLimitAlgorithm, ScriptRuntimeBindings,
 };
 pub use notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
@@ -144,9 +149,9 @@ pub use notification_protocol::{
   NOTIFICATION_PROVIDER_PROTOCOL, NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
 pub use notification_runtime::{
-  run_notification_provider_journey, NotificationDeliveryDiagnostic,
-  NotificationJourneyDiagnostics, NotificationJourneyError, NotificationJourneyResult,
-  NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION,
+  run_notification_provider_journey, run_notification_provider_journey_with_custom,
+  CustomNotificationJourneyOptions, NotificationDeliveryDiagnostic, NotificationJourneyDiagnostics,
+  NotificationJourneyError, NotificationJourneyResult, NOTIFICATION_JOURNEY_DIAGNOSTICS_VERSION,
 };
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError, ForkBranchProjection,

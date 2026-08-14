@@ -109,7 +109,7 @@ describe('frozen reusable definition contracts', () => {
     expect(definitionPackage.permissions.secrets).toContain(
       'TELEGRAM_BOT_TOKEN'
     );
-    expect(definitionPackage.runtimeReady).toBe(false);
+    expect(definitionPackage.runtimeReady).toBe(true);
   });
 
   test('validates Model v14 and Definition Package v9 reviewed artifacts', () => {

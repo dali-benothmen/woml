@@ -31,8 +31,8 @@ use crate::event::{
 };
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{
-  ApprovalDefinition, CompiledLifecycleAction, LifecycleEventName, ParallelGroupDefinition,
-  TemplatePart, ValueExpression,
+  ApprovalDefinition, CompiledLifecycleAction, CompiledReusableInvocation, LifecycleEventName,
+  ParallelGroupDefinition, TemplatePart, ValueExpression,
 };
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, LifecycleActionStatus, LifecycleHookProjection,
@@ -49,15 +49,20 @@ use crate::workflow_calls::WorkflowCallProgressReporter;
 use crate::{
   run_event_schema_version_for_model, ApprovalDecisionOutcome, ApprovalTimeoutSettlement,
   AttemptFailure, AttemptFailureKind, BranchFailure, CapabilityFailure, CapabilityFailureKind,
-  CapabilityRegistry, CompiledWorkflowDefinition, DurableCapabilityAuthority, DurableDagEngine,
-  DurableEngineError, DurableEventStore, DurableStoreError, EngineError, InMemoryDagEngine,
-  InformationalNotificationDeliverMessage, IssuedApprovalToken, NotificationCredentials,
-  NotificationHostClient, NotificationHostClientError, NotificationHostOutcome,
-  NotificationHostProcessOptions, OperationStatus, PolicyClaimWaitReason,
-  PolicyExecutionClaimResult, PolicyWaitingFor, RecoveryReport, RunEvent, RunEventPayload,
-  RunFailure, RunProjection, RunStatus, RunTimeoutSettlement, SchedulerClaimV1, ScriptHostClient,
-  ScriptHostClientError, ScriptHostModuleArtifact, ScriptHostProcessOptions,
-  StepFailureDisposition, TriggerAdmissionRequest, WorkflowContext,
+  CapabilityRegistry, CompiledWorkflowDefinition, CustomNotificationHostClient,
+  CustomNotificationHostClientError, CustomNotificationHostProcessOptions, CustomNotificationKind,
+  CustomNotificationRequest, CustomProviderAttempt, CustomProviderExecuteMessage,
+  CustomProviderLimits, CustomProviderOutcome, CustomProviderScriptArtifact,
+  DurableCapabilityAuthority, DurableDagEngine, DurableEngineError, DurableEventStore,
+  DurableStoreError, EngineError, InMemoryDagEngine, InformationalNotificationDeliverMessage,
+  IssuedApprovalToken, NotificationCredentials, NotificationHostClient,
+  NotificationHostClientError, NotificationHostOutcome, NotificationHostProcessOptions,
+  OperationStatus, PolicyClaimWaitReason, PolicyExecutionClaimResult, PolicyWaitingFor,
+  RecoveryReport, RunEvent, RunEventPayload, RunFailure, RunProjection, RunStatus,
+  RunTimeoutSettlement, SchedulerClaimV1, ScriptHostClient, ScriptHostClientError,
+  ScriptHostModuleArtifact, ScriptHostProcessOptions, StepFailureDisposition,
+  TriggerAdmissionRequest, WorkflowContext, CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL,
+  CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION, NOTIFICATION_PROVIDER_PROTOCOL,
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V2,
 };
@@ -217,6 +222,7 @@ impl EngineClock for FixedEngineClock {
 pub struct RuntimeExecutionOptions {
   pub script_host: ScriptHostProcessOptions,
   pub notification_host: Option<NotificationHostProcessOptions>,
+  pub custom_notification_host_path: Option<PathBuf>,
   pub script_timeout_ms: u64,
   pub max_context_bytes: Option<usize>,
   pub clock: Arc<dyn EngineClock>,
@@ -246,6 +252,10 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
       .field("script_host", &self.script_host)
       .field("script_timeout_ms", &self.script_timeout_ms)
       .field("notification_host", &self.notification_host)
+      .field(
+        "custom_notification_host_path",
+        &self.custom_notification_host_path,
+      )
       .field("max_context_bytes", &self.max_context_bytes)
       .field("clock", &"dyn EngineClock")
       .field("schedule_clock", &"dyn ScheduleClock")
@@ -302,6 +312,14 @@ impl RuntimeExecutionOptions {
       NotificationHostProcessOptions::new(script_host.bun_executable.clone(), path)
         .with_protocol_version(INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION)
     });
+    let custom_notification_host_path = script_host.host_script_path.parent().map(|parent| {
+      let extension = script_host
+        .host_script_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("js");
+      parent.join(format!("custom-notification-provider-host.{extension}"))
+    });
     let capability_registry = Arc::new(CapabilityRegistry::default());
     let managed_storage_store = Arc::new(crate::ManagedStorageStore::default());
     capability_registry
@@ -337,6 +355,7 @@ impl RuntimeExecutionOptions {
     Self {
       script_host,
       notification_host,
+      custom_notification_host_path,
       script_timeout_ms,
       max_context_bytes: None,
       clock: Arc::new(SystemEngineClock),
@@ -394,6 +413,7 @@ impl RuntimeExecutionOptions {
   pub fn with_runtime_modules(mut self, modules: Vec<RuntimeModuleArtifact>) -> Self {
     self.script_host.module_artifacts = modules
       .iter()
+      .filter(|module| !module.name.starts_with("__woml_provider__"))
       .map(|module| ScriptHostModuleArtifact {
         bundle_digest: module.bundle_digest.clone(),
         bundle: module.bundle.clone(),
@@ -1615,21 +1635,27 @@ fn validate_runtime_modules(
   workflow: &CompiledWorkflowDefinition,
   options: &RuntimeExecutionOptions,
 ) -> Result<(), RuntimeExecutionError> {
-  let Some(runtime) = &workflow.module_runtime else {
-    if options.runtime_modules.is_empty() {
-      return Ok(());
-    }
-    return Err(RuntimeExecutionError::InvalidConfiguration(
-      "module artifacts were supplied for a workflow without moduleRuntime".to_string(),
-    ));
-  };
-  if runtime.modules.len() != options.runtime_modules.len() {
+  let module_artifacts = options
+    .runtime_modules
+    .iter()
+    .filter(|artifact| !artifact.name.starts_with("__woml_provider__"))
+    .collect::<Vec<_>>();
+  let provider_artifacts = options
+    .runtime_modules
+    .iter()
+    .filter(|artifact| artifact.name.starts_with("__woml_provider__"))
+    .collect::<Vec<_>>();
+  let runtime_bindings = workflow
+    .module_runtime
+    .as_ref()
+    .map_or(&[][..], |runtime| runtime.modules.as_slice());
+  if runtime_bindings.len() != module_artifacts.len() {
     return Err(RuntimeExecutionError::InvalidConfiguration(
       "the runtime module artifacts do not match Model v9".to_string(),
     ));
   }
   let mut total_bytes = 0usize;
-  for (binding, artifact) in runtime.modules.iter().zip(options.runtime_modules.iter()) {
+  for (binding, artifact) in runtime_bindings.iter().zip(module_artifacts) {
     total_bytes = total_bytes
       .checked_add(artifact.bundle.len())
       .and_then(|value| value.checked_add(artifact.source_map.len()))
@@ -1661,6 +1687,46 @@ fn validate_runtime_modules(
         binding.name
       )));
     }
+  }
+  let provider_descriptors = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .filter_map(|definition| match definition {
+      crate::model::CompiledReusableInvocation::NotificationProvider {
+        script_artifact_id, ..
+      } => Some(script_artifact_id.as_str()),
+      _ => None,
+    })
+    .collect::<HashSet<_>>();
+  let mut provider_ids = HashSet::new();
+  for artifact in provider_artifacts {
+    let artifact_id = artifact.name.trim_start_matches("__woml_provider__");
+    total_bytes = total_bytes
+      .checked_add(artifact.bundle.len())
+      .and_then(|value| value.checked_add(artifact.source_map.len()))
+      .ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(
+          "custom-provider artifact byte count overflowed".to_string(),
+        )
+      })?;
+    if !provider_descriptors.contains(artifact_id)
+      || !provider_ids.insert(artifact_id)
+      || !artifact.exports.is_empty()
+      || !artifact.source_map.is_empty()
+      || sha256_identity(&artifact.bundle) != artifact.bundle_digest
+      || sha256_identity("") != artifact.source_map_digest
+      || artifact.bundle.len() > crate::durable::MAX_MODULE_ARTIFACT_BYTES
+    {
+      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+        "custom-provider artifact {artifact_id:?} failed its immutable identity or size check"
+      )));
+    }
+  }
+  if provider_ids.len() != provider_descriptors.len() {
+    return Err(RuntimeExecutionError::InvalidConfiguration(
+      "the custom-provider runtime artifacts do not match Model v14".to_string(),
+    ));
   }
   if total_bytes > crate::durable::MAX_MODULE_ARTIFACT_SET_BYTES {
     return Err(RuntimeExecutionError::InvalidConfiguration(
@@ -1874,6 +1940,7 @@ struct LifecycleNotificationDelivery<'a> {
   delivery_id: &'a str,
   provider: &'a str,
   destination: &'a str,
+  provider_id: Option<&'a str>,
   credentials: BTreeMap<String, String>,
   message: &'a ValueExpression,
 }
@@ -1905,13 +1972,14 @@ fn lifecycle_notification_deliveries(
         Some(ValueExpression::Literal { value }) => value.as_str(),
         _ => None,
       };
-      let ValueExpression::Object {
-        fields: credential_fields,
-      } = fields.get("credentials").ok_or_else(|| {
+      let credentials_expression = fields.get("credentials").ok_or_else(|| {
         RuntimeExecutionError::InvalidConfiguration(
           "lifecycle notification credentials are unavailable".to_string(),
         )
-      })?
+      })?;
+      let ValueExpression::Object {
+        fields: credential_fields,
+      } = credentials_expression
       else {
         return Err(RuntimeExecutionError::InvalidConfiguration(
           "lifecycle notification credentials are invalid".to_string(),
@@ -1942,6 +2010,7 @@ fn lifecycle_notification_deliveries(
             "lifecycle notification destination is unavailable".to_string(),
           )
         })?,
+        provider_id: literal("providerId"),
         credentials,
         message: fields.get("message").ok_or_else(|| {
           RuntimeExecutionError::InvalidConfiguration(
@@ -1949,6 +2018,115 @@ fn lifecycle_notification_deliveries(
           )
         })?,
       })
+    })
+    .collect()
+}
+
+fn reusable_provider_descriptor<'a>(
+  workflow: &'a CompiledWorkflowDefinition,
+  provider_id: &str,
+) -> Option<&'a CompiledReusableInvocation> {
+  workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .find(|definition| {
+      matches!(definition, CompiledReusableInvocation::NotificationProvider { provider_id: value, .. } if value == provider_id)
+    })
+}
+
+fn custom_provider_runtime_artifacts(
+  workflow: &CompiledWorkflowDefinition,
+  options: &RuntimeExecutionOptions,
+) -> Result<Vec<CustomProviderScriptArtifact>, LifecycleFailure> {
+  let mut seen = HashSet::new();
+  let mut artifacts = Vec::new();
+  for (definition_digest, script_artifact_id) in workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .filter_map(|definition| match definition {
+      CompiledReusableInvocation::NotificationProvider {
+        definition_digest,
+        script_artifact_id,
+        ..
+      } => Some((definition_digest, script_artifact_id)),
+      _ => None,
+    })
+  {
+    if !seen.insert(script_artifact_id.as_str()) {
+      continue;
+    }
+    let name = format!("__woml_provider__{script_artifact_id}");
+    let artifact = options
+      .runtime_modules
+      .iter()
+      .find(|artifact| artifact.name == name)
+      .ok_or_else(|| LifecycleFailure {
+        kind: LifecycleFailureKind::ProviderFailed,
+        code: "WOML_CUSTOM_PROVIDER_ARTIFACT_MISSING".to_string(),
+        message: "The immutable custom provider artifact is unavailable.".to_string(),
+      })?;
+    artifacts.push(CustomProviderScriptArtifact {
+      script_artifact_id: script_artifact_id.clone(),
+      definition_digest: definition_digest.clone(),
+      source: artifact.bundle.clone(),
+    });
+  }
+  Ok(artifacts)
+}
+
+fn custom_lifecycle_props(
+  descriptor: &CompiledReusableInvocation,
+  context: &WorkflowContext,
+  secrets: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, Value>, LifecycleFailure> {
+  let CompiledReusableInvocation::NotificationProvider { props, .. } = descriptor else {
+    return Err(LifecycleFailure {
+      kind: LifecycleFailureKind::ProviderFailed,
+      code: "WOML_CUSTOM_PROVIDER_DESCRIPTOR_INVALID".to_string(),
+      message: "The lifecycle delivery does not reference a custom provider.".to_string(),
+    });
+  };
+  props
+    .iter()
+    .map(|prop| {
+      let value = match &prop.expression {
+        crate::model::CompiledReusablePropExpression::Literal { value } => {
+          Value::String(value.clone())
+        }
+        crate::model::CompiledReusablePropExpression::Context { path } => {
+          let path = path
+            .split('.')
+            .map(|segment| {
+              if segment == "payload" {
+                "trigger".to_string()
+              } else {
+                segment.to_string()
+              }
+            })
+            .collect::<Vec<_>>();
+          resolve_context_reference(&ValueExpression::ContextReference { path }, context).map_err(
+            |_| LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: "WOML_CUSTOM_PROVIDER_PROP_UNAVAILABLE".to_string(),
+              message: format!("Custom provider prop {:?} is unavailable.", prop.name),
+            },
+          )?
+        }
+        crate::model::CompiledReusablePropExpression::Secret { name } => Value::String(
+          secrets
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .ok_or_else(|| LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: "WOML_CUSTOM_PROVIDER_SECRET_UNAVAILABLE".to_string(),
+              message: format!("Required custom provider secret {name:?} is unavailable."),
+            })?,
+        ),
+      };
+      Ok((prop.binding_name.clone(), value))
     })
     .collect()
 }
@@ -2039,6 +2217,29 @@ fn render_lifecycle_notification_message(
     });
   }
   Ok(rendered)
+}
+
+enum LifecycleProviderExecution {
+  Succeeded {
+    duration_ms: f64,
+    receipt: Vec<u8>,
+    metadata: Map<String, Value>,
+  },
+  Failed {
+    duration_ms: f64,
+    failure: CapabilityFailure,
+    lifecycle: LifecycleFailure,
+    retryable: bool,
+  },
+}
+
+fn custom_provider_failure_kind(kind: crate::CustomProviderFailureKind) -> CapabilityFailureKind {
+  match kind {
+    crate::CustomProviderFailureKind::DeliveryAmbiguous => CapabilityFailureKind::Ambiguous,
+    crate::CustomProviderFailureKind::HostCrashed
+    | crate::CustomProviderFailureKind::WorkerCrashed => CapabilityFailureKind::HostCrashed,
+    _ => CapabilityFailureKind::TransportFailed,
+  }
 }
 
 fn notification_capability_failure(
@@ -2241,21 +2442,58 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
     code: "WOML_NOTIFICATION_REQUEST_INVALID".to_string(),
     message: error.to_string(),
   })?;
-  let host_options = options
-    .notification_host
-    .clone()
-    .ok_or_else(|| LifecycleFailure {
-      kind: LifecycleFailureKind::HostCrashed,
-      code: "WOML_NOTIFICATION_HOST_UNAVAILABLE".to_string(),
-      message: "The informational notification provider host is not configured.".to_string(),
-    })?;
-  let host = NotificationHostClient::spawn(host_options)
-    .await
-    .map_err(|error| LifecycleFailure {
-      kind: LifecycleFailureKind::HostCrashed,
-      code: "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
-      message: error.to_string(),
-    })?;
+  let has_slack = deliveries
+    .iter()
+    .any(|delivery| delivery.provider == "slack");
+  let has_custom = deliveries
+    .iter()
+    .any(|delivery| delivery.provider == "custom");
+  let host = if has_slack {
+    let host_options = options
+      .notification_host
+      .clone()
+      .ok_or_else(|| LifecycleFailure {
+        kind: LifecycleFailureKind::HostCrashed,
+        code: "WOML_NOTIFICATION_HOST_UNAVAILABLE".to_string(),
+        message: "The informational notification provider host is not configured.".to_string(),
+      })?;
+    Some(
+      NotificationHostClient::spawn(host_options)
+        .await
+        .map_err(|error| LifecycleFailure {
+          kind: LifecycleFailureKind::HostCrashed,
+          code: "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
+          message: error.to_string(),
+        })?,
+    )
+  } else {
+    None
+  };
+  let custom_host = if has_custom {
+    let path = options
+      .custom_notification_host_path
+      .clone()
+      .ok_or_else(|| LifecycleFailure {
+        kind: LifecycleFailureKind::HostCrashed,
+        code: "WOML_CUSTOM_PROVIDER_HOST_UNAVAILABLE".to_string(),
+        message: "The custom notification provider host is not configured.".to_string(),
+      })?;
+    let artifacts = custom_provider_runtime_artifacts(engine.workflow(), options)?;
+    Some(
+      CustomNotificationHostClient::spawn(
+        CustomNotificationHostProcessOptions::new(options.script_host.bun_executable.clone(), path)
+          .with_artifacts(artifacts),
+      )
+      .await
+      .map_err(|error| LifecycleFailure {
+        kind: LifecycleFailureKind::HostCrashed,
+        code: "WOML_CUSTOM_PROVIDER_HOST_CRASHED".to_string(),
+        message: error.to_string(),
+      })?,
+    )
+  } else {
+    None
+  };
   let action_key = step_effect_idempotency_key(run_id, engine.definition_hash(), &action.action_id);
   let mut failures = Vec::new();
 
@@ -2268,16 +2506,42 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
         continue;
       }
     };
-    let credentials = match NotificationCredentials::from_symbolic(&delivery.credentials) {
-      Ok(credentials) => credentials,
-      Err(message) => {
+    let credentials = if delivery.provider == "slack" {
+      match NotificationCredentials::from_symbolic(&delivery.credentials) {
+        Ok(credentials) => Some(credentials),
+        Err(message) => {
+          failures.push(LifecycleFailure {
+            kind: LifecycleFailureKind::ProviderFailed,
+            code: "WOML_NOTIFICATION_REQUEST_INVALID".to_string(),
+            message,
+          });
+          continue;
+        }
+      }
+    } else {
+      None
+    };
+    let custom_descriptor = if delivery.provider == "custom" {
+      let Some(provider_id) = delivery.provider_id else {
         failures.push(LifecycleFailure {
           kind: LifecycleFailureKind::ProviderFailed,
-          code: "WOML_NOTIFICATION_REQUEST_INVALID".to_string(),
-          message,
+          code: "WOML_CUSTOM_PROVIDER_DESCRIPTOR_INVALID".to_string(),
+          message: "The lifecycle delivery has no custom provider identity.".to_string(),
         });
         continue;
-      }
+      };
+      let Some(descriptor) = reusable_provider_descriptor(engine.workflow(), provider_id).cloned()
+      else {
+        failures.push(LifecycleFailure {
+          kind: LifecycleFailureKind::ProviderFailed,
+          code: "WOML_CUSTOM_PROVIDER_DESCRIPTOR_INVALID".to_string(),
+          message: "The custom lifecycle provider descriptor is unavailable.".to_string(),
+        });
+        continue;
+      };
+      Some(descriptor)
+    } else {
+      None
     };
     let operation_key = crate::derive_operation_key(&action_key, delivery.delivery_id);
     let mut delivered = false;
@@ -2313,146 +2577,261 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
           code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
           message: error.to_string(),
         })?;
-      let request = InformationalNotificationDeliverMessage {
-        protocol: NOTIFICATION_PROVIDER_PROTOCOL,
-        protocol_version: INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
-        message_type: "deliver",
-        mode: "informational",
-        invocation_id: invocation_id.clone(),
-        run_id: run_id.to_string(),
-        hook_invocation_id: hook_invocation_id.to_string(),
-        action_id: action.action_id.clone(),
-        delivery_id: delivery.delivery_id.to_string(),
-        provider: delivery.provider.to_string(),
-        destination: delivery.destination.to_string(),
-        idempotency_key: operation_key.clone(),
-        credentials: credentials.clone(),
-        message: message.clone(),
-      };
-      match host.invoke(&invocation_id, &request).await {
-        Ok(completed) => match completed.outcome {
-          NotificationHostOutcome::DeliverySuccess { provider_message } => {
-            let encoded = serde_json::to_vec(&provider_message).unwrap_or_default();
-            let mut metadata = Map::new();
-            metadata.insert(
-              "provider".to_string(),
-              Value::String(delivery.provider.to_string()),
-            );
-            metadata.insert(
-              "destination".to_string(),
-              Value::String(delivery.destination.to_string()),
-            );
-            metadata.insert("providerAttempt".to_string(), Value::from(provider_attempt));
-            metadata.insert(
-              "workspaceId".to_string(),
-              Value::String(provider_message.workspace_id),
-            );
-            metadata.insert(
-              "channelId".to_string(),
-              Value::String(provider_message.channel_id),
-            );
-            metadata.insert(
-              "providerMessageId".to_string(),
-              Value::String(provider_message.message_id),
-            );
-            engine
-              .append_payload(
-                run_id,
-                RunEventPayload::OperationSucceeded(OperationSucceededData {
-                  node_id: action.action_id.clone(),
-                  attempt_number: 1,
-                  invocation_id,
-                  call_id: delivery.delivery_id.to_string(),
-                  operation_key: operation_key.clone(),
-                  capability: "notifications".to_string(),
-                  operation: "deliver".to_string(),
-                  execution_mode: OperationExecutionMode::Managed,
-                  metadata,
-                  duration_ms: completed.duration_ms,
-                  result_bytes: encoded.len() as u64,
-                  result_digest: format!("sha256:{}", hex::encode(Sha256::digest(&encoded))),
-                }),
-              )
-              .map_err(|error| LifecycleFailure {
-                kind: LifecycleFailureKind::ProviderFailed,
-                code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
-                message: error.to_string(),
-              })?;
-            delivered = true;
-            break;
-          }
-          NotificationHostOutcome::Failure { error } => {
-            let retry = error.retryable && provider_attempt < 3;
-            let capability_failure = notification_capability_failure(
-              if error.kind == "delivery_ambiguous" {
-                CapabilityFailureKind::Ambiguous
-              } else {
-                CapabilityFailureKind::TransportFailed
-              },
-              error.code.clone(),
-              error.message.clone(),
-              error.retryable,
-              error.kind == "delivery_ambiguous",
-            );
-            engine
-              .append_payload(
-                run_id,
-                RunEventPayload::OperationFailed(OperationFailedData {
-                  node_id: action.action_id.clone(),
-                  attempt_number: 1,
-                  invocation_id,
-                  call_id: delivery.delivery_id.to_string(),
-                  operation_key: operation_key.clone(),
-                  capability: "notifications".to_string(),
-                  operation: "deliver".to_string(),
-                  execution_mode: OperationExecutionMode::Managed,
-                  metadata: Map::new(),
-                  duration_ms: completed.duration_ms,
-                  failure: capability_failure,
-                }),
-              )
-              .map_err(|event_error| LifecycleFailure {
-                kind: LifecycleFailureKind::ProviderFailed,
-                code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
-                message: event_error.to_string(),
-              })?;
-            if retry {
-              if let Some(delay) = error.retry_after_ms {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
+      let execution = if let Some(descriptor) = custom_descriptor.as_ref() {
+        let CompiledReusableInvocation::NotificationProvider {
+          definition_digest,
+          script_artifact_id,
+          ..
+        } = descriptor
+        else {
+          unreachable!()
+        };
+        let request = CustomProviderExecuteMessage {
+          protocol: CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL.to_string(),
+          protocol_version: CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+          message_type: "execute".to_string(),
+          invocation_id: invocation_id.clone(),
+          definition_digest: definition_digest.clone(),
+          script_artifact_id: script_artifact_id.clone(),
+          props: custom_lifecycle_props(descriptor, context, &options.resolved_secrets)?,
+          notification: CustomNotificationRequest {
+            kind: CustomNotificationKind::Informational,
+            message: message.clone(),
+            delivery_id: delivery.delivery_id.to_string(),
+            idempotency_key: operation_key.clone(),
+            actions: None,
+          },
+          attempt: CustomProviderAttempt {
+            number: provider_attempt,
+            max: 3,
+          },
+          limits: CustomProviderLimits {
+            timeout_ms: 30_000,
+            max_result_bytes: 16_384,
+          },
+        };
+        match custom_host
+          .as_ref()
+          .expect("custom host")
+          .invoke(&request)
+          .await
+        {
+          Ok(completed) => match completed.outcome {
+            CustomProviderOutcome::Succeeded { receipt } => {
+              let encoded = serde_json::to_vec(&receipt).unwrap_or_default();
+              let mut metadata = Map::new();
+              if let Some(message_id) = receipt.message_id {
+                metadata.insert("providerMessageId".to_string(), Value::String(message_id));
               }
-              continue;
+              LifecycleProviderExecution::Succeeded {
+                duration_ms: completed.duration_ms,
+                receipt: encoded,
+                metadata,
+              }
             }
-            failures.push(LifecycleFailure {
-              kind: LifecycleFailureKind::ProviderFailed,
-              code: error.code,
-              message: error.message,
-            });
-            break;
-          }
-          NotificationHostOutcome::UpdateSuccess => {
-            failures.push(LifecycleFailure {
-              kind: LifecycleFailureKind::ProviderFailed,
-              code: "WOML_NOTIFICATION_PROTOCOL_INVALID".to_string(),
-              message: "Informational notification delivery returned an update result.".to_string(),
-            });
-            break;
-          }
-        },
-        Err(error) => {
-          let capability_failure = notification_capability_failure(
-            match error {
-              NotificationHostClientError::HostCrashed(_)
-              | NotificationHostClientError::Startup(_) => CapabilityFailureKind::HostCrashed,
-              NotificationHostClientError::Protocol(_)
-              | NotificationHostClientError::InteractionTimedOut => {
-                CapabilityFailureKind::TransportFailed
+            CustomProviderOutcome::Failed { error } => {
+              let ambiguous = matches!(
+                error.kind,
+                crate::CustomProviderFailureKind::DeliveryAmbiguous
+                  | crate::CustomProviderFailureKind::HostCrashed
+                  | crate::CustomProviderFailureKind::WorkerCrashed
+              );
+              let retryable = error.retryable && !ambiguous;
+              LifecycleProviderExecution::Failed {
+                duration_ms: completed.duration_ms,
+                failure: notification_capability_failure(
+                  custom_provider_failure_kind(error.kind),
+                  error.code.clone(),
+                  error.message.clone(),
+                  retryable,
+                  ambiguous,
+                ),
+                lifecycle: LifecycleFailure {
+                  kind: LifecycleFailureKind::ProviderFailed,
+                  code: error.code,
+                  message: error.message,
+                },
+                retryable,
               }
+            }
+          },
+          Err(error) => LifecycleProviderExecution::Failed {
+            duration_ms: 0.0,
+            failure: notification_capability_failure(
+              CapabilityFailureKind::HostCrashed,
+              "WOML_CUSTOM_PROVIDER_HOST_CRASHED".to_string(),
+              "The custom provider host stopped during an uncertain delivery.".to_string(),
+              false,
+              true,
+            ),
+            lifecycle: LifecycleFailure {
+              kind: LifecycleFailureKind::HostCrashed,
+              code: "WOML_CUSTOM_PROVIDER_HOST_CRASHED".to_string(),
+              message: match error {
+                CustomNotificationHostClientError::Protocol(_) => {
+                  "The custom provider returned an invalid response.".to_string()
+                }
+                _ => "The custom provider host stopped during delivery.".to_string(),
+              },
             },
-            "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
-            error.to_string(),
-            false,
-            true,
+            retryable: false,
+          },
+        }
+      } else {
+        let request = InformationalNotificationDeliverMessage {
+          protocol: NOTIFICATION_PROVIDER_PROTOCOL,
+          protocol_version: INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+          message_type: "deliver",
+          mode: "informational",
+          invocation_id: invocation_id.clone(),
+          run_id: run_id.to_string(),
+          hook_invocation_id: hook_invocation_id.to_string(),
+          action_id: action.action_id.clone(),
+          delivery_id: delivery.delivery_id.to_string(),
+          provider: delivery.provider.to_string(),
+          destination: delivery.destination.to_string(),
+          idempotency_key: operation_key.clone(),
+          credentials: credentials.clone().expect("Slack credentials"),
+          message: message.clone(),
+        };
+        match host
+          .as_ref()
+          .expect("Slack host")
+          .invoke(&invocation_id, &request)
+          .await
+        {
+          Ok(completed) => match completed.outcome {
+            NotificationHostOutcome::DeliverySuccess { provider_message } => {
+              let encoded = serde_json::to_vec(&provider_message).unwrap_or_default();
+              let mut metadata = Map::new();
+              metadata.insert(
+                "workspaceId".to_string(),
+                Value::String(provider_message.workspace_id),
+              );
+              metadata.insert(
+                "channelId".to_string(),
+                Value::String(provider_message.channel_id),
+              );
+              metadata.insert(
+                "providerMessageId".to_string(),
+                Value::String(provider_message.message_id),
+              );
+              LifecycleProviderExecution::Succeeded {
+                duration_ms: completed.duration_ms,
+                receipt: encoded,
+                metadata,
+              }
+            }
+            NotificationHostOutcome::Failure { error } => {
+              let ambiguous = error.kind == "delivery_ambiguous";
+              LifecycleProviderExecution::Failed {
+                duration_ms: completed.duration_ms,
+                failure: notification_capability_failure(
+                  if ambiguous {
+                    CapabilityFailureKind::Ambiguous
+                  } else {
+                    CapabilityFailureKind::TransportFailed
+                  },
+                  error.code.clone(),
+                  error.message.clone(),
+                  error.retryable,
+                  ambiguous,
+                ),
+                lifecycle: LifecycleFailure {
+                  kind: LifecycleFailureKind::ProviderFailed,
+                  code: error.code,
+                  message: error.message,
+                },
+                retryable: error.retryable && !ambiguous,
+              }
+            }
+            NotificationHostOutcome::UpdateSuccess => LifecycleProviderExecution::Failed {
+              duration_ms: completed.duration_ms,
+              failure: notification_capability_failure(
+                CapabilityFailureKind::TransportFailed,
+                "WOML_NOTIFICATION_PROTOCOL_INVALID".to_string(),
+                "Informational delivery returned an update result.".to_string(),
+                false,
+                false,
+              ),
+              lifecycle: LifecycleFailure {
+                kind: LifecycleFailureKind::ProviderFailed,
+                code: "WOML_NOTIFICATION_PROTOCOL_INVALID".to_string(),
+                message: "Informational notification delivery returned an update result."
+                  .to_string(),
+              },
+              retryable: false,
+            },
+          },
+          Err(error) => LifecycleProviderExecution::Failed {
+            duration_ms: 0.0,
+            failure: notification_capability_failure(
+              match error {
+                NotificationHostClientError::HostCrashed(_)
+                | NotificationHostClientError::Startup(_) => CapabilityFailureKind::HostCrashed,
+                _ => CapabilityFailureKind::TransportFailed,
+              },
+              "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
+              error.to_string(),
+              false,
+              true,
+            ),
+            lifecycle: LifecycleFailure {
+              kind: LifecycleFailureKind::HostCrashed,
+              code: "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
+              message: error.to_string(),
+            },
+            retryable: false,
+          },
+        }
+      };
+      match execution {
+        LifecycleProviderExecution::Succeeded {
+          duration_ms,
+          receipt,
+          mut metadata,
+        } => {
+          metadata.insert(
+            "provider".to_string(),
+            Value::String(delivery.provider.to_string()),
           );
+          metadata.insert(
+            "destination".to_string(),
+            Value::String(delivery.destination.to_string()),
+          );
+          metadata.insert("providerAttempt".to_string(), Value::from(provider_attempt));
+          engine
+            .append_payload(
+              run_id,
+              RunEventPayload::OperationSucceeded(OperationSucceededData {
+                node_id: action.action_id.clone(),
+                attempt_number: 1,
+                invocation_id,
+                call_id: delivery.delivery_id.to_string(),
+                operation_key: operation_key.clone(),
+                capability: "notifications".to_string(),
+                operation: "deliver".to_string(),
+                execution_mode: OperationExecutionMode::Managed,
+                metadata,
+                duration_ms,
+                result_bytes: receipt.len() as u64,
+                result_digest: format!("sha256:{}", hex::encode(Sha256::digest(&receipt))),
+              }),
+            )
+            .map_err(|error| LifecycleFailure {
+              kind: LifecycleFailureKind::ProviderFailed,
+              code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
+              message: error.to_string(),
+            })?;
+          delivered = true;
+          break;
+        }
+        LifecycleProviderExecution::Failed {
+          duration_ms,
+          failure,
+          lifecycle,
+          retryable,
+        } => {
           engine
             .append_payload(
               run_id,
@@ -2466,20 +2845,25 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
                 operation: "deliver".to_string(),
                 execution_mode: OperationExecutionMode::Managed,
                 metadata: Map::new(),
-                duration_ms: 0.0,
-                failure: capability_failure,
+                duration_ms,
+                failure,
               }),
             )
-            .map_err(|event_error| LifecycleFailure {
+            .map_err(|error| LifecycleFailure {
               kind: LifecycleFailureKind::ProviderFailed,
               code: "WOML_NOTIFICATION_EVENT_FAILED".to_string(),
-              message: event_error.to_string(),
+              message: error.to_string(),
             })?;
-          failures.push(LifecycleFailure {
-            kind: LifecycleFailureKind::HostCrashed,
-            code: "WOML_NOTIFICATION_HOST_CRASHED".to_string(),
-            message: error.to_string(),
-          });
+          if retryable && provider_attempt < 3 {
+            tokio::time::sleep(Duration::from_secs(if provider_attempt == 1 {
+              1
+            } else {
+              5
+            }))
+            .await;
+            continue;
+          }
+          failures.push(lifecycle);
           break;
         }
       }
@@ -2488,11 +2872,16 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
       failures.push(LifecycleFailure {
         kind: LifecycleFailureKind::ProviderFailed,
         code: "WOML_NOTIFICATION_DELIVERY_FAILED".to_string(),
-        message: "Slack lifecycle notification delivery failed.".to_string(),
+        message: "Lifecycle notification delivery failed.".to_string(),
       });
     }
   }
-  host.shutdown().await;
+  if let Some(host) = host {
+    host.shutdown().await;
+  }
+  if let Some(host) = custom_host {
+    host.shutdown().await;
+  }
   if failures.is_empty() {
     Ok(())
   } else {
@@ -2505,7 +2894,7 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
         first.message
       } else {
         format!(
-          "{failed} Slack lifecycle deliveries failed. First failure: {}",
+          "{failed} lifecycle deliveries failed. First failure: {}",
           first.message
         )
       },
@@ -2901,6 +3290,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
     let modules = options
       .runtime_modules
       .iter()
+      .filter(|module| !module.name.starts_with("__woml_provider__"))
       .map(|module| RuntimeModuleBinding {
         name: module.name.clone(),
         bundle_digest: module.bundle_digest.clone(),
@@ -4244,6 +4634,7 @@ async fn execute_fork<E: RuntimeDagEngine>(
             module_bindings: options
               .runtime_modules
               .iter()
+              .filter(|module| !module.name.starts_with("__woml_provider__"))
               .map(|module| RuntimeModuleBinding {
                 name: module.name.clone(),
                 bundle_digest: module.bundle_digest.clone(),
@@ -4638,6 +5029,7 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
             module_bindings: options
               .runtime_modules
               .iter()
+              .filter(|module| !module.name.starts_with("__woml_provider__"))
               .map(|module| RuntimeModuleBinding {
                 name: module.name.clone(),
                 bundle_digest: module.bundle_digest.clone(),
@@ -5003,6 +5395,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   let module_bindings = options
     .runtime_modules
     .iter()
+    .filter(|module| !module.name.starts_with("__woml_provider__"))
     .map(|module| RuntimeModuleBinding {
       name: module.name.clone(),
       bundle_digest: module.bundle_digest.clone(),

@@ -57,6 +57,7 @@ import {
   NotificationProviderError,
   type NotificationJourneyDiagnostics,
   resolveApprovalWithRust,
+  resolveNotificationApprovalWithRust,
   resumeApprovalWorkflowWithRust,
   resumeWorkflowWithRustDurable,
   RustWorkflowExecutionError,
@@ -1247,6 +1248,17 @@ function promoteForLifecycleAuthority(
 function workflowCallFrontendOnlySource(
   source: CompiledWorkflowSource
 ): boolean {
+  if (
+    source.workflow.schemaVersion === 14 &&
+    (source.workflow.reusableDefinitions?.length ?? 0) > 0
+  ) {
+    return (
+      source.workflow.triggers.length === 0 ||
+      source.workflow.graph.nodes.some(node =>
+        JSON.stringify(node.inputs).includes('services.workflows')
+      )
+    );
+  }
   return (
     source.workflow.triggers.length === 0 ||
     inspectWomlModuleUsage(source.document).referencedServices.includes(
@@ -1262,7 +1274,7 @@ function runtimeModulesFromPackage(
     | WomlDefinitionPackageV7
     | WomlDefinitionPackageV9
 ): readonly RustRuntimeModuleArtifact[] {
-  return definitionPackage.modules.map(module => {
+  const modules = definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
       artifact => artifact.path === module.bundle.path
     );
@@ -1283,6 +1295,36 @@ function runtimeModulesFromPackage(
       sourceMap: sourceMap.content,
     };
   });
+  if (definitionPackage.schemaVersion !== 9) return modules;
+  const seen = new Set<string>();
+  const providerArtifacts = (definitionPackage.workflow.model.reusableDefinitions ?? [])
+    .filter(
+      definition =>
+        definition.kind === 'notification-provider' &&
+        !seen.has(definition.scriptArtifactId) &&
+        seen.add(definition.scriptArtifactId)
+    )
+    .map(definition => {
+      const artifact = definitionPackage.artifacts.find(
+        item => item.path === `definitions/${definition.scriptArtifactId}.js`
+      );
+      if (artifact?.kind !== 'module-bundle') {
+        throw new Error(
+          `Custom provider artifact "${definition.scriptArtifactId}" is unavailable.`
+        );
+      }
+      return {
+        name: `__woml_provider__${definition.scriptArtifactId}`,
+        bundleDigest: artifact.digest,
+        sourceMapDigest: sourceDigest(''),
+        exports: [] as readonly string[],
+        bundle: artifact.content,
+        sourceMap: '',
+      };
+    });
+  return [...modules, ...providerArtifacts].sort((left, right) =>
+    left.name.localeCompare(right.name)
+  );
 }
 
 async function workflowFilePaths(
@@ -1356,40 +1398,59 @@ async function compileWorkflowSources(
           io
         );
       }
-      assertWomlDocumentRunnable(document);
+      if (
+        reusableGraph.definitions.some(
+          definition => definition.kind === 'reusable-step'
+        )
+      ) {
+        assertWomlDocumentRunnable(document);
+      }
     }
-    const inspected = buildWomlDefinitionPackage(document, {
-      sourcePath: filePath,
-      projectRoot,
-    });
-    if (inspected.modules.length > 0) {
+    const inspected =
+      reusableGraph.definitions.length === 0
+        ? buildWomlDefinitionPackage(document, {
+            sourcePath: filePath,
+            projectRoot,
+          })
+        : undefined;
+    if (inspected !== undefined && inspected.modules.length > 0) {
       inspectWomlModuleServiceUsage(document, {
         sourcePath: filePath,
         projectRoot,
       });
     }
-    const executablePackage =
-      inspected.modules.length > 0
-        ? await buildWomlExecutableDefinitionPackage(document, {
+    const reusablePackage =
+      reusableGraph.definitions.length > 0
+        ? await buildWomlReusableDefinitionPackage(document, reusableGraph, {
             sourcePath: filePath,
             projectRoot,
           })
         : undefined;
+    const executablePackage =
+      reusablePackage ?? (inspected!.modules.length > 0
+        ? await buildWomlExecutableDefinitionPackage(document, {
+            sourcePath: filePath,
+            projectRoot,
+          })
+        : undefined);
     // Definition Package v7 is the frozen Model v12 compilation identity. RP6
     // promotes its exact reviewed artifacts directly at activation time rather
     // than mutating that immutable package into a second public shape.
     const runtimePackage =
-      executablePackage?.schemaVersion === 7
+      reusablePackage !== undefined
+        ? reusablePackage
+        : executablePackage?.schemaVersion === 7
         ? executablePackage
-        : inspected.modules.length > 0
+        : inspected!.modules.length > 0
           ? await buildWomlRuntimeDefinitionPackage(document, {
               sourcePath: filePath,
               projectRoot,
             })
           : undefined;
-    const packageSources = runtimePackage?.sources ?? inspected.sources;
+    const packageSources = runtimePackage?.sources ?? inspected!.sources;
     if (
       runtimePackage !== undefined &&
+      inspected !== undefined &&
       !samePackageSources(inspected.sources, runtimePackage.sources)
     ) {
       throw new CliInputError(
@@ -1397,8 +1458,7 @@ async function compileWorkflowSources(
         `workflow or module source changed while "${filePath}" was being compiled; run the command again.`
       );
     }
-    const frontendWorkflow =
-      runtimePackage?.workflow.model ?? compileWoml(document);
+    const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
@@ -1414,7 +1474,10 @@ async function compileWorkflowSources(
         path: resolve(projectRoot, item.path),
         digest: item.digest,
       })),
-      migrationDiagnostics: inspectWomlMigrationDiagnostics(document),
+      migrationDiagnostics:
+        reusableGraph.definitions.length === 0
+          ? inspectWomlMigrationDiagnostics(document)
+          : [],
     });
   }
   const workflowIds = new Set<string>();
@@ -1501,6 +1564,24 @@ async function compileWorkflowInputs(
     }
   }
   return compiled;
+}
+
+function assertReusableRuntimeSupported(
+  sources: readonly CompiledWorkflowSource[]
+): void {
+  for (const source of sources) {
+    if (source.workflow.schemaVersion !== 14) continue;
+    const definition = source.workflow.reusableDefinitions?.find(
+      item =>
+        item.kind === 'notification-provider' && item.lifecycle !== undefined
+    );
+    if (definition !== undefined) {
+      throw new CliInputError(
+        'WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE',
+        `custom notification provider <${definition.alias}> declares reusable lifecycle hooks, whose durable execution authority is not available because the custom-step lifecycle phase was skipped. Remove the provider definition's <lifecycle> for now; workflow lifecycle notifications remain executable.`
+      );
+    }
+  }
 }
 
 export function activationIdentity(
@@ -1682,7 +1763,7 @@ async function runSingleCheckCommand(
       }
       io.stdout(
         reusablePackage !== undefined
-          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: reusable artifacts are ready; custom steps execute from SCP4 and custom providers from SCP6.\n`
+          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom notification providers are runnable; reusable step execution remains unavailable.\n`
           : reusableGraph.root.kind === 'workflow'
             ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
           : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
@@ -2192,6 +2273,17 @@ function workflowSecretReferences(
       references.push({ kind: 'secretReference', name });
     }
   }
+  for (const definition of
+    workflow.schemaVersion === 14
+      ? (workflow.reusableDefinitions ?? [])
+      : []) {
+    if (definition.kind !== 'notification-provider') continue;
+    for (const prop of definition.props) {
+      if (prop.expression.kind === 'secret') {
+        references.push({ kind: 'secretReference', name: prop.expression.name });
+      }
+    }
+  }
   return references;
 }
 
@@ -2212,14 +2304,14 @@ function workflowHasNotifications(
   );
 }
 
-function printSlackApproval(
+function printNotificationApproval(
   io: CliIo,
   outcome: Extract<RustApprovalRuntimeOutcome, { status: 'waiting' }>,
   filePath: string,
   statePath: string
 ): void {
   const approval = outcome.approval;
-  io.stderr('\nWOML workflow is waiting for approval in Slack.\n');
+  io.stderr('\nWOML workflow is waiting for approval.\n');
   io.stderr(`Approval: ${approval.name ?? approval.approvalId}\n`);
   if (approval.description !== undefined)
     io.stderr(`${approval.description}\n`);
@@ -2229,7 +2321,7 @@ function printSlackApproval(
     `Deadline: ${approval.expiresAt ?? 'none'} (${approval.onTimeout} on timeout)\n`
   );
   io.stderr(
-    'Sending Slack notifications; approve or reject from any configured channel.\n'
+    'Sending notifications; approve or reject from any configured provider.\n'
   );
   io.stderr(
     `Recovery: woml run ${JSON.stringify(filePath)} --state ${JSON.stringify(
@@ -2281,16 +2373,70 @@ async function runNotificationWorkflow(
         );
   while (outcome.status === 'waiting') {
     const waiting = outcome;
-    printSlackApproval(io, waiting, args.filePath, args.statePath);
-    const journey = await runNotificationProviderJourneyWithRust(
-      args.statePath,
-      waiting.runId,
-      {
-        notificationHostPath: dependencies.notificationHostPath,
-        nativeCorePath: dependencies.nativeCorePath,
-        interactionTimeoutMs: providerWaitMilliseconds(waiting),
+    printNotificationApproval(io, waiting, args.filePath, args.statePath);
+    const hasCustomProvider =
+      workflow.schemaVersion === 14 &&
+      (workflow.reusableDefinitions ?? []).some(
+        definition => definition.kind === 'notification-provider'
+      );
+    let journey;
+    if (hasCustomProvider) {
+      const controller = new AbortController();
+      let announceOrigin!: (origin: string) => void;
+      const originReady = new Promise<string>(resolveOrigin => {
+        announceOrigin = resolveOrigin;
+      });
+      const server = serveApprovalAndWait({
+        outcome: waiting,
+        port: args.approvalPort,
+        signal: controller.signal,
+        onDecision: (token, decision) =>
+          resolveApprovalWithRust(args.statePath, token, decision),
+        onNotificationDecision: (capability, decision) =>
+          resolveNotificationApprovalWithRust(
+            args.statePath,
+            capability,
+            decision,
+            { nativeCorePath: dependencies.nativeCorePath }
+          ),
+        onTimeout: (waitingRunId, approvalId) =>
+          settleApprovalTimeoutWithRust(
+            args.statePath,
+            waitingRunId,
+            approvalId
+          ),
+        onListening: url => announceOrigin(new URL(url).origin),
+      });
+      const approvalBaseUrl = await originReady;
+      try {
+        journey = await runNotificationProviderJourneyWithRust(
+          args.statePath,
+          waiting.runId,
+          {
+            notificationHostPath: dependencies.notificationHostPath,
+            customNotificationHostPath:
+              dependencies.customNotificationHostPath,
+            nativeCorePath: dependencies.nativeCorePath,
+            approvalBaseUrl,
+            resolvedSecrets: secrets,
+            interactionTimeoutMs: providerWaitMilliseconds(waiting),
+          }
+        );
+      } finally {
+        controller.abort();
+        await server;
       }
-    );
+    } else {
+      journey = await runNotificationProviderJourneyWithRust(
+        args.statePath,
+        waiting.runId,
+        {
+          notificationHostPath: dependencies.notificationHostPath,
+          nativeCorePath: dependencies.nativeCorePath,
+          interactionTimeoutMs: providerWaitMilliseconds(waiting),
+        }
+      );
+    }
     printNotificationWarnings(io, journey.diagnostics);
     outcome = await resumeApprovalWorkflowWithRust(
       workflow,
@@ -2358,16 +2504,53 @@ async function resumeStoredRun(
   while (outcome.status === 'waiting') {
     const waiting = outcome;
     if (requirements.hasNotifications) {
-      printSlackApproval(io, waiting, args.filePath, args.statePath);
-      const journey = await runNotificationProviderJourneyWithRust(
-        args.statePath,
-        waiting.runId,
-        {
-          notificationHostPath: dependencies.notificationHostPath,
-          nativeCorePath: dependencies.nativeCorePath,
-          interactionTimeoutMs: providerWaitMilliseconds(waiting),
-        }
-      );
+      printNotificationApproval(io, waiting, args.filePath, args.statePath);
+      const controller = new AbortController();
+      let announceOrigin!: (origin: string) => void;
+      const originReady = new Promise<string>(resolveOrigin => {
+        announceOrigin = resolveOrigin;
+      });
+      const server = serveApprovalAndWait({
+        outcome: waiting,
+        port: args.approvalPort,
+        signal: controller.signal,
+        onDecision: (token, decision) =>
+          resolveApprovalWithRust(args.statePath, token, decision),
+        onNotificationDecision: (capability, decision) =>
+          resolveNotificationApprovalWithRust(
+            args.statePath,
+            capability,
+            decision,
+            { nativeCorePath: dependencies.nativeCorePath }
+          ),
+        onTimeout: (waitingRunId, approvalId) =>
+          settleApprovalTimeoutWithRust(
+            args.statePath,
+            waitingRunId,
+            approvalId
+          ),
+        onListening: url => announceOrigin(new URL(url).origin),
+      });
+      const approvalBaseUrl = await originReady;
+      let journey;
+      try {
+        journey = await runNotificationProviderJourneyWithRust(
+          args.statePath,
+          waiting.runId,
+          {
+            notificationHostPath: dependencies.notificationHostPath,
+            customNotificationHostPath:
+              dependencies.customNotificationHostPath,
+            nativeCorePath: dependencies.nativeCorePath,
+            approvalBaseUrl,
+            resolvedSecrets: secrets,
+            interactionTimeoutMs: providerWaitMilliseconds(waiting),
+          }
+        );
+      } finally {
+        controller.abort();
+        await server;
+      }
       printNotificationWarnings(io, journey.diagnostics);
     } else {
       await serveApprovalAndWait({
@@ -2402,9 +2585,14 @@ async function executeOneShot(
   runtimeModules: readonly RustRuntimeModuleArtifact[] = []
 ): Promise<void> {
   if (runtimeModules.length > 0) {
-    io.stderr(
-      `WOML modules ready: ${runtimeModules.map(module => `services.${module.name}`).join(', ')}.\n`
+    const publicModules = runtimeModules.filter(
+      module => !module.name.startsWith('__woml_provider__')
     );
+    if (publicModules.length > 0) {
+      io.stderr(
+        `WOML modules ready: ${publicModules.map(module => `services.${module.name}`).join(', ')}.\n`
+      );
+    }
   }
   const hasApproval = workflowHasApproval(workflow);
   const hasNotifications = workflowHasNotifications(workflow);
@@ -2989,9 +3177,14 @@ async function activateWorkflows(
       const store = dependencies.createSecretStore();
       for (const source of productionSources) {
         if (source.runtimeModules.length > 0) {
-          io.stderr(
-            `WOML modules ready for ${source.workflow.workflowId}: ${source.runtimeModules.map(module => `services.${module.name}`).join(', ')}.\n`
+          const publicModules = source.runtimeModules.filter(
+            module => !module.name.startsWith('__woml_provider__')
           );
+          if (publicModules.length > 0) {
+            io.stderr(
+              `WOML modules ready for ${source.workflow.workflowId}: ${publicModules.map(module => `services.${module.name}`).join(', ')}.\n`
+            );
+          }
         }
       }
       const eventRoutes = productionSources
@@ -3378,6 +3571,7 @@ export interface CliDependencies {
   readonly readSecret: (name: string) => Promise<string>;
   readonly waitForShutdown?: () => Promise<void>;
   readonly notificationHostPath?: string;
+  readonly customNotificationHostPath?: string;
   readonly nativeCorePath?: string;
   readonly createSlackTransport?: (
     options: SharedSlackTransportOptions
@@ -4145,6 +4339,7 @@ export async function runCli(
   let sources: readonly CompiledWorkflowSource[] | undefined;
   try {
     sources = await compileWorkflowInputs(inputPaths, io);
+    assertReusableRuntimeSupported(sources);
     printMigrationDiagnostics(
       io,
       sources.flatMap(source => source.migrationDiagnostics)

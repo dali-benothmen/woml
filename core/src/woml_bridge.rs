@@ -18,9 +18,10 @@ use woml_engine::{
   execute_workflow_durable_outcome, inspect_backup_store, last_retention_result, plan_retention,
   prepare_restored_store, record_verified_backup, recover_durable_runs,
   resolve_human_approval_durable, resume_workflow_durable, resume_workflow_durable_any_outcome,
-  resume_workflow_durable_outcome, run_notification_provider_journey,
+  resume_workflow_durable_outcome, run_notification_provider_journey_with_custom,
   settle_approval_timeout_durable, ApprovalDecision, ApprovalDecisionOutcome, BackupError,
-  CompiledWorkflowDefinition, DurableEventStore, DurableStoreError,
+  CompiledReusableInvocation, CompiledWorkflowDefinition, CustomNotificationJourneyOptions,
+  CustomProviderScriptArtifact, DurableEventStore, DurableStoreError,
   ExternalTriggerAdmissionCommand, IntervalProgress, IntervalProgressReporter, LifecycleProgress,
   NotificationHostClientError, NotificationHostProcessOptions, NotificationJourneyDiagnostics,
   NotificationJourneyError, ParallelFailurePolicy, RetentionError, RetentionPolicyV1, RunFailure,
@@ -1120,6 +1121,21 @@ pub fn inspect_woml_stored_run_requirements(
       .flat_map(|action| action.script_runtime.iter())
       .flat_map(|runtime| runtime.required_secrets.iter().cloned()),
   );
+  required_secrets.extend(
+    workflow
+      .reusable_definitions
+      .iter()
+      .flatten()
+      .filter_map(|definition| match definition {
+        CompiledReusableInvocation::NotificationProvider { props, .. } => Some(props),
+        _ => None,
+      })
+      .flatten()
+      .filter_map(|prop| match &prop.expression {
+        woml_engine::model::CompiledReusablePropExpression::Secret { name } => Some(name.clone()),
+        _ => None,
+      }),
+  );
   required_secrets.sort();
   required_secrets.dedup();
   let has_approval = workflow
@@ -1204,6 +1220,34 @@ pub fn resolve_woml_approval(
     &SystemEngineClock,
   )
   .map_err(native_approval_error)?;
+  serde_json::to_string(&NativeApprovalDecisionOutcome {
+    contract: "woml.approval-http",
+    version: 1,
+    outcome,
+  })
+  .map_err(|error| napi::Error::from_reason(format!("Could not encode approval decision: {error}")))
+}
+
+#[napi]
+pub fn resolve_woml_notification_approval(
+  event_store_path: String,
+  capability: String,
+  decision: String,
+) -> napi::Result<String> {
+  let decision = match decision.as_str() {
+    "approved" => ApprovalDecision::Approved,
+    "rejected" => ApprovalDecision::Rejected,
+    _ => {
+      return Err(napi::Error::from_reason(
+        "Approval decision must be approved or rejected.".to_string(),
+      ))
+    }
+  };
+  let mut store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_approval_error(RuntimeExecutionError::DurableStore(error)))?;
+  let outcome = store
+    .resolve_notification_approval(&capability, "custom-provider", decision, Utc::now())
+    .map_err(|error| native_approval_error(RuntimeExecutionError::DurableStore(error)))?;
   serde_json::to_string(&NativeApprovalDecisionOutcome {
     contract: "woml.approval-http",
     version: 1,
@@ -1875,20 +1919,82 @@ pub async fn run_woml_notification_provider_journey(
   bun_executable: String,
   notification_host_path: String,
   interaction_timeout_ms: u32,
+  custom_notification_host_path: Option<String>,
+  approval_base_url: Option<String>,
+  resolved_secrets_json: Option<String>,
 ) -> napi::Result<String> {
   if interaction_timeout_ms == 0 {
     return Err(napi::Error::from_reason(
       "Notification interaction timeout must be positive.".to_string(),
     ));
   }
-  let result = run_notification_provider_journey(
-    PathBuf::from(event_store_path),
+  let event_store_path = PathBuf::from(event_store_path);
+  let store = DurableEventStore::open(&event_store_path)
+    .map_err(|error| native_notification_error(NotificationJourneyError::Store(error)))?;
+  let binding = store
+    .run_binding(&run_id)
+    .map_err(|error| native_notification_error(NotificationJourneyError::Store(error)))?;
+  let workflow = store
+    .definition(&binding.definition_hash)
+    .map_err(|error| native_notification_error(NotificationJourneyError::Store(error)))?;
+  let stored_artifacts = store
+    .definition_module_artifacts(&binding.definition_hash)
+    .map_err(|error| native_notification_error(NotificationJourneyError::Store(error)))?;
+  let custom_descriptors: HashMap<&str, &str> = workflow
+    .reusable_definitions
+    .iter()
+    .flatten()
+    .filter_map(|definition| match definition {
+      CompiledReusableInvocation::NotificationProvider {
+        definition_digest,
+        script_artifact_id,
+        ..
+      } => Some((script_artifact_id.as_str(), definition_digest.as_str())),
+      _ => None,
+    })
+    .collect::<HashMap<_, _>>();
+  let custom_artifacts = stored_artifacts
+    .iter()
+    .filter_map(|artifact| {
+      let artifact_id = artifact.name.strip_prefix("__woml_provider__")?;
+      Some(CustomProviderScriptArtifact {
+        script_artifact_id: artifact_id.to_string(),
+        definition_digest: custom_descriptors.get(artifact_id)?.to_string(),
+        source: artifact.bundle.clone(),
+      })
+    })
+    .collect::<Vec<_>>();
+  let has_custom = !custom_descriptors.is_empty();
+  let custom = if has_custom {
+    let host_script_path = custom_notification_host_path.ok_or_else(|| {
+      napi::Error::from_reason("Custom notification provider host path is required.".to_string())
+    })?;
+    let approval_base_url = approval_base_url.ok_or_else(|| {
+      napi::Error::from_reason("Custom provider approval base URL is required.".to_string())
+    })?;
+    let resolved_secrets = serde_json::from_str(resolved_secrets_json.as_deref().unwrap_or("{}"))
+      .map_err(|_| {
+      napi::Error::from_reason("Resolved provider secrets JSON is invalid.".to_string())
+    })?;
+    Some(CustomNotificationJourneyOptions {
+      bun_executable: PathBuf::from(&bun_executable),
+      host_script_path: PathBuf::from(host_script_path),
+      approval_base_url,
+      resolved_secrets,
+      artifacts: custom_artifacts,
+    })
+  } else {
+    None
+  };
+  let result = run_notification_provider_journey_with_custom(
+    event_store_path,
     &run_id,
     NotificationHostProcessOptions::new(
       PathBuf::from(bun_executable),
       PathBuf::from(notification_host_path),
     ),
     std::time::Duration::from_millis(u64::from(interaction_timeout_ms)),
+    custom,
   )
   .await
   .map_err(native_notification_error)?;

@@ -29,6 +29,11 @@ export interface ApprovalServerOptions {
     approvalId: string
   ) => ApprovalTimeoutResult;
   readonly onListening: (url: string) => void;
+  readonly onNotificationDecision?: (
+    capability: string,
+    decision: ApprovalDecision
+  ) => ApprovalDecisionResult;
+  readonly signal?: AbortSignal;
 }
 
 export class ApprovalServerBindError extends Error {
@@ -265,6 +270,28 @@ export async function serveApprovalAndWait(
       port: options.port,
       async fetch(request) {
         const url = new URL(request.url);
+        const notificationMatch =
+          /^\/api\/v1\/notification-approvals\/(ncap_[A-Za-z0-9_.-]+)\/(approved|rejected)$/.exec(
+            url.pathname
+          );
+        if (
+          notificationMatch !== null &&
+          (request.method === 'GET' || request.method === 'POST') &&
+          options.onNotificationDecision !== undefined
+        ) {
+          try {
+            const result = options.onNotificationDecision(
+              notificationMatch[1]!,
+              notificationMatch[2]! as ApprovalDecision
+            );
+            finishAfterResponse('decision');
+            return json(result, 200);
+          } catch (error) {
+            const mapped = errorResponse(error);
+            if (mapped.shouldResume) finishAfterResponse('refresh');
+            return mapped.response;
+          }
+        }
         if (request.method === 'GET' && url.pathname === tokenPath) {
           const nonce = randomBytes(18).toString('base64url');
           return new Response(approvalPage(outcome, nonce), {
@@ -368,6 +395,8 @@ export async function serveApprovalAndWait(
         complete('refresh')
       )
     : () => {};
+  const abort = () => complete('refresh');
+  options.signal?.addEventListener('abort', abort, { once: true });
 
   options.onListening(`${origin}${tokenPath}`);
   try {
@@ -375,6 +404,7 @@ export async function serveApprovalAndWait(
   } finally {
     stopDeadline();
     stopCredentialRefresh();
+    options.signal?.removeEventListener('abort', abort);
     server.stop(true);
   }
 }

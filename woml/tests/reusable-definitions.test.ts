@@ -217,7 +217,7 @@ describe('reusable definition graph resolution', () => {
     expect(definitionPackage.permissions.secrets).toEqual([
       'TELEGRAM_BOT_TOKEN',
     ]);
-    expect(definitionPackage.runtimeReady).toBe(false);
+    expect(definitionPackage.runtimeReady).toBe(true);
   });
 
   test('rejects a prop reference that is not visible at the invocation', async () => {

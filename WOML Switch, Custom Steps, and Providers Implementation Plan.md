@@ -1,11 +1,13 @@
 # WOML Switch, Custom Steps, and Providers Implementation Plan
 
-Status: SCP0, SCP1, SCP2, and SCP3 completed on 2026-08-14; source contracts,
+Status: SCP0, SCP1, SCP2, SCP3, SCP5, and the executable provider-delivery
+scope of SCP6 completed on 2026-08-14; source contracts,
 versioned interfaces, reusable document recognition, dependency resolution,
 diagnostics, folder classification, editor metadata, and durable exact-string
 switch execution are implemented. Custom steps now compile into deterministic
-Model v14/Definition Package v9 operations; durable custom-step and provider
-execution remains gated to SCP4-SCP6.
+Model v14/Definition Package v9 operations. Custom notification delivery now
+runs end to end. Custom-step execution and definition-owned reusable lifecycle
+hooks remain gated by the intentionally skipped SCP4 authority.
 
 ## 1. Product Outcome
 
@@ -1119,7 +1121,7 @@ or secret values.
 | SCP3 — completed | Compile reusable-step imports into Model v14 and Definition Package v9 with immutable props and provenance. | A custom step becomes one deterministic engine-ready operation. |
 | SCP4 | Execute custom steps with retries, services, secrets, results, lifecycle hooks, and recovery. | Imported custom steps work like native durable steps. |
 | SCP5 — completed | Compile custom notification providers and freeze the provider-worker boundary. | Custom provider tags lower to generic supervised delivery definitions. |
-| SCP6 | Execute custom providers for approvals and lifecycle notifications with shared decisions and safe retries. | A real user-authored notification provider works end to end. |
+| SCP6 — provider delivery completed | Execute custom providers for approvals and workflow lifecycle notifications with shared decisions and safe retries. Definition-owned lifecycle hooks remain fail-closed until SCP4 supplies Event v13 authority. | A real user-authored notification provider works end to end without silently ignoring unsupported hooks. |
 | SCP7 | Complete composition, CLI, folder activation, operations, cancellation, backup, and compatibility. | The features work inside production automations rather than isolated demos. |
 | SCP8 | Harden, benchmark, document, package, and publish the milestone. | Switch, custom steps, and custom notification providers are supported WOML features. |
 
@@ -1321,7 +1323,16 @@ Protocol conformance fixtures cover multibyte text, literal CRLF content,
 out-of-order responses, cancellation, oversized messages, malformed receipts,
 unknown artifacts, and every failure kind.
 
-### SCP6 — Execute custom providers end to end
+### SCP6 — Execute custom providers end to end — provider delivery completed
+
+Implementation note: approval delivery, workflow lifecycle delivery, durable
+decisions, retries, recovery primitives, redaction, and local/Telegram examples
+are implemented. A provider definition's own `on-success`, `on-error`, and
+`on-complete` actions depend on the reusable lifecycle/event authority assigned
+to SCP4, which was intentionally skipped. `woml run` therefore rejects that
+profile with `WOML_REUSABLE_LIFECYCLE_EXECUTION_UNAVAILABLE` instead of silently
+ignoring hooks. Completing SCP4 will close this remaining part of the original
+SCP6 scope.
 
 Changes:
 

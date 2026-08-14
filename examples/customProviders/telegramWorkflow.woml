@@ -1,0 +1,26 @@
+<woml>
+  <imports>
+    <module name="telegram" from="./telegram.woml" />
+  </imports>
+  <workflow id="telegram-provider-demo" name="Telegram provider demo">
+    <lifecycle>
+      <on-success>
+        <notify>
+          <telegram
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+            chat-id="{{secrets.TELEGRAM_CHAT_ID}}"
+            message="WOML finished: {{context.steps.finish.message}}"
+          />
+        </notify>
+      </on-success>
+    </lifecycle>
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="finish">
+        <script>return { message: "custom Telegram provider works" };</script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

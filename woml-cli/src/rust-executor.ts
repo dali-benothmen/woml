@@ -880,6 +880,11 @@ interface NativeCore {
     token: string,
     decision: ApprovalDecision
   ) => string;
+  readonly resolveWomlNotificationApproval: (
+    eventStorePath: string,
+    capability: string,
+    decision: ApprovalDecision
+  ) => string;
   readonly settleWomlApprovalTimeout: (
     eventStorePath: string,
     runId: string,
@@ -890,7 +895,10 @@ interface NativeCore {
     runId: string,
     bunExecutable: string,
     notificationHostPath: string,
-    interactionTimeoutMs: number
+    interactionTimeoutMs: number,
+    customNotificationHostPath?: string,
+    approvalBaseUrl?: string,
+    resolvedSecretsJson?: string
   ) => Promise<string>;
 }
 
@@ -1075,6 +1083,15 @@ function defaultNotificationHostPath(): string {
     import.meta.url.endsWith('.ts')
       ? 'notification-provider-host.ts'
       : 'notification-provider-host.js'
+  );
+}
+
+function defaultCustomNotificationHostPath(): string {
+  return resolve(
+    import.meta.dir,
+    import.meta.url.endsWith('.ts')
+      ? 'custom-notification-provider-host.ts'
+      : 'custom-notification-provider-host.js'
   );
 }
 
@@ -2073,6 +2090,33 @@ export function resolveApprovalWithRust(
   try {
     return parseApprovalDecisionResult(
       native.resolveWomlApproval(eventStorePath, token, decision)
+    );
+  } catch (error) {
+    if (error instanceof ApprovalDecisionError) throw error;
+    decodeNativeApprovalError(error);
+  }
+}
+
+export function resolveNotificationApprovalWithRust(
+  eventStorePath: string,
+  capability: string,
+  decision: ApprovalDecision,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): ApprovalDecisionResult {
+  const path = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(path);
+  if (typeof native.resolveWomlNotificationApproval !== 'function') {
+    throw new Error(
+      `Native core at "${path}" does not expose resolveWomlNotificationApproval; rebuild the Rust addon.`
+    );
+  }
+  try {
+    return parseApprovalDecisionResult(
+      native.resolveWomlNotificationApproval(
+        eventStorePath,
+        capability,
+        decision
+      )
     );
   } catch (error) {
     if (error instanceof ApprovalDecisionError) throw error;
@@ -3306,6 +3350,14 @@ function notificationJourneyDiagnostics(
     'host_crashed',
     'size_limit_exceeded',
     'update_failed',
+    'script_threw',
+    'timed_out',
+    'cancelled',
+    'non_json',
+    'worker_crashed',
+    'context_too_large',
+    'result_too_large',
+    'service_failed',
   ]);
   if (
     !record(value) ||
@@ -3330,11 +3382,13 @@ function notificationJourneyDiagnostics(
       !/^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$/.test(
         item.deliveryId
       ) ||
-      item.provider !== 'slack' ||
+      (item.provider !== 'slack' && item.provider !== 'custom') ||
       typeof item.destination !== 'string' ||
-      !/^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/.test(
-        item.destination
-      ) ||
+      (item.provider === 'slack'
+        ? !/^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/.test(
+            item.destination
+          )
+        : !/^[a-z][a-z0-9-]{0,63}$/.test(item.destination)) ||
       !Number.isSafeInteger(item.attempt) ||
       Number(item.attempt) < 1 ||
       Number(item.attempt) > 3 ||
@@ -3401,6 +3455,9 @@ export async function runNotificationProviderJourneyWithRust(
   runId: string,
   options: Pick<RustExecutorOptions, 'nativeCorePath' | 'bunExecutable'> & {
     readonly notificationHostPath?: string;
+    readonly customNotificationHostPath?: string;
+    readonly approvalBaseUrl?: string;
+    readonly resolvedSecrets?: Readonly<Record<string, string>>;
     readonly interactionTimeoutMs?: number;
   } = {}
 ): Promise<NotificationProviderJourneyResult> {
@@ -3425,7 +3482,11 @@ export async function runNotificationProviderJourneyWithRust(
       runId,
       options.bunExecutable ?? process.execPath,
       options.notificationHostPath ?? defaultNotificationHostPath(),
-      timeoutMs
+      timeoutMs,
+      options.customNotificationHostPath ??
+        defaultCustomNotificationHostPath(),
+      options.approvalBaseUrl,
+      JSON.stringify(options.resolvedSecrets ?? {})
     )
     .catch(decodeNotificationError);
   return parseNotificationJourney(json);

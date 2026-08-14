@@ -400,7 +400,7 @@ pub(crate) struct ParallelGroupDefinition {
   pub on_error: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ApprovalDefinition {
   pub approval_id: String,
   pub name: Option<String>,
@@ -410,13 +410,14 @@ pub(crate) struct ApprovalDefinition {
   pub notifications: Vec<NotificationDefinition>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NotificationDefinition {
   pub delivery_id: String,
   pub provider: String,
   pub destination: String,
   pub credentials: BTreeMap<String, String>,
   pub provider_id: Option<String>,
+  pub message: Option<ValueExpression>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1914,7 +1915,7 @@ fn approval_notifications(
     if !ordered {
       return None;
     }
-    let (names, provider_id, duplicate_key) = if provider == "slack" {
+    let (names, provider_id, message, duplicate_key) = if provider == "slack" {
       if fields.len() != 4
         || !["deliveryId", "provider", "destination", "credentials"]
           .iter()
@@ -1938,7 +1939,7 @@ fn approval_notifications(
         "slack\0{}\0{}\0{}",
         names["botToken"], names["appToken"], destination
       );
-      (names, None, duplicate_key)
+      (names, None, None, duplicate_key)
     } else if provider == "custom"
       && valid_custom_provider_delivery(fields, "approval", provider_ids, false)
     {
@@ -1946,6 +1947,7 @@ fn approval_notifications(
       (
         BTreeMap::new(),
         Some(provider_id.clone()),
+        fields.get("message").cloned(),
         format!("custom\0{provider_id}"),
       )
     } else {
@@ -1960,6 +1962,7 @@ fn approval_notifications(
       destination: destination.to_string(),
       credentials: names,
       provider_id,
+      message,
     });
     previous_tag = Some(tag);
     previous_channel = Some(channel);
@@ -3294,19 +3297,6 @@ impl CompiledWorkflowDefinition {
       issues.push(issue(
         ModelIssueCode::UnsupportedReusableExecution,
         "Model v14 custom steps are compiled and validated, but durable execution begins in SCP4.",
-      ));
-    }
-    if self.reusable_definitions.as_ref().is_some_and(|items| {
-      items.iter().any(|item| {
-        matches!(
-          item,
-          CompiledReusableInvocation::NotificationProvider { .. }
-        )
-      })
-    }) {
-      issues.push(issue(
-        ModelIssueCode::UnsupportedReusableExecution,
-        "Model v14 custom notification providers are compiled and validated, but durable execution begins in SCP6.",
       ));
     }
     if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {

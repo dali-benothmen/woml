@@ -109,6 +109,41 @@ function post(url: string, body: string, headers?: HeadersInit) {
 }
 
 describe('local approval HTTP v1', () => {
+  test('accepts a provider capability through a direct HTTP URL', async () => {
+    const port = await availablePort();
+    let listening!: (url: string) => void;
+    const url = new Promise<string>(resolve => {
+      listening = resolve;
+    });
+    const decisions: string[] = [];
+    const wait = serveApprovalAndWait({
+      outcome: waitingOutcome(),
+      port,
+      onDecision: (_token, decision) => decisionResult(decision),
+      onNotificationDecision: (capability, decision) => {
+        decisions.push(`${capability}:${decision}`);
+        return decisionResult(decision);
+      },
+      onTimeout: () => ({
+        status: 'not_due',
+        runId: 'run_approval_http',
+        approvalId: 'editorApproval',
+        requestId: 'aprreq_editor_http',
+        resolution: null,
+        settledAt: null,
+      }),
+      onListening: listening,
+    });
+    const origin = new URL(await url).origin;
+    const response = await fetch(
+      `${origin}/api/v1/notification-approvals/ncap_provider_42/approved`,
+      { method: 'POST' }
+    );
+    expect(response.status).toBe(200);
+    expect(decisions).toEqual(['ncap_provider_42:approved']);
+    expect(await wait).toBe('decision');
+  });
+
   test('serves a read-only secured page and rejects malformed requests', async () => {
     const journey = await serverJourney((_token, decision) =>
       decisionResult(decision)

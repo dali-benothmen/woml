@@ -1632,7 +1632,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
             | RUN_EVENT_SCHEMA_VERSION_V11
-        ) || data.provider != "slack"
+        ) || !matches!(data.provider.as_str(), "slack" | "custom")
           || data.destination.is_empty()
         {
           return Err(EventValidationError::Invalid(
@@ -1717,8 +1717,8 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
             | RUN_EVENT_SCHEMA_VERSION_V11
-        ) || data.provider != "slack"
-          || !valid_prefixed_id(&data.provider_actor_id, "U", 9)
+        ) || !((data.provider == "slack" && valid_prefixed_id(&data.provider_actor_id, "U", 9))
+          || (data.provider == "custom" && data.provider_actor_id == "custom-provider"))
         {
           return Err(EventValidationError::Invalid(
             "notification_decision_accepted has an invalid provider audit identity.".to_string(),

@@ -1143,12 +1143,14 @@ export function assertWomlDocumentRunnable(
       'Import it from a workflow with <module name="custom-tag" from="./definition.woml" />.'
     );
   }
-  const reusable = inspection.imports.find(item => item.kind === 'reusable-definition');
+  const reusable = inspection.imports.find(
+    item => item.kind === 'reusable-definition'
+  );
   if (reusable !== undefined) {
     failCompile(
       document,
       'WOML_REUSABLE_EXECUTION_UNAVAILABLE',
-      `Reusable definition <${reusable.name}> is valid, but durable custom-step execution begins in SCP4 and custom-provider execution begins in SCP6.`,
+      `Reusable definition <${reusable.name}> is valid, but durable custom-step execution is not available yet.`,
       reusable.element.openTagSpan,
       'Use `woml check` to compile and inspect the pinned Model v14 package.'
     );

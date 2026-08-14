@@ -40,7 +40,6 @@ fn durable_execution_stays_gated_until_scp4() {
     .map(|issue| issue.message.as_str())
     .collect::<Vec<_>>();
   assert!(messages.iter().any(|message| message.contains("SCP4")));
-  assert!(messages.iter().any(|message| message.contains("SCP6")));
 }
 
 #[test]
