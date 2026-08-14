@@ -1,0 +1,13 @@
+<woml>
+  <props>
+    <prop name="workflow-id" required="true" />
+    <prop name="value" required="true" />
+  </props>
+  <step name="Call workflow">
+    <script>
+      return services.workflows.call(props.workflowId, {
+        value: Number(props.value)
+      });
+    </script>
+  </step>
+</woml>

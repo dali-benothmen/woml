@@ -1,0 +1,24 @@
+<woml>
+  <imports>
+    <module name="scale-value" from="./scale-value.woml" />
+  </imports>
+  <workflow id="reusable-approval-composition" name="Reusable approval composition" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="prepare"><script>return { value: 7 };</script></step>
+      <approval id="review" name="Review reusable operation" timeout="1h" on-timeout="reject">
+        <when-approved>
+          <scale-value id="approvedScale" value="{{context.steps.prepare.value}}" factor="2" />
+        </when-approved>
+        <when-rejected>
+          <scale-value id="rejectedScale" value="{{context.steps.prepare.value}}" factor="0" />
+        </when-rejected>
+      </approval>
+      <step id="finish">
+        <script>return { decision: context.steps.review.decision };</script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

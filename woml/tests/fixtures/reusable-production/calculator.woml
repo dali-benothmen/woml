@@ -1,0 +1,12 @@
+<woml>
+  <workflow id="reusable-calculator" name="Reusable call target" version="1.0.0">
+    <steps>
+      <step id="calculate">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 100));
+          return { doubled: context.payload.value * 2 };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -92,9 +92,9 @@ try {
       : Bun.file(stdoutPath).text(),
     Bun.file(stderrPath).text(),
   ]);
-  if (timedOut) {
+  if (timedOut || stdout.trim().length === 0) {
     throw new Error(
-      `WOML did not settle within 20 seconds.\nstdout:\n${stdout}\nstderr:\n${stderr}`
+      `WOML did not produce a result within 20 seconds.\nstdout:\n${stdout}\nstderr:\n${stderr}`
     );
   }
   if (decisionError !== undefined) throw decisionError;

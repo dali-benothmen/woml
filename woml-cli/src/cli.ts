@@ -1121,6 +1121,7 @@ async function readWorkflow(filePath: string): Promise<string> {
 
 interface CompiledWorkflowSource {
   readonly filePath: string;
+  readonly activationInputPaths: readonly string[];
   readonly document: WomlSourceDocument;
   readonly workflow: CompiledWorkflowDefinition;
   readonly definitionHash: string;
@@ -1180,16 +1181,14 @@ export async function assertStableSourceSnapshot(
 
 async function assertStableWorkflowInputSet(
   inputPaths: readonly string[],
-  sources: readonly Pick<CompiledWorkflowSource, 'filePath'>[]
+  expectedPaths: readonly string[]
 ): Promise<void> {
   const current = new Set<string>();
   for (const inputPath of inputPaths) {
     for (const path of await workflowFilePaths(inputPath))
       current.add(resolve(path));
   }
-  const expected = [
-    ...new Set(sources.map(source => resolve(source.filePath))),
-  ].sort();
+  const expected = [...new Set(expectedPaths.map(path => resolve(path)))].sort();
   const observed = [...current].sort();
   if (
     expected.length !== observed.length ||
@@ -1256,6 +1255,11 @@ function workflowCallFrontendOnlySource(
       source.workflow.triggers.length === 0 ||
       source.workflow.graph.nodes.some(node =>
         JSON.stringify(node.inputs).includes('services.workflows')
+      ) ||
+      source.runtimeModules.some(
+        module =>
+          module.name.startsWith('__woml_reusable__') &&
+          /\bservices\.workflows\.(?:call|start)\s*\(/.test(module.bundle)
       )
     );
   }
@@ -1403,15 +1407,15 @@ async function compileWorkflowSources(
       projectRoot,
     });
     if (reusableGraph.root.kind !== 'workflow') {
-      if (skipReusableDefinitions) continue;
+      await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
       if (io !== undefined) {
-        await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
         await refreshReusableEditorData(
           filePath,
           generateWomlReusableCustomData(reusableGraph),
           io
         );
       }
+      if (skipReusableDefinitions) continue;
       assertWomlDocumentRunnable(document);
     }
     if (reusableGraph.definitions.length > 0) {
@@ -1482,6 +1486,7 @@ async function compileWorkflowSources(
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
       filePath,
+      activationInputPaths: [resolve(filePath)],
       document,
       workflow,
       definitionHash,
@@ -1582,7 +1587,12 @@ async function compileWorkflowInputs(
       );
     }
   }
-  return compiled;
+  const activationInputPaths = inputSnapshots
+    .flatMap(snapshot => snapshot.files)
+    .map(path => resolve(path))
+    .filter((path, index, paths) => paths.indexOf(path) === index)
+    .sort((left, right) => left.localeCompare(right));
+  return compiled.map(source => ({ ...source, activationInputPaths }));
 }
 
 function assertReusableRuntimeSupported(
@@ -2296,7 +2306,6 @@ function workflowSecretReferences(
     workflow.schemaVersion === 14
       ? (workflow.reusableDefinitions ?? [])
       : []) {
-    if (definition.kind !== 'notification-provider') continue;
     for (const prop of definition.props) {
       if (prop.expression.kind === 'secret') {
         references.push({ kind: 'secretReference', name: prop.expression.name });
@@ -3099,6 +3108,21 @@ async function activateWorkflows(
   io: CliIo,
   dependencies: CliDependencies
 ): Promise<void> {
+  const activationInputPaths = sources[0]?.activationInputPaths ?? [];
+  if (
+    sources.some(
+      source =>
+        source.activationInputPaths.length !== activationInputPaths.length ||
+        source.activationInputPaths.some(
+          (path, index) => path !== activationInputPaths[index]
+        )
+    )
+  ) {
+    throw new CliInputError(
+      'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
+      'compiled workflows do not share one atomic input snapshot.'
+    );
+  }
   if (sources.length > 1 && args.resumeRunId !== undefined) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',
@@ -3457,7 +3481,7 @@ async function activateWorkflows(
       // Provider startup may take long enough for an editor or generator to
       // rewrite a source. Never open admission for a mixed activation.
       await assertStableSourceSnapshot(productionSources);
-      await assertStableWorkflowInputSet(args.inputPaths, sources);
+      await assertStableWorkflowInputSet(args.inputPaths, activationInputPaths);
       await activateWebhookRuntimeWithRust(runtime.runtimeId, {
         nativeCorePath: dependencies.nativeCorePath,
       });

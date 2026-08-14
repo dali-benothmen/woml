@@ -1,0 +1,16 @@
+<woml>
+  <props>
+    <prop name="delay-ms" required="true" />
+  </props>
+  <step name="Wait before returning">
+    <script>
+      await new Promise(resolve => setTimeout(resolve, Number(props.delayMs)));
+      return { completed: true };
+    </script>
+  </step>
+  <lifecycle>
+    <on-complete>
+      <script>console.log(`Wait operation ${lifecycle.outcome}`);</script>
+    </on-complete>
+  </lifecycle>
+</woml>

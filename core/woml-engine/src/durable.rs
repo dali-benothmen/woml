@@ -9874,6 +9874,7 @@ pub enum StepFailureDisposition {
     scheduled_at: DateTime<Utc>,
   },
   StepFailed,
+  RunFailureDeferred,
   RunFailed,
 }
 
@@ -10072,6 +10073,22 @@ impl DurableDagEngine {
       .parallel_group_for_child(&failure.node_id)
       .is_some();
     let fork_child = self.workflow.fork_branch_owner(&failure.node_id).is_some();
+    let reusable_lifecycle =
+      self
+        .workflow
+        .reusable_definitions
+        .iter()
+        .flatten()
+        .any(|definition| {
+          matches!(
+            definition,
+            crate::model::CompiledReusableInvocation::Step {
+              node_id,
+              lifecycle: Some(_),
+              ..
+            } if node_id == &failure.node_id
+          )
+        });
     let projection = self.projection(run_id)?;
     let fork_coordinated = self.workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       && projection.forks.values().any(|fork| {
@@ -10146,6 +10163,15 @@ impl DurableDagEngine {
           RunEventPayload::StepAttemptFailed(failure.clone()),
         )],
         StepFailureDisposition::StepFailed,
+      )
+    } else if reusable_lifecycle {
+      (
+        vec![(
+          generated_event_id(),
+          failed_at,
+          RunEventPayload::StepAttemptFailed(failure.clone()),
+        )],
+        StepFailureDisposition::RunFailureDeferred,
       )
     } else {
       (

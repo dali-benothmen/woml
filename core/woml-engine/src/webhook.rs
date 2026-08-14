@@ -779,9 +779,11 @@ fn prepare_state(
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V10
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V11
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
     ) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} must use compiled Model v7, v8, v9, v10, v11, or v12",
+        "workflow {:?} must use a supported compiled Model v7 through v14",
         registration.workflow.workflow_id
       )));
     }
@@ -1158,7 +1160,7 @@ fn compile_route(
     authentication,
     schema,
     runtime_policy: registration.workflow.schema_version
-      == crate::COMPILED_MODEL_SCHEMA_VERSION_V12,
+      >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12,
   })
 }
 

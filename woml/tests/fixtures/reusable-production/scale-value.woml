@@ -1,0 +1,29 @@
+<woml>
+  <imports>
+    <module name="math" from="./math.ts" />
+  </imports>
+  <props>
+    <prop name="value" required="true" />
+    <prop name="factor" required="true" />
+    <prop name="fail-once" />
+  </props>
+  <step name="Scale value" description="Scales a numeric value">
+    <script>
+      if (props.failOnce === "true" && attempt.number === 1) {
+        throw new Error("temporary scaling failure");
+      }
+      return { value: services.math.scale(props.value, props.factor) };
+    </script>
+  </step>
+  <lifecycle>
+    <on-success>
+      <script>console.log(`Scaled value to ${lifecycle.result.value}`);</script>
+    </on-success>
+    <on-error>
+      <script>console.error(`Scaling failed: ${lifecycle.error.code}`);</script>
+    </on-error>
+    <on-complete>
+      <script>console.log(`Scaling ${lifecycle.outcome}`);</script>
+    </on-complete>
+  </lifecycle>
+</woml>

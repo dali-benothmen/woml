@@ -1647,7 +1647,7 @@ function executionResult(value: unknown): value is RustWorkflowExecutionResult {
       ]) &&
       Number.isSafeInteger(event.eventSchemaVersion) &&
       Number(event.eventSchemaVersion) >= 1 &&
-      Number(event.eventSchemaVersion) <= 12 &&
+      Number(event.eventSchemaVersion) <= 13 &&
       typeof event.eventId === 'string' &&
       typeof event.runId === 'string' &&
       Number.isSafeInteger(event.sequence) &&

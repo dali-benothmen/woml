@@ -1,7 +1,8 @@
 # WOML Switch, Custom Steps, and Providers Implementation Plan
 
-Status: SCP0 through SCP5 and the executable provider-delivery
-scope of SCP6 completed on 2026-08-14; source contracts,
+Status: SCP0 through SCP5, the executable provider-delivery scope of SCP6,
+and the executable production-integration scope of SCP7 completed on
+2026-08-14; source contracts,
 versioned interfaces, reusable document recognition, dependency resolution,
 diagnostics, folder classification, editor metadata, and durable exact-string
 switch execution are implemented. Custom steps now compile into deterministic
@@ -10,7 +11,7 @@ runtime. Custom-step props, services, retries, results, Event v13 lifecycle,
 recovery projection, and safe Inspection v5 are implemented. Custom
 notification delivery runs end to end; wiring a provider definition's own
 lifecycle scripts into the notification journey remains fail-closed follow-up
-work in SCP6.
+work in SCP6. SCP7 does not weaken or silently bypass that boundary.
 
 ## 1. Product Outcome
 
@@ -1367,6 +1368,11 @@ delivery fails, and never logs credentials or approval capabilities.
 
 ### SCP7 — Complete composition and production operations
 
+Status: Completed on 2026-08-14 for every currently executable reusable
+definition path. The provider-definition-owned lifecycle adapter withheld in
+SCP6 remains fail-closed and is therefore not claimed as an executable SCP7
+composition path.
+
 Changes:
 
 - Test custom steps inside switch/choose, parallel, fork branches, approval
@@ -1393,6 +1399,31 @@ Gate:
 Production integration tests cover mixed constructs, folder activation,
 background restart, cancellation, timeout, inspection, backup/restore,
 retention, and clean shutdown.
+
+Implemented proof:
+
+- custom steps execute inside switch, choose, parallel, joined fork branches,
+  approval arms, and retry attempts;
+- custom steps can use synchronous `services.workflows.call()` and detached
+  `services.workflows.start()` through the production Rust runtime;
+- reusable secret props are discovered before activation and remain absent
+  from results, logs, events, and inspection;
+- Model v14 workflows run in the persistent trigger host, including the
+  existing runtime-policy admission path;
+- cancellation and workflow timeout reach active reusable workers, and a
+  terminal custom-step failure completes its durable reusable lifecycle before
+  the run is finalized;
+- multi-file and directory activation pins one exact input snapshot, validates
+  every reusable definition, and activates only workflow documents;
+- approval recovery accepts Event v13 outcomes and preserves exactly-once
+  shared decisions across built-in and custom notification providers;
+- Inspection v5 and backup/restore preserve reusable attempts and results;
+- direct and transitive import cycles remain compile-time errors. A lifecycle
+  notification cycle that would require the withheld provider-owned lifecycle
+  adapter is rejected rather than partially executed;
+- the focused production acceptance project exercises composition, calls,
+  starts, approval, cancellation, timeout, inspection, backup, and restore
+  through the packaged CLI.
 
 ### SCP8 — Harden, package, document, and publish
 

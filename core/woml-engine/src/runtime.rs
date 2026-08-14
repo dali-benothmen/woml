@@ -5302,6 +5302,11 @@ async fn execute_fork<E: RuntimeDagEngine>(
             )
             .await?;
           }
+          StepFailureDisposition::RunFailureDeferred => {
+            return Err(RuntimeExecutionError::Stalled(
+              "fork-owned work deferred a top-level run failure".to_string(),
+            ));
+          }
           StepFailureDisposition::RunFailed => {
             return Err(RuntimeExecutionError::Stalled(
               "fork-coordinated work failed the run before all owned branches settled".to_string(),
@@ -5745,6 +5750,11 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
                 let _ = host.cancel(&invocation_id).await;
               }
             }
+          }
+          StepFailureDisposition::RunFailureDeferred => {
+            return Err(RuntimeExecutionError::Stalled(
+              "parallel-owned work deferred a top-level run failure".to_string(),
+            ));
           }
           StepFailureDisposition::RunFailed => {
             return Err(RuntimeExecutionError::Stalled(
@@ -6593,6 +6603,7 @@ async fn settle_script_attempt_failure<E: RuntimeDagEngine>(
         "non-parallel node {node_id:?} returned a group-owned failure"
       )));
     }
+    StepFailureDisposition::RunFailureDeferred => {}
     StepFailureDisposition::RunFailed => {}
   }
   if reusable_step_descriptor(engine.workflow(), node_id).is_some() && host.is_none() {
@@ -6619,6 +6630,20 @@ async fn settle_script_attempt_failure<E: RuntimeDagEngine>(
       host,
     )
     .await?;
+  }
+  if engine.projection(run_id)?.business_outcome.is_none() {
+    engine.append_payload(
+      run_id,
+      RunEventPayload::RunFailed(attempt_run_failed_data(
+        engine.event_schema_version(),
+        &StepAttemptFailedData {
+          node_id: node_id.to_string(),
+          attempt,
+          invocation_id: invocation_id.to_string(),
+          failure: failure.clone(),
+        },
+      )),
+    )?;
   }
   Err(RuntimeExecutionError::RunFailed(Box::new(
     FailedRunDetails {
