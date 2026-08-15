@@ -1,0 +1,10 @@
+{
+  "profile": "woml.terminal-performance-budgets/v1",
+  "rendererAverageMsMax": 10,
+  "projectionAverageMsMax": 25,
+  "retainedAttachAverageMsMax": 20,
+  "liveRefreshAverageMsMax": 20,
+  "memoryPerActiveRunBytesMax": 100000,
+  "largeResultSummaryAverageMsMax": 20,
+  "highRateRunPresentationsPerSecondMin": 100
+}

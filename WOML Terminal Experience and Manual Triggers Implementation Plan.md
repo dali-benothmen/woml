@@ -1,11 +1,12 @@
 # WOML Terminal Experience and Manual Triggers Implementation Plan
 
-Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 through TM7 completed
+Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 through TM8 completed
 on 2026-08-15. The versioned presentation contracts, pure color/plain/JSON
 renderer, durable Rust projection, native/TypeScript query boundary,
 professional foreground output, Enter-driven durable manual trigger, secure
 retained/live background log following, and complete complex-automation
-presentation are implemented and hardened. TM8 is next.
+presentation are implemented, hardened, documented, benchmarked, and package
+verified. This milestone is complete.
 
 ## 1. Product Outcome
 
@@ -835,7 +836,7 @@ arrival, or infer selected routes by reevaluating conditions.
 | TM5 — completed | Add `woml <run-id|workflow-id> --logs` and background-runtime attachment. | Users can inspect and follow background execution safely from another terminal. |
 | TM6 — completed | Complete complex control-flow, retry, approval, lifecycle, concurrency, and multi-run presentation. | Large real workflows remain organized instead of exposing internal engine noise. |
 | TM7 — completed | Harden accessibility, security, compatibility, retention, restart, and failure behavior. | Output remains safe and truthful across terminals, pipes, crashes, and historical stores. |
-| TM8 | Document, benchmark, package, and publish the terminal/manual milestone. | Professional output and real manual triggers are supported WOML features. |
+| TM8 — completed | Document, benchmark, package, and publish the terminal/manual milestone. | Professional output and real manual triggers are supported WOML features. |
 
 Phase labels are planning shorthand only. Permanent files, symbols, fixtures,
 tests, and package scripts use descriptive product names rather than names such
@@ -1175,7 +1176,7 @@ Completion evidence:
   restart, viewer recovery, backup/restore, retention/prune, and legacy machine
   commands, followed by TypeScript validation.
 
-### TM8 — Package, document, benchmark, and publish
+### TM8 — Package, document, benchmark, and publish — completed
 
 Changes:
 
@@ -1203,6 +1204,42 @@ Gate:
 Frontend, Rust, N-API, terminal snapshots, PTY, two-process background,
 security, compatibility, typecheck, Clippy, package, docs, and benchmark gates
 pass without skipped native coverage.
+
+Completion evidence:
+
+- `docs/woml-terminal-experience.md` documents every trigger header, status
+  symbol/text fallback, repeated and multi-target manual input, `woml run`
+  versus `woml test`, color/Unicode/plain/JSON behavior, retained/live
+  `--logs`, Ctrl+C ownership, security bounds, and actionable diagnostics.
+- Architecture, production-runtime, observability, trigger, lifecycle,
+  security, CLI, and SDK-migration guides link to the supported terminal
+  contract. Stale documentation claiming a manual run starts automatically was
+  removed.
+- `examples/terminalExperience` contains compiling sequential and intentional
+  failure workflows plus manual instructions for repeated runs, one-shot use,
+  webhook, fork/control-flow, lifecycle, and background log following.
+- Descriptive `test:terminal-package`, `test:terminal-release`,
+  `verify:terminal-experience`, and `benchmark:terminal-experience` commands
+  join the existing renderer, projection, manual-trigger, log-following, and
+  hardening gates.
+- The clean-package test creates the publishable tarball, installs it into an
+  empty consumer, verifies the platform Rust addon and bundled Bun hosts,
+  proves no run exists before Enter, executes two sequential script steps,
+  renders the colored durable result, and drains cleanly on Ctrl+C.
+- The versioned benchmark enforces seven budgets. The release run measured
+  0.232 ms average rendering, 3.675 ms durable projection, 0.245 ms retained
+  attachment, 0.239 ms decode/render refresh, 2,744 bytes per retained active
+  run, 1.225 ms large-result summarization, and 18,358 run presentations per
+  second on the development host.
+- The release verifier compiles both examples, checks eight required release
+  artifacts, validates seven versioned performance budgets, checks packaged
+  runtime artifacts, rejects stale manual semantics, and scans 198 published
+  documentation/fixture files for active secret shapes.
+- `test:terminal-release` passes 25 Rust tests and 62 Bun tests, including real
+  PTY, clean installed package, native N-API, foreground/manual, viewer,
+  two-process background, security, compatibility, backup/restore, retention,
+  and terminal snapshots, followed by documentation verification, benchmarks,
+  TypeScript, and warning-denying `woml-engine` Clippy.
 
 ## 12. Verification Matrix
 

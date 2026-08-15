@@ -2,8 +2,12 @@
 
 Production Triggers turn a compiled WOML definition into a long-lived
 automation. The supported trigger types are webhook, Slack, schedule, interval,
-and named event. Manual triggers remain available for startup and one-shot test
-journeys.
+and named event. A foreground manual trigger waits for keyboard input; it does
+not create a startup run. One-shot manual journeys use `woml test`.
+
+The exact trigger headers, activation instructions, manual selection, and
+status output are documented in
+[WOML Terminal Experience](woml-terminal-experience.md).
 
 ## Start an automation
 

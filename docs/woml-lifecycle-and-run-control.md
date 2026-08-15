@@ -9,6 +9,10 @@ Lifecycle hooks are observers. Use them for logging, notifications, audit
 records, metrics, and best-effort cleanup. Keep anything required for business
 correctness as an ordinary step in `<steps>`.
 
+The terminal keeps business steps and lifecycle finalization in separate
+sections so an `on-complete` action cannot make unfinished business look
+successful. See [WOML Terminal Experience](woml-terminal-experience.md).
+
 ## Authoring lifecycle hooks
 
 One optional `<lifecycle>` block is a direct child of `<workflow>`:

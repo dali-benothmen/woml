@@ -8,6 +8,10 @@ deployment recipes, compatibility auditing, and release performance budgets. Run
 the direct `.woml` experience—there is no build command or deployment-package
 extension.
 
+Foreground run presentation, Enter-driven manual admission, background
+`--logs`, color/plain/JSON behavior, and viewer recovery are documented in
+[WOML Terminal Experience](woml-terminal-experience.md).
+
 ## Current commands
 
 Check one workflow as an authoring operation:

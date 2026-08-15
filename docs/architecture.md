@@ -22,6 +22,11 @@ attributes, raw `<script>` bodies, and `{{context...}}` references. Its output i
 a versioned, language-neutral compiled workflow model whose nodes and edges form
 a DAG. It does not execute the workflow.
 
+The CLI does not derive status from console text. Its professional output is a
+versioned read-only projection of the frozen definition and Rust event fold;
+manual keyboard admission follows the same durable trigger boundary. See
+[WOML Terminal Experience](woml-terminal-experience.md).
+
 Module System MS1 makes `<woml>` the canonical document root. The frontend may
 resolve `<imports><module name="..." from="..." /></imports>` before lowering:
 it validates the direct named-function ESM surface, follows only safe static

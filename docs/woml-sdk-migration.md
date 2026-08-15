@@ -9,6 +9,11 @@ The JavaScript SDK remains in the repository during the migration. Do not mix
 SDK and WOML definitions in one run. The SDK is retired only after WOML reaches
 sufficient parity and the relevant production features have migration paths.
 
+Unlike an SDK function invocation, `woml run` hosts an automation continuously.
+A manual workflow waits for Enter and supports repeated runs; `woml test`
+performs one non-interactive execution. See
+[WOML Terminal Experience](woml-terminal-experience.md).
+
 ## Concept mapping
 
 | JavaScript SDK concept | WOML equivalent |

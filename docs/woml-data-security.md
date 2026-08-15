@@ -18,7 +18,13 @@ databases may live elsewhere.
 - Keep database URLs and provider credentials in `woml secrets`, never in
   WOML source or `services.state`.
 - Treat copied databases, WAL files, crash dumps, and support bundles as
-  sensitive application data.
+sensitive application data.
+
+Human, plain, and JSON run presentations additionally neutralize terminal
+controls and redact credential-shaped values, capability/approval URLs, and
+idempotency material. This is a display boundary, not permission to return
+secrets as business results. See
+[WOML Terminal Experience](woml-terminal-experience.md#security-and-bounds).
 
 When a runtime is active, `woml list`, `woml get`, and `woml cancel` first use
 its owner-only descriptor and rotating loopback administration capability.

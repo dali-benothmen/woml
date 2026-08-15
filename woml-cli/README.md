@@ -110,8 +110,10 @@ digests, and secret values are never printed.
 
 ## Activate an automation
 
-`woml run` executes a selected manual trigger once at startup, activates every
-production trigger, and stays alive until Ctrl+C:
+`woml run` activates every trigger and stays alive until Ctrl+C. A manual
+workflow creates no run at startup: press Enter for each independent durable
+run. If several manual targets are loaded, choose the printed number or use
+`--trigger <id>`:
 
 ```bash
 woml run examples/retryWorkflow.woml
@@ -201,9 +203,9 @@ curl --request POST http://127.0.0.1:3000/webhooks/orders \
 ```
 
 Readiness, accepted occurrences, run IDs, failures, and terminal statuses are
-printed as an ongoing stream to stderr. A successful run also prints its final
-workflow JSON, for example `Run run_... result: {"message":"Received order
-order-42"}`. Finishing one run does not deactivate the workflow.
+printed as organized workflow and run blocks. A successful run shows its
+bounded final result; `--json` emits the versioned machine presentation.
+Finishing one run does not deactivate the workflow.
 
 The generated example omits `Idempotency-Key`, so every call creates a fresh
 occurrence. Add that header when a caller needs safe delivery retries; repeating
@@ -231,6 +233,13 @@ its JSON result and exits:
 ```bash
 woml test woml/tests/fixtures/hello.woml
 ```
+
+The professional output, symbols, color modes, repeated manual input, and
+background `--logs` behavior are documented in the
+[WOML Terminal Experience](../docs/woml-terminal-experience.md). Runnable
+sequential, failure, control-flow, lifecycle, webhook, and background examples
+are collected in
+[`examples/terminalExperience`](../examples/terminalExperience/README.md).
 
 ## Fork work into independent routes
 

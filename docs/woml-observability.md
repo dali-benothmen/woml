@@ -4,6 +4,12 @@ PRO5 provides the safe local observability layer used by the future
 `woml inspect`. Workflow events and the SQLite store remain execution truth;
 telemetry is a bounded projection and can be discarded or re-created.
 
+`woml inspect` is the full-screen runtime operations view. In contrast,
+`woml <run-id|workflow-id> --logs` shows durable author-facing workflow history
+and follows matching changes. See
+[WOML Terminal Experience](woml-terminal-experience.md) for that read-only
+viewer and its Ctrl+C/restart behavior.
+
 ## What operators can observe
 
 Runtime Operations Snapshot v1 combines the durable recent-run projection with
