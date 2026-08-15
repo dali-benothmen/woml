@@ -33,6 +33,16 @@ fn native_manifest_has_only_the_woml_engine_as_a_local_dependency() {
     vec!["woml-engine = { path = \"../woml-engine\" }"],
     "The WOML native crate must not acquire another local dependency."
   );
+  assert!(
+    !manifest.lines().any(|line| {
+      let line = line.trim();
+      line.starts_with("core =")
+        || line.starts_with("cronflow =")
+        || line.contains("package = \"core\"")
+        || line.contains("package = \"cronflow\"")
+    }),
+    "The WOML native crate must not depend on the legacy package under any alias."
+  );
 }
 
 #[test]

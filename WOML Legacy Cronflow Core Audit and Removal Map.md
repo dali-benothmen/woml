@@ -1,10 +1,12 @@
 # WOML Legacy Cronflow Core Audit and Removal Map
 
-Status: Audit 0, Audit 1, and Audit 2 completed on 2026-08-15. The dependency
-and removal map is frozen, the canonical WOML N-API adapter lives in a dedicated
+Status: Audit 0 through Audit 3 completed on 2026-08-15. The dependency and
+removal map is frozen, the canonical WOML N-API adapter lives in a dedicated
 native crate that depends only on `woml-engine`, and every CLI build/release path
-now stages that crate directly. The temporary combined-core WOML shim was
-removed. No legacy JavaScript API, database, fixture, or user data was removed.
+now stages that crate directly. CI permanently verifies source imports, native
+dependencies, adapter imports, addon exports, and clean-package dependencies.
+The temporary combined-core WOML shim was removed. No legacy JavaScript API,
+database, fixture, or user data was removed.
 
 ## 1. Executive Conclusion
 
@@ -28,6 +30,8 @@ The current coupling is packaging, not execution:
   and stages `woml-native` as the stable
   `woml-core.<platform>-<arch>.node` artifact.
 - The WOML frontend and CLI do not import the JavaScript-chaining SDK.
+- `.github/workflows/ci.yml` runs the architecture-separation gate on every
+  push and pull request, so these boundaries cannot silently regress.
 
 The operational split is complete. The old Rust dependency closure can now be
 retired independently of WOML after the JavaScript SDK retirement contract is
@@ -399,15 +403,34 @@ Audit 2 evidence:
 Result: `woml run` is operationally independent of the legacy crate, not merely
 source-independent.
 
-### Audit 3 — Add separation gates
+### Audit 3 — Complete: add separation gates
 
-Add CI checks that fail if:
+The `test:architecture-separation` command now builds the dedicated addon and
+fails if:
 
-- the WOML native crate depends on the legacy crate;
-- `woml` or `woml-cli` imports `sdk`;
-- `woml_bridge`-equivalent code imports a legacy module;
-- the built addon omits any required WOML export; or
-- a clean WOML package accidentally requires an `@cronflow/*` package.
+- the WOML native crate acquires any local dependency except `woml-engine`;
+- source in `woml` or `woml-cli` imports `sdk`, `cronflow`, or an
+  `@cronflow/*` package;
+- the canonical native adapter imports a legacy Rust module;
+- the built addon differs from the 36-function required native surface;
+- the CLI `NativeCore` interface omits one of those functions; or
+- a clean packed WOML installation declares or installs an `@cronflow/*`
+  runtime package.
+
+Audit 3 evidence:
+
+- `woml-cli/scripts/verify-architecture-separation.ts` scans the source,
+  adapter, CLI contract, built binary, and isolated packed installation;
+- `woml-cli/tests/architecture-separation.test.ts` verifies static, dynamic,
+  CommonJS, and runtime-package detection without confusing metadata or
+  development-only dependencies;
+- `core/woml-native/tests/separation.rs` remains the Rust-owned dependency and
+  adapter-import gate;
+- `woml-cli/scripts/verify-native-exports.ts` provides the one canonical export
+  list shared by binary and CLI-contract verification;
+- `.github/workflows/ci.yml` runs the complete gate on every push and pull
+  request; and
+- the repository `test:release` journey also starts with this gate.
 
 Result: future changes cannot silently reconnect the architectures.
 

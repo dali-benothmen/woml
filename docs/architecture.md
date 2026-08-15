@@ -124,6 +124,14 @@ has been removed, so legacy Cronflow modules are neither compiled nor linked
 into the WOML package. There is one adapter implementation and one WOML
 execution path.
 
+This separation is enforced rather than documented by convention. The
+`test:architecture-separation` gate rejects SDK imports from the WOML frontend
+or CLI, legacy/local dependencies in `woml-native`, legacy imports in the N-API
+adapter, drift between the CLI's native contract and the addon's exact export
+surface, and any `@cronflow/*` runtime dependency in a clean packed install.
+GitHub Actions runs the gate for every push and pull request, and the full
+release journey runs it again before feature release tests.
+
 The long-lived Bun host executes JavaScript because JavaScript is part of the
 authoring experience. Each invocation runs in an isolated Worker with a real
 timeout boundary and receives only the versioned bindings approved for its
