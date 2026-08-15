@@ -1,0 +1,4 @@
+.gitignore
+.vscode/**
+scripts/**
+*.vsix

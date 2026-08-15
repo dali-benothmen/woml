@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "WOML Reference Expressions",
+  "scopeName": "woml.references.injection",
+  "injectionSelector": "L:text.html.woml string.quoted.double.html, L:text.html.woml string.quoted.single.html",
+  "patterns": [
+    {
+      "name": "meta.embedded.expression.woml",
+      "begin": "\\{\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.woml"
+        }
+      },
+      "end": "\\}\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.woml"
+        }
+      },
+      "patterns": [
+        {
+          "name": "support.variable.woml",
+          "match": "(?<![.$\\w])\\b(context|services|secrets|props|lifecycle|attempt)\\b"
+        },
+        {
+          "name": "punctuation.accessor.woml",
+          "match": "\\."
+        },
+        {
+          "name": "variable.other.property.woml",
+          "match": "\\b[A-Za-z_$][A-Za-z0-9_$]*\\b"
+        },
+        {
+          "name": "constant.numeric.woml",
+          "match": "\\b[0-9]+(?:\\.[0-9]+)?\\b"
+        }
+      ]
+    }
+  ]
+}

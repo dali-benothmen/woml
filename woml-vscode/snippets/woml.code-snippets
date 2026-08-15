@@ -1,0 +1,34 @@
+{
+  "WOML manual workflow": {
+    "prefix": "woml-workflow",
+    "description": "Create a WOML workflow with a manual trigger.",
+    "body": [
+      "<woml>",
+      "  <workflow id=\"${1:workflow-id}\" name=\"${2:Workflow name}\" description=\"${3:What this workflow does}\" version=\"${4:1.0.0}\">",
+      "    <triggers>",
+      "      <manual id=\"${5:start}\" />",
+      "    </triggers>",
+      "",
+      "    <steps>",
+      "      <step id=\"${6:firstStep}\" name=\"${7:First step}\">",
+      "        <script>",
+      "          return { ${8:message}: \"${9:Hello WOML}\" };",
+      "        </script>",
+      "      </step>",
+      "    </steps>",
+      "  </workflow>",
+      "</woml>"
+    ]
+  },
+  "WOML step": {
+    "prefix": "woml-step",
+    "description": "Create a named WOML script step.",
+    "body": [
+      "<step id=\"${1:stepId}\" name=\"${2:Step name}\" description=\"${3:What this step does}\">",
+      "  <script>",
+      "    ${4:return { ok: true };}",
+      "  </script>",
+      "</step>"
+    ]
+  }
+}

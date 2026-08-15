@@ -1,0 +1,76 @@
+{
+  "name": "woml-language",
+  "displayName": "WOML",
+  "description": "Syntax highlighting and editor support for the Workflow Orchestration Markup Language.",
+  "version": "0.1.1",
+  "publisher": "woml",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "woml",
+    "workflow",
+    "automation",
+    "markup"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dali-benothmen/cronflow.git",
+    "directory": "woml-vscode"
+  },
+  "scripts": {
+    "check": "bun scripts/check-extension.ts",
+    "package": "bun run check && bunx @vscode/vsce package"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "woml",
+        "aliases": [
+          "WOML",
+          "woml"
+        ],
+        "extensions": [
+          ".woml"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "woml",
+        "scopeName": "text.html.woml",
+        "path": "./syntaxes/woml.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.js": "javascript",
+          "source.js.embedded.html": "javascript"
+        }
+      },
+      {
+        "scopeName": "woml.javascript.injection",
+        "path": "./syntaxes/woml-javascript.injection.tmLanguage.json",
+        "injectTo": [
+          "text.html.woml"
+        ]
+      },
+      {
+        "scopeName": "woml.references.injection",
+        "path": "./syntaxes/woml-references.injection.tmLanguage.json",
+        "injectTo": [
+          "text.html.woml"
+        ]
+      }
+    ],
+    "snippets": [
+      {
+        "language": "woml",
+        "path": "./snippets/woml.code-snippets"
+      }
+    ]
+  }
+}
