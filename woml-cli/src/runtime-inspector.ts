@@ -7,6 +7,10 @@ import {
   runtimeDescriptorPath,
   type RuntimeDescriptorV1,
 } from './runtime-control';
+import {
+  consumeOperationsStream,
+  type OperationsStreamEventV1,
+} from './operations-stream';
 
 export const inspectUsage =
   'Usage: woml inspect [--state <path>] [--no-color]';
@@ -74,18 +78,7 @@ export interface InspectorSnapshotV1 {
   readonly alerts: readonly InspectorAlertV1[];
 }
 
-export interface InspectorStreamEventV1 {
-  readonly profile: 'woml.runtime-operations-stream/v1';
-  readonly runtimeInstanceId: string;
-  readonly sequence: number;
-  readonly occurredAt: string;
-  readonly kind: string;
-  readonly subject: {
-    readonly id: string;
-    readonly status: string;
-    readonly code?: string;
-  };
-}
+export type InspectorStreamEventV1 = OperationsStreamEventV1;
 
 export interface InspectorTerminal {
   readonly isTTY: boolean;
@@ -167,23 +160,6 @@ function decodeSnapshot(value: unknown): InspectorSnapshotV1 {
     throw new Error('The runtime returned an invalid operations snapshot.');
   }
   return value as unknown as InspectorSnapshotV1;
-}
-
-function decodeStreamEvent(value: unknown): InspectorStreamEventV1 {
-  if (
-    !isRecord(value) ||
-    value.profile !== 'woml.runtime-operations-stream/v1' ||
-    !isString(value.runtimeInstanceId) ||
-    !isCount(value.sequence) ||
-    !isString(value.occurredAt) ||
-    !isString(value.kind) ||
-    !isRecord(value.subject) ||
-    !isString(value.subject.id) ||
-    !isString(value.subject.status)
-  ) {
-    throw new Error('The runtime returned an invalid operations stream event.');
-  }
-  return value as unknown as InspectorStreamEventV1;
 }
 
 export function parseInspectArguments(args: readonly string[]): InspectorArguments {
@@ -484,40 +460,6 @@ async function fetchSnapshot(descriptor: RuntimeDescriptorV1, fetcher: typeof fe
   return decodeSnapshot(await response.json());
 }
 
-function streamEvents(
-  response: Response,
-  receive: (event: InspectorStreamEventV1) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  if (!response.ok || response.body === null) {
-    throw new Error(`Runtime event stream failed with HTTP ${response.status}.`);
-  }
-  return (async () => {
-    const reader = response.body!.getReader();
-    const cancel = (): void => { void reader.cancel().catch(() => {}); };
-    signal?.addEventListener('abort', cancel, { once: true });
-    const decoder = new TextDecoder();
-    let buffered = '';
-    try {
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buffered += decoder.decode(chunk.value, { stream: true });
-        for (;;) {
-          const boundary = buffered.indexOf('\n\n');
-          if (boundary < 0) break;
-          const block = buffered.slice(0, boundary);
-          buffered = buffered.slice(boundary + 2);
-          const data = block.split('\n').find(line => line.startsWith('data: '));
-          if (data !== undefined) receive(decodeStreamEvent(JSON.parse(data.slice(6))));
-        }
-      }
-    } finally {
-      signal?.removeEventListener('abort', cancel);
-    }
-  })();
-}
-
 export async function runRuntimeInspector(options: {
   readonly args: InspectorArguments;
   readonly terminal?: InspectorTerminal;
@@ -672,7 +614,7 @@ export async function runRuntimeInspector(options: {
           signal: streamAbort.signal,
         });
         delay = 250;
-        await streamEvents(response, event => {
+        await consumeOperationsStream(response, event => {
           if (event.subject.code === 'WOML_OBSERVABILITY_STREAM_GAP') {
             state = { ...state, stale: true, connectionMessage: 'Live updates were missed; resynchronizing…' };
             void refresh();

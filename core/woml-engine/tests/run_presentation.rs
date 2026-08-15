@@ -136,6 +136,10 @@ fn presentation_is_a_deterministic_read_model_across_store_restart() {
   assert_eq!(list.profile, RUN_PRESENTATION_LIST_PROFILE);
   assert_eq!(list.workflow_id, "hello");
   assert_eq!(list.runs, [first]);
+  assert!(reopened.has_definition_for_workflow("hello").unwrap());
+  assert!(!reopened
+    .has_definition_for_workflow("missing-workflow")
+    .unwrap());
 }
 
 #[test]

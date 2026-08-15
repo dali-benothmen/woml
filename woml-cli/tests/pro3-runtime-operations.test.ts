@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -34,6 +34,18 @@ async function temporaryDirectory(label: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), `woml-pro3-${label}-`));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+async function availablePort(): Promise<number> {
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(),
+  });
+  const port = server.port;
+  server.stop(true);
+  if (port === undefined) throw new Error('Bun did not assign a local port.');
+  return port;
 }
 
 async function output(process: ReturnType<typeof Bun.spawn>): Promise<{
@@ -238,13 +250,11 @@ describe('PRO3 packaged background journey', () => {
       )
     );
     expect(failed.exitCode).toBe(1);
-    expect(failed.stderr).toContain('failed to start');
+    expect(failed.stderr).toContain('WOML_MALFORMED_MARKUP');
     expect(await Bun.file(runtimeDescriptorPath(statePath)).exists()).toBe(
       false
     );
-    expect(
-      await readFile(join(directory, '.woml/logs/runtime.log'), 'utf8')
-    ).toContain('WOML parse error');
+    expect(await Bun.file(join(directory, '.woml/logs/runtime.log')).exists()).toBe(false);
   }, 15_000);
 
   test('first SIGTERM drains slow work and a second SIGTERM forces exit', async () => {
@@ -252,9 +262,10 @@ describe('PRO3 packaged background journey', () => {
     const directory = await temporaryDirectory('signals');
     const workflowPath = join(directory, 'slow.woml');
     const statePath = join(directory, '.woml/state.sqlite');
+    const publicPort = await availablePort();
     await writeFile(
       workflowPath,
-      `<woml><workflow id="pro3-slow"><triggers><manual id="start" /><interval id="keepAlive" every="1h" on-missed="skip" /></triggers><steps><step id="slow"><script>await new Promise(resolve => setTimeout(resolve, 10_000)); return { done: true };</script></step></steps></workflow></woml>`
+      `<woml><workflow id="pro3-slow"><triggers><webhook id="start" path="/slow" method="POST" auth="none"><schema>{"type":"object","additionalProperties":false}</schema></webhook></triggers><steps><step id="slow"><script>await new Promise(resolve => setTimeout(resolve, 10_000)); return { done: true };</script></step></steps></workflow></woml>`
     );
     const child = Bun.spawn(
       [
@@ -262,8 +273,8 @@ describe('PRO3 packaged background journey', () => {
         packagedCli,
         'run',
         workflowPath,
-        '--trigger',
-        'start',
+        '--port',
+        String(publicPort),
         '--state',
         statePath,
       ],
@@ -285,6 +296,13 @@ describe('PRO3 packaged background journey', () => {
         if (child.exitCode === null) child.kill('SIGKILL');
         throw new Error(`Slow runtime did not become ready: ${await childStderr}`);
       }
+      const admitted = await fetch(`http://127.0.0.1:${publicPort}/slow`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(admitted.status).toBe(202);
+      await Bun.sleep(100);
       child.kill('SIGTERM');
       await Bun.sleep(200);
       expect(child.exitCode).toBeNull();

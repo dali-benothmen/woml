@@ -835,6 +835,10 @@ interface NativeCore {
     workflowId: string,
     limit: number
   ) => string;
+  readonly hasWomlWorkflowDefinition: (
+    eventStorePath: string,
+    workflowId: string
+  ) => boolean;
   readonly listWomlRuns: (
     eventStorePath: string,
     limit: number,
@@ -2733,6 +2737,24 @@ export function listRunPresentationsWithRust(
     native.listWomlRunPresentations(eventStorePath, workflowId, limit)
   );
   return decodeRunPresentationListV1(JSON.stringify(value));
+}
+
+export function hasWorkflowDefinitionWithRust(
+  eventStorePath: string,
+  workflowId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): boolean {
+  if (eventStorePath.length === 0 || workflowId.length === 0 || workflowId.length > 256) {
+    throw new Error('Workflow definition lookup requires a store path and workflow ID.');
+  }
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.hasWomlWorkflowDefinition !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose workflow definition lookup; rebuild the Rust addon.`
+    );
+  }
+  return native.hasWomlWorkflowDefinition(eventStorePath, workflowId);
 }
 
 function callRunManagementNative(call: () => string): unknown {

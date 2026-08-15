@@ -2492,6 +2492,22 @@ impl DurableEventStore {
     Ok(workflow)
   }
 
+  pub fn has_definition_for_workflow(&self, workflow_id: &str) -> Result<bool, DurableStoreError> {
+    if workflow_id.is_empty() || workflow_id.len() > 256 {
+      return Err(DurableStoreError::Contract(
+        "A workflow definition lookup requires a valid workflow ID.".to_string(),
+      ));
+    }
+    self
+      .connection
+      .query_row(
+        "SELECT EXISTS(SELECT 1 FROM woml_definitions WHERE workflow_id = ?1)",
+        [workflow_id],
+        |row| row.get::<_, bool>(0),
+      )
+      .map_err(DurableStoreError::from)
+  }
+
   /// Returns the durable lineage depth of a run. Top-level trigger runs have
   /// depth zero; an admitted workflow-call child stores its assigned depth.
   pub fn workflow_call_depth_for_parent(&self, run_id: &str) -> Result<u32, DurableStoreError> {

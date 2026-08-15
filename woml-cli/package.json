@@ -120,6 +120,7 @@
     "test:run-presentation": "bun run build:native && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test run_presentation && bun test tests/terminal-presentation-contracts.test.ts tests/run-presentation-native.test.ts tests/run-presentation-admin.test.ts && bun run typecheck",
     "test:foreground-output": "bun test tests/terminal-presentation-renderer.test.ts tests/foreground-presentation.test.ts tests/foreground-output-cli.test.ts tests/t4_trigger_cli.test.ts tests/t7_slack_cli.test.ts tests/t8_schedule_cli.test.ts tests/t10_interval_cli.test.ts tests/t13_production_triggers_cli.test.ts && bun run typecheck",
     "test:manual-triggers": "bun run build:native && bun run build:js && bun test tests/terminal-presentation-contracts.test.ts tests/manual-trigger-cli.test.ts tests/manual-trigger-pty.test.ts tests/foreground-output-cli.test.ts tests/t4_trigger_cli.test.ts && bun run typecheck && cargo check --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine -p core",
+    "test:log-following": "bun run build:native && bun run build:js && bun test tests/log-follow.test.ts tests/background-log-follow.test.ts tests/run-presentation-admin.test.ts tests/pro6-runtime-inspector.test.ts tests/pro3-runtime-operations.test.ts && bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -1910,6 +1910,18 @@ pub fn list_woml_run_presentations(
 }
 
 #[napi]
+pub fn has_woml_workflow_definition(
+  event_store_path: String,
+  workflow_id: String,
+) -> napi::Result<bool> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_presentation_error(RunPresentationError::Store(error)))?;
+  store
+    .has_definition_for_workflow(&workflow_id)
+    .map_err(|error| native_run_presentation_error(RunPresentationError::Store(error)))
+}
+
+#[napi]
 pub fn list_woml_runs(
   event_store_path: String,
   limit: u32,

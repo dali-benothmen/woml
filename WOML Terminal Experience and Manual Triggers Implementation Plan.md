@@ -1,10 +1,10 @@
 # WOML Terminal Experience and Manual Triggers Implementation Plan
 
-Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 and TM4 completed on
-2026-08-15. The versioned presentation contracts, pure color/plain/JSON
+Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3, TM4, and TM5 completed
+on 2026-08-15. The versioned presentation contracts, pure color/plain/JSON
 renderer, durable Rust projection, native/TypeScript query boundary,
-professional foreground output, and Enter-driven durable manual trigger are
-implemented. TM5 is next and adds background log following.
+professional foreground output, Enter-driven durable manual trigger, and
+secure retained/live background log following are implemented. TM6 is next.
 
 ## 1. Product Outcome
 
@@ -831,7 +831,7 @@ arrival, or infer selected routes by reevaluating conditions.
 | TM2 — completed | Add Rust Run Presentation v1 projection and native/TypeScript decoding. | One durable run can be queried with names, descriptions, steps, results, lifecycle, timing, and summaries. |
 | TM3 — completed | Replace foreground trigger/run output with the professional renderer. | Webhook, Slack, schedule, interval, event, and existing one-shot runs are readable and organized. |
 | TM4 — completed | Implement explicit Rust manual admission and the Enter-driven foreground input loop. | `<manual>` waits for the user and can create repeated durable runs. |
-| TM5 | Add `woml <run-id|workflow-id> --logs` and background-runtime attachment. | Users can inspect and follow background execution safely from another terminal. |
+| TM5 — completed | Add `woml <run-id|workflow-id> --logs` and background-runtime attachment. | Users can inspect and follow background execution safely from another terminal. |
 | TM6 | Complete complex control-flow, retry, approval, lifecycle, concurrency, and multi-run presentation. | Large real workflows remain organized instead of exposing internal engine noise. |
 | TM7 | Harden accessibility, security, compatibility, retention, restart, and failure behavior. | Output remains safe and truthful across terminals, pipes, crashes, and historical stores. |
 | TM8 | Document, benchmark, package, and publish the terminal/manual milestone. | Professional output and real manual triggers are supported WOML features. |
@@ -1022,7 +1022,7 @@ Completion evidence:
   native-runtime, renderer, packaged CLI, and real PTY tests with 91
   assertions, followed by TypeScript and single-job Rust checks.
 
-### TM5 — Add background log following
+### TM5 — Add background log following — completed
 
 Changes:
 
@@ -1050,6 +1050,19 @@ Two-process acceptance starts a packaged background runtime, triggers several
 runs, attaches by run ID and workflow ID, verifies colors/history/live updates,
 detaches with Ctrl+C, proves the runtime remains ready, then stops it with
 `woml stop`.
+
+Completion evidence:
+
+- Direct run-ID and workflow-ID log commands resolve the default state store,
+  explicit `--state`, or a supplied runtime `--config`.
+- Retained durable Run Presentation snapshots render before authenticated live
+  attachment; stream notifications only cause a fresh durable projection read.
+- Run followers exit at terminal settlement, workflow followers reconnect
+  across same-deployment restarts, and Ctrl+C detaches only the viewer.
+- Background startup prints copyable per-workflow log commands. The consolidated
+  `test:log-following` gate passes 24 contract, native-boundary, renderer,
+  operations, and packaged two-process tests with 115 assertions, followed by
+  TypeScript validation.
 
 ### TM6 — Complete automation/control-flow presentation
 

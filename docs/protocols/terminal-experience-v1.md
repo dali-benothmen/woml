@@ -1,8 +1,9 @@
 # WOML Terminal Experience Contracts v1
 
-Status: Frozen by TM0. The renderer, durable Run Presentation projection,
-foreground integration, and interactive manual admission are implemented
-through TM4. Background log following remains a later phase.
+Status: Frozen by TM0 and implemented through TM5. The renderer, durable Run
+Presentation projection, foreground integration, interactive manual admission,
+and secure retained/live background log following are implemented. Complex
+control-flow presentation remains TM6 work.
 
 This document freezes the interfaces shared by the future Rust projection,
 the Bun CLI renderers, manual-trigger input, and background log following. It

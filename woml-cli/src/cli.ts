@@ -136,6 +136,12 @@ import {
 import { RuntimeObservability } from './runtime-observability';
 import { ForegroundPresentation } from './foreground-presentation';
 import {
+  followWorkflowLogs,
+  LogFollowError,
+  logFollowUsage,
+  resolveLogFollowArguments,
+} from './log-follower';
+import {
   createProcessManualLineInput,
   type ManualLineInput,
 } from './manual-input';
@@ -143,6 +149,7 @@ import {
   renderManualTargetSelection,
   renderRunPresentation,
   renderWorkflowStartup,
+  RunPresentationDecodeError,
   type ColorMode,
   type PresentationRenderOptions,
   type TriggerPresentationV1,
@@ -245,7 +252,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${logFollowUsage}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
 }
 
 interface RunArguments {
@@ -267,7 +274,6 @@ interface RunArguments {
   readonly shutdownTimeoutMs: number;
   readonly logDirectory: string;
   readonly logFormat: 'text' | 'json';
-  readonly observabilityEnabled: boolean;
   readonly observabilityHealth: boolean;
   readonly observabilityMetrics: boolean;
   readonly retention?: AutomaticRetentionConfiguration;
@@ -451,7 +457,6 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     shutdownTimeoutMs: 30_000,
     logDirectory: resolve('.woml/logs'),
     logFormat: 'text',
-    observabilityEnabled: true,
     observabilityHealth: true,
     observabilityMetrics: true,
     verbose,
@@ -482,8 +487,6 @@ async function resolveRunArgumentsConfiguration(
     shutdownTimeoutMs: configuration.shutdownTimeoutMs,
     logDirectory: configuration.logging.directory,
     logFormat: configuration.logging.format,
-    observabilityEnabled:
-      configuration.observability.health || configuration.observability.metrics,
     observabilityHealth: configuration.observability.health,
     observabilityMetrics: configuration.observability.metrics,
     ...(configuration.retention === undefined
@@ -1051,6 +1054,14 @@ function formatError(
 
   if (error instanceof RuntimeControlError) {
     return `WOML runtime error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof LogFollowError) {
+    return `WOML logs error [${error.code}]: ${error.message}`;
+  }
+
+  if (error instanceof RunPresentationDecodeError) {
+    return `WOML logs error [${error.code}]: ${error.message}`;
   }
 
   if (error instanceof TriggerRuntimeError) {
@@ -3631,7 +3642,7 @@ async function activateWorkflows(
         }
       );
       runtimeId = runtime.runtimeId;
-      if (args.observabilityEnabled) {
+      {
         const componentRecords = [
           {
             name: 'sqlite',
@@ -3993,6 +4004,7 @@ export interface CliDependencies {
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   readonly inspectorTerminal?: InspectorTerminal;
   readonly createManualInput?: () => ManualLineInput;
+  readonly waitForLogDetach?: () => Promise<void>;
   readonly onRuntimeReady?: (info: {
     readonly runtimeInstanceId: string;
     readonly descriptorPath: string;
@@ -4357,8 +4369,12 @@ async function runInBackground(
     return error instanceof CliInputError ? 2 : 1;
   }
   const statePath = parsed.statePath;
+  let workflowIds: readonly string[] = [];
   try {
     const sources = await compileWorkflowInputs(parsed.inputPaths);
+    workflowIds = sources
+      .map(source => source.workflow.workflowId)
+      .sort((left, right) => left.localeCompare(right));
     const manualTargets = activeManualTargets(sources, parsed.triggerId);
     if (manualTargets.length > 0 && !hasNonManualRuntimeIngress(sources)) {
       throw new CliInputError(
@@ -4378,6 +4394,7 @@ async function runInBackground(
   );
   const token =
     randomUUID().replaceAll('-', '') + randomUUID().replaceAll('-', '');
+  await mkdir(dirname(handoffPath), { recursive: true, mode: 0o700 });
   await mkdir(dirname(logPath), { recursive: true, mode: 0o700 });
   await writeFile(handoffPath, `${JSON.stringify({ status: 'starting' })}\n`, {
     mode: 0o600,
@@ -4425,16 +4442,27 @@ async function runInBackground(
         typeof handoff.runtimeInstanceId === 'string' &&
         typeof handoff.pid === 'number'
       ) {
+        const visibleWorkflows = workflowIds.slice(0, 5);
+        const logCommands = visibleWorkflows.map((workflowId, index) =>
+          `${index === 0 ? 'Logs       ' : '           '}woml ${workflowId} --logs --state ${JSON.stringify(statePath)}`
+        );
+        if (workflowIds.length > visibleWorkflows.length) {
+          logCommands.push(
+            `           ${workflowIds.length - visibleWorkflows.length} more workflow(s); list them with woml list --state ${JSON.stringify(statePath)}`
+          );
+        }
         io.stdout(
           [
             'WOML runtime started in the background.',
-            `PID: ${handoff.pid}`,
-            `Runtime: ${handoff.runtimeInstanceId}`,
-            `Workflows: ${handoff.workflowCount}`,
-            `Descriptor: ${descriptorPath}`,
-            `Logs: ${logPath}`,
-            `Inspect: woml inspect --state ${JSON.stringify(statePath)}`,
-            `Stop: woml stop --state ${JSON.stringify(statePath)}`,
+            '',
+            `Runtime    ${handoff.runtimeInstanceId}`,
+            `PID        ${handoff.pid}`,
+            `Workflows  ${handoff.workflowCount}`,
+            ...logCommands,
+            `Inspect    woml inspect --state ${JSON.stringify(statePath)}`,
+            `Stop       woml stop --state ${JSON.stringify(statePath)}`,
+            `Operations ${logPath}`,
+            `Descriptor ${descriptorPath}`,
           ].join('\n') + '\n'
         );
         return 0;
@@ -4484,6 +4512,51 @@ export async function runCli(
   if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
     io.stdout(`${usage()}\n`);
     return 0;
+  }
+
+  const commands = new Set([
+    'run',
+    'test',
+    'check',
+    'types',
+    'secrets',
+    'emit',
+    'stop',
+    'inspect',
+    'backup',
+    'restore',
+    'prune',
+    'list',
+    'get',
+    'cancel',
+    'runs',
+  ]);
+  if (
+    args.includes('--logs') &&
+    args[0] !== undefined &&
+    !commands.has(args[0])
+  ) {
+    try {
+      const logArguments = await resolveLogFollowArguments(args);
+      return await followWorkflowLogs({
+        args: logArguments,
+        io,
+        dependencies: {
+          nativeCorePath: dependencies.nativeCorePath,
+          fetch: dependencies.fetch,
+          waitForDetach: dependencies.waitForLogDetach,
+        },
+      });
+    } catch (error) {
+      io.stderr(`${formatError(error)}\n`);
+      if (
+        error instanceof LogFollowError &&
+        error.code === 'WOML_CLI_ARGUMENTS_INVALID'
+      ) {
+        return 2;
+      }
+      return 1;
+    }
   }
 
   if (args[0] === 'check') {
