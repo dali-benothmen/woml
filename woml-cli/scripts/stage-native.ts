@@ -4,28 +4,51 @@ import { resolve } from 'node:path';
 const packageRoot = resolve(import.meta.dir, '..');
 const releaseDirectory = resolve(packageRoot, '../dist/target/release');
 
-function rustLibraryName(): string {
-  if (process.platform === 'win32') return 'core.dll';
-  if (process.platform === 'darwin') return 'libcore.dylib';
-  if (process.platform === 'linux') return 'libcore.so';
-  throw new Error(`WOML does not support native builds for ${process.platform}.`);
+export type WomlNativePlatform = 'win32' | 'darwin' | 'linux';
+export type WomlNativeArchitecture = 'x64' | 'arm64';
+
+export function rustLibraryName(platform: string): string {
+  if (platform === 'win32') return 'woml_core.dll';
+  if (platform === 'darwin') return 'libwoml_core.dylib';
+  if (platform === 'linux') return 'libwoml_core.so';
+  throw new Error(`WOML does not support native builds for ${platform}.`);
 }
 
-const source = resolve(releaseDirectory, rustLibraryName());
-const destinationDirectory = resolve(packageRoot, 'dist');
-const destination = resolve(
-  destinationDirectory,
-  `woml-core.${process.platform}-${process.arch}.node`,
-);
+export function packagedAddonName(platform: string, architecture: string): string {
+  if (!['win32', 'darwin', 'linux'].includes(platform)) {
+    throw new Error(`WOML does not support native builds for ${platform}.`);
+  }
+  if (!['x64', 'arm64'].includes(architecture)) {
+    throw new Error(`WOML does not support native builds for ${architecture}.`);
+  }
+  return `woml-core.${platform}-${architecture}.node`;
+}
 
-try {
-  await stat(source);
-} catch {
-  throw new Error(
-    `The WOML Rust library was not found at "${source}". Build core/Cargo.toml in release mode first.`,
+export async function stageNativeArtifact(
+  platform = process.platform,
+  architecture = process.arch,
+): Promise<string> {
+  const source = resolve(releaseDirectory, rustLibraryName(platform));
+  const destinationDirectory = resolve(packageRoot, 'dist');
+  const destination = resolve(
+    destinationDirectory,
+    packagedAddonName(platform, architecture),
   );
+
+  try {
+    await stat(source);
+  } catch {
+    throw new Error(
+      `The WOML Rust library was not found at "${source}". Build core/woml-native/Cargo.toml in release mode first.`,
+    );
+  }
+
+  await mkdir(destinationDirectory, { recursive: true });
+  await rm(resolve(destinationDirectory, 'script-worker.ts'), { force: true });
+  await copyFile(source, destination);
+  return destination;
 }
 
-await mkdir(destinationDirectory, { recursive: true });
-await rm(resolve(destinationDirectory, 'script-worker.ts'), { force: true });
-await copyFile(source, destination);
+if (import.meta.main) {
+  await stageNativeArtifact();
+}

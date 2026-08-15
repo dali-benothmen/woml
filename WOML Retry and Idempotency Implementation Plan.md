@@ -762,7 +762,7 @@ The implementation is expected to touch these load-bearing areas:
 | Rust model/events/folding | `core/woml-engine/src/model.rs`, `event.rs`, `projection.rs`, `engine.rs` |
 | Durable scheduler/recovery | `core/woml-engine/src/durable.rs`, `runtime.rs` |
 | Rust/Bun protocol | `core/woml-engine/src/protocol.rs`, `host.rs`, `woml-cli/src/script-host/*` |
-| CLI execution and diagnostics | `core/src/woml_bridge.rs`, `woml-cli/src/rust-executor.ts`, `woml-cli/src/cli.ts` |
+| CLI execution and diagnostics | `core/woml-native/src/bridge.rs`, `woml-cli/src/rust-executor.ts`, `woml-cli/src/cli.ts` |
 | Product fixture | `examples/retryWorkflow.woml` plus compiled/event fixtures |
 
 Exact edits may be split into smaller modules during implementation, but the

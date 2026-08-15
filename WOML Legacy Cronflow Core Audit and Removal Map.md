@@ -1,10 +1,10 @@
 # WOML Legacy Cronflow Core Audit and Removal Map
 
-Status: Audit 0 and Audit 1 completed on 2026-08-15. The dependency and removal
-map is frozen, and the canonical WOML N-API adapter now lives in a dedicated
-native crate that depends only on `woml-engine`. The CLI packaging switch is
-deliberately reserved for Audit 2. No legacy public API, database, fixture, or
-user data was removed.
+Status: Audit 0, Audit 1, and Audit 2 completed on 2026-08-15. The dependency
+and removal map is frozen, the canonical WOML N-API adapter lives in a dedicated
+native crate that depends only on `woml-engine`, and every CLI build/release path
+now stages that crate directly. The temporary combined-core WOML shim was
+removed. No legacy JavaScript API, database, fixture, or user data was removed.
 
 ## 1. Executive Conclusion
 
@@ -21,22 +21,17 @@ The current coupling is packaging, not execution:
   canonical adapter at
   [`core/woml-native/src/bridge.rs`](core/woml-native/src/bridge.rs) imports
   `woml_engine`; it does not import the legacy Rust modules.
-- [`core/src/woml_bridge.rs`](core/src/woml_bridge.rs) is now a temporary
-  compatibility shim that includes the canonical adapter source while the CLI
-  still builds the combined addon.
-- [`core/src/lib.rs`](core/src/lib.rs) declares both `woml_bridge` and every
-  legacy module in one native `core` crate. Consequently, a normal WOML native
-  build still compiles and links the legacy implementation even though WOML
-  does not call it.
+- The former `core/src/woml_bridge.rs` compatibility shim has been removed, and
+  [`core/src/lib.rs`](core/src/lib.rs) no longer declares a WOML module. The
+  combined `core` crate is now legacy-only.
 - [`woml-cli/scripts/stage-native.ts`](woml-cli/scripts/stage-native.ts) builds
-  that combined crate and renames its platform library to the already
-  WOML-facing `woml-core.<platform>-<arch>.node` artifact.
+  and stages `woml-native` as the stable
+  `woml-core.<platform>-<arch>.node` artifact.
 - The WOML frontend and CLI do not import the JavaScript-chaining SDK.
 
-The first required removal action is therefore complete without deleting old
-modules. Once Audit 2 makes `woml-cli` build, package, and pass its release gates
-against `woml-native`, the temporary shim can leave the combined crate and the
-old Rust dependency closure can be retired independently of WOML.
+The operational split is complete. The old Rust dependency closure can now be
+retired independently of WOML after the JavaScript SDK retirement contract is
+published and its support window ends.
 
 ## 2. Audit Scope and Method
 
@@ -74,13 +69,11 @@ flowchart LR
   Frontend[woml TypeScript frontend]
   CLI[woml-cli]
 
-  subgraph Shell[Combined native package used until Audit 2]
+  subgraph Shell[Legacy combined native package]
     Lib[core/src/lib.rs module declarations]
-    Shim[core/src/woml_bridge.rs compatibility shim]
     LegacyBridge[core/src/bridge.rs]
     LegacyGraph[legacy dispatcher, triggers, orchestration, state and DB]
 
-    Lib --> Shim
     Lib --> LegacyBridge
     LegacyBridge --> LegacyGraph
   end
@@ -94,8 +87,7 @@ flowchart LR
 
   Source --> Frontend
   Frontend -->|versioned compiled model| CLI
-  CLI -->|currently loads combined addon| Lib
-  Shim -. includes canonical source .-> Adapter
+  CLI -->|loads woml-core platform addon| Adapter
   Adapter --> Engine
   Engine <-->|versioned protocols| Host
 
@@ -108,9 +100,8 @@ flowchart LR
   end
 ```
 
-The shared box is the problem. WOML and Cronflow currently leave the build as
-one `.node` library, but their runtime graphs are separate after the exported
-N-API symbol is selected.
+WOML and legacy Cronflow now have separate native build products as well as
+separate runtime graphs.
 
 ### 3.1 The current WOML path
 
@@ -122,7 +113,6 @@ N-API symbol is selected.
   -> woml-cli/src/cli.ts
   -> woml-cli/src/rust-executor.ts
   -> executeWoml*/startWoml*/submitWoml* N-API functions
-  -> core/src/woml_bridge.rs compatibility shim until Audit 2
   -> core/woml-native/src/bridge.rs canonical adapter
   -> core/woml-engine
   -> durable WOML event log and folded projections
@@ -165,8 +155,8 @@ The classification terms used below are:
 | [`core/woml-engine`](core/woml-engine) | Compiled DAG execution, immutable events, folding, SQLite durability, recovery, triggers, approvals, retries, workflow calls, lifecycle, policies, state, services, operations, backup, retention, and presentation | Direct execution authority | **Keep** |
 | [`core/woml-native`](core/woml-native) | WOML-only `cdylib`/N-API build owner | Directly depends on adapter libraries and `woml-engine`; no legacy dependency | **Keep; Audit 1 complete** |
 | [`core/woml-native/src/bridge.rs`](core/woml-native/src/bridge.rs) | Converts N-API arguments/progress callbacks into `woml-engine` calls and serializes outcomes | Canonical extracted CLI boundary; imports `woml_engine`, not legacy modules | **Keep in WOML native crate** |
-| [`core/src/woml_bridge.rs`](core/src/woml_bridge.rs) | Includes the canonical adapter into the combined addon during the transition | Keeps today's CLI build compatible until Audit 2 | **Temporary shim; remove after CLI switch** |
-| [`core/src/lib.rs`](core/src/lib.rs) | Declares every legacy module plus the temporary WOML shim; contains legacy core tests and branding | Causes both graphs to compile into the currently staged library | **Reshape**, then remove legacy form |
+| Former `core/src/woml_bridge.rs` | Included the canonical adapter into the combined addon during the transition | Removed after the CLI packaging switch | **Removed in Audit 2** |
+| [`core/src/lib.rs`](core/src/lib.rs) | Declares the legacy modules and contains legacy core tests and branding | No longer compiled, linked, or staged by WOML | **Legacy-only after Audit 2** |
 | [`core/src/bridge.rs`](core/src/bridge.rs) | Legacy N-API facade for workflow registration, run creation, jobs, triggers, steps, hooks, and webhook server | Called by the JS SDK and old N-API tests; not called by WOML | **Legacy-only** |
 | [`core/src/models.rs`](core/src/models.rs) | Chained-workflow, step, trigger, run, job, condition, parallel, and completion structures | Incompatible with WOML's versioned compiled model | **Legacy-only** |
 | [`core/src/context.rs`](core/src/context.rs) | Mutable legacy execution context sent to JS jobs | Not WOML event-folded context | **Legacy-only** |
@@ -200,8 +190,9 @@ bridge
 ```
 
 The canonical WOML adapter is outside this closure. Audit 1 moved it to a
-native crate with a direct dependency on `woml-engine`, making the complete
-graph above removable after Audit 2 stops staging the combined artifact.
+native crate with a direct dependency on `woml-engine`, and Audit 2 stopped
+staging the combined artifact. The complete graph above is no longer a WOML
+build or runtime dependency.
 
 ## 5. TypeScript, Package, and Test Inventory
 
@@ -286,9 +277,8 @@ runtime split, with frozen schema identities considered separately.
 
 ## 8. What WOML Still Needs Before Removal
 
-The required runtime replacement now exists: `core/woml-native` is a WOML-only
-native addon shell. Audit 2 still needs to make it the CLI's build and packaged
-artifact authority.
+The required runtime replacement is active: `core/woml-native` is the WOML-only
+native addon shell and the CLI's build and packaged-artifact authority.
 
 The target boundary should be:
 
@@ -306,13 +296,13 @@ The dedicated native crate now owns:
 - the native library name and build script; and
 - a checked list of all required JavaScript-facing WOML exports.
 
-Audit 2 must move platform artifact staging and packaged-release verification
-from the combined `core` build to this crate.
+Audit 2 moved platform artifact staging and packaged-release verification from
+the combined `core` build to this crate.
 
 Its manifest has no local dependency except `woml-engine`, and its boundary
 test rejects imports from the legacy graph. The JavaScript-facing filename can
-remain `woml-core.<platform>-<arch>.node`, so Audit 2 does not need to change the
-normal user command or CLI lookup contract.
+remain `woml-core.<platform>-<arch>.node`, so the normal user command and CLI
+lookup contract did not change.
 
 ## 9. Removal Sets
 
@@ -365,12 +355,12 @@ required replacement, data rule, risks, and proof gates. No deletion occurs.
 The canonical adapter now lives in `core/woml-native`, whose manifest depends
 locally only on `woml-engine`. The combined core includes that same source
 through a small compatibility shim, avoiding a duplicated implementation before
-Audit 2.
+the Audit 2 switch. That temporary shim has now been removed.
 
 Result: the standalone crate builds without the legacy core in its Cargo tree.
-Its 36 JavaScript-facing WOML exports exactly match the WOML subset exposed by
-the combined addon. The old combined addon also still compiles, so the current
-CLI remains usable before its packaging switch.
+Its 36 JavaScript-facing WOML exports exactly matched the WOML subset exposed by
+the combined addon. The old combined addon remained usable until Audit 2 moved
+the CLI to the dedicated artifact.
 
 Audit 1 evidence:
 
@@ -383,11 +373,28 @@ Audit 1 evidence:
   addon and returns `{"message":"Hello Dali"}`; and
 - the WOML CLI TypeScript project still type-checks.
 
-### Audit 2 — Switch the CLI build and release path
+### Audit 2 — Complete: switch the CLI build and release path
 
-Update the CLI's native build and staging scripts to build the dedicated crate.
-Prove development overrides, clean builds, packaged installs, every supported
-platform artifact name, and all WOML release journeys.
+The CLI now builds the locked `core/woml-native/Cargo.toml` manifest directly.
+Staging maps `libwoml_core.so`, `libwoml_core.dylib`, or `woml_core.dll` to the
+unchanged public `woml-core.<platform>-<arch>.node` name. The temporary combined
+core shim and module declaration are gone.
+
+Audit 2 evidence:
+
+- `bun run build:native` compiles only `woml-native` and its `woml-engine`
+  dependency, then stages the dedicated release artifact;
+- `core/woml-native/tests/separation.rs` proves the legacy crate no longer
+  compiles or exports the WOML adapter;
+- `woml-cli/tests/native-release-boundary.test.ts` freezes Linux, macOS, and
+  Windows x64/arm64 artifact names and executes a real workflow through
+  `WOML_RUST_CORE_PATH`;
+- `woml-cli/scripts/verify-native-exports.ts` checks the staged package artifact
+  and its exact 36-function WOML surface;
+- the clean package installation terminal journey executes through the staged
+  addon; and
+- `test:native-release-boundary` is part of the repository `test:release`
+  journey.
 
 Result: `woml run` is operationally independent of the legacy crate, not merely
 source-independent.

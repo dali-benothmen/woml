@@ -1329,7 +1329,7 @@ Implementation notes:
 | Occurrence persistence/recovery | `core/woml-engine/src/durable.rs` plus a focused trigger module if needed |
 | HTTP listener and scheduler | New WOML-owned Rust modules under `core/woml-engine`; not the legacy Cronflow execution path |
 | Shared Slack transport | Refactored modules under `woml-cli/src/notification-provider/` or a new `woml-cli/src/slack/` boundary shared by trigger and notification adapters |
-| Native/CLI boundary | `core/src/woml_bridge.rs`, `woml-cli/src/rust-executor.ts` or focused trigger clients |
+| Native/CLI boundary | `core/woml-native/src/bridge.rs`, `woml-cli/src/rust-executor.ts` or focused trigger clients |
 | CLI commands/diagnostics | `woml-cli/src/cli.ts` split into command modules as the surface grows |
 | Product fixtures | `examples/webhookWorkflow.woml`, `slackTriggerWorkflow.woml`, `scheduleWorkflow.woml`, `intervalWorkflow.woml`, `eventWorkflow.woml`, and the two-subscriber `examples/events/` journey |
 | Public docs | `docs/woml-v0.1.md`, `docs/architecture.md`, CLI and trigger operations guides |

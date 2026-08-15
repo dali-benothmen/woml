@@ -1541,7 +1541,7 @@ requires its own reviewed product and compatibility contract.
 | Rust scheduling/recovery | `core/woml-engine/src/engine.rs`, `runtime.rs`, `durable.rs` |
 | Notification authority | existing Rust notification scheduling/delivery and approval resolution areas |
 | Bun execution | existing script host/module worker plus a focused custom-provider invocation adapter |
-| Native/CLI | `core/src/woml_bridge.rs`, `woml-cli/src/rust-executor.ts`, `woml-cli/src/cli.ts` |
+| Native/CLI | `core/woml-native/src/bridge.rs`, `woml-cli/src/rust-executor.ts`, `woml-cli/src/cli.ts` |
 | Operations | run inspection, terminal inspector, logs/metrics, backup/restore, retention/prune |
 | Protocols/schemas | `docs/protocols`, `docs/schemas`, reviewed JSON/WOML/event fixtures |
 | Documentation/editor | `docs/woml-v0.1.md`, architecture, notification/lifecycle/module guides, editor data |

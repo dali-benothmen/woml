@@ -1163,7 +1163,7 @@ may justify separate reviewed milestones later.
 | Rust model validation | `core/woml-engine/src/model.rs`, graph-validation tests |
 | Events/folding | `core/woml-engine/src/event.rs`, `projection.rs`, event schemas/fixtures |
 | Scheduling/recovery | `core/woml-engine/src/engine.rs`, `runtime.rs`, `durable.rs` |
-| Native/CLI errors | `core/src/woml_bridge.rs`, `woml-cli/src/rust-executor.ts`, `cli.ts` |
+| Native/CLI errors | `core/woml-native/src/bridge.rs`, `woml-cli/src/rust-executor.ts`, `cli.ts` |
 | Operations | run inspection, production observability, terminal inspector, retention tests |
 | Examples | `examples/forkDistributionWorkflow.woml` and reviewed fixture directories |
 | Release gates | `woml/tests`, `core/woml-engine/tests`, `woml-cli/tests`, verifier scripts |

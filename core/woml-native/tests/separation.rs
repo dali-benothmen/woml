@@ -59,10 +59,10 @@ fn native_adapter_does_not_import_the_legacy_core_graph() {
 }
 
 #[test]
-fn combined_core_uses_the_canonical_adapter_only_as_a_temporary_shim() {
+fn legacy_core_no_longer_compiles_or_exports_the_woml_adapter() {
   let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-  let shim = fs::read_to_string(root.join("../src/woml_bridge.rs")).unwrap();
+  let legacy_root = fs::read_to_string(root.join("../src/lib.rs")).unwrap();
 
-  assert!(shim.contains("include!(\"../woml-native/src/bridge.rs\")"));
-  assert!(!shim.contains("pub async fn execute_woml_workflow"));
+  assert!(!legacy_root.contains("mod woml_bridge"));
+  assert!(!root.join("../src/woml_bridge.rs").exists());
 }

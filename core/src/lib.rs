@@ -17,7 +17,6 @@ pub mod step_orchestrator;
 pub mod trigger_executor;
 pub mod triggers;
 pub mod webhook_server;
-pub mod woml_bridge;
 pub mod workflow_state_machine;
 
 /// Core engine version

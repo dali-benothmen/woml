@@ -42,21 +42,18 @@ const expectedExports = [
   'submitWomlTriggerOccurrence',
 ] as const;
 
-function defaultLibraryName(): string {
-  if (process.platform === 'win32') return 'woml_core.dll';
-  if (process.platform === 'darwin') return 'libwoml_core.dylib';
-  if (process.platform === 'linux') return 'libwoml_core.so';
-  throw new Error(`Unsupported native platform: ${process.platform}.`);
-}
-
 const source = resolve(
   process.argv[2] ??
-    resolve(import.meta.dir, '../../dist/target/debug', defaultLibraryName()),
+    resolve(
+      import.meta.dir,
+      '../dist',
+      `woml-core.${process.platform}-${process.arch}.node`,
+    ),
 );
 const temporaryDirectory = await mkdtemp(join(tmpdir(), 'woml-native-exports-'));
 const stagedAddon = join(
   temporaryDirectory,
-  `${basename(source).replace(/\.(so|dylib|dll)$/u, '')}.node`,
+  `${basename(source).replace(/\.(so|dylib|dll|node)$/u, '')}.node`,
 );
 
 try {

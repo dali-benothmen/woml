@@ -1127,7 +1127,7 @@ request, and cancellation detection.
 | Script binding        | `woml-cli/src/script-host/worker.ts`, protocol/types/tests                       |
 | General notifications | frontend lowering, notification host/protocol, shared Slack adapter              |
 | Cancellation          | Rust runtime/host/capability tokens, approval settlement, workflow-call boundary |
-| N-API boundary        | `core/src/woml_bridge.rs`                                                        |
+| N-API boundary        | `core/woml-native/src/bridge.rs`                                                        |
 | CLI                   | `woml-cli/src/cli.ts`, `rust-executor.ts`, packaged CLI tests                    |
 | Contracts             | `docs/schemas/*`, `docs/protocols/*`, reviewed fixtures                          |
 | Examples and docs     | new lifecycle/cancellation examples plus language/architecture/operator guides   |

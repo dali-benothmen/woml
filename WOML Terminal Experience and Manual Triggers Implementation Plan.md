@@ -1297,7 +1297,7 @@ These remain separately reviewed roadmap work.
 | Trigger summaries | existing webhook/event/schedule/interval/Slack summary helpers in the CLI |
 | Rust presentation projection | `core/woml-engine/src/durable.rs`, projection/model helpers, and a focused presentation module |
 | Manual admission | `core/woml-engine/src/webhook.rs` or renamed production-trigger runtime authority |
-| Native bridge | `core/src/woml_bridge.rs`, `woml-cli/src/rust-executor.ts` |
+| Native bridge | `core/woml-native/src/bridge.rs`, `woml-cli/src/rust-executor.ts` |
 | Runtime administration | `woml-cli/src/runtime-control.ts`, `runtime-observability.ts`, reviewed admin schemas |
 | Schemas/protocols | `docs/schemas`, `docs/protocols`, reviewed presentation/manual fixtures |
 | PTY tests | focused `woml-cli/tests` helpers and packaged terminal acceptance |

@@ -1495,7 +1495,7 @@ Completion notes:
 | Runtime waits         | retry, approval, workflow-call, lifecycle, cancellation integration           |
 | State capability      | `core/woml-engine/src/capability.rs` plus focused State v1 Rust module        |
 | Bun services          | `woml-cli/src/script-host/*`, service facade/types/tests                      |
-| N-API boundary        | `core/src/woml_bridge.rs`                                                     |
+| N-API boundary        | `core/woml-native/src/bridge.rs`                                                     |
 | CLI                   | `woml-cli/src/cli.ts`, `rust-executor.ts`, packaged tests                     |
 | Contracts             | `docs/schemas/*`, `docs/protocols/*`, reviewed fixtures                       |
 | Examples/docs         | runtime-policy and durable-state examples/operator guides                     |

@@ -9,26 +9,6 @@
       <manual id="start" />
     </triggers>
 
-    <lifecycle>
-      <on-start>
-        <script>
-          console.log("Five-step workflow starting...");
-        </script>
-      </on-start>
-
-      <on-error>
-        <script>
-          console.log("Five-step workflow failed.");
-        </script>
-      </on-error>
-
-      <on-complete>
-        <script>
-          console.log("Five-step workflow complete.");
-        </script>
-      </on-complete>
-    </lifecycle>
-
     <steps>
       <step
         id="createOrder"

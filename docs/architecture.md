@@ -117,11 +117,12 @@ versioned events to SQLite, and rebuilds run context by folding those events. It
 must not understand markup, interpolation syntax, or JavaScript source meaning.
 
 The canonical N-API adapter is isolated in the `core/woml-native` crate, which
-depends locally only on `woml-engine`. During the legacy-core retirement
-transition, `core/src/woml_bridge.rs` is a compatibility shim that includes the
-same canonical adapter source in the combined addon. `woml-cli` continues to
-stage that combined artifact until the separately reviewed packaging switch;
-there is no second adapter implementation or second WOML execution path.
+depends locally only on `woml-engine`. `woml-cli` builds its locked manifest
+directly and stages its platform library as
+`woml-core.<platform>-<arch>.node`. The former combined-core compatibility shim
+has been removed, so legacy Cronflow modules are neither compiled nor linked
+into the WOML package. There is one adapter implementation and one WOML
+execution path.
 
 The long-lived Bun host executes JavaScript because JavaScript is part of the
 authoring experience. Each invocation runs in an isolated Worker with a real
