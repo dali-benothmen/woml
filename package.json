@@ -23,7 +23,11 @@
     "dist/sdk/**/*",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "docs/cronflow-sdk-retirement.md",
+    "docs/cronflow-sdk-data-archive.md",
+    "docs/woml-sdk-migration.md",
+    "docs/contracts/cronflow-sdk-retirement.v1.json"
   ],
   "napi": {
     "binaryName": "core",

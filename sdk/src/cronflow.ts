@@ -75,7 +75,9 @@ import {
 
 const { core } = loadCoreModule();
 
-export const VERSION = '0.1.0';
+// Public package identity. Internal native/platform package versions are not
+// the Cronflow SDK product version.
+export const VERSION = '0.11.6';
 
 interface CronflowState {
   workflows: Map<string, WorkflowDefinition>;

@@ -3,7 +3,7 @@ import { cronflow, VERSION } from '../sdk/index';
 
 describe('Cronflow SDK', () => {
   it('should export correct version', () => {
-    expect(VERSION).toBe('0.1.0');
+    expect(VERSION).toBe('0.11.6');
   });
 
   it('should initialize cronflow singleton', () => {

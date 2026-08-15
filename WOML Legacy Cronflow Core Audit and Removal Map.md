@@ -1,11 +1,13 @@
 # WOML Legacy Cronflow Core Audit and Removal Map
 
-Status: Audit 0 through Audit 3 completed on 2026-08-15. The dependency and
+Status: Audit 0 through Audit 4 completed on 2026-08-15. The dependency and
 removal map is frozen, the canonical WOML N-API adapter lives in a dedicated
 native crate that depends only on `woml-engine`, and every CLI build/release path
 now stages that crate directly. CI permanently verifies source imports, native
-dependencies, adapter imports, addon exports, and clean-package dependencies.
-The temporary combined-core WOML shim was removed. No legacy JavaScript API,
+dependencies, adapter imports, addon exports, clean-package dependencies, and
+the published SDK retirement contract. The temporary combined-core WOML shim
+was removed. The JavaScript SDK is frozen at `0.11.6` as its final feature
+baseline, with maintenance through 2027-02-15. No legacy JavaScript API,
 database, fixture, or user data was removed.
 
 ## 1. Executive Conclusion
@@ -434,11 +436,26 @@ Audit 3 evidence:
 
 Result: future changes cannot silently reconnect the architectures.
 
-### Audit 4 — Publish the SDK retirement contract
+### Audit 4 — Complete: publish the SDK retirement contract
 
-Freeze the last supported Cronflow release, deprecation duration, migration
-guide, feature-equivalence table, data archive procedure, and breaking release
-boundary. Stop adding new features to the chained SDK.
+The versioned `cronflow.sdk-retirement/v1` contract now freezes:
+
+- `cronflow@0.11.6` as the final feature-bearing SDK release and `0.11.x` as
+  the maintenance-only line;
+- a six-month support window from 2026-08-15 through 2027-02-15;
+- the allowed critical-fix categories and the no-new-features rule;
+- `cronflow@1.0.0`, no earlier than 2027-02-16, as the first legal removal
+  boundary;
+- a feature-equivalence table that separates direct replacements, migration
+  recipes, intentionally retired legacy helpers, and genuine gaps; and
+- a safe, manual archive and rollback procedure for the distinct legacy
+  SQLite data model.
+
+The contract, migration guide, and archive procedure ship in the npm package.
+The repository README publishes the deprecation prominently, the SDK's public
+`VERSION` now agrees with the package identity, and a release gate prevents the
+dates, version boundary, data-safety promises, or published documentation from
+drifting silently.
 
 Result: removal has a product contract and does not surprise existing users.
 
@@ -509,17 +526,19 @@ Removal is approved only when all applicable gates pass from a clean checkout:
 
 ## 13. Final Audit Decision
 
-The legacy Cronflow core is removable, but not by deleting files in place.
+The legacy Cronflow core is removable after the published support window, but
+not by deleting files in place.
 WOML has already replaced its behavior with a separate frontend, compiled DAG,
 durable event-sourced Rust engine, Bun execution hosts, trigger authority, and
-operations runtime. What remains is one structural coupling: both N-API
-surfaces share the `core` native crate.
+operations runtime. The WOML and legacy N-API surfaces no longer share a native
+crate or release path.
 
 The approved technical direction is:
 
 1. ~~extract the WOML native adapter~~ — completed in Audit 1;
-2. switch and prove the CLI package against the extracted crate;
-3. freeze a user-facing SDK retirement contract;
+2. ~~switch and prove the CLI package against the extracted crate~~ — completed
+   in Audit 2;
+3. ~~freeze a user-facing SDK retirement contract~~ — completed in Audit 4;
 4. remove the JavaScript chaining surface;
 5. remove the closed legacy Rust graph; and
 6. clean packaging and branding without rewriting frozen protocol history.

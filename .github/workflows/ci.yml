@@ -29,6 +29,10 @@ jobs:
         working-directory: woml-cli
         run: bun run test:architecture-separation
 
+      - name: Verify the SDK retirement contract
+        working-directory: woml-cli
+        run: bun run test:sdk-retirement-contract
+
   test:
     runs-on: ubuntu-latest
     steps:
