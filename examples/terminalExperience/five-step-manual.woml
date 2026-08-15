@@ -1,0 +1,132 @@
+<woml>
+  <workflow
+    id="five-step-manual"
+    name="Five-step manual workflow"
+    description="A simple five-step workflow for testing terminal output and durable logs."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <lifecycle>
+      <on-start>
+        <script>
+          console.log("Five-step workflow starting...");
+        </script>
+      </on-start>
+
+      <on-complete>
+        <script>
+          console.log("Five-step workflow complete.");
+        </script>
+      </on-complete>
+
+      <on-error>
+        <script>
+          console.log("Five-step workflow failed.");
+        </script>
+      </on-error>
+    </lifecycle>
+
+    <steps>
+      <step
+        id="createOrder"
+        name="Create order"
+        description="Create the sample order used by the remaining steps."
+      >
+        <script>
+          return {
+            orderId: "order-42",
+            customer: "Dali",
+            quantity: 3,
+            unitPrice: 25
+          };
+        </script>
+      </step>
+
+      <fork>
+        <branch>
+          <step
+            id="logOrder"
+            name="Log order"
+            description="Log the order details to the console."
+          >
+            <script>
+              const order = context.steps.createOrder;
+
+              console.log(
+                `Order ${order.orderId} for ${order.customer}: ` +
+                  `${order.quantity} x $${order.unitPrice}`
+              );
+
+              return {};
+            </script>
+          </step>
+        </branch>
+      </fork>
+
+      <step
+        id="calculateSubtotal"
+        name="Calculate subtotal"
+        description="Calculate the order subtotal from quantity and unit price."
+      >
+        <script>
+          const order = context.steps.createOrder;
+
+          return {
+            subtotal: order.quantity * order.unitPrice
+          };
+        </script>
+      </step>
+
+      <step
+        id="calculateTax"
+        name="Calculate tax"
+        description="Apply a twenty-percent tax to the subtotal."
+      >
+        <script>
+          const subtotal = context.steps.calculateSubtotal.subtotal;
+
+          return {
+            taxRate: 0.2,
+            tax: subtotal * 0.2
+          };
+        </script>
+      </step>
+
+      <step
+        id="calculateTotal"
+        name="Calculate total"
+        description="Combine the subtotal and tax into the final amount."
+      >
+        <script>
+          return {
+            subtotal: context.steps.calculateSubtotal.subtotal,
+            tax: context.steps.calculateTax.tax,
+            total:
+              context.steps.calculateSubtotal.subtotal +
+              context.steps.calculateTax.tax
+          };
+        </script>
+      </step>
+
+      <step
+        id="buildConfirmation"
+        name="Build confirmation"
+        description="Create the final customer-facing confirmation message."
+      >
+        <script>
+          return {
+            orderId: context.steps.createOrder.orderId,
+            customer: context.steps.createOrder.customer,
+            total: context.steps.calculateTotal.total,
+            message:
+              `Order ${context.steps.createOrder.orderId} for ` +
+              `${context.steps.createOrder.customer} totals $${context.steps.calculateTotal.total}.`
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
