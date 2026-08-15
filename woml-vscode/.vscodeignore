@@ -2,3 +2,4 @@
 .vscode/**
 scripts/**
 *.vsix
+CHANGELOG.md
