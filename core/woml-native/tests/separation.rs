@@ -69,10 +69,22 @@ fn native_adapter_does_not_import_the_legacy_core_graph() {
 }
 
 #[test]
-fn legacy_core_no_longer_compiles_or_exports_the_woml_adapter() {
+fn workspace_contains_only_the_woml_engine_and_native_adapter() {
   let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-  let legacy_root = fs::read_to_string(root.join("../src/lib.rs")).unwrap();
+  let workspace = fs::read_to_string(root.join("../Cargo.toml")).unwrap();
 
-  assert!(!legacy_root.contains("mod woml_bridge"));
-  assert!(!root.join("../src/woml_bridge.rs").exists());
+  assert!(!workspace.contains("[package]"));
+  assert!(workspace.contains("members = [\"woml-engine\", \"woml-native\"]"));
+  for retired_path in [
+    "../src/lib.rs",
+    "../src/bridge.rs",
+    "../src/schema.sql",
+    "../build.rs",
+    "../package.json",
+  ] {
+    assert!(
+      !root.join(retired_path).exists(),
+      "Legacy Rust package artifact returned at {retired_path}."
+    );
+  }
 }

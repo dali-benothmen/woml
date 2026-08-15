@@ -1,14 +1,15 @@
 # WOML Legacy Cronflow Core Audit and Removal Map
 
-Status: Audit 0 through Audit 5 completed on 2026-08-15. The dependency and
+Status: Audit 0 through Audit 6 completed on 2026-08-15. The dependency and
 removal map is frozen, the canonical WOML N-API adapter lives in a dedicated
 native crate that depends only on `woml-engine`, and every CLI build/release path
 now stages that crate directly. CI permanently verifies source imports, native
 dependencies, adapter imports, addon exports, and clean-package dependencies.
-The temporary combined-core WOML shim and the complete JavaScript-chaining
-package surface have been removed. The repository root is private and cannot
-publish the former `cronflow` package accidentally. No legacy database,
-committed database fixture, or user data was removed.
+The temporary combined-core WOML shim, complete JavaScript-chaining package
+surface, and closed legacy Rust graph have been removed. `core/Cargo.toml` is
+now a two-member WOML-only workspace with one committed lockfile. The repository
+root is private and cannot publish the former `cronflow` package accidentally.
+No user database or project data was removed.
 
 ## 1. Executive Conclusion
 
@@ -16,7 +17,7 @@ The WOML runtime does **not** execute workflows through the legacy Cronflow
 bridge, dispatcher, trigger executor, step orchestrator, state machine, mutable
 context, or database model.
 
-The current coupling is packaging, not execution:
+There is no remaining execution or packaging coupling:
 
 - [`core/woml-engine`](core/woml-engine) is an independent Rust crate and is
   the WOML execution, persistence, recovery, trigger, policy, service, and
@@ -25,9 +26,10 @@ The current coupling is packaging, not execution:
   canonical adapter at
   [`core/woml-native/src/bridge.rs`](core/woml-native/src/bridge.rs) imports
   `woml_engine`; it does not import the legacy Rust modules.
-- The former `core/src/woml_bridge.rs` compatibility shim has been removed, and
-  [`core/src/lib.rs`](core/src/lib.rs) no longer declares a WOML module. The
-  combined `core` crate is now legacy-only.
+- The former combined `core` package, its N-API bridge, mutable execution graph,
+  database schema, build shell, dependencies, and tests are absent.
+- [`core/Cargo.toml`](core/Cargo.toml) is a virtual workspace containing only
+  `woml-engine` and `woml-native`.
 - [`woml-cli/scripts/stage-native.ts`](woml-cli/scripts/stage-native.ts) builds
   and stages `woml-native` as the stable
   `woml-core.<platform>-<arch>.node` artifact.
@@ -35,8 +37,7 @@ The current coupling is packaging, not execution:
 - `.github/workflows/ci.yml` runs the architecture-separation gate on every
   push and pull request, so these boundaries cannot silently regress.
 
-The operational and authoring split is complete. The old Rust dependency
-closure can now be retired independently of WOML in Audit 6.
+The operational, authoring, and Rust dependency cleanup is complete.
 
 ## 2. Audit Scope and Method
 
@@ -74,16 +75,7 @@ flowchart LR
   Frontend[woml TypeScript frontend]
   CLI[woml-cli]
 
-  subgraph Shell[Legacy combined native package]
-    Lib[core/src/lib.rs module declarations]
-    LegacyBridge[core/src/bridge.rs]
-    LegacyGraph[legacy dispatcher, triggers, orchestration, state and DB]
-
-    Lib --> LegacyBridge
-    LegacyBridge --> LegacyGraph
-  end
-
-  subgraph Native[Extracted WOML-only native crate]
+  subgraph Native[WOML-only native crate]
     Adapter[core/woml-native/src/bridge.rs]
   end
 
@@ -96,17 +88,9 @@ flowchart LR
   Adapter --> Engine
   Engine <-->|versioned protocols| Host
 
-  subgraph Legacy[Legacy JavaScript-chaining path]
-    Public[src/index.ts]
-    SDK[sdk]
-
-    Public --> SDK
-    SDK -->|legacy N-API exports| LegacyBridge
-  end
 ```
 
-WOML and legacy Cronflow now have separate native build products as well as
-separate runtime graphs.
+Only the WOML build product and runtime graph remain.
 
 ### 3.1 The current WOML path
 
@@ -128,7 +112,7 @@ The frontend owns WOML markup. Rust receives the compiled model. The Bun hosts
 execute JavaScript but do not decide graph progression, retries, durable
 admission, or recovery.
 
-### 3.2 The legacy Cronflow path
+### 3.2 The retired Cronflow path
 
 ```text
 src/index.ts
@@ -140,10 +124,8 @@ src/index.ts
   -> legacy triggers/dispatcher/orchestrator/state machine/state/database
 ```
 
-The SDK also contains JavaScript-owned scheduling, webhook routing, events,
-human-loop state, concurrency, retries, lifecycle hooks, testing, performance,
-and workflow execution paths. Those are compatibility implementations for the
-old chained API, not components of `woml run`.
+Every file in this historical path was removed in Audit 5 or Audit 6. It remains
+shown only to explain the deletion boundary; it is not a buildable path.
 
 ## 4. Rust Core Inventory
 
@@ -161,23 +143,12 @@ The classification terms used below are:
 | [`core/woml-native`](core/woml-native) | WOML-only `cdylib`/N-API build owner | Directly depends on adapter libraries and `woml-engine`; no legacy dependency | **Keep; Audit 1 complete** |
 | [`core/woml-native/src/bridge.rs`](core/woml-native/src/bridge.rs) | Converts N-API arguments/progress callbacks into `woml-engine` calls and serializes outcomes | Canonical extracted CLI boundary; imports `woml_engine`, not legacy modules | **Keep in WOML native crate** |
 | Former `core/src/woml_bridge.rs` | Included the canonical adapter into the combined addon during the transition | Removed after the CLI packaging switch | **Removed in Audit 2** |
-| [`core/src/lib.rs`](core/src/lib.rs) | Declares the legacy modules and contains legacy core tests and branding | No longer compiled, linked, or staged by WOML | **Legacy-only after Audit 2** |
-| [`core/src/bridge.rs`](core/src/bridge.rs) | Legacy N-API facade for workflow registration, run creation, jobs, triggers, steps, hooks, and webhook server | Called by the JS SDK and old N-API tests; not called by WOML | **Legacy-only** |
-| [`core/src/models.rs`](core/src/models.rs) | Chained-workflow, step, trigger, run, job, condition, parallel, and completion structures | Incompatible with WOML's versioned compiled model | **Legacy-only** |
-| [`core/src/context.rs`](core/src/context.rs) | Mutable legacy execution context sent to JS jobs | Not WOML event-folded context | **Legacy-only** |
-| [`core/src/database.rs`](core/src/database.rs) | Synchronous/asynchronous access to legacy mutable workflow, run, step-result, and trigger tables | No WOML store access | **Legacy-only** |
-| [`core/src/schema.sql`](core/src/schema.sql) | Schema for `workflows`, `workflow_runs`, `step_results`, `triggers`, and two views | Separate from the WOML store | **Legacy-only** |
-| [`core/src/state.rs`](core/src/state.rs) | In-memory active runs layered over the legacy database | No WOML projection or event authority | **Legacy-only** |
-| [`core/src/job.rs`](core/src/job.rs) | Legacy job model, queue, attempts, and execution behavior | Superseded by WOML DAG attempts and durable events | **Legacy-only** |
-| [`core/src/dispatcher.rs`](core/src/dispatcher.rs) | Legacy worker pool, queue, job dispatch, retries, and status | Superseded by WOML runtime/policy scheduling | **Legacy-only** |
-| [`core/src/condition_evaluator.rs`](core/src/condition_evaluator.rs) | Evaluates old JS-chaining if/else expressions against legacy context | WOML choice/switch/fork selection lives in `woml-engine` | **Legacy-only** |
-| [`core/src/workflow_state_machine.rs`](core/src/workflow_state_machine.rs) | Old sequencing, dependency, conditional, and parallel state machine | Not used by the WOML DAG executor | **Legacy-only** |
-| [`core/src/step_orchestrator.rs`](core/src/step_orchestrator.rs) | Old step sequencing and result persistence | Not used by WOML | **Legacy-only** |
-| [`core/src/triggers.rs`](core/src/triggers.rs) | In-memory manual/webhook trigger definitions and matching | WOML uses compiled trigger contracts and durable occurrence admission | **Legacy-only** |
-| [`core/src/trigger_executor.rs`](core/src/trigger_executor.rs) | Connects old triggers to runs, jobs, and orchestration | Not used by WOML | **Legacy-only** |
-| [`core/src/webhook_server.rs`](core/src/webhook_server.rs) | Old Actix webhook server using legacy trigger/state managers | WOML uses `core/woml-engine/src/webhook.rs` | **Legacy-only** |
-| [`core/src/config.rs`](core/src/config.rs) | `CRONFLOW_*`-era worker, execution, webhook, database, and payload defaults | WOML has its own runtime configuration and policies | **Legacy-only** |
-| [`core/src/error.rs`](core/src/error.rs) | Error enum shared by old core modules | WOML defines errors in `woml-engine` and adapts them in `woml_bridge` | **Legacy-only** |
+| Former `core/src/lib.rs` | Declared the combined legacy crate | No WOML relationship | **Removed in Audit 6** |
+| Former `core/src/bridge.rs` | Legacy N-API facade | Replaced by the WOML-only adapter | **Removed in Audit 6** |
+| Former models, context, database, schema, and state modules | Mutable chained-workflow authority | Replaced by compiled models, immutable events, and folding | **Removed in Audit 6** |
+| Former jobs, dispatcher, condition evaluator, state machine, and orchestrator | Legacy execution loop | Replaced by the WOML DAG runtime and policy scheduler | **Removed in Audit 6** |
+| Former triggers, trigger executor, and webhook server | Legacy ingress | Replaced by WOML trigger authority | **Removed in Audit 6** |
+| Former config and error modules | `CRONFLOW_*` configuration and shared legacy errors | WOML owns its configuration and diagnostics | **Removed in Audit 6** |
 
 ### 4.1 Legacy Rust dependency closure
 
@@ -213,10 +184,9 @@ build or runtime dependency.
 | Former `sdk/src/webhook/server.ts` | Hosted the legacy JavaScript webhook path | **Removed in Audit 5** |
 | Former `src/index.ts` | Exposed the root `cronflow` compatibility API | **Removed in Audit 5** |
 | [`package.json`](package.json) | Private WOML repository command facade | **Replaced in Audit 5; no exports or publish configuration** |
-| [`core/package.json`](core/package.json) | Publishes `@cronflow/core` and names the combined native binary `core` | **Legacy packaging shell** |
-| [`tests`](tests) | Root SDK, native bridge, retry, state, chaining, dispatcher, and performance tests | Primarily **legacy-only**; classify file-by-file before removal |
-| [`scripts/generate-types.js`](scripts/generate-types.js) | Generates types for the chained SDK surface | **Legacy-only** |
-| Root native install/package scripts | Install and package `@cronflow/*` platform artifacts | **Legacy-only**, except any generic logic deliberately reused by a future WOML-native publisher |
+| Former `core/package.json` | Published `@cronflow/core` and named the combined binary | **Removed in Audit 6** |
+| Former root `tests/` | SDK, native bridge, dispatcher, and mutable-state fixtures | **Removed across Audit 5 and Audit 6** |
+| Former root `scripts/` | Generated and packaged the chained SDK | **Removed in Audit 5** |
 
 The WOML CLI does not use the old `@cronflow/*` resolver. It expects
 `woml-core.<platform>-<arch>.node` beside its built CLI and supports the
@@ -229,7 +199,7 @@ different state models.
 
 ### 6.1 Legacy data model
 
-[`core/src/schema.sql`](core/src/schema.sql) stores authoritative mutable rows:
+The former `core/src/schema.sql` stored authoritative mutable rows:
 
 - `workflows`;
 - `workflow_runs`;
@@ -280,12 +250,12 @@ and the generic Rust crate name `core` are branding/packaging cleanup items.
 They are not evidence that WOML executes the old engine. Handle them after the
 runtime split, with frozen schema identities considered separately.
 
-## 8. What WOML Still Needs Before Removal
+## 8. Final WOML Replacement Boundary
 
 The required runtime replacement is active: `core/woml-native` is the WOML-only
 native addon shell and the CLI's build and packaged-artifact authority.
 
-The target boundary should be:
+The resulting boundary is:
 
 ```text
 woml-cli
@@ -335,13 +305,18 @@ lookup contract did not change.
 The migration guide and manual legacy-data archive procedure remain. Historical
 examples and broad documentation cleanup remain assigned to Audit 7.
 
-### 9.3 Remove in Audit 6
+### 9.3 Removed in Audit 6
 
 - all legacy modules listed in Section 4;
 - `core/src/schema.sql`;
 - the legacy contents of `core/src/lib.rs` and its unit tests;
 - legacy dispatcher/N-API tests and committed legacy native fixtures; and
 - legacy native dependencies no longer required by the WOML-only adapter.
+
+The root Cargo manifest is now a virtual workspace containing only
+`woml-engine` and `woml-native`. Its committed `core/Cargo.lock` is generated
+from those two manifests, so deleted legacy dependencies cannot remain direct
+workspace dependencies.
 
 ### 9.4 Review individually, do not bulk-delete
 
@@ -477,12 +452,39 @@ ignored `cronflow.db` and any `.cronflow` user state were deliberately untouched
 
 Result: there is one public workflow authoring surface: WOML.
 
-### Audit 6 — Remove the legacy Rust closure
+### Audit 6 — Complete: remove the legacy Rust closure
 
-Remove the old bridge, models, context, database/schema, state, jobs,
+Audit 6 removed the old bridge, models, context, database/schema, state, jobs,
 dispatcher, condition evaluator, state machine, step orchestrator, triggers,
-trigger executor, webhook server, config, errors, and legacy tests. Prune the
-old crate's dependencies based on the new native crate's actual import graph.
+trigger executor, webhook server, config, errors, combined build script,
+`@cronflow/core` package shell, root legacy tests, committed test database, and
+legacy native fixtures.
+
+`core/Cargo.toml` is now a virtual workspace with exactly two members:
+`woml-engine` and `woml-native`. The workspace owns the release profile and one
+committed lockfile. Cargo metadata contains no package named `core`, and the
+CLI's manual-trigger gate no longer asks Cargo to compile `-p core`.
+
+The Rust and TypeScript separation gates now reject a restored combined crate,
+legacy source/schema/build/package files, any extra local native dependency, or
+a workspace member other than the engine and adapter.
+
+Audit 6 evidence:
+
+- locked Cargo metadata reports exactly `woml-engine` and `woml-native` as
+  workspace members;
+- the complete workspace passes `cargo check --workspace --all-targets` with
+  one build job;
+- all 16 engine library tests and all native separation tests pass against the
+  consolidated workspace lockfile;
+- the optimized native addon rebuilds and retains exactly 36 WOML-only exports;
+- clean-package architecture verification finds no legacy SDK, Rust package,
+  or `@cronflow/*` runtime dependency; and
+- `woml test hello.woml` executes successfully through the rebuilt addon.
+
+The ignored root `cronflow.db`, `.cronflow/`, and `.woml/` state were not read,
+migrated, or deleted. Git retains the removed source and committed fixtures in
+repository history.
 
 Result: the shipped Rust execution stack contains only WOML authority and its
 native adapter.
@@ -536,8 +538,8 @@ Removal is approved only when all applicable gates pass from a clean checkout:
 
 ## 13. Final Audit Decision
 
-The legacy Cronflow Rust core is now removable in Audit 6, but not by deleting
-files in place.
+The legacy Cronflow Rust core has been removed through the dependency-backed
+Audit 6 boundary.
 WOML has already replaced its behavior with a separate frontend, compiled DAG,
 durable event-sourced Rust engine, Bun execution hosts, trigger authority, and
 operations runtime. The WOML and legacy N-API surfaces no longer share a native
@@ -551,8 +553,8 @@ The approved technical direction is:
 3. ~~resolve SDK retirement policy~~ — the unused-library support-window draft
    was explicitly waived before publication;
 4. ~~remove the JavaScript chaining surface~~ — completed in Audit 5;
-5. remove the closed legacy Rust graph; and
+5. ~~remove the closed legacy Rust graph~~ — completed in Audit 6; and
 6. clean packaging and branding without rewriting frozen protocol history.
 
-Until those gates are completed, this document is a removal map, not
-authorization to delete legacy code.
+Only Audit 7 packaging and documentation residue remains; frozen WOML protocol
+identities are not legacy code and remain unchanged.

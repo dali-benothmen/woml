@@ -162,6 +162,28 @@ async function assertNoSdkImports(root: string): Promise<number> {
 }
 
 async function assertNativeSourceSeparation(root: string): Promise<void> {
+  const workspaceManifest = await readFile(
+    resolve(root, 'core/Cargo.toml'),
+    'utf8'
+  );
+  if (
+    workspaceManifest.includes('[package]') ||
+    !workspaceManifest.includes('members = ["woml-engine", "woml-native"]')
+  ) {
+    throw new Error('core/Cargo.toml is not the WOML-only workspace manifest.');
+  }
+  for (const retiredPath of [
+    'core/src/lib.rs',
+    'core/src/bridge.rs',
+    'core/src/schema.sql',
+    'core/build.rs',
+    'core/package.json',
+  ]) {
+    if (await Bun.file(resolve(root, retiredPath)).exists()) {
+      throw new Error(`The legacy Rust closure returned at ${retiredPath}.`);
+    }
+  }
+
   const manifest = await readFile(
     resolve(root, 'core/woml-native/Cargo.toml'),
     'utf8'
@@ -336,7 +358,7 @@ export async function verifyArchitectureSeparation(): Promise<void> {
   await assertCliNativeContract(root);
   await assertCleanPackage(root);
   console.log(
-    `WOML architecture separation verified: retired SDK package surface absent, ${scanned} frontend/CLI source files, one engine-only native dependency, ${expectedNativeExports.length} required addon exports, and a clean package with no @cronflow runtime dependency.`
+    `WOML architecture separation verified: retired SDK and Rust closures absent, ${scanned} frontend/CLI source files, one engine-only native dependency, ${expectedNativeExports.length} required addon exports, and a clean package with no @cronflow runtime dependency.`
   );
 }
 

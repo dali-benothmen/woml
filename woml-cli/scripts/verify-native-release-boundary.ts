@@ -48,12 +48,26 @@ if (
   );
 }
 
-const legacyRoot = await readFile(resolve(root, 'core/src/lib.rs'), 'utf8');
-if (legacyRoot.includes('mod woml_bridge')) {
-  throw new Error('The combined legacy crate still compiles the WOML adapter.');
+const workspaceManifest = await readFile(
+  resolve(root, 'core/Cargo.toml'),
+  'utf8'
+);
+if (
+  workspaceManifest.includes('[package]') ||
+  !workspaceManifest.includes('members = ["woml-engine", "woml-native"]')
+) {
+  throw new Error('The core workspace is not WOML-only.');
 }
-if (await Bun.file(resolve(root, 'core/src/woml_bridge.rs')).exists()) {
-  throw new Error('The temporary combined-core WOML shim still exists.');
+for (const retiredPath of [
+  'core/src/lib.rs',
+  'core/src/bridge.rs',
+  'core/src/schema.sql',
+  'core/build.rs',
+  'core/package.json',
+]) {
+  if (await Bun.file(resolve(root, retiredPath)).exists()) {
+    throw new Error(`The retired legacy Rust package returned at ${retiredPath}.`);
+  }
 }
 
 const artifact = resolve(
@@ -85,7 +99,7 @@ if (exports.length !== 36 || !exports.includes('executeWomlWorkflow')) {
 }
 
 console.log(
-  `WOML native release boundary verified: dedicated locked build, stable ${packagedAddonName(
+  `WOML native release boundary verified: WOML-only Cargo workspace, dedicated locked build, stable ${packagedAddonName(
     process.platform,
     process.arch
   )} artifact, 36 WOML-only exports, development override coverage, and clean-package release wiring.`

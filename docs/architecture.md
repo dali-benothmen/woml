@@ -120,15 +120,17 @@ The canonical N-API adapter is isolated in the `core/woml-native` crate, which
 depends locally only on `woml-engine`. `woml-cli` builds its locked manifest
 directly and stages its platform library as
 `woml-core.<platform>-<arch>.node`. The former combined-core compatibility shim
-has been removed, so legacy Cronflow modules are neither compiled nor linked
-into the WOML package. There is one adapter implementation and one WOML
-execution path.
+and its entire legacy Rust package have been removed. `core/Cargo.toml` is a
+virtual workspace containing only `woml-engine` and `woml-native`, with one
+committed lockfile. There is one adapter implementation and one WOML execution
+path.
 
 This separation is enforced rather than documented by convention. The
-`test:architecture-separation` gate rejects SDK imports from the WOML frontend
-or CLI, legacy/local dependencies in `woml-native`, legacy imports in the N-API
-adapter, drift between the CLI's native contract and the addon's exact export
-surface, and any `@cronflow/*` runtime dependency in a clean packed install.
+`test:architecture-separation` gate rejects a restored SDK or legacy Rust
+package, SDK imports from the WOML frontend or CLI, unexpected local
+dependencies in `woml-native`, legacy imports in the N-API adapter, drift
+between the CLI's native contract and the addon's exact export surface, and any
+`@cronflow/*` runtime dependency in a clean packed install.
 GitHub Actions runs the gate for every push and pull request, and the full
 release journey runs it again before feature release tests.
 
