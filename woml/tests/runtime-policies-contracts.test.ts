@@ -245,13 +245,19 @@ describe('RP1 runtime-policy frontend', () => {
         workflow('<config concurrency="1" /><config timeout="1m" />'),
         'WOML_CONFIG_DUPLICATE',
       ],
-      [
-        '<woml><workflow id="policy-test"><triggers><manual id="start" /></triggers><config concurrency="1" /><steps><step id="a"><script>return { ok: true };</script></step></steps></workflow></woml>',
-        'WOML_CONFIG_ORDER_INVALID',
-      ],
     ] as const;
     for (const [source, code] of cases) {
       expect(validationError(source).diagnostic.code, source).toBe(code);
+    }
+
+    const reordered = compileWoml(
+      parseWoml(
+        '<woml><workflow id="policy-test"><triggers><manual id="start" /></triggers><config concurrency="1" /><steps><step id="a"><script>return { ok: true };</script></step></steps></workflow></woml>'
+      )
+    );
+    expect(reordered.schemaVersion).toBe(12);
+    if (reordered.schemaVersion === 12) {
+      expect(reordered.runtimePolicy?.concurrency).toBe(1);
     }
   });
 

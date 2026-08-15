@@ -177,20 +177,44 @@ describe('LEC1 lifecycle frontend', () => {
     }
   });
 
-  test('validates lifecycle singleton, order, actions, and step filters precisely', () => {
-    expect(error(source('invalid-order.woml')).diagnostic.code).toBe(
-      'WOML_LIFECYCLE_ORDER_INVALID'
-    );
+  test('accepts order-independent workflow sections and lifecycle hooks', () => {
+    const reorderedHooks = compile(source('invalid-order.woml'));
+    expect(reorderedHooks.schemaVersion).toBe(11);
+    if (reorderedHooks.schemaVersion === 11) {
+      expect(reorderedHooks.lifecycle?.hooks.map(hook => hook.event)).toEqual([
+        'run_start',
+        'run_success',
+      ]);
+    }
+
+    const reorderedSections = compile(`
+      <woml>
+        <workflow id="order-independent">
+          <steps><step id="a"><script>return true;</script></step></steps>
+          <triggers><manual id="start" /></triggers>
+          <lifecycle>
+            <on-complete><script>return;</script></on-complete>
+            <on-start><script>return;</script></on-start>
+          </lifecycle>
+          <config concurrency="1" />
+        </workflow>
+      </woml>
+    `);
+    expect(reorderedSections.schemaVersion).toBe(12);
+    if (reorderedSections.schemaVersion === 12) {
+      expect(reorderedSections.lifecycle?.hooks.map(hook => hook.event)).toEqual([
+        'run_start',
+        'run_complete',
+      ]);
+    }
+    expect(reorderedSections.triggers).toHaveLength(1);
+    expect(reorderedSections.graph.nodes).toHaveLength(1);
+  });
+
+  test('validates lifecycle singleton, actions, and step filters precisely', () => {
     expect(error(workflow('<lifecycle />')).diagnostic.code).toBe(
       'WOML_LIFECYCLE_ACTION_REQUIRED'
     );
-    expect(
-      error(
-        workflow(
-          '<lifecycle><on-success><script>return;</script></on-success><on-start><script>return;</script></on-start></lifecycle>'
-        )
-      ).diagnostic.code
-    ).toBe('WOML_LIFECYCLE_ORDER_INVALID');
     expect(
       error(
         workflow(
@@ -215,6 +239,17 @@ describe('LEC1 lifecycle frontend', () => {
         )
       ).diagnostic.code
     ).toBe('WOML_LIFECYCLE_STEP_FILTER_INVALID');
+    const legacyFailureHook = error(
+      workflow(
+        '<lifecycle><on-failure><script>return;</script></on-failure></lifecycle>'
+      )
+    ).diagnostic;
+    expect(legacyFailureHook).toMatchObject({
+      code: 'WOML_LIFECYCLE_HOOK_INVALID',
+      message: 'WOML lifecycle uses <on-error>, not <on-failure>.',
+      hint:
+        'Replace <on-failure> with <on-error>; the same hook name is used in workflows and reusable definitions.',
+    });
     expect(
       error(
         workflow(
@@ -264,19 +299,19 @@ describe('LEC1 lifecycle frontend', () => {
       'WOML_SECRET_SINK_UNSUPPORTED'
     );
     const missingMessage = workflow(
-      `<lifecycle><on-failure><notify><slack channels="#ops" bot-token="{{secrets.BOT}}" app-token="{{secrets.APP}}" /></notify></on-failure></lifecycle>`
+      `<lifecycle><on-error><notify><slack channels="#ops" bot-token="{{secrets.BOT}}" app-token="{{secrets.APP}}" /></notify></on-error></lifecycle>`
     );
     expect(error(missingMessage).diagnostic.code).toBe(
       'WOML_SLACK_ATTRIBUTE_REQUIRED'
     );
     const malformed = workflow(
-      `<lifecycle><on-failure><notify><slack channels="#ops" message="Failure {{lifecycle.failure.code}" bot-token="{{secrets.BOT}}" app-token="{{secrets.APP}}" /></notify></on-failure></lifecycle>`
+      `<lifecycle><on-error><notify><slack channels="#ops" message="Failure {{lifecycle.failure.code}" bot-token="{{secrets.BOT}}" app-token="{{secrets.APP}}" /></notify></on-error></lifecycle>`
     );
     expect(error(malformed).diagnostic.code).toBe(
       'WOML_LIFECYCLE_TEMPLATE_INVALID'
     );
     const secretMessage = workflow(
-      `<lifecycle><on-failure><notify><slack channels="#ops" message="{{secrets.PRIVATE}}" bot-token="{{secrets.BOT}}" app-token="{{secrets.APP}}" /></notify></on-failure></lifecycle>`
+      `<lifecycle><on-error><notify><slack channels="#ops" message="{{secrets.PRIVATE}}" bot-token="{{secrets.BOT}}" app-token="{{secrets.APP}}" /></notify></on-error></lifecycle>`
     );
     expect(error(secretMessage).diagnostic.code).toBe(
       'WOML_SECRET_SINK_UNSUPPORTED'

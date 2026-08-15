@@ -127,6 +127,7 @@
     "test:terminal-package": "bun run build && bun test tests/terminal-experience-packaged-release.test.ts tests/manual-trigger-pty.test.ts && bun test tests/background-log-follow.test.ts",
     "test:terminal-release": "bun run build && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test run_presentation --test pro3_runtime_ownership --test pro7_backup_restore --test pro8_retention && bun test tests/terminal-presentation-contracts.test.ts tests/terminal-presentation-renderer.test.ts tests/presentation-hardening.test.ts tests/run-presentation-native.test.ts tests/foreground-presentation.test.ts tests/foreground-output-cli.test.ts tests/manual-trigger-cli.test.ts && bun test tests/manual-trigger-pty.test.ts tests/terminal-experience-packaged-release.test.ts && bun test tests/log-follow.test.ts tests/pro6-runtime-inspector.test.ts && bun test tests/background-log-follow.test.ts && bun scripts/verify-terminal-experience.ts && bun scripts/benchmark-terminal-experience.ts && bun run typecheck && cargo clippy --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --all-targets -- -D warnings",
     "verify:terminal-experience": "bun scripts/verify-terminal-experience.ts",
+    "verify:native-exports": "bun scripts/verify-native-exports.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

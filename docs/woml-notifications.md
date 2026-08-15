@@ -21,7 +21,7 @@ Lifecycle hooks may send Slack messages without creating an approval:
 
 ```xml
 <lifecycle>
-  <on-failure>
+  <on-error>
     <notify>
       <slack
         channels="#incidents"
@@ -30,7 +30,7 @@ Lifecycle hooks may send Slack messages without creating an approval:
         app-token="{{secrets.SLACK_APP_TOKEN}}"
       />
     </notify>
-  </on-failure>
+  </on-error>
 </lifecycle>
 ```
 

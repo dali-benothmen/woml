@@ -398,6 +398,35 @@ return {
     });
   });
 
+  test('keeps step console output off protocol stdout and redacts secrets', async () => {
+    const secret = 'console-secret-must-not-leak';
+    const message: ExecuteMessageV8 = {
+      ...executeStepV7(
+        'inv_safe_step_console',
+        `console.log('Step log', secrets.API_TOKEN); return { logged: true };`
+      ),
+      protocolVersion: 8,
+      bindings: {
+        bindingVersion: 1,
+        servicesVersion: 1,
+        secrets: { API_TOKEN: secret },
+      },
+    };
+    const result = await runHost([message], {
+      WOML_SCRIPT_HOST_PROTOCOL_VERSION: '8',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(
+      byInvocation(result.messages).get(message.invocationId)?.outcome
+    ).toEqual({
+      kind: 'success',
+      value: { logged: true },
+    });
+    expect(result.stderr).toContain('Step log [REDACTED]');
+    expect(result.stderr).not.toContain(secret);
+  });
+
   test('provides only the deeply frozen Protocol v3 attempt binding', async () => {
     const stableKey =
       'sha256:35278a8c79c5843d1fc3015aac65ea3ee7579559463214234e16624b5bbf609c';

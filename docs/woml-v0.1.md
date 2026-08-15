@@ -160,11 +160,11 @@ Outside raw-content elements:
       </script>
     </on-success>
 
-    <on-failure>
+    <on-error>
       <script>
         console.error("Content moderation failed");
       </script>
-    </on-failure>
+    </on-error>
   </lifecycle>
 
   <triggers>
@@ -390,7 +390,7 @@ lifecycle      := <lifecycle>
                     on-step-failure?
                     on-step-complete?
                     on-success?
-                    on-failure?
+                    on-error?
                     on-cancel?
                     on-complete?
                   </lifecycle>
@@ -694,11 +694,11 @@ to the postponed `services.queue` capability.
     </script>
   </on-success>
 
-  <on-failure>
+  <on-error>
     <script>
       console.error("Workflow failed");
     </script>
-  </on-failure>
+  </on-error>
 
   <on-complete>
     <script>
@@ -711,9 +711,9 @@ to the postponed `services.queue` capability.
 Structural rules:
 
 - `<lifecycle>` is optional and may occur at most once.
-- Hooks use canonical order: `on-start`, `on-step-start`, `on-step-success`,
-  `on-step-failure`, `on-step-complete`, `on-success`, `on-failure`,
-  `on-cancel`, then `on-complete`.
+- Hooks may appear in any source order. WOML recognizes them by name and
+  normalizes them to the semantic execution order: `on-start`, step hooks,
+  the matching workflow outcome hook, then `on-complete`.
 - Every hook is optional and may occur at most once.
 - A hook contains one or more source-ordered `<script>` or `<notify>` actions.
 - Step hooks accept an optional whitespace-separated `steps` filter containing

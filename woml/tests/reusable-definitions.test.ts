@@ -124,6 +124,20 @@ describe('reusable WOML document contracts', () => {
     expect(
       validationCode(`<woml><step><script>return true;</script></step><lifecycle><on-step-success><script>return;</script></on-step-success></lifecycle></woml>`)
     ).toBe('WOML_REUSABLE_STEP_HOOK_UNSUPPORTED');
+    expect(() =>
+      validateWoml(
+        parseWoml(
+          `<woml>
+  <step><script>return true;</script></step>
+  <lifecycle>
+    <on-complete><script>return;</script></on-complete>
+    <on-success><script>return;</script></on-success>
+  </lifecycle>
+</woml>`,
+          { file: 'order-independent-definition.woml' }
+        )
+      )
+    ).not.toThrow();
   });
 
   test('keeps reusable lifecycle actions script-only in the recoverable v1 profile', () => {

@@ -41,9 +41,9 @@ One optional `<lifecycle>` block is a direct child of `<workflow>`:
       <script>console.log('Order succeeded');</script>
     </on-success>
 
-    <on-failure>
+    <on-error>
       <script>console.log(`Order failed: ${lifecycle.failure.code}`);</script>
-    </on-failure>
+    </on-error>
 
     <on-cancel>
       <script>console.log('Order cancelled');</script>
@@ -62,7 +62,8 @@ One optional `<lifecycle>` block is a direct child of `<workflow>`:
 </workflow>
 ```
 
-Hooks must appear in this canonical order when present:
+Hooks may appear in any source order. WOML recognizes them by name and
+normalizes them to this semantic execution order:
 
 1. `on-start`
 2. `on-step-start`
@@ -70,7 +71,7 @@ Hooks must appear in this canonical order when present:
 4. `on-step-failure`
 5. `on-step-complete`
 6. `on-success`
-7. `on-failure`
+7. `on-error`
 8. `on-cancel`
 9. `on-complete`
 
@@ -89,7 +90,7 @@ and approval arms.
 | `on-step-failure` | A logical step exhausts its allowed attempts. |
 | `on-step-complete` | The logical step has settled as success or failure. |
 | `on-success` | The durable business outcome is success. |
-| `on-failure` | The durable business outcome is failure. |
+| `on-error` | The durable business outcome is failure. |
 | `on-cancel` | A cancellation request wins before the business outcome. |
 | `on-complete` | The outcome-specific hook has settled and the run is finalizing. |
 
@@ -119,7 +120,9 @@ business run into a failed run or a cancelled run into a failure. A run remains
 status `completed` or `completed_with_warnings`.
 
 Reusable step and notification-provider definitions have a narrower,
-invocation-owned lifecycle: `on-success`, `on-error`, then `on-complete`.
+invocation-owned lifecycle: `on-success`, `on-error`, and `on-complete`. Those
+hooks may also appear in any source order; the operation outcome determines
+which hook executes, and `on-complete` always executes afterward.
 Provider lifecycle scripts receive `props`, `lifecycle`, and managed services,
 but no workflow context. Their Event v13 action history settles after the
 provider delivery truth is committed, so an observational hook cannot change a
@@ -261,7 +264,7 @@ profile.
 The workflow `timeout` in `<config>` begins at first execution start and
 includes subsequent lifecycle time and durable waits. If it wins before a
 business outcome, WOML records `WOML_WORKFLOW_TIMED_OUT`, runs workflow
-`on-failure`, then `on-complete`. Timeout remains failure, not cancellation, and
+`on-error`, then `on-complete`. Timeout remains failure, not cancellation, and
 a previously committed outcome wins the race. Waiting for approval, retry, or a
 synchronous child releases concurrency capacity without pausing the deadline.
 See [WOML Runtime Policies](woml-runtime-policies.md).

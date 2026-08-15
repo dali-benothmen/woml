@@ -26,7 +26,7 @@ const TRIGGER_TYPES = new Set([
   'manual', 'webhook', 'slack', 'schedule', 'interval', 'event',
 ]);
 const LIFECYCLE_HOOKS = new Set([
-  'on-start', 'on-success', 'on-failure', 'on-cancel', 'on-complete',
+  'on-start', 'on-success', 'on-error', 'on-cancel', 'on-complete',
   'on-step-start', 'on-step-success', 'on-step-failure', 'on-step-complete',
 ]);
 

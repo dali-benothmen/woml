@@ -105,7 +105,7 @@ export interface StepPresentationV1 {
 export type LifecycleHookPresentation =
   | 'on-start'
   | 'on-success'
-  | 'on-failure'
+  | 'on-error'
   | 'on-cancel'
   | 'on-complete'
   | 'on-step-start'

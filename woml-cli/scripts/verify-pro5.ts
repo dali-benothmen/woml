@@ -14,7 +14,7 @@ for (const [file, required] of [
   ['woml-cli/src/runtime-observability.ts', 'woml.runtime-log-record/v1'],
   ['woml-cli/src/runtime-observability.ts', 'woml_store_size_bytes'],
   ['core/woml-engine/src/durable.rs', 'runtime_observation_v1'],
-  ['core/src/woml_bridge.rs', 'observe_woml_runtime'],
+  ['core/woml-native/src/bridge.rs', 'observe_woml_runtime'],
   ['woml-cli/src/runtime-control.ts', "'/readyz'"],
   ['woml-cli/src/runtime-control.ts', "'/v1/stream'"],
   ['docs/woml-observability.md', 'Failure isolation'],

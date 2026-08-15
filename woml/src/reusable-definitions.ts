@@ -535,7 +535,6 @@ function validateReusableLifecycle(
   }
   const order = ['on-success', 'on-error', 'on-complete'];
   const seen = new Set<string>();
-  let last = -1;
   for (const hook of hooks) {
     const index = order.indexOf(hook.name);
     if (index === -1) {
@@ -555,15 +554,6 @@ function validateReusableLifecycle(
         'WOML_LIFECYCLE_DUPLICATE',
         `<${hook.name}> may appear only once.`,
         hook.openTagSpan
-      );
-    }
-    if (index < last) {
-      failValidation(
-        document,
-        'WOML_LIFECYCLE_ORDER_INVALID',
-        `<${hook.name}> is out of reusable lifecycle order.`,
-        hook.openTagSpan,
-        'Use <on-success>, <on-error>, then <on-complete>.'
       );
     }
     ensureNoAttributes(document, hook);
@@ -596,7 +586,6 @@ function validateReusableLifecycle(
       }
     }
     seen.add(hook.name);
-    last = index;
   }
 }
 

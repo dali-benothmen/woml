@@ -19,14 +19,14 @@
         </notify>
       </on-success>
 
-      <on-failure>
+      <on-error>
         <notify>
           <console
             level="error"
             message="Workflow failed with {{lifecycle.failure.code}}"
           />
         </notify>
-      </on-failure>
+      </on-error>
 
       <on-complete>
         <notify>

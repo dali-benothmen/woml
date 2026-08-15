@@ -16,17 +16,17 @@
         </script>
       </on-start>
 
-      <on-complete>
-        <script>
-          console.log("Five-step workflow complete.");
-        </script>
-      </on-complete>
-
       <on-error>
         <script>
           console.log("Five-step workflow failed.");
         </script>
       </on-error>
+
+      <on-complete>
+        <script>
+          console.log("Five-step workflow complete.");
+        </script>
+      </on-complete>
     </lifecycle>
 
     <steps>
@@ -45,8 +45,8 @@
         </script>
       </step>
 
-      <fork>
-        <branch>
+      <fork id="orderLogging">
+        <branch id="logging">
           <step
             id="logOrder"
             name="Log order"

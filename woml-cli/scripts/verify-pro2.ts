@@ -15,7 +15,7 @@ for (const [file, required] of [
   ],
   ['core/woml-engine/src/webhook.rs', 'prepare_with_external_ingress'],
   ['core/woml-engine/src/webhook.rs', 'WOML_RUNTIME_NOT_READY'],
-  ['core/src/woml_bridge.rs', 'activate_woml_webhook_runtime'],
+  ['core/woml-native/src/bridge.rs', 'activate_woml_webhook_runtime'],
   ['woml-cli/src/cli.ts', 'WOML_SOURCE_CHANGED_DURING_ACTIVATION'],
   ['woml-cli/src/cli.ts', 'startSuspended: true'],
 ] as const) {

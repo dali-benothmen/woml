@@ -11,7 +11,7 @@ for (const [file, required] of [
   ],
   ['core/woml-engine/src/durable.rs', 'migrate_store_v13_to_v14'],
   ['core/woml-engine/src/durable.rs', 'acquire_runtime_owner'],
-  ['core/src/woml_bridge.rs', 'WOML_DEPLOYMENT_ALREADY_RUNNING'],
+  ['core/woml-native/src/bridge.rs', 'WOML_DEPLOYMENT_ALREADY_RUNNING'],
   ['core/woml-engine/src/webhook.rs', 'stop_with_deadline'],
   ['woml-cli/src/runtime-control.ts', 'woml.runtime-descriptor/v1'],
   ['woml-cli/src/cli.ts', 'WOML runtime started in the background.'],

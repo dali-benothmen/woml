@@ -72,7 +72,7 @@
   },
   "lifecycle": [
     {
-      "hook": "on-failure",
+      "hook": "on-error",
       "status": "succeeded",
       "durationMs": 7,
       "provider": "console",

@@ -1,7 +1,7 @@
 <woml>
   <workflow id="invalid-lifecycle-template">
     <lifecycle>
-      <on-failure>
+      <on-error>
         <notify>
           <slack
             channels="#incidents"
@@ -10,7 +10,7 @@
             app-token="{{secrets.SLACK_APP_TOKEN}}"
           />
         </notify>
-      </on-failure>
+      </on-error>
     </lifecycle>
     <triggers><manual id="start" /></triggers>
     <steps><step id="finish"><script>return true;</script></step></steps>

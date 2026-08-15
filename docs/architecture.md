@@ -116,6 +116,13 @@ selects ready DAG nodes, owns branch/parallel/approval/retry decisions, appends
 versioned events to SQLite, and rebuilds run context by folding those events. It
 must not understand markup, interpolation syntax, or JavaScript source meaning.
 
+The canonical N-API adapter is isolated in the `core/woml-native` crate, which
+depends locally only on `woml-engine`. During the legacy-core retirement
+transition, `core/src/woml_bridge.rs` is a compatibility shim that includes the
+same canonical adapter source in the combined addon. `woml-cli` continues to
+stage that combined artifact until the separately reviewed packaging switch;
+there is no second adapter implementation or second WOML execution path.
+
 The long-lived Bun host executes JavaScript because JavaScript is part of the
 authoring experience. Each invocation runs in an isolated Worker with a real
 timeout boundary and receives only the versioned bindings approved for its

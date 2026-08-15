@@ -197,7 +197,7 @@ describe('FJ0 frozen fork and branch contracts', () => {
     });
     expect(contracts.lifecycleOrder.joinedFailure).toEqual([
       'owned-branches-settled',
-      'on-failure',
+      'on-error',
       'on-complete',
       'run-finalized',
     ]);

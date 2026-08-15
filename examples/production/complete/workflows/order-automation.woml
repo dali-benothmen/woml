@@ -5,7 +5,7 @@
   <workflow id="production-orders" name="Production order automation" version="1.0.0">
     <config concurrency="4" rate-limit="120/1m" timeout="5m" queue="orders" />
     <lifecycle>
-      <on-failure>
+      <on-error>
         <notify>
           <slack
             channels="#woml-operations"
@@ -14,7 +14,7 @@
             app-token="{{secrets.SLACK_APP_TOKEN}}"
           />
         </notify>
-      </on-failure>
+      </on-error>
       <on-complete>
         <script>
           await services.state.increment('completed-runs', 1, {

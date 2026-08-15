@@ -354,7 +354,7 @@ const supportedElements = new Set([
   'on-step-failure',
   'on-step-complete',
   'on-success',
-  'on-failure',
+  'on-error',
   'on-cancel',
   'on-complete',
   'triggers',
@@ -404,7 +404,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   'on-step-failure': { attributes: new Set(['steps']) },
   'on-step-complete': { attributes: new Set(['steps']) },
   'on-success': { attributes: new Set() },
-  'on-failure': { attributes: new Set() },
+  'on-error': { attributes: new Set() },
   'on-cancel': { attributes: new Set() },
   'on-complete': { attributes: new Set() },
   triggers: { attributes: new Set() },
@@ -546,6 +546,15 @@ function visitProfile(
   parent?: WomlSourceElement
 ): void {
   if (!supportedElements.has(element.name)) {
+    if (parent?.name === 'lifecycle' && element.name === 'on-failure') {
+      failValidation(
+        document,
+        'WOML_LIFECYCLE_HOOK_INVALID',
+        'WOML lifecycle uses <on-error>, not <on-failure>.',
+        element.openTagSpan,
+        'Replace <on-failure> with <on-error>; the same hook name is used in workflows and reusable definitions.'
+      );
+    }
     if (parent?.name === 'notify') {
       failValidation(
         document,
@@ -855,24 +864,15 @@ function validateWorkflowChildren(
   const config = configContainers[0];
   const lifecycle = lifecycleContainers[0];
   const steps = stepsContainers[0];
-  const expected = [config, lifecycle, triggers, steps].filter(
-    (child): child is WomlSourceElement => child !== undefined
-  );
-  const canonical =
-    children.length === expected.length &&
-    children.every((child, index) => child === expected[index]);
-  if (!canonical) {
-    const offender = children.find((child, index) => child !== expected[index]);
+  const allowed = new Set(['config', 'lifecycle', 'triggers', 'steps']);
+  const offender = children.find(child => !allowed.has(child.name));
+  if (offender !== undefined) {
     failValidation(
       document,
-      config !== undefined && children.indexOf(config) > 0
-        ? 'WOML_CONFIG_ORDER_INVALID'
-        : lifecycle !== undefined &&
-            children.indexOf(lifecycle) > (config === undefined ? 0 : 1)
-          ? 'WOML_LIFECYCLE_ORDER_INVALID'
-          : 'WOML_INVALID_STRUCTURE',
-      '<workflow> must contain optional <config>, optional <lifecycle>, optional <triggers>, then exactly one <steps> container.',
-      offender?.openTagSpan ?? workflow.openTagSpan
+      'WOML_INVALID_STRUCTURE',
+      `<workflow> cannot contain <${offender.name}> directly.`,
+      offender.openTagSpan,
+      'Use optional <config>, <lifecycle>, and <triggers> containers plus exactly one <steps> container, in any order.'
     );
   }
 
@@ -2180,7 +2180,7 @@ const lifecycleHookEvents = {
   'on-step-failure': 'step_failure',
   'on-step-complete': 'step_complete',
   'on-success': 'run_success',
-  'on-failure': 'run_failure',
+  'on-error': 'run_failure',
   'on-cancel': 'run_cancel',
   'on-complete': 'run_complete',
 } as const satisfies Readonly<Record<string, LifecycleEventName>>;
@@ -2447,8 +2447,7 @@ function validateLifecycle(
   const executableSteps = collectValidatedSteps(flow.items);
   const allStepIds = new Set(executableSteps.map(step => step.id));
   const seen = new Set<string>();
-  let lastOrder = -1;
-  const hooks = children.map((hook, hookIndex): ValidatedLifecycleHook => {
+  for (const hook of children) {
     const order = lifecycleHookOrder.indexOf(
       hook.name as keyof typeof lifecycleHookEvents
     );
@@ -2468,17 +2467,19 @@ function validateLifecycle(
         hook.openTagSpan
       );
     }
-    if (order < lastOrder) {
-      failValidation(
-        document,
-        'WOML_LIFECYCLE_ORDER_INVALID',
-        `<${hook.name}> is out of canonical lifecycle order.`,
-        hook.openTagSpan,
-        `Use: ${lifecycleHookOrder.map(name => `<${name}>`).join(', ')}.`
-      );
-    }
     seen.add(hook.name);
-    lastOrder = order;
+  }
+  const orderedChildren = [...children].sort(
+    (left, right) =>
+      lifecycleHookOrder.indexOf(
+        left.name as keyof typeof lifecycleHookEvents
+      ) -
+      lifecycleHookOrder.indexOf(
+        right.name as keyof typeof lifecycleHookEvents
+      )
+  );
+  const hooks = orderedChildren.map(
+    (hook, hookIndex): ValidatedLifecycleHook => {
     const event =
       lifecycleHookEvents[hook.name as keyof typeof lifecycleHookEvents];
     const stepFilter = hook.attributes.steps;
@@ -2580,7 +2581,8 @@ function validateLifecycle(
       ...(filteredStepIds === undefined ? {} : { stepIds: filteredStepIds }),
       actions,
     };
-  });
+    }
+  );
   return { hooks };
 }
 

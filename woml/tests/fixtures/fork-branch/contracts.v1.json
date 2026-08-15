@@ -21,9 +21,9 @@
     "mainFailureWithActiveBranches": { "status": "failed", "openedBranches": "settle-before-lifecycle", "laterForks": "not-opened", "publicResult": "unavailable" }
   },
   "lifecycleOrder": {
-    "joinedFailure": ["owned-branches-settled", "on-failure", "on-complete", "run-finalized"],
-    "lateUnjoinedFailure": ["main-result-recorded", "owned-branches-settled", "on-failure", "on-complete", "run-finalized"],
-    "mainFailure": ["active-owned-branches-settled", "on-failure", "on-complete", "run-finalized"]
+    "joinedFailure": ["owned-branches-settled", "on-error", "on-complete", "run-finalized"],
+    "lateUnjoinedFailure": ["main-result-recorded", "owned-branches-settled", "on-error", "on-complete", "run-finalized"],
+    "mainFailure": ["active-owned-branches-settled", "on-error", "on-complete", "run-finalized"]
   },
   "recovery": {
     "sourceOfTruth": "folded-event-history",

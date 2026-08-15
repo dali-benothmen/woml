@@ -534,6 +534,10 @@ reusable-lifecycle    := <lifecycle>
 reusable-hook         := <hook> (script | notify)+ </hook>
 ```
 
+Reusable lifecycle hooks may appear in any source order. Their names and the
+operation outcome determine execution; actions inside one hook retain source
+order, and `<on-complete>` executes after the matching outcome hook.
+
 `required` and `secret` default to `false`. Only literal `true` and `false` are
 valid boolean tokens. Default prop values and prop type schemas are not included
 in v1.
@@ -542,17 +546,17 @@ The top-level reusable `<step>` accepts only `name` and `description`. It does
 not accept `id`, retry attributes, or timeout attributes. Those belong to the
 invocation in the workflow.
 
-The reusable lifecycle vocabulary is intentionally distinct from workflow
+Reusable definitions use the same outcome-hook vocabulary as workflow
 lifecycle scope:
 
 - `<on-success>` after the reusable operation succeeds;
 - `<on-error>` after it permanently fails; and
 - `<on-complete>` after either outcome.
 
-`<on-error>` is valid only in a reusable definition lifecycle. Workflow-level
-lifecycle retains its existing `<on-failure>` vocabulary. Step-observer hooks
-such as `<on-step-start>`, `<on-step-success>`, `<on-step-failure>`, and
-`<on-step-complete>` are rejected inside reusable definitions.
+`<on-error>` is therefore predictable in both runnable workflows and reusable
+definitions. Step-observer hooks such as `<on-step-start>`,
+`<on-step-success>`, `<on-step-failure>`, and `<on-step-complete>` remain
+workflow-only and are rejected inside reusable definitions.
 
 ### 4.2 Prop names and JavaScript access
 
@@ -1030,7 +1034,7 @@ custom operation failure after retries
   -> reusable on-error
   -> reusable on-complete
   -> workflow failure decision
-  -> workflow on-failure
+  -> workflow on-error
   -> workflow on-complete
 ```
 
@@ -1041,7 +1045,7 @@ The reusable definition cannot declare workflow/step observer hooks:
 - `on-step-success`;
 - `on-step-failure`;
 - `on-step-complete`;
-- `on-failure`;
+- `on-error`;
 - `on-cancel`; or
 - filters naming parent workflow step IDs.
 

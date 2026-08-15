@@ -67,7 +67,7 @@ The timeout deadline is `first execution started at + timeoutMs`. Policy queue
 delay is excluded; later approval, retry, and child-workflow waits are included.
 When timeout wins before a business outcome, Event v11 records
 `run_timeout_reached`, then the run decides failure with
-`WOML_WORKFLOW_TIMED_OUT`, runs `on-failure`, and finally `on-complete`.
+`WOML_WORKFLOW_TIMED_OUT`, runs `on-error`, and finally `on-complete`.
 
 A business outcome committed first cannot be rewritten by a later timer.
 Timeout is failure and remains distinct from operator cancellation.

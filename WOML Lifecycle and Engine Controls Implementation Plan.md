@@ -55,7 +55,7 @@ The authoring experience is:
         </notify>
       </on-success>
 
-      <on-failure>
+      <on-error>
         <notify>
           <slack
             channels="#order-incidents"
@@ -64,7 +64,7 @@ The authoring experience is:
             app-token="{{secrets.SLACK_APP_TOKEN}}"
           />
         </notify>
-      </on-failure>
+      </on-error>
 
       <on-cancel>
         <script>
@@ -176,7 +176,7 @@ failures.
 
 - One optional workflow-level `<lifecycle>` block.
 - `on-start`, `on-step-start`, `on-step-success`, `on-step-failure`,
-  `on-step-complete`, `on-success`, `on-failure`, `on-cancel`, and
+  `on-step-complete`, `on-success`, `on-error`, `on-cancel`, and
   `on-complete`.
 - Optional step filtering on step hooks through a whitespace-separated `steps`
   attribute.
@@ -217,16 +217,13 @@ this milestone in the global roadmap.
 
 ## 4. Source-Language Contract
 
-### 4.1 Workflow placement and order
+### 4.1 Workflow placement
 
-The workflow child order becomes:
+`<workflow>` contains optional `<config>`, optional `<lifecycle>`, optional
+`<triggers>` (omission continues to mean call-only), and exactly one required
+`<steps>` container. These named containers may appear in any source order.
 
-1. Optional `<config>` when its separate runtime-policy contract is executable.
-2. Optional `<lifecycle>`.
-3. Optional `<triggers>`; omission continues to mean call-only.
-4. Required `<steps>`.
-
-Only one `<lifecycle>` is allowed.
+Only one of each named container is allowed.
 
 ### 4.2 Hook grammar
 
@@ -238,7 +235,7 @@ lifecycle := <lifecycle>
                on-step-failure?
                on-step-complete?
                on-success?
-               on-failure?
+               on-error?
                on-cancel?
                on-complete?
              </lifecycle>
@@ -248,9 +245,11 @@ hook      := <hook hook-attributes> lifecycle-action+ </hook>
 lifecycle-action := script | notify
 ```
 
-Hook order is canonical and must match the grammar above. A hook may contain one
-or more `<script>` or `<notify>` actions. Action order is source order. A failed
-action is recorded, but later actions in the same hook still run.
+Lifecycle hooks may appear in any source order. Their names determine when they
+execute; source position does not change lifecycle semantics. The compiler
+normalizes hooks to deterministic semantic order. A hook may contain one or more
+`<script>` or `<notify>` actions. Actions inside one hook execute in source
+order. A failed action is recorded, but later actions in the same hook still run.
 
 The step hooks accept one optional attribute:
 
@@ -282,7 +281,7 @@ Workflow hooks accept no attributes in the first profile.
 | `on-step-failure`  | Once per permanently failed logical step | After retries are exhausted or a non-retryable failure commits.     |
 | `on-step-complete` |            Once per settled logical step | After success, permanent failure, or engine cancellation.           |
 | `on-success`       |                             Once per run | After the business DAG decides success.                             |
-| `on-failure`       |                             Once per run | After the business DAG decides failure.                             |
+| `on-error`       |                             Once per run | After the business DAG decides failure.                             |
 | `on-cancel`        |                             Once per run | After cancellation becomes the business outcome.                    |
 | `on-complete`      |                             Once per run | After the outcome-specific workflow hook settles.                   |
 
@@ -309,14 +308,14 @@ For one workflow:
 
 ```text
 success: on-success -> on-complete
-failure: on-failure -> on-complete
+failure: on-error -> on-complete
 cancel:  on-cancel  -> on-complete
 ```
 
 In a fail-fast parallel, the primary failed step receives `on-step-failure` and
 `on-step-complete`. Engine-cancelled siblings receive `on-step-complete` with a
 cancelled step outcome, but not `on-step-failure`. The workflow receives
-`on-failure`, not `on-cancel`, because its business outcome is failure.
+`on-error`, not `on-cancel`, because its business outcome is failure.
 
 ### 4.4 Lifecycle scripts
 
@@ -551,7 +550,7 @@ Rust uses this order:
 
 1. Decide and persist the business outcome.
 2. Drain all previously admitted step hooks.
-3. Execute `on-success`, `on-failure`, or `on-cancel` for that outcome.
+3. Execute `on-success`, `on-error`, or `on-cancel` for that outcome.
 4. Execute `on-complete`.
 5. Append `run_finalized`.
 
@@ -683,7 +682,6 @@ The initial catalog includes:
 | Code                                    | Meaning                                                                                                 |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `WOML_LIFECYCLE_DUPLICATE`              | More than one lifecycle block or duplicate singleton hook exists.                                       |
-| `WOML_LIFECYCLE_ORDER_INVALID`          | Hooks are not in canonical order.                                                                       |
 | `WOML_LIFECYCLE_ACTION_REQUIRED`        | A hook has no executable action.                                                                        |
 | `WOML_LIFECYCLE_ACTION_INVALID`         | A hook contains unsupported children.                                                                   |
 | `WOML_LIFECYCLE_STEP_FILTER_INVALID`    | A step filter is empty, duplicated, or malformed.                                                       |
@@ -774,7 +772,7 @@ and how a run becomes terminal.
 Changes:
 
 - Move lifecycle tags from staged to executable frontend elements.
-- Validate canonical hook order, singleton rules, action children, step filters,
+- Validate order-independent named hooks, singleton rules, action children, step filters,
   Slack informational attributes, templates, references, secrets, and modules.
 - Add Model v11 and Script Runtime Bindings v2 TypeScript types.
 - Lower deterministic hook/action IDs and source-ordered actions outside the
@@ -869,7 +867,7 @@ Changes:
   step result validation.
 - Execute `on-start` before business scheduling.
 - Enter finalization after business outcome, then run `on-success`,
-  `on-failure`, or `on-cancel`, followed by `on-complete`.
+  `on-error`, or `on-cancel`, followed by `on-complete`.
 - Record action success/failure and preserve the original business outcome.
 - Extend safe progress and inspection with lifecycle state.
 
@@ -1138,7 +1136,7 @@ request, and cancellation detection.
 
 | Area           | Required proof                                                                   |
 | -------------- | -------------------------------------------------------------------------------- |
-| Grammar        | One lifecycle location, canonical order, valid actions, and precise diagnostics. |
+| Grammar        | One lifecycle location, order-independent named hooks, valid actions, and precise diagnostics. |
 | Model          | Model v11 keeps lifecycle outside the business DAG and preserves v1-v10.         |
 | Hook identity  | One logical subject admits each hook once across retries and crashes.            |
 | Retry          | Step hooks observe the logical step, not every failed attempt.                   |

@@ -188,7 +188,7 @@
           "enum": [
             "on-start",
             "on-success",
-            "on-failure",
+            "on-error",
             "on-cancel",
             "on-complete",
             "on-step-start",

@@ -128,7 +128,7 @@ Releasing a slot does not end the run and does not reset its timeout.
 
 An author-declared workflow timeout means the workflow failed to finish within
 its budget. It produces the stable `WOML_WORKFLOW_TIMED_OUT` failure, executes
-`on-failure`, then `on-complete`, and remains inspectable as failed. It is not
+`on-error`, then `on-complete`, and remains inspectable as failed. It is not
 misreported as an operator cancellation.
 
 ### 2.6 Durable state is not context
@@ -1088,7 +1088,7 @@ Changes:
   wins.
 - Stop new steps/retries, settle active work truthfully, and append
   `run_timeout_reached`.
-- Decide failure as `WOML_WORKFLOW_TIMED_OUT`, then run `on-failure` and
+- Decide failure as `WOML_WORKFLOW_TIMED_OUT`, then run `on-error` and
   `on-complete` without rewriting the failure.
 - Include approval, retry, and synchronous child waits in elapsed time while
   excluding pre-start queue delay.

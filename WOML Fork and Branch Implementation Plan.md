@@ -560,7 +560,7 @@ history if an unjoined branch later fails. It is not promoted to a successful
 workflow result: `woml run`, Workflow Call, Workflow Start inspection, and
 runtime APIs report failure and never emit that partial value as success JSON.
 Authorized diagnostics may show that a main result was recorded, but production
-inspection remains payload-free. The failed run's `on-failure` and
+inspection remains payload-free. The failed run's `on-error` and
 `on-complete` hooks receive the final lifecycle context under the rules below.
 
 ### 5.6 Lifecycle ordering
@@ -574,7 +574,7 @@ safely:
   business outcome failure;
 - a main-route failure prevents unopened later forks from opening, while
   branches from already-open forks continue to settle under attempt-all; and
-- after step hooks drain, Rust runs `on-failure` or `on-cancel`, then
+- after step hooks drain, Rust runs `on-error` or `on-cancel`, then
   `on-complete`, then finalizes the run.
 
 No workflow outcome hook runs merely because the main route completed while an
@@ -1116,7 +1116,7 @@ compatibility/recovery matrix with no skipped native tests.
 | Result | The main route remains the sole public result; later branch completion never replaces it. |
 | Failure | Siblings continue, joined failure inactivates downstream continuation without deadlock, and any unhandled branch failure makes the run fail truthfully. |
 | Failed result | A recorded main value remains durable but is never emitted as successful CLI/API/Workflow Call output for a failed run. |
-| Lifecycle | Outcome hooks wait for all opened fork work, then preserve `on-failure`/`on-cancel` followed by `on-complete`. |
+| Lifecycle | Outcome hooks wait for all opened fork work, then preserve `on-error`/`on-cancel` followed by `on-complete`. |
 | Choice composition | `<choose>` behaves identically on the main route and inside a branch. |
 | Existing composition | Parallel, approval, retry, services, modules, calls, lifecycle, policies, State, and triggers retain their contracts. |
 | Events | Event v12 opens, settles, joins, validates, folds, persists, and reopens deterministically. |

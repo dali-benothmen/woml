@@ -36,11 +36,11 @@
           console.log('Workflow succeeded');
         </script>
       </on-success>
-      <on-failure>
+      <on-error>
         <script>
           console.log(`Workflow failed: ${lifecycle.failure.code}`);
         </script>
-      </on-failure>
+      </on-error>
       <on-cancel>
         <script>
           console.log('Workflow cancelled');

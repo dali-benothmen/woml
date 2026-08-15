@@ -214,7 +214,7 @@ STEPS COMPLETED
 
 LIFECYCLE
 
-  ✓  on-failure                                              7 ms
+  ✓  on-error                                              7 ms
      console · Payment processing failed
 
   ✓  on-complete                                             2 ms
@@ -1380,11 +1380,11 @@ them.
    conformance. TypeScript/Bun remains authoritative unless a reviewed complete
    migration makes Rust the single compiler; WOML must never maintain two
    competing compiler implementations.
-3. **Legacy Cronflow Core Audit and Removal Map** — produce a dependency-backed
-   inventory of old JavaScript-chaining bridge, dispatcher, trigger executor,
-   step orchestrator, state machine, database, and compatibility paths;
-   identify what WOML still uses, what needs replacement, and what can be
-   removed later without deleting code during the audit.
+3. **Legacy Cronflow Core Audit and Removal Map** — Audit 0 and Audit 1 are
+   completed. The dependency-backed inventory and retirement map are frozen,
+   and the canonical N-API adapter now lives in the WOML-only `woml-native`
+   crate. Audit 2 will switch CLI build and packaging to that crate before any
+   legacy executor is removed.
 4. **Additional Communication Providers** — add built-in Discord, WhatsApp, and
    Telegram triggers, notifications, and messaging capabilities when product
    demand justifies them; keep custom providers available for project-specific

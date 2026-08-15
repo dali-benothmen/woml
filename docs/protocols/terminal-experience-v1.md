@@ -55,7 +55,7 @@ is derived only after required lifecycle finalization settles. A renderer must
 not infer either fact from elapsed time or an empty progress stream.
 
 Lifecycle hook names cover the engine's complete existing vocabulary:
-`on-start`, `on-success`, `on-failure`, `on-cancel`, `on-complete`,
+`on-start`, `on-success`, `on-error`, `on-cancel`, `on-complete`,
 `on-step-start`, `on-step-success`, `on-step-failure`, and
 `on-step-complete`.
 

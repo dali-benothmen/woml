@@ -100,7 +100,7 @@ slot. Resume reacquires it. This lets another eligible run make progress while
 one automation is waiting on time or a person.
 
 A workflow timeout is a failure with code `WOML_WORKFLOW_TIMED_OUT`. When it
-wins the durable race, WOML stops active work, runs workflow `on-failure`, then
+wins the durable race, WOML stops active work, runs workflow `on-error`, then
 `on-complete`. A previously committed success/cancellation cannot be rewritten
 by a late timer.
 

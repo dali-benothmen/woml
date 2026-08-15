@@ -176,7 +176,7 @@ pub struct StepPresentationV1 {
 pub enum PresentationLifecycleHook {
   OnStart,
   OnSuccess,
-  OnFailure,
+  OnError,
   OnCancel,
   OnComplete,
   OnStepStart,
@@ -1722,7 +1722,7 @@ fn lifecycle_hook(event: LifecycleEventName) -> PresentationLifecycleHook {
     LifecycleEventName::StepFailure => PresentationLifecycleHook::OnStepFailure,
     LifecycleEventName::StepComplete => PresentationLifecycleHook::OnStepComplete,
     LifecycleEventName::RunSuccess => PresentationLifecycleHook::OnSuccess,
-    LifecycleEventName::RunFailure => PresentationLifecycleHook::OnFailure,
+    LifecycleEventName::RunFailure => PresentationLifecycleHook::OnError,
     LifecycleEventName::RunCancel => PresentationLifecycleHook::OnCancel,
     LifecycleEventName::RunComplete => PresentationLifecycleHook::OnComplete,
   }
@@ -1740,7 +1740,7 @@ fn provider_label(handler: &str) -> String {
 fn reusable_lifecycle_hook(hook: crate::event::ReusableLifecycleHook) -> PresentationLifecycleHook {
   match hook {
     crate::event::ReusableLifecycleHook::OnSuccess => PresentationLifecycleHook::OnSuccess,
-    crate::event::ReusableLifecycleHook::OnError => PresentationLifecycleHook::OnFailure,
+    crate::event::ReusableLifecycleHook::OnError => PresentationLifecycleHook::OnError,
     crate::event::ReusableLifecycleHook::OnComplete => PresentationLifecycleHook::OnComplete,
   }
 }

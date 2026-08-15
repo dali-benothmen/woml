@@ -1982,7 +1982,7 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
     const body = `"use strict";\n${request.source}\n//# sourceURL=woml-${request.mode === 'lifecycle' ? 'lifecycle' : 'step'}-${safeNodeId}.js`;
     const script =
       request.bindings === undefined
-        ? new AsyncFunction('context', 'attempt', body)
+        ? new AsyncFunction('context', 'attempt', 'console', body)
         : reusable !== undefined && reusableLifecycle !== undefined
           ? reusable.definition.kind === 'step'
             ? new AsyncFunction(
@@ -2029,11 +2029,12 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
               'services',
               'secrets',
               'fetch',
+              'console',
               body
             );
     let result =
       request.bindings === undefined
-        ? await script(context, attempt, undefined, {}, globalThis.fetch)
+        ? await script(context, attempt, safeConsole)
         : reusable !== undefined && reusableLifecycle !== undefined
           ? reusable.definition.kind === 'step'
             ? await script(
@@ -2070,7 +2071,14 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
               nativeFetch,
               safeConsole
             )
-          : await script(context, attempt, services, secrets, nativeFetch);
+          : await script(
+              context,
+              attempt,
+              services,
+              secrets,
+              nativeFetch,
+              safeConsole
+            );
     if (
       (request.mode === 'lifecycle' || reusableLifecycle !== undefined) &&
       result === undefined
