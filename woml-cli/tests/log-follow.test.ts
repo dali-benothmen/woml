@@ -362,4 +362,78 @@ describe('workflow log following', () => {
     expect(streams).toBeGreaterThanOrEqual(1);
     expect(descriptorReads).toBeGreaterThanOrEqual(3);
   });
+
+  test('reports an actionable error when durable history permissions deny access', async () => {
+    const denied = Object.assign(new Error('permission denied: secret path'), {
+      code: 'EACCES',
+    });
+    try {
+      await followWorkflowLogs({
+        args: {
+          subject: 'run_denied',
+          subjectKind: 'run',
+          statePath: '/private/state.sqlite',
+          json: false,
+          color: 'never',
+        },
+        io: { stdout: () => {}, stderr: () => {}, isTTY: false },
+        dependencies: {
+          readRun: () => { throw denied; },
+          readWorkflow: () => { throw new Error('unexpected workflow query'); },
+          hasWorkflow: () => false,
+          readDescriptor: async () => { throw new Error('unexpected descriptor query'); },
+        },
+      });
+      throw new Error('expected log following to reject denied state access');
+    } catch (error) {
+      expect(error).toBeInstanceOf(LogFollowError);
+      expect((error as LogFollowError).code).toBe('WOML_LOG_STATE_UNAVAILABLE');
+      expect((error as Error).message).not.toContain('secret path');
+    }
+  });
+
+  test('fails closed when a replacement descriptor belongs to another deployment', async () => {
+    const empty: RunPresentationListV1 = {
+      profile: 'woml.run-presentation-list/v1',
+      workflowId: 'order-processing',
+      runs: [],
+    };
+    const foreign: RuntimeDescriptorV1 = {
+      ...descriptor,
+      runtimeInstanceId: 'runtime_foreign',
+      deploymentId: 'deployment_foreign',
+      capability: 'c'.repeat(43),
+    };
+    let descriptorReads = 0;
+    let stderr = '';
+    const fetcher = (async (input: string) => {
+      if (input.endsWith('/v1/snapshot')) return Response.json(snapshot());
+      if (input.includes('/v1/presentations/workflows/')) return Response.json(empty);
+      return new Response('', { headers: { 'content-type': 'text/event-stream' } });
+    }) as (input: string, init?: RequestInit) => Promise<Response>;
+
+    expect(await followWorkflowLogs({
+      args: {
+        subject: 'order-processing',
+        subjectKind: 'workflow',
+        statePath: '/virtual/state.sqlite',
+        json: false,
+        color: 'never',
+      },
+      io: { stdout: () => {}, stderr: text => { stderr += text; }, isTTY: false },
+      dependencies: {
+        readWorkflow: () => empty,
+        hasWorkflow: () => true,
+        readRun: () => { throw new Error('unexpected run query'); },
+        readDescriptor: async () => {
+          descriptorReads += 1;
+          return descriptorReads === 1 ? descriptor : foreign;
+        },
+        fetch: fetcher,
+        reconnectWindowMs: 0,
+      },
+    })).toBe(0);
+    expect(stderr).toContain('WOML_LOG_RUNTIME_UNAVAILABLE');
+    expect(stderr).toContain('different deployment');
+  });
 });

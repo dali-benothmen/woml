@@ -26,7 +26,11 @@ const ANSI = {
   red: `${CSI}31m`,
 } as const;
 
-const SENSITIVE_KEY = /^(?:authorization|cookie|set-cookie|password|passwd|secret|token|api[-_]?key|access[-_]?key|private[-_]?key)$/i;
+const SENSITIVE_KEYS = [
+  'authorization', 'cookie', 'setcookie', 'password', 'passwd', 'secret',
+  'token', 'apikey', 'accesskey', 'privatekey', 'credential',
+  'idempotencykey', 'capability', 'approvalurl', 'resumeurl',
+] as const;
 const MAX_PREVIEW_DEPTH = 5;
 const MAX_PREVIEW_PROPERTIES = 20;
 const MAX_PREVIEW_ARRAY_ITEMS = 20;
@@ -89,13 +93,43 @@ export function sanitizeTerminalText(value: string): string {
     const code = character.codePointAt(0)!;
     if (code === 9 || code === 10) {
       safe += character;
-    } else if (code < 32 || code === 127) {
+    } else if (
+      code < 32 || code === 127 || (code >= 0x80 && code <= 0x9f) ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069)
+    ) {
       safe += ' ';
+    } else if (code === 0x2028 || code === 0x2029) {
+      safe += '\n';
     } else {
       safe += character;
     }
   }
   return safe;
+}
+
+function sensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[-_\s]/gu, '').toLowerCase();
+  return SENSITIVE_KEYS.some(candidate =>
+    normalized === candidate || normalized.endsWith(candidate)
+  );
+}
+
+function redactSecretFragments(value: string): string {
+  return value
+    .replace(/\b(?:Bearer|Basic)\s+[^\s"'\]}>,;]+/giu, match =>
+      `${match.slice(0, match.indexOf(' ') + 1)}[redacted]`
+    )
+    .replace(/\b(?:xox[baprs]|xapp)-[^\s"'\]}>,;]+/giu, '[redacted]')
+    .replace(
+      /((?:^|[?&\s])(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|authorization|idempotency[_-]?key)=)[^&\s"'\]}>,;]+/giu,
+      '$1[redacted]'
+    );
+}
+
+/** Sanitize an untrusted diagnostic before it crosses a terminal/log boundary. */
+export function sanitizePresentationDiagnostic(value: string): string {
+  return redactSecretFragments(oneLine(value));
 }
 
 function oneLine(value: string): string {
@@ -110,9 +144,9 @@ function safeJson(
 ): JsonValue {
   budget.nodes += 1;
   if (budget.nodes > MAX_PREVIEW_NODES) return '[preview limit reached]';
-  if (SENSITIVE_KEY.test(key)) return '[redacted]';
+  if (sensitiveKey(key)) return '[redacted]';
   if (typeof value === 'string') {
-    const safe = sanitizeTerminalText(value);
+    const safe = redactSecretFragments(sanitizeTerminalText(value));
     return safe.length <= MAX_PREVIEW_STRING
       ? safe
       : `${[...safe].slice(0, MAX_PREVIEW_STRING).join('')}…`;
@@ -139,11 +173,11 @@ function safeJson(
 export function sanitizePresentation(presentation: RunPresentationV1): RunPresentationV1 {
   const copy = structuredClone(presentation) as RunPresentationV1;
   const cleanString = (value: string | undefined): string | undefined =>
-    value === undefined ? undefined : oneLine(value);
+    value === undefined ? undefined : sanitizePresentationDiagnostic(value);
   const cleanFailure = <T extends { readonly code: string; readonly message: string; readonly kind?: string }>(failure: T): T => ({
     ...failure,
-    code: oneLine(failure.code),
-    message: oneLine(failure.message),
+    code: sanitizePresentationDiagnostic(failure.code),
+    message: sanitizePresentationDiagnostic(failure.message),
     ...(failure.kind === undefined ? {} : { kind: oneLine(failure.kind) }),
   });
   return {
@@ -194,16 +228,51 @@ export function sanitizePresentation(presentation: RunPresentationV1): RunPresen
   };
 }
 
+function terminalCellWidth(character: string): number {
+  const code = character.codePointAt(0)!;
+  if (/\p{Mark}/u.test(character) || code === 0x200d || code === 0xfe0f) return 0;
+  if (
+    code >= 0x1100 && (
+      code <= 0x115f || code === 0x2329 || code === 0x232a ||
+      (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe19) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1faff) ||
+      (code >= 0x20000 && code <= 0x3fffd)
+    )
+  ) return 2;
+  return 1;
+}
+
 function visibleLength(value: string): number {
-  return [...stripAnsi(value)].length;
+  return [...stripAnsi(value)].reduce(
+    (width, character) => width + terminalCellWidth(character),
+    0
+  );
+}
+
+function sliceToWidth(value: string, width: number): string {
+  let result = '';
+  let used = 0;
+  for (const character of value) {
+    const characterWidth = terminalCellWidth(character);
+    if (used + characterWidth > width) break;
+    result += character;
+    used += characterWidth;
+  }
+  return result;
 }
 
 function truncate(value: string, width: number): string {
   const clean = oneLine(value);
   if (width <= 0) return '';
-  if ([...clean].length <= width) return clean;
+  if (visibleLength(clean) <= width) return clean;
   if (width === 1) return '…';
-  return `${[...clean].slice(0, width - 1).join('')}…`;
+  return `${sliceToWidth(clean, width - 1)}…`;
 }
 
 function padRight(value: string, width: number): string {
@@ -227,9 +296,10 @@ function wrap(value: string, width: number): string[] {
   for (const word of words) {
     const chunks: string[] = [];
     let remaining = word;
-    while ([...remaining].length > width) {
-      chunks.push([...remaining].slice(0, Math.max(1, width - 1)).join('') + '…');
-      remaining = [...remaining].slice(Math.max(1, width - 1)).join('');
+    while (visibleLength(remaining) > width) {
+      const chunk = sliceToWidth(remaining, Math.max(1, width - 1));
+      chunks.push(`${chunk}…`);
+      remaining = remaining.slice(chunk.length);
     }
     chunks.push(remaining);
     for (const chunk of chunks) {
@@ -629,7 +699,7 @@ export function renderRunNotice(
 ): string {
   const options = resolveOptions(renderOptions);
   const safeRunId = sanitizeTerminalText(runId);
-  const safeMessage = sanitizeTerminalText(message).replaceAll('\n', ' ');
+  const safeMessage = sanitizePresentationDiagnostic(message);
   if (options.format === 'json') return '';
   const glyph = status === 'finalizing' ? (options.unicode ? '◇' : '*') : (options.unicode ? '○' : '*');
   return `  ${paint(glyph, 'yellow', options.color)} ${paint(safeRunId, 'cyan', options.color)} · ${paint(status, 'yellow', options.color)} · ${safeMessage}\n`;
@@ -642,7 +712,7 @@ export function renderPresentationWarning(
 ): string {
   const options = resolveOptions(renderOptions);
   const safeCode = sanitizeTerminalText(code).replaceAll('\n', ' ');
-  const safeMessage = sanitizeTerminalText(message).replaceAll('\n', ' ');
+  const safeMessage = sanitizePresentationDiagnostic(message);
   if (options.format === 'json') return '';
   return `${paint(options.unicode ? '!' : 'WARN', 'yellow', options.color)} ${paint(safeCode, 'yellow', options.color)} · ${safeMessage}\n`;
 }

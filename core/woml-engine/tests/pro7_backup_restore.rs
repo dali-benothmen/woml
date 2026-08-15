@@ -9,8 +9,9 @@ use serde_json::Map;
 use uuid::Uuid;
 use woml_engine::{
   create_online_backup, inspect_backup_store, prepare_restored_store, record_verified_backup,
-  ApprovalRequestedData, ApprovalTimeoutPolicy, BackupError, CompiledWorkflowDefinition,
-  DurableDagEngine, DurableEventStore, RunStatus, DURABLE_STORE_SCHEMA_VERSION,
+  run_presentation_from_store_v1, ApprovalRequestedData, ApprovalTimeoutPolicy, BackupError,
+  CompiledWorkflowDefinition, DurableDagEngine, DurableEventStore, RunStatus,
+  DURABLE_STORE_SCHEMA_VERSION, RUN_PRESENTATION_PROFILE,
 };
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
@@ -164,6 +165,13 @@ fn online_backup_is_coherent_during_writes_and_restores_exact_history() {
   assert!(prepared.runtime_instance_id.is_none());
   let restored_store = DurableEventStore::open(&restored).unwrap();
   assert_eq!(restored_store.events("run_pro7").unwrap().len(), 1);
+  let presentation = run_presentation_from_store_v1(&restored_store, "run_pro7").unwrap();
+  assert_eq!(presentation.profile, RUN_PRESENTATION_PROFILE);
+  assert_eq!(presentation.workflow.id, "hello");
+  assert_eq!(
+    presentation.status,
+    woml_engine::PresentationRunStatus::Running
+  );
 
   record_verified_backup(&source, "backup_pro7_online", Utc::now()).unwrap();
   let connection = Connection::open(&source).unwrap();

@@ -678,6 +678,16 @@ fn native_run_management_error(code: &'static str, error: DurableStoreError) -> 
 fn native_run_presentation_error(error: RunPresentationError) -> napi::Error {
   let code = match &error {
     RunPresentationError::Store(DurableStoreError::RunNotFound(_)) => "WOML_RUN_NOT_FOUND",
+    RunPresentationError::Store(DurableStoreError::Sqlite(_)) => "WOML_RUN_STATE_UNAVAILABLE",
+    RunPresentationError::Store(DurableStoreError::UnsupportedStoreVersion(_)) => {
+      "WOML_RUN_PRESENTATION_VERSION_UNSUPPORTED"
+    }
+    RunPresentationError::Store(
+      DurableStoreError::InvalidModel(_) | DurableStoreError::Json(_),
+    ) => "WOML_RUN_PRESENTATION_COMPATIBILITY_FAILED",
+    RunPresentationError::Store(DurableStoreError::InvalidStoredEvent(_))
+    | RunPresentationError::Fold(_)
+    | RunPresentationError::DefinitionMismatch => "WOML_RUN_PRESENTATION_HISTORY_INVALID",
     RunPresentationError::TooLarge | RunPresentationError::TooMany(_) => {
       "WOML_RUN_PRESENTATION_SIZE_LIMIT"
     }

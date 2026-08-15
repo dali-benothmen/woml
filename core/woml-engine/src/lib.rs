@@ -165,8 +165,8 @@ pub use presentation::{
   PresentationTriggerType, RunPresentationError, RunPresentationListV1, RunPresentationSummaryV1,
   RunPresentationTriggerV1, RunPresentationV1, StepPresentationV1, TriggerPresentationV1,
   WorkflowPresentationV1, RUN_PRESENTATION_LIST_PROFILE, RUN_PRESENTATION_MAX_BYTES,
-  RUN_PRESENTATION_MAX_LIFECYCLE, RUN_PRESENTATION_MAX_STEPS, RUN_PRESENTATION_MAX_WARNINGS,
-  RUN_PRESENTATION_PROFILE, RUN_PRESENTATION_RECENT_LIMIT,
+  RUN_PRESENTATION_MAX_EVENTS, RUN_PRESENTATION_MAX_LIFECYCLE, RUN_PRESENTATION_MAX_STEPS,
+  RUN_PRESENTATION_MAX_WARNINGS, RUN_PRESENTATION_PROFILE, RUN_PRESENTATION_RECENT_LIMIT,
 };
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError, ForkBranchProjection,

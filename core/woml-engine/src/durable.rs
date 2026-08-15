@@ -4131,6 +4131,19 @@ impl DurableEventStore {
     load_events(&self.connection, run_id)
   }
 
+  /// Count a run's durable events without allocating or decoding its history.
+  /// Read models use this to reject pathological histories before projection.
+  pub fn event_count(&self, run_id: &str) -> Result<usize, DurableStoreError> {
+    self.run_binding(run_id)?;
+    let count: i64 = self.connection.query_row(
+      "SELECT COUNT(*) FROM woml_run_events WHERE run_id = ?1",
+      [run_id],
+      |row| row.get(0),
+    )?;
+    usize::try_from(count)
+      .map_err(|_| DurableStoreError::Contract("run event count is invalid".to_string()))
+  }
+
   pub fn projection(&self, run_id: &str) -> Result<RunProjection, DurableStoreError> {
     let events = self.events(run_id)?;
     let binding = self.run_binding(run_id)?;

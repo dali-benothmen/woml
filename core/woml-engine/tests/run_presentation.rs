@@ -132,6 +132,7 @@ fn presentation_is_a_deterministic_read_model_across_store_restart() {
   let second = run_presentation_from_store_v1(&reopened, "run_hello_01").unwrap();
 
   assert_eq!(first, second);
+  assert_eq!(reopened.event_count("run_hello_01").unwrap(), history.len());
   assert_eq!(first.profile, RUN_PRESENTATION_PROFILE);
   assert_eq!(first.workflow.id, "hello");
   assert_eq!(first.workflow.name.as_deref(), Some("Hello WOML"));
@@ -422,8 +423,13 @@ fn queued_policy_and_workflow_timeout_are_explained_without_scheduler_logs() {
 fn results_are_bounded_and_credential_shaped_fields_are_redacted() {
   let mut history = events(HELLO_EVENTS);
   let unsafe_result = serde_json::json!({
-    "message": "ok",
+    "message": "Bearer top-secret token=also-secret xoxb-slack-secret",
     "token": "must-not-leak",
+    "botToken": "must-not-leak-bot",
+    "clientSecret": "must-not-leak-client",
+    "credential": "must-not-leak-credential",
+    "idempotencyKey": "must-not-leak-idempotency",
+    "approvalUrl": "https://example.test/approval?token=must-not-leak-url",
     "nested": { "authorization": "Bearer must-not-leak" },
     "values": (0..100).collect::<Vec<_>>(),
     "long": "x".repeat(2_000)
@@ -441,6 +447,8 @@ fn results_are_bounded_and_credential_shaped_fields_are_redacted() {
     project_run_presentation_v1(&model(HELLO_MODEL), HELLO_HASH, &history).unwrap();
   let encoded = serde_json::to_string(&presentation).unwrap();
   assert!(!encoded.contains("must-not-leak"));
+  assert!(!encoded.contains("top-secret"));
+  assert!(!encoded.contains("slack-secret"));
   assert!(presentation.result_truncated.is_some());
   assert_eq!(presentation.result.as_ref().unwrap()["token"], "[redacted]");
   assert_eq!(
@@ -450,4 +458,14 @@ fn results_are_bounded_and_credential_shaped_fields_are_redacted() {
       .len(),
     21
   );
+
+  let database = TemporaryDatabase::new();
+  persist_fixture(database.path(), model(HELLO_MODEL), HELLO_HASH, &history);
+  let store = DurableEventStore::open(database.path()).unwrap();
+  let stored = store.events("run_hello_01").unwrap();
+  let stored_result = stored.iter().find_map(|event| match &event.payload {
+    RunEventPayload::RunSucceeded(data) => Some(&data.result),
+    _ => None,
+  });
+  assert_eq!(stored_result, Some(&unsafe_result));
 }

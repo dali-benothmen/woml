@@ -25,6 +25,7 @@ pub const RUN_PRESENTATION_MAX_STEPS: usize = 10_000;
 pub const RUN_PRESENTATION_MAX_LIFECYCLE: usize = 1_000;
 pub const RUN_PRESENTATION_MAX_WARNINGS: usize = 1_000;
 pub const RUN_PRESENTATION_RECENT_LIMIT: usize = 10;
+pub const RUN_PRESENTATION_MAX_EVENTS: usize = 100_000;
 
 const MAX_SHORT_TEXT: usize = 2_048;
 const MAX_MESSAGE: usize = 8_192;
@@ -304,8 +305,73 @@ enum TimelineStatus {
   Failed(AttemptFailure),
 }
 
+fn redact_marker_value(value: &str, marker: &str) -> String {
+  let mut output = value.to_string();
+  let mut search_from = 0;
+  loop {
+    let lowered = output.to_ascii_lowercase();
+    let Some(relative) = lowered[search_from..].find(marker) else {
+      break;
+    };
+    let start = search_from + relative + marker.len();
+    let end = output[start..]
+      .char_indices()
+      .find_map(|(offset, character)| {
+        (character.is_whitespace() || matches!(character, '&' | '"' | '\'' | ']' | '}' | ',' | ';'))
+          .then_some(start + offset)
+      })
+      .unwrap_or(output.len());
+    if start == end {
+      search_from = start;
+      continue;
+    }
+    output.replace_range(start..end, "[redacted]");
+    search_from = start + "[redacted]".len();
+  }
+  output
+}
+
+fn redact_secret_fragments(value: &str) -> String {
+  let mut output = value.to_string();
+  for marker in [
+    "token=",
+    "secret=",
+    "password=",
+    "passwd=",
+    "api_key=",
+    "apikey=",
+    "access_key=",
+    "private_key=",
+    "authorization=",
+    "idempotency_key=",
+    "idempotencykey=",
+  ] {
+    output = redact_marker_value(&output, marker);
+  }
+  for marker in ["xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "xapp-"] {
+    output = redact_marker_value(&output, marker);
+  }
+
+  let mut words = output.split_whitespace().peekable();
+  let mut rebuilt = Vec::new();
+  while let Some(word) = words.next() {
+    rebuilt.push(word.to_string());
+    if word.eq_ignore_ascii_case("bearer") || word.eq_ignore_ascii_case("basic") {
+      if words.next().is_some() {
+        rebuilt.push("[redacted]".to_string());
+      }
+    }
+  }
+  if rebuilt.len() > 1 && value.contains(char::is_whitespace) {
+    rebuilt.join(" ")
+  } else {
+    output
+  }
+}
+
 fn bounded(value: &str, maximum: usize) -> String {
-  let mut characters = value.chars();
+  let redacted = redact_secret_fragments(value);
+  let mut characters = redacted.chars();
   let truncated = characters.by_ref().take(maximum).collect::<String>();
   if characters.next().is_some() && maximum > 0 {
     let mut value = truncated
@@ -452,19 +518,25 @@ fn is_sensitive_key(key: &str) -> bool {
     .filter(|character| !matches!(character, '-' | '_'))
     .flat_map(char::to_lowercase)
     .collect::<String>();
-  matches!(
-    normalized.as_str(),
-    "authorization"
-      | "cookie"
-      | "setcookie"
-      | "password"
-      | "passwd"
-      | "secret"
-      | "token"
-      | "apikey"
-      | "accesskey"
-      | "privatekey"
-  )
+  [
+    "authorization",
+    "cookie",
+    "setcookie",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "credential",
+    "idempotencykey",
+    "capability",
+    "approvalurl",
+    "resumeurl",
+  ]
+  .iter()
+  .any(|sensitive| normalized == *sensitive || normalized.ends_with(sensitive))
 }
 
 fn bounded_json_inner(value: &Value, key: &str, depth: usize, nodes: &mut usize) -> (Value, bool) {
@@ -1892,6 +1964,9 @@ pub fn project_run_presentation_v1(
   definition_hash: &str,
   events: &[RunEvent],
 ) -> Result<RunPresentationV1, RunPresentationError> {
+  if events.len() > RUN_PRESENTATION_MAX_EVENTS {
+    return Err(RunPresentationError::TooMany("events"));
+  }
   let first = events.first().ok_or(RunPresentationError::EmptyHistory)?;
   let projection = fold_events(events)?;
   if projection.definition_hash.as_deref() != Some(definition_hash)
@@ -2016,6 +2091,9 @@ pub fn run_presentation_from_store_v1(
   store: &DurableEventStore,
   run_id: &str,
 ) -> Result<RunPresentationV1, RunPresentationError> {
+  if store.event_count(run_id)? > RUN_PRESENTATION_MAX_EVENTS {
+    return Err(RunPresentationError::TooMany("events"));
+  }
   let binding = store.run_binding(run_id)?;
   let workflow = store.definition(&binding.definition_hash)?;
   let events = store.events(run_id)?;

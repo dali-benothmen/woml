@@ -10,6 +10,7 @@ import {
   executeWorkflowWithRustDurable,
   inspectRunPresentationWithRust,
   listRunPresentationsWithRust,
+  RunManagementError,
 } from '../src/rust-executor';
 
 const packageRoot = resolve(import.meta.dir, '..');
@@ -79,6 +80,27 @@ nativeTest('the native boundary returns strict durable Run Presentation v1 snaps
       'on-complete',
     ]);
     expect(lifecyclePresentation.lifecycle.every(item => item.status === 'succeeded')).toBe(true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+nativeTest('the native presentation boundary reports inaccessible state distinctly', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'woml-run-presentation-missing-state-'));
+  try {
+    const missingParent = join(directory, 'missing', 'state.sqlite');
+    expect(() => inspectRunPresentationWithRust(
+      missingParent,
+      'run_missing',
+      { nativeCorePath }
+    )).toThrow(RunManagementError);
+    try {
+      inspectRunPresentationWithRust(missingParent, 'run_missing', {
+        nativeCorePath,
+      });
+    } catch (error) {
+      expect((error as RunManagementError).code).toBe('WOML_RUN_STATE_UNAVAILABLE');
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -1,9 +1,9 @@
 # WOML Terminal Experience Contracts v1
 
-Status: Frozen by TM0 and implemented through TM6. The renderer, durable Run
+Status: Frozen by TM0 and implemented through TM7. The renderer, durable Run
 Presentation projection, foreground integration, interactive manual admission,
 secure retained/live background log following, and complex automation
-presentation are implemented. Hardening remains TM7 work.
+presentation are implemented and hardened.
 
 This document freezes the interfaces shared by the future Rust projection,
 the Bun CLI renderers, manual-trigger input, and background log following. It
@@ -91,6 +91,9 @@ uses `STEPS COMPLETED`.
 The frozen v1 budgets are:
 
 - at most 2 MiB of UTF-8 JSON for one complete Run Presentation snapshot;
+- at most 100,000 durable source events per projection; the store checks this
+  count before allocating or decoding the history, providing a deterministic
+  work/time budget instead of a host-speed-dependent wall-clock timeout;
 - at most 10,000 authored presentation rows, 1,000 lifecycle rows, and 1,000
   warnings, with the smaller encoded-byte limit taking precedence;
 - authored short text at most 2,048 characters and messages at most 8,192;
@@ -104,12 +107,15 @@ to emit a partial value that still claims to be a complete v1 snapshot. A
 shortened result inside an otherwise valid snapshot is explicitly marked with
 `resultTruncated: true`.
 
-The TM1 renderer additionally:
+The renderer additionally:
 
 - strips ANSI, OSC, cursor-control, and unsafe control characters from authored
-  strings and returned values;
+  strings and returned values, including C1 and Unicode bidi controls;
 - redacts values under credential-shaped object keys such as `password`,
-  `secret`, `token`, `authorization`, and `apiKey`;
+  `secret`, `token`, `authorization`, `apiKey`, compound/provider token names,
+  idempotency keys, capability URLs, and resume URLs;
+- removes Bearer/Basic credentials, Slack-token shapes, and sensitive query
+  fragments from untrusted result strings and diagnostic messages;
 - structurally bounds depth, property count, array count, and string length;
 - never modifies the durable result merely to shorten its display; and
 - labels shortened results and provides a full-result inspection command.
@@ -251,5 +257,14 @@ copyable `--logs` commands but does not persist decorative terminal frames.
   it does not change workflow execution semantics or durable events.
 - Existing JSON commands retain their current shapes. Run Presentation v1 is a
   new profile rather than a silent mutation of Run Inspection v5.
+- Presentation access distinguishes an unavailable SQLite state file
+  (`WOML_RUN_STATE_UNAVAILABLE`), an unsupported future store
+  (`WOML_RUN_PRESENTATION_VERSION_UNSUPPORTED`), a definition compatibility
+  failure (`WOML_RUN_PRESENTATION_COMPATIBILITY_FAILED`), and invalid durable
+  history (`WOML_RUN_PRESENTATION_HISTORY_INVALID`). None falls back to parsing
+  runtime text.
+- Store v14 projections survive verified backup/restore. Earlier supported
+  stores migrate through the existing store authority; future stores fail
+  closed before presentation.
 - Permanent files, symbols, tests, and package commands use product names,
   never milestone shorthand such as `tm1_*`.

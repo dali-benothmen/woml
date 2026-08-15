@@ -1,11 +1,11 @@
 # WOML Terminal Experience and Manual Triggers Implementation Plan
 
-Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 through TM6 completed
+Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 through TM7 completed
 on 2026-08-15. The versioned presentation contracts, pure color/plain/JSON
 renderer, durable Rust projection, native/TypeScript query boundary,
 professional foreground output, Enter-driven durable manual trigger, secure
 retained/live background log following, and complete complex-automation
-presentation are implemented. TM7 is next.
+presentation are implemented and hardened. TM8 is next.
 
 ## 1. Product Outcome
 
@@ -834,7 +834,7 @@ arrival, or infer selected routes by reevaluating conditions.
 | TM4 — completed | Implement explicit Rust manual admission and the Enter-driven foreground input loop. | `<manual>` waits for the user and can create repeated durable runs. |
 | TM5 — completed | Add `woml <run-id|workflow-id> --logs` and background-runtime attachment. | Users can inspect and follow background execution safely from another terminal. |
 | TM6 — completed | Complete complex control-flow, retry, approval, lifecycle, concurrency, and multi-run presentation. | Large real workflows remain organized instead of exposing internal engine noise. |
-| TM7 | Harden accessibility, security, compatibility, retention, restart, and failure behavior. | Output remains safe and truthful across terminals, pipes, crashes, and historical stores. |
+| TM7 — completed | Harden accessibility, security, compatibility, retention, restart, and failure behavior. | Output remains safe and truthful across terminals, pipes, crashes, and historical stores. |
 | TM8 | Document, benchmark, package, and publish the terminal/manual milestone. | Professional output and real manual triggers are supported WOML features. |
 
 Phase labels are planning shorthand only. Permanent files, symbols, fixtures,
@@ -1115,7 +1115,7 @@ Completion evidence:
   execution/projection tests and 35 Bun contract, renderer, packaged foreground,
   and log-follow tests (211 Bun assertions), followed by TypeScript validation.
 
-### TM7 — Harden security, accessibility, and compatibility
+### TM7 — Harden security, accessibility, and compatibility — completed
 
 Changes:
 
@@ -1143,6 +1143,37 @@ Gate:
 
 Security scan, adversarial snapshots, compatibility fixtures, crash/restart,
 retention, backup/restore, cross-terminal, and machine-output suites pass.
+
+Completion evidence:
+
+- The Rust read model now rejects histories above 100,000 events before loading
+  or folding them. Existing row, lifecycle, warning, JSON-node, nesting,
+  collection, string, recent-run, and 2 MiB encoded budgets remain enforced.
+- Credential-shaped fields now include compound and provider-oriented names
+  such as `botToken`, `clientSecret`, `credential`, `idempotencyKey`, capability
+  URLs, and resume URLs. Bearer/Basic credentials, Slack tokens, and sensitive
+  query fragments are also removed from result previews and diagnostics.
+- Terminal sanitization strips ANSI/OSC/C0/C1 controls and neutralizes Unicode
+  bidi controls. Layout measures combining marks, wide CJK characters, and
+  emoji by terminal cells, so the 32–160-column budget remains truthful.
+- Presentation shortening is proven read-only: the durable event keeps its
+  exact business result while the public projection reports a bounded,
+  explicitly truncated preview.
+- Inaccessible stores, unsupported historical stores, incompatible definitions,
+  and invalid event histories now have distinct reviewed diagnostics. Restored
+  Store v14 history is projected successfully; future stores still fail closed.
+- Same-deployment runtime replacement reconnects, cross-deployment descriptor
+  replacement fails closed, sequence gaps resynchronize, viewer rendering
+  failures restore the terminal, and prune/retention/backup behavior remains
+  covered by the existing durable authorities.
+- `NO_COLOR`, `TERM=dumb`, `--color=auto|always|never`, redirected output,
+  ASCII fallback, malformed/oversized JSON, deep/wide results, and hostile
+  Unicode have adversarial coverage. Existing `list`, `get`, help/version, and
+  not-found JSON contracts remain unchanged.
+- The serialized `test:terminal-hardening` gate covers 25 Rust tests and 65 Bun
+  tests across security, presentation, native compatibility, runtime ownership,
+  restart, viewer recovery, backup/restore, retention/prune, and legacy machine
+  commands, followed by TypeScript validation.
 
 ### TM8 — Package, document, benchmark, and publish
 

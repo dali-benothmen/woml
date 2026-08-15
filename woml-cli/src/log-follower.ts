@@ -20,6 +20,7 @@ import {
   decodeRunPresentationV1,
   renderPresentationWarning,
   renderRunPresentation,
+  sanitizePresentationDiagnostic,
   type ColorMode,
   type PresentationRenderOptions,
   type RunPresentationListV1,
@@ -280,11 +281,25 @@ function inactiveDescriptor(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
+function stateAccessDenied(error: unknown): boolean {
+  return error instanceof Error && 'code' in error &&
+    (error.code === 'EACCES' || error.code === 'EPERM');
+}
+
+function stateAccessError(error: unknown): LogFollowError {
+  return new LogFollowError(
+    'WOML_LOG_STATE_UNAVAILABLE',
+    'The durable state file cannot be read with the current user permissions.',
+    { cause: error }
+  );
+}
+
 async function existingState(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isFile();
   } catch (error) {
     if (inactiveDescriptor(error)) return false;
+    if (stateAccessDenied(error)) throw stateAccessError(error);
     throw error;
   }
 }
@@ -337,7 +352,11 @@ export async function followWorkflowLogs(options: {
     renderedAny = true;
   };
   const warning = (code: string, message: string): void => {
-    if (args.json) io.stderr(`Warning [${code}]: ${message}\n`);
+    if (args.json) {
+      io.stderr(
+        `Warning [${sanitizePresentationDiagnostic(code)}]: ${sanitizePresentationDiagnostic(message)}\n`
+      );
+    }
     else io.stderr(renderPresentationWarning(code, message, render));
   };
 
@@ -356,6 +375,13 @@ export async function followWorkflowLogs(options: {
         retainedWorkflowDefinition = hasWorkflow(args.statePath, args.subject);
       }
     } catch (error) {
+      if (stateAccessDenied(error)) throw stateAccessError(error);
+      if (
+        error instanceof RunManagementError &&
+        error.code === 'WOML_RUN_STATE_UNAVAILABLE'
+      ) {
+        throw stateAccessError(error);
+      }
       if (
         !(
           args.subjectKind === 'run' &&
