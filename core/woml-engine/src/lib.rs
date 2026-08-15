@@ -1,7 +1,7 @@
 //! The language-neutral WOML execution core.
 //!
-//! This crate is intentionally isolated from the legacy Cronflow SDK execution
-//! paths and from N-API. It consumes the versioned Compiled Workflow Model and
+//! This crate is intentionally isolated from retired authoring runtimes and
+//! from N-API. It consumes the versioned Compiled Workflow Model and
 //! derives all run state by folding versioned events.
 
 pub mod backup;

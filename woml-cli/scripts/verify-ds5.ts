@@ -40,7 +40,7 @@ for (const [file, required] of [
   ['docs/architecture.md', 'Durable User State DS0–DS5 publishes'],
   ['docs/woml-recovery.md', 'Durable User State recovery'],
   ['docs/woml-webhook-deployment.md', 'For workflows using `services.state`'],
-  ['docs/woml-sdk-migration.md', 'Small durable workflow-owned memory'],
+  ['docs/woml-data-guide.md', 'small JSON fact owned by one workflow'],
   ['woml-cli/README.md', 'Supported Durable User State'],
   ['examples/atomicCounterWorkflow.woml', 'services.state.increment'],
   ['examples/conversationStateWorkflow.woml', 'services.state.set'],

@@ -30,7 +30,7 @@ export function importSpecifiers(source: string): readonly string[] {
   );
 }
 
-export function isLegacySdkSpecifier(specifier: string): boolean {
+export function isRetiredSdkSpecifier(specifier: string): boolean {
   const normalized = specifier.replaceAll('\\', '/');
   return (
     normalized === 'cronflow' ||
@@ -39,7 +39,7 @@ export function isLegacySdkSpecifier(specifier: string): boolean {
   );
 }
 
-export function cronflowRuntimeDependencies(
+export function retiredSdkRuntimeDependencies(
   manifest: Readonly<Record<string, unknown>>
 ): readonly string[] {
   return ['dependencies', 'optionalDependencies', 'peerDependencies'].flatMap(
@@ -72,8 +72,8 @@ export function retiredRootManifestViolations(
   for (const field of ['main', 'module', 'types', 'exports', 'publishConfig']) {
     if (field in manifest) violations.push(`root package declares ${field}`);
   }
-  if (cronflowRuntimeDependencies(manifest).length > 0) {
-    violations.push('root package declares a Cronflow runtime dependency');
+  if (retiredSdkRuntimeDependencies(manifest).length > 0) {
+    violations.push('root package declares a retired SDK runtime dependency');
   }
   return violations;
 }
@@ -94,6 +94,25 @@ async function assertRetiredSdkSurface(root: string): Promise<void> {
     'sdk/index.ts',
     'sdk/src/index.ts',
     '.github/workflows/release.yml',
+    '.changeset',
+    '.npmignore',
+    '.npmrc',
+    '.releaserc.json',
+    'CHANGELOG.md',
+    'MIGRATION_V0.9.md',
+    'RELEASE.md',
+    'RELEASE_FIXES.md',
+    'SETUP_GUIDE.md',
+    'CORE_ARCHITECTURE_ANALYSIS.md',
+    'CORE_REFACTORING_PRIORITIES.md',
+    'WOML_ARCHITECTURE_ANALYSIS.md',
+    'refactoring-core.md',
+    'cronflow.jpg',
+    'core/.npmignore',
+    'docs/api-reference.md',
+    'docs/framework-integrations.md',
+    'docs/woml-sdk-migration.md',
+    'docs/cronflow-sdk-data-archive.md',
   ]) {
     try {
       await stat(resolve(root, retiredPath));
@@ -139,7 +158,7 @@ async function assertNoSdkImports(root: string): Promise<number> {
     for (const path of await filesBelow(sourceRoot)) {
       scanned += 1;
       const source = await readFile(path, 'utf8');
-      const forbidden = importSpecifiers(source).filter(isLegacySdkSpecifier);
+      const forbidden = importSpecifiers(source).filter(isRetiredSdkSpecifier);
       if (forbidden.length > 0) {
         throw new Error(
           `${relative(root, path)} imports the legacy SDK: ${forbidden.join(', ')}`
@@ -151,7 +170,7 @@ async function assertNoSdkImports(root: string): Promise<number> {
     const manifest = JSON.parse(
       await readFile(resolve(root, manifestPath), 'utf8')
     ) as Readonly<Record<string, unknown>>;
-    const forbidden = cronflowRuntimeDependencies(manifest);
+    const forbidden = retiredSdkRuntimeDependencies(manifest);
     if (forbidden.length > 0) {
       throw new Error(
         `${manifestPath} declares a legacy runtime dependency: ${forbidden.join(', ')}`
@@ -159,6 +178,19 @@ async function assertNoSdkImports(root: string): Promise<number> {
     }
   }
   return scanned;
+}
+
+async function assertWomlPackageMetadata(root: string): Promise<void> {
+  for (const manifestPath of [
+    'package.json',
+    'woml-cli/package.json',
+    'woml-vscode/package.json',
+  ]) {
+    const source = await readFile(resolve(root, manifestPath), 'utf8');
+    if (source.includes('github.com/dali-benothmen/cronflow')) {
+      throw new Error(`${manifestPath} points to the retired repository.`);
+    }
+  }
 }
 
 async function assertNativeSourceSeparation(root: string): Promise<void> {
@@ -312,7 +344,7 @@ async function assertCleanPackage(root: string): Promise<void> {
     const installedManifest = JSON.parse(
       await readFile(join(installedRoot, 'package.json'), 'utf8')
     ) as Readonly<Record<string, unknown>>;
-    const forbidden = cronflowRuntimeDependencies(installedManifest);
+    const forbidden = retiredSdkRuntimeDependencies(installedManifest);
     if (forbidden.length > 0) {
       throw new Error(
         `The clean WOML package requires legacy packages: ${forbidden.join(', ')}`
@@ -334,7 +366,7 @@ async function assertCleanPackage(root: string): Promise<void> {
       }
     }
     if (installedLegacyPackages) {
-      throw new Error('The clean WOML install contains an @cronflow package.');
+      throw new Error('The clean WOML install contains a retired SDK package.');
     }
     const version = Bun.spawnSync(
       [join(consumer, 'node_modules/.bin/woml'), '--version'],
@@ -354,11 +386,12 @@ export async function verifyArchitectureSeparation(): Promise<void> {
   const root = resolve(import.meta.dir, '../..');
   await assertRetiredSdkSurface(root);
   const scanned = await assertNoSdkImports(root);
+  await assertWomlPackageMetadata(root);
   await assertNativeSourceSeparation(root);
   await assertCliNativeContract(root);
   await assertCleanPackage(root);
   console.log(
-    `WOML architecture separation verified: retired SDK and Rust closures absent, ${scanned} frontend/CLI source files, one engine-only native dependency, ${expectedNativeExports.length} required addon exports, and a clean package with no @cronflow runtime dependency.`
+    `WOML architecture separation verified: retired SDK, packaging residue, and Rust closures absent; ${scanned} frontend/CLI source files, one engine-only native dependency, ${expectedNativeExports.length} required addon exports, and a clean WOML package.`
   );
 }
 

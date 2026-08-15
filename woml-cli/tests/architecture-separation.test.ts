@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  cronflowRuntimeDependencies,
   importSpecifiers,
-  isLegacySdkSpecifier,
+  isRetiredSdkSpecifier,
   retiredRootManifestViolations,
+  retiredSdkRuntimeDependencies,
 } from '../scripts/verify-architecture-separation';
 
 describe('WOML architecture separation scanner', () => {
@@ -21,13 +21,13 @@ describe('WOML architecture separation scanner', () => {
       '../sdk/src/cronflow',
       'cronflow',
     ]);
-    expect(importSpecifiers(source).every(isLegacySdkSpecifier)).toBe(true);
-    expect(isLegacySdkSpecifier('../woml/src/compiler')).toBe(false);
+    expect(importSpecifiers(source).every(isRetiredSdkSpecifier)).toBe(true);
+    expect(isRetiredSdkSpecifier('../woml/src/compiler')).toBe(false);
   });
 
   test('rejects runtime @cronflow dependencies without confusing metadata', () => {
     expect(
-      cronflowRuntimeDependencies({
+      retiredSdkRuntimeDependencies({
         dependencies: { woml: '1.0.0' },
         optionalDependencies: { '@cronflow/linux-x64': '1.0.0' },
         peerDependencies: { helper: 'file:../sdk/helper' },
@@ -62,7 +62,7 @@ describe('WOML architecture separation scanner', () => {
       'root package declares types',
       'root package declares exports',
       'root package declares publishConfig',
-      'root package declares a Cronflow runtime dependency',
+      'root package declares a retired SDK runtime dependency',
     ]);
   });
 });

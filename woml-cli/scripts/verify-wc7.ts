@@ -32,8 +32,8 @@ for (const [file, required] of [
     'woml.workflow-start',
   ],
   [
-    'docs/woml-sdk-migration.md',
-    'services.workflows.call(workflowId, payload)',
+    'docs/woml-workflow-calls.md',
+    "services.workflows.call('calculate-risk'",
   ],
   [
     'core/woml-engine/tests/wc7_workflow_calls.rs',

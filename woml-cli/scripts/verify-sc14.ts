@@ -68,15 +68,11 @@ const language = await Bun.file(
 const architecture = await Bun.file(
   resolve(projectRoot, 'docs/architecture.md')
 ).text();
-const migration = await Bun.file(
-  resolve(projectRoot, 'docs/woml-sdk-migration.md')
-).text();
 if (
   !language.includes('SC0–SC14 completed and hardened') ||
-  !architecture.includes('Queue remains intentionally postponed') ||
-  !migration.includes('Queue is explicitly postponed')
+  !architecture.includes('Queue remains intentionally postponed')
 ) {
-  throw new Error('SC14 architecture, language, or migration status is stale.');
+  throw new Error('SC14 architecture or language status is stale.');
 }
 
 process.stdout.write(

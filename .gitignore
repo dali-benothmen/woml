@@ -71,7 +71,7 @@ jspm_packages/
 # Nx
 .nx/cache/
 
-# Cronflow data directory (contains workflow state and execution history)
+# Retired local data and active WOML runtime state
 .cronflow/
 .woml/
 woml-env.d.ts

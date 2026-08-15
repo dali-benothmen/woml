@@ -1,428 +1,85 @@
-# Contributing to Cronflow
+# Contributing to WOML
 
-Thank you for your interest in contributing to Cronflow! This document outlines the development workflow, contribution guidelines, and how to work with our versioning system.
+Thank you for helping build WOML. Contributions should preserve its central
+boundary: TypeScript parses and compiles `.woml` documents, Rust owns durable
+workflow execution, and isolated Bun workers execute authored JavaScript.
 
-## 🚀 Quick Start
+## Development setup
 
-1. **Create an issue**
-2. **Fork** the repository
-3. **Clone** your fork: `git clone https://github.com/dali-benothmen/cronflow.git`
-4. **Install dependencies**: `bun install`
-5. **Build the project**: `bun run build:all`
-6. **Run tests**: `bun test`
-7. **Create a feature branch**: `git checkout -b feature/your-feature-name`
-
-## 🛠️ Development Setup
-
-### Prerequisites
-
-- **Bun** >= 1.0.0 (recommended) or **Node.js** >= 18.0.0
-- **Rust** >= 1.70.0 (for core development)
-- **Git**
-
-### Installation
+Install Bun 1.3.14 or later, the stable Rust toolchain, and Git:
 
 ```bash
-# Clone the repository
-git clone https://github.com/dali-benothmen/cronflow.git
-cd cronflow
-
-# Install dependencies
-npm install  # or: bun install
-
-# Build the Rust core
-cd core
-cargo build --release
-cd ..
-
-# Build TypeScript
-npm run build  # or: bun run build
-
-# Run tests
-npm test  # or: bun test
+git clone https://github.com/dali-benothmen/woml.git
+cd woml/woml-cli
+bun install --frozen-lockfile
+bun run build
 ```
 
-> 💡 **Tip**: For a comprehensive setup guide including troubleshooting, see [SETUP_GUIDE.md](./SETUP_GUIDE.md)
+The active product packages are:
 
-### Available Scripts
+- `woml` — parser, validator, compiler, source diagnostics, and public types;
+- `woml-cli` — CLI, runtime hosting, Bun workers, and provider adapters;
+- `core/woml-engine` — durable, language-neutral execution authority;
+- `core/woml-native` — the narrow N-API adapter; and
+- `woml-vscode` — editor grammar, snippets, and language configuration.
+
+## Before opening a pull request
+
+Run the checks relevant to your change. The minimum repository checks are:
 
 ```bash
-# Development
-npm run dev              # Start development server with watch mode
-npm run dev:test         # Run tests in watch mode
-
-# Building
-npm run build            # Build TypeScript + Rust core
-npm run build:core       # Build only Rust core
-npm run build:prod       # Production build with optimizations
-
-# Testing
-npm test                 # Run all tests
-npm run test:run         # Run tests once
-npm run test:coverage    # Run tests with coverage
-npm run test:ui          # Run tests with UI
-
-# Code Quality
-npm run lint             # Run ESLint
-npm run lint:fix         # Fix ESLint issues
-npm run format           # Format code with Prettier
-npm run format:check     # Check code formatting
-
-# Package Management
-npm run pack             # Create a local .tgz package
-npm run analyze          # Analyze bundle size
-npm run check:bundle-size # Check bundle size limits
-npm run clean            # Clean build artifacts
+# From woml-cli/
+bun run typecheck
+bun test ../woml/tests
+bun run test:architecture-separation
 ```
 
-> **Note**: You can replace `npm` with `bun` if you prefer Bun as your runtime
-
-## 📝 Changesets Workflow
-
-We use [Changesets](https://github.com/changesets/changesets) for versioning and publishing. This ensures consistent releases and automatic changelog generation.
-
-### How Changesets Work
-
-1. **Changeset Creation**: When making changes, create a changeset describing what changed
-2. **Version Bumping**: Changesets automatically determine the next version based on change types
-3. **Release Publishing**: Automated publishing to npm with proper changelog
-
-### Creating a Changeset
-
-When you make changes that should be included in a release:
+For Rust engine or adapter changes, also run:
 
 ```bash
-# Create a changeset
-bunx changeset
+cargo test -j 1 --locked --release --manifest-path ../core/Cargo.toml --workspace
 ```
 
-This will prompt you to:
+Use one Cargo build job (`-j 1`) so local verification has predictable memory
+usage. Feature-specific release scripts in `woml-cli/package.json` remain the
+source of truth for broader gates.
 
-1. **Select packages** that changed (if multiple)
-2. **Choose change type**:
-   - `patch` - Bug fixes, documentation updates
-   - `minor` - New features (backward compatible)
-   - `major` - Breaking changes
-3. **Write a description** of your changes
+## Architecture rules
 
-### Changeset Types
+- Do not parse WOML/XML in Rust. The TypeScript frontend is the single compiler.
+- Do not put markup, interpolation, or editor concerns into the engine.
+- Do not make Bun responsible for graph advancement, retry, or durable truth.
+- Keep schema and protocol changes explicit, versioned, and fixture-backed.
+- Preserve source locations and actionable error codes for author-facing errors.
+- Never persist resolved secrets or expose them in logs and diagnostics.
+- Do not add a second execution path for tests or convenience.
+- Do not restore the retired JavaScript-chaining package or combined Rust core.
 
-```bash
-# Patch release (0.1.0 → 0.1.1)
-bunx changeset
-# Select: patch
-# Description: "fix: resolve webhook parsing issue"
+Frozen schema identifiers are protocol identities. A historical domain in a
+schema `$id` must not be renamed as a branding cleanup.
 
-# Minor release (0.1.0 → 0.2.0)
-bunx changeset
-# Select: minor
-# Description: "feat: add parallel execution support"
+## Pull requests
 
-# Major release (0.1.0 → 1.0.0)
-bunx changeset
-# Select: major
-# Description: "BREAKING CHANGE: refactor API for better performance"
+Keep pull requests focused and explain:
+
+1. the product behavior being changed;
+2. the architecture boundary affected;
+3. the contracts or schemas changed, if any;
+4. how the result was tested; and
+5. any compatibility, recovery, security, or performance impact.
+
+Use conventional commit subjects where practical, for example:
+
+```text
+feat(frontend): validate reusable provider props
+fix(engine): recover an admitted child workflow
+docs(runtime): clarify background log following
 ```
 
-### Example Changeset File
+Do not include generated build output, runtime databases, secrets, or local
+`.woml/` state in a pull request.
 
-After running `bunx changeset`, a file like `.changeset/blue-cats-smile.md` will be created:
+## License
 
-```markdown
----
-'cronflow': patch
----
-
-fix: resolve webhook parsing issue in high-traffic scenarios
-
-- Improved error handling for malformed webhook payloads
-- Added validation for required webhook headers
-- Enhanced logging for debugging webhook issues
-```
-
-### Version Management
-
-```bash
-# Version packages (creates/updates CHANGELOG.md)
-bunx changeset version
-
-# Publish to npm
-bunx changeset publish
-```
-
-## 🔄 Pull Request Guidelines
-
-### Before Submitting a PR
-
-1. **Create an issue (even if it is a new feature) to notify the community about it**
-2. **Ensure tests pass**: `bun test`
-3. **Check code quality**: `bun run lint && bun run format:check`
-4. **Build successfully**: `bun run build:all`
-5. **Create changeset** (if needed): `bunx changeset`
-
-### PR Title Format
-
-Use conventional commit format:
-
-```
-type(scope): description
-
-Examples:
-feat(sdk): add parallel execution support
-fix(core): resolve memory leak in job dispatcher
-docs(readme): update installation instructions
-test(workflow): add integration tests for webhooks
-```
-
-### PR Description Template
-
-```markdown
-## Description
-
-Brief description of what this PR accomplishes.
-
-## Type of Change
-
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-
-## Testing
-
-- [ ] Unit tests pass
-- [ ] Integration tests pass
-- [ ] Manual testing completed
-
-## Checklist
-
-- [ ] Code follows the style guidelines
-- [ ] Self-review completed
-- [ ] Changeset created (if needed)
-- [ ] Documentation updated (if needed)
-
-## Related Issues
-
-Closes #123
-```
-
-### Code Style Guidelines
-
-#### TypeScript/JavaScript
-
-- **Indentation**: 2 spaces
-- **Quotes**: Single quotes for strings
-- **Semicolons**: Always use semicolons
-- **Trailing commas**: Use trailing commas in objects and arrays
-- **Line length**: 80 characters max
-
-```typescript
-// Good
-const config = {
-  name: 'cronflow',
-  version: '0.1.0',
-  description: 'Workflow automation engine',
-};
-
-// Bad
-const config = {
-  name: 'cronflow',
-  version: '0.1.0',
-  description: 'Workflow automation engine',
-};
-```
-
-#### Rust
-
-- **Indentation**: 4 spaces
-- **Line length**: 100 characters max
-- **Naming**: snake_case for variables and functions
-- **Documentation**: Include doc comments for public APIs
-
-```rust
-/// Executes a workflow step with the given context
-pub fn execute_step(&self, step_id: &str, context: &Context) -> CoreResult<StepResult> {
-    // Implementation
-}
-```
-
-### Commit Message Guidelines
-
-Follow [Conventional Commits](https://www.conventionalcommits.org/) format:
-
-```
-type(scope): description
-
-[optional body]
-
-[optional footer]
-```
-
-#### Types
-
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, etc.)
-- `refactor`: Code refactoring
-- `test`: Adding or updating tests
-- `chore`: Maintenance tasks
-
-#### Examples
-
-```bash
-# Good commit messages
-feat(sdk): add parallel execution support
-fix(core): resolve memory leak in job dispatcher
-docs(readme): update installation instructions
-test(workflow): add integration tests for webhooks
-
-# Bad commit messages
-added stuff
-fixed bug
-updated docs
-```
-
-## 🧪 Testing Guidelines
-
-### Writing Tests
-
-- **Unit tests**: Test individual functions and classes
-- **Integration tests**: Test component interactions
-- **End-to-end tests**: Test complete workflows
-
-### Test Structure
-
-```typescript
-// Unit test example
-describe('WorkflowBuilder', () => {
-  describe('step()', () => {
-    it('should add a step to the workflow', () => {
-      const workflow = new WorkflowBuilder();
-      workflow.step('test-step', async ctx => ({ result: 'success' }));
-
-      expect(workflow.steps).toHaveLength(1);
-      expect(workflow.steps[0].id).toBe('test-step');
-    });
-  });
-});
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-bun test
-
-# Run tests in watch mode
-bun run dev:test
-
-# Run tests with coverage
-bun run test:coverage
-
-# Run specific test file
-bun test tests/workflow.test.ts
-```
-
-## 📚 Documentation Guidelines
-
-### Code Documentation
-
-- **Public APIs**: Always include JSDoc comments
-- **Complex logic**: Add inline comments explaining the reasoning
-- **Examples**: Include usage examples in documentation
-
-````typescript
-/**
- * Creates a new workflow instance
- * @param name - The name of the workflow
- * @param options - Configuration options
- * @returns A new workflow builder instance
- * @example
- * ```typescript
- * const workflow = new WorkflowBuilder('my-workflow', {
- *   timeout: 30000,
- *   retries: 3
- * });
- * ```
- */
-export class WorkflowBuilder {
-  constructor(name: string, options?: WorkflowOptions) {
-    // Implementation
-  }
-}
-````
-
-### README Updates
-
-- Update README.md when adding new features
-- Include usage examples
-- Update installation instructions if needed
-- Add troubleshooting section for common issues
-
-## 🔧 Development Workflow
-
-### Feature Development
-
-1. **Create feature branch**: `git checkout -b feature/your-feature`
-2. **Make changes**: Implement your feature
-3. **Add tests**: Write tests for your feature
-4. **Run tests**: `bun test`
-5. **Check code quality**: `bun run lint && bun run format:check`
-6. **Create changeset**: `bunx changeset` (if needed)
-7. **Commit changes**: Use conventional commit format
-8. **Push branch**: `git push origin feature/your-feature`
-9. **Create PR**: Submit pull request
-
-### Bug Fixes
-
-1. **Create fix branch**: `git checkout -b fix/issue-description`
-2. **Reproduce issue**: Create test case that reproduces the bug
-3. **Fix the issue**: Implement the fix
-4. **Add regression test**: Ensure the bug doesn't return
-5. **Test thoroughly**: `bun test`
-6. **Create changeset**: `bunx changeset`
-7. **Submit PR**: Follow PR guidelines
-
-### Release Process
-
-1. **Merge PRs**: Merge approved pull requests to main
-2. **Version packages**: `bunx changeset version`
-3. **Review changelog**: Check generated CHANGELOG.md
-4. **Publish**: `bunx changeset publish` (automated in CI)
-
-## 🐛 Reporting Issues
-
-### Bug Reports
-
-When reporting bugs, please include:
-
-1. **Environment**: OS, Node.js/Bun version, package version
-2. **Steps to reproduce**: Clear, step-by-step instructions
-3. **Expected behavior**: What should happen
-4. **Actual behavior**: What actually happens
-5. **Error messages**: Full error stack traces
-6. **Code example**: Minimal code that reproduces the issue
-
-### Feature Requests
-
-When requesting features, please include:
-
-1. **Use case**: Why this feature is needed
-2. **Proposed solution**: How you envision it working
-3. **Alternatives considered**: Other approaches you've thought about
-4. **Impact**: How this affects existing functionality
-
-## 🤝 Getting Help
-
-- **GitHub Issues**: For bug reports and feature requests
-- **GitHub Discussions**: For questions and general discussion
-- **Documentation**: Check the README and inline code documentation
-
-## 📄 License
-
-By contributing to Cronflow, you agree that your contributions will be licensed under the MIT License.
-
----
-
-Thank you for contributing to Cronflow! 🚀
+By contributing, you agree that your contribution is licensed under the
+[Apache License 2.0](LICENSE).

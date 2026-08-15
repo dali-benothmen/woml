@@ -41,14 +41,12 @@ const operationsPath = resolve(
   projectRoot,
   'docs/woml-production-triggers.md'
 );
-const migrationPath = resolve(projectRoot, 'docs/woml-sdk-migration.md');
 const protocolPath = resolve(
   projectRoot,
   'docs/protocols/production-triggers-v1.md'
 );
-const [operations, migration, protocol] = await Promise.all([
+const [operations, protocol] = await Promise.all([
   Bun.file(operationsPath).text(),
-  Bun.file(migrationPath).text(),
   Bun.file(protocolPath).text(),
 ]);
 for (const section of [
@@ -64,19 +62,14 @@ for (const section of [
     );
   }
 }
-if (
-  migration.includes(
-    'Schedule, interval, event, and Slack triggers, general'
-  ) ||
-  !protocol.includes('completed in T13')
-) {
+if (!protocol.includes('completed in T13')) {
   throw new Error(
-    'T13 verification failed: migration or protocol status documentation is stale.'
+    'T13 verification failed: protocol status documentation is stale.'
   );
 }
 
 process.stdout.write(
-  '[T13] all production-trigger examples, operations, migration, and protocol surfaces are complete\n'
+  '[T13] all production-trigger examples, operations, and protocol surfaces are complete\n'
 );
 
 // T12 reaches the complete transitive release gate. Its N6 verifier rebuilds

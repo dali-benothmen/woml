@@ -167,4 +167,3 @@ stop the active runtime.
 - Durable User State operations: `docs/woml-durable-state.md`
 - Data choice guide: `docs/woml-data-guide.md`
 - Local data security: `docs/woml-data-security.md`
-- SDK migration: `docs/woml-sdk-migration.md`

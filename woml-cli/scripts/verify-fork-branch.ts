@@ -13,9 +13,8 @@ async function text(path: string): Promise<string> {
 }
 
 const requiredMarkers = new Map<string, readonly string[]>([
-  ['docs/woml-v0.1.md', ['<fork>', 'multi-item `<branch>` routes', 'forkDistributionWorkflow.woml']],
+  ['docs/woml-v0.1.md', ['<fork>', 'multi-item `<branch>` routes', 'join="none"', 'forkDistributionWorkflow.woml']],
   ['WOML Architecture.md', ['Model v13', 'Event v12', 'fail closed', 'N-API']],
-  ['docs/woml-sdk-migration.md', ['Independent multi-step fan-out routes', 'join="none"']],
   ['woml-cli/README.md', ['Fork work into independent routes', 'forkDistributionWorkflow.woml']],
 ]);
 for (const [path, markers] of requiredMarkers) {

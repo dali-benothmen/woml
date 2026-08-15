@@ -20,7 +20,7 @@ for (const [file, required] of [
   ['docs/woml-lifecycle-and-run-control.md', '## Cancellation semantics'],
   ['docs/woml-lifecycle-and-run-control.md', '## Production checklist'],
   ['docs/woml-notifications.md', 'Informational lifecycle notifications'],
-  ['docs/woml-sdk-migration.md', '<lifecycle>'],
+  ['docs/woml-v0.1.md', '<lifecycle>'],
   ['docs/architecture.md', 'Event v10'],
   ['docs/woml-recovery.md', 'cancellation request'],
   ['woml-cli/README.md', '## Manage durable runs'],

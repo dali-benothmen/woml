@@ -25,7 +25,7 @@ for (const [file, required] of [
   ['docs/woml-workflow-calls.md', '## Runtime Policies on parent and child'],
   ['docs/woml-lifecycle-and-run-control.md', '## Runtime Policy timeout interaction'],
   ['docs/woml-recovery.md', '## Runtime Policy recovery'],
-  ['docs/woml-sdk-migration.md', '<config concurrency='],
+  ['docs/woml-v0.1.md', '<config concurrency='],
   ['woml-cli/README.md', '## Control workflow runtime capacity'],
   ['woml-cli/tests/rp7_packaged_release.test.ts', 'a clean consumer can check'],
   ['woml-cli/scripts/benchmark-rp7-runtime-policies.ts', 'woml-runtime-policies-local-v1'],

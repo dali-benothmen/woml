@@ -156,8 +156,8 @@ contain bounded JSON Pointer issues but never raw payloads or credentials.
 
 ### T3 HTTP implementation
 
-The WOML Rust runtime binds the listener directly; it does not reuse the legacy
-Cronflow webhook server. Registration resolves symbolic bearer secrets before
+The WOML Rust runtime binds the listener directly; it does not reuse a retired
+compatibility webhook server. Registration resolves symbolic bearer secrets before
 binding, rejects inactive trigger kinds and route conflicts, compiles inline
 schemas once as Draft 2020-12 validators, and disables external schema
 retrieval.

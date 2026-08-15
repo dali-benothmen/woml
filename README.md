@@ -5,9 +5,6 @@ workflow's structure lives in a readable `.woml` file, JavaScript runs inside
 `<script>`, and the Rust engine owns execution, retries, persistence, recovery,
 triggers, workflow calls, lifecycle, and runtime policy.
 
-The former Cronflow JavaScript-chaining SDK has been retired. WOML is the only
-supported workflow authoring surface in this repository.
-
 ## Install
 
 Install Bun 1.3.14 or later, then install the CLI:
@@ -91,6 +88,7 @@ contracts. It never parses XML or owns editor syntax.
 ## Documentation
 
 - [CLI guide](woml-cli/README.md)
+- [Language reference](docs/woml-v0.1.md)
 - [Architecture](docs/architecture.md)
 - [Production runtime](docs/woml-production-runtime.md)
 - [Production deployment](docs/woml-production-deployment.md)
@@ -99,8 +97,7 @@ contracts. It never parses XML or owns editor syntax.
 - [Modules](docs/woml-modules.md)
 - [Lifecycle and run controls](docs/woml-lifecycle-and-run-control.md)
 - [Workflow calls](docs/woml-workflow-calls.md)
-- [Migrating old Cronflow definitions](docs/woml-sdk-migration.md)
-- [Archiving old Cronflow state](docs/cronflow-sdk-data-archive.md)
+- [Editor extension](woml-vscode/README.md)
 
 ## Development
 

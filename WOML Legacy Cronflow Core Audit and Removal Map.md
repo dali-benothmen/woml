@@ -1,6 +1,6 @@
 # WOML Legacy Cronflow Core Audit and Removal Map
 
-Status: Audit 0 through Audit 6 completed on 2026-08-15. The dependency and
+Status: Audit 0 through Audit 7 completed on 2026-08-15. The dependency and
 removal map is frozen, the canonical WOML N-API adapter lives in a dedicated
 native crate that depends only on `woml-engine`, and every CLI build/release path
 now stages that crate directly. CI permanently verifies source imports, native
@@ -8,8 +8,9 @@ dependencies, adapter imports, addon exports, and clean-package dependencies.
 The temporary combined-core WOML shim, complete JavaScript-chaining package
 surface, and closed legacy Rust graph have been removed. `core/Cargo.toml` is
 now a two-member WOML-only workspace with one committed lockfile. The repository
-root is private and cannot publish the former `cronflow` package accidentally.
-No user database or project data was removed.
+root is private and cannot publish the retired chaining package accidentally.
+Repository packaging, contributor guidance, product documentation, and examples
+now describe WOML only. No user database or project data was removed.
 
 ## 1. Executive Conclusion
 
@@ -482,18 +483,44 @@ Audit 6 evidence:
   or `@cronflow/*` runtime dependency; and
 - `woml test hello.woml` executes successfully through the rebuilt addon.
 
-The ignored root `cronflow.db`, `.cronflow/`, and `.woml/` state were not read,
-migrated, or deleted. Git retains the removed source and committed fixtures in
+The ignored root database was not read, migrated, or deleted during removal.
+It was subsequently renamed to `workflow-history.sqlite` so its archival
+purpose is clear and it cannot be confused with WOML's active
+`.woml/state.sqlite` store. The `.cronflow/` and `.woml/` state directories
+remain untouched. Git retains the removed source and committed fixtures in
 repository history.
 
 Result: the shipped Rust execution stack contains only WOML authority and its
 native adapter.
 
-### Audit 7 — Clean packaging and documentation residue
+### Audit 7 — Complete: clean packaging and documentation residue
 
-Remove retired `@cronflow/*` packages and install scripts, update package and
-repository metadata, archive legacy documentation, and decide branding changes
-separately from immutable schema identities.
+Audit 7 removed obsolete npm/semantic-release/Changesets configuration, the old
+release and setup guides, superseded architecture analyses, SDK API/framework
+documentation, migration-only documents, JavaScript-chaining examples, and the
+retired logo. Git history remains the archive for those files.
+
+The root and CLI manifests now point to the WOML repository, the NOTICE,
+contributor guide, commit template, pull-request template, README, and
+architecture guide are WOML-specific, and feature publication checks validate
+current feature documentation instead of a removed migration guide.
+
+The permanent architecture-separation gate now rejects restored packaging and
+documentation residue, rejects stale repository metadata, validates the exact
+native export boundary, and installs a clean packed CLI. Frozen historical
+schema `$id` values remain unchanged because they are immutable protocol
+identities, not active package branding.
+
+Audit 7 evidence:
+
+- all 237 WOML frontend tests pass;
+- CLI TypeScript type-checking and the three separation-scanner tests pass;
+- all local Markdown file links resolve;
+- the clean-package separation verifier scans 122 frontend/CLI source files,
+  verifies 36 native exports, packs and installs `woml-cli`, and confirms the
+  retired package namespace is absent; and
+- the historical `workflow-history.sqlite`, `.cronflow/`, and active `.woml/`
+  state remain ignored and untouched.
 
 Result: source layout, packages, docs, and product naming describe the same
 WOML architecture.
@@ -520,7 +547,8 @@ Removal is approved only when all applicable gates pass from a clean checkout:
 9. Backup, restore, retention, inspection, log following, cancellation, and
    background runtime operation remain intact.
 10. Static dependency checks find no SDK or legacy-core import from WOML code.
-11. The migration guide and legacy data archive procedure have been reviewed.
+11. Current WOML architecture, operations, and authoring documentation have
+    been reviewed and contain no dependency on retired documentation.
 12. The removal change does not delete user databases or project files.
 
 ## 12. Principal Risks and Controls
@@ -529,17 +557,16 @@ Removal is approved only when all applicable gates pass from a clean checkout:
 | --- | --- |
 | Deleting a legacy module that is still pulled into the native addon | Extract and prove the WOML-only addon before deletion |
 | Accidentally changing the CLI's native protocol while moving the adapter | Preserve N-API names and add export/fixture conformance tests |
-| A clean package works locally only because `core.node` exists in the repository | Test the packed CLI in an empty temporary project |
 | Historical WOML runs fail after the split | Run supported store/model/event recovery suites against the new addon |
-| Old Cronflow users lose active or historical data | Preserve archive/export guidance and never delete data automatically |
+| Local historical workflow data is removed during repository cleanup | Keep runtime/database patterns ignored and never delete user state automatically |
 | Frozen `cronflow.dev` schema IDs are mistaken for dead branding | Treat schema IDs as immutable protocol identities |
 | Duplicate TypeScript and Rust execution paths remain after SDK removal | Remove the entire chaining SDK executor closure, not only its public `define()` facade |
 | Dependencies remain bloated after source deletion | Prune Cargo/npm dependencies only after the isolated build passes |
 
 ## 13. Final Audit Decision
 
-The legacy Cronflow Rust core has been removed through the dependency-backed
-Audit 6 boundary.
+The retired Rust core and packaging/documentation surfaces have been removed
+through the dependency-backed Audit 7 boundary.
 WOML has already replaced its behavior with a separate frontend, compiled DAG,
 durable event-sourced Rust engine, Bun execution hosts, trigger authority, and
 operations runtime. The WOML and legacy N-API surfaces no longer share a native
@@ -554,7 +581,8 @@ The approved technical direction is:
    was explicitly waived before publication;
 4. ~~remove the JavaScript chaining surface~~ — completed in Audit 5;
 5. ~~remove the closed legacy Rust graph~~ — completed in Audit 6; and
-6. clean packaging and branding without rewriting frozen protocol history.
+6. ~~clean packaging and branding without rewriting frozen protocol history~~
+   — completed in Audit 7.
 
-Only Audit 7 packaging and documentation residue remains; frozen WOML protocol
-identities are not legacy code and remain unchanged.
+The removal program is complete. Frozen WOML protocol identities are not
+packaging residue and remain unchanged.
