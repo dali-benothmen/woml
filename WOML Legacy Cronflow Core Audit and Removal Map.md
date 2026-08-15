@@ -1,14 +1,14 @@
 # WOML Legacy Cronflow Core Audit and Removal Map
 
-Status: Audit 0 through Audit 4 completed on 2026-08-15. The dependency and
+Status: Audit 0 through Audit 5 completed on 2026-08-15. The dependency and
 removal map is frozen, the canonical WOML N-API adapter lives in a dedicated
 native crate that depends only on `woml-engine`, and every CLI build/release path
 now stages that crate directly. CI permanently verifies source imports, native
-dependencies, adapter imports, addon exports, clean-package dependencies, and
-the published SDK retirement contract. The temporary combined-core WOML shim
-was removed. The JavaScript SDK is frozen at `0.11.6` as its final feature
-baseline, with maintenance through 2027-02-15. No legacy JavaScript API,
-database, fixture, or user data was removed.
+dependencies, adapter imports, addon exports, and clean-package dependencies.
+The temporary combined-core WOML shim and the complete JavaScript-chaining
+package surface have been removed. The repository root is private and cannot
+publish the former `cronflow` package accidentally. No legacy database,
+committed database fixture, or user data was removed.
 
 ## 1. Executive Conclusion
 
@@ -35,9 +35,8 @@ The current coupling is packaging, not execution:
 - `.github/workflows/ci.yml` runs the architecture-separation gate on every
   push and pull request, so these boundaries cannot silently regress.
 
-The operational split is complete. The old Rust dependency closure can now be
-retired independently of WOML after the JavaScript SDK retirement contract is
-published and its support window ends.
+The operational and authoring split is complete. The old Rust dependency
+closure can now be retired independently of WOML in Audit 6.
 
 ## 2. Audit Scope and Method
 
@@ -206,14 +205,14 @@ build or runtime dependency.
 | --- | --- | --- |
 | [`woml`](woml) | WOML parsing, source diagnostics, validation, references, modules, reusable definitions, and compiled-model lowering | **Keep** |
 | [`woml-cli`](woml-cli) | `woml` command, activation, secret resolution, native adapter, Bun hosts/providers, trigger transports, operations, and terminal experience | **Keep** |
-| [`sdk`](sdk) | Public JavaScript chaining API and overlapping JS runtime subsystems | **Legacy-only**, remove after public SDK retirement |
-| [`sdk/src/utils/core-resolver.ts`](sdk/src/utils/core-resolver.ts) | Resolves old `@cronflow/*` native packages and development `core.node` locations | **Legacy-only** |
-| [`sdk/src/rust/integration.ts`](sdk/src/rust/integration.ts) | Converts a chained workflow into the old Rust model; schedule and event triggers are reduced to `Manual` | **Legacy-only compatibility adapter** |
-| [`sdk/src/execution/workflow-engine.ts`](sdk/src/execution/workflow-engine.ts) | JavaScript-owned workflow sequencing and handler execution backed by old native step/job calls | **Legacy-only overlapping executor** |
-| [`sdk/src/cronflow.ts`](sdk/src/cronflow.ts) | Singleton registry and public `define/start/stop/trigger` behavior | **Legacy-only public runtime** |
-| [`sdk/src/webhook/server.ts`](sdk/src/webhook/server.ts) | Old native server startup plus a JavaScript HTTP webhook server | **Legacy-only overlapping trigger host** |
-| [`src/index.ts`](src/index.ts) | Root `cronflow` package entry and default compatibility export | **Legacy-only public entry** |
-| [`package.json`](package.json) | Publishes `cronflow`, builds SDK bundles, and references `@cronflow/*` optional native packages | **Legacy product manifest**; retire or replace only after package strategy is approved |
+| Former `sdk/` | Public JavaScript chaining API and overlapping JS runtime subsystems | **Removed in Audit 5** |
+| Former `sdk/src/utils/core-resolver.ts` | Resolved old `@cronflow/*` native packages and development `core.node` locations | **Removed in Audit 5** |
+| Former `sdk/src/rust/integration.ts` | Converted a chained workflow into the old Rust model | **Removed in Audit 5** |
+| Former `sdk/src/execution/workflow-engine.ts` | Owned JavaScript workflow sequencing and handler execution | **Removed in Audit 5** |
+| Former `sdk/src/cronflow.ts` | Owned the singleton registry and public `define/start/stop/trigger` behavior | **Removed in Audit 5** |
+| Former `sdk/src/webhook/server.ts` | Hosted the legacy JavaScript webhook path | **Removed in Audit 5** |
+| Former `src/index.ts` | Exposed the root `cronflow` compatibility API | **Removed in Audit 5** |
+| [`package.json`](package.json) | Private WOML repository command facade | **Replaced in Audit 5; no exports or publish configuration** |
 | [`core/package.json`](core/package.json) | Publishes `@cronflow/core` and names the combined native binary `core` | **Legacy packaging shell** |
 | [`tests`](tests) | Root SDK, native bridge, retry, state, chaining, dispatcher, and performance tests | Primarily **legacy-only**; classify file-by-file before removal |
 | [`scripts/generate-types.js`](scripts/generate-types.js) | Generates types for the chained SDK surface | **Legacy-only** |
@@ -321,22 +320,30 @@ lookup contract did not change.
 - WOML fixtures, examples, release tests, and editor support; and
 - the N-API surface implemented by `core/woml-native/src/bridge.rs`.
 
-### 9.2 Remove after the WOML-native split and SDK retirement
+### 9.2 Removed in Audit 5
+
+- `sdk/` and `src/index.ts`;
+- root chaining-SDK tests;
+- legacy type generation, bundle analysis, installation, and npm packaging
+  scripts;
+- root JavaScript build/type/test configuration and legacy lockfiles;
+- the public `cronflow` exports, optional `@cronflow/*` packages, SDK runtime
+  dependencies, and publish metadata; and
+- the draft retirement-window contract, which was explicitly waived before
+  external publication because the unused library is being retired now.
+
+The migration guide and manual legacy-data archive procedure remain. Historical
+examples and broad documentation cleanup remain assigned to Audit 7.
+
+### 9.3 Remove in Audit 6
 
 - all legacy modules listed in Section 4;
 - `core/src/schema.sql`;
 - the legacy contents of `core/src/lib.rs` and its unit tests;
-- `sdk/`;
-- `src/index.ts`;
-- root chaining-SDK tests and committed legacy database/native fixtures;
-- legacy type generation, bundle analysis, package installation, and release
-  scripts;
-- `@cronflow/core` and `@cronflow/*` platform package declarations when their
-  support window ends; and
-- SDK-only dependencies such as `node-cron`, old validation types, and native
-  dependencies no longer required by the WOML-only adapter.
+- legacy dispatcher/N-API tests and committed legacy native fixtures; and
+- legacy native dependencies no longer required by the WOML-only adapter.
 
-### 9.3 Review individually, do not bulk-delete
+### 9.4 Review individually, do not bulk-delete
 
 - root `README.md`, `LICENSE`, and release metadata;
 - repository URLs and GitHub workflows;
@@ -436,34 +443,37 @@ Audit 3 evidence:
 
 Result: future changes cannot silently reconnect the architectures.
 
-### Audit 4 — Complete: publish the SDK retirement contract
+### Audit 4 — Superseded before publication
 
-The versioned `cronflow.sdk-retirement/v1` contract now freezes:
+A formal six-month SDK retirement-window draft was prepared, but the product
+owner explicitly waived it before external publication because the small
+library has no meaningful adoption and immediate removal is preferred. The
+draft contract and its CI gate were deleted. Its useful migration and
+data-archive guidance was retained independently.
 
-- `cronflow@0.11.6` as the final feature-bearing SDK release and `0.11.x` as
-  the maintenance-only line;
-- a six-month support window from 2026-08-15 through 2027-02-15;
-- the allowed critical-fix categories and the no-new-features rule;
-- `cronflow@1.0.0`, no earlier than 2027-02-16, as the first legal removal
-  boundary;
-- a feature-equivalence table that separates direct replacements, migration
-  recipes, intentionally retired legacy helpers, and genuine gaps; and
-- a safe, manual archive and rollback procedure for the distinct legacy
-  SQLite data model.
+Result: there is no fictional support promise blocking the actual product
+direction.
 
-The contract, migration guide, and archive procedure ship in the npm package.
-The repository README publishes the deprecation prominently, the SDK's public
-`VERSION` now agrees with the package identity, and a release gate prevents the
-dates, version boundary, data-safety promises, or published documentation from
-drifting silently.
+### Audit 5 — Complete: retire the JavaScript-chaining package surface
 
-Result: removal has a product contract and does not surprise existing users.
+Audit 5 removed the entire `sdk/` tree, the root compatibility entry,
+generated-type and packaging scripts, SDK tests, JavaScript build configuration,
+legacy root lockfiles, runtime dependencies, optional `@cronflow/*` packages,
+the legacy tag-release workflow, and npm publication metadata. The root manifest is now a private WOML
+repository facade with commands delegated to `woml-cli`.
 
-### Audit 5 — Retire the JavaScript-chaining package surface
+CI no longer installs or tests the retired SDK. It tests the WOML frontend and
+the permanent architecture-separation boundary instead. The root README now
+documents only WOML, while the migration guide and safe manual archive
+procedure remain available to anyone with an old local project.
 
-Remove `sdk/`, the root compatibility entry, generated chaining types, SDK
-tests, and old JS runtime dependencies after the announced support window.
-Preserve any explicitly published migration tooling separately.
+The architecture-separation gate now also rejects a publishable root manifest,
+the `cronflow` package name, root JavaScript entry/type/export metadata,
+Cronflow runtime dependencies, a restored SDK entry point, or the former
+legacy tag-release workflow.
+
+The legacy Rust crate and its dispatcher/N-API tests remain for Audit 6. The
+ignored `cronflow.db` and any `.cronflow` user state were deliberately untouched.
 
 Result: there is one public workflow authoring surface: WOML.
 
@@ -519,15 +529,15 @@ Removal is approved only when all applicable gates pass from a clean checkout:
 | Accidentally changing the CLI's native protocol while moving the adapter | Preserve N-API names and add export/fixture conformance tests |
 | A clean package works locally only because `core.node` exists in the repository | Test the packed CLI in an empty temporary project |
 | Historical WOML runs fail after the split | Run supported store/model/event recovery suites against the new addon |
-| Old Cronflow users lose active or historical data | Publish a support window and archive/export guidance; never delete data automatically |
+| Old Cronflow users lose active or historical data | Preserve archive/export guidance and never delete data automatically |
 | Frozen `cronflow.dev` schema IDs are mistaken for dead branding | Treat schema IDs as immutable protocol identities |
 | Duplicate TypeScript and Rust execution paths remain after SDK removal | Remove the entire chaining SDK executor closure, not only its public `define()` facade |
 | Dependencies remain bloated after source deletion | Prune Cargo/npm dependencies only after the isolated build passes |
 
 ## 13. Final Audit Decision
 
-The legacy Cronflow core is removable after the published support window, but
-not by deleting files in place.
+The legacy Cronflow Rust core is now removable in Audit 6, but not by deleting
+files in place.
 WOML has already replaced its behavior with a separate frontend, compiled DAG,
 durable event-sourced Rust engine, Bun execution hosts, trigger authority, and
 operations runtime. The WOML and legacy N-API surfaces no longer share a native
@@ -538,8 +548,9 @@ The approved technical direction is:
 1. ~~extract the WOML native adapter~~ — completed in Audit 1;
 2. ~~switch and prove the CLI package against the extracted crate~~ — completed
    in Audit 2;
-3. ~~freeze a user-facing SDK retirement contract~~ — completed in Audit 4;
-4. remove the JavaScript chaining surface;
+3. ~~resolve SDK retirement policy~~ — the unused-library support-window draft
+   was explicitly waived before publication;
+4. ~~remove the JavaScript chaining surface~~ — completed in Audit 5;
 5. remove the closed legacy Rust graph; and
 6. clean packaging and branding without rewriting frozen protocol history.
 

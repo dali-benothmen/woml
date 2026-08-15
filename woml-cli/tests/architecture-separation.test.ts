@@ -4,6 +4,7 @@ import {
   cronflowRuntimeDependencies,
   importSpecifiers,
   isLegacySdkSpecifier,
+  retiredRootManifestViolations,
 } from '../scripts/verify-architecture-separation';
 
 describe('WOML architecture separation scanner', () => {
@@ -34,5 +35,34 @@ describe('WOML architecture separation scanner', () => {
         repository: 'https://github.com/example/cronflow',
       })
     ).toEqual(['@cronflow/linux-x64', 'helper']);
+  });
+
+  test('keeps the repository root private and without a JavaScript SDK export', () => {
+    expect(
+      retiredRootManifestViolations({
+        name: 'woml-repository',
+        private: true,
+        scripts: { build: 'bun run --cwd woml-cli build' },
+      })
+    ).toEqual([]);
+    expect(
+      retiredRootManifestViolations({
+        name: 'cronflow',
+        private: false,
+        main: 'dist/index.js',
+        types: 'dist/index.d.ts',
+        exports: { '.': './dist/index.js' },
+        optionalDependencies: { '@cronflow/linux-x64': '0.10.4' },
+        publishConfig: { access: 'public' },
+      })
+    ).toEqual([
+      'root package is publishable',
+      'root package is named cronflow',
+      'root package declares main',
+      'root package declares types',
+      'root package declares exports',
+      'root package declares publishConfig',
+      'root package declares a Cronflow runtime dependency',
+    ]);
   });
 });

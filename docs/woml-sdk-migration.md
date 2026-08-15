@@ -1,19 +1,17 @@
 # Migrating from the JavaScript SDK to WOML
 
-The JavaScript-chaining SDK is governed by the
-[`cronflow.sdk-retirement/v1` contract](cronflow-sdk-retirement.md).
-`cronflow@0.11.6` is its final feature release, the `0.11.x` line is
-maintenance-only, and support ends on **2027-02-15**. Archive legacy state with
-the [legacy data procedure](cronflow-sdk-data-archive.md) before cutover.
+The JavaScript-chaining SDK has been removed from the active repository. This
+guide remains for projects converting old Cronflow definitions to WOML.
+Archive legacy state with the
+[legacy data procedure](cronflow-sdk-data-archive.md) before cutover.
 
 WOML replaces workflow construction through JavaScript chaining with a markup
 document. JavaScript remains available where it is useful—inside `<script>`—but
 the workflow structure becomes readable data that the frontend can validate and
 the Rust core can execute durably.
 
-The JavaScript SDK remains in the repository during its published support
-window. Do not mix SDK and WOML definitions in one run, and do not let both
-runtimes own the same production ingress during cutover.
+Do not mix SDK and WOML definitions in one run, and do not let an archived
+Cronflow deployment and WOML own the same production ingress during cutover.
 
 Unlike an SDK function invocation, `woml run` hosts an automation continuously.
 A manual workflow waits for Enter and supports repeated runs; `woml test`
@@ -139,8 +137,7 @@ Some SDK APIs require a recipe rather than a syntax translation: `.action()`,
 framework-embedded webhooks have different ownership or durability semantics
 in WOML. SDK testing/performance helper classes and the standalone circuit
 breaker are not reproduced as equivalent workflow APIs. See the retirement
-contract's [feature-equivalence table](cronflow-sdk-retirement.md#feature-equivalence-table)
-before committing to a cutover.
+capability notes below before committing to a cutover.
 
 Exact-string `<switch>`, local reusable custom steps, and local reusable
 notification providers are also publishable. Their Model v14 definitions,

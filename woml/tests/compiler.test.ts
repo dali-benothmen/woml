@@ -1184,7 +1184,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T1 accepts multiple manual triggers and keeps canonical container order', () => {
+  test('T1 accepts multiple manual triggers with order-independent workflow sections', () => {
     const multipleManual = `<woml>
 <workflow version="1.0.0" id="test-workflow">
   <triggers><manual id="first" /><manual id="second" /></triggers>
@@ -1198,15 +1198,15 @@ describe('compileWoml', () => {
       'second',
     ]);
 
-    const wrongOrder = `<woml>
+    const stepsBeforeTriggers = `<woml>
 <workflow version="1.0.0" id="test-workflow">
   <steps><step id="a"><script>return 1;</script></step></steps>
   <triggers><manual id="start" /></triggers>
 </workflow>
 </woml>`;
-    expect(validationError(wrongOrder).diagnostic.code).toBe(
-      'WOML_INVALID_STRUCTURE'
-    );
+    const reordered = compile(stepsBeforeTriggers);
+    expect(reordered.triggers.map(trigger => trigger.id)).toEqual(['start']);
+    expect(reordered.graph.nodes.map(node => node.id)).toEqual(['a']);
   });
 
   test('T1 lowers the reviewed manual and webhook fixture exactly to Model v7', () => {

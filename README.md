@@ -1,375 +1,117 @@
-# 🚀 Cronflow
+# WOML
 
-<div align="center">
+WOML is a markup-first workflow automation language and durable runtime. A
+workflow's structure lives in a readable `.woml` file, JavaScript runs inside
+`<script>`, and the Rust engine owns execution, retries, persistence, recovery,
+triggers, workflow calls, lifecycle, and runtime policy.
 
-![Cronflow Logo](cronflow.jpg)
+The former Cronflow JavaScript-chaining SDK has been retired. WOML is the only
+supported workflow authoring surface in this repository.
 
-**The Fastest Code-First Workflow Automation Engine**
+## Install
 
-[![npm version](https://img.shields.io/npm/v/cronflow.svg)](https://www.npmjs.com/package/cronflow)
-[![GitHub stars](https://img.shields.io/github/stars/dali-benothmen/cronflow.svg?style=social&label=Star)](https://github.com/dali-benothmen/cronflow)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
-[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Bun](https://img.shields.io/badge/Bun-000000?logo=bun&logoColor=white)](https://bun.sh/)
-
-_Built with Rust + Bun for unparalleled performance_
-
-</div>
-
----
-
-## Overview
-
-Cronflow is a powerful workflow automation library designed for developers who need the flexibility of code with exceptional performance. Built with a Rust core and Bun runtime, it delivers sub-millisecond execution speeds while maintaining a minimal memory footprint.
-
-> **The JavaScript-chaining SDK is deprecated.** `cronflow@0.11.6` is its
-> final feature release. The `0.11.x` line is maintenance-only through
-> **February 15, 2027**; new workflow development should use WOML. Read the
-> [retirement contract](docs/cronflow-sdk-retirement.md),
-> [migration guide](docs/woml-sdk-migration.md), and
-> [legacy data archive procedure](docs/cronflow-sdk-data-archive.md).
-
-> **WOML Production Runtime v1 is now implemented.** The project is migrating
-> from JavaScript chaining to markup-first `.woml` workflows. New production
-> runtime work should use `woml check` and `woml run`. See the
-> [WOML runtime guide](docs/woml-production-runtime.md),
-> [deployment guide](docs/woml-production-deployment.md), and
-> [complete production example](examples/production/complete/README.md).
-
-### Key Features
-
-- **🚀 High Performance** - Rust-powered execution engine with sub-millisecond step execution
-- **📝 TypeScript Native** - Full type safety and IntelliSense support
-- **🔗 Code-First** - Write workflows as code with version control and testing
-- **⚡ Real-Time Webhooks** - Built-in HTTP endpoints with schema validation
-- **🔄 Event-Driven** - Custom event triggers and listeners
-- **🌊 Parallel Execution** - Run multiple operations concurrently
-- **✋ Human-in-the-Loop** - Pause workflows for manual approval with timeout handling
-- **🎯 Conditional Logic** - Built-in if/else branching support
-- **🔌 Framework Agnostic** - Integrate with Express, Fastify, or any Node.js framework
-
-## Installation
+Install Bun 1.3.14 or later, then install the CLI:
 
 ```bash
-npm install cronflow
+bun add --global woml-cli
 ```
 
-Cronflow supports multiple platforms with native binaries:
-
-- **Windows**: x64, ARM64
-- **macOS**: Intel (x64), Apple Silicon (ARM64)
-- **Linux**: x64 (GNU/musl), ARM64 (GNU/musl)
-
-The correct binary for your platform is automatically installed. No compilation required!
-
-## Quick Start
-
-```typescript
-import { cronflow } from 'cronflow';
-
-// Define a workflow
-const workflow = cronflow.define({
-  id: 'hello-world',
-  name: 'My First Workflow',
-});
-
-// Add a webhook trigger
-workflow
-  .onWebhook('/webhooks/hello')
-  .step('greet', async ctx => ({
-    message: `Hello, ${ctx.payload.name}!`,
-  }))
-  .action('log', ctx => console.log(ctx.last.message));
-
-// Start the server
-cronflow.start();
-```
-
-Test it:
+Confirm the installation:
 
 ```bash
-curl -X POST http://localhost:3000/webhooks/hello \
-  -H "Content-Type: application/json" \
-  -d '{"name":"World"}'
+woml --version
+woml --help
 ```
 
-## Core Concepts
+## A small workflow
 
-### Workflows
+```xml
+<woml>
+  <workflow id="hello" name="Hello WOML" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
 
-Define workflows with full TypeScript support:
+    <steps>
+      <step id="prepare" name="Prepare greeting">
+        <script>
+          return { name: context.payload.name ?? "World" };
+        </script>
+      </step>
 
-```typescript
-const workflow = cronflow.define({
-  id: 'my-workflow',
-  name: 'My Workflow',
-  description: 'Optional description',
-});
+      <step id="greet" name="Build greeting">
+        <script>
+          return { message: `Hello ${context.steps.prepare.name}` };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
 ```
 
-### Triggers
+Activate it with:
 
-#### Webhooks
-
-Create HTTP endpoints that trigger workflows:
-
-```typescript
-import { z } from 'zod';
-
-workflow.onWebhook('/webhooks/order', {
-  method: 'POST',
-  schema: z.object({
-    orderId: z.string(),
-    amount: z.number().positive(),
-  }),
-});
+```bash
+woml run hello.woml
 ```
 
-#### Events
+For a manual trigger, WOML remains active and waits for Enter. Webhook,
+schedule, interval, named-event, and Slack triggers remain active until the
+runtime is stopped.
 
-Listen to custom application events:
+## Everyday commands
 
-```typescript
-workflow.onEvent('user.signup', {
-  schema: z.object({
-    userId: z.string(),
-    email: z.string().email(),
-  }),
-});
-
-// Emit from your app
-cronflow.emit('user.signup', { userId: '123', email: 'user@example.com' });
+```bash
+woml check workflows/
+woml run workflows/
+woml run workflows/ --background
+woml inspect
+woml list
+woml get run_...
+woml cancel run_...
+woml backup backups/latest
+woml prune --before 30d --dry-run
 ```
 
-#### Manual Triggers
+## Architecture
 
-Trigger workflows programmatically:
-
-```typescript
-const runId = await cronflow.trigger('workflow-id', {
-  data: 'custom payload',
-});
+```text
+.woml source
+  -> Bun/TypeScript parser and compiler
+  -> versioned compiled DAG
+  -> dedicated WOML N-API boundary
+  -> durable Rust execution engine
+  -> isolated Bun workers for authored JavaScript
 ```
 
-### Steps
-
-Process data and return results:
-
-```typescript
-workflow
-  .step('validate', async ctx => {
-    const data = await validate(ctx.payload);
-    return { isValid: true, data };
-  })
-  .step('process', async ctx => {
-    // ctx.last contains previous step's result
-    const result = await process(ctx.last.data);
-    return { processed: true, result };
-  });
-```
-
-### Actions
-
-Execute side effects without blocking:
-
-```typescript
-workflow
-  .action('send-email', async ctx => {
-    await sendEmail(ctx.payload.email);
-  })
-  .action('log', ctx => {
-    console.log('Completed:', ctx.last);
-  });
-```
-
-### Conditional Logic
-
-Add branching to your workflows:
-
-```typescript
-workflow
-  .step('check-amount', async ctx => ({ amount: ctx.payload.amount }))
-  .if('high-value', ctx => ctx.last.amount > 100)
-  .step('require-approval', async ctx => {
-    return { needsApproval: true };
-  })
-  .else()
-  .step('auto-approve', async ctx => {
-    return { approved: true };
-  })
-  .endIf();
-```
-
-### Parallel Execution
-
-Run multiple operations concurrently:
-
-```typescript
-workflow.parallel([
-  async ctx => ({ email: await sendEmail(ctx.last.user) }),
-  async ctx => ({ sms: await sendSMS(ctx.last.user) }),
-  async ctx => ({ slack: await notifySlack(ctx.last.user) }),
-]);
-```
-
-### Human-in-the-Loop
-
-Pause workflows for manual approval:
-
-```typescript
-workflow
-  .humanInTheLoop({
-    timeout: '24h',
-    description: 'Manual review required',
-    onPause: async (ctx, token) => {
-      await sendApprovalRequest(ctx.payload.email, token);
-    },
-    onTimeout: async ctx => {
-      await sendTimeoutNotification(ctx.payload.email);
-    },
-  })
-  .step('process-approval', async ctx => {
-    return { approved: ctx.last.approved };
-  });
-
-// Resume later
-await cronflow.resume('approval_token_123', { approved: true });
-```
-
-## Context Object
-
-Every step and action receives a context object:
-
-```typescript
-workflow.step('example', async ctx => {
-  // ctx.payload - Original trigger data
-  // ctx.last - Result from previous step
-  // ctx.meta - Workflow metadata (id, runId, startTime, etc.)
-  // ctx.services - Configured services
-
-  return { processed: true };
-});
-```
-
-## Framework Integration
-
-### Express
-
-```typescript
-import express from 'express';
-
-const app = express();
-
-workflow.onWebhook('/api/webhook', {
-  app: 'express',
-  appInstance: app,
-  method: 'POST',
-});
-
-app.listen(3000, async () => {
-  await cronflow.start();
-});
-```
-
-### Fastify
-
-```typescript
-import Fastify from 'fastify';
-
-const fastify = Fastify();
-
-workflow.onWebhook('/api/webhook', {
-  app: 'fastify',
-  appInstance: fastify,
-  method: 'POST',
-});
-
-await fastify.listen({ port: 3000 });
-await cronflow.start();
-```
-
-### Custom Frameworks
-
-```typescript
-workflow.onWebhook('/custom/webhook', {
-  registerRoute: (method, path, handler) => {
-    myFramework[method.toLowerCase()](path, handler);
-  },
-});
-```
-
-## Configuration
-
-Start Cronflow with custom options:
-
-```typescript
-cronflow.start({
-  port: 8080,
-  host: '0.0.0.0',
-});
-```
-
-## Performance
-
-Cronflow is built for performance:
-
-- **Rust Core Engine** - High-performance state management and database operations
-- **Bun Runtime** - 15-29% faster than Node.js
-- **Optimized Architecture** - Minimal overhead, maximum efficiency
-- **Smart Caching** - 92.5% improvement in database queries
-- **Connection Pooling** - 70.1% improvement in database operations
-
-Benchmark results on a modest VPS (1 vCPU, 1GB RAM):
-
-- ⚡ **Total Speed**: 118ms for complex 12-step workflow
-- 🚀 **Avg Speed per Step**: 9.8ms
-- 💾 **Total Memory Peak**: 5.9MB
-- 🧠 **Memory per Step**: 0.49MB
+The frontend understands markup, references, modules, and source diagnostics.
+The Rust core understands only the compiled workflow model and versioned event
+contracts. It never parses XML or owns editor syntax.
 
 ## Documentation
 
-- [📖 API Reference](docs/api-reference.md)
-- [🎯 Examples](examples/examples.md)
-- [🚀 Setup Guide](SETUP_GUIDE.md)
+- [CLI guide](woml-cli/README.md)
+- [Architecture](docs/architecture.md)
+- [Production runtime](docs/woml-production-runtime.md)
+- [Production deployment](docs/woml-production-deployment.md)
+- [Triggers](docs/woml-production-triggers.md)
+- [Services and data](docs/woml-data-guide.md)
+- [Modules](docs/woml-modules.md)
+- [Lifecycle and run controls](docs/woml-lifecycle-and-run-control.md)
+- [Workflow calls](docs/woml-workflow-calls.md)
+- [Migrating old Cronflow definitions](docs/woml-sdk-migration.md)
+- [Archiving old Cronflow state](docs/cronflow-sdk-data-archive.md)
 
-## Examples
+## Development
 
-Check out the [examples](examples/examples.md) directory for:
-
-- E-commerce order processing
-- User onboarding flows
-- Data processing pipelines
-- Approval workflows
-- Multi-step integrations
-
-## Contributing
-
-We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for details.
-
-### Development Setup
+The active product packages are `woml`, `woml-cli`, `core/woml-engine`, and
+`core/woml-native`. Install and run package commands from `woml-cli`:
 
 ```bash
-# Clone the repository
-git clone https://github.com/dali-benothmen/cronflow.git
-cd cronflow
-
-# Install dependencies
-npm install
-
-# Build the project
-npm run build
-
-# Run tests
-npm test
+cd woml-cli
+bun install
+bun run build
+bun run typecheck
 ```
 
-## License
-
-Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-- 🌐 Website: [cronflow.org](https://cronflow.org)
-- 📧 Email: [mohamedalibenothmen1@gmail.com](mailto:mohamedalibenothmen1@gmail.com)
-- 💬 GitHub Issues: [Report a bug](https://github.com/dali-benothmen/cronflow/issues)
+The project is licensed under the [Apache License 2.0](LICENSE).

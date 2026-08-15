@@ -63,6 +63,57 @@ export function cronflowRuntimeDependencies(
   );
 }
 
+export function retiredRootManifestViolations(
+  manifest: Readonly<Record<string, unknown>>
+): readonly string[] {
+  const violations: string[] = [];
+  if (manifest.private !== true) violations.push('root package is publishable');
+  if (manifest.name === 'cronflow') violations.push('root package is named cronflow');
+  for (const field of ['main', 'module', 'types', 'exports', 'publishConfig']) {
+    if (field in manifest) violations.push(`root package declares ${field}`);
+  }
+  if (cronflowRuntimeDependencies(manifest).length > 0) {
+    violations.push('root package declares a Cronflow runtime dependency');
+  }
+  return violations;
+}
+
+async function assertRetiredSdkSurface(root: string): Promise<void> {
+  const manifest = JSON.parse(
+    await readFile(resolve(root, 'package.json'), 'utf8')
+  ) as Readonly<Record<string, unknown>>;
+  const manifestViolations = retiredRootManifestViolations(manifest);
+  if (manifestViolations.length > 0) {
+    throw new Error(
+      `The retired JavaScript SDK package surface returned: ${manifestViolations.join(', ')}.`
+    );
+  }
+
+  for (const retiredPath of [
+    'src/index.ts',
+    'sdk/index.ts',
+    'sdk/src/index.ts',
+    '.github/workflows/release.yml',
+  ]) {
+    try {
+      await stat(resolve(root, retiredPath));
+      throw new Error(
+        `The retired JavaScript SDK package surface returned at ${retiredPath}.`
+      );
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 async function filesBelow(directory: string): Promise<readonly string[]> {
   const output: string[] = [];
   const visit = async (current: string): Promise<void> => {
@@ -279,12 +330,13 @@ async function assertCleanPackage(root: string): Promise<void> {
 
 export async function verifyArchitectureSeparation(): Promise<void> {
   const root = resolve(import.meta.dir, '../..');
+  await assertRetiredSdkSurface(root);
   const scanned = await assertNoSdkImports(root);
   await assertNativeSourceSeparation(root);
   await assertCliNativeContract(root);
   await assertCleanPackage(root);
   console.log(
-    `WOML architecture separation verified: ${scanned} frontend/CLI source files, one engine-only native dependency, ${expectedNativeExports.length} required addon exports, and a clean package with no @cronflow runtime dependency.`
+    `WOML architecture separation verified: retired SDK package surface absent, ${scanned} frontend/CLI source files, one engine-only native dependency, ${expectedNativeExports.length} required addon exports, and a clean package with no @cronflow runtime dependency.`
   );
 }
 

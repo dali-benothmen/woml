@@ -29,32 +29,25 @@ jobs:
         working-directory: woml-cli
         run: bun run test:architecture-separation
 
-      - name: Verify the SDK retirement contract
-        working-directory: woml-cli
-        run: bun run test:sdk-retirement-contract
-
-  test:
+  frontend:
+    name: WOML frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-
-      - name: Setup Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: x86_64-unknown-linux-gnu
-          override: true
+          bun-version: 1.3.14
 
       - name: Install dependencies
-        run: bun install
+        working-directory: woml-cli
+        run: bun install --frozen-lockfile
 
-      - name: Run tests
-        run: bun test
+      - name: Test the WOML language frontend
+        working-directory: woml-cli
+        run: bun test ../woml/tests
 
-      - name: Build for production
-        run: bun run build:prod
+      - name: Type-check the WOML CLI
+        working-directory: woml-cli
+        run: bun run typecheck
