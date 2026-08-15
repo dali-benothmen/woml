@@ -1,9 +1,9 @@
 # WOML Terminal Experience Contracts v1
 
-Status: Frozen by TM0 and implemented through TM5. The renderer, durable Run
+Status: Frozen by TM0 and implemented through TM6. The renderer, durable Run
 Presentation projection, foreground integration, interactive manual admission,
-and secure retained/live background log following are implemented. Complex
-control-flow presentation remains TM6 work.
+secure retained/live background log following, and complex automation
+presentation are implemented. Hardening remains TM7 work.
 
 This document freezes the interfaces shared by the future Rust projection,
 the Bun CLI renderers, manual-trigger input, and background log following. It
@@ -61,6 +61,30 @@ Lifecycle hook names cover the engine's complete existing vocabulary:
 
 Historical snapshots use the definition bound to the run, never a currently
 edited `.woml` file.
+
+### 2.1 Complex automation rows
+
+Authored switch, choose, parallel, fork, branch, approval, workflow-call, and
+workflow-start work may appear as presentation rows. Their rows remain in
+frozen definition order even when concurrent children finish in another order;
+`depth` groups nested work visually without redefining execution dependencies.
+
+Control-only choices receive a stable display label such as `choose-1` or
+`switch-1`. Raw compiler node IDs, join barriers, fork terminals, selectors,
+and workflow-settlement nodes never appear. The summary counts all authored
+visible rows, including authored control structures, and excludes lifecycle
+rows and hidden compiler machinery.
+
+Approval details may include deadlines, bounded provider names, delivery
+counts, and the accepted decision. They never include capability URLs,
+credentials, provider actor IDs, or provider message identities. Workflow-call
+details may include the target workflow and child run ID because both are
+durable operational identities; synchronous calls say they are waiting or
+completed, while starts explicitly say they are detached.
+
+A nonterminal snapshot uses `STEP PROGRESS` and truthful queued, running,
+waiting, retrying, cancelling, or finalizing labels. Only a terminal snapshot
+uses `STEPS COMPLETED`.
 
 ## 3. Presentation bounds and safety
 

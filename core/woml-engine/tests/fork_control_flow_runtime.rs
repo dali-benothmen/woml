@@ -6,8 +6,9 @@ use uuid::Uuid;
 use woml_engine::model::ValueExpression;
 use woml_engine::model::{BackoffPolicy, RetryPolicy};
 use woml_engine::{
-  execute_admitted_trigger_run_durable, execute_workflow_durable, BusinessOutcome,
-  CompiledWorkflowDefinition, DurableEventStore, ForkBranchOutcome, RunEventPayload, RunStatus,
+  execute_admitted_trigger_run_durable, execute_workflow_durable, project_run_presentation_v1,
+  run_presentation_from_store_v1, BusinessOutcome, CompiledWorkflowDefinition, DurableEventStore,
+  ForkBranchOutcome, PresentationStepKind, PresentationStepStatus, RunEventPayload, RunStatus,
   RuntimeExecutionError, RuntimeExecutionOptions, ScriptHostProcessOptions,
   TriggerAdmissionRequest,
 };
@@ -79,9 +80,10 @@ async fn a_branch_retry_settles_before_the_fork_join() {
     },
   );
   workflow.validate_for_durable_execution().unwrap();
+  let hash = format!("sha256:{:064x}", 77);
   let result = execute_workflow_durable(
-    workflow,
-    format!("sha256:{:064x}", 77),
+    workflow.clone(),
+    hash.clone(),
     Map::new(),
     RuntimeExecutionOptions::new(host, 3_000),
     database.path().to_path_buf(),
@@ -96,6 +98,26 @@ async fn a_branch_retry_settles_before_the_fork_join() {
     result.context.steps["publishFacebook"]["platform"],
     "facebook"
   );
+  let presentation = project_run_presentation_v1(&workflow, &hash, &result.events).unwrap();
+  let fork = presentation
+    .steps
+    .iter()
+    .find(|step| step.kind == PresentationStepKind::Fork)
+    .unwrap();
+  assert_eq!(fork.status, PresentationStepStatus::Succeeded);
+  assert!(fork
+    .detail
+    .as_deref()
+    .is_some_and(|detail| detail.contains("join all") && detail.contains("continuation released")));
+  assert_eq!(
+    presentation
+      .steps
+      .iter()
+      .filter(|step| step.kind == PresentationStepKind::Branch)
+      .count(),
+    2
+  );
+  assert_eq!(presentation.summary.total, 7);
 }
 
 #[tokio::test]
@@ -179,6 +201,19 @@ async fn cancellation_closes_active_and_queued_fork_work_before_the_run() {
     .branches
     .values()
     .all(|branch| branch.outcome == Some(ForkBranchOutcome::Cancelled)));
+  let presentation = run_presentation_from_store_v1(&control, &run_id).unwrap();
+  assert_eq!(
+    presentation
+      .steps
+      .iter()
+      .find(|step| step.kind == PresentationStepKind::Fork)
+      .unwrap()
+      .status,
+    PresentationStepStatus::Cancelled
+  );
+  assert!(presentation.steps.iter().any(|step| {
+    step.kind == PresentationStepKind::Branch && step.status == PresentationStepStatus::Cancelled
+  }));
 }
 
 struct TemporaryDatabase(PathBuf);
@@ -228,9 +263,10 @@ async fn control_only_choice_selects_one_route_and_reaches_workflow_settlement()
     let database = TemporaryDatabase::new();
     let workflow = choice_model(condition);
     workflow.validate_for_durable_execution().unwrap();
+    let hash = format!("sha256:{:064x}", u8::from(condition) + 10);
     let result = execute_workflow_durable(
-      workflow,
-      format!("sha256:{:064x}", u8::from(condition) + 10),
+      workflow.clone(),
+      hash.clone(),
       Map::new(),
       RuntimeExecutionOptions::new(host.clone(), 3_000),
       database.path().to_path_buf(),
@@ -243,5 +279,24 @@ async fn control_only_choice_selects_one_route_and_reaches_workflow_settlement()
       matches!(&event.payload, RunEventPayload::ChoiceSelected(data) if data.arm_id.contains(if condition { ":when:" } else { ":otherwise" }))
     }));
     assert_eq!(result.terminal_node_id, "__woml_workflow__settlement");
+    let presentation = project_run_presentation_v1(&workflow, &hash, &result.events).unwrap();
+    let choice = presentation
+      .steps
+      .iter()
+      .find(|step| step.kind == PresentationStepKind::Choose)
+      .unwrap();
+    assert_eq!(choice.id, "choose-1");
+    assert_eq!(choice.status, PresentationStepStatus::Succeeded);
+    assert_eq!(
+      choice.detail.as_deref(),
+      Some(if condition {
+        "Selected condition 1."
+      } else {
+        "Selected otherwise."
+      })
+    );
+    assert!(!serde_json::to_string(&presentation)
+      .unwrap()
+      .contains("__woml_choice__"));
   }
 }

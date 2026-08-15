@@ -143,6 +143,41 @@ describe('terminal presentation renderer', () => {
     expect(output.indexOf('LIFECYCLE')).toBeLessThan(output.indexOf('RUN FAILED'));
   });
 
+  test('organizes nested automation while a durable run is still waiting', async () => {
+    const fixture = await Bun.file(
+      resolve(fixtureRoot, 'complex-control-flow.v1.json')
+    ).json() as RunPresentationV1;
+    const output = renderRunPresentation(fixture, {
+      format: 'plain', width: 88, unicode: true, timeZone: 'UTC',
+    });
+    expect(output).toContain('STEP PROGRESS');
+    expect(output).not.toContain('STEPS COMPLETED');
+    expect(output).toContain('Switch · Selected "express".');
+    expect(output).toContain('Parallel · 2 children · up to 2 at once');
+    expect(output).toContain('Fork · 3 branches · join slack, email');
+    expect(output).toContain('Branch · Runs independently');
+    expect(output).toContain('Workflow call · Waiting for calculate-risk · run_call_42');
+    expect(output).toContain('Workflow start · Started audit-trail · run_call_43 · detached');
+    expect(output).toContain('Approval · Waiting for decision until');
+    expect(output).toContain('Record analytics');
+    expect(output).toContain('Retrying');
+    expect(output).toContain('Confirm order');
+    expect(output).toContain('Queued');
+    expect(output).toContain('6 succeeded · 0 failed · 0 skipped');
+    expect(output.indexOf('Send Slack update')).toBeLessThan(
+      output.indexOf('Record analytics')
+    );
+    expect(output.indexOf('STEP PROGRESS')).toBeLessThan(output.indexOf('LIFECYCLE'));
+    expect(output).toContain('RUN WAITING');
+
+    const colored = renderRunPresentation(fixture, {
+      format: 'tty', color: 'always', isTTY: true, width: 88, unicode: true,
+      timeZone: 'UTC',
+    });
+    expect(colored).toContain('\u001b[33m');
+    expect(stripAnsi(colored)).toBe(output);
+  });
+
   test('shows a ready prompt only for manual workflows and never in JSON', async () => {
     const fixture = await success();
     expect(renderReadyPrompt(fixture.workflow, { format: 'plain', unicode: true })).toBe('● Ready · Press Enter to run again\n');

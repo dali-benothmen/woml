@@ -25,6 +25,10 @@ const BRANCH_HASH: &str = "sha256:6a9b3aa53e81ae0e95414f80df0192de5ff11489e9b65b
 const PARALLEL_MODEL: &str = include_str!("../../../woml/tests/fixtures/parallel.compiled.v3.json");
 const PARALLEL_EVENTS: &str =
   include_str!("../../../woml/tests/fixtures/run-events/parallel-succeeded.events.v3.json");
+const PARALLEL_FAIL_FAST_EVENTS: &str =
+  include_str!("../../../woml/tests/fixtures/run-events/parallel-fail-fast.events.v3.json");
+const PARALLEL_WAIT_ALL_EVENTS: &str =
+  include_str!("../../../woml/tests/fixtures/run-events/parallel-wait-all-failed.events.v3.json");
 const PARALLEL_HASH: &str =
   "sha256:d58dfcefdcd6c40db659042c41e17ca6c8d652033f90f120734d5cd95819b45c";
 const APPROVAL_MODEL: &str = include_str!("../../../woml/tests/fixtures/approval.compiled.v4.json");
@@ -32,6 +36,20 @@ const APPROVAL_EVENTS: &str =
   include_str!("../../../woml/tests/fixtures/run-events/approval-approved.events.v4.json");
 const APPROVAL_HASH: &str =
   "sha256:c85377270773c4abb178ba2811109843be53df66c91fedea04bb37d586901aa9";
+const APPROVAL_SLACK_MODEL: &str =
+  include_str!("../../../woml/tests/fixtures/approval-slack.compiled.v5.json");
+const APPROVAL_SLACK_EVENTS: &str =
+  include_str!("../../../woml/tests/fixtures/run-events/approval-slack-approved.events.v5.json");
+const APPROVAL_SLACK_HASH: &str =
+  "sha256:a02f094f7200f0e7e33bef7de2aba9b52638ac24adb9f017fd292764fbcb6988";
+const RETRY_SCHEDULED_EVENTS: &str =
+  include_str!("../../../woml/tests/fixtures/run-events/retry-scheduled-recovery.events.v6.json");
+const RUNTIME_POLICY_MODEL: &str =
+  include_str!("../../../woml/tests/fixtures/runtime-policies/runtime-policy.compiled.v12.json");
+const RUNTIME_POLICY_EVENTS: &str =
+  include_str!("../../../woml/tests/fixtures/runtime-policies/events.v11.json");
+const RUNTIME_POLICY_HASH: &str =
+  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 struct TemporaryDatabase {
   path: PathBuf,
@@ -187,10 +205,7 @@ fn selected_routes_are_explained_and_unselected_work_is_skipped() {
     .find(|step| step.id == "decision")
     .unwrap();
   assert_eq!(choice.kind, PresentationStepKind::Choose);
-  assert_eq!(
-    choice.detail.as_deref(),
-    Some("Selected case \"decision:when:0\".")
-  );
+  assert_eq!(choice.detail.as_deref(), Some("Selected condition 1."));
   assert_eq!(choice.status, PresentationStepStatus::Succeeded);
   let unselected = presentation
     .steps
@@ -230,7 +245,11 @@ fn parallel_work_is_grouped_without_exposing_engine_nodes() {
   assert_eq!(parallel.kind, PresentationStepKind::Parallel);
   assert_eq!(parallel.status, PresentationStepStatus::Succeeded);
   assert_eq!(parallel.duration_ms, Some(84));
-  assert_eq!(parallel.detail.as_deref(), Some("2 concurrent steps."));
+  assert_eq!(
+    parallel.detail.as_deref(),
+    Some("2 children · up to 2 at once · wait for all · all children completed.")
+  );
+  assert_eq!(presentation.summary.total, 5);
   assert_eq!(
     presentation
       .steps
@@ -243,6 +262,54 @@ fn parallel_work_is_grouped_without_exposing_engine_nodes() {
   assert!(!serde_json::to_string(&presentation)
     .unwrap()
     .contains("engine.parallel"));
+}
+
+#[test]
+fn parallel_failure_policy_and_cancelled_siblings_are_visible() {
+  let fail_fast = project_run_presentation_v1(
+    &model(PARALLEL_MODEL),
+    PARALLEL_HASH,
+    &events(PARALLEL_FAIL_FAST_EVENTS),
+  )
+  .unwrap();
+  let group = fail_fast
+    .steps
+    .iter()
+    .find(|step| step.id == "fieldData")
+    .unwrap();
+  assert_eq!(group.status, PresentationStepStatus::Failed);
+  assert_eq!(
+    group.failure.as_ref().map(|failure| failure.code.as_str()),
+    Some("WOML_PARALLEL_CHILD_FAILED")
+  );
+  assert!(group
+    .detail
+    .as_deref()
+    .is_some_and(|detail| detail.contains("1 failed, 1 cancelled")));
+  assert_eq!(
+    fail_fast
+      .steps
+      .iter()
+      .find(|step| step.id == "loadSoil")
+      .unwrap()
+      .status,
+    PresentationStepStatus::Cancelled
+  );
+
+  let wait_all = project_run_presentation_v1(
+    &model(PARALLEL_MODEL),
+    PARALLEL_HASH,
+    &events(PARALLEL_WAIT_ALL_EVENTS),
+  )
+  .unwrap();
+  let group = wait_all
+    .steps
+    .iter()
+    .find(|step| step.id == "fieldData")
+    .unwrap();
+  assert!(group.detail.as_deref().is_some_and(
+    |detail| detail.contains("wait for all") && detail.contains("1 failed, 0 cancelled")
+  ));
 }
 
 #[test]
@@ -262,10 +329,93 @@ fn approval_waiting_and_resolution_are_one_author_visible_item() {
   assert_eq!(approval.status, PresentationStepStatus::Succeeded);
   assert_eq!(approval.duration_ms, Some(299_997));
   assert_eq!(approval.name.as_deref(), Some("Editorial approval"));
+  assert!(approval
+    .detail
+    .as_deref()
+    .is_some_and(|detail| detail.contains("Decision approved by human")));
   assert!(!presentation
     .steps
     .iter()
     .any(|step| step.id.contains("approval__")));
+}
+
+#[test]
+fn approval_presentation_reports_safe_delivery_and_decision_details() {
+  let presentation = project_run_presentation_v1(
+    &model(APPROVAL_SLACK_MODEL),
+    APPROVAL_SLACK_HASH,
+    &events(APPROVAL_SLACK_EVENTS),
+  )
+  .unwrap();
+  let approval = presentation
+    .steps
+    .iter()
+    .find(|step| step.id == "releaseApproval")
+    .unwrap();
+  let detail = approval.detail.as_deref().unwrap();
+  assert!(detail.contains("Decision approved by slack"));
+  assert!(detail.contains("Notifications 2/2 delivered via slack"));
+  let encoded = serde_json::to_string(&presentation).unwrap();
+  assert!(!encoded.contains("providerActorId"));
+  assert!(!encoded.contains("U12345678"));
+  assert!(!encoded.contains("capability"));
+}
+
+#[test]
+fn scheduled_retry_is_one_retrying_row_with_the_next_attempt() {
+  let presentation = project_run_presentation_v1(
+    &model(RETRY_MODEL),
+    RETRY_HASH,
+    &events(RETRY_SCHEDULED_EVENTS),
+  )
+  .unwrap();
+  let step = presentation
+    .steps
+    .iter()
+    .find(|step| step.id == "greet")
+    .unwrap();
+  assert_eq!(presentation.status, PresentationRunStatus::Retrying);
+  assert_eq!(step.status, PresentationStepStatus::Retrying);
+  assert_eq!(step.attempts, 1);
+  assert!(step
+    .detail
+    .as_deref()
+    .is_some_and(|detail| detail.contains("Attempt 2 scheduled")));
+  assert!(step.failure.is_some());
+}
+
+#[test]
+fn queued_policy_and_workflow_timeout_are_explained_without_scheduler_logs() {
+  let history = events(RUNTIME_POLICY_EVENTS);
+  let queued = project_run_presentation_v1(
+    &model(RUNTIME_POLICY_MODEL),
+    RUNTIME_POLICY_HASH,
+    &history[..1],
+  )
+  .unwrap();
+  assert_eq!(queued.status, PresentationRunStatus::Queued);
+  let entry = queued
+    .steps
+    .iter()
+    .find(|step| step.id == "processOrder")
+    .unwrap();
+  assert_eq!(entry.status, PresentationStepStatus::Queued);
+  assert_eq!(
+    entry.detail.as_deref(),
+    Some("Waiting in queue orders for concurrency and rate limit capacity.")
+  );
+
+  let timed_out =
+    project_run_presentation_v1(&model(RUNTIME_POLICY_MODEL), RUNTIME_POLICY_HASH, &history)
+      .unwrap();
+  assert_eq!(timed_out.status, PresentationRunStatus::TimedOut);
+  assert_eq!(
+    timed_out
+      .failure
+      .as_ref()
+      .map(|failure| failure.code.as_str()),
+    Some("WOML_WORKFLOW_TIMED_OUT")
+  );
 }
 
 #[test]

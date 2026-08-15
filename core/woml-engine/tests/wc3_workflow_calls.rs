@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use uuid::Uuid;
 use woml_engine::{
-  CompiledWorkflowDefinition, DurableEventStore, RunStatus, RuntimeExecutionOptions,
-  ScriptHostProcessOptions, TriggerProgress, WebhookDefinitionRegistration, WomlWebhookServer,
-  WomlWebhookServerConfig, WorkflowCallProgress,
+  run_presentation_from_store_v1, CompiledWorkflowDefinition, DurableEventStore,
+  PresentationStepKind, RunStatus, RuntimeExecutionOptions, ScriptHostProcessOptions,
+  TriggerProgress, WebhookDefinitionRegistration, WomlWebhookServer, WomlWebhookServerConfig,
+  WorkflowCallProgress,
 };
 
 const PARENT_MODEL: &str =
@@ -167,6 +168,16 @@ async fn same_runtime_call_executes_child_with_payload_and_returns_object_result
   let child = store.projection(&child_run_id).unwrap();
   assert_eq!(child.context.trigger["customerId"], "customer-42");
   assert_eq!(child.result, Some(json!({ "score": 90 })));
+  let presentation = run_presentation_from_store_v1(&store, &parent_run_id).unwrap();
+  let call = presentation
+    .steps
+    .iter()
+    .find(|step| step.id == "requestRisk")
+    .unwrap();
+  assert_eq!(call.kind, PresentationStepKind::WorkflowCall);
+  assert!(call.detail.as_deref().is_some_and(|detail| {
+    detail.contains("calculate-risk completed") && detail.contains(&child_run_id)
+  }));
   let progress = call_progress.lock().unwrap();
   assert!(progress.iter().any(|message| matches!(
     message,
@@ -216,6 +227,18 @@ async fn workflow_start_returns_after_admission_while_the_child_keeps_running() 
     store.projection(&child_run_id).unwrap().status,
     RunStatus::Running
   );
+  let presentation = run_presentation_from_store_v1(&store, &parent_run_id).unwrap();
+  let started = presentation
+    .steps
+    .iter()
+    .find(|step| step.id == "requestRisk")
+    .unwrap();
+  assert_eq!(started.kind, PresentationStepKind::WorkflowStart);
+  assert!(started.detail.as_deref().is_some_and(|detail| {
+    detail.contains("Started calculate-risk")
+      && detail.contains(&child_run_id)
+      && detail.contains("detached")
+  }));
   assert_eq!(
     wait_for_terminal(&database, &child_run_id).await,
     RunStatus::Succeeded

@@ -1,10 +1,11 @@
 # WOML Terminal Experience and Manual Triggers Implementation Plan
 
-Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3, TM4, and TM5 completed
+Status: TM0, TM1, and TM2 completed on 2026-08-14; TM3 through TM6 completed
 on 2026-08-15. The versioned presentation contracts, pure color/plain/JSON
 renderer, durable Rust projection, native/TypeScript query boundary,
-professional foreground output, Enter-driven durable manual trigger, and
-secure retained/live background log following are implemented. TM6 is next.
+professional foreground output, Enter-driven durable manual trigger, secure
+retained/live background log following, and complete complex-automation
+presentation are implemented. TM7 is next.
 
 ## 1. Product Outcome
 
@@ -832,7 +833,7 @@ arrival, or infer selected routes by reevaluating conditions.
 | TM3 — completed | Replace foreground trigger/run output with the professional renderer. | Webhook, Slack, schedule, interval, event, and existing one-shot runs are readable and organized. |
 | TM4 — completed | Implement explicit Rust manual admission and the Enter-driven foreground input loop. | `<manual>` waits for the user and can create repeated durable runs. |
 | TM5 — completed | Add `woml <run-id|workflow-id> --logs` and background-runtime attachment. | Users can inspect and follow background execution safely from another terminal. |
-| TM6 | Complete complex control-flow, retry, approval, lifecycle, concurrency, and multi-run presentation. | Large real workflows remain organized instead of exposing internal engine noise. |
+| TM6 — completed | Complete complex control-flow, retry, approval, lifecycle, concurrency, and multi-run presentation. | Large real workflows remain organized instead of exposing internal engine noise. |
 | TM7 | Harden accessibility, security, compatibility, retention, restart, and failure behavior. | Output remains safe and truthful across terminals, pipes, crashes, and historical stores. |
 | TM8 | Document, benchmark, package, and publish the terminal/manual milestone. | Professional output and real manual triggers are supported WOML features. |
 
@@ -1064,7 +1065,7 @@ Completion evidence:
   operations, and packaged two-process tests with 115 assertions, followed by
   TypeScript validation.
 
-### TM6 — Complete automation/control-flow presentation
+### TM6 — Complete automation/control-flow presentation — completed
 
 Changes:
 
@@ -1092,6 +1093,27 @@ Gate:
 Golden and packaged acceptance cover every official flow construct in nested
 positions, reversed concurrency timing, waiting/recovery, failures, and more
 than one simultaneous run.
+
+Completion evidence:
+
+- Switches and identified or control-only choices show readable selected cases
+  without leaking raw compiler IDs; stable merged results remain visible.
+- Parallel groups show concurrency, error policy, child outcomes, cancellation,
+  and definition-order grouping. Forks show joined versus independent branches,
+  barrier release/failure/cancellation, nested depth, and owned branch results.
+- Approvals show safe deadlines, notification delivery counts/providers, human
+  or timeout decisions, and failures without capability URLs or actor IDs.
+- Retry scheduling, recovery, eventual success/exhaustion, workflow calls,
+  detached workflow starts, runtime-policy queue waits, cancellation, workflow
+  timeout, workflow/reusable lifecycle activity, and warnings are projected
+  from frozen definitions plus folded durable events.
+- Active snapshots use `STEP PROGRESS`; terminal snapshots use
+  `STEPS COMPLETED`. Authored control rows participate in the visible summary,
+  while compiler-only joins, terminals, selectors, and settlement nodes remain
+  hidden.
+- The serialized `test:complex-presentations` gate passes 18 Rust
+  execution/projection tests and 35 Bun contract, renderer, packaged foreground,
+  and log-follow tests (211 Bun assertions), followed by TypeScript validation.
 
 ### TM7 — Harden security, accessibility, and compatibility
 

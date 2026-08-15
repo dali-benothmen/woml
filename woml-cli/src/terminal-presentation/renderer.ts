@@ -273,6 +273,23 @@ function statusColor(status: StepPresentationStatus | RunPresentationStatus): Co
   return 'dim';
 }
 
+function statusLabel(status: StepPresentationStatus | RunPresentationStatus): string {
+  const labels: Record<StepPresentationStatus | RunPresentationStatus, string> = {
+    queued: 'Queued',
+    running: 'Running',
+    waiting: 'Waiting',
+    retrying: 'Retrying',
+    cancelling: 'Cancelling',
+    finalizing: 'Finalizing',
+    succeeded: 'Succeeded',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+    timed_out: 'Timed out',
+    skipped: 'Skipped',
+  };
+  return labels[status];
+}
+
 function stepKind(kind: StepPresentationKind): string {
   const labels: Record<StepPresentationKind, string> = {
     step: 'Step',
@@ -417,7 +434,9 @@ function stepLines(step: StepPresentationV1, index: number, runId: string, optio
   const depth = '  '.repeat(Math.min(step.depth, 4));
   const prefix = `  ${number}  ${glyph}  ${depth}`;
   const label = step.name ?? step.id;
-  const right = step.status === 'skipped' ? 'Skipped' : duration(step.durationMs);
+  const right = step.durationMs === undefined
+    ? statusLabel(step.status)
+    : duration(step.durationMs);
   lines.push(alignEnds(`${prefix}${paint(label, 'bold', options.color)}`, right, options.width));
 
   const contentIndent = `          ${depth}`;
@@ -501,7 +520,8 @@ export function renderRunPresentation(
   safe.steps.forEach((step, index) => {
     lines.push(...stepLines(step, index, safe.runId, options), '');
   });
-  lines.push('', paint('STEPS COMPLETED', 'bold', options.color), '');
+  const terminal = ['succeeded', 'failed', 'cancelled', 'timed_out'].includes(safe.status);
+  lines.push('', paint(terminal ? 'STEPS COMPLETED' : 'STEP PROGRESS', 'bold', options.color), '');
   lines.push(`  Duration    ${duration(safe.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0))}`);
   const summaryParts = [`${safe.summary.succeeded} succeeded`, `${safe.summary.failed} failed`, `${safe.summary.skipped} skipped`];
   if (safe.summary.cancelled > 0) summaryParts.push(`${safe.summary.cancelled} cancelled`);

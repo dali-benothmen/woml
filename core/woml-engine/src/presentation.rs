@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -290,6 +290,7 @@ struct ControlTimeline {
 
 #[derive(Debug, Clone, Default)]
 struct ControlTimelines {
+  choice: HashMap<String, ControlTimeline>,
   parallel: HashMap<String, ControlTimeline>,
   fork: HashMap<String, ControlTimeline>,
   branch: HashMap<(String, String), ControlTimeline>,
@@ -573,6 +574,11 @@ fn control_timelines(events: &[RunEvent]) -> ControlTimelines {
           .or_default()
           .started_at = Some(event.occurred_at);
       }
+      RunEventPayload::ChoiceSelected(data) => {
+        let timeline = value.choice.entry(data.choice_id.clone()).or_default();
+        timeline.started_at = Some(event.occurred_at);
+        timeline.completed_at = Some(event.occurred_at);
+      }
       RunEventPayload::ParallelGroupCompleted(data) => {
         value
           .parallel
@@ -703,28 +709,204 @@ fn reusable_aliases(workflow: &CompiledWorkflowDefinition) -> HashMap<&str, &str
     .collect()
 }
 
-fn selected_choice<'a>(
-  workflow: &'a CompiledWorkflowDefinition,
+fn selected_choice(
+  workflow: &CompiledWorkflowDefinition,
   node_id: &str,
-  projection: &'a RunProjection,
-) -> Option<(&'a str, bool)> {
+  projection: &RunProjection,
+) -> Option<String> {
   if let Some(choice) = workflow
     .graph
     .choices
     .as_deref()
     .unwrap_or_default()
     .iter()
-    .find(|choice| choice.result_node_id.as_deref() == Some(node_id))
+    .find(|choice| {
+      choice.result_node_id.as_deref() == Some(node_id) || choice.selector_node_id == node_id
+    })
   {
-    return projection
-      .choice_selections
-      .get(&choice.choice_id)
-      .map(|arm| (arm.as_str(), choice.string_selector.is_some()));
+    let arm = projection.choice_selections.get(&choice.choice_id)?;
+    if choice.string_selector.is_some() {
+      if let Some(value) = choice
+        .string_cases
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|case| case.arm_id == *arm)
+        .map(|case| case.value.as_str())
+      {
+        return Some(bounded(&format!("Selected \"{value}\"."), MAX_MESSAGE));
+      }
+      return Some("Selected default.".to_string());
+    }
+    if choice.default_arm_id.as_deref() == Some(arm) || arm.ends_with(":otherwise") {
+      return Some("Selected otherwise.".to_string());
+    }
+    let index = choice
+      .arm_ids
+      .iter()
+      .position(|candidate| candidate == arm)
+      .unwrap_or(0)
+      + 1;
+    return Some(format!("Selected condition {index}."));
   }
-  projection
-    .branch_selections
-    .get(node_id)
-    .map(|arm| (arm.as_str(), false))
+  projection.branch_selections.get(node_id).map(|arm| {
+    if arm.ends_with(":otherwise") {
+      "Selected otherwise.".to_string()
+    } else if let Some(index) = arm
+      .rsplit(':')
+      .next()
+      .and_then(|value| value.parse::<usize>().ok())
+    {
+      format!("Selected condition {}.", index + 1)
+    } else {
+      bounded(&format!("Selected case \"{arm}\"."), MAX_MESSAGE)
+    }
+  })
+}
+
+fn combine_details(parts: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+  let joined = parts.into_iter().flatten().collect::<Vec<_>>().join(" · ");
+  (!joined.is_empty()).then(|| bounded(&joined, MAX_MESSAGE))
+}
+
+fn retry_detail(
+  node_id: &str,
+  timeline: Option<&AttemptTimeline>,
+  status: PresentationStepStatus,
+  projection: &RunProjection,
+) -> Option<String> {
+  if let Some(retry) = projection.pending_retries.get(node_id) {
+    return Some(format!(
+      "Attempt {} scheduled for {}.",
+      retry.next_attempt,
+      retry.scheduled_at.to_rfc3339()
+    ));
+  }
+  let attempts = timeline.map_or(1, |timeline| timeline.attempts.max(1));
+  if attempts <= 1 {
+    return None;
+  }
+  Some(match status {
+    PresentationStepStatus::Succeeded => format!("Succeeded after {attempts} attempts."),
+    PresentationStepStatus::Failed | PresentationStepStatus::TimedOut => {
+      format!("Retry exhausted after {attempts} attempts.")
+    }
+    _ => format!("Attempt {attempts} in progress."),
+  })
+}
+
+fn workflow_operation(
+  node_id: &str,
+  projection: &RunProjection,
+) -> Option<(PresentationStepKind, String)> {
+  let operations = projection
+    .operations
+    .values()
+    .filter(|operation| {
+      operation.node_id == node_id
+        && operation.capability == "workflows"
+        && matches!(operation.operation.as_str(), "call" | "start")
+    })
+    .collect::<Vec<_>>();
+  if operations.is_empty() {
+    return None;
+  }
+  let kind = if operations
+    .iter()
+    .all(|operation| operation.operation == "call")
+  {
+    PresentationStepKind::WorkflowCall
+  } else if operations
+    .iter()
+    .all(|operation| operation.operation == "start")
+  {
+    PresentationStepKind::WorkflowStart
+  } else {
+    PresentationStepKind::Script
+  };
+  let details = operations
+    .iter()
+    .map(|operation| {
+      let target = operation
+        .metadata
+        .get("targetWorkflowId")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown workflow");
+      let child = operation
+        .metadata
+        .get("childRunId")
+        .and_then(Value::as_str)
+        .unwrap_or("child run pending");
+      match (&operation.operation[..], &operation.status) {
+        ("call", crate::projection::OperationStatus::Started) => {
+          format!("Waiting for {target} · {child}")
+        }
+        ("call", crate::projection::OperationStatus::Succeeded { .. }) => {
+          format!("{target} completed · {child}")
+        }
+        ("call", crate::projection::OperationStatus::Failed { .. }) => {
+          format!("{target} failed · {child}")
+        }
+        ("start", crate::projection::OperationStatus::Started) => {
+          format!("Starting {target} · {child}")
+        }
+        ("start", crate::projection::OperationStatus::Succeeded { .. }) => {
+          format!("Started {target} · {child} · detached")
+        }
+        ("start", crate::projection::OperationStatus::Failed { .. }) => {
+          format!("Could not start {target} · {child}")
+        }
+        _ => format!("{target} · {child}"),
+      }
+    })
+    .collect::<Vec<_>>()
+    .join("; ");
+  Some((kind, bounded(&details, MAX_MESSAGE)))
+}
+
+fn runtime_policy_detail(
+  workflow: &CompiledWorkflowDefinition,
+  projection: &RunProjection,
+  node_id: &str,
+) -> Option<String> {
+  if !workflow
+    .graph
+    .entry_node_ids
+    .iter()
+    .any(|entry| entry == node_id)
+  {
+    return None;
+  }
+  let queue = projection.queue.as_deref().unwrap_or("workflow queue");
+  if projection.status == RunStatus::Queued {
+    let mut gates = Vec::new();
+    if workflow
+      .runtime_policy
+      .as_ref()
+      .and_then(|policy| policy.concurrency)
+      .is_some()
+    {
+      gates.push("concurrency");
+    }
+    if workflow
+      .runtime_policy
+      .as_ref()
+      .and_then(|policy| policy.rate_limit.as_ref())
+      .is_some()
+    {
+      gates.push("rate limit");
+    }
+    return Some(if gates.is_empty() {
+      format!("Waiting in queue {queue}.")
+    } else {
+      format!(
+        "Waiting in queue {queue} for {} capacity.",
+        gates.join(" and ")
+      )
+    });
+  }
+  let wait_ms = duration_between(projection.admitted_at, projection.started_at)?;
+  (wait_ms > 0).then(|| format!("Started after {wait_ms} ms in queue {queue}."))
 }
 
 fn control_metadata<'a>(
@@ -788,9 +970,66 @@ fn presentable_kind(
         PresentationStepKind::Choose
       }
     }
+    "engine.choice-select" => {
+      let choice = workflow
+        .graph
+        .choices
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|choice| choice.selector_node_id == node.id && choice.result_node_id.is_none())?;
+      if choice.string_selector.is_some() {
+        PresentationStepKind::Switch
+      } else {
+        PresentationStepKind::Choose
+      }
+    }
     "engine.approval-wait" => PresentationStepKind::Approval,
     _ => return None,
   })
+}
+
+fn presentation_node_id(
+  workflow: &CompiledWorkflowDefinition,
+  node: &crate::model::CompiledWorkflowNode,
+) -> String {
+  if node.handler != "engine.choice-select" {
+    return bounded(&node.id, 256);
+  }
+  let choices = workflow.graph.choices.as_deref().unwrap_or_default();
+  let Some((index, choice)) = choices
+    .iter()
+    .enumerate()
+    .find(|(_, choice)| choice.selector_node_id == node.id)
+  else {
+    return "choice".to_string();
+  };
+  let label = if choice.string_selector.is_some() {
+    "switch"
+  } else {
+    "choose"
+  };
+  format!("{label}-{}", index + 1)
+}
+
+fn choice_status(
+  workflow: &CompiledWorkflowDefinition,
+  node_id: &str,
+  projection: &RunProjection,
+) -> PresentationStepStatus {
+  let selected = workflow
+    .graph
+    .choices
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .find(|choice| choice.selector_node_id == node_id)
+    .is_some_and(|choice| projection.choice_selections.contains_key(&choice.choice_id));
+  if selected {
+    PresentationStepStatus::Succeeded
+  } else {
+    inactive_status(projection)
+  }
 }
 
 fn inactive_status(projection: &RunProjection) -> PresentationStepStatus {
@@ -819,6 +1058,65 @@ fn parallel_status(parallel_id: &str, projection: &RunProjection) -> Presentatio
   }
 }
 
+fn parallel_detail(
+  definition: &crate::model::ParallelGroupDefinition,
+  projection: &RunProjection,
+) -> String {
+  let policy = if definition.on_error == "fail-fast" {
+    "fail fast"
+  } else {
+    "wait for all"
+  };
+  let outcome = match projection
+    .parallel_groups
+    .get(&definition.parallel_id)
+    .map(|group| &group.status)
+  {
+    Some(crate::projection::ParallelGroupStatus::Started) => "running".to_string(),
+    Some(crate::projection::ParallelGroupStatus::Completed {
+      outcome: crate::event::ParallelGroupOutcome::Succeeded,
+      ..
+    }) => "all children completed".to_string(),
+    Some(crate::projection::ParallelGroupStatus::Completed {
+      failed_node_ids,
+      cancelled_node_ids,
+      ..
+    }) => format!(
+      "{} failed, {} cancelled",
+      failed_node_ids.len(),
+      cancelled_node_ids.len()
+    ),
+    None => "not started".to_string(),
+  };
+  bounded(
+    &format!(
+      "{} children · up to {} at once · {policy} · {outcome}.",
+      definition.child_node_ids.len(),
+      definition.concurrency
+    ),
+    MAX_MESSAGE,
+  )
+}
+
+fn parallel_failure(
+  parallel_id: &str,
+  projection: &RunProjection,
+) -> Option<PresentationFailureV1> {
+  match projection.failure.as_ref() {
+    Some(RunFailure::Parallel {
+      parallel_id: failed_parallel,
+      failure,
+      ..
+    }) if failed_parallel == parallel_id => Some(PresentationFailureV1 {
+      code: bounded(&failure.code, 124),
+      message: bounded(&failure.message, MAX_MESSAGE),
+      kind: Some(failure.kind.clone()),
+      retryable: Some(false),
+    }),
+    _ => None,
+  }
+}
+
 fn approval_status(approval_id: &str, projection: &RunProjection) -> PresentationStepStatus {
   match projection
     .approval_requests
@@ -835,6 +1133,119 @@ fn approval_status(approval_id: &str, projection: &RunProjection) -> Presentatio
   }
 }
 
+fn approval_detail(approval_id: &str, projection: &RunProjection) -> Option<String> {
+  let request = projection.approval_requests.get(approval_id)?;
+  let deliveries = projection
+    .notification_deliveries
+    .values()
+    .filter(|delivery| {
+      delivery.approval_id == approval_id && delivery.request_id == request.request_id
+    })
+    .collect::<Vec<_>>();
+  let delivered = deliveries
+    .iter()
+    .filter(|delivery| {
+      matches!(
+        delivery.status,
+        crate::projection::NotificationDeliveryStatus::Succeeded { .. }
+      )
+    })
+    .count();
+  let failed = deliveries
+    .iter()
+    .filter(|delivery| {
+      matches!(
+        delivery.status,
+        crate::projection::NotificationDeliveryStatus::Failed { final_: true, .. }
+      )
+    })
+    .count();
+  let providers = deliveries
+    .iter()
+    .map(|delivery| delivery.provider.as_str())
+    .collect::<BTreeSet<_>>()
+    .into_iter()
+    .collect::<Vec<_>>()
+    .join(", ");
+  let notification = if deliveries.is_empty() {
+    None
+  } else {
+    Some(format!(
+      "Notifications {delivered}/{} delivered{}{}",
+      deliveries.len(),
+      if failed == 0 {
+        String::new()
+      } else {
+        format!(", {failed} failed")
+      },
+      if providers.is_empty() {
+        String::new()
+      } else {
+        format!(" via {providers}")
+      }
+    ))
+  };
+  let decision = match &request.status {
+    crate::projection::ApprovalRequestStatus::Waiting => Some(match request.expires_at {
+      Some(deadline) => format!("Waiting for decision until {}", deadline.to_rfc3339()),
+      None => "Waiting for decision".to_string(),
+    }),
+    crate::projection::ApprovalRequestStatus::Resolved { resolution, .. } => {
+      Some(match resolution {
+        crate::event::ApprovalResolution::Decision { decision, source } => {
+          let decision = format!("{decision:?}").to_ascii_lowercase();
+          let source = match source {
+            crate::event::ApprovalDecisionSource::Human => projection
+              .notification_decisions
+              .iter()
+              .rev()
+              .find(|accepted| {
+                accepted.approval_id == approval_id && accepted.request_id == request.request_id
+              })
+              .map(|accepted| format!(" by {}", accepted.provider))
+              .unwrap_or_else(|| " by human".to_string()),
+            crate::event::ApprovalDecisionSource::Timeout => " at timeout".to_string(),
+          };
+          format!("Decision {decision}{source}")
+        }
+        crate::event::ApprovalResolution::TimeoutFailure => {
+          "Approval failed at timeout".to_string()
+        }
+      })
+    }
+  };
+  combine_details([decision, notification])
+}
+
+fn approval_failure(
+  approval_id: &str,
+  projection: &RunProjection,
+) -> Option<PresentationFailureV1> {
+  match projection.failure.as_ref() {
+    Some(RunFailure::Approval {
+      approval_id: failed_approval,
+      failure,
+      ..
+    }) if failed_approval == approval_id => Some(PresentationFailureV1 {
+      code: bounded(&failure.code, 124),
+      message: bounded(&failure.message, MAX_MESSAGE),
+      kind: Some(failure.kind.clone()),
+      retryable: Some(false),
+    }),
+    Some(RunFailure::Notification {
+      approval_id: failed_approval,
+      failure,
+      ..
+    }) if failed_approval == approval_id => Some(PresentationFailureV1 {
+      code: bounded(&failure.code, 124),
+      message: bounded(&failure.message, MAX_MESSAGE),
+      kind: Some(failure.kind.clone()),
+      retryable: Some(false),
+    }),
+    _ => None,
+  }
+}
+
 fn fork_status(fork_id: &str, projection: &RunProjection) -> PresentationStepStatus {
   match projection.forks.get(fork_id).map(|fork| fork.join_status) {
     Some(crate::projection::ForkJoinStatus::Pending) => PresentationStepStatus::Running,
@@ -843,6 +1254,47 @@ fn fork_status(fork_id: &str, projection: &RunProjection) -> PresentationStepSta
     Some(crate::projection::ForkJoinStatus::Cancelled) => PresentationStepStatus::Cancelled,
     None => inactive_status(projection),
   }
+}
+
+fn fork_detail(fork: &crate::model::CompiledFork, projection: &RunProjection) -> String {
+  let joined = fork.joined_branch_ids.len();
+  let join_profile = if joined == 0 {
+    "join none".to_string()
+  } else if joined == fork.branches.len() {
+    "join all".to_string()
+  } else {
+    format!("join {}", fork.joined_branch_ids.join(", "))
+  };
+  let settlement = match projection.forks.get(&fork.fork_id) {
+    Some(value) => match value.join_status {
+      crate::projection::ForkJoinStatus::Pending => {
+        format!("waiting for {joined} joined branches")
+      }
+      crate::projection::ForkJoinStatus::Succeeded => {
+        format!("continuation released after {joined} branches")
+      }
+      crate::projection::ForkJoinStatus::Failed => value
+        .blocking_branch_id
+        .as_deref()
+        .map(|branch| format!("join blocked by {branch}"))
+        .unwrap_or_else(|| "join failed".to_string()),
+      crate::projection::ForkJoinStatus::Cancelled => "join cancelled".to_string(),
+    },
+    None => "not started".to_string(),
+  };
+  bounded(
+    &format!(
+      "{} branches · {join_profile} · {settlement}.",
+      fork.branches.len()
+    ),
+    MAX_MESSAGE,
+  )
+}
+
+fn fork_failure(fork_id: &str, projection: &RunProjection) -> Option<PresentationFailureV1> {
+  (fork_status(fork_id, projection) == PresentationStepStatus::Failed)
+    .then(|| projection.failure.as_ref().map(run_failure))
+    .flatten()
 }
 
 fn fork_branch_status(
@@ -905,6 +1357,15 @@ fn step_status(
     Some(TimelineStatus::Succeeded) => PresentationStepStatus::Succeeded,
     Some(TimelineStatus::Failed(failure)) if failure.kind == AttemptFailureKind::ScriptTimedOut => {
       PresentationStepStatus::TimedOut
+    }
+    Some(TimelineStatus::Failed(failure))
+      if failure.kind == AttemptFailureKind::InvocationCancelled =>
+    {
+      if projection.timeout_reached_at.is_some() {
+        PresentationStepStatus::TimedOut
+      } else {
+        PresentationStepStatus::Cancelled
+      }
     }
     Some(TimelineStatus::Failed(_)) => PresentationStepStatus::Failed,
     None
@@ -979,15 +1440,15 @@ fn steps(
         completed_at: timeline.completed_at,
         duration_ms: duration_between(timeline.started_at, timeline.completed_at),
         attempts: 1,
-        detail: definition.map(|definition| {
-          bounded(
-            &format!("{} concurrent steps.", definition.child_node_ids.len()),
-            MAX_MESSAGE,
-          )
-        }),
+        detail: combine_details([
+          runtime_policy_detail(workflow, projection, &node.id),
+          definition
+            .as_ref()
+            .map(|definition| parallel_detail(definition, projection)),
+        ]),
         result,
         result_truncated,
-        failure: None,
+        failure: parallel_failure(parallel_id, projection),
       });
       continue;
     }
@@ -1022,13 +1483,13 @@ fn steps(
         completed_at: timeline.completed_at,
         duration_ms: duration_between(timeline.started_at, timeline.completed_at),
         attempts: 1,
-        detail: Some(bounded(
-          &format!("{} branches.", fork.branches.len()),
-          MAX_MESSAGE,
-        )),
+        detail: combine_details([
+          runtime_policy_detail(workflow, projection, &node.id),
+          Some(fork_detail(fork, projection)),
+        ]),
         result: None,
         result_truncated: None,
-        failure: None,
+        failure: fork_failure(&fork.fork_id, projection),
       });
       continue;
     }
@@ -1064,17 +1525,21 @@ fn steps(
           completed_at: timeline.completed_at,
           duration_ms: duration_between(started_at, timeline.completed_at),
           attempts: 1,
-          detail: fork
-            .joined_branch_ids
-            .contains(&branch.branch_id)
-            .then_some("Joins the main route.".to_string()),
+          detail: Some(
+            if fork.joined_branch_ids.contains(&branch.branch_id) {
+              "Joins the continuation; the fork waits for this branch."
+            } else {
+              "Runs independently; this branch does not delay the continuation."
+            }
+            .to_string(),
+          ),
           result: None,
           result_truncated: None,
           failure: None,
         });
       }
     }
-    let Some(kind) = presentable_kind(workflow, node, &reusable) else {
+    let Some(mut kind) = presentable_kind(workflow, node, &reusable) else {
       continue;
     };
     if steps.len() >= RUN_PRESENTATION_MAX_STEPS {
@@ -1082,10 +1547,10 @@ fn steps(
     }
     let metadata = control_metadata(workflow, node);
     let timeline = timelines.get(&node.id);
-    let status = if node.handler == "engine.approval-wait" {
-      approval_status(&node.id, projection)
-    } else {
-      step_status(&node.id, timeline, projection, &cancelled)
+    let status = match node.handler.as_str() {
+      "engine.approval-wait" => approval_status(&node.id, projection),
+      "engine.choice-select" => choice_status(workflow, &node.id, projection),
+      _ => step_status(&node.id, timeline, projection, &cancelled),
     };
     let (result, result_truncated) = projection
       .context
@@ -1095,24 +1560,55 @@ fn steps(
       .map_or((None, None), |(value, truncated)| {
         (Some(value), truncated.then_some(true))
       });
-    let failure = timeline.and_then(|timeline| match timeline.latest.as_ref() {
+    let mut failure = timeline.and_then(|timeline| match timeline.latest.as_ref() {
       Some(TimelineStatus::Failed(failure)) => Some(attempt_failure(failure)),
       _ => None,
     });
-    let detail = selected_choice(workflow, &node.id, projection)
-      .map(|(arm, _)| bounded(&format!("Selected case \"{arm}\"."), MAX_MESSAGE));
+    let workflow_operation = workflow_operation(&node.id, projection);
+    if let Some((operation_kind, _)) = workflow_operation.as_ref() {
+      kind = *operation_kind;
+    }
+    let mut detail = combine_details([
+      runtime_policy_detail(workflow, projection, &node.id),
+      selected_choice(workflow, &node.id, projection),
+      workflow_operation.map(|(_, detail)| detail),
+      retry_detail(&node.id, timeline, status, projection),
+    ]);
+    if node.handler == "engine.approval-wait" {
+      detail = approval_detail(&node.id, projection);
+      failure = approval_failure(&node.id, projection).or(failure);
+    }
     let name = metadata_string(metadata, "name", MAX_SHORT_TEXT).or_else(|| {
       reusable
         .get(node.id.as_str())
         .map(|alias| bounded(alias, MAX_SHORT_TEXT))
     });
-    let control_timeline = (node.handler == "engine.approval-wait").then(|| {
-      control_times
-        .approval
-        .get(&node.id)
-        .copied()
+    let control_timeline = if node.handler == "engine.approval-wait" {
+      Some(
+        control_times
+          .approval
+          .get(&node.id)
+          .copied()
+          .unwrap_or_default(),
+      )
+    } else if node.handler == "engine.choice-select" {
+      workflow
+        .graph
+        .choices
+        .as_deref()
         .unwrap_or_default()
-    });
+        .iter()
+        .find(|choice| choice.selector_node_id == node.id)
+        .map(|choice| {
+          control_times
+            .choice
+            .get(&choice.choice_id)
+            .copied()
+            .unwrap_or_default()
+        })
+    } else {
+      None
+    };
     let started_at = control_timeline
       .and_then(|timeline| timeline.started_at)
       .or_else(|| timeline.and_then(|timeline| timeline.started_at));
@@ -1127,7 +1623,7 @@ fn steps(
       0
     };
     steps.push(StepPresentationV1 {
-      id: bounded(&node.id, 256),
+      id: presentation_node_id(workflow, node),
       name,
       description: metadata_string(metadata, "description", MAX_MESSAGE),
       kind,
@@ -1157,6 +1653,23 @@ fn lifecycle_hook(event: LifecycleEventName) -> PresentationLifecycleHook {
     LifecycleEventName::RunFailure => PresentationLifecycleHook::OnFailure,
     LifecycleEventName::RunCancel => PresentationLifecycleHook::OnCancel,
     LifecycleEventName::RunComplete => PresentationLifecycleHook::OnComplete,
+  }
+}
+
+fn provider_label(handler: &str) -> String {
+  let value = handler
+    .strip_prefix("notification.")
+    .or_else(|| handler.strip_prefix("runtime."))
+    .unwrap_or(handler)
+    .replace(['_', '-'], " ");
+  bounded(&value, MAX_SHORT_TEXT)
+}
+
+fn reusable_lifecycle_hook(hook: crate::event::ReusableLifecycleHook) -> PresentationLifecycleHook {
+  match hook {
+    crate::event::ReusableLifecycleHook::OnSuccess => PresentationLifecycleHook::OnSuccess,
+    crate::event::ReusableLifecycleHook::OnError => PresentationLifecycleHook::OnFailure,
+    crate::event::ReusableLifecycleHook::OnComplete => PresentationLifecycleHook::OnComplete,
   }
 }
 
@@ -1208,15 +1721,38 @@ fn lifecycle(
           retryable: Some(false),
         })
     });
-    let provider = compiled
-      .and_then(|lifecycle| {
-        lifecycle
-          .hooks
-          .iter()
-          .find(|item| item.hook_id == hook.hook_id)
-      })
-      .and_then(|item| item.actions.first())
-      .map(|action| bounded(&action.handler, MAX_SHORT_TEXT));
+    let definition = compiled.and_then(|lifecycle| {
+      lifecycle
+        .hooks
+        .iter()
+        .find(|item| item.hook_id == hook.hook_id)
+    });
+    let providers = definition
+      .into_iter()
+      .flat_map(|definition| definition.actions.iter())
+      .map(|action| provider_label(&action.handler))
+      .collect::<BTreeSet<_>>()
+      .into_iter()
+      .collect::<Vec<_>>();
+    let provider = (!providers.is_empty()).then(|| providers.join(", "));
+    let action_count = definition.map_or(hook.actions.len(), |item| item.actions.len());
+    let subject = match hook.subject.kind {
+      crate::event::LifecycleSubjectKind::Workflow => "Workflow".to_string(),
+      crate::event::LifecycleSubjectKind::Step => format!("Step {}", hook.subject.id),
+    };
+    let detail = Some(format!(
+      "{subject} · {action_count} action{}{}",
+      if action_count == 1 { "" } else { "s" },
+      if hook.failed_actions == 0 {
+        String::new()
+      } else {
+        format!(
+          " · {} warning{}",
+          hook.failed_actions,
+          if hook.failed_actions == 1 { "" } else { "s" }
+        )
+      }
+    ));
     let (started, completed) = times
       .get(&invocation_id)
       .copied()
@@ -1226,8 +1762,106 @@ fn lifecycle(
       status,
       duration_ms: duration_between(Some(started), completed),
       provider,
-      detail: None,
+      detail,
       failure,
+    });
+  }
+
+  let mut reusable_times = HashMap::<
+    (String, crate::event::ReusableLifecycleHook),
+    (DateTime<Utc>, Option<DateTime<Utc>>),
+  >::new();
+  let mut reusable_order = Vec::new();
+  for event in events {
+    match &event.payload {
+      RunEventPayload::ReusableLifecycleRequested(data) => {
+        let key = (data.invocation_id.clone(), data.hook);
+        reusable_order.push(key.clone());
+        reusable_times.insert(key, (event.occurred_at, None));
+      }
+      RunEventPayload::ReusableLifecycleCompleted(data) => {
+        if let Some((_, completed)) =
+          reusable_times.get_mut(&(data.invocation_id.clone(), data.hook))
+        {
+          *completed = Some(event.occurred_at);
+        }
+      }
+      _ => {}
+    }
+  }
+  for (invocation_id, reusable_hook) in reusable_order {
+    if output.len() >= RUN_PRESENTATION_MAX_LIFECYCLE {
+      return Err(RunPresentationError::TooMany("lifecycle items"));
+    }
+    let key = format!("{}:{:?}", invocation_id, reusable_hook);
+    let Some(hook) = projection.reusable_lifecycle_hooks.get(&key) else {
+      continue;
+    };
+    let status = match hook.status {
+      crate::projection::ReusableLifecycleStatus::Requested => PresentationStepStatus::Queued,
+      crate::projection::ReusableLifecycleStatus::Running => PresentationStepStatus::Running,
+      crate::projection::ReusableLifecycleStatus::Completed
+      | crate::projection::ReusableLifecycleStatus::CompletedWithWarnings => {
+        PresentationStepStatus::Succeeded
+      }
+    };
+    let alias = workflow
+      .reusable_definitions
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find_map(|definition| match definition {
+        CompiledReusableInvocation::Step {
+          invocation_id: candidate,
+          alias,
+          ..
+        } if candidate == &invocation_id => Some(alias.as_str()),
+        CompiledReusableInvocation::NotificationProvider {
+          provider_id, alias, ..
+        } if provider_id == &invocation_id => Some(alias.as_str()),
+        _ => None,
+      })
+      .unwrap_or(invocation_id.as_str());
+    let (started, completed) = reusable_times
+      .get(&(invocation_id.clone(), reusable_hook))
+      .copied()
+      .unwrap_or((events[0].occurred_at, None));
+    let hook_name = match reusable_hook {
+      crate::event::ReusableLifecycleHook::OnSuccess => "on-success",
+      crate::event::ReusableLifecycleHook::OnError => "on-error",
+      crate::event::ReusableLifecycleHook::OnComplete => "on-complete",
+    };
+    output.push(LifecyclePresentationV1 {
+      hook: reusable_lifecycle_hook(reusable_hook),
+      status,
+      duration_ms: duration_between(Some(started), completed),
+      provider: Some(bounded(alias, MAX_SHORT_TEXT)),
+      detail: Some(bounded(
+        &format!(
+          "Reusable {hook_name} · {} action{}{}",
+          hook.completed_action_ids.len(),
+          if hook.completed_action_ids.len() == 1 {
+            ""
+          } else {
+            "s"
+          },
+          if hook.warning_codes.is_empty() {
+            String::new()
+          } else {
+            format!(
+              " · {} warning{}",
+              hook.warning_codes.len(),
+              if hook.warning_codes.len() == 1 {
+                ""
+              } else {
+                "s"
+              }
+            )
+          }
+        ),
+        MAX_MESSAGE,
+      )),
+      failure: None,
     });
   }
   Ok(output)
@@ -1302,6 +1936,25 @@ pub fn project_run_presentation_v1(
     .collect::<Vec<_>>();
   if projection.lifecycle_warnings.len() > RUN_PRESENTATION_MAX_WARNINGS {
     return Err(RunPresentationError::TooMany("warnings"));
+  }
+  for reusable in projection.reusable_lifecycle_hooks.values() {
+    for code in &reusable.warning_codes {
+      if warnings.len() >= RUN_PRESENTATION_MAX_WARNINGS {
+        return Err(RunPresentationError::TooMany("warnings"));
+      }
+      warnings.push(PresentationFailureV1 {
+        code: bounded(code, 124),
+        message: bounded(
+          &format!(
+            "Reusable lifecycle action for \"{}\" completed with a warning.",
+            reusable.invocation_id
+          ),
+          MAX_MESSAGE,
+        ),
+        kind: Some("reusable_lifecycle_warning".to_string()),
+        retryable: Some(false),
+      });
+    }
   }
   let failure = projection.failure.as_ref().map(run_failure).or_else(|| {
     projection

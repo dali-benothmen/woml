@@ -35,9 +35,14 @@ async function validators() {
 describe('Run Presentation v1 contract', () => {
   test('accepts the reviewed successful and failed run fixtures', async () => {
     const validate = await validators();
-    for (const name of ['success.v1.json', 'failure.v1.json']) {
+    for (const name of [
+      'success.v1.json',
+      'failure.v1.json',
+      'complex-control-flow.v1.json',
+    ]) {
       const fixture = await Bun.file(resolve(fixtureRoot, name)).json();
       expect(validate.run(fixture), `${name}: ${JSON.stringify(validate.run.errors)}`).toBe(true);
+      expect(() => decodeRunPresentationV1(JSON.stringify(fixture))).not.toThrow();
     }
   });
 
