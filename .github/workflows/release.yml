@@ -1,0 +1,257 @@
+name: Release WOML
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: woml-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: '1.3.14'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install JavaScript dependencies
+        working-directory: woml-cli
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag and release packaging contract
+        run: |
+          bun woml-cli/scripts/native-release.ts verify-tag --tag "${GITHUB_REF_NAME}"
+          bun test woml-cli/tests/native-platform-release.test.ts
+          bun woml-cli/scripts/verify-native-platform-release.ts
+
+      - name: Test and type-check the WOML frontend
+        working-directory: woml-cli
+        run: |
+          bun test ../woml/tests
+          bun run typecheck
+
+  build-main:
+    name: Build woml-cli
+    runs-on: ubuntu-24.04
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        working-directory: woml-cli
+        run: bun install --frozen-lockfile
+
+      - name: Build portable Bun hosts and CLI
+        working-directory: woml-cli
+        run: bun run build:js
+
+      - name: Stage the platform-neutral npm package
+        run: bun woml-cli/scripts/native-release.ts prepare-main --output release/main
+
+      - name: Inspect the package before upload
+        working-directory: release/main
+        run: bun pm pack --dry-run
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: woml-main
+          path: release/main
+          if-no-files-found: error
+
+  build-native:
+    name: Build ${{ matrix.package }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: darwin-x64
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+            library: libwoml_core.dylib
+            musl: false
+          - package: darwin-arm64
+            runner: macos-15
+            rust: aarch64-apple-darwin
+            library: libwoml_core.dylib
+            musl: false
+          - package: win32-x64-msvc
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+            library: woml_core.dll
+            musl: false
+          - package: win32-arm64-msvc
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+            library: woml_core.dll
+            musl: false
+          - package: linux-x64-gnu
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+            library: libwoml_core.so
+            musl: false
+          - package: linux-x64-musl
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-musl
+            library: libwoml_core.so
+            musl: true
+          - package: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+            library: libwoml_core.so
+            musl: false
+          - package: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-musl
+            library: libwoml_core.so
+            musl: true
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust }}
+
+      - name: Install musl linker
+        if: matrix.musl
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+
+      - name: Build the isolated WOML native adapter
+        shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.musl && '-C target-feature=-crt-static' || '' }}
+        run: >-
+          cargo build -j 1 --release --locked
+          --manifest-path core/woml-native/Cargo.toml
+          --target ${{ matrix.rust }}
+
+      - name: Create the platform npm package
+        shell: bash
+        run: >-
+          bun woml-cli/scripts/native-release.ts package-platform
+          --target ${{ matrix.package }}
+          --artifact dist/target/${{ matrix.rust }}/release/${{ matrix.library }}
+          --output release/native
+
+      - name: Load-test native addon
+        if: ${{ !matrix.musl }}
+        shell: bash
+        run: >-
+          bun -e "const addon=require('./release/native/woml-core.${{ matrix.package }}.node');
+          const names=Object.keys(addon);
+          if(names.length!==36||typeof addon.executeWomlWorkflow!=='function')
+          throw new Error('unexpected native export surface')"
+
+      - name: Load-test musl native addon in Alpine
+        if: matrix.musl
+        shell: bash
+        run: >-
+          docker run --rm
+          -v "${{ github.workspace }}:/work"
+          -w /work
+          oven/bun:${{ env.BUN_VERSION }}-alpine
+          bun -e "const addon=require('./release/native/woml-core.${{ matrix.package }}.node');
+          const names=Object.keys(addon);
+          if(names.length!==36||typeof addon.executeWomlWorkflow!=='function')
+          throw new Error('unexpected native export surface')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.package }}
+          path: release/native
+          if-no-files-found: error
+
+  publish:
+    name: Publish npm packages
+    runs-on: ubuntu-24.04
+    needs: [validate, build-main, build-native]
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: woml-main
+          path: release/main
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: release/platforms
+
+      - name: Verify the complete collected release
+        run: >-
+          bun woml-cli/scripts/native-release.ts verify-collected
+          --main release/main
+          --platforms release/platforms
+          --tag "${GITHUB_REF_NAME}"
+
+      - name: Publish native platform packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          for directory in release/platforms/native-*; do
+            name=$(node -p "require('./${directory}/package.json').name")
+            version=$(node -p "require('./${directory}/package.json').version")
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${name}@${version}; it is already published."
+            else
+              npm publish "${directory}" --access public --provenance
+            fi
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish woml-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./release/main/package.json').version")
+          if npm view "woml-cli@${version}" version >/dev/null 2>&1; then
+            echo "Skipping woml-cli@${version}; it is already published."
+          else
+            npm publish release/main --access public --provenance
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes

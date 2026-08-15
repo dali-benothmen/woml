@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
@@ -9,6 +10,12 @@ import {
   type RunPresentationListV1,
   type RunPresentationV1,
 } from './terminal-presentation';
+import {
+  detectLinuxLibc,
+  localNativeBinaryName,
+  nativePackageName,
+  nativeTargetForRuntime,
+} from './native-platform';
 
 export interface RustRunEvent {
   readonly eventSchemaVersion:
@@ -1140,12 +1147,27 @@ export function compiledDefinitionHash(
 
 function defaultNativeCorePath(): string {
   const override = process.env.WOML_RUST_CORE_PATH;
-  return override === undefined
-    ? resolve(
-        import.meta.dir,
-        `woml-core.${process.platform}-${process.arch}.node`
-      )
-    : resolve(override);
+  if (override !== undefined) return resolve(override);
+
+  const local = resolve(
+    import.meta.dir,
+    localNativeBinaryName(process.platform, process.arch),
+  );
+  if (existsSync(local)) return local;
+
+  const target = nativeTargetForRuntime(
+    process.platform,
+    process.arch,
+    detectLinuxLibc(),
+  );
+  const packageName = nativePackageName(target);
+  try {
+    return createRequire(import.meta.url).resolve(packageName);
+  } catch {
+    throw new Error(
+      `WOML native package ${packageName} is unavailable. Reinstall woml-cli on this machine and make sure optional dependencies are enabled.`,
+    );
+  }
 }
 
 function defaultScriptHostPath(): string {

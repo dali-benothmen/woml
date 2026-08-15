@@ -13,6 +13,7 @@ Cargo.lock
 # Build outputs
 dist/
 build/
+/release/
 *.node
 core/npm/
 local-builds/

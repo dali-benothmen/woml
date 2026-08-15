@@ -44,6 +44,10 @@ Use one Cargo build job (`-j 1`) so local verification has predictable memory
 usage. Feature-specific release scripts in `woml-cli/package.json` remain the
 source of truth for broader gates.
 
+Cross-platform npm publication is documented in
+[`docs/woml-release.md`](docs/woml-release.md). Do not push a release tag unless
+the CLI, frontend, and native-adapter versions match exactly.
+
 ## Architecture rules
 
 - Do not parse WOML/XML in Rust. The TypeScript frontend is the single compiler.

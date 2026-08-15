@@ -98,6 +98,7 @@ contracts. It never parses XML or owns editor syntax.
 - [Lifecycle and run controls](docs/woml-lifecycle-and-run-control.md)
 - [Workflow calls](docs/woml-workflow-calls.md)
 - [Editor extension](woml-vscode/README.md)
+- [Release and cross-platform packages](docs/woml-release.md)
 
 ## Development
 

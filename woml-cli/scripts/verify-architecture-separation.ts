@@ -93,7 +93,6 @@ async function assertRetiredSdkSurface(root: string): Promise<void> {
     'src/index.ts',
     'sdk/index.ts',
     'sdk/src/index.ts',
-    '.github/workflows/release.yml',
     '.changeset',
     '.npmignore',
     '.npmrc',
@@ -388,6 +387,7 @@ export async function verifyArchitectureSeparation(): Promise<void> {
   const scanned = await assertNoSdkImports(root);
   await assertWomlPackageMetadata(root);
   await assertNativeSourceSeparation(root);
+  await import('./verify-native-platform-release');
   await assertCliNativeContract(root);
   await assertCleanPackage(root);
   console.log(

@@ -1,6 +1,8 @@
 import { copyFile, mkdir, rm, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { localNativeBinaryName } from '../src/native-platform';
+
 const packageRoot = resolve(import.meta.dir, '..');
 const releaseDirectory = resolve(packageRoot, '../dist/target/release');
 
@@ -15,13 +17,7 @@ export function rustLibraryName(platform: string): string {
 }
 
 export function packagedAddonName(platform: string, architecture: string): string {
-  if (!['win32', 'darwin', 'linux'].includes(platform)) {
-    throw new Error(`WOML does not support native builds for ${platform}.`);
-  }
-  if (!['x64', 'arm64'].includes(architecture)) {
-    throw new Error(`WOML does not support native builds for ${architecture}.`);
-  }
-  return `woml-core.${platform}-${architecture}.node`;
+  return localNativeBinaryName(platform, architecture);
 }
 
 export async function stageNativeArtifact(
