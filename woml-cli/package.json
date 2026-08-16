@@ -141,6 +141,7 @@
     "test:communication-provider-contracts": "bun test ../woml/tests/communication-provider-contracts.test.ts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test communication_provider_contracts",
     "test:communication-provider-foundation": "bun run test:communication-provider-contracts && bun test tests/communication-provider-foundation.test.ts tests/notification-provider-host.test.ts tests/slack-trigger-host.test.ts && bun run typecheck",
     "test:telegram-runtime": "bun test ../woml/tests/telegram-authoring.test.ts tests/telegram-authoring-cli.test.ts tests/telegram-runtime.test.ts && bun test tests/script-host.test.ts --test-name-pattern 'services.telegram' && cargo test -j 1 --manifest-path ../core/Cargo.toml -p woml-engine telegram::tests --lib && cargo test -j 1 --manifest-path ../core/Cargo.toml -p woml-engine durable::notification_capability_tests --lib && cargo test -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test telegram_model_runtime && bun run typecheck",
+    "test:discord-authoring": "bun test ../woml/tests/discord-authoring.test.ts tests/discord-authoring-cli.test.ts && cargo test -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test discord_model_contract && bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

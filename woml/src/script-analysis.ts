@@ -51,6 +51,7 @@ const unsupportedBunNetworkMethods = new Set([
 const workflowIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const operationNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const durationPattern = /^([1-9][0-9]*)(ms|s|m|h|d)$/;
+const discordSnowflakePattern = /^[0-9]{17,20}$/;
 const durationMultipliers = {
   ms: 1,
   s: 1_000,
@@ -702,6 +703,243 @@ function analyzeScript(
                         'WOML_TELEGRAM_SEND_OPTION_UNKNOWN',
                         `Unknown Telegram send option "${name ?? ''}".`,
                         'Telegram Send v1 accepts only the stable name option.'
+                      )
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      if (
+        path?.[0] === 'services' &&
+        path[1] === 'discord' &&
+        !options.shadowedServices?.includes('discord')
+      ) {
+        if (path.length !== 3 || path[2] !== 'send') {
+          fail(
+            issueAt(
+              callee,
+              source.length,
+              'WOML_DISCORD_OPERATION_UNSUPPORTED',
+              `Discord service operation "${path.slice(2).join('.') || ''}" is unsupported.`,
+              'Use services.discord.send({ botToken, conversationId, text }).'
+            )
+          );
+        } else {
+          const args = (node.arguments as readonly unknown[] | undefined) ?? [];
+          if (args.length < 1 || args.length > 2) {
+            fail(
+              issueAt(
+                node,
+                source.length,
+                'WOML_DISCORD_SEND_ARGUMENTS_INVALID',
+                'services.discord.send() requires one request object and optional operation options.',
+                'Use services.discord.send({ botToken: secrets.DISCORD_BOT_TOKEN, conversationId, text }, { name: "reply" }).'
+              )
+            );
+          } else {
+            const input = args[0];
+            if (!isNode(input) || input.type !== 'ObjectExpression') {
+              fail(
+                issueAt(
+                  isNode(input) ? input : node,
+                  source.length,
+                  'WOML_DISCORD_SEND_INPUT_INVALID',
+                  'A workflow script must pass a direct object to services.discord.send().',
+                  'Use the required botToken, conversationId, and text properties.'
+                )
+              );
+            } else {
+              const seen = new Set<string>();
+              for (const property of (input.properties as readonly unknown[] | undefined) ?? []) {
+                if (
+                  !isNode(property) ||
+                  property.type !== 'Property' ||
+                  property.computed === true ||
+                  property.kind !== 'init'
+                ) {
+                  fail(
+                    issueAt(
+                      isNode(property) ? property : input,
+                      source.length,
+                      'WOML_DISCORD_SEND_INPUT_INVALID',
+                      'Discord send input does not support spreads, computed keys, getters, or setters.'
+                    )
+                  );
+                  continue;
+                }
+                const name = isNode(property.key)
+                  ? property.key.type === 'Identifier'
+                    ? property.key.name
+                    : literalString(property.key)
+                  : undefined;
+                if (
+                  name !== 'botToken' &&
+                  name !== 'conversationId' &&
+                  name !== 'text' &&
+                  name !== 'replyToMessageId'
+                ) {
+                  fail(
+                    issueAt(
+                      property,
+                      source.length,
+                      'WOML_DISCORD_SEND_PROPERTY_UNKNOWN',
+                      `Unknown Discord send property "${name ?? ''}".`,
+                      'Discord Send v1 accepts botToken, conversationId, text, and replyToMessageId.'
+                    )
+                  );
+                  continue;
+                }
+                if (seen.has(name)) {
+                  fail(
+                    issueAt(
+                      property,
+                      source.length,
+                      'WOML_DISCORD_SEND_PROPERTY_DUPLICATE',
+                      `Discord send property "${name}" is declared more than once.`
+                    )
+                  );
+                }
+                seen.add(name);
+                if (name === 'botToken') {
+                  const credentialPath = isNode(property.value)
+                    ? staticMemberPath(property.value)
+                    : undefined;
+                  if (
+                    credentialPath?.length !== 2 ||
+                    credentialPath[0] !== 'secrets' ||
+                    !isValidSecretName(credentialPath[1])
+                  ) {
+                    fail(
+                      issueAt(
+                        isNode(property.value) ? property.value : property,
+                        source.length,
+                        'WOML_DISCORD_CREDENTIAL_INVALID',
+                        'Discord botToken must be one direct secrets.NAME value.',
+                        'Example: botToken: secrets.DISCORD_BOT_TOKEN'
+                      )
+                    );
+                  }
+                }
+                const literal = literalString(property.value);
+                if (
+                  literal !== undefined &&
+                  (literal.length === 0 ||
+                    literal.length > (name === 'text' ? 2_000 : 320))
+                ) {
+                  fail(
+                    issueAt(
+                      property.value as AstNode,
+                      source.length,
+                      'WOML_DISCORD_SEND_VALUE_INVALID',
+                      `Discord send property "${name}" has an invalid literal value.`
+                    )
+                  );
+                }
+                if (
+                  literal !== undefined &&
+                  (name === 'conversationId' ||
+                    name === 'replyToMessageId') &&
+                  !discordSnowflakePattern.test(literal)
+                ) {
+                  fail(
+                    issueAt(
+                      property.value as AstNode,
+                      source.length,
+                      'WOML_DISCORD_SEND_VALUE_INVALID',
+                      `Discord send property "${name}" must be a numeric Discord snowflake containing 17 to 20 digits when written as a literal.`
+                    )
+                  );
+                }
+              }
+              for (const required of ['botToken', 'conversationId', 'text']) {
+                if (!seen.has(required)) {
+                  fail(
+                    issueAt(
+                      input,
+                      source.length,
+                      'WOML_DISCORD_SEND_PROPERTY_REQUIRED',
+                      `services.discord.send() requires the "${required}" property.`
+                    )
+                  );
+                }
+              }
+            }
+            const operationOptions = args[1];
+            if (isNode(operationOptions)) {
+              if (operationOptions.type !== 'ObjectExpression') {
+                fail(
+                  issueAt(
+                    operationOptions,
+                    source.length,
+                    'WOML_DISCORD_SEND_OPTIONS_INVALID',
+                    'Discord send operation options must be an object containing an optional stable name.'
+                  )
+                );
+              } else {
+                const seenOptions = new Set<string>();
+                for (const property of (operationOptions.properties as readonly unknown[] | undefined) ?? []) {
+                  if (
+                    !isNode(property) ||
+                    property.type !== 'Property' ||
+                    property.computed === true ||
+                    property.kind !== 'init'
+                  ) {
+                    fail(
+                      issueAt(
+                        isNode(property) ? property : operationOptions,
+                        source.length,
+                        'WOML_DISCORD_SEND_OPTIONS_INVALID',
+                        'Discord send options do not support spreads, computed keys, getters, or setters.'
+                      )
+                    );
+                    continue;
+                  }
+                  const name = isNode(property.key)
+                    ? property.key.type === 'Identifier'
+                      ? property.key.name
+                      : literalString(property.key)
+                    : undefined;
+                  if (name !== 'name') {
+                    fail(
+                      issueAt(
+                        property,
+                        source.length,
+                        'WOML_DISCORD_SEND_OPTION_UNKNOWN',
+                        `Unknown Discord send option "${name ?? ''}".`,
+                        'Discord Send v1 accepts only the stable name option.'
+                      )
+                    );
+                    continue;
+                  }
+                  if (seenOptions.has(name)) {
+                    fail(
+                      issueAt(
+                        property,
+                        source.length,
+                        'WOML_DISCORD_SEND_OPTION_DUPLICATE',
+                        'Discord send option "name" is declared more than once.'
+                      )
+                    );
+                  }
+                  seenOptions.add(name);
+                  const value = literalString(property.value);
+                  if (
+                    isNode(property.value) &&
+                    property.value.type === 'Literal' &&
+                    (value === undefined ||
+                      value.length > 128 ||
+                      !operationNamePattern.test(value))
+                  ) {
+                    fail(
+                      issueAt(
+                        property.value,
+                        source.length,
+                        'WOML_DISCORD_SEND_NAME_INVALID',
+                        'A literal Discord send name must use lowercase operation-name syntax.',
+                        'Example: reply-to-message'
                       )
                     );
                   }

@@ -48,5 +48,24 @@
       "  text: ${3:\"Hello from WOML\"}",
       "}, { name: \"${4:send-message}\" });"
     ]
+  },
+  "WOML Discord trigger": {
+    "prefix": "woml-discord-trigger",
+    "description": "Create a Discord mention and direct-message trigger.",
+    "body": [
+      "<discord id=\"${1:agentMessage}\" events=\"${2:app-mention,direct-message}\" channels=\"${3:200000000000000001}\" bot-token=\"{{secrets.${4:DISCORD_BOT_TOKEN}}}\" />"
+    ]
+  },
+  "WOML Discord message": {
+    "prefix": "woml-discord-send",
+    "description": "Send a Discord message from a WOML script.",
+    "body": [
+      "const message = await services.discord.send({",
+      "  botToken: secrets.${1:DISCORD_BOT_TOKEN},",
+      "  conversationId: ${2:context.payload.conversationId},",
+      "  text: ${3:\"Hello from WOML\"},",
+      "  replyToMessageId: ${4:context.payload.messageId}",
+      "}, { name: \"${5:send-message}\" });"
+    ]
   }
 }

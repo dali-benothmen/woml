@@ -1272,16 +1272,18 @@ export async function buildWomlExecutableDefinitionPackage(
     exports: module.exports,
   }));
   const moduleServiceUsage = inspectWomlModuleServiceUsage(document, options);
-  const forceModelV15 =
-    moduleServiceUsage.referencedServices.includes('telegram') &&
-    !resolved.modules.some(module => module.name === 'telegram');
+  const forcedCommunicationServices = (['telegram', 'discord'] as const).filter(
+    provider =>
+      moduleServiceUsage.referencedServices.includes(provider) &&
+      !resolved.modules.some(module => module.name === provider)
+  );
   const model = compileWomlWithModules(
     document,
     {
       profileVersion: 1,
       modules: bindings,
     },
-    { forceModelV15 }
+    { forcedCommunicationServices }
   );
   const modelContent = canonicalJson(model);
   const modelDigest = sha256(modelContent);
@@ -1599,11 +1601,16 @@ export async function buildWomlReusableDefinitionPackage(
       networkOrigins: basePackage?.permissions.networkOrigins ?? [],
     },
   };
+  const communicationRuntimeReady =
+    model.schemaVersion !== 15 ||
+    model.communication.providers.every(
+      provider => provider.provider === 'telegram'
+    );
   const unsigned = model.schemaVersion === 15
     ? {
         schemaVersion: 10 as const,
         profile: WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE,
-        runtimeReady: true,
+        runtimeReady: communicationRuntimeReady,
         ...common,
         workflow: { ...common.workflow, model },
       }
@@ -1636,6 +1643,18 @@ export async function buildWomlRuntimeDefinitionPackage(
     options
   );
   if (compiled.schemaVersion === 10) {
+    const unavailable = compiled.workflow.model.communication.providers.find(
+      provider => provider.provider !== 'telegram'
+    );
+    if (unavailable !== undefined) {
+      throw compileDiagnostic(
+        document.file,
+        'WOML_DISCORD_RUNTIME_UNAVAILABLE',
+        'Discord syntax compiled successfully, but Discord Gateway and REST execution begins in ACP5.',
+        document.root.openTagSpan,
+        'Use `woml check` to review the Model v15 package during ACP4.'
+      );
+    }
     const { rootHash: _compilationRootHash, ...rest } = compiled;
     const unsigned = { ...rest, runtimeReady: true as const };
     return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };

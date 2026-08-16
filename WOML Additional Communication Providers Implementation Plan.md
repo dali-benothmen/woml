@@ -1,9 +1,11 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0 through ACP3 were completed on 2026-08-16.
+Status: In progress. ACP0 through ACP4 were completed on 2026-08-16.
 Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
-end to end through the durable production runtime.
-Discord and WhatsApp remain unavailable until their provider phases. Slack
+end to end through the durable production runtime. Discord authoring, imported
+module discovery, validation, and Model v15 / Definition Package v10 lowering
+are complete; execution intentionally begins in ACP5. WhatsApp remains
+unavailable until its provider phases. Slack
 triggers and notifications, custom notification providers, Human Approval,
 durable capability execution, production runtime hosting, and cross-platform
 release packaging form the proven baseline.
@@ -877,6 +879,13 @@ ambiguous-send, lifecycle, background-runtime, and clean-package tests pass;
 an opt-in real bot/channel manual journey is documented and succeeds.
 
 ### ACP4 — Add Discord authoring and lowering
+
+Status: **Completed on 2026-08-16.** Discord triggers, approval and lifecycle
+notifications, `services.discord.send()`, imported-module discovery, local
+alias compatibility, Model v15 / Definition Package v10 lowering, source-aware
+diagnostics, editor declarations, and VS Code snippets are implemented. ACP4
+deliberately keeps activation closed with `WOML_DISCORD_RUNTIME_UNAVAILABLE`;
+the Gateway and REST runtime begins in ACP5.
 
 Changes:
 

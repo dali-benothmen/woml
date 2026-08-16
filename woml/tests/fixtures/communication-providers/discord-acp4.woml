@@ -1,0 +1,67 @@
+<woml>
+  <workflow
+    id="discord-agent"
+    name="Discord Agent"
+    description="Receives, reviews, and replies to Discord messages."
+    version="1.0.0"
+  >
+    <triggers>
+      <discord
+        id="agentMessage"
+        events="app-mention,direct-message"
+        channels="200000000000000001,200000000000000002"
+        bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+      />
+    </triggers>
+
+    <steps>
+      <step id="prepare" name="Prepare reply">
+        <script>
+          return {
+            text: `Reply to ${context.payload.conversationId}`
+          };
+        </script>
+      </step>
+
+      <approval id="review" name="Approve Discord reply" timeout="1h" on-timeout="reject">
+        <notify>
+          <discord
+            channels="200000000000000001,200000000000000002"
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+        </notify>
+        <when-approved>
+          <step id="approved"><script>return { approved: true };</script></step>
+        </when-approved>
+        <when-rejected>
+          <step id="rejected"><script>return { approved: false };</script></step>
+        </when-rejected>
+      </approval>
+
+      <step id="reply" name="Send Discord reply">
+        <script>
+          const sent = await services.discord.send({
+            botToken: secrets.DISCORD_BOT_TOKEN,
+            conversationId: context.payload.conversationId,
+            text: context.steps.prepare.text,
+            replyToMessageId: context.payload.messageId
+          }, { name: 'reply-to-message' });
+
+          return sent;
+        </script>
+      </step>
+    </steps>
+
+    <lifecycle>
+      <on-error>
+        <notify>
+          <discord
+            channels="200000000000000001"
+            message="Workflow {{lifecycle.workflow.id}} failed."
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+        </notify>
+      </on-error>
+    </lifecycle>
+  </workflow>
+</woml>

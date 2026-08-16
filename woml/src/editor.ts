@@ -73,6 +73,21 @@ interface WomlTelegramSendResult {
   readonly threadId?: string;
 }
 
+interface WomlDiscordSendRequest {
+  readonly botToken: string;
+  readonly conversationId: string;
+  readonly text: string;
+  readonly replyToMessageId?: string;
+}
+
+interface WomlDiscordSendResult {
+  readonly provider: 'discord';
+  readonly conversationId: string;
+  readonly messageId: string;
+  readonly acceptedAt: string;
+  readonly threadId?: string;
+}
+
 interface WomlHttpRequest {
   readonly url: string;
   readonly method?: string;
@@ -194,6 +209,12 @@ interface WomlBuiltinServices {
       input: WomlTelegramSendRequest,
       options?: Readonly<{ readonly name?: string }>
     ) => Promise<WomlTelegramSendResult>;
+  };
+  readonly discord: {
+    readonly send: (
+      input: WomlDiscordSendRequest,
+      options?: Readonly<{ readonly name?: string }>
+    ) => Promise<WomlDiscordSendResult>;
   };
 }
 

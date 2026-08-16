@@ -192,9 +192,18 @@ interface ValidatedTelegramNotificationDelivery {
   readonly message?: ValueExpression;
 }
 
+interface ValidatedDiscordNotificationDelivery {
+  readonly deliveryId: string;
+  readonly provider: 'discord';
+  readonly destination: string;
+  readonly botToken: SecretReferenceExpression;
+  readonly message?: ValueExpression;
+}
+
 type ValidatedNotificationDelivery =
   | ValidatedSlackNotificationDelivery
-  | ValidatedTelegramNotificationDelivery;
+  | ValidatedTelegramNotificationDelivery
+  | ValidatedDiscordNotificationDelivery;
 
 type ValidatedFlowItem =
   | ValidatedStep
@@ -313,6 +322,16 @@ interface ValidatedTelegramTrigger {
   readonly botToken: SecretReferenceExpression;
 }
 
+type DiscordTriggerEvent = 'app-mention' | 'direct-message';
+
+interface ValidatedDiscordTrigger {
+  readonly kind: 'discord';
+  readonly id: string;
+  readonly events: readonly DiscordTriggerEvent[];
+  readonly channels: readonly string[];
+  readonly botToken: SecretReferenceExpression;
+}
+
 interface ValidatedScheduleTrigger {
   readonly kind: 'schedule';
   readonly id: string;
@@ -341,6 +360,7 @@ type ValidatedTrigger =
   | ValidatedWebhookTrigger
   | ValidatedSlackTrigger
   | ValidatedTelegramTrigger
+  | ValidatedDiscordTrigger
   | ValidatedScheduleTrigger
   | ValidatedIntervalTrigger
   | ValidatedEventTrigger;
@@ -401,6 +421,7 @@ const supportedElements = new Set([
   'notify',
   'slack',
   'telegram',
+  'discord',
   'schedule',
   'interval',
   'event',
@@ -485,6 +506,9 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   telegram: {
     attributes: new Set(['id', 'events', 'chats', 'message', 'bot-token']),
+  },
+  discord: {
+    attributes: new Set(['id', 'events', 'channels', 'message', 'bot-token']),
   },
   schedule: {
     attributes: new Set(['id', 'cron', 'timezone', 'on-missed']),
@@ -586,7 +610,7 @@ function visitProfile(
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports built-in <slack>, <telegram>, and imported custom providers; found <${element.name}>.`,
+        `<notify> supports built-in <slack>, <telegram>, <discord>, and imported custom providers; found <${element.name}>.`,
         element.openTagSpan
       );
     }
@@ -631,9 +655,11 @@ function visitProfile(
               ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
               : element.name === 'telegram'
                 ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
-              : element.name === 'config'
-                ? 'WOML_CONFIG_ATTRIBUTE_UNKNOWN'
-                : 'WOML_UNKNOWN_ATTRIBUTE',
+                : element.name === 'discord'
+                  ? 'WOML_DISCORD_UNKNOWN_ATTRIBUTE'
+                  : element.name === 'config'
+                    ? 'WOML_CONFIG_ATTRIBUTE_UNKNOWN'
+                    : 'WOML_UNKNOWN_ATTRIBUTE',
         isLifecycleStepFilterMisuse
           ? 'Attribute "steps" is valid only on step lifecycle hooks.'
           : attribute.name === 'retry' || attribute.name.startsWith('retry-')
@@ -662,6 +688,8 @@ function validateSecretReferenceSinks(
       (attribute.name === 'bot-token' || attribute.name === 'app-token');
     const isTelegramCredential =
       element.name === 'telegram' && attribute.name === 'bot-token';
+    const isDiscordCredential =
+      element.name === 'discord' && attribute.name === 'bot-token';
     const isWebhookCredential =
       element.name === 'webhook' && attribute.name === 'secret';
     const isEventCredential =
@@ -669,6 +697,7 @@ function validateSecretReferenceSinks(
     if (
       isSlackCredential ||
       isTelegramCredential ||
+      isDiscordCredential ||
       isWebhookCredential ||
       isEventCredential
     ) {
@@ -1456,6 +1485,9 @@ function validateTriggers(
     if (child.name === 'telegram') {
       return validateTelegramTrigger(document, child);
     }
+    if (child.name === 'discord') {
+      return validateDiscordTrigger(document, child);
+    }
     if (child.name === 'schedule') {
       return validateScheduleTrigger(document, child);
     }
@@ -2141,6 +2173,152 @@ function telegramChatTokens(
   return tokens;
 }
 
+interface DiscordToken {
+  readonly value: string;
+  readonly span: SourceSpan;
+}
+
+const discordSnowflakePattern = /^[0-9]{17,20}$/;
+
+function requiredDiscordAttribute(
+  document: WomlSourceDocument,
+  discord: WomlSourceElement,
+  name: 'events' | 'channels' | 'message' | 'bot-token'
+): WomlSourceAttribute {
+  const attribute = discord.attributes[name];
+  if (attribute === undefined) {
+    failValidation(
+      document,
+      'WOML_DISCORD_ATTRIBUTE_REQUIRED',
+      `<discord> requires the "${name}" attribute.`,
+      discord.openTagSpan
+    );
+  }
+  return attribute;
+}
+
+function commaSeparatedDiscordTokens(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute,
+  label: 'events' | 'channels'
+): readonly DiscordToken[] {
+  const sourceFile = new SourceFile(document.file, document.source);
+  const tokens: DiscordToken[] = [];
+  let offset = 0;
+  for (const part of attribute.value.split(',')) {
+    const leading = part.length - part.trimStart().length;
+    const value = part.trim();
+    const start = attribute.valueSpan.start.offset + offset + leading;
+    if (value.length === 0) {
+      failValidation(
+        document,
+        'WOML_DISCORD_LIST_INVALID',
+        `<discord> ${label} must be a comma-separated list without empty items.`,
+        sourceFile.span(start, start)
+      );
+    }
+    tokens.push({ value, span: sourceFile.span(start, start + value.length) });
+    offset += part.length + 1;
+  }
+  return tokens;
+}
+
+function discordChannelTokens(
+  document: WomlSourceDocument,
+  discord: WomlSourceElement,
+  required: boolean
+): readonly DiscordToken[] {
+  const attribute = discord.attributes.channels;
+  if (attribute === undefined) {
+    if (required) requiredDiscordAttribute(document, discord, 'channels');
+    return [];
+  }
+  const tokens = commaSeparatedDiscordTokens(document, attribute, 'channels');
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (!discordSnowflakePattern.test(token.value)) {
+      failValidation(
+        document,
+        'WOML_DISCORD_CHANNEL_INVALID',
+        `Discord channel "${token.value}" must be a numeric Discord channel ID containing 17 to 20 digits.`,
+        token.span,
+        'Enable Discord Developer Mode and copy the channel ID; channel names are not durable routing identities.'
+      );
+    }
+    if (seen.has(token.value)) {
+      failValidation(
+        document,
+        'WOML_DISCORD_CHANNEL_DUPLICATE',
+        `Discord channel "${token.value}" is listed more than once.`,
+        token.span
+      );
+    }
+    seen.add(token.value);
+  }
+  return tokens;
+}
+
+function validateDiscordTrigger(
+  document: WomlSourceDocument,
+  discord: WomlSourceElement
+): ValidatedDiscordTrigger {
+  ensureEmptyElement(document, discord);
+  const message = discord.attributes.message;
+  if (message !== undefined) {
+    failValidation(
+      document,
+      'WOML_DISCORD_UNKNOWN_ATTRIBUTE',
+      'Attribute "message" is valid on a Discord lifecycle notification, not a trigger.',
+      message.nameSpan
+    );
+  }
+  const id = validateJavaScriptSafeId(
+    document,
+    requiredAttribute(document, discord, 'id'),
+    'trigger'
+  );
+  const eventTokens = commaSeparatedDiscordTokens(
+    document,
+    requiredDiscordAttribute(document, discord, 'events'),
+    'events'
+  );
+  const events: DiscordTriggerEvent[] = [];
+  const seenEvents = new Set<string>();
+  for (const token of eventTokens) {
+    if (token.value !== 'app-mention' && token.value !== 'direct-message') {
+      failValidation(
+        document,
+        'WOML_DISCORD_TRIGGER_EVENT_INVALID',
+        `Unsupported Discord trigger event "${token.value}".`,
+        token.span,
+        'Discord v1 supports app-mention and direct-message. Slash commands are deferred.'
+      );
+    }
+    if (seenEvents.has(token.value)) {
+      failValidation(
+        document,
+        'WOML_DISCORD_TRIGGER_EVENT_DUPLICATE',
+        `Discord trigger event "${token.value}" is listed more than once.`,
+        token.span
+      );
+    }
+    seenEvents.add(token.value);
+    events.push(token.value);
+  }
+  return {
+    kind: 'discord',
+    id,
+    events,
+    channels: discordChannelTokens(document, discord, false).map(
+      token => token.value
+    ),
+    botToken: requireSecretReference(
+      document,
+      requiredDiscordAttribute(document, discord, 'bot-token')
+    ),
+  };
+}
+
 function validateNotify(
   document: WomlSourceDocument,
   notify: WomlSourceElement,
@@ -2159,11 +2337,15 @@ function validateNotify(
   const seenDestinations = new Set<string>();
   const deliveries: ValidatedNotificationDelivery[] = [];
   providers.forEach((provider, providerIndex) => {
-    if (provider.name !== 'slack' && provider.name !== 'telegram') {
+    if (
+      provider.name !== 'slack' &&
+      provider.name !== 'telegram' &&
+      provider.name !== 'discord'
+    ) {
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports built-in <slack> and <telegram> providers; found <${provider.name}>.`,
+        `<notify> supports built-in <slack>, <telegram>, and <discord> providers; found <${provider.name}>.`,
         provider.openTagSpan
       );
     }
@@ -2175,10 +2357,12 @@ function validateNotify(
           document,
           provider.name === 'telegram'
             ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
+            : provider.name === 'discord'
+              ? 'WOML_DISCORD_UNKNOWN_ATTRIBUTE'
             : 'WOML_SLACK_UNKNOWN_ATTRIBUTE',
           triggerOnlyAttribute === 'message'
             ? 'Attribute "message" is valid on a lifecycle notification, not an approval notification.'
-            : `Attribute "${triggerOnlyAttribute}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : 'Slack'} trigger, not a notification provider.`,
+            : `Attribute "${triggerOnlyAttribute}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : provider.name === 'discord' ? 'Discord' : 'Slack'} trigger, not a notification provider.`,
           attribute.nameSpan
         );
       }
@@ -2204,6 +2388,32 @@ function validateNotify(
           deliveryId: `${approvalId}:notify:${providerIndex}:chat:${chatIndex}`,
           provider: 'telegram',
           destination: chat.value,
+          botToken,
+        });
+      });
+      return;
+    }
+    if (provider.name === 'discord') {
+      const channels = discordChannelTokens(document, provider, true);
+      const botToken = requireSecretReference(
+        document,
+        requiredDiscordAttribute(document, provider, 'bot-token')
+      );
+      channels.forEach((channel, channelIndex) => {
+        const destinationKey = `discord\u0000${botToken.name}\u0000${channel.value}`;
+        if (seenDestinations.has(destinationKey)) {
+          failValidation(
+            document,
+            'WOML_DISCORD_CHANNEL_DUPLICATE',
+            `Discord destination "${channel.value}" is duplicated for the same credential.`,
+            channel.span
+          );
+        }
+        seenDestinations.add(destinationKey);
+        deliveries.push({
+          deliveryId: `${approvalId}:notify:${providerIndex}:channel:${channelIndex}`,
+          provider: 'discord',
+          destination: channel.value,
           botToken,
         });
       });
@@ -2572,11 +2782,15 @@ function validateLifecycleNotify(
   const seenDestinations = new Set<string>();
   const deliveries: ValidatedNotificationDelivery[] = [];
   providers.forEach((provider, providerIndex) => {
-    if (provider.name !== 'slack' && provider.name !== 'telegram') {
+    if (
+      provider.name !== 'slack' &&
+      provider.name !== 'telegram' &&
+      provider.name !== 'discord'
+    ) {
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports built-in <slack> and <telegram> providers; found <${provider.name}>.`,
+        `<notify> supports built-in <slack>, <telegram>, and <discord> providers; found <${provider.name}>.`,
         provider.openTagSpan
       );
     }
@@ -2588,8 +2802,10 @@ function validateLifecycleNotify(
           document,
           provider.name === 'telegram'
             ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
+            : provider.name === 'discord'
+              ? 'WOML_DISCORD_UNKNOWN_ATTRIBUTE'
             : 'WOML_SLACK_UNKNOWN_ATTRIBUTE',
-          `Attribute "${invalidName}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : 'Slack'} trigger, not a lifecycle notification.`,
+          `Attribute "${invalidName}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : provider.name === 'discord' ? 'Discord' : 'Slack'} trigger, not a lifecycle notification.`,
           invalid.nameSpan
         );
       }
@@ -2598,6 +2814,8 @@ function validateLifecycleNotify(
       document,
       provider.name === 'telegram'
         ? requiredTelegramAttribute(document, provider, 'message')
+        : provider.name === 'discord'
+          ? requiredDiscordAttribute(document, provider, 'message')
         : requiredSlackAttribute(document, provider, 'message'),
       event,
       stepIds
@@ -2623,6 +2841,33 @@ function validateLifecycleNotify(
           deliveryId: `lifecycle:${hookIndex}:action:${actionIndex}:provider:${providerIndex}:chat:${chatIndex}`,
           provider: 'telegram',
           destination: chat.value,
+          botToken,
+          message,
+        });
+      });
+      return;
+    }
+    if (provider.name === 'discord') {
+      const channels = discordChannelTokens(document, provider, true);
+      const botToken = requireSecretReference(
+        document,
+        requiredDiscordAttribute(document, provider, 'bot-token')
+      );
+      channels.forEach((channel, channelIndex) => {
+        const destinationKey = `discord\u0000${botToken.name}\u0000${channel.value}`;
+        if (seenDestinations.has(destinationKey)) {
+          failValidation(
+            document,
+            'WOML_DISCORD_CHANNEL_DUPLICATE',
+            `Discord destination "${channel.value}" is duplicated for the same credential.`,
+            channel.span
+          );
+        }
+        seenDestinations.add(destinationKey);
+        deliveries.push({
+          deliveryId: `lifecycle:${hookIndex}:action:${actionIndex}:provider:${providerIndex}:channel:${channelIndex}`,
+          provider: 'discord',
+          destination: channel.value,
           botToken,
           message,
         });
@@ -2868,6 +3113,7 @@ const builtInServiceNames = new Set([
   'workflows',
   'state',
   'telegram',
+  'discord',
 ]);
 
 function collectValidatedSteps(
@@ -3881,7 +4127,8 @@ function validateFlowItem(
   if (
     element.name === 'notify' ||
     element.name === 'slack' ||
-    element.name === 'telegram'
+    element.name === 'telegram' ||
+    element.name === 'discord'
   ) {
     failValidation(
       document,
@@ -5245,6 +5492,33 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
       },
     };
   }
+  if (trigger.kind === 'discord') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.discord',
+      config: {
+        kind: 'object',
+        fields: {
+          events: {
+            kind: 'array',
+            items: trigger.events.map(value => ({ kind: 'literal', value })),
+          },
+          ...(trigger.channels.length === 0
+            ? {}
+            : {
+                channels: {
+                  kind: 'array' as const,
+                  items: trigger.channels.map(value => ({
+                    kind: 'literal' as const,
+                    value,
+                  })),
+                },
+              }),
+          botToken: trigger.botToken,
+        },
+      },
+    };
+  }
   if (trigger.kind === 'schedule') {
     return {
       id: trigger.id,
@@ -5500,7 +5774,7 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
       ? []
       : validateTriggers(document, triggersElement);
   const shadowedServices = modules
-    .filter(module => module.name === 'telegram')
+    .filter(module => module.name === 'telegram' || module.name === 'discord')
     .map(module => module.name);
   const flow = validateSteps(document, stepsElement, shadowedServices);
   const lifecycle =
@@ -5539,17 +5813,18 @@ export function inspectWomlMigrationDiagnostics(
   const inspected = inspectWomlDocument(document);
   if (inspected.kind === 'workflow') {
     for (const imported of inspected.imports) {
-      if (imported.name === 'telegram') {
+      if (imported.name === 'telegram' || imported.name === 'discord') {
+        const provider = imported.name === 'telegram' ? 'Telegram' : 'Discord';
         diagnostics.push({
           severity: 'warning',
           code: 'WOML_BUILTIN_SERVICE_SHADOWED',
           phase: 'validation',
           message:
-            'The local module alias "telegram" shadows the built-in services.telegram capability in this workflow.',
+            `The local module alias "${imported.name}" shadows the built-in services.${imported.name} capability in this workflow.`,
           file: document.file,
           location: imported.element.openTagSpan,
           hint:
-            'Keep this name to preserve the local module, or rename it when you want services.telegram.send().',
+            `Keep this name to preserve the local module, or rename it when you want services.${imported.name}.send() from the built-in ${provider} provider.`,
         });
       }
     }
@@ -6190,7 +6465,7 @@ function compileValidatedWoml(
   document: WomlSourceDocument,
   moduleRuntime?: CompiledModuleRuntimeV1,
   forceModelV14 = false,
-  forceModelV15 = false
+  forcedCommunicationServices: readonly ('telegram' | 'discord')[] = []
 ): CompiledWorkflowDefinition {
   assertWomlDocumentRunnable(document);
   const {
@@ -6223,18 +6498,39 @@ function compileValidatedWoml(
     ...workflowNotifications,
     ...lifecycleNotifications,
   ].filter(delivery => delivery.provider === 'telegram');
+  const discordNotifications = [
+    ...workflowNotifications,
+    ...lifecycleNotifications,
+  ].filter(delivery => delivery.provider === 'discord');
   const localTelegramModule = modules.some(module => module.name === 'telegram');
+  const localDiscordModule = modules.some(module => module.name === 'discord');
+  const allScriptAnalyses = [
+    ...scriptAnalyses.values(),
+    ...lifecycleScripts.map(item => item.analysis),
+  ];
+  const forcedTelegramMessaging =
+    forcedCommunicationServices.includes('telegram');
+  const forcedDiscordMessaging =
+    forcedCommunicationServices.includes('discord');
   const usesTelegramMessaging =
     !localTelegramModule &&
-    [
-      ...scriptAnalyses.values(),
-      ...lifecycleScripts.map(item => item.analysis),
-    ].some(analysis => analysis.requiredServices.includes('telegram'));
+    (forcedTelegramMessaging ||
+      allScriptAnalyses.some(analysis =>
+        analysis.requiredServices.includes('telegram')
+      ));
+  const usesDiscordMessaging =
+    !localDiscordModule &&
+    (forcedDiscordMessaging ||
+      allScriptAnalyses.some(analysis =>
+        analysis.requiredServices.includes('discord')
+      ));
   const usesModelV15 =
-    forceModelV15 ||
     triggers.some(trigger => trigger.kind === 'telegram') ||
+    triggers.some(trigger => trigger.kind === 'discord') ||
     telegramNotifications.length > 0 ||
-    usesTelegramMessaging;
+    discordNotifications.length > 0 ||
+    usesTelegramMessaging ||
+    usesDiscordMessaging;
   const usesModelV14 =
     usesModelV15 || forceModelV14 || flow.firstSwitch !== undefined;
   const usesStructuredGraph =
@@ -6403,46 +6699,89 @@ function compileValidatedWoml(
     ? {
         profileVersion: 1 as const,
         providers: [
-          {
-            provider: 'telegram' as const,
-            triggerIds: triggers
-              .filter(trigger => trigger.kind === 'telegram')
-              .map(trigger => trigger.id),
-            notificationDeliveryIds: telegramNotifications.map(
-              delivery => delivery.deliveryId
-            ),
-            messaging: usesTelegramMessaging || forceModelV15,
-            credentialNames: [
-              ...new Set([
-                ...triggers.flatMap(trigger =>
-                  trigger.kind === 'telegram' ? [trigger.botToken.name] : []
-                ),
-                ...telegramNotifications.map(delivery => delivery.botToken.name),
-                ...[
-                  ...scriptAnalyses.values(),
-                  ...lifecycleScripts.map(item => item.analysis),
-                ].flatMap(analysis =>
-                  analysis.requiredServices.includes('telegram') ||
-                  forceModelV15
-                    ? analysis.requiredSecrets
-                    : []
-                ),
-              ]),
-            ].sort(),
-          },
+          ...(triggers.some(trigger => trigger.kind === 'discord') ||
+          discordNotifications.length > 0 ||
+          usesDiscordMessaging
+            ? [
+                {
+                  provider: 'discord' as const,
+                  triggerIds: triggers
+                    .filter(trigger => trigger.kind === 'discord')
+                    .map(trigger => trigger.id),
+                  notificationDeliveryIds: discordNotifications.map(
+                    delivery => delivery.deliveryId
+                  ),
+                  messaging: usesDiscordMessaging,
+                  credentialNames: [
+                    ...new Set([
+                      ...triggers.flatMap(trigger =>
+                        trigger.kind === 'discord'
+                          ? [trigger.botToken.name]
+                          : []
+                      ),
+                      ...discordNotifications.map(
+                        delivery => delivery.botToken.name
+                      ),
+                      ...allScriptAnalyses.flatMap(analysis =>
+                        analysis.requiredServices.includes('discord') ||
+                        forcedDiscordMessaging
+                          ? analysis.requiredSecrets
+                          : []
+                      ),
+                    ]),
+                  ].sort(),
+                },
+              ]
+            : []),
+          ...(triggers.some(trigger => trigger.kind === 'telegram') ||
+          telegramNotifications.length > 0 ||
+          usesTelegramMessaging
+            ? [
+                {
+                  provider: 'telegram' as const,
+                  triggerIds: triggers
+                    .filter(trigger => trigger.kind === 'telegram')
+                    .map(trigger => trigger.id),
+                  notificationDeliveryIds: telegramNotifications.map(
+                    delivery => delivery.deliveryId
+                  ),
+                  messaging: usesTelegramMessaging,
+                  credentialNames: [
+                    ...new Set([
+                      ...triggers.flatMap(trigger =>
+                        trigger.kind === 'telegram'
+                          ? [trigger.botToken.name]
+                          : []
+                      ),
+                      ...telegramNotifications.map(
+                        delivery => delivery.botToken.name
+                      ),
+                      ...allScriptAnalyses.flatMap(analysis =>
+                        analysis.requiredServices.includes('telegram') ||
+                        forcedTelegramMessaging
+                          ? analysis.requiredSecrets
+                          : []
+                      ),
+                    ]),
+                  ].sort(),
+                },
+              ]
+            : []),
         ],
       }
     : undefined;
-  if (
-    communication !== undefined &&
-    communication.providers[0].credentialNames.length === 0
-  ) {
+  const unresolvedProvider = communication?.providers.find(
+    provider => provider.credentialNames.length === 0
+  );
+  if (unresolvedProvider !== undefined) {
+    const providerName =
+      unresolvedProvider.provider === 'telegram' ? 'Telegram' : 'Discord';
     failCompile(
       document,
-      'WOML_TELEGRAM_CREDENTIAL_UNRESOLVED',
-      'Telegram usage requires at least one explicit symbolic secret reference in the workflow.',
+      `WOML_${unresolvedProvider.provider.toUpperCase()}_CREDENTIAL_UNRESOLVED`,
+      `${providerName} usage requires at least one explicit symbolic secret reference in the workflow.`,
       workflow.openTagSpan,
-      'Pass secrets.TELEGRAM_BOT_TOKEN from the WOML script into the imported module that calls services.telegram.send().'
+      `Pass secrets.${unresolvedProvider.provider === 'telegram' ? 'TELEGRAM' : 'DISCORD'}_BOT_TOKEN from the WOML script into the imported module that calls services.${unresolvedProvider.provider}.send().`
     );
   }
   const definition = {
@@ -6747,7 +7086,10 @@ export function compileWoml(
 export function compileWomlWithModules(
   document: WomlSourceDocument,
   moduleRuntime: CompiledModuleRuntimeV1,
-  options: { readonly forceModelV15?: boolean } = {}
+  options: {
+    readonly forceModelV15?: boolean;
+    readonly forcedCommunicationServices?: readonly ('telegram' | 'discord')[];
+  } = {}
 ):
   | CompiledWorkflowDefinitionV9
   | CompiledWorkflowDefinitionV10
@@ -6760,7 +7102,8 @@ export function compileWomlWithModules(
     document,
     moduleRuntime,
     false,
-    options.forceModelV15 === true
+    options.forcedCommunicationServices ??
+      (options.forceModelV15 === true ? ['telegram'] : [])
   );
   if (
     compiled.schemaVersion !== 9 &&

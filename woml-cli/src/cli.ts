@@ -1342,6 +1342,24 @@ function promoteForLifecycleAuthority(
   };
 }
 
+function builtInCommunicationProviders(
+  workflow: CompiledWorkflowDefinition
+): readonly string[] {
+  return workflow.schemaVersion === 15
+    ? workflow.communication.providers.map(provider => provider.provider)
+    : [];
+}
+
+function assertCommunicationRuntimeReady(
+  workflow: CompiledWorkflowDefinition
+): void {
+  if (!builtInCommunicationProviders(workflow).includes('discord')) return;
+  throw new CliInputError(
+    'WOML_DISCORD_RUNTIME_UNAVAILABLE',
+    'Discord authoring is valid in ACP4, but Discord Gateway and REST execution begin in ACP5. Use "woml check" to validate this workflow for now.'
+  );
+}
+
 function reusableCommunicationAliasDiagnostics(
   document: WomlSourceDocument,
   graph: WomlReusableDefinitionGraph
@@ -1353,19 +1371,21 @@ function reusableCommunicationAliasDiagnostics(
   );
   return graph.root.imports.flatMap(imported =>
     imported.kind === 'reusable-definition' &&
-    imported.name === 'telegram' &&
+    (imported.name === 'telegram' || imported.name === 'discord') &&
     providerAliases.has(imported.name)
-      ? [{
-          severity: 'warning' as const,
-          code: 'WOML_BUILTIN_PROVIDER_SHADOWED',
-          phase: 'validation' as const,
-          message:
-            'The imported notification provider <telegram> shadows WOML\'s built-in Telegram notification tag in this workflow.',
-          file: document.file,
-          location: imported.element.openTagSpan,
-          hint:
-            'WOML preserves this local provider. Rename the import only when you want the built-in <telegram chats="..."> contract.',
-        }]
+      ? [
+          {
+            severity: 'warning' as const,
+            code: 'WOML_BUILTIN_PROVIDER_SHADOWED',
+            phase: 'validation' as const,
+            message:
+              `The imported notification provider <${imported.name}> shadows WOML's built-in ${imported.name === 'telegram' ? 'Telegram' : 'Discord'} notification tag in this workflow.`,
+            file: document.file,
+            location: imported.element.openTagSpan,
+            hint:
+              `WOML preserves this local provider. Rename the import only when you want the built-in <${imported.name} ${imported.name === 'telegram' ? 'chats' : 'channels'}="..."> contract.`,
+          },
+        ]
       : []
   );
 }
@@ -1586,6 +1606,7 @@ async function compileWorkflowSources(
     }
     const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
+    assertCommunicationRuntimeReady(workflow);
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
       filePath,
@@ -1884,13 +1905,18 @@ async function runSingleCheckCommand(
         );
       }
       io.stdout(
-        reusablePackage?.schemaVersion === 10
-          ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: custom definitions and Telegram triggers, notifications, and messaging are runnable together.\n`
-          : reusablePackage !== undefined
-          ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom steps and notification providers are runnable.\n`
-          : reusableGraph.root.kind === 'workflow'
-            ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
-          : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
+        reusablePackage?.schemaVersion === 10 &&
+          reusablePackage.workflow.model.communication.providers.some(
+            provider => provider.provider === 'discord'
+          )
+          ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: Discord authoring and lowering are valid. Discord Gateway and REST execution begin in ACP5; woml run is intentionally unavailable for this package.\n`
+          : reusablePackage?.schemaVersion === 10
+            ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: custom definitions and Telegram triggers, notifications, and messaging are runnable together.\n`
+            : reusablePackage !== undefined
+              ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom steps and notification providers are runnable.\n`
+              : reusableGraph.root.kind === 'workflow'
+                ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
+                : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
       );
       return 0;
     }
@@ -1994,28 +2020,33 @@ async function runSingleCheckCommand(
       compiledWorkflow.graph.choices.some(
         choice => choice.stringSelector !== undefined
       );
-    const hasTelegram = compiledWorkflow.schemaVersion === 15;
+    const communicationProviders =
+      builtInCommunicationProviders(compiledWorkflow);
+    const hasDiscord = communicationProviders.includes('discord');
+    const hasTelegram = communicationProviders.includes('telegram');
     const workflowCallsFrontendOnly =
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      hasTelegram
-        ? 'Execution: Telegram triggers, notifications, and services.telegram.send() are executable through the durable Rust runtime.\n'
-        : hasSwitch
-        ? 'Execution: Model v14 exact-string switch routing and merged results are executable through the durable Rust runtime.\n'
-        : hasFork
-          ? 'Execution: Model v13 all, selected, and non-blocking fork joins are executable through the durable Rust runtime.\n'
-          : hasRuntimePolicy && definitionPackage.modules.length > 0
-            ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
-            : hasRuntimePolicy
-              ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
-              : hasLifecycle
-                ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
-                : workflowCallsFrontendOnly
-                  ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
-                  : definitionPackage.modules.length === 0
-                    ? 'Execution: module-free workflow; woml run is available.\n'
-                    : 'Execution: local modules are compiled and ready for woml run.\n'
+      hasDiscord
+        ? 'Execution: Discord authoring and lowering are valid. Discord Gateway and REST execution begin in ACP5; woml run is intentionally unavailable for this workflow.\n'
+        : hasTelegram
+          ? 'Execution: Telegram triggers, notifications, and services.telegram.send() are executable through the durable Rust runtime.\n'
+          : hasSwitch
+            ? 'Execution: Model v14 exact-string switch routing and merged results are executable through the durable Rust runtime.\n'
+            : hasFork
+              ? 'Execution: Model v13 all, selected, and non-blocking fork joins are executable through the durable Rust runtime.\n'
+              : hasRuntimePolicy && definitionPackage.modules.length > 0
+                ? 'Execution: Model v12 runtime policies and compiled local modules are executable together.\n'
+                : hasRuntimePolicy
+                  ? 'Execution: Model v12 concurrency, durable FIFO queueing, rolling-window rate limits, and workflow timeouts are executable.\n'
+                  : hasLifecycle
+                    ? 'Execution: workflow and step lifecycle scripts plus informational Slack notifications are executable.\n'
+                    : workflowCallsFrontendOnly
+                      ? 'Execution: Workflow Calls are valid and executable through the durable Rust runtime.\n'
+                      : definitionPackage.modules.length === 0
+                        ? 'Execution: module-free workflow; woml run is available.\n'
+                        : 'Execution: local modules are compiled and ready for woml run.\n'
     );
     return 0;
   } catch (error) {

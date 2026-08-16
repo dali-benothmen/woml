@@ -1,0 +1,28 @@
+<woml>
+  <imports>
+    <module name="discord" from="./local-discord-provider.woml" />
+  </imports>
+  <workflow id="discord-contexts" name="Discord contextual resolution" version="1.0.0">
+    <triggers>
+      <discord
+        id="message"
+        events="app-mention"
+        channels="200000000000000001"
+        bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+      />
+    </triggers>
+    <steps>
+      <approval id="review" name="Review message">
+        <notify>
+          <discord
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+            channel-id="project-owned-destination"
+          />
+        </notify>
+        <when-approved />
+        <when-rejected />
+      </approval>
+      <step id="finish"><script>return context.steps.review;</script></step>
+    </steps>
+  </workflow>
+</woml>

@@ -62,6 +62,7 @@ includes conditional choices and bounded parallel groups:
 | Multiple triggers, webhook, and inline payload schema | Completed in Production Triggers T13 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
 | Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
 | Telegram trigger, notifications, and `services.telegram.send()` | ACP3 implemented | Runs through the shared long-polling Telegram host and durable Rust execution authority |
+| Discord trigger, notifications, and `services.discord.send()` | ACP4 authoring implemented | `woml check` validates and lowers Model v15; `woml run` fails clearly until ACP5 adds Gateway and REST execution |
 | Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
 | `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
@@ -727,10 +728,10 @@ Structural rules:
 - Lifecycle scripts do not create `context.steps` outputs.
 - Lifecycle scripts receive the read-only `lifecycle` binding. It is unavailable
   in normal step scripts.
-- Lifecycle Slack and Telegram notifications are informational. Slack requires
+- Lifecycle Slack, Telegram, and Discord notifications are informational. Slack requires
   `channels`, `message`, `bot-token`, and `app-token`; Telegram requires
-  `chats`, `message`, and `bot-token`. They never create approval buttons or
-  decision capabilities.
+  `chats`, `message`, and `bot-token`; Discord requires `channels`, `message`,
+  and `bot-token`. They never create approval buttons or decision capabilities.
 - Notification messages use WOML Template v1: bounded literal text and scalar
   `{{context...}}` or `{{lifecycle...}}` placeholders. Secrets are forbidden in
   message content.
@@ -883,9 +884,27 @@ the CLI must reject activation instead of pretending that the trigger is live.
 
 Telegram v1 supports the single `message` event. The trigger is empty and is
 valid only directly inside `<triggers>`. Its bot token is one exact symbolic
-secret reference. ACP2 validates and lowers it to Model v15; `woml run` reports
-`WOML_TELEGRAM_RUNTIME_UNAVAILABLE` until ACP3 supplies polling and durable
-admission.
+secret reference. ACP2 validates and lowers it to Model v15; ACP3 supplies
+long polling and durable admission.
+
+### 9.3.2 `<discord>`
+
+```xml
+<discord
+  id="agentMessage"
+  events="app-mention,direct-message"
+  channels="200000000000000001,200000000000000002"
+  bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+/>
+```
+
+Discord v1 supports `app-mention` and `direct-message`. `channels` is optional;
+when present it is a comma-separated list of numeric Discord channel IDs with
+17 to 20 digits. Channel names are rejected because they are mutable display
+labels, not durable routing identities. `bot-token` is one exact secret
+reference. ACP4 validates and lowers Discord to Model v15. Slash-command syntax
+is explicitly deferred. Until ACP5 adds Gateway and REST execution, `woml run`
+reports `WOML_DISCORD_RUNTIME_UNAVAILABLE`; `woml check` remains fully usable.
 
 ### 9.4 `<schedule>`
 
@@ -1278,7 +1297,7 @@ resolve to a positive safe integer number of milliseconds.
 
 The child order is fixed:
 
-1. Optional `<notify>` containing one or more built-in Slack/Telegram or
+1. Optional `<notify>` containing one or more built-in Slack/Telegram/Discord or
    explicitly imported custom-provider deliveries.
 2. Required `<when-approved>`.
 3. Required `<when-rejected>`.
@@ -1341,6 +1360,21 @@ comma-separated numeric chat IDs:
 Approval Telegram tags forbid `message`; lifecycle Telegram tags require it.
 Every chat becomes one ordered delivery while every delivery for the approval
 shares the same first-valid-decision-wins authority.
+
+One built-in `<discord>` tag targets one bot credential and one or more
+comma-separated numeric channel IDs:
+
+```xml
+<discord
+  channels="200000000000000001,200000000000000002"
+  bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+/>
+```
+
+Approval Discord tags forbid `message`; lifecycle Discord tags require it.
+Every channel becomes one ordered delivery and all deliveries share the same
+first-valid-decision-wins approval authority. ACP4 freezes authoring and
+lowering; delivery and interaction handling begin in ACP5.
 
 ### 12.2 Resolving an approval
 
@@ -2060,8 +2094,8 @@ provider host, real Socket Mode integration, recovery, packaging, and
 publication hardening. The remaining approval-adjacent work is later product
 expansion:
 
-- Discord, WhatsApp, and generic signed webhook notifications follow the
-  Telegram milestone.
+- Discord execution follows its ACP4 authoring milestone in ACP5. WhatsApp and
+  generic signed webhook notifications remain later work.
 - Remote hosting waits for TLS, reviewer authentication/authorization, and
   deployment ownership.
 - Structured reviewer metadata, custom forms, and validated decision payloads

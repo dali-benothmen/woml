@@ -1,0 +1,11 @@
+<woml>
+  <props>
+    <prop name="bot-token" required="true" secret="true" />
+    <prop name="channel-id" required="true" />
+  </props>
+  <provider kind="notification">
+    <script>
+      return { messageId: `${props.channelId}:${notification.deliveryId}` };
+    </script>
+  </provider>
+</woml>

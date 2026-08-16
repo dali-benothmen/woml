@@ -963,6 +963,42 @@ fn valid_telegram_trigger(config: &ValueExpression) -> bool {
     && matches!(fields.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
 }
 
+fn valid_discord_snowflake(value: &str) -> bool {
+  (17..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn valid_discord_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  let Some(events) = literal_string_array(fields.get("events")) else {
+    return false;
+  };
+  let channels = fields
+    .get("channels")
+    .map(|value| literal_string_array(Some(value)));
+  if channels == Some(None) {
+    return false;
+  }
+  let channels = channels.flatten();
+  let exact = exact_fields(fields, &["events", "botToken"])
+    || exact_fields(fields, &["events", "channels", "botToken"]);
+  exact
+    && (1..=2).contains(&events.len())
+    && unique_non_empty(&events)
+    && events
+      .iter()
+      .all(|event| matches!(*event, "app-mention" | "direct-message"))
+    && channels.is_none_or(|channels| {
+      !channels.is_empty()
+        && unique_non_empty(&channels)
+        && channels
+          .iter()
+          .all(|channel| valid_discord_snowflake(channel))
+    })
+    && matches!(fields.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+}
+
 fn valid_on_missed(expression: Option<&ValueExpression>) -> bool {
   matches!(literal_string(expression), Some("skip" | "run-once"))
 }
@@ -1039,6 +1075,7 @@ fn valid_model_v7_trigger(trigger: &CompiledTrigger) -> bool {
     "trigger.webhook" => valid_webhook_trigger(&trigger.config),
     "trigger.slack" => valid_slack_trigger(&trigger.config),
     "trigger.telegram" => valid_telegram_trigger(&trigger.config),
+    "trigger.discord" => valid_discord_trigger(&trigger.config),
     "trigger.schedule" => valid_schedule_trigger(&trigger.config),
     "trigger.interval" => valid_interval_trigger(&trigger.config),
     "trigger.event" => valid_event_trigger(&trigger.config),
@@ -1543,12 +1580,22 @@ fn valid_lifecycle_notification_inputs(
           credentials.len() == 1
             && matches!(credentials.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
         }),
+        Some("discord") => credentials.is_some_and(|credentials| {
+          credentials.len() == 1
+            && matches!(credentials.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+        }),
         _ => false,
       };
       fields.len() == 5
         && matches!(fields.get("deliveryId"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
-        && matches!(provider, Some("slack" | "telegram"))
-        && matches!(fields.get("destination"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
+        && matches!(provider, Some("slack" | "telegram" | "discord"))
+        && matches!(fields.get("destination"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| {
+          if provider == Some("discord") {
+            valid_discord_snowflake(value)
+          } else {
+            !value.is_empty() && value.len() <= 512
+          }
+        }))
         && built_in_credentials
         && matches!(fields.get("message"), Some(ValueExpression::Template { parts }) if (1..=65).contains(&parts.len()) && parts.iter().all(|part| !matches!(part, TemplatePart::Text { text } if text.len() > 4096)))
     })
@@ -2017,6 +2064,25 @@ fn approval_notifications(
       }
       let names = BTreeMap::from_iter([("botToken".to_string(), name.clone())]);
       let duplicate_key = format!("telegram\0{}\0{}", names["botToken"], destination);
+      (names, None, None, duplicate_key)
+    } else if provider == "discord" {
+      if fields.len() != 4
+        || !["deliveryId", "provider", "destination", "credentials"]
+          .iter()
+          .all(|key| fields.contains_key(*key))
+        || !valid_discord_snowflake(destination)
+        || credentials.len() != 1
+      {
+        return None;
+      }
+      let ValueExpression::SecretReference { name } = credentials.get("botToken")? else {
+        return None;
+      };
+      if !valid_secret_name(name) {
+        return None;
+      }
+      let names = BTreeMap::from_iter([("botToken".to_string(), name.clone())]);
+      let duplicate_key = format!("discord\0{}\0{}", names["botToken"], destination);
       (names, None, None, duplicate_key)
     } else if provider == "custom"
       && valid_custom_provider_delivery(fields, "approval", provider_ids, false)
@@ -2955,7 +3021,6 @@ impl CompiledWorkflowDefinition {
           "events",
           "queue",
           "workflows",
-          "telegram",
         ];
         let valid = runtime.profile_version == 1
           && (1..=64).contains(&runtime.modules.len())
@@ -3034,7 +3099,7 @@ impl CompiledWorkflowDefinition {
             .windows(2)
             .all(|pair| pair[0].provider < pair[1].provider)
           && communication.providers.iter().all(|provider| {
-            provider.provider == "telegram"
+            matches!(provider.provider.as_str(), "telegram" | "discord")
               && (!provider.trigger_ids.is_empty()
                 || !provider.notification_delivery_ids.is_empty()
                 || provider.messaging)

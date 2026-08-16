@@ -649,6 +649,7 @@ function isApprovalDecisionCondition(
 const compiledSlackAliasPattern = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
 const compiledSlackConversationIdPattern = /^[CG][A-Z0-9]{8,31}$/;
 const compiledTelegramChatIdPattern = /^-?[1-9][0-9]{0,19}$/;
+const compiledDiscordChannelIdPattern = /^[0-9]{17,20}$/;
 const compiledSecretNamePattern = /^[A-Z][A-Z0-9_]*$/;
 
 function hasExactlyKeys(
@@ -689,10 +690,11 @@ function validApprovalNotifications(
     const providerName = provider?.kind === 'literal' ? provider.value : undefined;
     const slackDelivery = providerName === 'slack';
     const telegramDelivery = providerName === 'telegram';
+    const discordDelivery = providerName === 'discord';
     if (
       deliveryId?.kind !== 'literal' ||
       typeof deliveryId.value !== 'string' ||
-      (!slackDelivery && !telegramDelivery) ||
+      (!slackDelivery && !telegramDelivery && !discordDelivery) ||
       destination?.kind !== 'literal' ||
       typeof destination.value !== 'string' ||
       (slackDelivery &&
@@ -700,6 +702,8 @@ function validApprovalNotifications(
         !compiledSlackConversationIdPattern.test(destination.value)) ||
       (telegramDelivery &&
         !compiledTelegramChatIdPattern.test(destination.value)) ||
+      (discordDelivery &&
+        !compiledDiscordChannelIdPattern.test(destination.value)) ||
       credentials?.kind !== 'object' ||
       !hasExactlyKeys(
         credentials.fields,
@@ -709,7 +713,7 @@ function validApprovalNotifications(
       return false;
     }
     const match = new RegExp(
-      `^${approvalId}:notify:([0-9]+):${slackDelivery ? 'channel' : 'chat'}:([0-9]+)$`
+      `^${approvalId}:notify:([0-9]+):${telegramDelivery ? 'chat' : 'channel'}:([0-9]+)$`
     ).exec(deliveryId.value);
     const botToken = credentials.fields.botToken;
     const appToken = credentials.fields.appToken;
