@@ -130,6 +130,13 @@ import {
   type SharedTelegramTransportOptions,
 } from './telegram';
 import {
+  DiscordTriggerHost,
+  SharedDiscordTransport,
+  discordStartupError,
+  discordTriggerRegistrations,
+  type SharedDiscordTransportOptions,
+} from './discord';
+import {
   preflightRuntimeConfiguration,
   resolveRuntimeConfiguration,
   type ResolvedRuntimeConfigurationV1,
@@ -1167,6 +1174,8 @@ function formatNotificationDeliveryFailures(
           ? 'Slack'
           : provider === 'telegram'
             ? 'Telegram'
+            : provider === 'discord'
+              ? 'Discord'
             : provider;
       return `\n${label} notification to ${destination} failed [${failure.code}]: ${failure.message}`;
     })
@@ -1348,16 +1357,6 @@ function builtInCommunicationProviders(
   return workflow.schemaVersion === 15
     ? workflow.communication.providers.map(provider => provider.provider)
     : [];
-}
-
-function assertCommunicationRuntimeReady(
-  workflow: CompiledWorkflowDefinition
-): void {
-  if (!builtInCommunicationProviders(workflow).includes('discord')) return;
-  throw new CliInputError(
-    'WOML_DISCORD_RUNTIME_UNAVAILABLE',
-    'Discord authoring is valid in ACP4, but Discord Gateway and REST execution begin in ACP5. Use "woml check" to validate this workflow for now.'
-  );
 }
 
 function reusableCommunicationAliasDiagnostics(
@@ -1606,7 +1605,6 @@ async function compileWorkflowSources(
     }
     const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
-    assertCommunicationRuntimeReady(workflow);
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
       filePath,
@@ -1909,7 +1907,7 @@ async function runSingleCheckCommand(
           reusablePackage.workflow.model.communication.providers.some(
             provider => provider.provider === 'discord'
           )
-          ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: Discord authoring and lowering are valid. Discord Gateway and REST execution begin in ACP5; woml run is intentionally unavailable for this package.\n`
+          ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: Discord triggers, notifications, approval buttons, and services.discord.send() are executable through the durable Rust runtime.\n`
           : reusablePackage?.schemaVersion === 10
             ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: custom definitions and Telegram triggers, notifications, and messaging are runnable together.\n`
             : reusablePackage !== undefined
@@ -1949,14 +1947,18 @@ async function runSingleCheckCommand(
     const definitionPackage =
       inspectionPackage.modules.length === 0
         ? inspectionPackage
-        : executablePackage?.schemaVersion === 10 ||
-            declaresLifecycle ||
-            declaresRuntimePolicy
-          ? executablePackage!
-          : await buildWomlRuntimeDefinitionPackage(document, {
+        : executablePackage?.schemaVersion === 10
+          ? await buildWomlRuntimeDefinitionPackage(document, {
               sourcePath: filePath,
               projectRoot,
-            });
+            })
+          : declaresLifecycle ||
+            declaresRuntimePolicy
+            ? executablePackage!
+            : await buildWomlRuntimeDefinitionPackage(document, {
+                sourcePath: filePath,
+                projectRoot,
+              });
     const compiledWorkflow =
       definitionPackage.schemaVersion === 1
         ? compileWoml(document)
@@ -2029,7 +2031,7 @@ async function runSingleCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasDiscord
-        ? 'Execution: Discord authoring and lowering are valid. Discord Gateway and REST execution begin in ACP5; woml run is intentionally unavailable for this workflow.\n'
+        ? 'Execution: Discord triggers, notifications, approval buttons, and services.discord.send() are executable through the durable Rust runtime.\n'
         : hasTelegram
           ? 'Execution: Telegram triggers, notifications, and services.telegram.send() are executable through the durable Rust runtime.\n'
           : hasSwitch
@@ -2992,6 +2994,7 @@ function hasNonManualRuntimeIngress(
         'trigger.webhook',
         'trigger.slack',
         'trigger.telegram',
+        'trigger.discord',
         'trigger.schedule',
         'trigger.interval',
         'trigger.event',
@@ -3032,6 +3035,7 @@ function triggerPresentationType(handler: string): TriggerPresentationV1['type']
   if (handler === 'trigger.webhook') return 'webhook';
   if (handler === 'trigger.slack') return 'slack';
   if (handler === 'trigger.telegram') return 'telegram';
+  if (handler === 'trigger.discord') return 'discord';
   if (handler === 'trigger.schedule') return 'schedule';
   if (handler === 'trigger.interval') return 'interval';
   if (handler === 'trigger.event') return 'event';
@@ -3326,6 +3330,20 @@ function workflowPresentation(
       });
       continue;
     }
+    if (type === 'discord') {
+      const events = literalStringArray(fields?.events);
+      const channels = literalStringArray(fields?.channels);
+      const scope = [
+        events.length === 0 ? undefined : events.join(', '),
+        channels.length === 0 ? undefined : `channels: ${channels.join(', ')}`,
+      ].filter((value): value is string => value !== undefined).join(' · ');
+      triggers.push({
+        id: trigger.id,
+        type,
+        ...(scope.length === 0 ? {} : { scope }),
+      });
+      continue;
+    }
     if (type === 'schedule') {
       triggers.push({
         id: trigger.id,
@@ -3502,6 +3520,8 @@ function observedTriggerType(
   | 'manual'
   | 'webhook'
   | 'slack'
+  | 'telegram'
+  | 'discord'
   | 'schedule'
   | 'interval'
   | 'event'
@@ -3511,6 +3531,8 @@ function observedTriggerType(
     'manual',
     'webhook',
     'slack',
+    'telegram',
+    'discord',
     'schedule',
     'interval',
     'event',
@@ -3519,6 +3541,8 @@ function observedTriggerType(
         | 'manual'
         | 'webhook'
         | 'slack'
+        | 'telegram'
+        | 'discord'
         | 'schedule'
         | 'interval'
         | 'event')
@@ -3589,6 +3613,7 @@ async function activateWorkflows(
   let communicationTriggerHost: CommunicationTriggerHost | undefined;
   let slackTransport: SharedSlackTransport | undefined;
   let telegramTransport: SharedTelegramTransport | undefined;
+  let discordTransport: SharedDiscordTransport | undefined;
   let runtimeControl: RuntimeControlHandle | undefined;
   let observability: RuntimeObservability | undefined;
   let automaticRetention: AutomaticRetentionHandle | undefined;
@@ -3672,12 +3697,30 @@ async function activateWorkflows(
       const telegramRegistrations = productionSources.flatMap(source =>
         telegramTriggerRegistrations(source.workflow, source.definitionHash)
       );
+      const discordRegistrations = productionSources.flatMap(source =>
+        discordTriggerRegistrations(source.workflow, source.definitionHash)
+      );
       const telegramPollingCredentials = [
         ...new Set(
           productionSources.flatMap(source =>
             source.workflow.schemaVersion === 15
               ? source.workflow.communication.providers.flatMap(provider =>
                   provider.provider === 'telegram' &&
+                  (provider.triggerIds.length > 0 ||
+                    provider.notificationDeliveryIds.length > 0)
+                    ? provider.credentialNames
+                    : []
+                )
+              : []
+          )
+        ),
+      ];
+      const discordGatewayCredentials = [
+        ...new Set(
+          productionSources.flatMap(source =>
+            source.workflow.schemaVersion === 15
+              ? source.workflow.communication.providers.flatMap(provider =>
+                  provider.provider === 'discord' &&
                   (provider.triggerIds.length > 0 ||
                     provider.notificationDeliveryIds.length > 0)
                     ? provider.credentialNames
@@ -3810,6 +3853,15 @@ async function activateWorkflows(
             : [
                 {
                   name: 'telegram',
+                  kind: 'provider' as const,
+                  status: 'unready' as const,
+                },
+              ]),
+          ...(discordGatewayCredentials.length === 0
+            ? []
+            : [
+                {
+                  name: 'discord',
                   kind: 'provider' as const,
                   status: 'unready' as const,
                 },
@@ -4023,6 +4075,71 @@ async function activateWorkflows(
           adapter: telegramHost,
         });
       }
+      if (discordGatewayCredentials.length > 0) {
+        discordTransport =
+          dependencies.createDiscordTransport?.({
+            log: message => foregroundPresentation.verbose(message),
+            onFatal: failure => {
+              foregroundPresentation.warning(failure.code, failure.message);
+              resolveRuntimeUnavailable();
+            },
+          }) ??
+          new SharedDiscordTransport({
+            log: message => foregroundPresentation.verbose(message),
+            onFatal: failure => {
+              foregroundPresentation.warning(failure.code, failure.message);
+              resolveRuntimeUnavailable();
+            },
+          });
+        const discordHost = new DiscordTriggerHost({
+          registrations: discordRegistrations,
+          credentialNames: discordGatewayCredentials,
+          secretStore: store,
+          transport: discordTransport,
+          submit: ingress =>
+            submitTriggerOccurrenceWithRust(runtime.runtimeId, ingress, {
+              nativeCorePath: dependencies.nativeCorePath,
+            }),
+          resolveApproval: update => {
+            try {
+              const result = resolveNotificationApprovalWithRust(
+                args.statePath,
+                update.decisionCapability,
+                update.decision,
+                {
+                  nativeCorePath: dependencies.nativeCorePath,
+                  providerActorId: `discord:${update.actorId}`,
+                }
+              );
+              foregroundPresentation.verbose(
+                `Discord approval ${result.approvalId} was ${update.decision}.`
+              );
+              return result.status === 'accepted'
+                ? 'accepted'
+                : 'already-resolved';
+            } catch (error) {
+              if (error instanceof ApprovalDecisionError) {
+                foregroundPresentation.warning(error.code, error.message);
+                return error.code === 'WOML_APPROVAL_DECISION_CONFLICT'
+                  ? 'already-resolved'
+                  : 'expired';
+              }
+              throw error;
+            }
+          },
+          diagnostic: (code, message) => {
+            if (code === 'WOML_DISCORD_READY') {
+              foregroundPresentation.verbose(message);
+            } else {
+              foregroundPresentation.verbose(`${code}: ${message}`);
+            }
+          },
+        });
+        communicationProviders.register({
+          role: 'trigger',
+          adapter: discordHost,
+        });
+      }
       if (communicationProviders.providers('trigger').length > 0) {
         communicationTriggerHost = new CommunicationTriggerHost(
           communicationProviders.triggerAdapters()
@@ -4035,12 +4152,19 @@ async function activateWorkflows(
           if (telegramPollingCredentials.length > 0) {
             observability?.setComponent('telegram', 'provider', 'ready');
           }
+          if (discordGatewayCredentials.length > 0) {
+            observability?.setComponent('discord', 'provider', 'ready');
+          }
         } catch (error) {
+          const discordFailure = discordStartupError(error);
           const telegramFailure = telegramStartupError(error);
           const slackFailure = slackTriggerStartupError(error);
-          const failure = telegramFailure.code !== 'WOML_TELEGRAM_TRIGGER_UNAVAILABLE'
-            ? telegramFailure
-            : slackFailure;
+          const failure =
+            discordFailure.code !== 'WOML_DISCORD_TRIGGER_UNAVAILABLE'
+              ? discordFailure
+              : telegramFailure.code !== 'WOML_TELEGRAM_TRIGGER_UNAVAILABLE'
+                ? telegramFailure
+                : slackFailure;
           throw new CliInputError(failure.code, failure.message);
         }
       }
@@ -4201,6 +4325,7 @@ async function activateWorkflows(
     await communicationTriggerHost?.close().catch(() => {});
     await slackTransport?.close().catch(() => {});
     await telegramTransport?.close().catch(() => {});
+    await discordTransport?.close().catch(() => {});
     await runtimeStop;
     observability?.setLifecycle('stopped');
     if (descriptorPath !== undefined && runtimeControl !== undefined) {
@@ -4226,6 +4351,9 @@ export interface CliDependencies {
   readonly createTelegramTransport?: (
     options: SharedTelegramTransportOptions
   ) => SharedTelegramTransport;
+  readonly createDiscordTransport?: (
+    options: SharedDiscordTransportOptions
+  ) => SharedDiscordTransport;
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   readonly inspectorTerminal?: InspectorTerminal;
   readonly createManualInput?: () => ManualLineInput;

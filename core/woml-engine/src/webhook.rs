@@ -798,6 +798,7 @@ fn prepare_state(
           | "trigger.webhook"
           | "trigger.slack"
           | "trigger.telegram"
+          | "trigger.discord"
           | "trigger.schedule"
           | "trigger.interval"
           | "trigger.event"
@@ -2780,7 +2781,7 @@ async fn execute_trigger_run_with_builtin_notifications(
       || definition
         .notifications
         .iter()
-        .any(|delivery| !matches!(delivery.provider.as_str(), "slack" | "telegram"))
+        .any(|delivery| !matches!(delivery.provider.as_str(), "slack" | "telegram" | "discord"))
     {
       return Ok(outcome);
     }

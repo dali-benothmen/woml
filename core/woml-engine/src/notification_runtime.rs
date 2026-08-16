@@ -153,10 +153,12 @@ pub async fn run_notification_provider_journey_with_custom(
     ));
   }
 
-  let has_builtin = approval
-    .notifications
-    .iter()
-    .any(|definition| matches!(definition.provider.as_str(), "slack" | "telegram"));
+  let has_builtin = approval.notifications.iter().any(|definition| {
+    matches!(
+      definition.provider.as_str(),
+      "slack" | "telegram" | "discord"
+    )
+  });
   let has_custom = approval
     .notifications
     .iter()

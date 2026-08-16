@@ -17,6 +17,10 @@ import {
   TelegramNotificationAdapter,
 } from './telegram';
 import {
+  DiscordNotificationAdapter,
+  SharedDiscordTransport,
+} from './discord';
+import {
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
   NOTIFICATION_PROVIDER_PROTOCOL,
@@ -79,6 +83,7 @@ export interface RunNotificationProviderHostOptions {
     emit: (message: Parameters<SerializedFrameWriter['send']>[0]) => Promise<void>
   ) => SlackTransport;
   readonly createTelegramTransport?: () => SharedTelegramTransport;
+  readonly createDiscordTransport?: () => SharedDiscordTransport;
 }
 
 export async function runNotificationProviderHost(
@@ -120,6 +125,11 @@ export async function runNotificationProviderHost(
         options.createTelegramTransport?.() ?? new SharedTelegramTransport()
       ) as ActiveNotificationAdapter
     );
+    adapters.push(
+      new DiscordNotificationAdapter(
+        options.createDiscordTransport?.() ?? new SharedDiscordTransport()
+      ) as ActiveNotificationAdapter
+    );
   }
   const host = new NotificationProviderHost({
     secretStore: createSecretStore(),
@@ -130,8 +140,10 @@ export async function runNotificationProviderHost(
   const providers = adapters.map(adapter => adapter.provider);
   if (
     !providers.every(
-      (provider): provider is 'slack' | 'telegram' =>
-        provider === 'slack' || provider === 'telegram'
+      (provider): provider is 'slack' | 'telegram' | 'discord' =>
+        provider === 'slack' ||
+        provider === 'telegram' ||
+        provider === 'discord'
     )
   ) {
     throw new Error('The notification host contains an unavailable provider adapter.');

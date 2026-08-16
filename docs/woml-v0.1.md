@@ -62,7 +62,7 @@ includes conditional choices and bounded parallel groups:
 | Multiple triggers, webhook, and inline payload schema | Completed in Production Triggers T13 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
 | Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
 | Telegram trigger, notifications, and `services.telegram.send()` | ACP3 implemented | Runs through the shared long-polling Telegram host and durable Rust execution authority |
-| Discord trigger, notifications, and `services.discord.send()` | ACP4 authoring implemented | `woml check` validates and lowers Model v15; `woml run` fails clearly until ACP5 adds Gateway and REST execution |
+| Discord trigger, notifications, approvals, and `services.discord.send()` | ACP5 implemented | Executable through one shared Gateway session per bot credential, Discord REST, durable Rust admission, and supervised messaging |
 | Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
 | `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
@@ -902,9 +902,9 @@ Discord v1 supports `app-mention` and `direct-message`. `channels` is optional;
 when present it is a comma-separated list of numeric Discord channel IDs with
 17 to 20 digits. Channel names are rejected because they are mutable display
 labels, not durable routing identities. `bot-token` is one exact secret
-reference. ACP4 validates and lowers Discord to Model v15. Slash-command syntax
-is explicitly deferred. Until ACP5 adds Gateway and REST execution, `woml run`
-reports `WOML_DISCORD_RUNTIME_UNAVAILABLE`; `woml check` remains fully usable.
+reference. ACP5 executes Discord through a shared resumable Gateway connection
+and supervised REST operations. Slash-command syntax is explicitly deferred.
+`woml check` remains offline and does not read credentials or contact Discord.
 
 ### 9.4 `<schedule>`
 
@@ -1374,7 +1374,8 @@ comma-separated numeric channel IDs:
 Approval Discord tags forbid `message`; lifecycle Discord tags require it.
 Every channel becomes one ordered delivery and all deliveries share the same
 first-valid-decision-wins approval authority. ACP4 freezes authoring and
-lowering; delivery and interaction handling begin in ACP5.
+lowering; ACP5 executes delivery, durable button decisions, and message
+convergence.
 
 ### 12.2 Resolving an approval
 
@@ -2094,8 +2095,8 @@ provider host, real Socket Mode integration, recovery, packaging, and
 publication hardening. The remaining approval-adjacent work is later product
 expansion:
 
-- Discord execution follows its ACP4 authoring milestone in ACP5. WhatsApp and
-  generic signed webhook notifications remain later work.
+- WhatsApp and generic signed webhook notifications remain later work. Discord
+  trigger, messaging, notification, and approval execution is available.
 - Remote hosting waits for TLS, reviewer authentication/authorization, and
   deployment ownership.
 - Structured reviewer metadata, custom forms, and validated decision payloads

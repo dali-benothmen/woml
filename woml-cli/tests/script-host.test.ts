@@ -1064,6 +1064,89 @@ return {
     });
   });
 
+  test('protocol v4 lowers services.discord.send to one supervised capability call', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const managedResult = {
+          provider: 'discord',
+          conversationId: '345678901234567890',
+          messageId: '456789012345678901',
+          acceptedAt: '2026-08-16T12:00:00.000Z',
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(managedResult)),
+            durationMs: 2,
+            result: managedResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_discord_send',
+        `return services.discord.send({
+          botToken: 'synthetic-token',
+          conversationId: '345678901234567890',
+          text: 'Hello from WOML',
+          replyToMessageId: '456789012345678900'
+        }, { name: 'reply-to-message' });`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.call).toMatchObject({
+      capability: 'discord',
+      operation: 'send',
+      identity: {
+        mode: 'named',
+        operationName: 'discord.send.reply-to-message',
+      },
+      input: {
+        contract: 'woml.discord-message',
+        contractVersion: 1,
+        kind: 'send',
+        botToken: 'synthetic-token',
+        conversationId: '345678901234567890',
+        text: 'Hello from WOML',
+        replyToMessageId: '456789012345678900',
+      },
+    });
+    expect(completed[0]?.outcome).toEqual({
+      kind: 'success',
+      value: {
+        provider: 'discord',
+        conversationId: '345678901234567890',
+        messageId: '456789012345678901',
+        acceptedAt: '2026-08-16T12:00:00.000Z',
+      },
+    });
+  });
+
   test('WC3/WC4 lowers workflows.call, bounds waiting, and enforces stable repeated identities', async () => {
     const completed: CompletedMessage[] = [];
     const calls: CapabilityCallMessage[] = [];

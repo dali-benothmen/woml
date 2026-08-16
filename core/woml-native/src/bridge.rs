@@ -1658,7 +1658,7 @@ pub async fn submit_woml_trigger_occurrence(
     || ingress.request_id.is_empty()
     || !matches!(
       ingress.trigger_handler.as_str(),
-      "trigger.slack" | "trigger.telegram"
+      "trigger.slack" | "trigger.telegram" | "trigger.discord"
     )
   {
     return Err(napi::Error::from_reason(

@@ -358,7 +358,10 @@ export interface TriggerIngressAdmit {
   readonly workflowId: string;
   readonly definitionHash: string;
   readonly triggerId: string;
-  readonly triggerHandler: 'trigger.slack' | 'trigger.telegram';
+  readonly triggerHandler:
+    | 'trigger.slack'
+    | 'trigger.telegram'
+    | 'trigger.discord';
   readonly sourceIdentity: string;
   readonly payload: Readonly<Record<string, JsonValue>>;
   readonly receivedAt: string;

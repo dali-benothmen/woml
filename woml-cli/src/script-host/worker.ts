@@ -693,6 +693,71 @@ function publicTelegramResult(result: JsonValue): JsonValue {
   });
 }
 
+function normalizeDiscordSend(input: JsonValue): JsonObject {
+  const object = plainObject(input);
+  if (object === undefined) {
+    throw new TypeError('services.discord.send() requires a request object.');
+  }
+  const allowed = new Set([
+    'botToken',
+    'conversationId',
+    'text',
+    'replyToMessageId',
+  ]);
+  const unknown = Object.keys(object).find(key => !allowed.has(key));
+  if (unknown !== undefined) {
+    throw new TypeError(`Unknown Discord send option "${unknown}".`);
+  }
+  for (const required of ['botToken', 'conversationId', 'text'] as const) {
+    if (typeof object[required] !== 'string' || object[required].length === 0) {
+      throw new TypeError(`Discord send requires a non-empty ${required} string.`);
+    }
+  }
+  if (!/^[0-9]{17,20}$/.test(object.conversationId as string)) {
+    throw new TypeError('Discord conversationId must be a numeric snowflake.');
+  }
+  if ((object.text as string).length > 2_000) {
+    throw new TypeError('Discord text may contain at most 2000 characters.');
+  }
+  if (
+    object.replyToMessageId !== undefined &&
+    (typeof object.replyToMessageId !== 'string' ||
+      !/^[0-9]{17,20}$/.test(object.replyToMessageId))
+  ) {
+    throw new TypeError('Discord replyToMessageId must be a numeric snowflake.');
+  }
+  return {
+    contract: 'woml.discord-message',
+    contractVersion: 1,
+    kind: 'send',
+    botToken: object.botToken,
+    conversationId: object.conversationId,
+    text: object.text,
+    ...(object.replyToMessageId === undefined
+      ? {}
+      : { replyToMessageId: object.replyToMessageId }),
+  };
+}
+
+function publicDiscordResult(result: JsonValue): JsonValue {
+  const object = plainObject(result);
+  if (
+    object === undefined ||
+    object.provider !== 'discord' ||
+    typeof object.conversationId !== 'string' ||
+    typeof object.messageId !== 'string' ||
+    typeof object.acceptedAt !== 'string'
+  ) {
+    throw new TypeError('Discord returned an invalid managed result.');
+  }
+  return Object.freeze({
+    provider: 'discord',
+    conversationId: object.conversationId,
+    messageId: object.messageId,
+    acceptedAt: object.acceptedAt,
+  });
+}
+
 function namedOperation(
   capability: string,
   operation: string,
@@ -1453,6 +1518,7 @@ function deeplyReadonlyServiceFacade(
       capability === 'workflows' &&
       (operation === 'call' || operation === 'start');
     const managedTelegram = capability === 'telegram' && operation === 'send';
+    const managedDiscord = capability === 'discord' && operation === 'send';
     if (
       !managedHttp &&
       !managedDatabase &&
@@ -1462,6 +1528,7 @@ function deeplyReadonlyServiceFacade(
       !managedEvents &&
       !managedWorkflows &&
       !managedTelegram &&
+      !managedDiscord &&
       callOptions !== undefined
     ) {
       throw new TypeError(
@@ -1504,7 +1571,8 @@ function deeplyReadonlyServiceFacade(
         cacheEffectful ||
         stateEffectful ||
         managedEvents ||
-        managedTelegram) &&
+        managedTelegram ||
+        managedDiscord) &&
       identity.mode === 'automatic'
     ) {
       const key = `${capability}.${operation}`;
@@ -1586,6 +1654,8 @@ function deeplyReadonlyServiceFacade(
                 ? publicWorkflowResult(result, operation as 'call' | 'start')
                 : managedTelegram
                   ? publicTelegramResult(result)
+                  : managedDiscord
+                    ? publicDiscordResult(result)
                 : result;
   };
   return new Proxy(Object.freeze({}), {
@@ -1788,6 +1858,8 @@ function deeplyReadonlyServiceFacade(
                 ? normalizeHttpRequest(rawInput)
                 : capabilityProperty === 'telegram' && operationProperty === 'send'
                   ? normalizeTelegramSend(rawInput)
+                  : capabilityProperty === 'discord' && operationProperty === 'send'
+                    ? normalizeDiscordSend(rawInput)
                 : rawInput,
               callOptions
             );

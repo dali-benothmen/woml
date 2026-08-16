@@ -19,6 +19,8 @@ export interface ObservedWorkflow {
     | 'manual'
     | 'webhook'
     | 'slack'
+    | 'telegram'
+    | 'discord'
     | 'schedule'
     | 'interval'
     | 'event'

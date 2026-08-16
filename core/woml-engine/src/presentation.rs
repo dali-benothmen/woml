@@ -43,6 +43,7 @@ pub enum PresentationTriggerType {
   Webhook,
   Slack,
   Telegram,
+  Discord,
   Schedule,
   Interval,
   Event,
@@ -436,6 +437,7 @@ fn trigger_type(handler: &str) -> Result<PresentationTriggerType, RunPresentatio
     "trigger.webhook" => PresentationTriggerType::Webhook,
     "trigger.slack" => PresentationTriggerType::Slack,
     "trigger.telegram" => PresentationTriggerType::Telegram,
+    "trigger.discord" => PresentationTriggerType::Discord,
     "trigger.schedule" => PresentationTriggerType::Schedule,
     "trigger.interval" => PresentationTriggerType::Interval,
     "trigger.event" => PresentationTriggerType::Event,
@@ -453,7 +455,9 @@ fn trigger_presentation(
   let kind = trigger_type(&trigger.handler)?;
   let scope = if matches!(
     kind,
-    PresentationTriggerType::Slack | PresentationTriggerType::Telegram
+    PresentationTriggerType::Slack
+      | PresentationTriggerType::Telegram
+      | PresentationTriggerType::Discord
   ) {
     let channels = literal_strings(trigger, "channels");
     let events = literal_strings(trigger, "events");

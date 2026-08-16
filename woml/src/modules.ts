@@ -1604,7 +1604,8 @@ export async function buildWomlReusableDefinitionPackage(
   const communicationRuntimeReady =
     model.schemaVersion !== 15 ||
     model.communication.providers.every(
-      provider => provider.provider === 'telegram'
+      provider =>
+        provider.provider === 'telegram' || provider.provider === 'discord'
     );
   const unsigned = model.schemaVersion === 15
     ? {
@@ -1644,15 +1645,16 @@ export async function buildWomlRuntimeDefinitionPackage(
   );
   if (compiled.schemaVersion === 10) {
     const unavailable = compiled.workflow.model.communication.providers.find(
-      provider => provider.provider !== 'telegram'
+      provider =>
+        provider.provider !== 'telegram' && provider.provider !== 'discord'
     );
     if (unavailable !== undefined) {
       throw compileDiagnostic(
         document.file,
-        'WOML_DISCORD_RUNTIME_UNAVAILABLE',
-        'Discord syntax compiled successfully, but Discord Gateway and REST execution begins in ACP5.',
+        'WOML_COMMUNICATION_RUNTIME_UNAVAILABLE',
+        `The built-in ${unavailable.provider} provider is not executable in this runtime.`,
         document.root.openTagSpan,
-        'Use `woml check` to review the Model v15 package during ACP4.'
+        'Use a currently supported built-in provider or a custom notification provider.'
       );
     }
     const { rootHash: _compilationRootHash, ...rest } = compiled;

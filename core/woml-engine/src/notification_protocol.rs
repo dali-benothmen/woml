@@ -34,7 +34,9 @@ impl NotificationReadyMessage {
       || self.message_type != "ready"
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 320
-      || (self.providers != ["slack"] && self.providers != ["slack", "telegram"])
+      || (self.providers != ["slack"]
+        && self.providers != ["slack", "telegram"]
+        && self.providers != ["slack", "telegram", "discord"])
     {
       return Err(
         "The child did not send a valid notification-provider ready message.".to_string(),
@@ -268,4 +270,41 @@ fn valid_slack_actor(value: &str) -> bool {
     && value[1..]
       .bytes()
       .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn provider_host_accepts_discord_readiness_and_message_identity() {
+    let ready: NotificationReadyMessage = serde_json::from_value(serde_json::json!({
+      "protocol": NOTIFICATION_PROVIDER_PROTOCOL,
+      "protocolVersion": NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+      "messageType": "ready",
+      "hostInstanceId": "notification-host-discord",
+      "providers": ["slack", "telegram", "discord"]
+    }))
+    .expect("Discord-ready host message");
+    ready.validate().expect("Discord-ready provider host");
+
+    let completed: NotificationCompletedMessage = serde_json::from_value(serde_json::json!({
+      "protocol": NOTIFICATION_PROVIDER_PROTOCOL,
+      "protocolVersion": NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
+      "messageType": "completed",
+      "invocationId": "notification-discord-delivery",
+      "outcome": {
+        "kind": "delivery_success",
+        "providerMessage": {
+          "provider": "discord",
+          "accountId": "123456789012345678",
+          "conversationId": "345678901234567890",
+          "messageId": "456789012345678901"
+        }
+      },
+      "durationMs": 2.5
+    }))
+    .expect("Discord completion message");
+    completed.validate().expect("Discord delivery identity");
+  }
 }

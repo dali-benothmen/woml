@@ -11,6 +11,7 @@ pub mod custom_notification_host;
 pub mod custom_notification_provider_protocol;
 pub mod database;
 mod database_postgres;
+pub mod discord;
 pub mod durable;
 pub mod durable_state;
 pub mod engine;
@@ -70,6 +71,7 @@ pub use custom_notification_provider_protocol::{
   CUSTOM_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
 };
 pub use database::{ManagedDatabaseHandler, ManagedDatabasePool};
+pub use discord::ManagedDiscordHandler;
 pub use durable::{
   derive_lifecycle_hook_invocation_id, ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus,
   ApprovalTimeoutSettlement, ApprovalTimeoutSettlementStatus, ApprovalTokenBinding,

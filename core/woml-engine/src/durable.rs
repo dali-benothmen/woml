@@ -47,6 +47,7 @@ use crate::{
   fold_events, run_event_schema_version_for_model, AttemptFailure, AttemptFailureKind,
   CompiledWorkflowDefinition, FoldError, ModelValidationError, RunEvent, RunEventPayload,
   RunProjection, RunStatus, RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V11,
+  RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V13, RUN_EVENT_SCHEMA_VERSION_V14,
   RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
   RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
   RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
@@ -6204,7 +6205,7 @@ impl DurableEventStore {
     for delivered in projection.notification_deliveries.values().filter(|item| {
       item.approval_id == approval_id
         && item.request_id == request_id
-        && matches!(item.provider.as_str(), "slack" | "telegram")
+        && matches!(item.provider.as_str(), "slack" | "telegram" | "discord")
         && matches!(item.status, NotificationDeliveryStatus::Succeeded { .. })
     }) {
       payloads.push(RunEventPayload::NotificationMessageUpdateRequested(
@@ -6743,7 +6744,7 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request_id
-          && matches!(delivery.provider.as_str(), "slack" | "telegram")
+          && matches!(delivery.provider.as_str(), "slack" | "telegram" | "discord")
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }
@@ -6873,7 +6874,7 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request.request_id
-          && matches!(delivery.provider.as_str(), "slack" | "telegram")
+          && matches!(delivery.provider.as_str(), "slack" | "telegram" | "discord")
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }
@@ -9113,6 +9114,7 @@ fn trigger_occurrence_from_stored(
       | "trigger.webhook"
       | "trigger.slack"
       | "trigger.telegram"
+      | "trigger.discord"
       | "trigger.schedule"
       | "trigger.interval"
       | "trigger.event"
@@ -9243,8 +9245,13 @@ fn validate_trigger_occurrence_history(
   };
   let payload = match &first.payload {
     RunEventPayload::RunAdmitted(admission)
-      if first.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V11
-        && admission.definition_hash == occurrence.definition_hash
+      if matches!(
+        first.event_schema_version,
+        RUN_EVENT_SCHEMA_VERSION_V11
+          | RUN_EVENT_SCHEMA_VERSION_V12
+          | RUN_EVENT_SCHEMA_VERSION_V13
+          | RUN_EVENT_SCHEMA_VERSION_V14
+      ) && admission.definition_hash == occurrence.definition_hash
         && admission.trigger.id == occurrence.trigger_id
         && admission.trigger.handler == occurrence.trigger_handler
         && first.occurred_at == occurrence.received_at

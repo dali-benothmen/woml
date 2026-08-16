@@ -1,11 +1,11 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0 through ACP4 were completed on 2026-08-16.
+Status: In progress. ACP0 through ACP5 were completed on 2026-08-16.
 Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
 end to end through the durable production runtime. Discord authoring, imported
-module discovery, validation, and Model v15 / Definition Package v10 lowering
-are complete; execution intentionally begins in ACP5. WhatsApp remains
-unavailable until its provider phases. Slack
+module discovery, validation, Model v15 / Definition Package v10 lowering, and
+production execution are also complete. WhatsApp remains unavailable until its
+provider phases. Slack
 triggers and notifications, custom notification providers, Human Approval,
 durable capability execution, production runtime hosting, and cross-platform
 release packaging form the proven baseline.
@@ -910,6 +910,16 @@ Frontend, schema, fixtures, module analysis, diagnostics, editor, and backward
 compatibility tests pass; no invalid Discord workflow reaches activation.
 
 ### ACP5 — Execute Discord end to end
+
+Status: **Completed on 2026-08-16.** Discord now runs through one shared
+Gateway connection per bot credential with heartbeat, sequence tracking,
+session resume, bounded reconnect, and safe shutdown. App mentions and direct
+messages enter durable Rust admission; approvals use Discord components and
+converge after the first durable decision; lifecycle notifications and
+`services.discord.send()` use supervised REST delivery with structured
+provider diagnostics. Fake Gateway/REST, resume, interaction-ordering,
+idempotency, compiler/CLI, script-host, and durable-admission tests cover the
+release boundary.
 
 Changes:
 

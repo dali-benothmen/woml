@@ -333,6 +333,9 @@ impl RuntimeExecutionOptions {
     capability_registry
       .register(Arc::new(crate::ManagedTelegramHandler::default()))
       .expect("the production Telegram capability is registered exactly once");
+    capability_registry
+      .register(Arc::new(crate::ManagedDiscordHandler::default()))
+      .expect("the production Discord capability is registered exactly once");
     let managed_database_pool = Arc::new(crate::ManagedDatabasePool::default());
     for handler in crate::ManagedDatabaseHandler::handlers(Arc::clone(&managed_database_pool)) {
       capability_registry
@@ -3134,7 +3137,7 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
   })?;
   let has_builtin = deliveries
     .iter()
-    .any(|delivery| matches!(delivery.provider, "slack" | "telegram"));
+    .any(|delivery| matches!(delivery.provider, "slack" | "telegram" | "discord"));
   let has_custom = deliveries
     .iter()
     .any(|delivery| delivery.provider == "custom");
@@ -3197,7 +3200,7 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
         continue;
       }
     };
-    let credentials = if matches!(delivery.provider, "slack" | "telegram") {
+    let credentials = if matches!(delivery.provider, "slack" | "telegram" | "discord") {
       match NotificationCredentials::from_symbolic(&delivery.credentials) {
         Ok(credentials) => Some(credentials),
         Err(message) => {

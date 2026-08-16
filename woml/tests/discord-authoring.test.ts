@@ -142,7 +142,7 @@ describe('ACP4 Discord authoring and lowering', () => {
     expect(validate(compiled), JSON.stringify(validate.errors, null, 2)).toBe(true);
   });
 
-  test('discovers services.discord in imported TypeScript and keeps it staged', async () => {
+  test('discovers services.discord in imported TypeScript and promotes it for runtime', async () => {
     const source = document('discord-module-acp4.woml');
     const definitionPackage = await buildWomlExecutableDefinitionPackage(
       source,
@@ -172,18 +172,12 @@ describe('ACP4 Discord authoring and lowering', () => {
       'https://woml.dev/schemas/woml-definition-package.v10.schema.json'
     )!;
     expect(validate(definitionPackage), JSON.stringify(validate.errors, null, 2)).toBe(true);
-    try {
-      await buildWomlRuntimeDefinitionPackage(source, {
-        sourcePath: source.file,
-        projectRoot: fixtureRoot,
-      });
-      throw new Error('Expected staged Discord runtime rejection.');
-    } catch (error) {
-      expect(error).toBeInstanceOf(WomlDiagnosticError);
-      expect((error as WomlDiagnosticError).diagnostic.code).toBe(
-        'WOML_DISCORD_RUNTIME_UNAVAILABLE'
-      );
-    }
+    const runtimePackage = await buildWomlRuntimeDefinitionPackage(source, {
+      sourcePath: source.file,
+      projectRoot: fixtureRoot,
+    });
+    expect(runtimePackage.schemaVersion).toBe(10);
+    expect(runtimePackage.runtimeReady).toBe(true);
   });
 
   test('requires imported Discord messaging credentials to be explicit workflow secrets', async () => {
@@ -234,7 +228,7 @@ describe('ACP4 Discord authoring and lowering', () => {
       { sourcePath: source.file, projectRoot: fixtureRoot }
     );
     expect(definitionPackage.schemaVersion).toBe(10);
-    expect(definitionPackage.runtimeReady).toBe(false);
+    expect(definitionPackage.runtimeReady).toBe(true);
     expect(definitionPackage.workflow.model.schemaVersion).toBe(15);
     expect(definitionPackage.workflow.model.triggers[0].handler).toBe(
       'trigger.discord'

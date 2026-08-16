@@ -1110,6 +1110,7 @@ fn valid_trigger_handler(value: &str) -> bool {
       | "trigger.webhook"
       | "trigger.slack"
       | "trigger.telegram"
+      | "trigger.discord"
       | "trigger.schedule"
       | "trigger.interval"
       | "trigger.event"
@@ -1754,8 +1755,10 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
             | RUN_EVENT_SCHEMA_VERSION_V11
-        ) || !matches!(data.provider.as_str(), "slack" | "telegram" | "custom")
-          || data.destination.is_empty()
+        ) || !matches!(
+          data.provider.as_str(),
+          "slack" | "telegram" | "discord" | "custom"
+        ) || data.destination.is_empty()
         {
           return Err(EventValidationError::Invalid(
             "notification_delivery_requested requires event schema v5 and a provider destination."
@@ -1840,6 +1843,22 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V10
             | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !((data.provider == "slack" && valid_prefixed_id(&data.provider_actor_id, "U", 9))
+          || (data.provider == "telegram"
+            && data
+              .provider_actor_id
+              .strip_prefix("telegram:")
+              .is_some_and(|value| {
+                !value.is_empty()
+                  && value.len() <= 32
+                  && value.bytes().all(|byte| byte.is_ascii_digit())
+              }))
+          || (data.provider == "discord"
+            && data
+              .provider_actor_id
+              .strip_prefix("discord:")
+              .is_some_and(|value| {
+                (17..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
+              }))
           || (data.provider == "custom" && data.provider_actor_id == "custom-provider"))
         {
           return Err(EventValidationError::Invalid(

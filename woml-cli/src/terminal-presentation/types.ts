@@ -13,6 +13,7 @@ export type TriggerPresentationType =
   | 'webhook'
   | 'slack'
   | 'telegram'
+  | 'discord'
   | 'schedule'
   | 'interval'
   | 'event';
