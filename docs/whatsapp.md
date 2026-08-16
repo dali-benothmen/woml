@@ -91,3 +91,20 @@ Meta does not allow an already-delivered approved-template message to be
 edited. WOML therefore records a bounded `WOML_WHATSAPP_UPDATE_UNAVAILABLE`
 warning after resolution. This warning is informational: the accepted approval
 decision and workflow route remain unchanged.
+
+## Diagnostics and recovery
+
+Run a safe read-only setup check with the workflow's Phone Number ID and public
+callback URL:
+
+```bash
+woml whatsapp doctor \
+  --phone-number-id 123456789012345 \
+  --callback-url https://automation.example/callbacks/whatsapp
+```
+
+It validates all three configured secrets, authenticates the phone identity,
+and checks the HTTPS callback shape without sending a template. See
+[Communication Provider Diagnostics and Operations](communication-provider-operations.md)
+for JSON output, signed callback limits, token rotation, backup, retention,
+and recovery.

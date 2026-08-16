@@ -106,6 +106,17 @@ Discord. The terminal records the waiting run and its final result.
 
 ## Actionable failures
 
+Run a safe read-only setup check at any time:
+
+```bash
+woml discord doctor --destination 200000000000000001
+```
+
+It verifies the bot, application intent, and optional channel visibility
+without sending a message. See
+[Communication Provider Diagnostics and Operations](communication-provider-operations.md)
+for JSON output, resource limits, credential rotation, and recovery.
+
 - `WOML_DISCORD_AUTH_FAILED`: the bot token was rejected.
 - `WOML_DISCORD_INTENTS_MISSING`: enable Message Content Intent and verify the
   bot's server permissions.

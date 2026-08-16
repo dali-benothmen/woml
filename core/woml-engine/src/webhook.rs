@@ -41,6 +41,8 @@ use crate::{
 
 pub const WEBHOOK_MAX_BODY_BYTES: usize = 1024 * 1024;
 pub const WHATSAPP_CALLBACK_PATH: &str = "/callbacks/whatsapp";
+pub const COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS: usize = 100;
+pub const COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES: usize = 40_000;
 pub const EVENT_MAX_SUBSCRIBERS: usize = 1_000;
 pub const TRIGGER_PROGRESS_CONTRACT: &str = "woml.trigger-progress";
 pub const TRIGGER_PROGRESS_CONTRACT_VERSION: u32 = 1;
@@ -2139,12 +2141,31 @@ fn whatsapp_signature_valid(request: &HttpRequest, body: &[u8], secret: &str) ->
 }
 
 fn whatsapp_decision_payload(value: &str) -> Option<(crate::ApprovalDecision, &str)> {
-  if let Some(capability) = value.strip_prefix("woml_approve:") {
-    return Some((crate::ApprovalDecision::Approved, capability));
+  let (decision, raw_capability) = if let Some(capability) = value.strip_prefix("woml_approve:") {
+    (crate::ApprovalDecision::Approved, capability)
+  } else {
+    (
+      crate::ApprovalDecision::Rejected,
+      value.strip_prefix("woml_reject:")?,
+    )
+  };
+  let capability = raw_capability.strip_prefix("ncap_")?;
+  let (id, secret) = capability.split_once('.')?;
+  let compact = id.len() == 16 && secret.len() == 32;
+  let legacy = id.len() == 32 && secret.len() == 64;
+  if (!compact && !legacy)
+    || !id
+      .bytes()
+      .chain(secret.bytes())
+      .all(|byte| byte.is_ascii_hexdigit())
+  {
+    return None;
   }
-  value
-    .strip_prefix("woml_reject:")
-    .map(|capability| (crate::ApprovalDecision::Rejected, capability))
+  Some((decision, raw_capability))
+}
+
+fn bounded_whatsapp_message_id(value: &str) -> bool {
+  !value.is_empty() && value.len() <= 512 && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
 async fn handle_whatsapp_callback(
@@ -2263,17 +2284,35 @@ async fn handle_whatsapp_callback(
   }
 
   let mut accepted = Vec::<(RunProgressIdentity, bool)>::new();
-  let entries = envelope
-    .get("entry")
-    .and_then(Value::as_array)
-    .cloned()
-    .unwrap_or_default();
+  let Some(entries) = envelope.get("entry").and_then(Value::as_array).cloned() else {
+    return whatsapp_callback_error(
+      StatusCode::BAD_REQUEST,
+      "WOML_WHATSAPP_PAYLOAD_INVALID",
+      "The WhatsApp callback entry list is invalid.",
+    );
+  };
+  if entries.len() > COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS {
+    return whatsapp_callback_error(
+      StatusCode::PAYLOAD_TOO_LARGE,
+      "WOML_WHATSAPP_BATCH_TOO_LARGE",
+      "The WhatsApp callback contains too many entries.",
+    );
+  }
   for entry in entries {
-    let changes = entry
-      .get("changes")
-      .and_then(Value::as_array)
-      .cloned()
-      .unwrap_or_default();
+    let Some(changes) = entry.get("changes").and_then(Value::as_array).cloned() else {
+      return whatsapp_callback_error(
+        StatusCode::BAD_REQUEST,
+        "WOML_WHATSAPP_PAYLOAD_INVALID",
+        "The WhatsApp callback change list is invalid.",
+      );
+    };
+    if changes.len() > COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS {
+      return whatsapp_callback_error(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "WOML_WHATSAPP_BATCH_TOO_LARGE",
+        "The WhatsApp callback contains too many changes.",
+      );
+    }
     for change in changes {
       if change.get("field").and_then(Value::as_str) != Some("messages") {
         continue;
@@ -2295,11 +2334,24 @@ async fn handle_whatsapp_callback(
           "No loaded WOML trigger is registered for this WhatsApp Phone Number ID.",
         );
       };
-      let messages = value
-        .get("messages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+      let messages = match value.get("messages") {
+        None => Vec::new(),
+        Some(Value::Array(messages)) => messages.clone(),
+        Some(_) => {
+          return whatsapp_callback_error(
+            StatusCode::BAD_REQUEST,
+            "WOML_WHATSAPP_PAYLOAD_INVALID",
+            "The WhatsApp callback message list is invalid.",
+          )
+        }
+      };
+      if messages.len() > COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS {
+        return whatsapp_callback_error(
+          StatusCode::PAYLOAD_TOO_LARGE,
+          "WOML_WHATSAPP_BATCH_TOO_LARGE",
+          "The WhatsApp callback contains too many messages.",
+        );
+      }
       for message in messages {
         let Some(message_id) = message.get("id").and_then(Value::as_str) else {
           continue;
@@ -2307,6 +2359,12 @@ async fn handle_whatsapp_callback(
         let Some(sender) = message.get("from").and_then(Value::as_str) else {
           continue;
         };
+        if !bounded_whatsapp_message_id(message_id)
+          || !(8..=16).contains(&sender.len())
+          || !sender.bytes().all(|byte| byte.is_ascii_digit())
+        {
+          continue;
+        }
         if let Some(button_payload) = message
           .get("interactive")
           .and_then(|interactive| interactive.get("button_reply"))
@@ -2369,7 +2427,15 @@ async fn handle_whatsapp_callback(
             Value::String(phone_number_id.to_string()),
           )])),
         );
-        if let Some(timestamp) = message.get("timestamp").and_then(Value::as_str) {
+        if let Some(timestamp) = message
+          .get("timestamp")
+          .and_then(Value::as_str)
+          .filter(|value| {
+            !value.is_empty()
+              && value.len() <= 20
+              && value.bytes().all(|byte| byte.is_ascii_digit())
+          })
+        {
           payload.insert(
             "timestamp".to_string(),
             Value::String(timestamp.to_string()),
@@ -2402,7 +2468,9 @@ async fn handle_whatsapp_callback(
               .and_then(|button| button.get("text"))
               .and_then(Value::as_str)
           });
-        let Some(text) = text else {
+        let Some(text) = text.filter(|value| {
+          !value.is_empty() && value.len() <= COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES
+        }) else {
           continue;
         };
         payload.insert("text".to_string(), Value::String(text.to_string()));
@@ -2410,6 +2478,7 @@ async fn handle_whatsapp_callback(
           .get("context")
           .and_then(|context| context.get("id"))
           .and_then(Value::as_str)
+          .filter(|value| bounded_whatsapp_message_id(value))
         {
           payload.insert(
             "replyToMessageId".to_string(),
@@ -3461,8 +3530,22 @@ mod tests {
       "test-secret"
     ));
     assert!(matches!(
-      whatsapp_decision_payload("woml_approve:ncap_1234.secret"),
-      Some((crate::ApprovalDecision::Approved, "ncap_1234.secret"))
+      whatsapp_decision_payload(
+        "woml_approve:ncap_1234567890abcdef.1234567890abcdef1234567890abcdef"
+      ),
+      Some((
+        crate::ApprovalDecision::Approved,
+        "ncap_1234567890abcdef.1234567890abcdef1234567890abcdef"
+      ))
     ));
+    assert!(whatsapp_decision_payload("woml_approve:ncap_1234.secret").is_none());
+    assert!(whatsapp_decision_payload(&format!(
+      "woml_reject:ncap_{}.{}x",
+      "a".repeat(16),
+      "b".repeat(32)
+    ))
+    .is_none());
+    assert!(bounded_whatsapp_message_id("wamid.message-1"));
+    assert!(!bounded_whatsapp_message_id(&"x".repeat(513)));
   }
 }

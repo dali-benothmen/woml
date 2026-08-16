@@ -6,6 +6,15 @@ import type {
   DiscordNormalizedUpdate,
   DiscordUpdateListener,
 } from './types';
+import {
+  COMMUNICATION_PROVIDER_MAX_CONNECTIONS,
+  COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES,
+  COMMUNICATION_PROVIDER_MAX_SUBSCRIBERS,
+  ProviderResponseLimitError,
+  providerCredentialWithinBudget,
+  readProviderResponseBody,
+  serializeProviderRequest,
+} from '../communication-provider/limits';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const DISCORD_GATEWAY = 'wss://gateway.discord.gg/?v=10&encoding=json';
@@ -121,6 +130,14 @@ export class SharedDiscordTransport {
     listener: DiscordUpdateListener
   ): () => void {
     if (this.#closed) throw this.#unavailable();
+    if (this.#listenerCount() >= COMMUNICATION_PROVIDER_MAX_SUBSCRIBERS) {
+      throw failure(
+        'size_limit_exceeded',
+        'WOML_DISCORD_SUBSCRIBER_LIMIT',
+        `Discord supports at most ${COMMUNICATION_PROVIDER_MAX_SUBSCRIBERS} active trigger subscriptions per runtime.`,
+        false
+      );
+    }
     const connection = this.#connectionsByReference.get(botTokenReference);
     const listeners =
       connection?.listeners ??
@@ -148,6 +165,17 @@ export class SharedDiscordTransport {
     }
     let connection = this.#connectionsByToken.get(botToken);
     if (connection === undefined) {
+      if (
+        this.#connectionsByToken.size >=
+        COMMUNICATION_PROVIDER_MAX_CONNECTIONS
+      ) {
+        throw failure(
+          'size_limit_exceeded',
+          'WOML_DISCORD_CONNECTION_LIMIT',
+          `Discord supports at most ${COMMUNICATION_PROVIDER_MAX_CONNECTIONS} bot connections per runtime.`,
+          false
+        );
+      }
       const identity = await this.botIdentity(botToken);
       connection = {
         token: botToken,
@@ -551,7 +579,8 @@ export class SharedDiscordTransport {
       !snowflake(data.id) ||
       !snowflake(data.channel_id) ||
       typeof data.content !== 'string' ||
-      Buffer.byteLength(data.content, 'utf8') > 40_000 ||
+      Buffer.byteLength(data.content, 'utf8') >
+        COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES ||
       typeof data.timestamp !== 'string' ||
       !record(data.author) ||
       !snowflake(data.author.id) ||
@@ -729,6 +758,25 @@ export class SharedDiscordTransport {
     body: Readonly<Record<string, unknown>> | undefined,
     effect: 'read' | 'delivery' | 'update'
   ): Promise<unknown> {
+    if (botToken !== undefined && !providerCredentialWithinBudget(botToken)) {
+      throw failure(
+        'provider_auth_failed',
+        'WOML_DISCORD_CREDENTIAL_INVALID',
+        'The configured Discord bot token has an invalid shape or exceeds the credential limit.',
+        false
+      );
+    }
+    let requestBody: string | undefined;
+    try {
+      requestBody = body === undefined ? undefined : serializeProviderRequest(body);
+    } catch {
+      throw failure(
+        'size_limit_exceeded',
+        'WOML_DISCORD_REQUEST_TOO_LARGE',
+        'The Discord request exceeds the 64 KiB provider limit.',
+        false
+      );
+    }
     const controller = new AbortController();
     this.#controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -742,7 +790,7 @@ export class SharedDiscordTransport {
             : { authorization: `Bot ${botToken}` }),
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(requestBody === undefined ? {} : { body: requestBody }),
         signal: controller.signal,
       });
     } catch {
@@ -763,10 +811,27 @@ export class SharedDiscordTransport {
     let decoded: unknown;
     if (response.status === 204) decoded = undefined;
     else {
+      let text: string;
       try {
-        decoded = await response.json();
-      } catch {
+        text = await readProviderResponseBody(response);
+      } catch (error) {
+        if (error instanceof ProviderResponseLimitError) {
+          throw failure(
+            'size_limit_exceeded',
+            'WOML_DISCORD_RESPONSE_TOO_LARGE',
+            'Discord returned a response larger than the 1 MiB provider limit.',
+            false
+          );
+        }
         decoded = undefined;
+        text = '';
+      }
+      if (text.length > 0) {
+        try {
+          decoded = JSON.parse(text);
+        } catch {
+          decoded = undefined;
+        }
       }
     }
     if (!response.ok) throw this.#apiFailure(response.status, decoded, effect);
@@ -841,5 +906,16 @@ export class SharedDiscordTransport {
       'The Discord transport is closed or has conflicting credentials.',
       true
     );
+  }
+
+  #listenerCount(): number {
+    let total = 0;
+    for (const connection of this.#connectionsByToken.values()) {
+      total += connection.listeners.size;
+    }
+    for (const listeners of this.#pendingListeners.values()) {
+      total += listeners.size;
+    }
+    return total;
   }
 }

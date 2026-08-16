@@ -215,3 +215,92 @@ async fn verifies_handshake_signature_and_durably_deduplicates_messages() {
   assert!(projection.context.trigger.get("occurredAt").is_some());
   server.stop_with_deadline(Duration::from_millis(100)).await;
 }
+
+#[actix_web::test]
+async fn rejects_adversarial_batches_and_accepts_bounded_unicode_without_leaking_secrets() {
+  let database = TemporaryDatabase::new();
+  let progress = Arc::new(Mutex::new(Vec::new()));
+  let report = Arc::clone(&progress);
+  let server = WomlWebhookServer::start(WomlWebhookServerConfig {
+    bind_address: "127.0.0.1:0".parse().unwrap(),
+    database_path: database.0.clone(),
+    registrations: vec![WebhookDefinitionRegistration::new(model(), DEFINITION_HASH)
+      .with_secret("WHATSAPP_VERIFY_TOKEN", VERIFY_TOKEN)
+      .with_secret("WHATSAPP_APP_SECRET", APP_SECRET)],
+    startup_manual_triggers: Default::default(),
+    execution: RuntimeExecutionOptions::new(
+      ScriptHostProcessOptions::new("bun", "missing-whatsapp-test-host.ts"),
+      1_000,
+    ),
+    progress_reporter: Some(Arc::new(move |event| {
+      report.lock().unwrap().push(event);
+    })),
+  })
+  .await
+  .expect("WhatsApp runtime");
+  let address = server.local_address();
+
+  let malformed = signed_post(address, "{", APP_SECRET).await;
+  assert!(malformed.starts_with("HTTP/1.1 400"), "{malformed}");
+  assert!(!malformed.contains(APP_SECRET));
+  assert!(!malformed.contains(VERIFY_TOKEN));
+
+  let messages = (0..101)
+    .map(|index| {
+      json!({
+        "from": "15551234567",
+        "id": format!("wamid.batch-{index}"),
+        "timestamp": "1786880000",
+        "type": "text",
+        "text": { "body": "bounded" }
+      })
+    })
+    .collect::<Vec<_>>();
+  let oversized_batch = json!({
+    "object": "whatsapp_business_account",
+    "entry": [{
+      "changes": [{
+        "field": "messages",
+        "value": {
+          "metadata": { "phone_number_id": PHONE_NUMBER_ID },
+          "messages": messages
+        }
+      }]
+    }]
+  })
+  .to_string();
+  let rejected = signed_post(address, &oversized_batch, APP_SECRET).await;
+  assert!(rejected.starts_with("HTTP/1.1 413"), "{rejected}");
+  assert!(rejected.contains("WOML_WHATSAPP_BATCH_TOO_LARGE"));
+
+  let unicode = json!({
+    "object": "whatsapp_business_account",
+    "entry": [{
+      "changes": [{
+        "field": "messages",
+        "value": {
+          "metadata": { "phone_number_id": PHONE_NUMBER_ID },
+          "messages": [{
+            "from": "15551234567",
+            "id": "wamid.unicode-1",
+            "timestamp": "1786880000",
+            "type": "text",
+            "text": { "body": "مرحبا 👋 WOML" }
+          }]
+        }
+      }]
+    }]
+  })
+  .to_string();
+  let accepted = signed_post(address, &unicode, APP_SECRET).await;
+  assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+  assert!(progress.lock().unwrap().iter().any(|event| matches!(
+    event,
+    TriggerProgress::OccurrenceAccepted {
+      trigger_handler,
+      ..
+    } if trigger_handler == "trigger.whatsapp"
+  )));
+
+  server.stop_with_deadline(Duration::from_millis(100)).await;
+}

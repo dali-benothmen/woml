@@ -1,6 +1,6 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0 through ACP8 were completed on 2026-08-16.
+Status: In progress. ACP0 through ACP9 were completed on 2026-08-16.
 Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
 end to end through the durable production runtime. Discord authoring, imported
 module discovery, validation, Model v15 / Definition Package v10 lowering, and
@@ -1066,6 +1066,17 @@ cancellation, provider outage, workflow restart, nested control flow,
 multi-workflow, and custom-provider composition tests pass.
 
 ### ACP9 — Harden diagnostics, security, recovery, and operations
+
+Status: **Completed on 2026-08-16.** Telegram, Discord, and WhatsApp now have
+safe read-only doctor commands with human, colored/plain, and stable JSON
+output. Shared connection, subscriber, request, response, batch, message, and
+diagnostic limits fail closed with provider-specific WOML codes. The WhatsApp
+callback validates exact capability shapes, bounded signed batches,
+identifiers, Unicode text, and signatures before durable admission. Existing
+cross-provider convergence, ambiguity, restart, backup/restore, retention,
+background-log, and platform gates are collected by the descriptive
+communication-provider hardening suite. Operational guidance lives in
+`docs/communication-provider-operations.md`.
 
 Changes:
 

@@ -2,6 +2,12 @@ import type {
   WhatsAppFailure,
   WhatsAppMessageIdentity,
 } from './types';
+import {
+  ProviderResponseLimitError,
+  providerCredentialWithinBudget,
+  readProviderResponseBody,
+  serializeProviderRequest,
+} from '../communication-provider/limits';
 
 const GRAPH_API = 'https://graph.facebook.com/v23.0';
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -104,6 +110,14 @@ export class SharedWhatsAppTransport {
         true
       );
     }
+    if (!providerCredentialWithinBudget(options.accessToken)) {
+      throw failure(
+        'provider_auth_failed',
+        'WOML_WHATSAPP_CREDENTIAL_INVALID',
+        'The configured WhatsApp access token has an invalid shape or exceeds the credential limit.',
+        false
+      );
+    }
     const components: Record<string, unknown>[] = options.parameters.length === 0
       ? []
       : [{
@@ -132,6 +146,27 @@ export class SharedWhatsAppTransport {
         }
       );
     }
+    let requestBody: string;
+    try {
+      requestBody = serializeProviderRequest({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: options.conversationId,
+        type: 'template',
+        template: {
+          name: options.templateName,
+          language: { code: options.language },
+          ...(components.length === 0 ? {} : { components }),
+        },
+      });
+    } catch {
+      throw failure(
+        'size_limit_exceeded',
+        'WOML_WHATSAPP_REQUEST_TOO_LARGE',
+        'The WhatsApp request exceeds the 64 KiB provider limit.',
+        false
+      );
+    }
     const controller = new AbortController();
     this.#controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -145,17 +180,7 @@ export class SharedWhatsAppTransport {
             authorization: `Bearer ${options.accessToken}`,
             'content-type': 'application/json',
           },
-          body: JSON.stringify({
-            messaging_product: 'whatsapp',
-            recipient_type: 'individual',
-            to: options.conversationId,
-            type: 'template',
-            template: {
-              name: options.templateName,
-              language: { code: options.language },
-              ...(components.length === 0 ? {} : { components }),
-            },
-          }),
+          body: requestBody,
           signal: controller.signal,
         }
       );
@@ -170,7 +195,25 @@ export class SharedWhatsAppTransport {
       clearTimeout(timeout);
       this.#controllers.delete(controller);
     }
-    const raw = await response.text();
+    let raw: string;
+    try {
+      raw = await readProviderResponseBody(response);
+    } catch (error) {
+      if (error instanceof ProviderResponseLimitError) {
+        throw failure(
+          'size_limit_exceeded',
+          'WOML_WHATSAPP_RESPONSE_TOO_LARGE',
+          'Meta returned a response larger than the 1 MiB provider limit.',
+          false
+        );
+      }
+      throw failure(
+        'delivery_ambiguous',
+        'WOML_WHATSAPP_RESPONSE_INVALID',
+        'Meta returned an unreadable WhatsApp response.',
+        false
+      );
+    }
     let body: unknown;
     try {
       body = raw.length === 0 ? {} : JSON.parse(raw);
@@ -209,4 +252,3 @@ export class SharedWhatsAppTransport {
     this.#controllers.clear();
   }
 }
-

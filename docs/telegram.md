@@ -79,6 +79,17 @@ silently sending a duplicate message.
 
 ## Common errors
 
+Run a safe read-only setup check at any time:
+
+```bash
+woml telegram doctor --destination -1001234567890
+```
+
+It verifies authentication, polling conflicts, and optional chat access
+without sending a message. See
+[Communication Provider Diagnostics and Operations](communication-provider-operations.md)
+for JSON output, resource limits, token rotation, and recovery.
+
 - `WOML_SECRET_NOT_FOUND`: configure the named token with `woml secrets set`.
 - `WOML_TELEGRAM_AUTH_FAILED`: BotFather token is invalid or was revoked.
 - `WOML_TELEGRAM_DESTINATION_INVALID`: verify the numeric chat ID and ensure

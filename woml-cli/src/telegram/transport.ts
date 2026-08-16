@@ -1,4 +1,14 @@
 import { CommunicationProviderAdapterError } from '../communication-provider';
+import {
+  COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS,
+  COMMUNICATION_PROVIDER_MAX_CONNECTIONS,
+  COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES,
+  COMMUNICATION_PROVIDER_MAX_SUBSCRIBERS,
+  ProviderResponseLimitError,
+  providerCredentialWithinBudget,
+  readProviderResponseBody,
+  serializeProviderRequest,
+} from '../communication-provider/limits';
 import type {
   TelegramBotIdentity,
   TelegramFailure,
@@ -146,6 +156,14 @@ export class SharedTelegramTransport {
     listener: TelegramUpdateListener
   ): () => void {
     if (this.#closed) throw this.#unavailable();
+    if (this.#listenerCount() >= COMMUNICATION_PROVIDER_MAX_SUBSCRIBERS) {
+      throw failure(
+        'size_limit_exceeded',
+        'WOML_TELEGRAM_SUBSCRIBER_LIMIT',
+        `Telegram supports at most ${COMMUNICATION_PROVIDER_MAX_SUBSCRIBERS} active trigger subscriptions per runtime.`,
+        false
+      );
+    }
     const connection = this.#connectionsByReference.get(botTokenReference);
     const listeners =
       connection?.listeners ??
@@ -173,6 +191,17 @@ export class SharedTelegramTransport {
     }
     let connection = this.#connectionsByToken.get(botToken);
     if (connection === undefined) {
+      if (
+        this.#connectionsByToken.size >=
+        COMMUNICATION_PROVIDER_MAX_CONNECTIONS
+      ) {
+        throw failure(
+          'size_limit_exceeded',
+          'WOML_TELEGRAM_CONNECTION_LIMIT',
+          `Telegram supports at most ${COMMUNICATION_PROVIDER_MAX_CONNECTIONS} bot connections per runtime.`,
+          false
+        );
+      }
       const identity = await this.botIdentity(botToken);
       connection = {
         token: botToken,
@@ -334,7 +363,10 @@ export class SharedTelegramTransport {
           'read',
           (this.#pollTimeoutSeconds + 5) * 1_000
         );
-        if (!Array.isArray(result)) {
+        if (
+          !Array.isArray(result) ||
+          result.length > COMMUNICATION_PROVIDER_MAX_BATCH_ITEMS
+        ) {
           throw failure(
             'request_invalid',
             'WOML_TELEGRAM_RESPONSE_INVALID',
@@ -407,7 +439,8 @@ export class SharedTelegramTransport {
       !Number.isSafeInteger(message.message_id) ||
       !Number.isSafeInteger(message.date) ||
       typeof message.text !== 'string' ||
-      Buffer.byteLength(message.text, 'utf8') > 40_000 ||
+      Buffer.byteLength(message.text, 'utf8') >
+        COMMUNICATION_PROVIDER_MAX_MESSAGE_BYTES ||
       !record(message.from) ||
       (!Number.isSafeInteger(message.from.id) && typeof message.from.id !== 'string') ||
       message.from.is_bot === true ||
@@ -453,6 +486,25 @@ export class SharedTelegramTransport {
     effect: 'read' | 'delivery' | 'update',
     timeoutMs = REQUEST_TIMEOUT_MS
   ): Promise<unknown> {
+    if (!providerCredentialWithinBudget(botToken)) {
+      throw failure(
+        'provider_auth_failed',
+        'WOML_TELEGRAM_CREDENTIAL_INVALID',
+        'The configured Telegram bot token has an invalid shape or exceeds the credential limit.',
+        false
+      );
+    }
+    let requestBody: string;
+    try {
+      requestBody = serializeProviderRequest(body);
+    } catch {
+      throw failure(
+        'size_limit_exceeded',
+        'WOML_TELEGRAM_REQUEST_TOO_LARGE',
+        'The Telegram request exceeds the 64 KiB provider limit.',
+        false
+      );
+    }
     const controller = new AbortController();
     this.#controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -461,7 +513,7 @@ export class SharedTelegramTransport {
       response = await this.#fetch(`${TELEGRAM_API}/bot${botToken}/${method}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        body: requestBody,
         signal: controller.signal,
       });
     } catch (error) {
@@ -480,9 +532,23 @@ export class SharedTelegramTransport {
       clearTimeout(timeout);
       this.#controllers.delete(controller);
     }
+    let text: string;
+    try {
+      text = await readProviderResponseBody(response);
+    } catch (error) {
+      if (error instanceof ProviderResponseLimitError) {
+        throw failure(
+          'size_limit_exceeded',
+          'WOML_TELEGRAM_RESPONSE_TOO_LARGE',
+          'Telegram returned a response larger than the 1 MiB provider limit.',
+          false
+        );
+      }
+      throw apiFailure(response.status, {}, effect);
+    }
     let decoded: unknown;
     try {
-      decoded = await response.json();
+      decoded = JSON.parse(text);
     } catch {
       throw apiFailure(response.status, {}, effect);
     }
@@ -503,5 +569,16 @@ export class SharedTelegramTransport {
       'The Telegram transport is closed or has conflicting credentials.',
       true
     );
+  }
+
+  #listenerCount(): number {
+    let total = 0;
+    for (const connection of this.#connectionsByToken.values()) {
+      total += connection.listeners.size;
+    }
+    for (const listeners of this.#pendingListeners.values()) {
+      total += listeners.size;
+    }
+    return total;
   }
 }

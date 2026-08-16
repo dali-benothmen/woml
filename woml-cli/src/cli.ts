@@ -201,6 +201,12 @@ import {
   type AutomaticRetentionConfiguration,
   type AutomaticRetentionHandle,
 } from './production-retention';
+import {
+  formatProviderDoctor,
+  parseProviderDoctorArguments,
+  providerDoctorUsage,
+  runProviderDoctor,
+} from './provider-doctor';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -274,7 +280,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${logFollowUsage}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${logFollowUsage}\n${checkUsage()}\n${typesUsage()}\n${inspectUsage}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${stopUsage()}\n${emitUsage()}\n${secretsUsage()}\n${providerDoctorUsage()}`;
 }
 
 interface RunArguments {
@@ -4940,6 +4946,9 @@ export async function runCli(
     'get',
     'cancel',
     'runs',
+    'telegram',
+    'discord',
+    'whatsapp',
   ]);
   if (
     args.includes('--logs') &&
@@ -4979,6 +4988,38 @@ export async function runCli(
 
   if (args[0] === 'secrets') {
     return await runSecretsCommand(args, io, dependencies);
+  }
+
+  if (
+    args[0] === 'telegram' ||
+    args[0] === 'discord' ||
+    args[0] === 'whatsapp'
+  ) {
+    let parsed;
+    try {
+      parsed = parseProviderDoctorArguments(args);
+    } catch {
+      io.stderr(`${providerDoctorUsage(args[0])}\n`);
+      return 2;
+    }
+    try {
+      const result = await runProviderDoctor(parsed, {
+        secretStore: dependencies.createSecretStore(),
+        fetch: (dependencies.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
+      });
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(result)}\n`
+          : formatProviderDoctor(result, {
+              color: parsed.color,
+              isTTY: io.isTTY,
+            })
+      );
+      return result.status === 'failed' ? 1 : 0;
+    } catch (error) {
+      io.stderr(`${formatError(error)}\n`);
+      return 1;
+    }
   }
 
   if (args[0] === 'emit') {
