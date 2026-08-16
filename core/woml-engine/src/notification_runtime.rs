@@ -156,7 +156,7 @@ pub async fn run_notification_provider_journey_with_custom(
   let has_builtin = approval.notifications.iter().any(|definition| {
     matches!(
       definition.provider.as_str(),
-      "slack" | "telegram" | "discord"
+      "slack" | "telegram" | "discord" | "whatsapp"
     )
   });
   let has_custom = approval
@@ -871,6 +871,8 @@ fn delivery_message(
       approval_description: approval_description.map(str::to_string),
       expires_at,
     },
+    template_name: work.template_name.clone(),
+    language: work.language.clone(),
   })
 }
 

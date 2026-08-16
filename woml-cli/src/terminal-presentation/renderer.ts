@@ -416,7 +416,7 @@ function workflowBox(workflow: WorkflowPresentationV1, options: ResolvedRenderOp
 
 function triggerTitle(trigger: TriggerPresentationV1): string {
   const labels: Record<TriggerPresentationV1['type'], string> = {
-    manual: 'Manual', webhook: 'Webhook', slack: 'Slack', telegram: 'Telegram', discord: 'Discord', schedule: 'Schedule',
+    manual: 'Manual', webhook: 'Webhook', slack: 'Slack', telegram: 'Telegram', discord: 'Discord', whatsapp: 'WhatsApp', schedule: 'Schedule',
     interval: 'Interval', event: 'Event',
   };
   return trigger.label ?? labels[trigger.type];
@@ -447,6 +447,12 @@ function triggerDetails(
   if (trigger.type === 'discord') return [
     'Mention the configured Discord bot or send it a direct message.',
     ...(trigger.scope === undefined ? [] : [`Events     ${trigger.scope}`]),
+  ];
+  if (trigger.type === 'whatsapp') return [
+    'Send a message to the configured WhatsApp Business number.',
+    ...(trigger.url === undefined ? [] : [`Callback   ${trigger.url}`]),
+    ...(trigger.scope === undefined ? [] : [`Events     ${trigger.scope}`]),
+    ...(trigger.warning === undefined ? [] : [`Warning    ${trigger.warning}`]),
   ];
   if (trigger.type === 'schedule') return [
     `Schedule   ${trigger.schedule ?? 'configured schedule'}`,

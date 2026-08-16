@@ -1114,6 +1114,7 @@ fn valid_trigger_handler(value: &str) -> bool {
       | "trigger.slack"
       | "trigger.telegram"
       | "trigger.discord"
+      | "trigger.whatsapp"
       | "trigger.schedule"
       | "trigger.interval"
       | "trigger.event"
@@ -1760,7 +1761,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V11
         ) || !matches!(
           data.provider.as_str(),
-          "slack" | "telegram" | "discord" | "custom"
+          "slack" | "telegram" | "discord" | "whatsapp" | "custom"
         ) || data.destination.is_empty()
         {
           return Err(EventValidationError::Invalid(
@@ -1861,6 +1862,13 @@ impl RunEvent {
               .strip_prefix("discord:")
               .is_some_and(|value| {
                 (17..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
+              }))
+          || (data.provider == "whatsapp"
+            && data
+              .provider_actor_id
+              .strip_prefix("whatsapp:")
+              .is_some_and(|value| {
+                (8..=16).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
               }))
           || (data.provider == "custom" && data.provider_actor_id == "custom-provider"))
         {

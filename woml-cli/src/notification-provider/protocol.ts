@@ -36,17 +36,21 @@ const ID = /^.{1,320}$/s;
 const APPROVAL_ID = /^[a-z][A-Za-z0-9]*$/;
 const REQUEST_ID = /^aprreq_[A-Za-z0-9_-]+$/;
 const DELIVERY_ID =
-  /^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):(channel|chat):(0|[1-9][0-9]*)$/;
+  /^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):(channel|chat|recipient):(0|[1-9][0-9]*)$/;
 const UPDATE_ID = /^nupdate_[A-Za-z0-9_-]+$/;
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const SLACK_DESTINATION = /^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/;
 const TELEGRAM_DESTINATION = /^-?[1-9][0-9]{0,19}$/;
 const DISCORD_ID = /^[1-9][0-9]{16,19}$/;
+const WHATSAPP_RECIPIENT = /^[0-9]{8,16}$/;
+const WHATSAPP_PHONE_NUMBER_ID = /^[0-9]{6,32}$/;
+const WHATSAPP_TEMPLATE = /^[a-z][a-z0-9_]{0,511}$/;
+const WHATSAPP_LANGUAGE = /^[a-z]{2,3}(?:_[A-Z]{2})?$/;
 
 function supportedProvider(
   value: unknown
-): value is 'slack' | 'telegram' | 'discord' {
-  return value === 'slack' || value === 'telegram' || value === 'discord';
+): value is 'slack' | 'telegram' | 'discord' | 'whatsapp' {
+  return value === 'slack' || value === 'telegram' || value === 'discord' || value === 'whatsapp';
 }
 
 function validDestination(value: unknown, provider: unknown): boolean {
@@ -55,7 +59,9 @@ function validDestination(value: unknown, provider: unknown): boolean {
       ? SLACK_DESTINATION.test(value)
       : provider === 'telegram'
         ? TELEGRAM_DESTINATION.test(value)
-        : provider === 'discord' && DISCORD_ID.test(value)
+        : provider === 'discord'
+          ? DISCORD_ID.test(value)
+          : provider === 'whatsapp' && WHATSAPP_RECIPIENT.test(value)
   );
 }
 
@@ -75,6 +81,12 @@ function credentials(value: unknown, provider: unknown): boolean {
   if (provider === 'telegram' || provider === 'discord') {
     return exactKeys(value, ['botToken']) && secretReference(value.botToken);
   }
+  if (provider === 'whatsapp') {
+    return exactKeys(value, ['accessToken', 'phoneNumberId']) &&
+      secretReference(value.accessToken) &&
+      typeof value.phoneNumberId === 'string' &&
+      WHATSAPP_PHONE_NUMBER_ID.test(value.phoneNumberId);
+  }
   return provider === 'slack' &&
     exactKeys(value, ['botToken', 'appToken']) &&
     secretReference(value.botToken) &&
@@ -87,19 +99,25 @@ export function validProviderMessage(
   if (
     record(value) &&
     exactKeys(value, ['provider', 'accountId', 'conversationId', 'messageId']) &&
-    (value.provider === 'telegram' || value.provider === 'discord') &&
+    (value.provider === 'telegram' || value.provider === 'discord' || value.provider === 'whatsapp') &&
     typeof value.accountId === 'string' &&
     (value.provider === 'telegram'
       ? /^[1-9][0-9]{0,19}$/.test(value.accountId)
-      : DISCORD_ID.test(value.accountId)) &&
+      : value.provider === 'discord'
+        ? DISCORD_ID.test(value.accountId)
+        : WHATSAPP_PHONE_NUMBER_ID.test(value.accountId)) &&
     typeof value.conversationId === 'string' &&
     (value.provider === 'telegram'
       ? TELEGRAM_DESTINATION.test(value.conversationId)
-      : DISCORD_ID.test(value.conversationId)) &&
+      : value.provider === 'discord'
+        ? DISCORD_ID.test(value.conversationId)
+        : WHATSAPP_RECIPIENT.test(value.conversationId)) &&
     typeof value.messageId === 'string' &&
     (value.provider === 'telegram'
       ? /^[1-9][0-9]{0,19}$/.test(value.messageId)
-      : DISCORD_ID.test(value.messageId))
+      : value.provider === 'discord'
+        ? DISCORD_ID.test(value.messageId)
+        : value.messageId.length >= 1 && value.messageId.length <= 512)
   ) return true;
   return (
     record(value) &&
@@ -187,6 +205,9 @@ export function assertNotificationInvocation(
     );
   }
   if (value.protocolVersion === INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION) {
+    const whatsappTemplateKeys = value.provider === 'whatsapp'
+      ? ['templateName', 'language']
+      : [];
     if (
       !informationalBase(value) ||
       !exactKeys(value, [
@@ -204,12 +225,18 @@ export function assertNotificationInvocation(
         'idempotencyKey',
         'credentials',
         'message',
+        ...whatsappTemplateKeys,
       ]) ||
       value.messageType !== 'deliver' ||
       value.mode !== 'informational' ||
       typeof value.message !== 'string' ||
       value.message.length < 1 ||
-      [...value.message].length > 4096
+      [...value.message].length > 4096 ||
+      (value.provider === 'whatsapp' &&
+        (typeof value.templateName !== 'string' ||
+          !WHATSAPP_TEMPLATE.test(value.templateName) ||
+          typeof value.language !== 'string' ||
+          !WHATSAPP_LANGUAGE.test(value.language)))
     ) {
       throw new NotificationProtocolError(
         'The provider host received an invalid informational delivery invocation.'
@@ -223,6 +250,9 @@ export function assertNotificationInvocation(
     );
   }
   if (value.messageType === 'deliver') {
+    const whatsappTemplateKeys = value.provider === 'whatsapp'
+      ? ['templateName', 'language']
+      : [];
     if (
       !exactKeys(
         value,
@@ -241,6 +271,7 @@ export function assertNotificationInvocation(
           'credentials',
           'decisionCapability',
           'message',
+          ...whatsappTemplateKeys,
         ]
       ) ||
       !validDestination(value.destination, value.provider) ||
@@ -249,7 +280,12 @@ export function assertNotificationInvocation(
       typeof value.decisionCapability !== 'string' ||
       value.decisionCapability.length < 43 ||
       value.decisionCapability.length > 512 ||
-      !approvalMessage(value.message)
+      !approvalMessage(value.message) ||
+      (value.provider === 'whatsapp' &&
+        (typeof value.templateName !== 'string' ||
+          !WHATSAPP_TEMPLATE.test(value.templateName) ||
+          typeof value.language !== 'string' ||
+          !WHATSAPP_LANGUAGE.test(value.language)))
     ) {
       throw new NotificationProtocolError(
         'The provider host received an invalid delivery invocation.'

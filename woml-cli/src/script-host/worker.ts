@@ -758,6 +758,94 @@ function publicDiscordResult(result: JsonValue): JsonValue {
   });
 }
 
+function normalizeWhatsAppSend(input: JsonValue): JsonObject {
+  const object = plainObject(input);
+  if (object === undefined) {
+    throw new TypeError('services.whatsapp.send() requires a request object.');
+  }
+  const allowed = new Set([
+    'accessToken',
+    'phoneNumberId',
+    'conversationId',
+    'template',
+  ]);
+  const unknown = Object.keys(object).find(key => !allowed.has(key));
+  if (unknown !== undefined) {
+    throw new TypeError(`Unknown WhatsApp send option "${unknown}".`);
+  }
+  for (const required of [
+    'accessToken',
+    'phoneNumberId',
+    'conversationId',
+  ] as const) {
+    if (typeof object[required] !== 'string' || object[required].length === 0) {
+      throw new TypeError(
+        `WhatsApp send requires a non-empty ${required} string.`
+      );
+    }
+  }
+  if (!/^[0-9]{6,32}$/.test(object.phoneNumberId as string)) {
+    throw new TypeError('WhatsApp phoneNumberId must be a numeric Meta Phone Number ID.');
+  }
+  if (!/^[0-9]{8,16}$/.test(object.conversationId as string)) {
+    throw new TypeError(
+      'WhatsApp conversationId must contain 8 to 16 digits without a plus sign.'
+    );
+  }
+  const template = plainObject(object.template);
+  if (
+    template === undefined ||
+    Object.keys(template).some(
+      key => key !== 'name' && key !== 'language' && key !== 'parameters'
+    ) ||
+    typeof template.name !== 'string' ||
+    !/^[a-z][a-z0-9_]{0,511}$/.test(template.name) ||
+    typeof template.language !== 'string' ||
+    !/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(template.language) ||
+    !Array.isArray(template.parameters) ||
+    template.parameters.length > 32 ||
+    template.parameters.some(
+      value => typeof value !== 'string' || value.length > 1024
+    )
+  ) {
+    throw new TypeError(
+      'WhatsApp template must contain a valid name, language, and string parameters array.'
+    );
+  }
+  return {
+    contract: 'woml.whatsapp-message',
+    contractVersion: 1,
+    kind: 'send',
+    accessToken: object.accessToken,
+    phoneNumberId: object.phoneNumberId,
+    conversationId: object.conversationId,
+    template: {
+      name: template.name,
+      language: template.language,
+      parameters: template.parameters,
+    },
+  };
+}
+
+function publicWhatsAppResult(result: JsonValue): JsonValue {
+  const object = plainObject(result);
+  if (
+    object === undefined ||
+    object.provider !== 'whatsapp' ||
+    typeof object.conversationId !== 'string' ||
+    typeof object.messageId !== 'string' ||
+    typeof object.acceptedAt !== 'string'
+  ) {
+    throw new TypeError('WhatsApp returned an invalid managed result.');
+  }
+  return Object.freeze({
+    provider: 'whatsapp',
+    conversationId: object.conversationId,
+    messageId: object.messageId,
+    acceptedAt: object.acceptedAt,
+  });
+}
+
 function namedOperation(
   capability: string,
   operation: string,
@@ -1519,6 +1607,7 @@ function deeplyReadonlyServiceFacade(
       (operation === 'call' || operation === 'start');
     const managedTelegram = capability === 'telegram' && operation === 'send';
     const managedDiscord = capability === 'discord' && operation === 'send';
+    const managedWhatsApp = capability === 'whatsapp' && operation === 'send';
     if (
       !managedHttp &&
       !managedDatabase &&
@@ -1529,6 +1618,7 @@ function deeplyReadonlyServiceFacade(
       !managedWorkflows &&
       !managedTelegram &&
       !managedDiscord &&
+      !managedWhatsApp &&
       callOptions !== undefined
     ) {
       throw new TypeError(
@@ -1572,7 +1662,8 @@ function deeplyReadonlyServiceFacade(
         stateEffectful ||
         managedEvents ||
         managedTelegram ||
-        managedDiscord) &&
+        managedDiscord ||
+        managedWhatsApp) &&
       identity.mode === 'automatic'
     ) {
       const key = `${capability}.${operation}`;
@@ -1656,6 +1747,8 @@ function deeplyReadonlyServiceFacade(
                   ? publicTelegramResult(result)
                   : managedDiscord
                     ? publicDiscordResult(result)
+                    : managedWhatsApp
+                      ? publicWhatsAppResult(result)
                 : result;
   };
   return new Proxy(Object.freeze({}), {
@@ -1860,6 +1953,8 @@ function deeplyReadonlyServiceFacade(
                   ? normalizeTelegramSend(rawInput)
                   : capabilityProperty === 'discord' && operationProperty === 'send'
                     ? normalizeDiscordSend(rawInput)
+                  : capabilityProperty === 'whatsapp' && operationProperty === 'send'
+                    ? normalizeWhatsAppSend(rawInput)
                 : rawInput,
               callOptions
             );

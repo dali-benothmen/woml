@@ -21,6 +21,10 @@ import {
   SharedDiscordTransport,
 } from './discord';
 import {
+  SharedWhatsAppTransport,
+  WhatsAppNotificationAdapter,
+} from './whatsapp';
+import {
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
   NOTIFICATION_PROVIDER_PROTOCOL,
@@ -84,6 +88,7 @@ export interface RunNotificationProviderHostOptions {
   ) => SlackTransport;
   readonly createTelegramTransport?: () => SharedTelegramTransport;
   readonly createDiscordTransport?: () => SharedDiscordTransport;
+  readonly createWhatsAppTransport?: () => SharedWhatsAppTransport;
 }
 
 export async function runNotificationProviderHost(
@@ -130,6 +135,11 @@ export async function runNotificationProviderHost(
         options.createDiscordTransport?.() ?? new SharedDiscordTransport()
       ) as ActiveNotificationAdapter
     );
+    adapters.push(
+      new WhatsAppNotificationAdapter(
+        options.createWhatsAppTransport?.() ?? new SharedWhatsAppTransport()
+      ) as ActiveNotificationAdapter
+    );
   }
   const host = new NotificationProviderHost({
     secretStore: createSecretStore(),
@@ -140,10 +150,11 @@ export async function runNotificationProviderHost(
   const providers = adapters.map(adapter => adapter.provider);
   if (
     !providers.every(
-      (provider): provider is 'slack' | 'telegram' | 'discord' =>
+      (provider): provider is 'slack' | 'telegram' | 'discord' | 'whatsapp' =>
         provider === 'slack' ||
         provider === 'telegram' ||
-        provider === 'discord'
+        provider === 'discord' ||
+        provider === 'whatsapp'
     )
   ) {
     throw new Error('The notification host contains an unavailable provider adapter.');

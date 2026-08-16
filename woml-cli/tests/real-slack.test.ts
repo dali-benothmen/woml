@@ -612,8 +612,12 @@ describe('N5 real Slack transport', () => {
       createWebSocket: () => new MockSocket(),
     });
     const update = await fixture<UpdateMessage>('update.v1.json');
+    if (!('workspaceId' in update.providerMessage)) {
+      throw new Error('The Slack fixture must contain a Slack message identity.');
+    }
     const foreign: ProviderMessageIdentity = {
-      ...update.providerMessage,
+      channelId: update.providerMessage.channelId,
+      messageId: update.providerMessage.messageId,
       workspaceId: 'T87654321',
     };
     await transport.ensureConnection('SLACK_APP_TOKEN', 'xapp-real-test-token');

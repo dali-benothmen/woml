@@ -44,6 +44,7 @@ pub enum PresentationTriggerType {
   Slack,
   Telegram,
   Discord,
+  Whatsapp,
   Schedule,
   Interval,
   Event,
@@ -438,6 +439,7 @@ fn trigger_type(handler: &str) -> Result<PresentationTriggerType, RunPresentatio
     "trigger.slack" => PresentationTriggerType::Slack,
     "trigger.telegram" => PresentationTriggerType::Telegram,
     "trigger.discord" => PresentationTriggerType::Discord,
+    "trigger.whatsapp" => PresentationTriggerType::Whatsapp,
     "trigger.schedule" => PresentationTriggerType::Schedule,
     "trigger.interval" => PresentationTriggerType::Interval,
     "trigger.event" => PresentationTriggerType::Event,
@@ -458,6 +460,7 @@ fn trigger_presentation(
     PresentationTriggerType::Slack
       | PresentationTriggerType::Telegram
       | PresentationTriggerType::Discord
+      | PresentationTriggerType::Whatsapp
   ) {
     let channels = literal_strings(trigger, "channels");
     let events = literal_strings(trigger, "events");

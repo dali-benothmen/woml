@@ -25,16 +25,10 @@ describe('ACP6 WhatsApp CLI boundary', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('WOML check passed');
-    expect(result.stdout).toContain('WhatsApp trigger, approved-template notifications');
-    expect(result.stdout).toContain('Execution: WhatsApp transport activates in ACP7');
+    expect(result.stdout).toContain('WhatsApp triggers, approved-template notifications');
+    expect(result.stdout).toContain('WhatsApp triggers, approved-template notifications');
+    expect(result.stdout).toContain('are executable through the durable Rust runtime');
     expect(result.stdout).toContain('/callbacks/whatsapp');
   });
 
-  test('fails run before resolving credentials or contacting Meta', async () => {
-    const result = await invoke(['run', fixture]);
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('WOML_COMMUNICATION_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('arrives in ACP7');
-  });
 });

@@ -36,7 +36,8 @@ impl NotificationReadyMessage {
       || self.host_instance_id.chars().count() > 320
       || (self.providers != ["slack"]
         && self.providers != ["slack", "telegram"]
-        && self.providers != ["slack", "telegram", "discord"])
+        && self.providers != ["slack", "telegram", "discord"]
+        && self.providers != ["slack", "telegram", "discord", "whatsapp"])
     {
       return Err(
         "The child did not send a valid notification-provider ready message.".to_string(),
@@ -66,10 +67,30 @@ pub enum NotificationCredentials {
     #[serde(rename = "botToken")]
     bot_token: NotificationSecretReference,
   },
+  WhatsApp {
+    #[serde(rename = "accessToken")]
+    access_token: NotificationSecretReference,
+    #[serde(rename = "phoneNumberId")]
+    phone_number_id: String,
+  },
 }
 
 impl NotificationCredentials {
   pub fn from_symbolic(credentials: &BTreeMap<String, String>) -> Result<Self, String> {
+    if let (Some(access_token), Some(phone_number_id)) = (
+      credentials.get("accessToken"),
+      credentials.get("phoneNumberId"),
+    ) {
+      if credentials.len() != 2 {
+        return Err(
+          "WhatsApp notification credentials contain an unsupported binding.".to_string(),
+        );
+      }
+      return Ok(Self::whatsapp(
+        access_token.clone(),
+        phone_number_id.clone(),
+      ));
+    }
     let bot_token = credentials
       .get("botToken")
       .ok_or_else(|| "Notification credentials are missing botToken.".to_string())?;
@@ -87,6 +108,16 @@ impl NotificationCredentials {
         },
       }),
       _ => Err("Notification credentials contain an unsupported binding.".to_string()),
+    }
+  }
+
+  pub fn whatsapp(access_token: String, phone_number_id: String) -> Self {
+    Self::WhatsApp {
+      access_token: NotificationSecretReference {
+        kind: "secretReference",
+        name: access_token,
+      },
+      phone_number_id,
     }
   }
 }
@@ -119,6 +150,10 @@ pub struct NotificationDeliverMessage {
   pub credentials: NotificationCredentials,
   pub decision_capability: String,
   pub message: NotificationApprovalMessage,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub template_name: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -138,6 +173,10 @@ pub struct InformationalNotificationDeliverMessage {
   pub idempotency_key: String,
   pub credentials: NotificationCredentials,
   pub message: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub template_name: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

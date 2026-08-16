@@ -28,6 +28,11 @@ export interface DiscordNotificationCredentials {
   readonly botToken: SecretReference;
 }
 
+export interface WhatsAppNotificationCredentials {
+  readonly accessToken: SecretReference;
+  readonly phoneNumberId: string;
+}
+
 export interface ApprovalMessage {
   readonly workflowId: string;
   readonly approvalName: string;
@@ -55,10 +60,18 @@ export interface DiscordProviderMessageIdentity {
   readonly messageId: string;
 }
 
+export interface WhatsAppProviderMessageIdentity {
+  readonly provider: 'whatsapp';
+  readonly accountId: string;
+  readonly conversationId: string;
+  readonly messageId: string;
+}
+
 export type ProviderMessageIdentity =
   | SlackProviderMessageIdentity
   | TelegramProviderMessageIdentity
-  | DiscordProviderMessageIdentity;
+  | DiscordProviderMessageIdentity
+  | WhatsAppProviderMessageIdentity;
 
 interface InvocationBase {
   readonly protocol: typeof NOTIFICATION_PROVIDER_PROTOCOL;
@@ -68,11 +81,12 @@ interface InvocationBase {
   readonly approvalId: string;
   readonly requestId: string;
   readonly deliveryId: string;
-  readonly provider: 'slack' | 'telegram' | 'discord';
+  readonly provider: 'slack' | 'telegram' | 'discord' | 'whatsapp';
   readonly credentials:
     | NotificationCredentials
     | TelegramNotificationCredentials
-    | DiscordNotificationCredentials;
+    | DiscordNotificationCredentials
+    | WhatsAppNotificationCredentials;
 }
 
 interface InformationalInvocationBase {
@@ -83,13 +97,17 @@ interface InformationalInvocationBase {
   readonly hookInvocationId: string;
   readonly actionId: string;
   readonly deliveryId: string;
-  readonly provider: 'slack' | 'telegram' | 'discord';
+  readonly provider: 'slack' | 'telegram' | 'discord' | 'whatsapp';
   readonly destination: string;
   readonly idempotencyKey: string;
   readonly credentials:
     | NotificationCredentials
     | TelegramNotificationCredentials
-    | DiscordNotificationCredentials;
+    | DiscordNotificationCredentials
+    | WhatsAppNotificationCredentials;
+
+  readonly templateName?: string;
+  readonly language?: string;
 }
 
 export interface DeliverMessage extends InvocationBase {
@@ -98,6 +116,8 @@ export interface DeliverMessage extends InvocationBase {
   readonly idempotencyKey: string;
   readonly decisionCapability: string;
   readonly message: ApprovalMessage;
+  readonly templateName?: string;
+  readonly language?: string;
 }
 
 export interface UpdateMessage extends InvocationBase {
@@ -165,7 +185,7 @@ export interface ReadyMessage {
     | typeof INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION;
   readonly messageType: 'ready';
   readonly hostInstanceId: string;
-  readonly providers: readonly ('slack' | 'telegram' | 'discord')[];
+  readonly providers: readonly ('slack' | 'telegram' | 'discord' | 'whatsapp')[];
 }
 
 export interface InteractionMessage {
@@ -174,7 +194,7 @@ export interface InteractionMessage {
   readonly messageType: 'interaction';
   readonly interactionId: string;
   readonly deliveryId: string;
-  readonly provider: 'slack' | 'telegram' | 'discord';
+  readonly provider: 'slack' | 'telegram' | 'discord' | 'whatsapp';
   readonly decisionCapability: string;
   readonly decision: ApprovalDecision;
   readonly providerActorId: string;

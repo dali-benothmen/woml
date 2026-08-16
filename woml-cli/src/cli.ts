@@ -2033,7 +2033,7 @@ async function runSingleCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasWhatsApp
-        ? `Authoring: WhatsApp trigger, approved-template notifications, lifecycle delivery, and services.whatsapp.send() compile to Model v15.\nExecution: WhatsApp transport activates in ACP7; woml run fails before contacting Meta. Callback: ${WOML_WHATSAPP_CALLBACK_PATH}\n`
+        ? `Execution: WhatsApp triggers, approved-template notifications, lifecycle delivery, approvals, and services.whatsapp.send() are executable through the durable Rust runtime.\nCallback: ${WOML_WHATSAPP_CALLBACK_PATH} (public HTTPS is required by Meta in production).\n`
         : hasDiscord
         ? 'Execution: Discord triggers, notifications, approval buttons, and services.discord.send() are executable through the durable Rust runtime.\n'
         : hasTelegram
@@ -2999,6 +2999,7 @@ function hasNonManualRuntimeIngress(
         'trigger.slack',
         'trigger.telegram',
         'trigger.discord',
+        'trigger.whatsapp',
         'trigger.schedule',
         'trigger.interval',
         'trigger.event',
@@ -3040,6 +3041,7 @@ function triggerPresentationType(handler: string): TriggerPresentationV1['type']
   if (handler === 'trigger.slack') return 'slack';
   if (handler === 'trigger.telegram') return 'telegram';
   if (handler === 'trigger.discord') return 'discord';
+  if (handler === 'trigger.whatsapp') return 'whatsapp';
   if (handler === 'trigger.schedule') return 'schedule';
   if (handler === 'trigger.interval') return 'interval';
   if (handler === 'trigger.event') return 'event';
@@ -3348,6 +3350,17 @@ function workflowPresentation(
       });
       continue;
     }
+    if (type === 'whatsapp') {
+      const events = literalStringArray(fields?.events);
+      triggers.push({
+        id: trigger.id,
+        type,
+        url: `http://${host}:${port}${WOML_WHATSAPP_CALLBACK_PATH}`,
+        ...(events.length === 0 ? {} : { scope: events.join(', ') }),
+        warning: 'Meta requires this callback to be reachable through public HTTPS in production.',
+      });
+      continue;
+    }
     if (type === 'schedule') {
       triggers.push({
         id: trigger.id,
@@ -3526,6 +3539,7 @@ function observedTriggerType(
   | 'slack'
   | 'telegram'
   | 'discord'
+  | 'whatsapp'
   | 'schedule'
   | 'interval'
   | 'event'
@@ -3537,6 +3551,7 @@ function observedTriggerType(
     'slack',
     'telegram',
     'discord',
+    'whatsapp',
     'schedule',
     'interval',
     'event',
@@ -3547,6 +3562,7 @@ function observedTriggerType(
         | 'slack'
         | 'telegram'
         | 'discord'
+        | 'whatsapp'
         | 'schedule'
         | 'interval'
         | 'event')
@@ -3588,20 +3604,6 @@ async function activateWorkflows(
   }
 
   const productionSources = sources;
-  if (
-    productionSources.some(
-      source =>
-        source.workflow.schemaVersion === 15 &&
-        source.workflow.communication.providers.some(
-          provider => provider.provider === 'whatsapp'
-        )
-    )
-  ) {
-    throw new CliInputError(
-      'WOML_COMMUNICATION_RUNTIME_UNAVAILABLE',
-      `WhatsApp authoring is valid, but its Cloud API callback and delivery runtime arrives in ACP7. The reserved callback route is ${WOML_WHATSAPP_CALLBACK_PATH}.`
-    );
-  }
   const manualTargets = activeManualTargets(sources, args.triggerId);
   const hasOtherIngress = hasNonManualRuntimeIngress(sources);
   const background = process.env.WOML_BACKGROUND_HANDOFF !== undefined;
@@ -3767,7 +3769,14 @@ async function activateWorkflows(
         }
         seenRoutes.set(route.path, route);
       }
-      const hasHttpEndpoint = routes.length > 0 || uniqueEventRoutes.length > 0;
+      const hasWhatsAppEndpoint = productionSources.some(source =>
+        source.workflow.schemaVersion === 15 &&
+        source.workflow.communication.providers.some(
+          provider => provider.provider === 'whatsapp'
+        )
+      );
+      const hasHttpEndpoint =
+        routes.length > 0 || uniqueEventRoutes.length > 0 || hasWhatsAppEndpoint;
       const currentActivationId = activationIdentity(productionSources);
       const currentDeploymentId = deploymentIdentity(args.statePath);
       const runtime = await startWebhookRuntimeWithRust(
@@ -3882,6 +3891,15 @@ async function activateWorkflows(
                   name: 'discord',
                   kind: 'provider' as const,
                   status: 'unready' as const,
+                },
+              ]),
+          ...(!hasWhatsAppEndpoint
+            ? []
+            : [
+                {
+                  name: 'whatsapp',
+                  kind: 'provider' as const,
+                  status: 'ready' as const,
                 },
               ]),
           ...(args.retention?.enabled === true

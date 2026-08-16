@@ -2182,7 +2182,10 @@ fn approval_notifications(
         {
           return None;
         }
-        let names = BTreeMap::from_iter([("accessToken".to_string(), access_token.clone())]);
+        let names = BTreeMap::from_iter([
+          ("accessToken".to_string(), access_token.clone()),
+          ("phoneNumberId".to_string(), phone_number_id.to_string()),
+        ]);
         let duplicate_key = format!(
           "whatsapp\0{}\0{}\0{}",
           access_token, phone_number_id, destination

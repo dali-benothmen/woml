@@ -34,6 +34,7 @@ pub mod storage;
 pub mod store;
 pub mod telegram;
 pub mod webhook;
+pub mod whatsapp;
 pub mod workflow_calls;
 
 pub use backup::{
@@ -213,6 +214,7 @@ pub use webhook::{
   WomlWebhookServerConfig, TRIGGER_PROGRESS_CONTRACT, TRIGGER_PROGRESS_CONTRACT_VERSION,
   WEBHOOK_MAX_BODY_BYTES,
 };
+pub use whatsapp::ManagedWhatsAppHandler;
 pub use workflow_calls::{
   derive_workflow_call_key, dispatch_admitted_workflow_call, workflow_routing_credential_hash,
   workflow_routing_session_credential, ManagedWorkflowCallsHandler, WorkflowCallAdmission,

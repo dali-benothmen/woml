@@ -240,6 +240,14 @@ export class RealSlackTransport implements SlackTransport {
   async #deliver(
     request: SlackDeliveryRequest
   ): Promise<SlackProviderMessageIdentity> {
+    if (!("botToken" in request.invocation.credentials)) {
+      throw failure(
+        'request_invalid',
+        'WOML_NOTIFICATION_REQUEST_INVALID',
+        'Slack received non-Slack credentials.',
+        false
+      );
+    }
     const botReference = request.invocation.credentials.botToken.name;
     const identity = await this.#shared.botIdentity(
       botReference,
@@ -297,6 +305,14 @@ export class RealSlackTransport implements SlackTransport {
         'update_failed',
         'WOML_SLACK_UPDATE_FAILED',
         'Slack received a non-Slack message identity.',
+        false
+      );
+    }
+    if (!("botToken" in request.invocation.credentials)) {
+      throw failure(
+        'update_failed',
+        'WOML_SLACK_UPDATE_FAILED',
+        'Slack received non-Slack credentials.',
         false
       );
     }

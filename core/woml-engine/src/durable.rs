@@ -747,6 +747,8 @@ pub struct NotificationDeliveryWork {
   pub credentials: BTreeMap<String, String>,
   pub provider_id: Option<String>,
   pub message: Option<crate::model::ValueExpression>,
+  pub template_name: Option<String>,
+  pub language: Option<String>,
   pub attempt: u32,
   pub attempt_id: String,
   pub idempotency_key: String,
@@ -5892,6 +5894,8 @@ impl DurableEventStore {
       credentials: definition.credentials.clone(),
       provider_id: definition.provider_id.clone(),
       message: definition.message.clone(),
+      template_name: definition.template_name.clone(),
+      language: definition.language.clone(),
       attempt,
       attempt_id,
       idempotency_key,
@@ -6205,7 +6209,10 @@ impl DurableEventStore {
     for delivered in projection.notification_deliveries.values().filter(|item| {
       item.approval_id == approval_id
         && item.request_id == request_id
-        && matches!(item.provider.as_str(), "slack" | "telegram" | "discord")
+        && matches!(
+          item.provider.as_str(),
+          "slack" | "telegram" | "discord" | "whatsapp"
+        )
         && matches!(item.status, NotificationDeliveryStatus::Succeeded { .. })
     }) {
       payloads.push(RunEventPayload::NotificationMessageUpdateRequested(
@@ -6744,7 +6751,10 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request_id
-          && matches!(delivery.provider.as_str(), "slack" | "telegram" | "discord")
+          && matches!(
+            delivery.provider.as_str(),
+            "slack" | "telegram" | "discord" | "whatsapp"
+          )
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }
@@ -6874,7 +6884,10 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request.request_id
-          && matches!(delivery.provider.as_str(), "slack" | "telegram" | "discord")
+          && matches!(
+            delivery.provider.as_str(),
+            "slack" | "telegram" | "discord" | "whatsapp"
+          )
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }
@@ -9115,6 +9128,7 @@ fn trigger_occurrence_from_stored(
       | "trigger.slack"
       | "trigger.telegram"
       | "trigger.discord"
+      | "trigger.whatsapp"
       | "trigger.schedule"
       | "trigger.interval"
       | "trigger.event"

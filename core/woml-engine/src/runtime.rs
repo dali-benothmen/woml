@@ -336,6 +336,9 @@ impl RuntimeExecutionOptions {
     capability_registry
       .register(Arc::new(crate::ManagedDiscordHandler::default()))
       .expect("the production Discord capability is registered exactly once");
+    capability_registry
+      .register(Arc::new(crate::ManagedWhatsAppHandler::default()))
+      .expect("the production WhatsApp capability is registered exactly once");
     let managed_database_pool = Arc::new(crate::ManagedDatabasePool::default());
     for handler in crate::ManagedDatabaseHandler::handlers(Arc::clone(&managed_database_pool)) {
       capability_registry
@@ -2114,6 +2117,8 @@ struct LifecycleNotificationDelivery<'a> {
   provider_id: Option<&'a str>,
   credentials: BTreeMap<String, String>,
   message: &'a ValueExpression,
+  template_name: Option<&'a str>,
+  language: Option<&'a str>,
 }
 
 fn lifecycle_notification_deliveries(
@@ -2156,10 +2161,27 @@ fn lifecycle_notification_deliveries(
           "lifecycle notification credentials are invalid".to_string(),
         ));
       };
+      let provider = literal("provider").ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(
+          "lifecycle notification provider is unavailable".to_string(),
+        )
+      })?;
       let credentials = credential_fields
         .iter()
         .map(|(name, expression)| match expression {
           ValueExpression::SecretReference { name: secret } => Ok((name.clone(), secret.clone())),
+          ValueExpression::Literal { value }
+            if provider == "whatsapp" && name == "phoneNumberId" =>
+          {
+            value
+              .as_str()
+              .map(|value| (name.clone(), value.to_string()))
+              .ok_or_else(|| {
+                RuntimeExecutionError::InvalidConfiguration(
+                  "WhatsApp phoneNumberId must be a literal string".to_string(),
+                )
+              })
+          }
           _ => Err(RuntimeExecutionError::InvalidConfiguration(
             "lifecycle notification credentials must be symbolic secret references".to_string(),
           )),
@@ -2171,11 +2193,7 @@ fn lifecycle_notification_deliveries(
             "lifecycle notification deliveryId is unavailable".to_string(),
           )
         })?,
-        provider: literal("provider").ok_or_else(|| {
-          RuntimeExecutionError::InvalidConfiguration(
-            "lifecycle notification provider is unavailable".to_string(),
-          )
-        })?,
+        provider,
         destination: literal("destination").ok_or_else(|| {
           RuntimeExecutionError::InvalidConfiguration(
             "lifecycle notification destination is unavailable".to_string(),
@@ -2188,6 +2206,8 @@ fn lifecycle_notification_deliveries(
             "lifecycle notification message is unavailable".to_string(),
           )
         })?,
+        template_name: literal("templateName"),
+        language: literal("language"),
       })
     })
     .collect()
@@ -3135,9 +3155,12 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
     code: "WOML_NOTIFICATION_REQUEST_INVALID".to_string(),
     message: error.to_string(),
   })?;
-  let has_builtin = deliveries
-    .iter()
-    .any(|delivery| matches!(delivery.provider, "slack" | "telegram" | "discord"));
+  let has_builtin = deliveries.iter().any(|delivery| {
+    matches!(
+      delivery.provider,
+      "slack" | "telegram" | "discord" | "whatsapp"
+    )
+  });
   let has_custom = deliveries
     .iter()
     .any(|delivery| delivery.provider == "custom");
@@ -3200,7 +3223,10 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
         continue;
       }
     };
-    let credentials = if matches!(delivery.provider, "slack" | "telegram" | "discord") {
+    let credentials = if matches!(
+      delivery.provider,
+      "slack" | "telegram" | "discord" | "whatsapp"
+    ) {
       match NotificationCredentials::from_symbolic(&delivery.credentials) {
         Ok(credentials) => Some(credentials),
         Err(message) => {
@@ -3387,6 +3413,8 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
           idempotency_key: operation_key.clone(),
           credentials: credentials.clone().expect("built-in provider credentials"),
           message: message.clone(),
+          template_name: delivery.template_name.map(str::to_string),
+          language: delivery.language.map(str::to_string),
         };
         match host
           .as_ref()

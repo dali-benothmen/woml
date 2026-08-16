@@ -21,6 +21,7 @@ export interface ObservedWorkflow {
     | 'slack'
     | 'telegram'
     | 'discord'
+    | 'whatsapp'
     | 'schedule'
     | 'interval'
     | 'event'

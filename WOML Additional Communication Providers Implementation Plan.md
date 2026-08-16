@@ -1,12 +1,13 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0 through ACP6 were completed on 2026-08-16.
+Status: In progress. ACP0 through ACP7 were completed on 2026-08-16.
 Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
 end to end through the durable production runtime. Discord authoring, imported
 module discovery, validation, Model v15 / Definition Package v10 lowering, and
 production execution are also complete. WhatsApp authoring, reviewed template
-contracts, Model v15 lowering, editor support, and callback security contracts
-are complete; actual Cloud API execution remains unavailable until ACP7. Slack
+contracts, Model v15 lowering, editor support, callback security, signed
+durable ingress, templates, approval decisions, lifecycle delivery, and the
+managed messaging capability are complete. Slack
 triggers and notifications, custom notification providers, Human Approval,
 durable capability execution, production runtime hosting, and cross-platform
 release packaging form the proven baseline.
@@ -985,14 +986,27 @@ rejected before activation.
 
 ### ACP7 — Execute WhatsApp end to end
 
+Status: **Completed on 2026-08-16.** The Rust production listener now owns the
+Meta verification handshake and exact raw-body signature boundary, routes by
+Phone Number ID, durably admits messages before returning success, and
+deduplicates Meta retries. Approved-template notifications and
+`services.whatsapp.send()` execute through the shared Cloud API transport;
+Human Approval quick replies resolve through the existing Rust decision
+authority. The terminal publishes the callback route and public-HTTPS warning.
+Fake-Meta transport, signature, handshake, duplicate, phone-route, template,
+rate-limit, provider-host, and model gates cover the executable slice. Meta
+delivery-status callbacks are authenticated and acknowledged but do not create
+workflow runs; deeper cross-provider message convergence remains ACP8.
+
 Changes:
 
 - Implement Meta callback verification and signed webhook ingestion on the
   production listener.
 - Normalize supported inbound messages and button replies.
 - Durably admit occurrences before successful webhook acknowledgement.
-- Execute free-form/session and reviewed template messaging through the
-  official Cloud API.
+- Execute the frozen approved-template messaging profile through the official
+  Cloud API. Session-window free-form text remains deliberately unavailable in
+  Messaging v1 until its authoring contract is reviewed.
 - Deliver lifecycle and Human Approval notifications using the frozen valid
   WhatsApp profiles.
 - Resolve approval replies/buttons through Rust and record convergence status.
@@ -1007,7 +1021,7 @@ run, receive a response or approval request, and continue the durable workflow.
 
 Gate:
 
-Signed webhook, handshake, duplicate, phone routing, template/session,
+Signed webhook, handshake, duplicate, phone routing, approved-template,
 approval, lifecycle, delivery-status, rate-limit, restart, public-runtime, and
 clean-package tests pass; an opt-in Meta test-number journey is documented.
 

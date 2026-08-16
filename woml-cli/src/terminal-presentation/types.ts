@@ -14,6 +14,7 @@ export type TriggerPresentationType =
   | 'slack'
   | 'telegram'
   | 'discord'
+  | 'whatsapp'
   | 'schedule'
   | 'interval'
   | 'event';

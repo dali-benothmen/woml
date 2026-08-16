@@ -23,7 +23,7 @@ const STEP_KINDS = new Set([
   'branch', 'approval', 'workflow_call', 'workflow_start',
 ]);
 const TRIGGER_TYPES = new Set([
-  'manual', 'webhook', 'slack', 'telegram', 'discord', 'schedule', 'interval', 'event',
+  'manual', 'webhook', 'slack', 'telegram', 'discord', 'whatsapp', 'schedule', 'interval', 'event',
 ]);
 const LIFECYCLE_HOOKS = new Set([
   'on-start', 'on-success', 'on-error', 'on-cancel', 'on-complete',
