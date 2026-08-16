@@ -6,10 +6,10 @@ use thiserror::Error;
 use crate::{
   capability::{validate_safe_metadata, CapabilityFailure},
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V11,
-  RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V13, RUN_EVENT_SCHEMA_VERSION_V2,
-  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
-  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
-  RUN_EVENT_SCHEMA_VERSION_V9,
+  RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V13, RUN_EVENT_SCHEMA_VERSION_V14,
+  RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
+  RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
+  RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -583,11 +583,29 @@ pub struct NotificationDeliveryAttemptStartedData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderMessageIdentity {
+  Slack(SlackProviderMessageIdentity),
+  Communication(CommunicationProviderMessageIdentity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProviderMessageIdentity {
+pub struct SlackProviderMessageIdentity {
   pub workspace_id: String,
   pub channel_id: String,
   pub message_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommunicationProviderMessageIdentity {
+  pub provider: String,
+  pub account_id: String,
+  pub conversation_id: String,
+  pub message_id: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1091,6 +1109,7 @@ fn valid_trigger_handler(value: &str) -> bool {
     "trigger.manual"
       | "trigger.webhook"
       | "trigger.slack"
+      | "trigger.telegram"
       | "trigger.schedule"
       | "trigger.interval"
       | "trigger.event"
@@ -1098,25 +1117,38 @@ fn valid_trigger_handler(value: &str) -> bool {
 }
 
 pub(crate) fn valid_provider_message(message: &ProviderMessageIdentity) -> bool {
-  valid_prefixed_id(&message.workspace_id, "T", 9)
-    && matches!(
-      message.channel_id.as_bytes().first(),
-      Some(b'C' | b'G' | b'D')
-    )
-    && message.channel_id.len() >= 9
-    && message.channel_id.len() <= 32
-    && message.channel_id[1..]
-      .bytes()
-      .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
-    && message
-      .message_id
-      .split_once('.')
-      .is_some_and(|(seconds, micros)| {
-        seconds.len() >= 10
-          && seconds.bytes().all(|byte| byte.is_ascii_digit())
-          && micros.len() == 6
-          && micros.bytes().all(|byte| byte.is_ascii_digit())
-      })
+  match message {
+    ProviderMessageIdentity::Slack(message) => {
+      valid_prefixed_id(&message.workspace_id, "T", 9)
+        && matches!(
+          message.channel_id.as_bytes().first(),
+          Some(b'C' | b'G' | b'D')
+        )
+        && message.channel_id.len() >= 9
+        && message.channel_id.len() <= 32
+        && message.channel_id[1..]
+          .bytes()
+          .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        && message
+          .message_id
+          .split_once('.')
+          .is_some_and(|(seconds, micros)| {
+            seconds.len() >= 10
+              && seconds.bytes().all(|byte| byte.is_ascii_digit())
+              && micros.len() == 6
+              && micros.bytes().all(|byte| byte.is_ascii_digit())
+          })
+    }
+    ProviderMessageIdentity::Communication(message) => {
+      matches!(
+        message.provider.as_str(),
+        "telegram" | "discord" | "whatsapp"
+      ) && valid_id(&message.account_id)
+        && valid_id(&message.conversation_id)
+        && valid_id(&message.message_id)
+        && message.thread_id.as_deref().is_none_or(valid_id)
+    }
+  }
 }
 
 impl NotificationSafeFailure {
@@ -1334,6 +1366,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V11
         | RUN_EVENT_SCHEMA_VERSION_V12
         | RUN_EVENT_SCHEMA_VERSION_V13
+        | RUN_EVENT_SCHEMA_VERSION_V14
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -1343,6 +1376,11 @@ impl RunEvent {
       return Err(EventValidationError::Invalid(
         "Run events require valid eventId, runId, and sequence >= 1.".to_string(),
       ));
+    }
+    if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V14 {
+      let mut inherited = self.clone();
+      inherited.event_schema_version = RUN_EVENT_SCHEMA_VERSION_V13;
+      return inherited.validate();
     }
     if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V13
       && !matches!(
@@ -1716,7 +1754,7 @@ impl RunEvent {
             | RUN_EVENT_SCHEMA_VERSION_V9
             | RUN_EVENT_SCHEMA_VERSION_V10
             | RUN_EVENT_SCHEMA_VERSION_V11
-        ) || !matches!(data.provider.as_str(), "slack" | "custom")
+        ) || !matches!(data.provider.as_str(), "slack" | "telegram" | "custom")
           || data.destination.is_empty()
         {
           return Err(EventValidationError::Invalid(

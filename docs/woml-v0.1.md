@@ -61,7 +61,7 @@ includes conditional choices and bounded parallel groups:
 | Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
 | Multiple triggers, webhook, and inline payload schema | Completed in Production Triggers T13 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
 | Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
-| Telegram trigger, notifications, and `services.telegram.send()` | ACP2 authoring/lowering completed | Validates through `woml check` and lowers to Model v15 / Package v10; activation fails clearly until ACP3 adds the network adapter |
+| Telegram trigger, notifications, and `services.telegram.send()` | ACP3 implemented | Runs through the shared long-polling Telegram host and durable Rust execution authority |
 | Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
 | `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |

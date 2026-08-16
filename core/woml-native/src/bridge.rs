@@ -1318,6 +1318,7 @@ pub fn resolve_woml_notification_approval(
   event_store_path: String,
   capability: String,
   decision: String,
+  provider_actor_id: Option<String>,
 ) -> napi::Result<String> {
   let decision = match decision.as_str() {
     "approved" => ApprovalDecision::Approved,
@@ -1330,8 +1331,11 @@ pub fn resolve_woml_notification_approval(
   };
   let mut store = DurableEventStore::open(PathBuf::from(event_store_path))
     .map_err(|error| native_approval_error(RuntimeExecutionError::DurableStore(error)))?;
+  let provider_actor_id = provider_actor_id
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| "custom-provider".to_string());
   let outcome = store
-    .resolve_notification_approval(&capability, "custom-provider", decision, Utc::now())
+    .resolve_notification_approval(&capability, &provider_actor_id, decision, Utc::now())
     .map_err(|error| native_approval_error(RuntimeExecutionError::DurableStore(error)))?;
   serde_json::to_string(&NativeApprovalDecisionOutcome {
     contract: "woml.approval-http",
@@ -1652,10 +1656,13 @@ pub async fn submit_woml_trigger_occurrence(
     || ingress.contract_version != 1
     || ingress.message_type != "admit"
     || ingress.request_id.is_empty()
-    || ingress.trigger_handler != "trigger.slack"
+    || !matches!(
+      ingress.trigger_handler.as_str(),
+      "trigger.slack" | "trigger.telegram"
+    )
   {
     return Err(napi::Error::from_reason(
-      "Invalid Slack trigger ingress contract.".to_string(),
+      "Invalid communication trigger ingress contract.".to_string(),
     ));
   }
   let request_id = ingress.request_id;
@@ -1719,17 +1726,47 @@ pub async fn submit_woml_trigger_occurrence(
         },
       })
     }
-    Err(_) => serde_json::to_string(&NativeTriggerIngressRejected {
-      contract: "woml.trigger-ingress",
-      contract_version: 1,
-      message_type: "rejected",
-      request_id,
-      failure: NativeTriggerIngressFailure {
-        code: "WOML_TRIGGER_UNAVAILABLE",
-        message: "The durable WOML trigger authority is unavailable.",
-        retryable: true,
-      },
-    }),
+    Err(error) => {
+      let (code, message, retryable) = match error {
+        DurableStoreError::DefinitionNotFound(_)
+        | DurableStoreError::TriggerDefinitionMismatch => (
+          "WOML_TRIGGER_DEFINITION_MISMATCH",
+          "The provider event does not match the active workflow definition; restart the WOML runtime.",
+          false,
+        ),
+        DurableStoreError::TriggerNotFound { .. } => (
+          "WOML_TRIGGER_NOT_FOUND",
+          "The provider event references a trigger that is not registered in the active workflow.",
+          false,
+        ),
+        DurableStoreError::TriggerHandlerMismatch => (
+          "WOML_TRIGGER_HANDLER_MISMATCH",
+          "The provider event type does not match the compiled workflow trigger.",
+          false,
+        ),
+        DurableStoreError::Contract(_) | DurableStoreError::InvalidModel(_) => (
+          "WOML_TRIGGER_CONTRACT_INVALID",
+          "The compiled workflow and durable trigger contracts are incompatible; update or rebuild WOML.",
+          false,
+        ),
+        _ => (
+          "WOML_TRIGGER_UNAVAILABLE",
+          "The durable WOML trigger authority is temporarily unavailable.",
+          true,
+        ),
+      };
+      serde_json::to_string(&NativeTriggerIngressRejected {
+        contract: "woml.trigger-ingress",
+        contract_version: 1,
+        message_type: "rejected",
+        request_id,
+        failure: NativeTriggerIngressFailure {
+          code,
+          message,
+          retryable,
+        },
+      })
+    }
   };
   json.map_err(|error| {
     napi::Error::from_reason(format!("Could not encode trigger ingress outcome: {error}"))

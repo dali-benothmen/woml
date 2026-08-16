@@ -54,7 +54,7 @@ pub struct CustomNotificationJourneyOptions {
 }
 
 enum DeliveryHostResult {
-  Slack(Result<crate::NotificationCompletedMessage, NotificationHostClientError>),
+  BuiltIn(Result<crate::NotificationCompletedMessage, NotificationHostClientError>),
   Custom(Result<crate::CustomProviderCompletedMessage, CustomNotificationHostClientError>),
 }
 
@@ -153,15 +153,15 @@ pub async fn run_notification_provider_journey_with_custom(
     ));
   }
 
-  let has_slack = approval
+  let has_builtin = approval
     .notifications
     .iter()
-    .any(|definition| definition.provider == "slack");
+    .any(|definition| matches!(definition.provider.as_str(), "slack" | "telegram"));
   let has_custom = approval
     .notifications
     .iter()
     .any(|definition| definition.provider == "custom");
-  let client = if has_slack {
+  let client = if has_builtin {
     Some(Arc::new(NotificationHostClient::spawn(host_options).await?))
   } else {
     None
@@ -221,10 +221,10 @@ pub async fn run_notification_provider_journey_with_custom(
           approval.description.as_deref(),
           request.expires_at,
         )?;
-        let task_client = Arc::clone(client.as_ref().expect("Slack host"));
+        let task_client = Arc::clone(client.as_ref().expect("built-in provider host"));
         delivery_tasks.spawn(async move {
           let result = task_client.invoke(&message.invocation_id, &message).await;
-          (work, DeliveryHostResult::Slack(result))
+          (work, DeliveryHostResult::BuiltIn(result))
         });
       }
     }
@@ -233,8 +233,8 @@ pub async fn run_notification_provider_journey_with_custom(
         NotificationJourneyError::Host(NotificationHostClientError::HostCrashed(error.to_string()))
       })?;
       let provider_result = match result {
-        DeliveryHostResult::Slack(Ok(completed)) => delivery_result(completed.outcome),
-        DeliveryHostResult::Slack(Err(error)) => {
+        DeliveryHostResult::BuiltIn(Ok(completed)) => delivery_result(completed.outcome),
+        DeliveryHostResult::BuiltIn(Err(error)) => {
           NotificationProviderDeliveryResult::Failed(host_failure(&error, false))
         }
         DeliveryHostResult::Custom(Ok(completed)) => {
@@ -281,7 +281,12 @@ pub async fn run_notification_provider_journey_with_custom(
         let (outcome, result, error) = match lifecycle_result {
           NotificationProviderDeliveryResult::Succeeded(provider_message) => (
             ReusableInvocationOutcome::Succeeded,
-            Some(serde_json::json!({ "messageId": provider_message.message_id })),
+            Some(serde_json::json!({
+              "messageId": match provider_message {
+                crate::ProviderMessageIdentity::Slack(message) => message.message_id,
+                crate::ProviderMessageIdentity::Communication(message) => message.message_id,
+              }
+            })),
             None,
           ),
           NotificationProviderDeliveryResult::Failed(failure) => (
@@ -773,11 +778,11 @@ fn synthetic_provider_message(
   let seconds =
     1_000_000_000_u64 + u64::from_be_bytes(digest[..8].try_into().unwrap()) % 8_000_000_000;
   let micros = u32::from_be_bytes(digest[8..12].try_into().unwrap()) % 1_000_000;
-  crate::ProviderMessageIdentity {
+  crate::ProviderMessageIdentity::Slack(crate::event::SlackProviderMessageIdentity {
     workspace_id: format!("T{}", &hexadecimal[..8]),
     channel_id: format!("C{}", &hexadecimal[8..16]),
     message_id: format!("{seconds}.{micros:06}"),
-  }
+  })
 }
 
 fn custom_delivery_result(

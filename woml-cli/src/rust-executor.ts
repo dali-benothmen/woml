@@ -358,7 +358,7 @@ export interface TriggerIngressAdmit {
   readonly workflowId: string;
   readonly definitionHash: string;
   readonly triggerId: string;
-  readonly triggerHandler: 'trigger.slack';
+  readonly triggerHandler: 'trigger.slack' | 'trigger.telegram';
   readonly sourceIdentity: string;
   readonly payload: Readonly<Record<string, JsonValue>>;
   readonly receivedAt: string;
@@ -967,7 +967,8 @@ interface NativeCore {
   readonly resolveWomlNotificationApproval: (
     eventStorePath: string,
     capability: string,
-    decision: ApprovalDecision
+    decision: ApprovalDecision,
+    providerActorId?: string
   ) => string;
   readonly settleWomlApprovalTimeout: (
     eventStorePath: string,
@@ -2201,7 +2202,9 @@ export function resolveNotificationApprovalWithRust(
   eventStorePath: string,
   capability: string,
   decision: ApprovalDecision,
-  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> & {
+    readonly providerActorId?: string;
+  } = {}
 ): ApprovalDecisionResult {
   const path = options.nativeCorePath ?? defaultNativeCorePath();
   const native = loadNativeCore(path);
@@ -2215,7 +2218,8 @@ export function resolveNotificationApprovalWithRust(
       native.resolveWomlNotificationApproval(
         eventStorePath,
         capability,
-        decision
+        decision,
+        options.providerActorId
       )
     );
   } catch (error) {

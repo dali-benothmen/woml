@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type {
   ApprovalDecision,
   InteractionMessage,
-  ProviderMessageIdentity,
+  SlackProviderMessageIdentity,
   SlackDeliveryRequest,
   SlackUpdateRequest,
 } from './types';
@@ -18,7 +18,7 @@ export { SlackTransportError, type SlackTransport } from './slack-transport';
 export interface FakeSlackMessage {
   readonly deliveryId: string;
   readonly destination: string;
-  readonly providerMessage: ProviderMessageIdentity;
+  readonly providerMessage: SlackProviderMessageIdentity;
   readonly decisionCapability?: string;
   readonly message: string;
   readonly idempotencyKey: string;
@@ -88,7 +88,7 @@ export class FakeSlackTransport implements SlackTransport {
     this.#connections.set(appTokenReference, resolvedAppToken);
   }
 
-  async deliver(request: SlackDeliveryRequest): Promise<ProviderMessageIdentity> {
+  async deliver(request: SlackDeliveryRequest): Promise<SlackProviderMessageIdentity> {
     if (this.#closed) throw this.#unavailable();
     if (this.#failedDestinations.has(request.invocation.destination)) {
       throw new SlackTransportError({
@@ -115,7 +115,7 @@ export class FakeSlackTransport implements SlackTransport {
     );
     if (existing !== undefined) return existing.providerMessage;
     this.#messageSequence += 1;
-    const providerMessage: ProviderMessageIdentity = {
+    const providerMessage: SlackProviderMessageIdentity = {
       workspaceId: stableSlackId('T', request.credentials.botToken),
       channelId: request.invocation.destination.startsWith('#')
         ? stableSlackId('C', request.invocation.destination)
@@ -157,6 +157,14 @@ export class FakeSlackTransport implements SlackTransport {
   async update(request: SlackUpdateRequest): Promise<void> {
     if (this.#closed) throw this.#unavailable();
     if (this.#updates.has(request.invocation.idempotencyKey)) return;
+    if (!('workspaceId' in request.invocation.providerMessage)) {
+      throw new SlackTransportError({
+        kind: 'update_failed',
+        code: 'WOML_SLACK_UPDATE_FAILED',
+        message: 'Slack received a non-Slack message identity.',
+        retryable: false,
+      });
+    }
     const message = this.#messagesByDelivery.get(request.invocation.deliveryId);
     if (
       message !== undefined &&

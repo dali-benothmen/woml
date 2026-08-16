@@ -12,11 +12,10 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 use woml_engine::model::ValueExpression;
 use woml_engine::{
-  execute_admitted_trigger_run_durable, run_notification_provider_journey, ApprovalDecision,
   CompiledWorkflowDefinition, DurableEventStore, NotificationHostProcessOptions, RunEventPayload,
   RunStatus, RuntimeExecutionOptions, ScriptHostProcessOptions, TriggerAdmissionRequest,
   TriggerProgress, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
-  WomlWebhookServerConfig, WorkflowRuntimeOutcome, WEBHOOK_MAX_BODY_BYTES,
+  WomlWebhookServerConfig, WEBHOOK_MAX_BODY_BYTES,
 };
 
 const WEBHOOK_MODEL: &str =
@@ -1003,7 +1002,8 @@ async fn webhook_composes_with_retry_branch_parallel_approval_and_slack_delivery
     database_path: database.path().to_path_buf(),
     registrations,
     startup_manual_triggers: BTreeMap::new(),
-    execution: RuntimeExecutionOptions::new(host.clone(), 3_000),
+    execution: RuntimeExecutionOptions::new(host.clone(), 3_000)
+      .with_notification_host(notification_host),
     progress_reporter: None,
   })
   .await
@@ -1057,27 +1057,6 @@ async fn webhook_composes_with_retry_branch_parallel_approval_and_slack_delivery
   )
   .await;
   let slack_run_id = slack.body["runId"].as_str().unwrap();
-  wait_for_status(&database, slack_run_id, RunStatus::Waiting).await;
-  let journey = run_notification_provider_journey(
-    database.path(),
-    slack_run_id,
-    notification_host,
-    Duration::from_secs(5),
-  )
-  .await
-  .unwrap();
-  assert_eq!(
-    journey.decision.as_ref().map(|decision| decision.decision),
-    Some(ApprovalDecision::Approved)
-  );
-  let resumed = execute_admitted_trigger_run_durable(
-    database.path().to_path_buf(),
-    slack_run_id,
-    RuntimeExecutionOptions::new(host, 3_000),
-  )
-  .await
-  .unwrap();
-  assert!(matches!(resumed, WorkflowRuntimeOutcome::Succeeded { .. }));
   wait_for_status(&database, slack_run_id, RunStatus::Succeeded).await;
   server.stop().await;
 }

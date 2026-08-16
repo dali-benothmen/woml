@@ -416,7 +416,7 @@ function workflowBox(workflow: WorkflowPresentationV1, options: ResolvedRenderOp
 
 function triggerTitle(trigger: TriggerPresentationV1): string {
   const labels: Record<TriggerPresentationV1['type'], string> = {
-    manual: 'Manual', webhook: 'Webhook', slack: 'Slack', schedule: 'Schedule',
+    manual: 'Manual', webhook: 'Webhook', slack: 'Slack', telegram: 'Telegram', schedule: 'Schedule',
     interval: 'Interval', event: 'Event',
   };
   return trigger.label ?? labels[trigger.type];
@@ -439,6 +439,10 @@ function triggerDetails(
   if (trigger.type === 'slack') return [
     `Workspace  ${trigger.workspace ?? 'configured workspace'}`,
     ...(trigger.scope === undefined ? [] : [`Scope      ${trigger.scope}`]),
+  ];
+  if (trigger.type === 'telegram') return [
+    'Send a message to the configured Telegram bot.',
+    ...(trigger.scope === undefined ? [] : [`Events     ${trigger.scope}`]),
   ];
   if (trigger.type === 'schedule') return [
     `Schedule   ${trigger.schedule ?? 'configured schedule'}`,

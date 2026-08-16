@@ -768,6 +768,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) || data.definition_hash != definition_hash
         || workflow.runtime_policy_hash().as_deref() != Some(data.policy_hash.as_str())
         || workflow.runtime_policy_queue_name().as_deref() != Some(data.queue.name.as_str())
@@ -797,6 +798,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -821,6 +823,7 @@ pub(crate) fn validate_payload_against_definition(
         crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -1261,6 +1264,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) {
         return Err("Lifecycle and run-control events require compiled Model v11+.".to_string());
       }
@@ -1272,6 +1276,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) {
         return Err("Lifecycle hook events require compiled Model v11+.".to_string());
       }
@@ -1307,6 +1312,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) || !action_exists
       {
         return Err("Lifecycle action event references an unknown Model v11+ action.".to_string());
@@ -1326,6 +1332,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) || !action_exists
       {
         return Err(
@@ -1340,6 +1347,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
       ) || workflow.lifecycle.is_none()
         || !crate::event::is_definition_hash(&data.hook_invocation_id)
       {
@@ -2037,8 +2045,11 @@ fn validate_reusable_lifecycle_binding(
   definition_digest: &str,
   action_id: Option<&str>,
 ) -> Result<(), String> {
-  if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V14 {
-    return Err("Reusable lifecycle events require compiled Model v14.".to_string());
+  if !matches!(
+    workflow.schema_version,
+    crate::COMPILED_MODEL_SCHEMA_VERSION_V14 | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+  ) {
+    return Err("Reusable lifecycle events require compiled Model v14 or later.".to_string());
   }
   let descriptor = workflow
     .reusable_definitions

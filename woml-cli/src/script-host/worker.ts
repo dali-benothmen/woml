@@ -634,6 +634,65 @@ function normalizeHttpRequest(input: JsonValue): JsonObject {
   return normalized;
 }
 
+function normalizeTelegramSend(input: JsonValue): JsonObject {
+  const object = plainObject(input);
+  if (object === undefined) {
+    throw new TypeError('services.telegram.send() requires a request object.');
+  }
+  const allowed = new Set([
+    'botToken',
+    'conversationId',
+    'text',
+    'replyToMessageId',
+  ]);
+  const unknown = Object.keys(object).find(key => !allowed.has(key));
+  if (unknown !== undefined) {
+    throw new TypeError(`Unknown Telegram send option "${unknown}".`);
+  }
+  for (const required of ['botToken', 'conversationId', 'text'] as const) {
+    if (typeof object[required] !== 'string' || object[required].length === 0) {
+      throw new TypeError(`Telegram send requires a non-empty ${required} string.`);
+    }
+  }
+  if (
+    object.replyToMessageId !== undefined &&
+    (typeof object.replyToMessageId !== 'string' ||
+      object.replyToMessageId.length === 0)
+  ) {
+    throw new TypeError('Telegram replyToMessageId must be a non-empty string.');
+  }
+  return {
+    contract: 'woml.telegram-message',
+    contractVersion: 1,
+    kind: 'send',
+    botToken: object.botToken,
+    conversationId: object.conversationId,
+    text: object.text,
+    ...(object.replyToMessageId === undefined
+      ? {}
+      : { replyToMessageId: object.replyToMessageId }),
+  };
+}
+
+function publicTelegramResult(result: JsonValue): JsonValue {
+  const object = plainObject(result);
+  if (
+    object === undefined ||
+    object.provider !== 'telegram' ||
+    typeof object.conversationId !== 'string' ||
+    typeof object.messageId !== 'string' ||
+    typeof object.acceptedAt !== 'string'
+  ) {
+    throw new TypeError('Telegram returned an invalid managed result.');
+  }
+  return Object.freeze({
+    provider: 'telegram',
+    conversationId: object.conversationId,
+    messageId: object.messageId,
+    acceptedAt: object.acceptedAt,
+  });
+}
+
 function namedOperation(
   capability: string,
   operation: string,
@@ -1393,6 +1452,7 @@ function deeplyReadonlyServiceFacade(
     const managedWorkflows =
       capability === 'workflows' &&
       (operation === 'call' || operation === 'start');
+    const managedTelegram = capability === 'telegram' && operation === 'send';
     if (
       !managedHttp &&
       !managedDatabase &&
@@ -1401,6 +1461,7 @@ function deeplyReadonlyServiceFacade(
       !managedState &&
       !managedEvents &&
       !managedWorkflows &&
+      !managedTelegram &&
       callOptions !== undefined
     ) {
       throw new TypeError(
@@ -1439,7 +1500,11 @@ function deeplyReadonlyServiceFacade(
     const stateEffectful =
       managedState && operation !== 'get' && operation !== 'has';
     if (
-      (effectful || cacheEffectful || stateEffectful || managedEvents) &&
+      (effectful ||
+        cacheEffectful ||
+        stateEffectful ||
+        managedEvents ||
+        managedTelegram) &&
       identity.mode === 'automatic'
     ) {
       const key = `${capability}.${operation}`;
@@ -1519,6 +1584,8 @@ function deeplyReadonlyServiceFacade(
               ? publicEventResult(result)
               : managedWorkflows
                 ? publicWorkflowResult(result, operation as 'call' | 'start')
+                : managedTelegram
+                  ? publicTelegramResult(result)
                 : result;
   };
   return new Proxy(Object.freeze({}), {
@@ -1719,6 +1786,8 @@ function deeplyReadonlyServiceFacade(
               operationProperty,
               capabilityProperty === 'http' && operationProperty === 'request'
                 ? normalizeHttpRequest(rawInput)
+                : capabilityProperty === 'telegram' && operationProperty === 'send'
+                  ? normalizeTelegramSend(rawInput)
                 : rawInput,
               callOptions
             );

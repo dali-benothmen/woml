@@ -26,21 +26,24 @@ describe('Telegram frontend CLI boundary', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toContain('WOML check passed');
-      expect(result.stdout).toContain('compile to Model v15');
-      expect(result.stdout).toContain('network execution begins in ACP3');
+      expect(result.stdout).toMatch(
+        /executable through the durable Rust runtime|Telegram triggers, notifications, and messaging are runnable together/
+      );
     }
   });
 
-  test('rejects activation with an explicit staged-runtime diagnostic', async () => {
+  test('publishes Model v15 as runtime-ready without contacting Telegram during check', async () => {
     const result = await invoke([
-      'run',
+      'check',
       resolve(fixtureRoot, 'telegram-acp2.woml'),
+      '--json',
     ]);
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('WOML_TELEGRAM_RUNTIME_UNAVAILABLE');
-    expect(result.stderr).toContain('Telegram execution begins in ACP3');
-    expect(result.stderr).toContain('Use `woml check`');
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      schemaVersion: 1,
+      profile: 'woml.definition-package/v1',
+      workflow: { id: 'telegram-agent' },
+    });
   });
 
   test('keeps a local <telegram> provider while the trigger resolves to the built-in', async () => {
@@ -49,10 +52,8 @@ describe('Telegram frontend CLI boundary', () => {
     expect(checked.exitCode).toBe(0);
     expect(checked.stderr).toContain('WOML_BUILTIN_PROVIDER_SHADOWED');
     expect(checked.stdout).toContain('Compiled Model v15 package');
-    expect(checked.stdout).toContain('custom definitions and Telegram authoring compose');
-
-    const run = await invoke(['run', path]);
-    expect(run.exitCode).toBe(1);
-    expect(run.stderr).toContain('WOML_TELEGRAM_RUNTIME_UNAVAILABLE');
+    expect(checked.stdout).toContain(
+      'custom definitions and Telegram triggers, notifications, and messaging are runnable together'
+    );
   });
 });

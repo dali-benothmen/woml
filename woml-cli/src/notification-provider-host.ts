@@ -5,10 +5,17 @@ import { randomUUID } from 'node:crypto';
 import { FrameDecoder, SerializedFrameWriter } from './script-host/framing';
 import { createSecretStore } from './secrets';
 import { FakeSlackTransport } from './notification-provider/fake-slack';
-import { NotificationProviderHost } from './notification-provider/host';
+import {
+  NotificationProviderHost,
+  type ActiveNotificationAdapter,
+} from './notification-provider/host';
 import { RealSlackTransport } from './notification-provider/real-slack';
 import { SlackNotificationAdapter } from './notification-provider/slack-adapter';
 import type { SlackTransport } from './notification-provider/slack-transport';
+import {
+  SharedTelegramTransport,
+  TelegramNotificationAdapter,
+} from './telegram';
 import {
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
@@ -71,6 +78,7 @@ export interface RunNotificationProviderHostOptions {
   readonly createTransport?: (
     emit: (message: Parameters<SerializedFrameWriter['send']>[0]) => Promise<void>
   ) => SlackTransport;
+  readonly createTelegramTransport?: () => SharedTelegramTransport;
 }
 
 export async function runNotificationProviderHost(
@@ -103,18 +111,37 @@ export async function runNotificationProviderHost(
           emit,
           log: message => process.stderr.write(`[woml] ${message}\n`),
         }));
+  const adapters: ActiveNotificationAdapter[] = [
+    new SlackNotificationAdapter(transport) as ActiveNotificationAdapter,
+  ];
+  if (options.adapter !== 'fake') {
+    adapters.push(
+      new TelegramNotificationAdapter(
+        options.createTelegramTransport?.() ?? new SharedTelegramTransport()
+      ) as ActiveNotificationAdapter
+    );
+  }
   const host = new NotificationProviderHost({
     secretStore: createSecretStore(),
-    adapter: new SlackNotificationAdapter(transport),
+    adapters,
     send: message => writer.send(message),
     protocolVersion,
   });
+  const providers = adapters.map(adapter => adapter.provider);
+  if (
+    !providers.every(
+      (provider): provider is 'slack' | 'telegram' =>
+        provider === 'slack' || provider === 'telegram'
+    )
+  ) {
+    throw new Error('The notification host contains an unavailable provider adapter.');
+  }
   const ready: ReadyMessage = {
     protocol: NOTIFICATION_PROVIDER_PROTOCOL,
     protocolVersion,
     messageType: 'ready',
     hostInstanceId: `notification_host_${randomUUID()}`,
-    providers: ['slack'],
+    providers,
   };
 
   try {

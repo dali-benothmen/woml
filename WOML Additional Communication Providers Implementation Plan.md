@@ -1,8 +1,8 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0, ACP1, and ACP2 were completed on 2026-08-16.
-Telegram authoring now validates and lowers to Model v15 / Definition Package
-v10; Telegram network execution remains intentionally unavailable until ACP3.
+Status: In progress. ACP0 through ACP3 were completed on 2026-08-16.
+Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
+end to end through the durable production runtime.
 Discord and WhatsApp remain unavailable until their provider phases. Slack
 triggers and notifications, custom notification providers, Human Approval,
 durable capability execution, production runtime hosting, and cross-platform
@@ -815,9 +815,8 @@ Status: **Completed on 2026-08-16.** Telegram triggers, approval and lifecycle
 notifications, and `services.telegram.send()` now have source-aware validation,
 generated editor types/snippets, immutable Model v15 and Definition Package
 v10 lowering, local-module discovery, and explicit local-alias compatibility.
-Reviewed compile/check fixtures make no network requests. `woml run` fails
-before runtime activation with `WOML_TELEGRAM_RUNTIME_UNAVAILABLE`, leaving
-polling, delivery, callbacks, and supervised messaging to ACP3.
+Reviewed compile/check fixtures make no network requests. ACP2 deliberately
+froze the authoring and lowering boundary before ACP3 activated its runtime.
 
 Changes:
 
@@ -841,10 +840,17 @@ construct has an executable lowering target.
 Gate:
 
 Parser, grammar, compiler, model, package, module analysis, diagnostics,
-autocomplete, and compatibility fixtures pass; activation still fails clearly
-until ACP3 provides the runtime adapter.
+autocomplete, and compatibility fixtures pass against the reviewed Model v15
+and Definition Package v10 artifacts.
 
 ### ACP3 — Execute Telegram end to end
+
+Status: **Completed on 2026-08-16.** One shared long-polling transport now
+serves Telegram triggers and approval callbacks, while the notification host
+delivers approval/lifecycle messages and Rust supervises
+`services.telegram.send()`. Polling offsets advance only after durable
+acceptance, approval decisions retain one shared authority across providers,
+and uncertain sends fail closed.
 
 Changes:
 

@@ -781,9 +781,10 @@ fn prepare_state(
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
     ) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} must use a supported compiled Model v7 through v14",
+        "workflow {:?} must use a supported compiled Model v7 through v15",
         registration.workflow.workflow_id
       )));
     }
@@ -796,6 +797,7 @@ fn prepare_state(
         "trigger.manual"
           | "trigger.webhook"
           | "trigger.slack"
+          | "trigger.telegram"
           | "trigger.schedule"
           | "trigger.interval"
           | "trigger.event"
@@ -2603,33 +2605,48 @@ async fn run_external_ingress(
       Ok(Ok(outcome)) => outcome,
       Ok(Err(error)) => {
         let manual = trigger_handler == "trigger.manual";
-        let (code, message) = if matches!(error, DurableStoreError::TriggerIdempotencyConflict) {
-          (
+        let (code, message) = match &error {
+          DurableStoreError::TriggerIdempotencyConflict => (
             "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
             if manual {
               "This manual request identity is already bound to another run."
             } else {
               "This provider event is already bound to a different payload."
             },
-          )
-        } else if matches!(error, DurableStoreError::RuntimePolicyQueueFull) {
-          (
+          ),
+          DurableStoreError::RuntimePolicyQueueFull => (
             "WOML_POLICY_QUEUE_FULL",
             if manual {
               "The durable WOML policy queue is full; try the manual trigger again later."
             } else {
               "The durable WOML policy queue is full; the provider may retry this event."
             },
-          )
-        } else {
-          (
+          ),
+          DurableStoreError::DefinitionNotFound(_)
+          | DurableStoreError::TriggerDefinitionMismatch => (
+            "WOML_TRIGGER_DEFINITION_MISMATCH",
+            "The provider event does not match the active workflow definition; restart the WOML runtime.",
+          ),
+          DurableStoreError::TriggerNotFound { .. } => (
+            "WOML_TRIGGER_NOT_FOUND",
+            "The provider event references a trigger that is not registered in the active workflow.",
+          ),
+          DurableStoreError::TriggerHandlerMismatch => (
+            "WOML_TRIGGER_HANDLER_MISMATCH",
+            "The provider event type does not match the compiled workflow trigger.",
+          ),
+          DurableStoreError::Contract(_) | DurableStoreError::InvalidModel(_) => (
+            "WOML_TRIGGER_CONTRACT_INVALID",
+            "The compiled workflow and durable trigger contracts are incompatible; update or rebuild WOML.",
+          ),
+          _ => (
             "WOML_TRIGGER_UNAVAILABLE",
             if manual {
-              "The durable WOML trigger authority rejected the manual request."
+              "The durable WOML trigger authority is temporarily unavailable; retry the manual request."
             } else {
-              "The durable WOML trigger authority rejected the provider event."
+              "The durable WOML trigger authority is temporarily unavailable; the provider may retry this event."
             },
-          )
+          ),
         };
         state.report(TriggerProgress::OccurrenceRejected {
           contract: TRIGGER_PROGRESS_CONTRACT,
@@ -2707,7 +2724,8 @@ fn dispatch_run(state: &WebhookRuntimeState, identity: RunProgressIdentity) {
   active_runs.fetch_add(1, Ordering::AcqRel);
   actix_web::rt::spawn(async move {
     let result =
-      execute_admitted_trigger_run_durable(database_path, &identity.run_id, execution).await;
+      execute_trigger_run_with_builtin_notifications(database_path, &identity.run_id, execution)
+        .await;
     let progress = match result {
       Ok(crate::WorkflowRuntimeOutcome::Succeeded { .. }) => Some(TriggerProgress::RunTerminal {
         contract: TRIGGER_PROGRESS_CONTRACT,
@@ -2735,6 +2753,59 @@ fn dispatch_run(state: &WebhookRuntimeState, identity: RunProgressIdentity) {
     active_runs.fetch_sub(1, Ordering::AcqRel);
     active_runs_changed.notify_waiters();
   });
+}
+
+async fn execute_trigger_run_with_builtin_notifications(
+  database_path: PathBuf,
+  run_id: &str,
+  execution: RuntimeExecutionOptions,
+) -> Result<crate::WorkflowRuntimeOutcome, crate::RuntimeExecutionError> {
+  loop {
+    let outcome =
+      execute_admitted_trigger_run_durable(database_path.clone(), run_id, execution.clone())
+        .await?;
+    let crate::WorkflowRuntimeOutcome::Waiting { approval, .. } = &outcome else {
+      return Ok(outcome);
+    };
+
+    let store = DurableEventStore::open(&database_path)?;
+    let binding = store.run_binding(run_id)?;
+    let workflow = store.definition(&binding.definition_hash)?;
+    let Some(definition) = workflow.approval(&approval.approval_id) else {
+      return Err(crate::RuntimeExecutionError::InvalidConfiguration(
+        "The waiting approval is missing from its immutable workflow definition.".to_string(),
+      ));
+    };
+    if definition.notifications.is_empty()
+      || definition
+        .notifications
+        .iter()
+        .any(|delivery| !matches!(delivery.provider.as_str(), "slack" | "telegram"))
+    {
+      return Ok(outcome);
+    }
+    let Some(host) = execution.notification_host.clone() else {
+      return Err(crate::RuntimeExecutionError::InvalidConfiguration(
+        "The built-in notification provider host is unavailable.".to_string(),
+      ));
+    };
+    let wait = approval
+      .expires_at
+      .and_then(|expires_at| (expires_at - Utc::now()).to_std().ok())
+      .unwrap_or(std::time::Duration::from_secs(u32::MAX.into()))
+      .max(std::time::Duration::from_millis(1));
+    if let Err(error) =
+      crate::run_notification_provider_journey(&database_path, run_id, host, wait).await
+    {
+      let store = DurableEventStore::open(&database_path)?;
+      if store.projection(run_id)?.status == crate::RunStatus::Failed {
+        return execute_admitted_trigger_run_durable(database_path, run_id, execution).await;
+      }
+      return Err(crate::RuntimeExecutionError::InvalidConfiguration(format!(
+        "The notification provider journey stopped before the approval was resolved: {error}"
+      )));
+    }
+  }
 }
 
 async fn wait_for_active_runs(state: &WebhookRuntimeState, deadline: std::time::Duration) {

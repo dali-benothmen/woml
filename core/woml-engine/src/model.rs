@@ -10,10 +10,11 @@ use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V1, COMPILED_MODEL_SCHEMA_VERSION_V10,
   COMPILED_MODEL_SCHEMA_VERSION_V11, COMPILED_MODEL_SCHEMA_VERSION_V12,
   COMPILED_MODEL_SCHEMA_VERSION_V13, COMPILED_MODEL_SCHEMA_VERSION_V14,
-  COMPILED_MODEL_SCHEMA_VERSION_V2, COMPILED_MODEL_SCHEMA_VERSION_V3,
-  COMPILED_MODEL_SCHEMA_VERSION_V4, COMPILED_MODEL_SCHEMA_VERSION_V5,
-  COMPILED_MODEL_SCHEMA_VERSION_V6, COMPILED_MODEL_SCHEMA_VERSION_V7,
-  COMPILED_MODEL_SCHEMA_VERSION_V8, COMPILED_MODEL_SCHEMA_VERSION_V9,
+  COMPILED_MODEL_SCHEMA_VERSION_V15, COMPILED_MODEL_SCHEMA_VERSION_V2,
+  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
+  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
+  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
+  COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,6 +34,25 @@ pub struct CompiledWorkflowDefinition {
   pub runtime_policy: Option<CompiledRuntimePolicy>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub reusable_definitions: Option<Vec<CompiledReusableInvocation>>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub communication: Option<CompiledCommunicationRequirements>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledCommunicationRequirements {
+  pub profile_version: u32,
+  pub providers: Vec<CompiledCommunicationProviderRequirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledCommunicationProviderRequirement {
+  pub provider: String,
+  pub trigger_ids: Vec<String>,
+  pub notification_delivery_ids: Vec<String>,
+  pub messaging: bool,
+  pub credential_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -678,13 +698,15 @@ fn inspect_reusable_contract(
   let Some(definitions) = &workflow.reusable_definitions else {
     return HashSet::new();
   };
-  if workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V14
-    || definitions.is_empty()
+  if !matches!(
+    workflow.schema_version,
+    COMPILED_MODEL_SCHEMA_VERSION_V14 | COMPILED_MODEL_SCHEMA_VERSION_V15
+  ) || definitions.is_empty()
     || definitions.len() > 256
   {
     issues.push(issue(
       ModelIssueCode::InvalidReusableDefinition,
-      "reusableDefinitions requires between 1 and 256 entries on Model v14 only.",
+      "reusableDefinitions requires between 1 and 256 entries on Model v14 or v15.",
     ));
   }
   let nodes = workflow
@@ -929,6 +951,18 @@ fn valid_slack_trigger(config: &ValueExpression) -> bool {
     && matches!(fields.get("appToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
 }
 
+fn valid_telegram_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  let Some(events) = literal_string_array(fields.get("events")) else {
+    return false;
+  };
+  exact_fields(fields, &["events", "botToken"])
+    && events == ["message"]
+    && matches!(fields.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+}
+
 fn valid_on_missed(expression: Option<&ValueExpression>) -> bool {
   matches!(literal_string(expression), Some("skip" | "run-once"))
 }
@@ -1004,6 +1038,7 @@ fn valid_model_v7_trigger(trigger: &CompiledTrigger) -> bool {
     }
     "trigger.webhook" => valid_webhook_trigger(&trigger.config),
     "trigger.slack" => valid_slack_trigger(&trigger.config),
+    "trigger.telegram" => valid_telegram_trigger(&trigger.config),
     "trigger.schedule" => valid_schedule_trigger(&trigger.config),
     "trigger.interval" => valid_interval_trigger(&trigger.config),
     "trigger.event" => valid_event_trigger(&trigger.config),
@@ -1497,15 +1532,24 @@ fn valid_lifecycle_notification_inputs(
         return valid_custom_provider_delivery(fields, "informational", provider_ids, true);
       }
       let credentials = fields.get("credentials").and_then(object_fields);
-      fields.len() == 5
-        && matches!(fields.get("deliveryId"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
-        && matches!(fields.get("provider"), Some(ValueExpression::Literal { value }) if value.as_str() == Some("slack"))
-        && matches!(fields.get("destination"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
-        && credentials.is_some_and(|credentials| {
+      let provider = literal_string(fields.get("provider"));
+      let built_in_credentials = match provider {
+        Some("slack") => credentials.is_some_and(|credentials| {
           credentials.len() == 2
             && matches!(credentials.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
             && matches!(credentials.get("appToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
-        })
+        }),
+        Some("telegram") => credentials.is_some_and(|credentials| {
+          credentials.len() == 1
+            && matches!(credentials.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+        }),
+        _ => false,
+      };
+      fields.len() == 5
+        && matches!(fields.get("deliveryId"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
+        && matches!(provider, Some("slack" | "telegram"))
+        && matches!(fields.get("destination"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
+        && built_in_credentials
         && matches!(fields.get("message"), Some(ValueExpression::Template { parts }) if (1..=65).contains(&parts.len()) && parts.iter().all(|part| !matches!(part, TemplatePart::Text { text } if text.len() > 4096)))
     })
 }
@@ -1520,6 +1564,7 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
       | COMPILED_MODEL_SCHEMA_VERSION_V12
       | COMPILED_MODEL_SCHEMA_VERSION_V13
       | COMPILED_MODEL_SCHEMA_VERSION_V14
+      | COMPILED_MODEL_SCHEMA_VERSION_V15
   ) {
     issues.push(issue(
       ModelIssueCode::InvalidLifecycle,
@@ -1645,7 +1690,8 @@ fn inspect_runtime_policy_contract(
     (
       COMPILED_MODEL_SCHEMA_VERSION_V12
       | COMPILED_MODEL_SCHEMA_VERSION_V13
-      | COMPILED_MODEL_SCHEMA_VERSION_V14,
+      | COMPILED_MODEL_SCHEMA_VERSION_V14
+      | COMPILED_MODEL_SCHEMA_VERSION_V15,
       Some(policy),
     ) => {
       let has_policy = policy.concurrency.is_some()
@@ -1683,7 +1729,8 @@ fn inspect_runtime_policy_contract(
     (
       COMPILED_MODEL_SCHEMA_VERSION_V12
       | COMPILED_MODEL_SCHEMA_VERSION_V13
-      | COMPILED_MODEL_SCHEMA_VERSION_V14,
+      | COMPILED_MODEL_SCHEMA_VERSION_V14
+      | COMPILED_MODEL_SCHEMA_VERSION_V15,
       None,
     ) => issues.push(issue(
       ModelIssueCode::InvalidRuntimePolicy,
@@ -1901,7 +1948,13 @@ fn approval_notifications(
     let provider = provider.as_str()?;
     let destination = destination.as_str()?;
     let prefix = format!("{approval_id}:notify:");
-    let (tag, channel) = delivery_id.strip_prefix(&prefix)?.split_once(":channel:")?;
+    let suffix = delivery_id.strip_prefix(&prefix)?;
+    let destination_marker = if provider == "telegram" {
+      ":chat:"
+    } else {
+      ":channel:"
+    };
+    let (tag, channel) = suffix.split_once(destination_marker)?;
     let tag = tag.parse::<usize>().ok()?;
     let channel = channel.parse::<usize>().ok()?;
     let ordered = match (previous_tag, previous_channel) {
@@ -1939,6 +1992,31 @@ fn approval_notifications(
         "slack\0{}\0{}\0{}",
         names["botToken"], names["appToken"], destination
       );
+      (names, None, None, duplicate_key)
+    } else if provider == "telegram" {
+      if fields.len() != 4
+        || !["deliveryId", "provider", "destination", "credentials"]
+          .iter()
+          .all(|key| fields.contains_key(*key))
+        || destination.is_empty()
+        || destination.len() > 20
+        || destination
+          .strip_prefix('-')
+          .unwrap_or(destination)
+          .bytes()
+          .any(|byte| !byte.is_ascii_digit())
+        || credentials.len() != 1
+      {
+        return None;
+      }
+      let ValueExpression::SecretReference { name } = credentials.get("botToken")? else {
+        return None;
+      };
+      if !valid_secret_name(name) {
+        return None;
+      }
+      let names = BTreeMap::from_iter([("botToken".to_string(), name.clone())]);
+      let duplicate_key = format!("telegram\0{}\0{}", names["botToken"], destination);
       (names, None, None, duplicate_key)
     } else if provider == "custom"
       && valid_custom_provider_delivery(fields, "approval", provider_ids, false)
@@ -2827,6 +2905,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V12
         | COMPILED_MODEL_SCHEMA_VERSION_V13
         | COMPILED_MODEL_SCHEMA_VERSION_V14
+        | COMPILED_MODEL_SCHEMA_VERSION_V15
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -2864,7 +2943,8 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V11
         | COMPILED_MODEL_SCHEMA_VERSION_V12
         | COMPILED_MODEL_SCHEMA_VERSION_V13
-        | COMPILED_MODEL_SCHEMA_VERSION_V14,
+        | COMPILED_MODEL_SCHEMA_VERSION_V14
+        | COMPILED_MODEL_SCHEMA_VERSION_V15,
         Some(runtime),
       ) => {
         let reserved = [
@@ -2875,6 +2955,7 @@ impl CompiledWorkflowDefinition {
           "events",
           "queue",
           "workflows",
+          "telegram",
         ];
         let valid = runtime.profile_version == 1
           && (1..=64).contains(&runtime.modules.len())
@@ -2927,6 +3008,7 @@ impl CompiledWorkflowDefinition {
           | COMPILED_MODEL_SCHEMA_VERSION_V12
           | COMPILED_MODEL_SCHEMA_VERSION_V13
           | COMPILED_MODEL_SCHEMA_VERSION_V14
+          | COMPILED_MODEL_SCHEMA_VERSION_V15
       )
     {
       issues.push(issue(
@@ -2942,6 +3024,52 @@ impl CompiledWorkflowDefinition {
     }
     inspect_lifecycle_contract(self, &mut issues);
     inspect_runtime_policy_contract(self, &mut issues);
+    match (self.schema_version, &self.communication) {
+      (COMPILED_MODEL_SCHEMA_VERSION_V15, Some(communication)) => {
+        let valid = communication.profile_version == 1
+          && !communication.providers.is_empty()
+          && communication.providers.len() <= 4
+          && communication
+            .providers
+            .windows(2)
+            .all(|pair| pair[0].provider < pair[1].provider)
+          && communication.providers.iter().all(|provider| {
+            provider.provider == "telegram"
+              && (!provider.trigger_ids.is_empty()
+                || !provider.notification_delivery_ids.is_empty()
+                || provider.messaging)
+              && provider.trigger_ids.iter().all(|id| valid_id(id))
+              && provider
+                .notification_delivery_ids
+                .iter()
+                .all(|id| valid_id(id))
+              && !provider.credential_names.is_empty()
+              && provider
+                .credential_names
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+              && provider
+                .credential_names
+                .iter()
+                .all(|name| valid_secret_name(name))
+          });
+        if !valid {
+          issues.push(issue(
+            ModelIssueCode::InvalidValueExpression,
+            "Model v15 communication requirements do not match Communication Requirements v1.",
+          ));
+        }
+      }
+      (COMPILED_MODEL_SCHEMA_VERSION_V15, None) => issues.push(issue(
+        ModelIssueCode::InvalidValueExpression,
+        "Model v15 requires communication requirements.",
+      )),
+      (_, Some(_)) => issues.push(issue(
+        ModelIssueCode::InvalidValueExpression,
+        "communication requirements are available only on Model v15.",
+      )),
+      _ => {}
+    }
     let mut trigger_ids = HashSet::new();
     for trigger in &self.triggers {
       if !valid_id(&trigger.id)

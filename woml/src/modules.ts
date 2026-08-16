@@ -1603,7 +1603,7 @@ export async function buildWomlReusableDefinitionPackage(
     ? {
         schemaVersion: 10 as const,
         profile: WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE,
-        runtimeReady: false,
+        runtimeReady: true,
         ...common,
         workflow: { ...common.workflow, model },
       }
@@ -1629,19 +1629,16 @@ export async function buildWomlRuntimeDefinitionPackage(
   | WomlDefinitionPackageV3
   | WomlDefinitionPackageV5
   | WomlDefinitionPackageV9
+  | WomlDefinitionPackageV10
 > {
   const compiled = await buildWomlExecutableDefinitionPackage(
     document,
     options
   );
   if (compiled.schemaVersion === 10) {
-    throw compileDiagnostic(
-      document.file,
-      'WOML_TELEGRAM_RUNTIME_UNAVAILABLE',
-      'Telegram syntax and services compiled successfully, but Telegram execution begins in ACP3.',
-      document.root.openTagSpan,
-      'Use `woml check <file>` to review the Model v15 / Definition Package v10 output.'
-    );
+    const { rootHash: _compilationRootHash, ...rest } = compiled;
+    const unsigned = { ...rest, runtimeReady: true as const };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
   }
   if (compiled.schemaVersion === 9) {
     const { rootHash: _compilationRootHash, ...rest } = compiled;

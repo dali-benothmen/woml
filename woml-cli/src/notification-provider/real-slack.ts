@@ -14,7 +14,7 @@ import {
   type DeliverMessage,
   type InteractionMessage,
   type NotificationProviderFailure,
-  type ProviderMessageIdentity,
+  type SlackProviderMessageIdentity,
   type SlackDeliveryRequest,
   type SlackUpdateRequest,
 } from './types';
@@ -164,7 +164,7 @@ export class RealSlackTransport implements SlackTransport {
   readonly #log: (message: string) => void;
   readonly #listenerId = `approval_${randomUUID()}`;
   readonly #unsubscribers = new Map<string, () => void>();
-  readonly #deliveries = new Map<string, Promise<ProviderMessageIdentity>>();
+  readonly #deliveries = new Map<string, Promise<SlackProviderMessageIdentity>>();
   readonly #approvalDeliveryIds = new Set<string>();
   readonly #updates = new Map<string, Promise<void>>();
   #closed = false;
@@ -200,7 +200,7 @@ export class RealSlackTransport implements SlackTransport {
     await this.#shared.ensureConnection(appTokenReference, resolvedAppToken);
   }
 
-  async deliver(request: SlackDeliveryRequest): Promise<ProviderMessageIdentity> {
+  async deliver(request: SlackDeliveryRequest): Promise<SlackProviderMessageIdentity> {
     if (this.#closed) throw this.#unavailable();
     const key = request.invocation.idempotencyKey;
     const existing = this.#deliveries.get(key);
@@ -239,7 +239,7 @@ export class RealSlackTransport implements SlackTransport {
 
   async #deliver(
     request: SlackDeliveryRequest
-  ): Promise<ProviderMessageIdentity> {
+  ): Promise<SlackProviderMessageIdentity> {
     const botReference = request.invocation.credentials.botToken.name;
     const identity = await this.#shared.botIdentity(
       botReference,
@@ -292,6 +292,14 @@ export class RealSlackTransport implements SlackTransport {
   }
 
   async #update(request: SlackUpdateRequest): Promise<void> {
+    if (!('workspaceId' in request.invocation.providerMessage)) {
+      throw failure(
+        'update_failed',
+        'WOML_SLACK_UPDATE_FAILED',
+        'Slack received a non-Slack message identity.',
+        false
+      );
+    }
     const botReference = request.invocation.credentials.botToken.name;
     const identity = await this.#shared.botIdentity(
       botReference,

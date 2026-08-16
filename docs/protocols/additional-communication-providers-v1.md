@@ -30,6 +30,21 @@ the first executable consumer. ACP0 freezes their communication fragments in
 `communication-provider-model.v1.schema.json`; implementation may not change
 those fragments while assembling the complete schemas.
 
+Event v14 preserves WOML's single durable vocabulary. The logical facts in
+`communication-provider-run-event.v1.schema.json` map as follows:
+
+| Communication fact | Persisted Event v14 representation |
+| --- | --- |
+| delivery requested | existing `notification_delivery_requested` and attempt event |
+| delivery succeeded | existing `notification_delivery_succeeded` with a provider-neutral message identity |
+| delivery failed | existing `notification_delivery_failed` |
+| interaction received | existing `notification_decision_accepted` after Rust commits the decision |
+| message sent | existing capability `operation_succeeded` result and safe metadata |
+
+The complete additive event schema is
+`docs/schemas/run-event.v14.schema.json`. WOML does not persist parallel
+`communication_*` events for the same side effect.
+
 ## 2. Exact authoring syntax
 
 List attributes are comma-separated, trimmed, non-empty, ordered, and reject

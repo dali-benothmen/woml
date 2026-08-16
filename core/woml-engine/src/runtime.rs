@@ -330,6 +330,9 @@ impl RuntimeExecutionOptions {
         Arc::clone(&managed_storage_store),
       )))
       .expect("the production HTTP capability is registered exactly once");
+    capability_registry
+      .register(Arc::new(crate::ManagedTelegramHandler::default()))
+      .expect("the production Telegram capability is registered exactly once");
     let managed_database_pool = Arc::new(crate::ManagedDatabasePool::default());
     for handler in crate::ManagedDatabaseHandler::handlers(Arc::clone(&managed_database_pool)) {
       capability_registry
@@ -3129,13 +3132,13 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
     code: "WOML_NOTIFICATION_REQUEST_INVALID".to_string(),
     message: error.to_string(),
   })?;
-  let has_slack = deliveries
+  let has_builtin = deliveries
     .iter()
-    .any(|delivery| delivery.provider == "slack");
+    .any(|delivery| matches!(delivery.provider, "slack" | "telegram"));
   let has_custom = deliveries
     .iter()
     .any(|delivery| delivery.provider == "custom");
-  let host = if has_slack {
+  let host = if has_builtin {
     let host_options = options
       .notification_host
       .clone()
@@ -3194,7 +3197,7 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
         continue;
       }
     };
-    let credentials = if delivery.provider == "slack" {
+    let credentials = if matches!(delivery.provider, "slack" | "telegram") {
       match NotificationCredentials::from_symbolic(&delivery.credentials) {
         Ok(credentials) => Some(credentials),
         Err(message) => {
@@ -3379,12 +3382,12 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
           provider: delivery.provider.to_string(),
           destination: delivery.destination.to_string(),
           idempotency_key: operation_key.clone(),
-          credentials: credentials.clone().expect("Slack credentials"),
+          credentials: credentials.clone().expect("built-in provider credentials"),
           message: message.clone(),
         };
         match host
           .as_ref()
-          .expect("Slack host")
+          .expect("built-in notification host")
           .invoke(&invocation_id, &request)
           .await
         {
@@ -3392,18 +3395,30 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
             NotificationHostOutcome::DeliverySuccess { provider_message } => {
               let encoded = serde_json::to_vec(&provider_message).unwrap_or_default();
               let mut metadata = Map::new();
-              metadata.insert(
-                "workspaceId".to_string(),
-                Value::String(provider_message.workspace_id),
-              );
-              metadata.insert(
-                "channelId".to_string(),
-                Value::String(provider_message.channel_id),
-              );
-              metadata.insert(
-                "providerMessageId".to_string(),
-                Value::String(provider_message.message_id),
-              );
+              match provider_message {
+                crate::ProviderMessageIdentity::Slack(message) => {
+                  metadata.insert(
+                    "workspaceId".to_string(),
+                    Value::String(message.workspace_id),
+                  );
+                  metadata.insert("channelId".to_string(), Value::String(message.channel_id));
+                  metadata.insert(
+                    "providerMessageId".to_string(),
+                    Value::String(message.message_id),
+                  );
+                }
+                crate::ProviderMessageIdentity::Communication(message) => {
+                  metadata.insert("accountId".to_string(), Value::String(message.account_id));
+                  metadata.insert(
+                    "conversationId".to_string(),
+                    Value::String(message.conversation_id),
+                  );
+                  metadata.insert(
+                    "providerMessageId".to_string(),
+                    Value::String(message.message_id),
+                  );
+                }
+              }
               LifecycleProviderExecution::Succeeded {
                 duration_ms: completed.duration_ms,
                 receipt: encoded,
@@ -3677,6 +3692,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
   ) {
     return Ok(());
   }
@@ -7103,7 +7119,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V10
     | crate::RUN_EVENT_SCHEMA_VERSION_V11
     | crate::RUN_EVENT_SCHEMA_VERSION_V12
-    | crate::RUN_EVENT_SCHEMA_VERSION_V13 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V13
+    | crate::RUN_EVENT_SCHEMA_VERSION_V14 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -7310,6 +7327,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
+        | crate::RUN_EVENT_SCHEMA_VERSION_V14
     ) {
       crate::durable::expand_model_v11_payload(self.workflow(), run_id, payload)?
     } else {

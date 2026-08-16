@@ -36,10 +36,11 @@ const ID = /^.{1,320}$/s;
 const APPROVAL_ID = /^[a-z][A-Za-z0-9]*$/;
 const REQUEST_ID = /^aprreq_[A-Za-z0-9_-]+$/;
 const DELIVERY_ID =
-  /^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$/;
+  /^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):(channel|chat):(0|[1-9][0-9]*)$/;
 const UPDATE_ID = /^nupdate_[A-Za-z0-9_-]+$/;
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
-const DESTINATION = /^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/;
+const SLACK_DESTINATION = /^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/;
+const TELEGRAM_DESTINATION = /^-?[1-9][0-9]{0,19}$/;
 
 function secretReference(value: unknown): boolean {
   return (
@@ -52,18 +53,31 @@ function secretReference(value: unknown): boolean {
   );
 }
 
-function credentials(value: unknown): boolean {
-  return (
-    record(value) &&
+function credentials(value: unknown, provider: unknown): boolean {
+  if (!record(value)) return false;
+  if (provider === 'telegram') {
+    return exactKeys(value, ['botToken']) && secretReference(value.botToken);
+  }
+  return provider === 'slack' &&
     exactKeys(value, ['botToken', 'appToken']) &&
     secretReference(value.botToken) &&
-    secretReference(value.appToken)
-  );
+    secretReference(value.appToken);
 }
 
 export function validProviderMessage(
   value: unknown
 ): value is ProviderMessageIdentity {
+  if (
+    record(value) &&
+    exactKeys(value, ['provider', 'accountId', 'conversationId', 'messageId']) &&
+    value.provider === 'telegram' &&
+    typeof value.accountId === 'string' &&
+    /^-?[1-9][0-9]{0,19}$/.test(value.accountId) &&
+    typeof value.conversationId === 'string' &&
+    TELEGRAM_DESTINATION.test(value.conversationId) &&
+    typeof value.messageId === 'string' &&
+    /^[1-9][0-9]{0,19}$/.test(value.messageId)
+  ) return true;
   return (
     record(value) &&
     exactKeys(value, ['workspaceId', 'channelId', 'messageId']) &&
@@ -90,8 +104,8 @@ function approvalBase(value: Record<string, unknown>): boolean {
     REQUEST_ID.test(value.requestId) &&
     typeof value.deliveryId === 'string' &&
     DELIVERY_ID.test(value.deliveryId) &&
-    value.provider === 'slack' &&
-    credentials(value.credentials)
+    (value.provider === 'slack' || value.provider === 'telegram') &&
+    credentials(value.credentials, value.provider)
   );
 }
 
@@ -110,12 +124,14 @@ function informationalBase(value: Record<string, unknown>): boolean {
     ID.test(value.actionId) &&
     typeof value.deliveryId === 'string' &&
     ID.test(value.deliveryId) &&
-    value.provider === 'slack' &&
+    (value.provider === 'slack' || value.provider === 'telegram') &&
     typeof value.destination === 'string' &&
-    DESTINATION.test(value.destination) &&
+    (value.provider === 'slack'
+      ? SLACK_DESTINATION.test(value.destination)
+      : TELEGRAM_DESTINATION.test(value.destination)) &&
     typeof value.idempotencyKey === 'string' &&
     SHA256.test(value.idempotencyKey) &&
-    credentials(value.credentials)
+    credentials(value.credentials, value.provider)
   );
 }
 
@@ -208,7 +224,9 @@ export function assertNotificationInvocation(
         ]
       ) ||
       typeof value.destination !== 'string' ||
-      !DESTINATION.test(value.destination) ||
+      !(value.provider === 'slack'
+        ? SLACK_DESTINATION.test(value.destination)
+        : TELEGRAM_DESTINATION.test(value.destination)) ||
       typeof value.idempotencyKey !== 'string' ||
       !SHA256.test(value.idempotencyKey) ||
       typeof value.decisionCapability !== 'string' ||

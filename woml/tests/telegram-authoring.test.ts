@@ -171,7 +171,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
         sourcePath: source.file,
         projectRoot: fixtureRoot,
       })
-    ).rejects.toThrow('Telegram execution begins in ACP3');
+    ).resolves.toMatchObject({ runtimeReady: true });
   });
 
   test('requires imported Telegram messaging to remain rooted in an explicit workflow secret', async () => {
@@ -280,7 +280,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
       { sourcePath: source.file, projectRoot: fixtureRoot }
     );
     expect(definitionPackage.schemaVersion).toBe(10);
-    expect(definitionPackage.runtimeReady).toBe(false);
+    expect(definitionPackage.runtimeReady).toBe(true);
     expect(definitionPackage.workflow.model.schemaVersion).toBe(15);
     expect(definitionPackage.workflow.model.triggers[0].handler).toBe(
       'trigger.telegram'

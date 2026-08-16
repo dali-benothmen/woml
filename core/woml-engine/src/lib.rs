@@ -31,6 +31,7 @@ pub mod runtime;
 pub mod schedule;
 pub mod storage;
 pub mod store;
+pub mod telegram;
 pub mod webhook;
 pub mod workflow_calls;
 
@@ -102,26 +103,27 @@ pub use event::{
   ApprovalDecision, ApprovalDecisionSource, ApprovalFailure, ApprovalRequestedData,
   ApprovalResolution, ApprovalResolvedData, ApprovalTimeoutPolicy, AttemptFailure,
   AttemptFailureKind, BranchFailure, BranchSelectedData, BusinessOutcome, ChoiceSelectedData,
-  FailureSizeDetails, FinalLifecycleStatus, ForkBranchOutcome, ForkBranchSettledData,
-  ForkJoinOutcome, ForkJoinSettledData, ForkOpenedData, JsonValueType, LifecycleActionFailedData,
-  LifecycleActionIdentityData, LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
-  LifecycleHookCompletionStatus, LifecycleHookRequestedData, LifecycleSubject,
-  LifecycleSubjectKind, LifecycleWarning, NotificationDecisionAcceptedData,
-  NotificationDeliveryAttemptStartedData, NotificationDeliveryFailedData,
-  NotificationDeliveryRequestedData, NotificationDeliverySucceededData,
-  NotificationMessageUpdateAttemptStartedData, NotificationMessageUpdateFailedData,
-  NotificationMessageUpdateRequestedData, NotificationMessageUpdatedData, NotificationResolution,
-  NotificationRunFailure, NotificationSafeFailure, OperationExecutionMode, OperationFailedData,
-  OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
-  ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData,
-  ProviderMessageIdentity, ReusableLifecycleActionFailedData, ReusableLifecycleActionStartedData,
+  CommunicationProviderMessageIdentity, FailureSizeDetails, FinalLifecycleStatus,
+  ForkBranchOutcome, ForkBranchSettledData, ForkJoinOutcome, ForkJoinSettledData, ForkOpenedData,
+  JsonValueType, LifecycleActionFailedData, LifecycleActionIdentityData, LifecycleFailure,
+  LifecycleFailureKind, LifecycleHookCompletedData, LifecycleHookCompletionStatus,
+  LifecycleHookRequestedData, LifecycleSubject, LifecycleSubjectKind, LifecycleWarning,
+  NotificationDecisionAcceptedData, NotificationDeliveryAttemptStartedData,
+  NotificationDeliveryFailedData, NotificationDeliveryRequestedData,
+  NotificationDeliverySucceededData, NotificationMessageUpdateAttemptStartedData,
+  NotificationMessageUpdateFailedData, NotificationMessageUpdateRequestedData,
+  NotificationMessageUpdatedData, NotificationResolution, NotificationRunFailure,
+  NotificationSafeFailure, OperationExecutionMode, OperationFailedData, OperationStartedData,
+  OperationSucceededData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  ParallelGroupOutcome, ParallelGroupStartedData, ProviderMessageIdentity,
+  ReusableLifecycleActionFailedData, ReusableLifecycleActionStartedData,
   ReusableLifecycleActionSucceededData, ReusableLifecycleCompletedData, ReusableLifecycleHook,
   ReusableLifecycleOutcome, ReusableLifecycleRequestedData, RunAdmissionQueue, RunAdmissionTrigger,
   RunAdmittedData, RunCancellationRequestedData, RunEvent, RunEventPayload,
   RunExecutionStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
   RunFailedDataV4, RunFailedDataV5, RunFinalizedData, RunIngress, RunOutcomeDecidedData,
-  RunStartedData, RunSucceededData, RunTimeoutReachedData, StepAttemptFailedData,
-  StepAttemptStartedData, StepAttemptSucceededData, StepRetryScheduledData,
+  RunStartedData, RunSucceededData, RunTimeoutReachedData, SlackProviderMessageIdentity,
+  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData, StepRetryScheduledData,
 };
 pub use events_service::{
   EventServiceAcceptedRun, EventServiceRunDispatcher, EventServiceSubscriber, ManagedEventsHandler,
@@ -202,6 +204,7 @@ pub use schedule::{
 };
 pub use storage::{ManagedStorageHandler, ManagedStorageStore, StorageObjectReference};
 pub use store::{EventStoreError, InMemoryEventStore};
+pub use telegram::ManagedTelegramHandler;
 pub use webhook::{
   ExternalTriggerAdmissionCommand, ExternalTriggerAdmissionReceiver, TriggerProgress,
   TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError, WomlWebhookServer,
@@ -235,7 +238,8 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V11: u32 = 11;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V12: u32 = 12;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V13: u32 = 13;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V14: u32 = 14;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V14;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V15: u32 = 15;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V15;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
@@ -249,10 +253,13 @@ pub const RUN_EVENT_SCHEMA_VERSION_V10: u32 = 10;
 pub const RUN_EVENT_SCHEMA_VERSION_V11: u32 = 11;
 pub const RUN_EVENT_SCHEMA_VERSION_V12: u32 = 12;
 pub const RUN_EVENT_SCHEMA_VERSION_V13: u32 = 13;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V13;
+pub const RUN_EVENT_SCHEMA_VERSION_V14: u32 = 14;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V14;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V14 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V15 {
+    RUN_EVENT_SCHEMA_VERSION_V14
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V14 {
     RUN_EVENT_SCHEMA_VERSION_V13
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
     RUN_EVENT_SCHEMA_VERSION_V12

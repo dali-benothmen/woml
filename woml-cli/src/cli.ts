@@ -47,6 +47,7 @@ import {
   type WomlDefinitionPackageV5,
   type WomlDefinitionPackageV7,
   type WomlDefinitionPackageV9,
+  type WomlDefinitionPackageV10,
 } from 'woml';
 import {
   compiledDefinitionHash,
@@ -54,6 +55,7 @@ import {
   executeWorkflowWithRust,
   executeWorkflowWithRustDurable,
   type ExecutionProgressV1,
+  ApprovalDecisionError,
   NotificationProviderError,
   type NotificationJourneyDiagnostics,
   resolveApprovalWithRust,
@@ -120,6 +122,13 @@ import {
   slackTriggerStartupError,
   type SlackTriggerProtocolMessage,
 } from './slack-trigger';
+import {
+  SharedTelegramTransport,
+  TelegramTriggerHost,
+  telegramStartupError,
+  telegramTriggerRegistrations,
+  type SharedTelegramTransportOptions,
+} from './telegram';
 import {
   preflightRuntimeConfiguration,
   resolveRuntimeConfiguration,
@@ -1153,7 +1162,12 @@ function formatNotificationDeliveryFailures(
   }
   return diagnostics.deliveryFailures
     .map(({ provider, destination, failure }) => {
-      const label = provider === 'slack' ? 'Slack' : provider;
+      const label =
+        provider === 'slack'
+          ? 'Slack'
+          : provider === 'telegram'
+            ? 'Telegram'
+            : provider;
       return `\n${label} notification to ${destination} failed [${failure.code}]: ${failure.message}`;
     })
     .join('');
@@ -1362,6 +1376,7 @@ function runtimeModulesFromPackage(
     | WomlDefinitionPackageV5
     | WomlDefinitionPackageV7
     | WomlDefinitionPackageV9
+    | WomlDefinitionPackageV10
 ): readonly RustRuntimeModuleArtifact[] {
   const modules = definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
@@ -1384,7 +1399,10 @@ function runtimeModulesFromPackage(
       sourceMap: sourceMap.content,
     };
   });
-  if (definitionPackage.schemaVersion !== 9) return modules;
+  if (
+    definitionPackage.schemaVersion !== 9 &&
+    definitionPackage.schemaVersion !== 10
+  ) return modules;
   const seen = new Set<string>();
   const reusableArtifacts = (definitionPackage.workflow.model.reusableDefinitions ?? [])
     .filter(
@@ -1567,12 +1585,6 @@ async function compileWorkflowSources(
       );
     }
     const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
-    if (frontendWorkflow.schemaVersion === 15) {
-      throw new CliInputError(
-        'WOML_TELEGRAM_RUNTIME_UNAVAILABLE',
-        'Telegram authoring is valid, but Telegram execution begins in ACP3. Use `woml check` to validate this workflow now.'
-      );
-    }
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
@@ -1582,7 +1594,7 @@ async function compileWorkflowSources(
       workflow,
       definitionHash,
       runtimeModules:
-        runtimePackage === undefined || runtimePackage.schemaVersion === 10
+        runtimePackage === undefined
           ? []
           : runtimeModulesFromPackage(runtimePackage),
       sourceSnapshot: packageSources.map(item => ({
@@ -1873,7 +1885,7 @@ async function runSingleCheckCommand(
       }
       io.stdout(
         reusablePackage?.schemaVersion === 10
-          ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: custom definitions and Telegram authoring compose; Telegram network execution begins in ACP3.\n`
+          ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: custom definitions and Telegram triggers, notifications, and messaging are runnable together.\n`
           : reusablePackage !== undefined
           ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom steps and notification providers are runnable.\n`
           : reusableGraph.root.kind === 'workflow'
@@ -1988,7 +2000,7 @@ async function runSingleCheckCommand(
       usage.referencedServices.includes('workflows');
     io.stdout(
       hasTelegram
-        ? 'Execution: Telegram tags and services.telegram.send() compile to Model v15; network execution begins in ACP3.\n'
+        ? 'Execution: Telegram triggers, notifications, and services.telegram.send() are executable through the durable Rust runtime.\n'
         : hasSwitch
         ? 'Execution: Model v14 exact-string switch routing and merged results are executable through the durable Rust runtime.\n'
         : hasFork
@@ -2948,6 +2960,7 @@ function hasNonManualRuntimeIngress(
       [
         'trigger.webhook',
         'trigger.slack',
+        'trigger.telegram',
         'trigger.schedule',
         'trigger.interval',
         'trigger.event',
@@ -2987,6 +3000,7 @@ function triggerPresentationType(handler: string): TriggerPresentationV1['type']
   if (handler === 'trigger.manual') return 'manual';
   if (handler === 'trigger.webhook') return 'webhook';
   if (handler === 'trigger.slack') return 'slack';
+  if (handler === 'trigger.telegram') return 'telegram';
   if (handler === 'trigger.schedule') return 'schedule';
   if (handler === 'trigger.interval') return 'interval';
   if (handler === 'trigger.event') return 'event';
@@ -3272,6 +3286,15 @@ function workflowPresentation(
       });
       continue;
     }
+    if (type === 'telegram') {
+      const events = literalStringArray(fields?.events);
+      triggers.push({
+        id: trigger.id,
+        type,
+        ...(events.length === 0 ? {} : { scope: events.join(', ') }),
+      });
+      continue;
+    }
     if (type === 'schedule') {
       triggers.push({
         id: trigger.id,
@@ -3534,6 +3557,7 @@ async function activateWorkflows(
   let runtimeId: string | undefined;
   let communicationTriggerHost: CommunicationTriggerHost | undefined;
   let slackTransport: SharedSlackTransport | undefined;
+  let telegramTransport: SharedTelegramTransport | undefined;
   let runtimeControl: RuntimeControlHandle | undefined;
   let observability: RuntimeObservability | undefined;
   let automaticRetention: AutomaticRetentionHandle | undefined;
@@ -3614,6 +3638,24 @@ async function activateWorkflows(
       const slackRegistrations = productionSources.flatMap(source =>
         slackTriggerRegistrations(source.workflow, source.definitionHash)
       );
+      const telegramRegistrations = productionSources.flatMap(source =>
+        telegramTriggerRegistrations(source.workflow, source.definitionHash)
+      );
+      const telegramPollingCredentials = [
+        ...new Set(
+          productionSources.flatMap(source =>
+            source.workflow.schemaVersion === 15
+              ? source.workflow.communication.providers.flatMap(provider =>
+                  provider.provider === 'telegram' &&
+                  (provider.triggerIds.length > 0 ||
+                    provider.notificationDeliveryIds.length > 0)
+                    ? provider.credentialNames
+                    : []
+                )
+              : []
+          )
+        ),
+      ];
       const uniqueEventRoutes: EventRouteSummary[] = [];
       const seenEventNames = new Set<string>();
       for (const route of eventRoutes) {
@@ -3732,6 +3774,15 @@ async function activateWorkflows(
                   status: 'unready' as const,
                 },
               ]),
+          ...(telegramPollingCredentials.length === 0
+            ? []
+            : [
+                {
+                  name: 'telegram',
+                  kind: 'provider' as const,
+                  status: 'unready' as const,
+                },
+              ]),
           ...(args.retention?.enabled === true
             ? [
                 {
@@ -3824,6 +3875,7 @@ async function activateWorkflows(
         },
       });
 
+      const communicationProviders = new CommunicationProviderRegistry();
       if (slackRegistrations.length > 0) {
         slackTransport =
           dependencies.createSlackTransport?.({
@@ -3873,22 +3925,91 @@ async function activateWorkflows(
               message
             ),
         });
-        const communicationProviders = new CommunicationProviderRegistry();
         communicationProviders.register({ role: 'trigger', adapter: slackHost });
+      }
+      if (telegramPollingCredentials.length > 0) {
+        telegramTransport =
+          dependencies.createTelegramTransport?.({
+            log: message => foregroundPresentation.verbose(message),
+            onFatal: failure => {
+              foregroundPresentation.warning(failure.code, failure.message);
+              resolveRuntimeUnavailable();
+            },
+          }) ??
+          new SharedTelegramTransport({
+            log: message => foregroundPresentation.verbose(message),
+            onFatal: failure => {
+              foregroundPresentation.warning(failure.code, failure.message);
+              resolveRuntimeUnavailable();
+            },
+          });
+        const telegramHost = new TelegramTriggerHost({
+          registrations: telegramRegistrations,
+          credentialNames: telegramPollingCredentials,
+          secretStore: store,
+          transport: telegramTransport,
+          submit: ingress =>
+            submitTriggerOccurrenceWithRust(runtime.runtimeId, ingress, {
+              nativeCorePath: dependencies.nativeCorePath,
+            }),
+          resolveApproval: update => {
+            try {
+              const result = resolveNotificationApprovalWithRust(
+                args.statePath,
+                update.decisionCapability,
+                update.decision,
+                {
+                  nativeCorePath: dependencies.nativeCorePath,
+                  providerActorId: `telegram:${update.actorId}`,
+                }
+              );
+              foregroundPresentation.verbose(
+                `Telegram approval ${result.approvalId} was ${update.decision}.`
+              );
+              return result.status === 'accepted'
+                ? 'accepted'
+                : 'already-resolved';
+            } catch (error) {
+              if (error instanceof ApprovalDecisionError) {
+                foregroundPresentation.warning(error.code, error.message);
+                return error.code === 'WOML_APPROVAL_DECISION_CONFLICT'
+                  ? 'already-resolved'
+                  : 'expired';
+              }
+              throw error;
+            }
+          },
+          diagnostic: (code, message) => {
+            if (code === 'WOML_TELEGRAM_READY') {
+              foregroundPresentation.verbose(message);
+            } else {
+              foregroundPresentation.verbose(`${code}: ${message}`);
+            }
+          },
+        });
+        communicationProviders.register({
+          role: 'trigger',
+          adapter: telegramHost,
+        });
+      }
+      if (communicationProviders.providers('trigger').length > 0) {
         communicationTriggerHost = new CommunicationTriggerHost(
           communicationProviders.triggerAdapters()
         );
         try {
           await communicationTriggerHost.start();
-          observability?.setComponent('slack', 'provider', 'ready');
+          if (slackRegistrations.length > 0) {
+            observability?.setComponent('slack', 'provider', 'ready');
+          }
+          if (telegramPollingCredentials.length > 0) {
+            observability?.setComponent('telegram', 'provider', 'ready');
+          }
         } catch (error) {
-          observability?.setComponent(
-            'slack',
-            'provider',
-            'unready',
-            'WOML_SLACK_TRIGGER_UNAVAILABLE'
-          );
-          const failure = slackTriggerStartupError(error);
+          const telegramFailure = telegramStartupError(error);
+          const slackFailure = slackTriggerStartupError(error);
+          const failure = telegramFailure.code !== 'WOML_TELEGRAM_TRIGGER_UNAVAILABLE'
+            ? telegramFailure
+            : slackFailure;
           throw new CliInputError(failure.code, failure.message);
         }
       }
@@ -4048,6 +4169,7 @@ async function activateWorkflows(
           });
     await communicationTriggerHost?.close().catch(() => {});
     await slackTransport?.close().catch(() => {});
+    await telegramTransport?.close().catch(() => {});
     await runtimeStop;
     observability?.setLifecycle('stopped');
     if (descriptorPath !== undefined && runtimeControl !== undefined) {
@@ -4070,6 +4192,9 @@ export interface CliDependencies {
   readonly createSlackTransport?: (
     options: SharedSlackTransportOptions
   ) => SharedSlackTransport;
+  readonly createTelegramTransport?: (
+    options: SharedTelegramTransportOptions
+  ) => SharedTelegramTransport;
   readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   readonly inspectorTerminal?: InspectorTerminal;
   readonly createManualInput?: () => ManualLineInput;

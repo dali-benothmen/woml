@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://woml.dev/schemas/communication-provider-run-event/v1",
-  "title": "WOML Event v14 Communication Provider Additions",
-  "description": "Durable provider-neutral event additions reserved for Event Vocabulary v14.",
+  "title": "WOML Communication Provider Durable Fact Profile v1",
+  "description": "Provider-neutral logical facts used to review how communication work maps onto WOML's existing durable notification, decision, and capability events. These names are a conformance profile, not a second persisted event vocabulary.",
   "x-status": "additional-communication-providers-acp0-frozen",
   "type": "object",
   "additionalProperties": false,

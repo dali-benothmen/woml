@@ -12,7 +12,7 @@ use woml_engine::{
   NotificationMessageUpdateStatus, NotificationProviderAdapter, NotificationProviderDeliveryResult,
   NotificationProviderUpdateResult, NotificationSafeFailure, NotificationUpdateWork,
   ProviderMessageIdentity, RunEvent, RunEventPayload, RunFailure, RunStatus,
-  COMPILED_MODEL_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V5,
+  SlackProviderMessageIdentity, COMPILED_MODEL_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V5,
 };
 
 const MODEL: &str = include_str!("../../../woml/tests/fixtures/approval-slack.compiled.v5.json");
@@ -97,11 +97,11 @@ fn safe_failure(kind: &str, retryable: bool) -> NotificationSafeFailure {
 }
 
 fn provider_message(index: usize) -> ProviderMessageIdentity {
-  ProviderMessageIdentity {
+  ProviderMessageIdentity::Slack(SlackProviderMessageIdentity {
     workspace_id: "T12345678".to_string(),
     channel_id: format!("C1234567{index}"),
     message_id: format!("1723024800.{index:06}"),
-  }
+  })
 }
 
 #[derive(Default)]

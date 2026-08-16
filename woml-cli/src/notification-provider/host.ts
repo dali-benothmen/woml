@@ -17,7 +17,7 @@ import {
 } from './types';
 import type { SlackTransport } from './slack-transport';
 
-type ActiveNotificationAdapter = CommunicationNotificationAdapter<
+export type ActiveNotificationAdapter = CommunicationNotificationAdapter<
   NotificationInvocation,
   unknown,
   import('./types').ProviderMessageIdentity,
@@ -27,6 +27,7 @@ type ActiveNotificationAdapter = CommunicationNotificationAdapter<
 export interface NotificationProviderHostOptions {
   readonly secretStore: SecretStore;
   readonly adapter?: ActiveNotificationAdapter;
+  readonly adapters?: readonly ActiveNotificationAdapter[];
   /** Compatibility constructor for the frozen Slack v1/v2 host API. */
   readonly transport?: SlackTransport;
   readonly send: (message: NotificationProviderOutbound) => Promise<void>;
@@ -62,7 +63,7 @@ function byteLength(value: unknown): number {
 
 export class NotificationProviderHost {
   readonly #secretStore: SecretStore;
-  readonly #adapter: ActiveNotificationAdapter;
+  readonly #adapters: ReadonlyMap<string, ActiveNotificationAdapter>;
   readonly #send: NotificationProviderHostOptions['send'];
   readonly #maxFrameBytes: number;
   readonly #protocolVersion: CompletedMessage['protocolVersion'];
@@ -70,18 +71,39 @@ export class NotificationProviderHost {
   #aborted = false;
 
   constructor(options: NotificationProviderHostOptions) {
-    if (options.adapter !== undefined && options.transport !== undefined) {
+    if (
+      [options.adapter, options.adapters, options.transport].filter(
+        value => value !== undefined
+      ).length > 1
+    ) {
       throw new Error(
-        'NotificationProviderHost accepts an adapter or a legacy Slack transport, not both.'
+        'NotificationProviderHost accepts adapters or a legacy Slack transport, not both.'
       );
     }
-    if (options.adapter === undefined && options.transport === undefined) {
+    if (
+      options.adapter === undefined &&
+      options.adapters === undefined &&
+      options.transport === undefined
+    ) {
       throw new Error('NotificationProviderHost requires a provider adapter.');
     }
     this.#secretStore = options.secretStore;
-    this.#adapter =
+    const adapters = options.adapters ?? [
       options.adapter ??
-      (new SlackNotificationAdapter(options.transport!) as ActiveNotificationAdapter);
+        (new SlackNotificationAdapter(
+          options.transport!
+        ) as ActiveNotificationAdapter),
+    ];
+    const mapped = new Map<string, ActiveNotificationAdapter>();
+    for (const adapter of adapters) {
+      if (mapped.has(adapter.provider)) {
+        throw new Error(
+          `Notification adapter "${adapter.provider}" is registered more than once.`
+        );
+      }
+      mapped.set(adapter.provider, adapter);
+    }
+    this.#adapters = mapped;
     this.#send = options.send;
     this.#maxFrameBytes =
       options.maxFrameBytes ?? NOTIFICATION_PROVIDER_MAX_FRAME_BYTES;
@@ -92,9 +114,10 @@ export class NotificationProviderHost {
   accept(value: unknown): void {
     if (this.#aborted) throw new Error('The notification provider host is closed.');
     assertNotificationInvocation(value);
-    if (value.provider !== this.#adapter.provider) {
+    const adapter = this.#adapters.get(value.provider);
+    if (adapter === undefined) {
       throw new Error(
-        `Notification invocation provider "${value.provider}" cannot be executed by the "${this.#adapter.provider}" adapter.`
+        `Notification invocation provider "${value.provider}" has no active adapter.`
       );
     }
     if (value.protocolVersion !== this.#protocolVersion) {
@@ -105,7 +128,7 @@ export class NotificationProviderHost {
     if (this.#tasks.has(value.invocationId)) {
       throw new Error(`Invocation ID "${value.invocationId}" is already active.`);
     }
-    const task = this.#invoke(value).finally(() => {
+    const task = this.#invoke(value, adapter).finally(() => {
       this.#tasks.delete(value.invocationId);
     });
     this.#tasks.set(value.invocationId, task);
@@ -118,29 +141,34 @@ export class NotificationProviderHost {
   async close(): Promise<void> {
     this.#aborted = true;
     await this.drain();
-    await this.#adapter.close();
+    await Promise.all(
+      [...this.#adapters.values()].map(adapter => adapter.close())
+    );
   }
 
-  async #invoke(invocation: NotificationInvocation): Promise<void> {
+  async #invoke(
+    invocation: NotificationInvocation,
+    adapter: ActiveNotificationAdapter
+  ): Promise<void> {
     const startedAt = performance.now();
     let resolvedValues: string[] = [];
     let response: CompletedMessage;
     try {
-      const resolved = await this.#adapter.resolveCredentials(
+      const resolved = await adapter.resolveCredentials(
         this.#secretStore,
         invocation
       );
       const credentials = resolved.credentials;
       resolvedValues = [...resolved.secretValues];
-      await this.#adapter.prepare(invocation, credentials);
+      await adapter.prepare(invocation, credentials);
       if (invocation.messageType === 'deliver') {
-        const providerMessage = await this.#adapter.deliver(
+        const providerMessage = await adapter.deliver(
           invocation,
           credentials
         );
-        if (!this.#adapter.validMessageIdentity(providerMessage)) {
+        if (!adapter.validMessageIdentity(providerMessage)) {
           throw new CommunicationProviderAdapterError(
-            this.#adapter.invalidMessageIdentityFailure()
+            adapter.invalidMessageIdentityFailure()
           );
         }
         response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
@@ -148,7 +176,7 @@ export class NotificationProviderHost {
           providerMessage,
         });
       } else {
-        await this.#adapter.update(invocation, credentials);
+        await adapter.update(invocation, credentials);
         response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
           kind: 'update_success',
         });
@@ -156,7 +184,7 @@ export class NotificationProviderHost {
     } catch (error) {
       response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
         kind: 'failure',
-        error: this.#adapter.safeFailure(error, resolvedValues),
+        error: adapter.safeFailure(error, resolvedValues),
       });
     }
 

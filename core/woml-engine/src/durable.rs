@@ -4016,6 +4016,7 @@ impl DurableEventStore {
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
+        | crate::RUN_EVENT_SCHEMA_VERSION_V14
     ) {
       expand_model_v11_payload(&workflow, &run_id, payload)?
     } else {
@@ -4096,6 +4097,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V11
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
           | crate::RUN_EVENT_SCHEMA_VERSION_V13
+          | crate::RUN_EVENT_SCHEMA_VERSION_V14
       ) {
         expand_model_v11_payload(&workflow, run_id, payload)?
       } else {
@@ -4623,9 +4625,9 @@ impl DurableEventStore {
     let base = self.inspect_run_v4(run_id)?;
     let binding = self.run_binding(run_id)?;
     let workflow = self.definition(&binding.definition_hash)?;
-    if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V14 {
+    if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V14 {
       return Err(DurableStoreError::Contract(
-        "Run Inspection v5 is available only for compiled Model v14 runs.".to_string(),
+        "Run Inspection v5 is available only for compiled Model v14 or later runs.".to_string(),
       ));
     }
     let projection = self.projection(run_id)?;
@@ -5324,6 +5326,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
     ) {
       return Ok(result(
         RunCancellationStatus::Rejected,
@@ -5418,6 +5421,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
     ) {
       return Err(DurableStoreError::Contract(
         "Business-outcome authority requires compiled Model v11+.".to_string(),
@@ -5723,6 +5727,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V12
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
     ) {
       return Err(DurableStoreError::Contract(
         "Run finalization authority requires compiled Model v11+.".to_string(),
@@ -5777,8 +5782,12 @@ impl DurableEventStore {
     delivery_id: &str,
     now: DateTime<Utc>,
   ) -> Result<NotificationDeliveryWork, DurableStoreError> {
-    let capability_id = random_hex(16)?;
-    let capability_secret = random_hex(32)?;
+    // Telegram callback_data is limited to 64 bytes. A 64-bit random lookup
+    // identity plus a 128-bit secret keeps the full capability (including the
+    // approve/reject prefix) within that limit; authority still rests on the
+    // secret hash stored by Rust.
+    let capability_id = random_hex(8)?;
+    let capability_secret = random_hex(16)?;
     let capability_hash = Sha256::digest(capability_secret.as_bytes());
     let attempt_id = format!("nattempt_{}", Uuid::new_v4().simple());
     let transaction = self
@@ -6195,7 +6204,7 @@ impl DurableEventStore {
     for delivered in projection.notification_deliveries.values().filter(|item| {
       item.approval_id == approval_id
         && item.request_id == request_id
-        && item.provider == "slack"
+        && matches!(item.provider.as_str(), "slack" | "telegram")
         && matches!(item.status, NotificationDeliveryStatus::Succeeded { .. })
     }) {
       payloads.push(RunEventPayload::NotificationMessageUpdateRequested(
@@ -6734,7 +6743,7 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request_id
-          && delivery.provider == "slack"
+          && matches!(delivery.provider.as_str(), "slack" | "telegram")
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }
@@ -6864,7 +6873,7 @@ impl DurableEventStore {
       .filter(|delivery| {
         delivery.approval_id == approval_id
           && delivery.request_id == request.request_id
-          && delivery.provider == "slack"
+          && matches!(delivery.provider.as_str(), "slack" | "telegram")
           && matches!(
             delivery.status,
             NotificationDeliveryStatus::Succeeded { .. }
@@ -7156,6 +7165,7 @@ impl DurableEventStore {
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
+        | crate::RUN_EVENT_SCHEMA_VERSION_V14
     ) {
       let ambiguous_actions = projection
         .lifecycle_hooks
@@ -7538,6 +7548,7 @@ impl DurableEventStore {
             | crate::RUN_EVENT_SCHEMA_VERSION_V11
             | crate::RUN_EVENT_SCHEMA_VERSION_V12
             | crate::RUN_EVENT_SCHEMA_VERSION_V13
+            | crate::RUN_EVENT_SCHEMA_VERSION_V14
         ) {
           expand_model_v11_payload(&workflow, run_id, payload)?
         } else {
@@ -7589,6 +7600,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V11
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
           | crate::RUN_EVENT_SCHEMA_VERSION_V13
+          | crate::RUN_EVENT_SCHEMA_VERSION_V14
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -7804,6 +7816,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V11
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
           | crate::RUN_EVENT_SCHEMA_VERSION_V13
+          | crate::RUN_EVENT_SCHEMA_VERSION_V14
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -8110,8 +8123,9 @@ fn parse_notification_capability(token: &str) -> Result<(&str, &str), DurableSto
   let Some((id, secret)) = token.split_once('.') else {
     return Err(DurableStoreError::InvalidApprovalToken);
   };
-  if id.len() != 32
-    || secret.len() != 64
+  let compact = id.len() == 16 && secret.len() == 32;
+  let legacy = id.len() == 32 && secret.len() == 64;
+  if (!compact && !legacy)
     || !id
       .bytes()
       .chain(secret.bytes())
@@ -9098,6 +9112,7 @@ fn trigger_occurrence_from_stored(
     "trigger.manual"
       | "trigger.webhook"
       | "trigger.slack"
+      | "trigger.telegram"
       | "trigger.schedule"
       | "trigger.interval"
       | "trigger.event"
@@ -9756,6 +9771,7 @@ fn append_to_history(
       | crate::RUN_EVENT_SCHEMA_VERSION_V11
       | crate::RUN_EVENT_SCHEMA_VERSION_V12
       | crate::RUN_EVENT_SCHEMA_VERSION_V13
+      | crate::RUN_EVENT_SCHEMA_VERSION_V14
   ) && matches!(
     payload,
     RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -9872,7 +9888,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V10
     | crate::RUN_EVENT_SCHEMA_VERSION_V11
     | crate::RUN_EVENT_SCHEMA_VERSION_V12
-    | crate::RUN_EVENT_SCHEMA_VERSION_V13 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V13
+    | crate::RUN_EVENT_SCHEMA_VERSION_V14 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -10027,6 +10044,7 @@ impl DurableDagEngine {
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
+        | crate::RUN_EVENT_SCHEMA_VERSION_V14
     ) && matches!(
       &payload,
       RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -10392,5 +10410,29 @@ impl DurableDagEngine {
 
   pub fn into_store(self) -> DurableEventStore {
     self.store
+  }
+}
+
+#[cfg(test)]
+mod notification_capability_tests {
+  use super::parse_notification_capability;
+
+  #[test]
+  fn accepts_compact_and_legacy_notification_capabilities() {
+    let compact_id = "1".repeat(16);
+    let compact_secret = "2".repeat(32);
+    let compact = format!("ncap_{compact_id}.{compact_secret}");
+    assert_eq!(
+      parse_notification_capability(&compact).unwrap(),
+      (compact_id.as_str(), compact_secret.as_str())
+    );
+
+    let legacy_id = "3".repeat(32);
+    let legacy_secret = "4".repeat(64);
+    let legacy = format!("ncap_{legacy_id}.{legacy_secret}");
+    assert_eq!(
+      parse_notification_capability(&legacy).unwrap(),
+      (legacy_id.as_str(), legacy_secret.as_str())
+    );
   }
 }

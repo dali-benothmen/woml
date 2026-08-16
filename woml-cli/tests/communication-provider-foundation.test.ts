@@ -113,7 +113,7 @@ describe('ACP1 communication-provider foundation', () => {
     });
 
     expect(() => host.accept(deliver)).toThrow(
-      'cannot be executed by the "telegram" adapter'
+      'Notification invocation provider "slack" has no active adapter'
     );
   });
 });

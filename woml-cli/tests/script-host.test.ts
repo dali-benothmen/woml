@@ -981,6 +981,89 @@ return {
     });
   });
 
+  test('protocol v4 lowers services.telegram.send to one supervised capability call', async () => {
+    const completed: CompletedMessage[] = [];
+    const calls: CapabilityCallMessage[] = [];
+    let host!: ScriptHost;
+    host = new ScriptHost({
+      workerUrl: new URL('../src/script-host-worker.ts', import.meta.url),
+      protocolVersion: 4,
+      send: async message => {
+        if (message.messageType === 'completed') {
+          completed.push(message);
+          return;
+        }
+        if (message.messageType !== 'capability_call') return;
+        calls.push(message);
+        const managedResult = {
+          provider: 'telegram',
+          conversationId: '-1001234567890',
+          messageId: '42',
+          acceptedAt: '2026-08-16T12:00:00.000Z',
+        } as const;
+        host.accept({
+          protocol: 'woml.script-host',
+          protocolVersion: 4,
+          messageType: 'capability_result',
+          invocationId: message.invocationId,
+          callId: message.callId,
+          result: {
+            contract: 'woml.capability-call',
+            contractVersion: 1,
+            messageType: 'result',
+            invocationId: message.invocationId,
+            callId: message.callId,
+            outcome: 'succeeded',
+            resultContractVersion: 1,
+            resultBytes: Buffer.byteLength(JSON.stringify(managedResult)),
+            durationMs: 2,
+            result: managedResult,
+          },
+        });
+      },
+    });
+    host.accept(
+      executeV4(
+        'inv_v4_telegram_send',
+        `return services.telegram.send({
+          botToken: 'synthetic-token',
+          conversationId: '-1001234567890',
+          text: 'Hello from WOML',
+          replyToMessageId: '41'
+        }, { name: 'reply-to-message' });`
+      )
+    );
+    await host.drain();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.call).toMatchObject({
+      capability: 'telegram',
+      operation: 'send',
+      identity: {
+        mode: 'named',
+        operationName: 'telegram.send.reply-to-message',
+      },
+      input: {
+        contract: 'woml.telegram-message',
+        contractVersion: 1,
+        kind: 'send',
+        botToken: 'synthetic-token',
+        conversationId: '-1001234567890',
+        text: 'Hello from WOML',
+        replyToMessageId: '41',
+      },
+    });
+    expect(completed[0]?.outcome).toEqual({
+      kind: 'success',
+      value: {
+        provider: 'telegram',
+        conversationId: '-1001234567890',
+        messageId: '42',
+        acceptedAt: '2026-08-16T12:00:00.000Z',
+      },
+    });
+  });
+
   test('WC3/WC4 lowers workflows.call, bounds waiting, and enforces stable repeated identities', async () => {
     const completed: CompletedMessage[] = [];
     const calls: CapabilityCallMessage[] = [];
@@ -1998,6 +2081,48 @@ return {
 });
 
 describe('MS3 Script Host v5 module runtime', () => {
+  test('keeps an explicitly imported services.telegram module ahead of the built-in capability', async () => {
+    const bundle = `export async function send(value) {
+      return { source: 'local-module', value };
+    }`;
+    const digest = moduleDigest(bundle);
+    const request = executeV5(
+      'inv_module_telegram_shadow',
+      `return services.telegram.send('local behavior');`,
+      digest,
+      ['send']
+    );
+    const result = await runHost(
+      [
+        {
+          protocol: 'woml.script-host',
+          protocolVersion: 5,
+          messageType: 'register_module',
+          bundleDigest: digest,
+          bundle,
+        },
+        {
+          ...request,
+          modules: [{ name: 'telegram', bundleDigest: digest, exports: ['send'] }],
+        },
+      ],
+      { WOML_SCRIPT_HOST_PROTOCOL_VERSION: '5' }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(
+      byInvocation(result.messages).get('inv_module_telegram_shadow')
+    ).toMatchObject({
+      outcome: {
+        kind: 'success',
+        value: { source: 'local-module', value: 'local behavior' },
+      },
+    });
+    expect(
+      result.messages.some(message => message.messageType === 'capability_call')
+    ).toBe(false);
+  });
+
   test('registers one immutable bundle and creates fresh sync/async module state per Worker', async () => {
     const bundle = `let calls = 0;
 export function sync() { calls += 1; return calls; }

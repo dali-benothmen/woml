@@ -49,6 +49,9 @@ export class SlackNotificationAdapter
     readonly credentials: ResolvedSlackCredentials;
     readonly secretValues: readonly string[];
   }> {
+    if (!('appToken' in invocation.credentials)) {
+      throw new Error('Slack requires botToken and appToken credentials.');
+    }
     const credentials = await resolveSlackCredentials(
       secretStore,
       invocation.credentials
@@ -63,6 +66,9 @@ export class SlackNotificationAdapter
     invocation: NotificationInvocation,
     credentials: ResolvedSlackCredentials
   ): Promise<void> {
+    if (!('appToken' in invocation.credentials)) {
+      throw new Error('Slack requires an appToken credential.');
+    }
     await this.#transport.ensureConnection(
       invocation.credentials.appToken.name,
       credentials.appToken
@@ -76,7 +82,10 @@ export class SlackNotificationAdapter
     if (invocation.messageType !== 'deliver') {
       throw new Error('A Slack update cannot be delivered as a new message.');
     }
-    return await this.#transport.deliver({ invocation, credentials });
+    return await this.#transport.deliver({
+      invocation: invocation as import('./types').SlackDeliveryRequest['invocation'],
+      credentials,
+    });
   }
 
   async update(
@@ -86,7 +95,16 @@ export class SlackNotificationAdapter
     if (invocation.messageType !== 'update') {
       throw new Error('A Slack delivery cannot be executed as an update.');
     }
-    await this.#transport.update({ invocation, credentials });
+    if (
+      !('workspaceId' in invocation.providerMessage) ||
+      !('appToken' in invocation.credentials)
+    ) {
+      throw new Error('Slack received an invalid message update identity.');
+    }
+    await this.#transport.update({
+      invocation: invocation as import('./types').SlackUpdateRequest['invocation'],
+      credentials,
+    });
   }
 
   validMessageIdentity(value: unknown): value is ProviderMessageIdentity {

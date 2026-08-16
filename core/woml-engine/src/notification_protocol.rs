@@ -34,7 +34,7 @@ impl NotificationReadyMessage {
       || self.message_type != "ready"
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 320
-      || self.providers != ["slack"]
+      || (self.providers != ["slack"] && self.providers != ["slack", "telegram"])
     {
       return Err(
         "The child did not send a valid notification-provider ready message.".to_string(),
@@ -52,10 +52,18 @@ pub struct NotificationSecretReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NotificationCredentials {
-  pub bot_token: NotificationSecretReference,
-  pub app_token: NotificationSecretReference,
+#[serde(untagged)]
+pub enum NotificationCredentials {
+  Slack {
+    #[serde(rename = "botToken")]
+    bot_token: NotificationSecretReference,
+    #[serde(rename = "appToken")]
+    app_token: NotificationSecretReference,
+  },
+  Bot {
+    #[serde(rename = "botToken")]
+    bot_token: NotificationSecretReference,
+  },
 }
 
 impl NotificationCredentials {
@@ -63,22 +71,21 @@ impl NotificationCredentials {
     let bot_token = credentials
       .get("botToken")
       .ok_or_else(|| "Notification credentials are missing botToken.".to_string())?;
-    let app_token = credentials
-      .get("appToken")
-      .ok_or_else(|| "Notification credentials are missing appToken.".to_string())?;
-    if credentials.len() != 2 {
-      return Err("Notification credentials contain an unsupported binding.".to_string());
+    let bot_token = NotificationSecretReference {
+      kind: "secretReference",
+      name: bot_token.clone(),
+    };
+    match (credentials.len(), credentials.get("appToken")) {
+      (1, None) => Ok(Self::Bot { bot_token }),
+      (2, Some(app_token)) => Ok(Self::Slack {
+        bot_token,
+        app_token: NotificationSecretReference {
+          kind: "secretReference",
+          name: app_token.clone(),
+        },
+      }),
+      _ => Err("Notification credentials contain an unsupported binding.".to_string()),
     }
-    Ok(Self {
-      bot_token: NotificationSecretReference {
-        kind: "secretReference",
-        name: bot_token.clone(),
-      },
-      app_token: NotificationSecretReference {
-        kind: "secretReference",
-        name: app_token.clone(),
-      },
-    })
   }
 }
 

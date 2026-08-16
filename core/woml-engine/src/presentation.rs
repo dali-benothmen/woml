@@ -42,6 +42,7 @@ pub enum PresentationTriggerType {
   Manual,
   Webhook,
   Slack,
+  Telegram,
   Schedule,
   Interval,
   Event,
@@ -434,6 +435,7 @@ fn trigger_type(handler: &str) -> Result<PresentationTriggerType, RunPresentatio
     "trigger.manual" => PresentationTriggerType::Manual,
     "trigger.webhook" => PresentationTriggerType::Webhook,
     "trigger.slack" => PresentationTriggerType::Slack,
+    "trigger.telegram" => PresentationTriggerType::Telegram,
     "trigger.schedule" => PresentationTriggerType::Schedule,
     "trigger.interval" => PresentationTriggerType::Interval,
     "trigger.event" => PresentationTriggerType::Event,
@@ -449,7 +451,10 @@ fn trigger_presentation(
   trigger: &CompiledTrigger,
 ) -> Result<TriggerPresentationV1, RunPresentationError> {
   let kind = trigger_type(&trigger.handler)?;
-  let scope = if kind == PresentationTriggerType::Slack {
+  let scope = if matches!(
+    kind,
+    PresentationTriggerType::Slack | PresentationTriggerType::Telegram
+  ) {
     let channels = literal_strings(trigger, "channels");
     let events = literal_strings(trigger, "events");
     let mut parts = Vec::new();
