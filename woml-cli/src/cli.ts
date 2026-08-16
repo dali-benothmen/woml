@@ -107,6 +107,10 @@ import {
 } from './secrets';
 import { readSecretFromTerminal } from './secrets/prompt';
 import {
+  CommunicationProviderRegistry,
+  CommunicationTriggerHost,
+} from './communication-provider';
+import {
   SharedSlackTransport,
   type SharedSlackTransportOptions,
 } from './notification-provider';
@@ -3468,7 +3472,7 @@ async function activateWorkflows(
   }
 
   let runtimeId: string | undefined;
-  let slackHost: SlackTriggerHost | undefined;
+  let communicationTriggerHost: CommunicationTriggerHost | undefined;
   let slackTransport: SharedSlackTransport | undefined;
   let runtimeControl: RuntimeControlHandle | undefined;
   let observability: RuntimeObservability | undefined;
@@ -3784,7 +3788,7 @@ async function activateWorkflows(
               }
             },
           });
-        slackHost = new SlackTriggerHost({
+        const slackHost = new SlackTriggerHost({
           registrations: slackRegistrations,
           secretStore: store,
           transport: slackTransport,
@@ -3809,8 +3813,13 @@ async function activateWorkflows(
               message
             ),
         });
+        const communicationProviders = new CommunicationProviderRegistry();
+        communicationProviders.register({ role: 'trigger', adapter: slackHost });
+        communicationTriggerHost = new CommunicationTriggerHost(
+          communicationProviders.triggerAdapters()
+        );
         try {
-          await slackHost.start();
+          await communicationTriggerHost.start();
           observability?.setComponent('slack', 'provider', 'ready');
         } catch (error) {
           observability?.setComponent(
@@ -3977,7 +3986,7 @@ async function activateWorkflows(
         : stopWebhookRuntimeWithRust(runtimeId, {
             nativeCorePath: dependencies.nativeCorePath,
           });
-    await slackHost?.close().catch(() => {});
+    await communicationTriggerHost?.close().catch(() => {});
     await slackTransport?.close().catch(() => {});
     await runtimeStop;
     observability?.setLifecycle('stopped');

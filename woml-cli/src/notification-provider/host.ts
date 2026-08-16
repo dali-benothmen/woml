@@ -1,6 +1,10 @@
+import {
+  CommunicationProviderAdapterError,
+  type CommunicationNotificationAdapter,
+} from '../communication-provider';
 import type { SecretStore } from '../secrets';
-import { SecretStoreError } from '../secrets';
-import { assertNotificationInvocation, validFailure, validProviderMessage } from './protocol';
+import { assertNotificationInvocation } from './protocol';
+import { SlackNotificationAdapter } from './slack-adapter';
 import {
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
   NOTIFICATION_PROVIDER_MAX_FRAME_BYTES,
@@ -10,17 +14,21 @@ import {
   type NotificationInvocation,
   type NotificationProviderFailure,
   type NotificationProviderOutbound,
-  type ResolvedSlackCredentials,
 } from './types';
-import {
-  resolveSlackCredentials,
-  SlackTransportError,
-  type SlackTransport,
-} from './slack-transport';
+import type { SlackTransport } from './slack-transport';
+
+type ActiveNotificationAdapter = CommunicationNotificationAdapter<
+  NotificationInvocation,
+  unknown,
+  import('./types').ProviderMessageIdentity,
+  NotificationProviderFailure
+>;
 
 export interface NotificationProviderHostOptions {
   readonly secretStore: SecretStore;
-  readonly transport: SlackTransport;
+  readonly adapter?: ActiveNotificationAdapter;
+  /** Compatibility constructor for the frozen Slack v1/v2 host API. */
+  readonly transport?: SlackTransport;
   readonly send: (message: NotificationProviderOutbound) => Promise<void>;
   readonly maxFrameBytes?: number;
   readonly protocolVersion?:
@@ -48,47 +56,13 @@ function completed(
   };
 }
 
-function redact(message: string, values: readonly string[]): string {
-  let redacted = message;
-  for (const value of values) {
-    if (value.length > 0) redacted = redacted.split(value).join('[REDACTED]');
-  }
-  return redacted.slice(0, 1024) || 'The provider invocation failed safely.';
-}
-
-function safeFailure(
-  error: unknown,
-  resolvedValues: readonly string[]
-): NotificationProviderFailure {
-  if (error instanceof SlackTransportError && validFailure(error.failure)) {
-    return {
-      ...error.failure,
-      message: redact(error.failure.message, resolvedValues),
-    };
-  }
-  if (error instanceof SecretStoreError && error.code === 'WOML_SECRET_NOT_FOUND') {
-    return {
-      kind: 'secret_not_found',
-      code: 'WOML_SECRET_NOT_FOUND',
-      message: 'A required Slack credential is not available.',
-      retryable: false,
-    };
-  }
-  return {
-    kind: 'provider_unavailable',
-    code: 'WOML_SLACK_UNAVAILABLE',
-    message: 'The Slack adapter failed without exposing provider details.',
-    retryable: true,
-  };
-}
-
 function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
 export class NotificationProviderHost {
   readonly #secretStore: SecretStore;
-  readonly #transport: SlackTransport;
+  readonly #adapter: ActiveNotificationAdapter;
   readonly #send: NotificationProviderHostOptions['send'];
   readonly #maxFrameBytes: number;
   readonly #protocolVersion: CompletedMessage['protocolVersion'];
@@ -96,8 +70,18 @@ export class NotificationProviderHost {
   #aborted = false;
 
   constructor(options: NotificationProviderHostOptions) {
+    if (options.adapter !== undefined && options.transport !== undefined) {
+      throw new Error(
+        'NotificationProviderHost accepts an adapter or a legacy Slack transport, not both.'
+      );
+    }
+    if (options.adapter === undefined && options.transport === undefined) {
+      throw new Error('NotificationProviderHost requires a provider adapter.');
+    }
     this.#secretStore = options.secretStore;
-    this.#transport = options.transport;
+    this.#adapter =
+      options.adapter ??
+      (new SlackNotificationAdapter(options.transport!) as ActiveNotificationAdapter);
     this.#send = options.send;
     this.#maxFrameBytes =
       options.maxFrameBytes ?? NOTIFICATION_PROVIDER_MAX_FRAME_BYTES;
@@ -108,6 +92,11 @@ export class NotificationProviderHost {
   accept(value: unknown): void {
     if (this.#aborted) throw new Error('The notification provider host is closed.');
     assertNotificationInvocation(value);
+    if (value.provider !== this.#adapter.provider) {
+      throw new Error(
+        `Notification invocation provider "${value.provider}" cannot be executed by the "${this.#adapter.provider}" adapter.`
+      );
+    }
     if (value.protocolVersion !== this.#protocolVersion) {
       throw new Error(
         `Notification Provider Host v${this.#protocolVersion} cannot execute a v${value.protocolVersion} invocation.`
@@ -129,16 +118,7 @@ export class NotificationProviderHost {
   async close(): Promise<void> {
     this.#aborted = true;
     await this.drain();
-    await this.#transport.close();
-  }
-
-  async #credentials(
-    invocation: NotificationInvocation
-  ): Promise<ResolvedSlackCredentials> {
-    return await resolveSlackCredentials(
-      this.#secretStore,
-      invocation.credentials
-    );
+    await this.#adapter.close();
   }
 
   async #invoke(invocation: NotificationInvocation): Promise<void> {
@@ -146,31 +126,29 @@ export class NotificationProviderHost {
     let resolvedValues: string[] = [];
     let response: CompletedMessage;
     try {
-      const credentials = await this.#credentials(invocation);
-      resolvedValues = [credentials.botToken, credentials.appToken];
-      await this.#transport.ensureConnection(
-        invocation.credentials.appToken.name,
-        credentials.appToken
+      const resolved = await this.#adapter.resolveCredentials(
+        this.#secretStore,
+        invocation
       );
+      const credentials = resolved.credentials;
+      resolvedValues = [...resolved.secretValues];
+      await this.#adapter.prepare(invocation, credentials);
       if (invocation.messageType === 'deliver') {
-        const providerMessage = await this.#transport.deliver({
+        const providerMessage = await this.#adapter.deliver(
           invocation,
-          credentials,
-        });
-        if (!validProviderMessage(providerMessage)) {
-          throw new SlackTransportError({
-            kind: 'request_invalid',
-            code: 'WOML_SLACK_RESPONSE_INVALID',
-            message: 'Slack returned an invalid message identity.',
-            retryable: false,
-          });
+          credentials
+        );
+        if (!this.#adapter.validMessageIdentity(providerMessage)) {
+          throw new CommunicationProviderAdapterError(
+            this.#adapter.invalidMessageIdentityFailure()
+          );
         }
         response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
           kind: 'delivery_success',
           providerMessage,
         });
       } else {
-        await this.#transport.update({ invocation, credentials });
+        await this.#adapter.update(invocation, credentials);
         response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
           kind: 'update_success',
         });
@@ -178,7 +156,7 @@ export class NotificationProviderHost {
     } catch (error) {
       response = completed(invocation.protocolVersion, invocation.invocationId, startedAt, {
         kind: 'failure',
-        error: safeFailure(error, resolvedValues),
+        error: this.#adapter.safeFailure(error, resolvedValues),
       });
     }
 

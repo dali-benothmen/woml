@@ -138,6 +138,8 @@
     "verify:native-platform-release": "bun scripts/verify-native-platform-release.ts",
     "test:architecture-separation": "bun run build && cargo test -j 1 --locked --release --manifest-path ../core/woml-native/Cargo.toml --test separation && bun test tests/architecture-separation.test.ts && bun scripts/verify-architecture-separation.ts && bun run typecheck",
     "verify:architecture-separation": "bun scripts/verify-architecture-separation.ts",
+    "test:communication-provider-contracts": "bun test ../woml/tests/communication-provider-contracts.test.ts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test communication_provider_contracts",
+    "test:communication-provider-foundation": "bun run test:communication-provider-contracts && bun test tests/communication-provider-foundation.test.ts tests/notification-provider-host.test.ts tests/slack-trigger-host.test.ts && bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

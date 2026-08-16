@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/communication-provider-model/v1",
+  "title": "WOML Model v15 Communication Provider Additions",
+  "description": "The exact communication-provider fragments reserved for Compiled Workflow Model v15 and Definition Package v10.",
+  "x-status": "additional-communication-providers-acp0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "targetModelVersion", "targetDefinitionPackageVersion", "trigger", "notification", "messagingCapability"],
+  "properties": {
+    "contractVersion": { "const": 1 }, "targetModelVersion": { "const": 15 }, "targetDefinitionPackageVersion": { "const": 10 },
+    "trigger": { "$ref": "#/$defs/trigger" }, "notification": { "$ref": "#/$defs/notification" }, "messagingCapability": { "$ref": "#/$defs/messagingCapability" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$", "maxLength": 128 },
+    "externalId": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "secret": { "type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": { "kind": { "const": "secretReference" }, "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" } } },
+    "botCredentials": { "type": "object", "additionalProperties": false, "required": ["botToken"], "properties": { "botToken": { "$ref": "#/$defs/secret" } } },
+    "whatsappCredentials": { "type": "object", "additionalProperties": false, "required": ["accessToken", "phoneNumberId"], "properties": { "accessToken": { "$ref": "#/$defs/secret" }, "phoneNumberId": { "$ref": "#/$defs/externalId" } } },
+    "notificationCredentials": { "oneOf": [{ "$ref": "#/$defs/botCredentials" }, { "$ref": "#/$defs/whatsappCredentials" }] },
+    "trigger": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["id", "handler", "events", "botToken"], "properties": { "id": { "$ref": "#/$defs/id" }, "handler": { "const": "trigger.telegram" }, "events": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "const": "message" } }, "botToken": { "$ref": "#/$defs/secret" } } },
+        { "type": "object", "additionalProperties": false, "required": ["id", "handler", "events", "botToken"], "properties": { "id": { "$ref": "#/$defs/id" }, "handler": { "const": "trigger.discord" }, "events": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["app-mention", "direct-message"] } }, "channels": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/externalId" } }, "botToken": { "$ref": "#/$defs/secret" } } },
+        { "type": "object", "additionalProperties": false, "required": ["id", "handler", "events", "phoneNumberId", "verifyToken", "appSecret"], "properties": { "id": { "$ref": "#/$defs/id" }, "handler": { "const": "trigger.whatsapp" }, "events": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "const": "message" } }, "phoneNumberId": { "$ref": "#/$defs/externalId" }, "verifyToken": { "$ref": "#/$defs/secret" }, "appSecret": { "$ref": "#/$defs/secret" } } }
+      ]
+    },
+    "notification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "destinations", "credentials"],
+      "properties": {
+        "provider": { "enum": ["telegram", "discord", "whatsapp"] }, "destinations": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 320 } },
+        "credentials": { "$ref": "#/$defs/notificationCredentials" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 40000 }, "templateName": { "type": "string", "pattern": "^[a-z0-9_]+$" }, "language": { "type": "string", "minLength": 2, "maxLength": 16 }
+      },
+      "allOf": [
+        { "if": { "properties": { "provider": { "const": "whatsapp" } }, "required": ["provider"] }, "then": { "required": ["templateName", "language"], "properties": { "credentials": { "$ref": "#/$defs/whatsappCredentials" } }, "not": { "required": ["message"] } } },
+        { "if": { "properties": { "provider": { "enum": ["telegram", "discord"] } }, "required": ["provider"] }, "then": { "properties": { "credentials": { "$ref": "#/$defs/botCredentials" } }, "not": { "anyOf": [{ "required": ["templateName"] }, { "required": ["language"] }] } } }
+      ]
+    },
+    "messagingCapability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["service", "operation", "protocolVersion"],
+      "properties": { "service": { "enum": ["telegram", "discord", "whatsapp"] }, "operation": { "const": "send" }, "protocolVersion": { "const": 1 } }
+    }
+  }
+}

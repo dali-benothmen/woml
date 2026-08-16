@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import type { CommunicationTriggerAdapter } from '../communication-provider';
 import { SecretStoreError, type SecretStore } from '../secrets';
 import {
   resolveSlackCredentials,
@@ -133,7 +134,8 @@ function decodedPayload(
   };
 }
 
-export class SlackTriggerHost {
+export class SlackTriggerHost implements CommunicationTriggerAdapter {
+  readonly provider = 'slack' as const;
   readonly #options: SlackTriggerHostOptions;
   readonly #listenerId = `trigger_${randomUUID()}`;
   readonly #unsubscribers: Array<() => void> = [];

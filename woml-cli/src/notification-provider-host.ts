@@ -7,6 +7,7 @@ import { createSecretStore } from './secrets';
 import { FakeSlackTransport } from './notification-provider/fake-slack';
 import { NotificationProviderHost } from './notification-provider/host';
 import { RealSlackTransport } from './notification-provider/real-slack';
+import { SlackNotificationAdapter } from './notification-provider/slack-adapter';
 import type { SlackTransport } from './notification-provider/slack-transport';
 import {
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,
@@ -104,7 +105,7 @@ export async function runNotificationProviderHost(
         }));
   const host = new NotificationProviderHost({
     secretStore: createSecretStore(),
-    transport,
+    adapter: new SlackNotificationAdapter(transport),
     send: message => writer.send(message),
     protocolVersion,
   });
