@@ -33,6 +33,7 @@ import {
   parseWoml,
   resolveWomlReusableDefinitionGraph,
   validateResolvedReusableWorkflow,
+  WOML_WHATSAPP_CALLBACK_PATH,
   WomlDiagnosticError,
   type CompiledWorkflowDefinition,
   type JsonValue,
@@ -2026,11 +2027,14 @@ async function runSingleCheckCommand(
       builtInCommunicationProviders(compiledWorkflow);
     const hasDiscord = communicationProviders.includes('discord');
     const hasTelegram = communicationProviders.includes('telegram');
+    const hasWhatsApp = communicationProviders.includes('whatsapp');
     const workflowCallsFrontendOnly =
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      hasDiscord
+      hasWhatsApp
+        ? `Authoring: WhatsApp trigger, approved-template notifications, lifecycle delivery, and services.whatsapp.send() compile to Model v15.\nExecution: WhatsApp transport activates in ACP7; woml run fails before contacting Meta. Callback: ${WOML_WHATSAPP_CALLBACK_PATH}\n`
+        : hasDiscord
         ? 'Execution: Discord triggers, notifications, approval buttons, and services.discord.send() are executable through the durable Rust runtime.\n'
         : hasTelegram
           ? 'Execution: Telegram triggers, notifications, and services.telegram.send() are executable through the durable Rust runtime.\n'
@@ -3584,6 +3588,20 @@ async function activateWorkflows(
   }
 
   const productionSources = sources;
+  if (
+    productionSources.some(
+      source =>
+        source.workflow.schemaVersion === 15 &&
+        source.workflow.communication.providers.some(
+          provider => provider.provider === 'whatsapp'
+        )
+    )
+  ) {
+    throw new CliInputError(
+      'WOML_COMMUNICATION_RUNTIME_UNAVAILABLE',
+      `WhatsApp authoring is valid, but its Cloud API callback and delivery runtime arrives in ACP7. The reserved callback route is ${WOML_WHATSAPP_CALLBACK_PATH}.`
+    );
+  }
   const manualTargets = activeManualTargets(sources, args.triggerId);
   const hasOtherIngress = hasNonManualRuntimeIngress(sources);
   const background = process.env.WOML_BACKGROUND_HANDOFF !== undefined;

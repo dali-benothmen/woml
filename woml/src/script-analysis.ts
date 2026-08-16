@@ -52,6 +52,10 @@ const workflowIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const operationNamePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const durationPattern = /^([1-9][0-9]*)(ms|s|m|h|d)$/;
 const discordSnowflakePattern = /^[0-9]{17,20}$/;
+const whatsAppPhoneNumberIdPattern = /^[1-9][0-9]{5,19}$/;
+const whatsAppRecipientPattern = /^[1-9][0-9]{7,15}$/;
+const whatsAppTemplatePattern = /^[a-z0-9_]+$/;
+const whatsAppLanguagePattern = /^[a-z]{2,3}(?:_[A-Z]{2})?$/;
 const durationMultipliers = {
   ms: 1,
   s: 1_000,
@@ -942,6 +946,217 @@ function analyzeScript(
                         'Example: reply-to-message'
                       )
                     );
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      if (
+        path?.[0] === 'services' &&
+        path[1] === 'whatsapp' &&
+        !options.shadowedServices?.includes('whatsapp')
+      ) {
+        if (path.length !== 3 || path[2] !== 'send') {
+          fail(
+            issueAt(
+              callee,
+              source.length,
+              'WOML_WHATSAPP_OPERATION_UNSUPPORTED',
+              `WhatsApp service operation "${path.slice(2).join('.') || ''}" is unsupported.`,
+              'Use services.whatsapp.send({ accessToken, phoneNumberId, conversationId, template }).'
+            )
+          );
+        } else {
+          const args = (node.arguments as readonly unknown[] | undefined) ?? [];
+          const input = args[0];
+          if (args.length < 1 || args.length > 2) {
+            fail(
+              issueAt(
+                node,
+                source.length,
+                'WOML_WHATSAPP_SEND_ARGUMENTS_INVALID',
+                'services.whatsapp.send() requires one request object and optional operation options.'
+              )
+            );
+          } else if (!isNode(input) || input.type !== 'ObjectExpression') {
+            fail(
+              issueAt(
+                isNode(input) ? input : node,
+                source.length,
+                'WOML_WHATSAPP_SEND_INPUT_INVALID',
+                'A workflow script must pass a direct object to services.whatsapp.send().'
+              )
+            );
+          } else {
+            const seen = new Set<string>();
+            for (const property of (input.properties as readonly unknown[] | undefined) ?? []) {
+              if (
+                !isNode(property) ||
+                property.type !== 'Property' ||
+                property.computed === true ||
+                property.kind !== 'init'
+              ) {
+                fail(
+                  issueAt(
+                    isNode(property) ? property : input,
+                    source.length,
+                    'WOML_WHATSAPP_SEND_INPUT_INVALID',
+                    'WhatsApp send input does not support spreads, computed keys, getters, or setters.'
+                  )
+                );
+                continue;
+              }
+              const name = isNode(property.key)
+                ? property.key.type === 'Identifier'
+                  ? property.key.name
+                  : literalString(property.key)
+                : undefined;
+              if (
+                name !== 'accessToken' &&
+                name !== 'phoneNumberId' &&
+                name !== 'conversationId' &&
+                name !== 'template'
+              ) {
+                fail(
+                  issueAt(
+                    property,
+                    source.length,
+                    'WOML_WHATSAPP_SEND_PROPERTY_UNKNOWN',
+                    `Unknown WhatsApp send property "${name ?? ''}".`,
+                    'WhatsApp Send v1 accepts accessToken, phoneNumberId, conversationId, and template.'
+                  )
+                );
+                continue;
+              }
+              if (seen.has(name)) {
+                fail(
+                  issueAt(
+                    property,
+                    source.length,
+                    'WOML_WHATSAPP_SEND_PROPERTY_DUPLICATE',
+                    `WhatsApp send property "${name}" is declared more than once.`
+                  )
+                );
+              }
+              seen.add(name);
+              if (name === 'accessToken') {
+                const credentialPath = isNode(property.value)
+                  ? staticMemberPath(property.value)
+                  : undefined;
+                if (
+                  credentialPath?.length !== 2 ||
+                  credentialPath[0] !== 'secrets' ||
+                  !isValidSecretName(credentialPath[1])
+                ) {
+                  fail(
+                    issueAt(
+                      isNode(property.value) ? property.value : property,
+                      source.length,
+                      'WOML_WHATSAPP_CREDENTIAL_INVALID',
+                      'WhatsApp accessToken must be one direct secrets.NAME value.',
+                      'Example: accessToken: secrets.WHATSAPP_ACCESS_TOKEN'
+                    )
+                  );
+                }
+              }
+              const literal = literalString(property.value);
+              if (
+                literal !== undefined &&
+                name === 'phoneNumberId' &&
+                !whatsAppPhoneNumberIdPattern.test(literal)
+              ) {
+                fail(issueAt(property.value as AstNode, source.length, 'WOML_WHATSAPP_SEND_VALUE_INVALID', 'WhatsApp phoneNumberId must be the numeric Meta Phone Number ID.'));
+              }
+              if (
+                literal !== undefined &&
+                name === 'conversationId' &&
+                !whatsAppRecipientPattern.test(literal)
+              ) {
+                fail(issueAt(property.value as AstNode, source.length, 'WOML_WHATSAPP_SEND_VALUE_INVALID', 'WhatsApp conversationId must be an international phone number containing 8 to 16 digits without a plus sign.'));
+              }
+              if (name === 'template') {
+                if (!isNode(property.value) || property.value.type !== 'ObjectExpression') {
+                  fail(issueAt(isNode(property.value) ? property.value : property, source.length, 'WOML_WHATSAPP_TEMPLATE_INVALID', 'WhatsApp template must be a direct object with name, language, and parameters.'));
+                  continue;
+                }
+                const templateSeen = new Set<string>();
+                for (const templateProperty of (property.value.properties as readonly unknown[] | undefined) ?? []) {
+                  if (!isNode(templateProperty) || templateProperty.type !== 'Property' || templateProperty.computed === true || templateProperty.kind !== 'init') {
+                    fail(issueAt(isNode(templateProperty) ? templateProperty : property.value, source.length, 'WOML_WHATSAPP_TEMPLATE_INVALID', 'WhatsApp template does not support spreads, computed keys, getters, or setters.'));
+                    continue;
+                  }
+                  const templateKey = isNode(templateProperty.key)
+                    ? templateProperty.key.type === 'Identifier'
+                      ? templateProperty.key.name
+                      : literalString(templateProperty.key)
+                    : undefined;
+                  if (templateKey !== 'name' && templateKey !== 'language' && templateKey !== 'parameters') {
+                    fail(issueAt(templateProperty, source.length, 'WOML_WHATSAPP_TEMPLATE_PROPERTY_UNKNOWN', `Unknown WhatsApp template property "${templateKey ?? ''}".`));
+                    continue;
+                  }
+                  if (templateSeen.has(templateKey)) {
+                    fail(issueAt(templateProperty, source.length, 'WOML_WHATSAPP_TEMPLATE_PROPERTY_DUPLICATE', `WhatsApp template property "${templateKey}" is declared more than once.`));
+                  }
+                  templateSeen.add(templateKey);
+                  const templateLiteral = literalString(templateProperty.value);
+                  if (templateKey === 'name' && (templateLiteral === undefined || !whatsAppTemplatePattern.test(templateLiteral))) {
+                    fail(issueAt(templateProperty.value as AstNode, source.length, 'WOML_WHATSAPP_TEMPLATE_INVALID', 'WhatsApp template name must be a literal containing lowercase letters, digits, and underscores only.'));
+                  }
+                  if (templateKey === 'language' && (templateLiteral === undefined || !whatsAppLanguagePattern.test(templateLiteral))) {
+                    fail(issueAt(templateProperty.value as AstNode, source.length, 'WOML_WHATSAPP_LANGUAGE_INVALID', 'WhatsApp template language must be a literal such as en, en_US, or pt_BR.'));
+                  }
+                  if (templateKey === 'parameters' && isNode(templateProperty.value)) {
+                    if (templateProperty.value.type !== 'ArrayExpression') {
+                      fail(issueAt(templateProperty.value, source.length, 'WOML_WHATSAPP_TEMPLATE_PARAMETERS_INVALID', 'WhatsApp template parameters must be a direct array.'));
+                    } else {
+                      const elements = (templateProperty.value.elements as readonly unknown[] | undefined) ?? [];
+                      if (elements.length > 32 || elements.some(value => isNode(value) && (literalString(value)?.length ?? 0) > 1024)) {
+                        fail(issueAt(templateProperty.value, source.length, 'WOML_WHATSAPP_TEMPLATE_PARAMETERS_INVALID', 'WhatsApp templates accept at most 32 parameters of at most 1024 characters each.'));
+                      }
+                    }
+                  }
+                }
+                for (const required of ['name', 'language', 'parameters']) {
+                  if (!templateSeen.has(required)) {
+                    fail(issueAt(property.value, source.length, 'WOML_WHATSAPP_TEMPLATE_PROPERTY_REQUIRED', `WhatsApp template requires the "${required}" property.`));
+                  }
+                }
+              }
+            }
+            for (const required of ['accessToken', 'phoneNumberId', 'conversationId', 'template']) {
+              if (!seen.has(required)) {
+                fail(issueAt(input, source.length, 'WOML_WHATSAPP_SEND_PROPERTY_REQUIRED', `services.whatsapp.send() requires the "${required}" property.`));
+              }
+            }
+            const operationOptions = args[1];
+            if (isNode(operationOptions)) {
+              if (operationOptions.type !== 'ObjectExpression') {
+                fail(issueAt(operationOptions, source.length, 'WOML_WHATSAPP_SEND_OPTIONS_INVALID', 'WhatsApp send operation options must be an object containing an optional stable name.'));
+              } else {
+                const seenOptions = new Set<string>();
+                for (const property of (operationOptions.properties as readonly unknown[] | undefined) ?? []) {
+                  if (!isNode(property) || property.type !== 'Property' || property.computed === true || property.kind !== 'init') {
+                    fail(issueAt(isNode(property) ? property : operationOptions, source.length, 'WOML_WHATSAPP_SEND_OPTIONS_INVALID', 'WhatsApp send options do not support spreads, computed keys, getters, or setters.'));
+                    continue;
+                  }
+                  const name = isNode(property.key)
+                    ? property.key.type === 'Identifier'
+                      ? property.key.name
+                      : literalString(property.key)
+                    : undefined;
+                  if (name !== 'name') {
+                    fail(issueAt(property, source.length, 'WOML_WHATSAPP_SEND_OPTION_UNKNOWN', `Unknown WhatsApp send option "${name ?? ''}".`, 'WhatsApp Send v1 accepts only the stable name option.'));
+                    continue;
+                  }
+                  if (seenOptions.has(name)) {
+                    fail(issueAt(property, source.length, 'WOML_WHATSAPP_SEND_OPTION_DUPLICATE', 'WhatsApp send option "name" is declared more than once.'));
+                  }
+                  seenOptions.add(name);
+                  const value = literalString(property.value);
+                  if (isNode(property.value) && property.value.type === 'Literal' && (value === undefined || value.length > 128 || !operationNamePattern.test(value))) {
+                    fail(issueAt(property.value, source.length, 'WOML_WHATSAPP_SEND_NAME_INVALID', 'A literal WhatsApp send name must use lowercase operation-name syntax.', 'Example: send-template'));
                   }
                 }
               }

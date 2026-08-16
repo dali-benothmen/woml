@@ -438,6 +438,8 @@ pub struct NotificationDefinition {
   pub credentials: BTreeMap<String, String>,
   pub provider_id: Option<String>,
   pub message: Option<ValueExpression>,
+  pub template_name: Option<String>,
+  pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -999,6 +1001,54 @@ fn valid_discord_trigger(config: &ValueExpression) -> bool {
     && matches!(fields.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
 }
 
+fn valid_whatsapp_phone_number_id(value: &str) -> bool {
+  (6..=20).contains(&value.len())
+    && !value.starts_with('0')
+    && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn valid_whatsapp_recipient(value: &str) -> bool {
+  (8..=16).contains(&value.len())
+    && !value.starts_with('0')
+    && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn valid_whatsapp_template(value: &str) -> bool {
+  !value.is_empty()
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn valid_whatsapp_language(value: &str) -> bool {
+  let bytes = value.as_bytes();
+  matches!(bytes.len(), 2 | 3) && bytes.iter().all(|byte| byte.is_ascii_lowercase())
+    || matches!(bytes.len(), 5 | 6)
+      && bytes[..bytes.len() - 3]
+        .iter()
+        .all(|byte| byte.is_ascii_lowercase())
+      && bytes[bytes.len() - 3] == b'_'
+      && bytes[bytes.len() - 2..]
+        .iter()
+        .all(|byte| byte.is_ascii_uppercase())
+}
+
+fn valid_whatsapp_trigger(config: &ValueExpression) -> bool {
+  let Some(fields) = object_fields(config) else {
+    return false;
+  };
+  let Some(events) = literal_string_array(fields.get("events")) else {
+    return false;
+  };
+  exact_fields(
+    fields,
+    &["events", "phoneNumberId", "verifyToken", "appSecret"],
+  ) && events == ["message"]
+    && literal_string(fields.get("phoneNumberId")).is_some_and(valid_whatsapp_phone_number_id)
+    && matches!(fields.get("verifyToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+    && matches!(fields.get("appSecret"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+}
+
 fn valid_on_missed(expression: Option<&ValueExpression>) -> bool {
   matches!(literal_string(expression), Some("skip" | "run-once"))
 }
@@ -1076,6 +1126,7 @@ fn valid_model_v7_trigger(trigger: &CompiledTrigger) -> bool {
     "trigger.slack" => valid_slack_trigger(&trigger.config),
     "trigger.telegram" => valid_telegram_trigger(&trigger.config),
     "trigger.discord" => valid_discord_trigger(&trigger.config),
+    "trigger.whatsapp" => valid_whatsapp_trigger(&trigger.config),
     "trigger.schedule" => valid_schedule_trigger(&trigger.config),
     "trigger.interval" => valid_interval_trigger(&trigger.config),
     "trigger.event" => valid_event_trigger(&trigger.config),
@@ -1584,19 +1635,31 @@ fn valid_lifecycle_notification_inputs(
           credentials.len() == 1
             && matches!(credentials.get("botToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
         }),
+        Some("whatsapp") => credentials.is_some_and(|credentials| {
+          credentials.len() == 2
+            && matches!(credentials.get("accessToken"), Some(ValueExpression::SecretReference { name }) if valid_secret_name(name))
+            && literal_string(credentials.get("phoneNumberId")).is_some_and(valid_whatsapp_phone_number_id)
+        }),
         _ => false,
       };
-      fields.len() == 5
+      let whatsapp = provider == Some("whatsapp");
+      fields.len() == if whatsapp { 7 } else { 5 }
         && matches!(fields.get("deliveryId"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| !value.is_empty() && value.len() <= 512))
-        && matches!(provider, Some("slack" | "telegram" | "discord"))
+        && matches!(provider, Some("slack" | "telegram" | "discord" | "whatsapp"))
         && matches!(fields.get("destination"), Some(ValueExpression::Literal { value }) if value.as_str().is_some_and(|value| {
           if provider == Some("discord") {
             valid_discord_snowflake(value)
+          } else if provider == Some("whatsapp") {
+            valid_whatsapp_recipient(value)
           } else {
             !value.is_empty() && value.len() <= 512
           }
         }))
         && built_in_credentials
+        && (!whatsapp
+          || literal_string(fields.get("templateName")).is_some_and(valid_whatsapp_template))
+        && (!whatsapp
+          || literal_string(fields.get("language")).is_some_and(valid_whatsapp_language))
         && matches!(fields.get("message"), Some(ValueExpression::Template { parts }) if (1..=65).contains(&parts.len()) && parts.iter().all(|part| !matches!(part, TemplatePart::Text { text } if text.len() > 4096)))
     })
 }
@@ -1998,6 +2061,8 @@ fn approval_notifications(
     let suffix = delivery_id.strip_prefix(&prefix)?;
     let destination_marker = if provider == "telegram" {
       ":chat:"
+    } else if provider == "whatsapp" {
+      ":recipient:"
     } else {
       ":channel:"
     };
@@ -2015,88 +2080,136 @@ fn approval_notifications(
     if !ordered {
       return None;
     }
-    let (names, provider_id, message, duplicate_key) = if provider == "slack" {
-      if fields.len() != 4
-        || !["deliveryId", "provider", "destination", "credentials"]
-          .iter()
-          .all(|key| fields.contains_key(*key))
-        || !valid_slack_destination(destination)
-        || credentials.len() != 2
-      {
-        return None;
-      }
-      let mut names = BTreeMap::new();
-      for key in ["botToken", "appToken"] {
-        let ValueExpression::SecretReference { name } = credentials.get(key)? else {
+    let (names, provider_id, message, template_name, language, duplicate_key) =
+      if provider == "slack" {
+        if fields.len() != 4
+          || !["deliveryId", "provider", "destination", "credentials"]
+            .iter()
+            .all(|key| fields.contains_key(*key))
+          || !valid_slack_destination(destination)
+          || credentials.len() != 2
+        {
+          return None;
+        }
+        let mut names = BTreeMap::new();
+        for key in ["botToken", "appToken"] {
+          let ValueExpression::SecretReference { name } = credentials.get(key)? else {
+            return None;
+          };
+          if !valid_secret_name(name) {
+            return None;
+          }
+          names.insert(key.to_string(), name.clone());
+        }
+        let duplicate_key = format!(
+          "slack\0{}\0{}\0{}",
+          names["botToken"], names["appToken"], destination
+        );
+        (names, None, None, None, None, duplicate_key)
+      } else if provider == "telegram" {
+        if fields.len() != 4
+          || !["deliveryId", "provider", "destination", "credentials"]
+            .iter()
+            .all(|key| fields.contains_key(*key))
+          || destination.is_empty()
+          || destination.len() > 20
+          || destination
+            .strip_prefix('-')
+            .unwrap_or(destination)
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit())
+          || credentials.len() != 1
+        {
+          return None;
+        }
+        let ValueExpression::SecretReference { name } = credentials.get("botToken")? else {
           return None;
         };
         if !valid_secret_name(name) {
           return None;
         }
-        names.insert(key.to_string(), name.clone());
-      }
-      let duplicate_key = format!(
-        "slack\0{}\0{}\0{}",
-        names["botToken"], names["appToken"], destination
-      );
-      (names, None, None, duplicate_key)
-    } else if provider == "telegram" {
-      if fields.len() != 4
-        || !["deliveryId", "provider", "destination", "credentials"]
+        let names = BTreeMap::from_iter([("botToken".to_string(), name.clone())]);
+        let duplicate_key = format!("telegram\0{}\0{}", names["botToken"], destination);
+        (names, None, None, None, None, duplicate_key)
+      } else if provider == "discord" {
+        if fields.len() != 4
+          || !["deliveryId", "provider", "destination", "credentials"]
+            .iter()
+            .all(|key| fields.contains_key(*key))
+          || !valid_discord_snowflake(destination)
+          || credentials.len() != 1
+        {
+          return None;
+        }
+        let ValueExpression::SecretReference { name } = credentials.get("botToken")? else {
+          return None;
+        };
+        if !valid_secret_name(name) {
+          return None;
+        }
+        let names = BTreeMap::from_iter([("botToken".to_string(), name.clone())]);
+        let duplicate_key = format!("discord\0{}\0{}", names["botToken"], destination);
+        (names, None, None, None, None, duplicate_key)
+      } else if provider == "whatsapp" {
+        if fields.len() != 6
+          || ![
+            "deliveryId",
+            "provider",
+            "destination",
+            "credentials",
+            "templateName",
+            "language",
+          ]
           .iter()
           .all(|key| fields.contains_key(*key))
-        || destination.is_empty()
-        || destination.len() > 20
-        || destination
-          .strip_prefix('-')
-          .unwrap_or(destination)
-          .bytes()
-          .any(|byte| !byte.is_ascii_digit())
-        || credentials.len() != 1
+          || !valid_whatsapp_recipient(destination)
+          || credentials.len() != 2
+        {
+          return None;
+        }
+        let ValueExpression::SecretReference { name: access_token } =
+          credentials.get("accessToken")?
+        else {
+          return None;
+        };
+        let phone_number_id = literal_string(credentials.get("phoneNumberId"))?;
+        let template_name = literal_string(fields.get("templateName"))?;
+        let language = literal_string(fields.get("language"))?;
+        if !valid_secret_name(access_token)
+          || !valid_whatsapp_phone_number_id(phone_number_id)
+          || !valid_whatsapp_template(template_name)
+          || !valid_whatsapp_language(language)
+        {
+          return None;
+        }
+        let names = BTreeMap::from_iter([("accessToken".to_string(), access_token.clone())]);
+        let duplicate_key = format!(
+          "whatsapp\0{}\0{}\0{}",
+          access_token, phone_number_id, destination
+        );
+        (
+          names,
+          None,
+          None,
+          Some(template_name.to_string()),
+          Some(language.to_string()),
+          duplicate_key,
+        )
+      } else if provider == "custom"
+        && valid_custom_provider_delivery(fields, "approval", provider_ids, false)
       {
-        return None;
-      }
-      let ValueExpression::SecretReference { name } = credentials.get("botToken")? else {
+        let provider_id = literal_string(fields.get("providerId"))?.to_string();
+        (
+          BTreeMap::new(),
+          Some(provider_id.clone()),
+          fields.get("message").cloned(),
+          None,
+          None,
+          format!("custom\0{provider_id}"),
+        )
+      } else {
         return None;
       };
-      if !valid_secret_name(name) {
-        return None;
-      }
-      let names = BTreeMap::from_iter([("botToken".to_string(), name.clone())]);
-      let duplicate_key = format!("telegram\0{}\0{}", names["botToken"], destination);
-      (names, None, None, duplicate_key)
-    } else if provider == "discord" {
-      if fields.len() != 4
-        || !["deliveryId", "provider", "destination", "credentials"]
-          .iter()
-          .all(|key| fields.contains_key(*key))
-        || !valid_discord_snowflake(destination)
-        || credentials.len() != 1
-      {
-        return None;
-      }
-      let ValueExpression::SecretReference { name } = credentials.get("botToken")? else {
-        return None;
-      };
-      if !valid_secret_name(name) {
-        return None;
-      }
-      let names = BTreeMap::from_iter([("botToken".to_string(), name.clone())]);
-      let duplicate_key = format!("discord\0{}\0{}", names["botToken"], destination);
-      (names, None, None, duplicate_key)
-    } else if provider == "custom"
-      && valid_custom_provider_delivery(fields, "approval", provider_ids, false)
-    {
-      let provider_id = literal_string(fields.get("providerId"))?.to_string();
-      (
-        BTreeMap::new(),
-        Some(provider_id.clone()),
-        fields.get("message").cloned(),
-        format!("custom\0{provider_id}"),
-      )
-    } else {
-      return None;
-    };
     if !duplicate_keys.insert(duplicate_key) {
       return None;
     }
@@ -2107,6 +2220,8 @@ fn approval_notifications(
       credentials: names,
       provider_id,
       message,
+      template_name,
+      language,
     });
     previous_tag = Some(tag);
     previous_channel = Some(channel);
@@ -3099,10 +3214,12 @@ impl CompiledWorkflowDefinition {
             .windows(2)
             .all(|pair| pair[0].provider < pair[1].provider)
           && communication.providers.iter().all(|provider| {
-            matches!(provider.provider.as_str(), "telegram" | "discord")
-              && (!provider.trigger_ids.is_empty()
-                || !provider.notification_delivery_ids.is_empty()
-                || provider.messaging)
+            matches!(
+              provider.provider.as_str(),
+              "telegram" | "discord" | "whatsapp"
+            ) && (!provider.trigger_ids.is_empty()
+              || !provider.notification_delivery_ids.is_empty()
+              || provider.messaging)
               && provider.trigger_ids.iter().all(|id| valid_id(id))
               && provider
                 .notification_delivery_ids

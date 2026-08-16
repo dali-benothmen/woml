@@ -211,7 +211,8 @@ context.
   adapter owns heartbeat, resume, reconnect, intents, and bot-message
   filtering. Run admission still belongs to Rust.
 - WhatsApp v1 uses the existing production HTTP listener and official Cloud
-  API only. Verification checks the configured token. POST signatures are
+  API only at the stable `/callbacks/whatsapp` route. Verification checks the
+  configured token. POST signatures are
   checked against the exact raw bytes before JSON decoding. HTTP success is
   returned only after durable accepted-or-duplicate admission.
 

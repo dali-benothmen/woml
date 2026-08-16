@@ -129,6 +129,14 @@ export {
   WOML_SECRET_NAME_PATTERN,
 } from './secrets';
 export {
+  WOML_WHATSAPP_CALLBACK_PATH,
+  WOML_WHATSAPP_SIGNATURE_HEADER,
+  verifyWhatsAppCallbackHandshake,
+  verifyWhatsAppRawBodySignature,
+  type WhatsAppVerificationQueryV1,
+  type WhatsAppVerificationResultV1,
+} from './whatsapp-callback';
+export {
   isWomlElement,
   isWomlRawText,
   SourceFile,

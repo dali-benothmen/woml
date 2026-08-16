@@ -1,11 +1,12 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0 through ACP5 were completed on 2026-08-16.
+Status: In progress. ACP0 through ACP6 were completed on 2026-08-16.
 Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
 end to end through the durable production runtime. Discord authoring, imported
 module discovery, validation, Model v15 / Definition Package v10 lowering, and
-production execution are also complete. WhatsApp remains unavailable until its
-provider phases. Slack
+production execution are also complete. WhatsApp authoring, reviewed template
+contracts, Model v15 lowering, editor support, and callback security contracts
+are complete; actual Cloud API execution remains unavailable until ACP7. Slack
 triggers and notifications, custom notification providers, Human Approval,
 durable capability execution, production runtime hosting, and cross-platform
 release packaging form the proven baseline.
@@ -947,6 +948,14 @@ permissions, approval race, rate-limit, lifecycle, background, and packaged
 tests pass; an opt-in real server/channel manual journey is documented.
 
 ### ACP6 — Add WhatsApp authoring, template, and callback contracts
+
+Status: **Completed on 2026-08-16.** WhatsApp triggers, approval and lifecycle
+template notifications, and `services.whatsapp.send()` now validate and lower
+to schema-valid Model v15. The stable callback path, verification handshake,
+and exact raw-byte HMAC boundary are pinned by multibyte/CRLF fixtures. Editor
+types and VS Code snippets are included. `woml check` remains offline and
+truthful; `woml run` fails before secret resolution or network access until
+ACP7 supplies the official Cloud API runtime.
 
 Changes:
 

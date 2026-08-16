@@ -9,6 +9,7 @@
   "scripts": {
     "test": "bun test",
     "test:discord-authoring": "bun test tests/discord-authoring.test.ts",
+    "test:whatsapp-authoring": "bun test tests/whatsapp-authoring.test.ts",
     "test:reusable-definitions": "bun test tests/reusable-definition-contracts.test.ts tests/reusable-definitions.test.ts",
     "typecheck": "tsc --noEmit"
   },

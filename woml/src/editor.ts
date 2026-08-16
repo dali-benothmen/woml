@@ -88,6 +88,27 @@ interface WomlDiscordSendResult {
   readonly threadId?: string;
 }
 
+interface WomlWhatsAppTemplate {
+  readonly name: string;
+  readonly language: string;
+  readonly parameters: readonly string[];
+}
+
+interface WomlWhatsAppSendRequest {
+  readonly accessToken: string;
+  readonly phoneNumberId: string;
+  readonly conversationId: string;
+  readonly template: WomlWhatsAppTemplate;
+}
+
+interface WomlWhatsAppSendResult {
+  readonly provider: 'whatsapp';
+  readonly conversationId: string;
+  readonly messageId: string;
+  readonly acceptedAt: string;
+  readonly threadId?: string;
+}
+
 interface WomlHttpRequest {
   readonly url: string;
   readonly method?: string;
@@ -215,6 +236,12 @@ interface WomlBuiltinServices {
       input: WomlDiscordSendRequest,
       options?: Readonly<{ readonly name?: string }>
     ) => Promise<WomlDiscordSendResult>;
+  };
+  readonly whatsapp: {
+    readonly send: (
+      input: WomlWhatsAppSendRequest,
+      options?: Readonly<{ readonly name?: string }>
+    ) => Promise<WomlWhatsAppSendResult>;
   };
 }
 

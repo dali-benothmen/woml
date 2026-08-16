@@ -67,5 +67,47 @@
       "  replyToMessageId: ${4:context.payload.messageId}",
       "}, { name: \"${5:send-message}\" });"
     ]
+  },
+  "WOML WhatsApp trigger": {
+    "prefix": "woml-whatsapp-trigger",
+    "description": "Create a WhatsApp Cloud API message trigger.",
+    "body": [
+      "<whatsapp",
+      "  id=\"${1:customerMessage}\"",
+      "  events=\"message\"",
+      "  phone-number-id=\"${2:123456789012345}\"",
+      "  verify-token=\"{{secrets.${3:WHATSAPP_VERIFY_TOKEN}}}\"",
+      "  app-secret=\"{{secrets.${4:WHATSAPP_APP_SECRET}}}\"",
+      "/>"
+    ]
+  },
+  "WOML WhatsApp notification": {
+    "prefix": "woml-whatsapp-notify",
+    "description": "Add an approved WhatsApp template notification.",
+    "body": [
+      "<whatsapp",
+      "  recipients=\"${1:15551234567}\"",
+      "  access-token=\"{{secrets.${2:WHATSAPP_ACCESS_TOKEN}}}\"",
+      "  phone-number-id=\"${3:123456789012345}\"",
+      "  template=\"${4:woml_approval_v1}\"",
+      "  language=\"${5:en_US}\"",
+      "/>"
+    ]
+  },
+  "WOML WhatsApp template message": {
+    "prefix": "woml-whatsapp-send",
+    "description": "Send an approved WhatsApp template from a WOML script.",
+    "body": [
+      "const message = await services.whatsapp.send({",
+      "  accessToken: secrets.${1:WHATSAPP_ACCESS_TOKEN},",
+      "  phoneNumberId: '${2:123456789012345}',",
+      "  conversationId: ${3:context.payload.conversationId},",
+      "  template: {",
+      "    name: '${4:workflow_completed}',",
+      "    language: '${5:en_US}',",
+      "    parameters: [${6:'build-42'}]",
+      "  }",
+      "}, { name: \"${7:send-template}\" });"
+    ]
   }
 }

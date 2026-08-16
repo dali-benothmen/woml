@@ -650,6 +650,9 @@ const compiledSlackAliasPattern = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
 const compiledSlackConversationIdPattern = /^[CG][A-Z0-9]{8,31}$/;
 const compiledTelegramChatIdPattern = /^-?[1-9][0-9]{0,19}$/;
 const compiledDiscordChannelIdPattern = /^[0-9]{17,20}$/;
+const compiledWhatsAppRecipientPattern = /^[1-9][0-9]{7,15}$/;
+const compiledWhatsAppTemplatePattern = /^[a-z0-9_]+$/;
+const compiledWhatsAppLanguagePattern = /^[a-z]{2,3}(?:_[A-Z]{2})?$/;
 const compiledSecretNamePattern = /^[A-Z][A-Z0-9_]*$/;
 
 function hasExactlyKeys(
@@ -675,15 +678,7 @@ function validApprovalNotifications(
   const deliveryIds = new Set<string>();
   const destinationKeys = new Set<string>();
   for (const item of expression.items) {
-    if (
-      item.kind !== 'object' ||
-      !hasExactlyKeys(item.fields, [
-        'deliveryId',
-        'provider',
-        'destination',
-        'credentials',
-      ])
-    ) {
+    if (item.kind !== 'object') {
       return false;
     }
     const { deliveryId, provider, destination, credentials } = item.fields;
@@ -691,10 +686,25 @@ function validApprovalNotifications(
     const slackDelivery = providerName === 'slack';
     const telegramDelivery = providerName === 'telegram';
     const discordDelivery = providerName === 'discord';
+    const whatsappDelivery = providerName === 'whatsapp';
+    const expectedFields = whatsappDelivery
+      ? [
+          'deliveryId',
+          'provider',
+          'destination',
+          'credentials',
+          'templateName',
+          'language',
+        ]
+      : ['deliveryId', 'provider', 'destination', 'credentials'];
     if (
+      !hasExactlyKeys(item.fields, expectedFields) ||
       deliveryId?.kind !== 'literal' ||
       typeof deliveryId.value !== 'string' ||
-      (!slackDelivery && !telegramDelivery && !discordDelivery) ||
+      (!slackDelivery &&
+        !telegramDelivery &&
+        !discordDelivery &&
+        !whatsappDelivery) ||
       destination?.kind !== 'literal' ||
       typeof destination.value !== 'string' ||
       (slackDelivery &&
@@ -704,27 +714,49 @@ function validApprovalNotifications(
         !compiledTelegramChatIdPattern.test(destination.value)) ||
       (discordDelivery &&
         !compiledDiscordChannelIdPattern.test(destination.value)) ||
+      (whatsappDelivery &&
+        !compiledWhatsAppRecipientPattern.test(destination.value)) ||
       credentials?.kind !== 'object' ||
       !hasExactlyKeys(
         credentials.fields,
-        slackDelivery ? ['botToken', 'appToken'] : ['botToken']
+        slackDelivery
+          ? ['botToken', 'appToken']
+          : whatsappDelivery
+            ? ['accessToken', 'phoneNumberId']
+            : ['botToken']
       )
     ) {
       return false;
     }
     const match = new RegExp(
-      `^${approvalId}:notify:([0-9]+):${telegramDelivery ? 'chat' : 'channel'}:([0-9]+)$`
+      `^${approvalId}:notify:([0-9]+):${telegramDelivery ? 'chat' : whatsappDelivery ? 'recipient' : 'channel'}:([0-9]+)$`
     ).exec(deliveryId.value);
     const botToken = credentials.fields.botToken;
     const appToken = credentials.fields.appToken;
+    const accessToken = credentials.fields.accessToken;
+    const phoneNumberId = credentials.fields.phoneNumberId;
+    const templateName = item.fields.templateName;
+    const language = item.fields.language;
     if (
       match === null ||
       deliveryIds.has(deliveryId.value) ||
-      botToken?.kind !== 'secretReference' ||
-      !compiledSecretNamePattern.test(botToken.name) ||
+      (!whatsappDelivery &&
+        (botToken?.kind !== 'secretReference' ||
+          !compiledSecretNamePattern.test(botToken.name))) ||
       (slackDelivery &&
         (appToken?.kind !== 'secretReference' ||
-          !compiledSecretNamePattern.test(appToken.name)))
+          !compiledSecretNamePattern.test(appToken.name))) ||
+      (whatsappDelivery &&
+        (accessToken?.kind !== 'secretReference' ||
+          !compiledSecretNamePattern.test(accessToken.name) ||
+          phoneNumberId?.kind !== 'literal' ||
+          typeof phoneNumberId.value !== 'string' ||
+          templateName?.kind !== 'literal' ||
+          typeof templateName.value !== 'string' ||
+          !compiledWhatsAppTemplatePattern.test(templateName.value) ||
+          language?.kind !== 'literal' ||
+          typeof language.value !== 'string' ||
+          !compiledWhatsAppLanguagePattern.test(language.value)))
     ) {
       return false;
     }
@@ -737,7 +769,13 @@ function validApprovalNotifications(
         : providerIndex === previousProviderIndex
           ? channelIndex === previousChannelIndex + 1
           : providerIndex === previousProviderIndex + 1 && channelIndex === 0;
-    const destinationKey = `${providerName}\u0000${botToken.name}\u0000${appToken?.kind === 'secretReference' ? appToken.name : ''}\u0000${destination.value}`;
+    const credentialName =
+      whatsappDelivery && accessToken?.kind === 'secretReference'
+        ? accessToken.name
+        : botToken?.kind === 'secretReference'
+          ? botToken.name
+          : '';
+    const destinationKey = `${providerName}\u0000${credentialName}\u0000${appToken?.kind === 'secretReference' ? appToken.name : ''}\u0000${destination.value}`;
     if (!followsPrevious || destinationKeys.has(destinationKey)) return false;
 
     deliveryIds.add(deliveryId.value);

@@ -906,6 +906,37 @@ reference. ACP5 executes Discord through a shared resumable Gateway connection
 and supervised REST operations. Slash-command syntax is explicitly deferred.
 `woml check` remains offline and does not read credentials or contact Discord.
 
+### 9.3.3 `<whatsapp>`
+
+```xml
+<whatsapp
+  id="customerMessage"
+  events="message"
+  phone-number-id="123456789012345"
+  verify-token="{{secrets.WHATSAPP_VERIFY_TOKEN}}"
+  app-secret="{{secrets.WHATSAPP_APP_SECRET}}"
+/>
+```
+
+WhatsApp v1 supports the single inbound `message` event. The numeric
+`phone-number-id` is Meta's durable Phone Number ID, not the display phone
+number. Verification and signature credentials are exact symbolic secret
+references. Status callbacks never start runs.
+
+Approval and lifecycle notifications require `recipients`, `access-token`,
+`phone-number-id`, `template`, and `language`; lifecycle notifications also
+require `message`, which becomes the first template body parameter. Proactive
+free-form delivery is rejected rather than silently violating WhatsApp's
+template boundary. Script messaging uses the same reviewed shape through
+`services.whatsapp.send({ accessToken, phoneNumberId, conversationId,
+template: { name, language, parameters } })`.
+
+ACP6 validates and lowers this authoring surface to Model v15. The stable
+callback route is `/callbacks/whatsapp`; handshake and exact raw-body
+signature verification are frozen and conformance-tested. Actual Cloud API
+ingestion and delivery remain unavailable until ACP7, so `woml run` fails
+before resolving credentials or contacting Meta while `woml check` succeeds.
+
 ### 9.4 `<schedule>`
 
 ```xml

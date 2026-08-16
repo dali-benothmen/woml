@@ -1,0 +1,20 @@
+{
+  "contractVersion": 1,
+  "route": "/callbacks/whatsapp",
+  "handshake": {
+    "query": {
+      "mode": "subscribe",
+      "verifyToken": "synthetic-verify-token",
+      "challenge": "challenge-42"
+    },
+    "expectedStatus": 200,
+    "expectedBody": "challenge-42"
+  },
+  "signature": {
+    "rawBodyBase64": "eyJ0ZXh0IjoiaMOpbGxvXHJcbtmF2LHYrdio2KcifQ0K",
+    "syntheticAppSecret": "synthetic-app-secret",
+    "header": "sha256=32188c2507ca45fd28b39df9c24c4be6895bb73520fbc9761750141535e0dc11"
+  },
+  "acknowledgement": "durable-accepted-or-duplicate-only",
+  "statusCallbacksCreateRuns": false
+}

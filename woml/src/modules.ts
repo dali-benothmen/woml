@@ -1272,7 +1272,9 @@ export async function buildWomlExecutableDefinitionPackage(
     exports: module.exports,
   }));
   const moduleServiceUsage = inspectWomlModuleServiceUsage(document, options);
-  const forcedCommunicationServices = (['telegram', 'discord'] as const).filter(
+  const forcedCommunicationServices = (
+    ['telegram', 'discord', 'whatsapp'] as const
+  ).filter(
     provider =>
       moduleServiceUsage.referencedServices.includes(provider) &&
       !resolved.modules.some(module => module.name === provider)
@@ -1605,7 +1607,8 @@ export async function buildWomlReusableDefinitionPackage(
     model.schemaVersion !== 15 ||
     model.communication.providers.every(
       provider =>
-        provider.provider === 'telegram' || provider.provider === 'discord'
+        provider.provider === 'telegram' ||
+        provider.provider === 'discord'
     );
   const unsigned = model.schemaVersion === 15
     ? {

@@ -200,10 +200,22 @@ interface ValidatedDiscordNotificationDelivery {
   readonly message?: ValueExpression;
 }
 
+interface ValidatedWhatsAppNotificationDelivery {
+  readonly deliveryId: string;
+  readonly provider: 'whatsapp';
+  readonly destination: string;
+  readonly accessToken: SecretReferenceExpression;
+  readonly phoneNumberId: string;
+  readonly templateName: string;
+  readonly language: string;
+  readonly message?: ValueExpression;
+}
+
 type ValidatedNotificationDelivery =
   | ValidatedSlackNotificationDelivery
   | ValidatedTelegramNotificationDelivery
-  | ValidatedDiscordNotificationDelivery;
+  | ValidatedDiscordNotificationDelivery
+  | ValidatedWhatsAppNotificationDelivery;
 
 type ValidatedFlowItem =
   | ValidatedStep
@@ -332,6 +344,15 @@ interface ValidatedDiscordTrigger {
   readonly botToken: SecretReferenceExpression;
 }
 
+interface ValidatedWhatsAppTrigger {
+  readonly kind: 'whatsapp';
+  readonly id: string;
+  readonly events: readonly ['message'];
+  readonly phoneNumberId: string;
+  readonly verifyToken: SecretReferenceExpression;
+  readonly appSecret: SecretReferenceExpression;
+}
+
 interface ValidatedScheduleTrigger {
   readonly kind: 'schedule';
   readonly id: string;
@@ -361,6 +382,7 @@ type ValidatedTrigger =
   | ValidatedSlackTrigger
   | ValidatedTelegramTrigger
   | ValidatedDiscordTrigger
+  | ValidatedWhatsAppTrigger
   | ValidatedScheduleTrigger
   | ValidatedIntervalTrigger
   | ValidatedEventTrigger;
@@ -422,6 +444,7 @@ const supportedElements = new Set([
   'slack',
   'telegram',
   'discord',
+  'whatsapp',
   'schedule',
   'interval',
   'event',
@@ -509,6 +532,20 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
   },
   discord: {
     attributes: new Set(['id', 'events', 'channels', 'message', 'bot-token']),
+  },
+  whatsapp: {
+    attributes: new Set([
+      'id',
+      'events',
+      'recipients',
+      'message',
+      'access-token',
+      'phone-number-id',
+      'verify-token',
+      'app-secret',
+      'template',
+      'language',
+    ]),
   },
   schedule: {
     attributes: new Set(['id', 'cron', 'timezone', 'on-missed']),
@@ -655,8 +692,10 @@ function visitProfile(
               ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
               : element.name === 'telegram'
                 ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
-                : element.name === 'discord'
+              : element.name === 'discord'
                   ? 'WOML_DISCORD_UNKNOWN_ATTRIBUTE'
+                  : element.name === 'whatsapp'
+                    ? 'WOML_WHATSAPP_UNKNOWN_ATTRIBUTE'
                   : element.name === 'config'
                     ? 'WOML_CONFIG_ATTRIBUTE_UNKNOWN'
                     : 'WOML_UNKNOWN_ATTRIBUTE',
@@ -690,6 +729,11 @@ function validateSecretReferenceSinks(
       element.name === 'telegram' && attribute.name === 'bot-token';
     const isDiscordCredential =
       element.name === 'discord' && attribute.name === 'bot-token';
+    const isWhatsAppCredential =
+      element.name === 'whatsapp' &&
+      (attribute.name === 'access-token' ||
+        attribute.name === 'verify-token' ||
+        attribute.name === 'app-secret');
     const isWebhookCredential =
       element.name === 'webhook' && attribute.name === 'secret';
     const isEventCredential =
@@ -698,6 +742,7 @@ function validateSecretReferenceSinks(
       isSlackCredential ||
       isTelegramCredential ||
       isDiscordCredential ||
+      isWhatsAppCredential ||
       isWebhookCredential ||
       isEventCredential
     ) {
@@ -1487,6 +1532,9 @@ function validateTriggers(
     }
     if (child.name === 'discord') {
       return validateDiscordTrigger(document, child);
+    }
+    if (child.name === 'whatsapp') {
+      return validateWhatsAppTrigger(document, child);
     }
     if (child.name === 'schedule') {
       return validateScheduleTrigger(document, child);
@@ -2319,6 +2367,179 @@ function validateDiscordTrigger(
   };
 }
 
+interface WhatsAppToken {
+  readonly value: string;
+  readonly span: SourceSpan;
+}
+
+const whatsAppPhoneNumberIdPattern = /^[1-9][0-9]{5,19}$/;
+const whatsAppRecipientPattern = /^[1-9][0-9]{7,15}$/;
+const whatsAppTemplatePattern = /^[a-z0-9_]+$/;
+const whatsAppLanguagePattern = /^[a-z]{2,3}(?:_[A-Z]{2})?$/;
+
+function requiredWhatsAppAttribute(
+  document: WomlSourceDocument,
+  whatsapp: WomlSourceElement,
+  name:
+    | 'events'
+    | 'recipients'
+    | 'message'
+    | 'access-token'
+    | 'phone-number-id'
+    | 'verify-token'
+    | 'app-secret'
+    | 'template'
+    | 'language'
+): WomlSourceAttribute {
+  const attribute = whatsapp.attributes[name];
+  if (attribute === undefined) {
+    failValidation(
+      document,
+      'WOML_WHATSAPP_ATTRIBUTE_REQUIRED',
+      `<whatsapp> requires the "${name}" attribute.`,
+      whatsapp.openTagSpan
+    );
+  }
+  return attribute;
+}
+
+function validateWhatsAppTemplateAttributes(
+  document: WomlSourceDocument,
+  whatsapp: WomlSourceElement
+): { readonly templateName: string; readonly language: string } {
+  const template = requiredWhatsAppAttribute(document, whatsapp, 'template');
+  if (!whatsAppTemplatePattern.test(template.value)) {
+    failValidation(
+      document,
+      'WOML_WHATSAPP_TEMPLATE_INVALID',
+      `WhatsApp template "${template.value}" must contain lowercase letters, digits, and underscores only.`,
+      template.valueSpan,
+      'Use the exact approved Meta template name, for example woml_approval_v1.'
+    );
+  }
+  const language = requiredWhatsAppAttribute(document, whatsapp, 'language');
+  if (!whatsAppLanguagePattern.test(language.value)) {
+    failValidation(
+      document,
+      'WOML_WHATSAPP_LANGUAGE_INVALID',
+      `WhatsApp template language "${language.value}" is invalid.`,
+      language.valueSpan,
+      'Use a language code such as en, en_US, or pt_BR.'
+    );
+  }
+  return { templateName: template.value, language: language.value };
+}
+
+function whatsappRecipientTokens(
+  document: WomlSourceDocument,
+  whatsapp: WomlSourceElement
+): readonly WhatsAppToken[] {
+  const attribute = requiredWhatsAppAttribute(document, whatsapp, 'recipients');
+  const sourceFile = new SourceFile(document.file, document.source);
+  const tokens: WhatsAppToken[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  for (const part of attribute.value.split(',')) {
+    const leading = part.length - part.trimStart().length;
+    const value = part.trim();
+    const start = attribute.valueSpan.start.offset + offset + leading;
+    const span = sourceFile.span(start, start + value.length);
+    if (!whatsAppRecipientPattern.test(value)) {
+      failValidation(
+        document,
+        'WOML_WHATSAPP_RECIPIENT_INVALID',
+        `WhatsApp recipient "${value}" must be an international phone number containing 8 to 16 digits without a plus sign or spaces.`,
+        span,
+        'Example: recipients="15551234567".'
+      );
+    }
+    if (seen.has(value)) {
+      failValidation(
+        document,
+        'WOML_WHATSAPP_RECIPIENT_DUPLICATE',
+        `WhatsApp recipient "${value}" is listed more than once.`,
+        span
+      );
+    }
+    seen.add(value);
+    tokens.push({ value, span });
+    offset += part.length + 1;
+  }
+  return tokens;
+}
+
+function validateWhatsAppPhoneNumberId(
+  document: WomlSourceDocument,
+  whatsapp: WomlSourceElement
+): string {
+  const attribute = requiredWhatsAppAttribute(
+    document,
+    whatsapp,
+    'phone-number-id'
+  );
+  if (!whatsAppPhoneNumberIdPattern.test(attribute.value)) {
+    failValidation(
+      document,
+      'WOML_WHATSAPP_PHONE_NUMBER_ID_INVALID',
+      'WhatsApp phone-number-id must be the numeric Meta Phone Number ID, not the display phone number.',
+      attribute.valueSpan
+    );
+  }
+  return attribute.value;
+}
+
+function validateWhatsAppTrigger(
+  document: WomlSourceDocument,
+  whatsapp: WomlSourceElement
+): ValidatedWhatsAppTrigger {
+  ensureEmptyElement(document, whatsapp);
+  for (const notificationOnly of [
+    'recipients',
+    'message',
+    'access-token',
+    'template',
+    'language',
+  ] as const) {
+    const attribute = whatsapp.attributes[notificationOnly];
+    if (attribute !== undefined) {
+      failValidation(
+        document,
+        'WOML_WHATSAPP_UNKNOWN_ATTRIBUTE',
+        `Attribute "${notificationOnly}" is valid on a WhatsApp notification, not a trigger.`,
+        attribute.nameSpan
+      );
+    }
+  }
+  const events = requiredWhatsAppAttribute(document, whatsapp, 'events');
+  if (events.value !== 'message') {
+    failValidation(
+      document,
+      'WOML_WHATSAPP_TRIGGER_EVENT_INVALID',
+      `Unsupported WhatsApp trigger event "${events.value}".`,
+      events.valueSpan,
+      'WhatsApp v1 supports events="message"; delivery-status callbacks never create workflow runs.'
+    );
+  }
+  return {
+    kind: 'whatsapp',
+    id: validateJavaScriptSafeId(
+      document,
+      requiredAttribute(document, whatsapp, 'id'),
+      'trigger'
+    ),
+    events: ['message'],
+    phoneNumberId: validateWhatsAppPhoneNumberId(document, whatsapp),
+    verifyToken: requireSecretReference(
+      document,
+      requiredWhatsAppAttribute(document, whatsapp, 'verify-token')
+    ),
+    appSecret: requireSecretReference(
+      document,
+      requiredWhatsAppAttribute(document, whatsapp, 'app-secret')
+    ),
+  };
+}
+
 function validateNotify(
   document: WomlSourceDocument,
   notify: WomlSourceElement,
@@ -2340,17 +2561,24 @@ function validateNotify(
     if (
       provider.name !== 'slack' &&
       provider.name !== 'telegram' &&
-      provider.name !== 'discord'
+      provider.name !== 'discord' &&
+      provider.name !== 'whatsapp'
     ) {
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports built-in <slack>, <telegram>, and <discord> providers; found <${provider.name}>.`,
+        `<notify> supports built-in <slack>, <telegram>, <discord>, and <whatsapp> providers; found <${provider.name}>.`,
         provider.openTagSpan
       );
     }
     ensureEmptyElement(document, provider);
-    for (const triggerOnlyAttribute of ['id', 'events', 'message'] as const) {
+    for (const triggerOnlyAttribute of [
+      'id',
+      'events',
+      'message',
+      'verify-token',
+      'app-secret',
+    ] as const) {
       const attribute = provider.attributes[triggerOnlyAttribute];
       if (attribute !== undefined) {
         failValidation(
@@ -2359,10 +2587,12 @@ function validateNotify(
             ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
             : provider.name === 'discord'
               ? 'WOML_DISCORD_UNKNOWN_ATTRIBUTE'
+              : provider.name === 'whatsapp'
+                ? 'WOML_WHATSAPP_UNKNOWN_ATTRIBUTE'
             : 'WOML_SLACK_UNKNOWN_ATTRIBUTE',
           triggerOnlyAttribute === 'message'
             ? 'Attribute "message" is valid on a lifecycle notification, not an approval notification.'
-            : `Attribute "${triggerOnlyAttribute}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : provider.name === 'discord' ? 'Discord' : 'Slack'} trigger, not a notification provider.`,
+            : `Attribute "${triggerOnlyAttribute}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : provider.name === 'discord' ? 'Discord' : provider.name === 'whatsapp' ? 'WhatsApp' : 'Slack'} trigger, not a notification provider.`,
           attribute.nameSpan
         );
       }
@@ -2415,6 +2645,40 @@ function validateNotify(
           provider: 'discord',
           destination: channel.value,
           botToken,
+        });
+      });
+      return;
+    }
+    if (provider.name === 'whatsapp') {
+      const recipients = whatsappRecipientTokens(document, provider);
+      const accessToken = requireSecretReference(
+        document,
+        requiredWhatsAppAttribute(document, provider, 'access-token')
+      );
+      const phoneNumberId = validateWhatsAppPhoneNumberId(document, provider);
+      const { templateName, language } = validateWhatsAppTemplateAttributes(
+        document,
+        provider
+      );
+      recipients.forEach((recipient, recipientIndex) => {
+        const destinationKey = `whatsapp\u0000${accessToken.name}\u0000${phoneNumberId}\u0000${recipient.value}`;
+        if (seenDestinations.has(destinationKey)) {
+          failValidation(
+            document,
+            'WOML_WHATSAPP_RECIPIENT_DUPLICATE',
+            `WhatsApp recipient "${recipient.value}" is duplicated for the same credential and phone identity.`,
+            recipient.span
+          );
+        }
+        seenDestinations.add(destinationKey);
+        deliveries.push({
+          deliveryId: `${approvalId}:notify:${providerIndex}:recipient:${recipientIndex}`,
+          provider: 'whatsapp',
+          destination: recipient.value,
+          accessToken,
+          phoneNumberId,
+          templateName,
+          language,
         });
       });
       return;
@@ -2785,17 +3049,23 @@ function validateLifecycleNotify(
     if (
       provider.name !== 'slack' &&
       provider.name !== 'telegram' &&
-      provider.name !== 'discord'
+      provider.name !== 'discord' &&
+      provider.name !== 'whatsapp'
     ) {
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports built-in <slack>, <telegram>, and <discord> providers; found <${provider.name}>.`,
+        `<notify> supports built-in <slack>, <telegram>, <discord>, and <whatsapp> providers; found <${provider.name}>.`,
         provider.openTagSpan
       );
     }
     ensureEmptyElement(document, provider);
-    for (const invalidName of ['id', 'events'] as const) {
+    for (const invalidName of [
+      'id',
+      'events',
+      'verify-token',
+      'app-secret',
+    ] as const) {
       const invalid = provider.attributes[invalidName];
       if (invalid !== undefined) {
         failValidation(
@@ -2804,8 +3074,10 @@ function validateLifecycleNotify(
             ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
             : provider.name === 'discord'
               ? 'WOML_DISCORD_UNKNOWN_ATTRIBUTE'
+              : provider.name === 'whatsapp'
+                ? 'WOML_WHATSAPP_UNKNOWN_ATTRIBUTE'
             : 'WOML_SLACK_UNKNOWN_ATTRIBUTE',
-          `Attribute "${invalidName}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : provider.name === 'discord' ? 'Discord' : 'Slack'} trigger, not a lifecycle notification.`,
+          `Attribute "${invalidName}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : provider.name === 'discord' ? 'Discord' : provider.name === 'whatsapp' ? 'WhatsApp' : 'Slack'} trigger, not a lifecycle notification.`,
           invalid.nameSpan
         );
       }
@@ -2816,6 +3088,8 @@ function validateLifecycleNotify(
         ? requiredTelegramAttribute(document, provider, 'message')
         : provider.name === 'discord'
           ? requiredDiscordAttribute(document, provider, 'message')
+          : provider.name === 'whatsapp'
+            ? requiredWhatsAppAttribute(document, provider, 'message')
         : requiredSlackAttribute(document, provider, 'message'),
       event,
       stepIds
@@ -2869,6 +3143,41 @@ function validateLifecycleNotify(
           provider: 'discord',
           destination: channel.value,
           botToken,
+          message,
+        });
+      });
+      return;
+    }
+    if (provider.name === 'whatsapp') {
+      const recipients = whatsappRecipientTokens(document, provider);
+      const accessToken = requireSecretReference(
+        document,
+        requiredWhatsAppAttribute(document, provider, 'access-token')
+      );
+      const phoneNumberId = validateWhatsAppPhoneNumberId(document, provider);
+      const { templateName, language } = validateWhatsAppTemplateAttributes(
+        document,
+        provider
+      );
+      recipients.forEach((recipient, recipientIndex) => {
+        const destinationKey = `whatsapp\u0000${accessToken.name}\u0000${phoneNumberId}\u0000${recipient.value}`;
+        if (seenDestinations.has(destinationKey)) {
+          failValidation(
+            document,
+            'WOML_WHATSAPP_RECIPIENT_DUPLICATE',
+            `WhatsApp recipient "${recipient.value}" is duplicated for the same credential and phone identity.`,
+            recipient.span
+          );
+        }
+        seenDestinations.add(destinationKey);
+        deliveries.push({
+          deliveryId: `lifecycle:${hookIndex}:action:${actionIndex}:provider:${providerIndex}:recipient:${recipientIndex}`,
+          provider: 'whatsapp',
+          destination: recipient.value,
+          accessToken,
+          phoneNumberId,
+          templateName,
+          language,
           message,
         });
       });
@@ -3114,6 +3423,7 @@ const builtInServiceNames = new Set([
   'state',
   'telegram',
   'discord',
+  'whatsapp',
 ]);
 
 function collectValidatedSteps(
@@ -3287,6 +3597,18 @@ function lowerLifecycle(
                         value: delivery.destination,
                       },
                       credentials: lowerNotificationCredentials(delivery),
+                      ...(delivery.provider === 'whatsapp'
+                        ? {
+                            templateName: {
+                              kind: 'literal' as const,
+                              value: delivery.templateName,
+                            },
+                            language: {
+                              kind: 'literal' as const,
+                              value: delivery.language,
+                            },
+                          }
+                        : {}),
                       message: delivery.message!,
                     },
                   })),
@@ -3318,10 +3640,21 @@ function lowerNotificationCredentials(
           appToken: delivery.appToken,
         },
       }
-    : {
-        kind: 'object',
-        fields: { botToken: delivery.botToken },
-      };
+    : delivery.provider === 'whatsapp'
+      ? {
+          kind: 'object',
+          fields: {
+            accessToken: delivery.accessToken,
+            phoneNumberId: {
+              kind: 'literal',
+              value: delivery.phoneNumberId,
+            },
+          },
+        }
+      : {
+          kind: 'object',
+          fields: { botToken: delivery.botToken },
+        };
 }
 
 function validateBranchArm(
@@ -4813,6 +5146,18 @@ function lowerApproval(approval: ValidatedApproval): LoweredFlowFragment {
                   value: notification.destination,
                 },
                 credentials: lowerNotificationCredentials(notification),
+                ...(notification.provider === 'whatsapp'
+                  ? {
+                      templateName: {
+                        kind: 'literal' as const,
+                        value: notification.templateName,
+                      },
+                      language: {
+                        kind: 'literal' as const,
+                        value: notification.language,
+                      },
+                    }
+                  : {}),
               },
             })),
           },
@@ -5519,6 +5864,27 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
       },
     };
   }
+  if (trigger.kind === 'whatsapp') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.whatsapp',
+      config: {
+        kind: 'object',
+        fields: {
+          events: {
+            kind: 'array',
+            items: [{ kind: 'literal', value: 'message' }],
+          },
+          phoneNumberId: {
+            kind: 'literal',
+            value: trigger.phoneNumberId,
+          },
+          verifyToken: trigger.verifyToken,
+          appSecret: trigger.appSecret,
+        },
+      },
+    };
+  }
   if (trigger.kind === 'schedule') {
     return {
       id: trigger.id,
@@ -5774,7 +6140,11 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
       ? []
       : validateTriggers(document, triggersElement);
   const shadowedServices = modules
-    .filter(module => module.name === 'telegram' || module.name === 'discord')
+    .filter(module =>
+      module.name === 'telegram' ||
+      module.name === 'discord' ||
+      module.name === 'whatsapp'
+    )
     .map(module => module.name);
   const flow = validateSteps(document, stepsElement, shadowedServices);
   const lifecycle =
@@ -5813,8 +6183,17 @@ export function inspectWomlMigrationDiagnostics(
   const inspected = inspectWomlDocument(document);
   if (inspected.kind === 'workflow') {
     for (const imported of inspected.imports) {
-      if (imported.name === 'telegram' || imported.name === 'discord') {
-        const provider = imported.name === 'telegram' ? 'Telegram' : 'Discord';
+      if (
+        imported.name === 'telegram' ||
+        imported.name === 'discord' ||
+        imported.name === 'whatsapp'
+      ) {
+        const provider =
+          imported.name === 'telegram'
+            ? 'Telegram'
+            : imported.name === 'discord'
+              ? 'Discord'
+              : 'WhatsApp';
         diagnostics.push({
           severity: 'warning',
           code: 'WOML_BUILTIN_SERVICE_SHADOWED',
@@ -6465,7 +6844,7 @@ function compileValidatedWoml(
   document: WomlSourceDocument,
   moduleRuntime?: CompiledModuleRuntimeV1,
   forceModelV14 = false,
-  forcedCommunicationServices: readonly ('telegram' | 'discord')[] = []
+  forcedCommunicationServices: readonly ('telegram' | 'discord' | 'whatsapp')[] = []
 ): CompiledWorkflowDefinition {
   assertWomlDocumentRunnable(document);
   const {
@@ -6502,8 +6881,13 @@ function compileValidatedWoml(
     ...workflowNotifications,
     ...lifecycleNotifications,
   ].filter(delivery => delivery.provider === 'discord');
+  const whatsappNotifications = [
+    ...workflowNotifications,
+    ...lifecycleNotifications,
+  ].filter(delivery => delivery.provider === 'whatsapp');
   const localTelegramModule = modules.some(module => module.name === 'telegram');
   const localDiscordModule = modules.some(module => module.name === 'discord');
+  const localWhatsAppModule = modules.some(module => module.name === 'whatsapp');
   const allScriptAnalyses = [
     ...scriptAnalyses.values(),
     ...lifecycleScripts.map(item => item.analysis),
@@ -6512,6 +6896,8 @@ function compileValidatedWoml(
     forcedCommunicationServices.includes('telegram');
   const forcedDiscordMessaging =
     forcedCommunicationServices.includes('discord');
+  const forcedWhatsAppMessaging =
+    forcedCommunicationServices.includes('whatsapp');
   const usesTelegramMessaging =
     !localTelegramModule &&
     (forcedTelegramMessaging ||
@@ -6524,13 +6910,22 @@ function compileValidatedWoml(
       allScriptAnalyses.some(analysis =>
         analysis.requiredServices.includes('discord')
       ));
+  const usesWhatsAppMessaging =
+    !localWhatsAppModule &&
+    (forcedWhatsAppMessaging ||
+      allScriptAnalyses.some(analysis =>
+        analysis.requiredServices.includes('whatsapp')
+      ));
   const usesModelV15 =
     triggers.some(trigger => trigger.kind === 'telegram') ||
     triggers.some(trigger => trigger.kind === 'discord') ||
+    triggers.some(trigger => trigger.kind === 'whatsapp') ||
     telegramNotifications.length > 0 ||
     discordNotifications.length > 0 ||
+    whatsappNotifications.length > 0 ||
     usesTelegramMessaging ||
-    usesDiscordMessaging;
+    usesDiscordMessaging ||
+    usesWhatsAppMessaging;
   const usesModelV14 =
     usesModelV15 || forceModelV14 || flow.firstSwitch !== undefined;
   const usesStructuredGraph =
@@ -6699,6 +7094,40 @@ function compileValidatedWoml(
     ? {
         profileVersion: 1 as const,
         providers: [
+          ...(triggers.some(trigger => trigger.kind === 'whatsapp') ||
+          whatsappNotifications.length > 0 ||
+          usesWhatsAppMessaging
+            ? [
+                {
+                  provider: 'whatsapp' as const,
+                  triggerIds: triggers
+                    .filter(trigger => trigger.kind === 'whatsapp')
+                    .map(trigger => trigger.id),
+                  notificationDeliveryIds: whatsappNotifications.map(
+                    delivery => delivery.deliveryId
+                  ),
+                  messaging: usesWhatsAppMessaging,
+                  credentialNames: [
+                    ...new Set([
+                      ...triggers.flatMap(trigger =>
+                        trigger.kind === 'whatsapp'
+                          ? [trigger.verifyToken.name, trigger.appSecret.name]
+                          : []
+                      ),
+                      ...whatsappNotifications.map(
+                        delivery => delivery.accessToken.name
+                      ),
+                      ...allScriptAnalyses.flatMap(analysis =>
+                        analysis.requiredServices.includes('whatsapp') ||
+                        forcedWhatsAppMessaging
+                          ? analysis.requiredSecrets
+                          : []
+                      ),
+                    ]),
+                  ].sort(),
+                },
+              ]
+            : []),
           ...(triggers.some(trigger => trigger.kind === 'discord') ||
           discordNotifications.length > 0 ||
           usesDiscordMessaging
@@ -6767,7 +7196,7 @@ function compileValidatedWoml(
                 },
               ]
             : []),
-        ],
+        ].sort((left, right) => left.provider.localeCompare(right.provider)),
       }
     : undefined;
   const unresolvedProvider = communication?.providers.find(
@@ -6775,13 +7204,19 @@ function compileValidatedWoml(
   );
   if (unresolvedProvider !== undefined) {
     const providerName =
-      unresolvedProvider.provider === 'telegram' ? 'Telegram' : 'Discord';
+      unresolvedProvider.provider === 'telegram'
+        ? 'Telegram'
+        : unresolvedProvider.provider === 'discord'
+          ? 'Discord'
+          : 'WhatsApp';
     failCompile(
       document,
       `WOML_${unresolvedProvider.provider.toUpperCase()}_CREDENTIAL_UNRESOLVED`,
       `${providerName} usage requires at least one explicit symbolic secret reference in the workflow.`,
       workflow.openTagSpan,
-      `Pass secrets.${unresolvedProvider.provider === 'telegram' ? 'TELEGRAM' : 'DISCORD'}_BOT_TOKEN from the WOML script into the imported module that calls services.${unresolvedProvider.provider}.send().`
+      unresolvedProvider.provider === 'whatsapp'
+        ? 'Pass secrets.WHATSAPP_ACCESS_TOKEN from the WOML script into the imported module that calls services.whatsapp.send().'
+        : `Pass secrets.${unresolvedProvider.provider === 'telegram' ? 'TELEGRAM' : 'DISCORD'}_BOT_TOKEN from the WOML script into the imported module that calls services.${unresolvedProvider.provider}.send().`
     );
   }
   const definition = {
@@ -7088,7 +7523,11 @@ export function compileWomlWithModules(
   moduleRuntime: CompiledModuleRuntimeV1,
   options: {
     readonly forceModelV15?: boolean;
-    readonly forcedCommunicationServices?: readonly ('telegram' | 'discord')[];
+    readonly forcedCommunicationServices?: readonly (
+      | 'telegram'
+      | 'discord'
+      | 'whatsapp'
+    )[];
   } = {}
 ):
   | CompiledWorkflowDefinitionV9
