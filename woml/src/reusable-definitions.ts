@@ -739,6 +739,12 @@ function validateCustomTagUsage(
 ): void {
   const definition = definitions.get(element.name);
   if (definition === undefined) return;
+  if (
+    parent?.name === 'triggers' &&
+    ['slack', 'telegram', 'discord', 'whatsapp'].includes(element.name)
+  ) {
+    return;
+  }
   const stepParents = new Set([
     'steps',
     'when',

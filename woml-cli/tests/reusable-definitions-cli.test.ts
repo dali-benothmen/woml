@@ -53,7 +53,8 @@ describe('reusable definition CLI authoring', () => {
     ]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe('');
+    expect(result.stderr).toContain('WOML_BUILTIN_PROVIDER_SHADOWED');
+    expect(result.stderr).toContain('preserves this local provider');
     expect(result.stdout).toContain('Definitions: 2; pinned sources: 5.');
     expect(result.stdout).toContain('<calculate-discount>');
     expect(result.stdout).toContain('<telegram>');
@@ -91,7 +92,7 @@ describe('reusable definition CLI authoring', () => {
     const path = resolve(fixtureRoot, 'custom-provider-workflow.woml');
     const checked = await invoke(['check', path, '--json']);
     expect(checked.exitCode).toBe(0);
-    expect(checked.stderr).toBe('');
+    expect(checked.stderr).toContain('WOML_BUILTIN_PROVIDER_SHADOWED');
     const definitionPackage = JSON.parse(checked.stdout);
     expect(definitionPackage).toMatchObject({
       schemaVersion: 9,

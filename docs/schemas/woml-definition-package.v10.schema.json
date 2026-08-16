@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/woml-definition-package.v10.schema.json",
+  "title": "WOML Communication Provider Definition Package v10",
+  "description": "Immutable Model v15 package containing communication requirements and all local module artifacts.",
+  "x-status": "additional-communication-providers-acp2-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile", "executable", "runtimeReady", "workflow", "definitions", "modules", "sources", "artifacts", "compiler", "permissions", "rootHash"],
+  "properties": {
+    "schemaVersion": { "const": 10 },
+    "profile": { "const": "woml.definition-package/v10" },
+    "executable": { "const": true },
+    "runtimeReady": { "type": "boolean" },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "modelDigest", "model"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+        "source": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/portablePath" },
+        "modelDigest": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/sha256" },
+        "model": { "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15" }
+      }
+    },
+    "definitions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alias", "kind", "source", "digest", "dependencies", "props"],
+        "properties": {
+          "alias": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+          "kind": { "enum": ["reusable-step", "notification-provider"] },
+          "source": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/portablePath" },
+          "digest": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/sha256" },
+          "dependencies": { "type": "array", "uniqueItems": true, "items": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/portablePath" } },
+          "props": { "type": "array", "items": { "$ref": "https://woml.dev/schemas/woml-definition-package.v9.schema.json#/$defs/prop" } }
+        }
+      }
+    },
+    "modules": { "type": "array", "maxItems": 64, "items": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/module" } },
+    "sources": { "type": "array", "minItems": 2, "maxItems": 769, "items": { "$ref": "https://woml.dev/schemas/woml-definition-package.v1.schema.json#/$defs/source" } },
+    "artifacts": { "type": "array", "minItems": 2, "maxItems": 450, "items": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/artifact" } },
+    "compiler": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/compiler" },
+    "permissions": { "$ref": "https://woml.dev/schemas/woml-definition-package.v1.schema.json#/$defs/permissions" },
+    "rootHash": { "$ref": "https://woml.dev/schemas/woml-definition-package.v4.schema.json#/$defs/sha256" }
+  }
+}

@@ -22,6 +22,7 @@ import {
   type CompiledWorkflowDefinitionV12,
   type CompiledWorkflowDefinitionV13,
   type CompiledWorkflowDefinitionV14,
+  type CompiledWorkflowDefinitionV15,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowGraphV13,
@@ -174,7 +175,7 @@ interface ValidatedFork {
   readonly joinedBranchIds: readonly string[];
 }
 
-interface ValidatedNotificationDelivery {
+interface ValidatedSlackNotificationDelivery {
   readonly deliveryId: string;
   readonly provider: 'slack';
   readonly destination: string;
@@ -182,6 +183,18 @@ interface ValidatedNotificationDelivery {
   readonly appToken: SecretReferenceExpression;
   readonly message?: ValueExpression;
 }
+
+interface ValidatedTelegramNotificationDelivery {
+  readonly deliveryId: string;
+  readonly provider: 'telegram';
+  readonly destination: string;
+  readonly botToken: SecretReferenceExpression;
+  readonly message?: ValueExpression;
+}
+
+type ValidatedNotificationDelivery =
+  | ValidatedSlackNotificationDelivery
+  | ValidatedTelegramNotificationDelivery;
 
 type ValidatedFlowItem =
   | ValidatedStep
@@ -205,10 +218,12 @@ interface ValidatedFlow {
 
 interface FlowValidationContext {
   readonly insideForkBranch: boolean;
+  readonly shadowedServices: readonly string[];
 }
 
 const rootFlowValidationContext: FlowValidationContext = {
   insideForkBranch: false,
+  shadowedServices: [],
 };
 
 interface ValidatedLifecycleScriptAction {
@@ -291,6 +306,13 @@ interface ValidatedSlackTrigger {
   readonly appToken: SecretReferenceExpression;
 }
 
+interface ValidatedTelegramTrigger {
+  readonly kind: 'telegram';
+  readonly id: string;
+  readonly events: readonly ['message'];
+  readonly botToken: SecretReferenceExpression;
+}
+
 interface ValidatedScheduleTrigger {
   readonly kind: 'schedule';
   readonly id: string;
@@ -318,6 +340,7 @@ type ValidatedTrigger =
   | ValidatedManualTrigger
   | ValidatedWebhookTrigger
   | ValidatedSlackTrigger
+  | ValidatedTelegramTrigger
   | ValidatedScheduleTrigger
   | ValidatedIntervalTrigger
   | ValidatedEventTrigger;
@@ -377,6 +400,7 @@ const supportedElements = new Set([
   'approval',
   'notify',
   'slack',
+  'telegram',
   'schedule',
   'interval',
   'event',
@@ -458,6 +482,9 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
       'bot-token',
       'app-token',
     ]),
+  },
+  telegram: {
+    attributes: new Set(['id', 'events', 'chats', 'message', 'bot-token']),
   },
   schedule: {
     attributes: new Set(['id', 'cron', 'timezone', 'on-missed']),
@@ -559,7 +586,7 @@ function visitProfile(
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports <slack> only in this release; found <${element.name}>.`,
+        `<notify> supports built-in <slack>, <telegram>, and imported custom providers; found <${element.name}>.`,
         element.openTagSpan
       );
     }
@@ -602,6 +629,8 @@ function visitProfile(
             ? 'WOML_RETRY_HANDLER_UNSUPPORTED'
             : element.name === 'slack'
               ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
+              : element.name === 'telegram'
+                ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
               : element.name === 'config'
                 ? 'WOML_CONFIG_ATTRIBUTE_UNKNOWN'
                 : 'WOML_UNKNOWN_ATTRIBUTE',
@@ -631,11 +660,18 @@ function validateSecretReferenceSinks(
     const isSlackCredential =
       element.name === 'slack' &&
       (attribute.name === 'bot-token' || attribute.name === 'app-token');
+    const isTelegramCredential =
+      element.name === 'telegram' && attribute.name === 'bot-token';
     const isWebhookCredential =
       element.name === 'webhook' && attribute.name === 'secret';
     const isEventCredential =
       element.name === 'event' && attribute.name === 'secret';
-    if (isSlackCredential || isWebhookCredential || isEventCredential) {
+    if (
+      isSlackCredential ||
+      isTelegramCredential ||
+      isWebhookCredential ||
+      isEventCredential
+    ) {
       requireSecretReference(document, attribute);
       continue;
     }
@@ -1417,6 +1453,9 @@ function validateTriggers(
     if (child.name === 'slack') {
       return validateSlackTrigger(document, child);
     }
+    if (child.name === 'telegram') {
+      return validateTelegramTrigger(document, child);
+    }
     if (child.name === 'schedule') {
       return validateScheduleTrigger(document, child);
     }
@@ -1480,9 +1519,10 @@ function scriptBody(
 
 function validateScriptAnalysis(
   document: WomlSourceDocument,
-  body: ScriptBody
+  body: ScriptBody,
+  shadowedServices: readonly string[] = []
 ): ScriptAnalysis {
-  const analysis = analyzeWomlScript(body.source);
+  const analysis = analyzeWomlScript(body.source, { shadowedServices });
   if (analysis.issue === undefined) return analysis;
   const sourceFile = new SourceFile(document.file, document.source);
   const start = body.span.start.offset + analysis.issue.start;
@@ -1966,6 +2006,141 @@ function validateSlackTrigger(
   };
 }
 
+interface TelegramToken {
+  readonly value: string;
+  readonly span: SourceSpan;
+}
+
+const telegramChatIdPattern = /^-?[1-9][0-9]{0,19}$/;
+
+function requiredTelegramAttribute(
+  document: WomlSourceDocument,
+  telegram: WomlSourceElement,
+  name: 'events' | 'chats' | 'message' | 'bot-token'
+): WomlSourceAttribute {
+  const attribute = telegram.attributes[name];
+  if (attribute === undefined) {
+    failValidation(
+      document,
+      'WOML_TELEGRAM_ATTRIBUTE_REQUIRED',
+      `<telegram> requires the "${name}" attribute.`,
+      telegram.openTagSpan
+    );
+  }
+  return attribute;
+}
+
+function commaSeparatedTelegramTokens(
+  document: WomlSourceDocument,
+  attribute: WomlSourceAttribute,
+  label: 'events' | 'chats'
+): readonly TelegramToken[] {
+  const sourceFile = new SourceFile(document.file, document.source);
+  const tokens: TelegramToken[] = [];
+  let offset = 0;
+  for (const part of attribute.value.split(',')) {
+    const leading = part.length - part.trimStart().length;
+    const value = part.trim();
+    const start = attribute.valueSpan.start.offset + offset + leading;
+    if (value.length === 0) {
+      failValidation(
+        document,
+        'WOML_TELEGRAM_LIST_INVALID',
+        `<telegram> ${label} must be a comma-separated list without empty items.`,
+        sourceFile.span(start, start)
+      );
+    }
+    tokens.push({ value, span: sourceFile.span(start, start + value.length) });
+    offset += part.length + 1;
+  }
+  return tokens;
+}
+
+function validateTelegramTrigger(
+  document: WomlSourceDocument,
+  telegram: WomlSourceElement
+): ValidatedTelegramTrigger {
+  ensureEmptyElement(document, telegram);
+  for (const notificationOnly of ['chats', 'message'] as const) {
+    const attribute = telegram.attributes[notificationOnly];
+    if (attribute !== undefined) {
+      failValidation(
+        document,
+        'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE',
+        `Attribute "${notificationOnly}" is valid on a Telegram notification, not a trigger.`,
+        attribute.nameSpan
+      );
+    }
+  }
+  const id = validateJavaScriptSafeId(
+    document,
+    requiredAttribute(document, telegram, 'id'),
+    'trigger'
+  );
+  const events = commaSeparatedTelegramTokens(
+    document,
+    requiredTelegramAttribute(document, telegram, 'events'),
+    'events'
+  );
+  if (events.length !== 1 || events[0].value !== 'message') {
+    const unsupported = events.find(token => token.value !== 'message');
+    const invalid = unsupported ?? events[1];
+    failValidation(
+      document,
+      unsupported === undefined
+        ? 'WOML_TELEGRAM_TRIGGER_EVENT_DUPLICATE'
+        : 'WOML_TELEGRAM_TRIGGER_EVENT_INVALID',
+      unsupported === undefined
+        ? 'Telegram trigger event "message" is listed more than once.'
+        : `Unsupported Telegram trigger event "${unsupported.value}".`,
+      invalid?.span ?? telegram.openTagSpan,
+      'Telegram v1 supports events="message".'
+    );
+  }
+  return {
+    kind: 'telegram',
+    id,
+    events: ['message'],
+    botToken: requireSecretReference(
+      document,
+      requiredTelegramAttribute(document, telegram, 'bot-token')
+    ),
+  };
+}
+
+function telegramChatTokens(
+  document: WomlSourceDocument,
+  telegram: WomlSourceElement
+): readonly TelegramToken[] {
+  const tokens = commaSeparatedTelegramTokens(
+    document,
+    requiredTelegramAttribute(document, telegram, 'chats'),
+    'chats'
+  );
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (!telegramChatIdPattern.test(token.value)) {
+      failValidation(
+        document,
+        'WOML_TELEGRAM_CHAT_INVALID',
+        `Telegram chat "${token.value}" must be a numeric Telegram chat ID.`,
+        token.span,
+        'Use the positive user/chat ID or negative group/channel ID returned by Telegram.'
+      );
+    }
+    if (seen.has(token.value)) {
+      failValidation(
+        document,
+        'WOML_TELEGRAM_CHAT_DUPLICATE',
+        `Telegram chat "${token.value}" is listed more than once.`,
+        token.span
+      );
+    }
+    seen.add(token.value);
+  }
+  return tokens;
+}
+
 function validateNotify(
   document: WomlSourceDocument,
   notify: WomlSourceElement,
@@ -1976,7 +2151,7 @@ function validateNotify(
     failValidation(
       document,
       'WOML_NOTIFY_EMPTY',
-      '<notify> must contain at least one <slack> provider.',
+      '<notify> must contain at least one notification provider.',
       notify.openTagSpan
     );
   }
@@ -1984,11 +2159,11 @@ function validateNotify(
   const seenDestinations = new Set<string>();
   const deliveries: ValidatedNotificationDelivery[] = [];
   providers.forEach((provider, providerIndex) => {
-    if (provider.name !== 'slack') {
+    if (provider.name !== 'slack' && provider.name !== 'telegram') {
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports <slack> only in this release; found <${provider.name}>.`,
+        `<notify> supports built-in <slack> and <telegram> providers; found <${provider.name}>.`,
         provider.openTagSpan
       );
     }
@@ -1998,13 +2173,41 @@ function validateNotify(
       if (attribute !== undefined) {
         failValidation(
           document,
-          'WOML_SLACK_UNKNOWN_ATTRIBUTE',
+          provider.name === 'telegram'
+            ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
+            : 'WOML_SLACK_UNKNOWN_ATTRIBUTE',
           triggerOnlyAttribute === 'message'
             ? 'Attribute "message" is valid on a lifecycle notification, not an approval notification.'
-            : `Attribute "${triggerOnlyAttribute}" is valid on a Slack trigger, not a Slack notification provider.`,
+            : `Attribute "${triggerOnlyAttribute}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : 'Slack'} trigger, not a notification provider.`,
           attribute.nameSpan
         );
       }
+    }
+    if (provider.name === 'telegram') {
+      const chats = telegramChatTokens(document, provider);
+      const botToken = requireSecretReference(
+        document,
+        requiredTelegramAttribute(document, provider, 'bot-token')
+      );
+      chats.forEach((chat, chatIndex) => {
+        const destinationKey = `telegram\u0000${botToken.name}\u0000${chat.value}`;
+        if (seenDestinations.has(destinationKey)) {
+          failValidation(
+            document,
+            'WOML_TELEGRAM_CHAT_DUPLICATE',
+            `Telegram destination "${chat.value}" is duplicated for the same credential.`,
+            chat.span
+          );
+        }
+        seenDestinations.add(destinationKey);
+        deliveries.push({
+          deliveryId: `${approvalId}:notify:${providerIndex}:chat:${chatIndex}`,
+          provider: 'telegram',
+          destination: chat.value,
+          botToken,
+        });
+      });
+      return;
     }
     const channels = slackChannelTokens(
       document,
@@ -2140,7 +2343,8 @@ function validateApproval(
 function validateStep(
   document: WomlSourceDocument,
   step: WomlSourceElement,
-  registry: Set<string>
+  registry: Set<string>,
+  shadowedServices: readonly string[] = []
 ): ValidatedStep {
   const id = registerStructuralId(
     document,
@@ -2167,7 +2371,7 @@ function validateStep(
     id,
     source: body.source,
     scriptSpan: body.span,
-    scriptAnalysis: validateScriptAnalysis(document, body),
+    scriptAnalysis: validateScriptAnalysis(document, body, shadowedServices),
     retryPolicy: stepRetryPolicy(document, step),
     metadata: flowItemMetadata(document, step),
   };
@@ -2361,18 +2565,18 @@ function validateLifecycleNotify(
     failValidation(
       document,
       'WOML_LIFECYCLE_ACTION_REQUIRED',
-      '<notify> must contain at least one <slack> provider.',
+      '<notify> must contain at least one notification provider.',
       notify.openTagSpan
     );
   }
   const seenDestinations = new Set<string>();
   const deliveries: ValidatedNotificationDelivery[] = [];
   providers.forEach((provider, providerIndex) => {
-    if (provider.name !== 'slack') {
+    if (provider.name !== 'slack' && provider.name !== 'telegram') {
       failValidation(
         document,
         'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
-        `<notify> supports <slack> only in this release; found <${provider.name}>.`,
+        `<notify> supports built-in <slack> and <telegram> providers; found <${provider.name}>.`,
         provider.openTagSpan
       );
     }
@@ -2382,18 +2586,49 @@ function validateLifecycleNotify(
       if (invalid !== undefined) {
         failValidation(
           document,
-          'WOML_SLACK_UNKNOWN_ATTRIBUTE',
-          `Attribute "${invalidName}" is valid on a Slack trigger, not a lifecycle notification.`,
+          provider.name === 'telegram'
+            ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
+            : 'WOML_SLACK_UNKNOWN_ATTRIBUTE',
+          `Attribute "${invalidName}" is valid on a ${provider.name === 'telegram' ? 'Telegram' : 'Slack'} trigger, not a lifecycle notification.`,
           invalid.nameSpan
         );
       }
     }
     const message = parseLifecycleTemplate(
       document,
-      requiredSlackAttribute(document, provider, 'message'),
+      provider.name === 'telegram'
+        ? requiredTelegramAttribute(document, provider, 'message')
+        : requiredSlackAttribute(document, provider, 'message'),
       event,
       stepIds
     );
+    if (provider.name === 'telegram') {
+      const chats = telegramChatTokens(document, provider);
+      const botToken = requireSecretReference(
+        document,
+        requiredTelegramAttribute(document, provider, 'bot-token')
+      );
+      chats.forEach((chat, chatIndex) => {
+        const destinationKey = `telegram\u0000${botToken.name}\u0000${chat.value}`;
+        if (seenDestinations.has(destinationKey)) {
+          failValidation(
+            document,
+            'WOML_TELEGRAM_CHAT_DUPLICATE',
+            `Telegram destination "${chat.value}" is duplicated for the same credential.`,
+            chat.span
+          );
+        }
+        seenDestinations.add(destinationKey);
+        deliveries.push({
+          deliveryId: `lifecycle:${hookIndex}:action:${actionIndex}:provider:${providerIndex}:chat:${chatIndex}`,
+          provider: 'telegram',
+          destination: chat.value,
+          botToken,
+          message,
+        });
+      });
+      return;
+    }
     const channels = slackChannelTokens(
       document,
       requiredSlackAttribute(document, provider, 'channels')
@@ -2433,7 +2668,8 @@ function validateLifecycleNotify(
 function validateLifecycle(
   document: WomlSourceDocument,
   lifecycle: WomlSourceElement,
-  flow: ValidatedFlow
+  flow: ValidatedFlow,
+  shadowedServices: readonly string[] = []
 ): ValidatedLifecycle {
   const children = elementChildren(document, lifecycle);
   if (children.length === 0) {
@@ -2536,7 +2772,9 @@ function validateLifecycle(
       (action, actionIndex): ValidatedLifecycleAction => {
         if (action.name === 'script') {
           const body = scriptBody(document, action);
-          const analysis = analyzeWomlLifecycleScript(body.source);
+          const analysis = analyzeWomlLifecycleScript(body.source, {
+            shadowedServices,
+          });
           if (analysis.issue !== undefined) {
             const sourceFile = new SourceFile(document.file, document.source);
             const start = body.span.start.offset + analysis.issue.start;
@@ -2629,6 +2867,7 @@ const builtInServiceNames = new Set([
   'events',
   'workflows',
   'state',
+  'telegram',
 ]);
 
 function collectValidatedSteps(
@@ -2654,6 +2893,32 @@ function collectValidatedSteps(
     }
   }
   return steps;
+}
+
+function collectValidatedNotifications(
+  items: readonly ValidatedFlowItem[],
+  deliveries: ValidatedNotificationDelivery[] = []
+): readonly ValidatedNotificationDelivery[] {
+  for (const item of items) {
+    if (item.kind === 'approval') {
+      deliveries.push(...item.notifications);
+      collectValidatedNotifications(item.approvedItems, deliveries);
+      collectValidatedNotifications(item.rejectedItems, deliveries);
+    } else if (
+      item.kind === 'branch' ||
+      item.kind === 'controlChoice' ||
+      item.kind === 'switch'
+    ) {
+      for (const arm of item.arms) {
+        collectValidatedNotifications(arm.items, deliveries);
+      }
+    } else if (item.kind === 'fork') {
+      for (const branch of item.branches) {
+        collectValidatedNotifications(branch.items, deliveries);
+      }
+    }
+  }
+  return deliveries;
 }
 
 export interface WomlModuleUsageInspection {
@@ -2775,13 +3040,7 @@ function lowerLifecycle(
                         kind: 'literal' as const,
                         value: delivery.destination,
                       },
-                      credentials: {
-                        kind: 'object' as const,
-                        fields: {
-                          botToken: delivery.botToken,
-                          appToken: delivery.appToken,
-                        },
-                      },
+                      credentials: lowerNotificationCredentials(delivery),
                       message: delivery.message!,
                     },
                   })),
@@ -2800,6 +3059,23 @@ function lowerLifecycle(
       return compiledHook;
     }),
   };
+}
+
+function lowerNotificationCredentials(
+  delivery: ValidatedNotificationDelivery
+): ValueExpression {
+  return delivery.provider === 'slack'
+    ? {
+        kind: 'object',
+        fields: {
+          botToken: delivery.botToken,
+          appToken: delivery.appToken,
+        },
+      }
+    : {
+        kind: 'object',
+        fields: { botToken: delivery.botToken },
+      };
 }
 
 function validateBranchArm(
@@ -3263,7 +3539,8 @@ function forkJoinTokens(
 function validateFork(
   document: WomlSourceDocument,
   fork: WomlSourceElement,
-  registry: Set<string>
+  registry: Set<string>,
+  context: FlowValidationContext
 ): ValidatedFork {
   const id = registerStructuralId(
     document,
@@ -3291,7 +3568,10 @@ function validateFork(
   }
 
   const branchIds = new Set<string>();
-  const branchContext: FlowValidationContext = { insideForkBranch: true };
+  const branchContext: FlowValidationContext = {
+    ...context,
+    insideForkBranch: true,
+  };
   const branches: ValidatedForkBranch[] = children.map(branch => {
     for (const attribute of Object.values(branch.attributes)) {
       if (attribute.name !== 'id') {
@@ -3429,7 +3709,8 @@ function validateFork(
 function validateParallel(
   document: WomlSourceDocument,
   parallel: WomlSourceElement,
-  registry: Set<string>
+  registry: Set<string>,
+  context: FlowValidationContext
 ): ValidatedParallel {
   const id = registerStructuralId(
     document,
@@ -3470,7 +3751,7 @@ function validateParallel(
   }
 
   const children = childElements.map(child =>
-    validateStep(document, child, registry)
+    validateStep(document, child, registry, context.shadowedServices)
   );
   const concurrencyAttribute = parallel.attributes.concurrency;
   let concurrency = children.length;
@@ -3523,7 +3804,13 @@ function validateFlowItem(
   parent: string,
   context: FlowValidationContext
 ): ValidatedFlowItem {
-  if (element.name === 'step') return validateStep(document, element, registry);
+  if (element.name === 'step')
+    return validateStep(
+      document,
+      element,
+      registry,
+      context.shadowedServices
+    );
   if (element.name === 'branch') {
     if (context.insideForkBranch) {
       failValidation(
@@ -3575,10 +3862,10 @@ function validateFlowItem(
         'Move the nested fan-out outside the branch or use <parallel> for direct concurrent steps.'
       );
     }
-    return validateFork(document, element, registry);
+    return validateFork(document, element, registry, context);
   }
   if (element.name === 'parallel') {
-    return validateParallel(document, element, registry);
+    return validateParallel(document, element, registry, context);
   }
   if (element.name === 'approval') {
     return validateApproval(document, element, registry, context);
@@ -3591,13 +3878,17 @@ function validateFlowItem(
       element.openTagSpan
     );
   }
-  if (element.name === 'notify' || element.name === 'slack') {
+  if (
+    element.name === 'notify' ||
+    element.name === 'slack' ||
+    element.name === 'telegram'
+  ) {
     failValidation(
       document,
       'WOML_NOTIFY_INVALID_ORDER',
       element.name === 'notify'
         ? '<notify> is valid only as the first direct child of <approval>.'
-        : '<slack> is valid only as a direct child of <notify>.',
+        : `<${element.name}> is valid only as a direct child of <notify>.`,
       element.openTagSpan
     );
   }
@@ -3841,7 +4132,8 @@ function validateReferenceAvailability(
 
 function validateSteps(
   document: WomlSourceDocument,
-  stepsElement: WomlSourceElement
+  stepsElement: WomlSourceElement,
+  shadowedServices: readonly string[] = []
 ): ValidatedFlow {
   const children = elementChildren(document, stepsElement);
   if (children.length === 0) {
@@ -3860,7 +4152,7 @@ function validateSteps(
       child,
       structuralIds,
       '<steps>',
-      rootFlowValidationContext
+      { ...rootFlowValidationContext, shadowedServices }
     )
   );
   validateReferenceAvailability(document, items, structuralIds);
@@ -4273,13 +4565,7 @@ function lowerApproval(approval: ValidatedApproval): LoweredFlowFragment {
                   kind: 'literal' as const,
                   value: notification.destination,
                 },
-                credentials: {
-                  kind: 'object' as const,
-                  fields: {
-                    botToken: notification.botToken,
-                    appToken: notification.appToken,
-                  },
-                },
+                credentials: lowerNotificationCredentials(notification),
               },
             })),
           },
@@ -4943,6 +5229,22 @@ function lowerTrigger(trigger: ValidatedTrigger): CompiledTrigger {
       },
     };
   }
+  if (trigger.kind === 'telegram') {
+    return {
+      id: trigger.id,
+      handler: 'trigger.telegram',
+      config: {
+        kind: 'object',
+        fields: {
+          events: {
+            kind: 'array',
+            items: [{ kind: 'literal', value: 'message' }],
+          },
+          botToken: trigger.botToken,
+        },
+      },
+    };
+  }
   if (trigger.kind === 'schedule') {
     return {
       id: trigger.id,
@@ -5197,11 +5499,14 @@ function validateDocument(document: WomlSourceDocument): ValidatedWorkflow {
     triggersElement === undefined
       ? []
       : validateTriggers(document, triggersElement);
-  const flow = validateSteps(document, stepsElement);
+  const shadowedServices = modules
+    .filter(module => module.name === 'telegram')
+    .map(module => module.name);
+  const flow = validateSteps(document, stepsElement, shadowedServices);
   const lifecycle =
     lifecycleElement === undefined
       ? undefined
-      : validateLifecycle(document, lifecycleElement, flow);
+      : validateLifecycle(document, lifecycleElement, flow, shadowedServices);
 
   return {
     element: workflow,
@@ -5230,6 +5535,25 @@ export function inspectWomlMigrationDiagnostics(
 ): readonly WomlAdvisoryDiagnostic[] {
   validateDocument(document);
   const diagnostics: WomlAdvisoryDiagnostic[] = [];
+
+  const inspected = inspectWomlDocument(document);
+  if (inspected.kind === 'workflow') {
+    for (const imported of inspected.imports) {
+      if (imported.name === 'telegram') {
+        diagnostics.push({
+          severity: 'warning',
+          code: 'WOML_BUILTIN_SERVICE_SHADOWED',
+          phase: 'validation',
+          message:
+            'The local module alias "telegram" shadows the built-in services.telegram capability in this workflow.',
+          file: document.file,
+          location: imported.element.openTagSpan,
+          hint:
+            'Keep this name to preserve the local module, or rename it when you want services.telegram.send().',
+        });
+      }
+    }
+  }
 
   const visit = (
     element: WomlSourceElement,
@@ -5331,6 +5655,7 @@ export function validateResolvedReusableWorkflow(
       return { ...element, name: 'step', attributes, children: [script] };
     }
     if (definitionKind === 'notification-provider') {
+      if (ancestors.at(-1) === 'triggers') return element;
       const informational = ancestors.some(name => name.startsWith('on-'));
       const attributes: Record<string, WomlSourceAttribute> = {
         channels: placeholderAttribute(element, 'channels', '#custom-provider'),
@@ -5693,6 +6018,7 @@ export function prepareResolvedReusableWorkflow(
   ): WomlSourceElement => {
     const found = definitions.get(element.name);
     if (found?.inspection.kind === 'notification-provider') {
+      if (ancestors.at(-1)?.name === 'triggers') return element;
       const notify = ancestors.at(-1);
       const providerIndex = notify?.children
         .filter((child): child is WomlSourceElement => child.kind === 'element')
@@ -5863,7 +6189,8 @@ export function prepareResolvedReusableWorkflow(
 function compileValidatedWoml(
   document: WomlSourceDocument,
   moduleRuntime?: CompiledModuleRuntimeV1,
-  forceModelV14 = false
+  forceModelV14 = false,
+  forceModelV15 = false
 ): CompiledWorkflowDefinition {
   assertWomlDocumentRunnable(document);
   const {
@@ -5876,7 +6203,40 @@ function compileValidatedWoml(
     lifecycle,
     runtimePolicy,
   } = validateDocument(document);
-  const usesModelV14 = forceModelV14 || flow.firstSwitch !== undefined;
+  const scriptAnalyses = collectScriptAnalyses(flow.items);
+  const lifecycleScripts =
+    lifecycle?.hooks.flatMap(hook =>
+      hook.actions.flatMap(action =>
+        action.kind === 'script'
+          ? [{ analysis: action.scriptAnalysis, span: action.scriptSpan }]
+          : []
+      )
+    ) ?? [];
+  const workflowNotifications = collectValidatedNotifications(flow.items);
+  const lifecycleNotifications =
+    lifecycle?.hooks.flatMap(hook =>
+      hook.actions.flatMap(action =>
+        action.kind === 'notify' ? action.deliveries : []
+      )
+    ) ?? [];
+  const telegramNotifications = [
+    ...workflowNotifications,
+    ...lifecycleNotifications,
+  ].filter(delivery => delivery.provider === 'telegram');
+  const localTelegramModule = modules.some(module => module.name === 'telegram');
+  const usesTelegramMessaging =
+    !localTelegramModule &&
+    [
+      ...scriptAnalyses.values(),
+      ...lifecycleScripts.map(item => item.analysis),
+    ].some(analysis => analysis.requiredServices.includes('telegram'));
+  const usesModelV15 =
+    forceModelV15 ||
+    triggers.some(trigger => trigger.kind === 'telegram') ||
+    telegramNotifications.length > 0 ||
+    usesTelegramMessaging;
+  const usesModelV14 =
+    usesModelV15 || forceModelV14 || flow.firstSwitch !== undefined;
   const usesStructuredGraph =
     usesModelV14 ||
     flow.firstFork !== undefined ||
@@ -5964,7 +6324,7 @@ function compileValidatedWoml(
     failCompile(
       document,
       'WOML_WORKFLOW_RESULT_REQUIRED',
-      `This Model v${usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
+      `This Model v${usesModelV15 ? '15' : usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
       source.openTagSpan,
       'Add a main-route <step>, result-producing <choose id="..."> or <switch id="...">, or <approval> before the terminal control structure.'
     );
@@ -5973,15 +6333,6 @@ function compileValidatedWoml(
     ? lowerWorkflowV13(flow.items)
     : undefined;
   const lowered = loweredV13?.fragment ?? lowerFlowItems(flow.items);
-  const scriptAnalyses = collectScriptAnalyses(flow.items);
-  const lifecycleScripts =
-    lifecycle?.hooks.flatMap(hook =>
-      hook.actions.flatMap(action =>
-        action.kind === 'script'
-          ? [{ analysis: action.scriptAnalysis, span: action.scriptSpan }]
-          : []
-      )
-    ) ?? [];
   const availableServices = new Set([
     ...builtInServiceNames,
     ...modules.map(module => module.name),
@@ -6048,6 +6399,52 @@ function compileValidatedWoml(
             scriptAnalyses
           ),
         } satisfies CompiledWorkflowGraphV13);
+  const communication = usesModelV15
+    ? {
+        profileVersion: 1 as const,
+        providers: [
+          {
+            provider: 'telegram' as const,
+            triggerIds: triggers
+              .filter(trigger => trigger.kind === 'telegram')
+              .map(trigger => trigger.id),
+            notificationDeliveryIds: telegramNotifications.map(
+              delivery => delivery.deliveryId
+            ),
+            messaging: usesTelegramMessaging || forceModelV15,
+            credentialNames: [
+              ...new Set([
+                ...triggers.flatMap(trigger =>
+                  trigger.kind === 'telegram' ? [trigger.botToken.name] : []
+                ),
+                ...telegramNotifications.map(delivery => delivery.botToken.name),
+                ...[
+                  ...scriptAnalyses.values(),
+                  ...lifecycleScripts.map(item => item.analysis),
+                ].flatMap(analysis =>
+                  analysis.requiredServices.includes('telegram') ||
+                  forceModelV15
+                    ? analysis.requiredSecrets
+                    : []
+                ),
+              ]),
+            ].sort(),
+          },
+        ],
+      }
+    : undefined;
+  if (
+    communication !== undefined &&
+    communication.providers[0].credentialNames.length === 0
+  ) {
+    failCompile(
+      document,
+      'WOML_TELEGRAM_CREDENTIAL_UNRESOLVED',
+      'Telegram usage requires at least one explicit symbolic secret reference in the workflow.',
+      workflow.openTagSpan,
+      'Pass secrets.TELEGRAM_BOT_TOKEN from the WOML script into the imported module that calls services.telegram.send().'
+    );
+  }
   const definition = {
     workflowId,
     ...(metadata === undefined ? {} : { metadata }),
@@ -6062,7 +6459,18 @@ function compileValidatedWoml(
       : { runtimePolicy: runtimePolicy.value }),
   };
   const compiled: CompiledWorkflowDefinition = usesStructuredGraph
-    ? usesModelV14
+    ? usesModelV15
+      ? ({
+          schemaVersion: 15,
+          ...definition,
+          communication: communication!,
+          graph: baseGraph as CompiledWorkflowGraphV13,
+          runtimePolicy: runtimePolicy?.value ?? {
+            profileVersion: 1,
+            concurrency: 1,
+          },
+        } satisfies CompiledWorkflowDefinitionV15)
+      : usesModelV14
       ? ({
           schemaVersion: 14,
           ...definition,
@@ -6131,14 +6539,14 @@ function compileValidatedWoml(
 export function compilePreparedReusableWorkflow(
   prepared: PreparedReusableWorkflow,
   moduleRuntime?: CompiledModuleRuntimeV1
-): CompiledWorkflowDefinitionV14 {
+): CompiledWorkflowDefinitionV14 | CompiledWorkflowDefinitionV15 {
   const compiled = compileValidatedWoml(
     prepared.document,
     moduleRuntime,
     true
   );
-  if (compiled.schemaVersion !== 14) {
-    throw new Error('reusable-step lowering did not produce Model v14');
+  if (compiled.schemaVersion !== 14 && compiled.schemaVersion !== 15) {
+    throw new Error('reusable-step lowering did not produce Model v14 or v15');
   }
   const invocationsByNode = new Map(
     prepared.invocations.map(invocation => [invocation.nodeId, invocation])
@@ -6338,25 +6746,33 @@ export function compileWoml(
 
 export function compileWomlWithModules(
   document: WomlSourceDocument,
-  moduleRuntime: CompiledModuleRuntimeV1
+  moduleRuntime: CompiledModuleRuntimeV1,
+  options: { readonly forceModelV15?: boolean } = {}
 ):
   | CompiledWorkflowDefinitionV9
   | CompiledWorkflowDefinitionV10
   | CompiledWorkflowDefinitionV11
   | CompiledWorkflowDefinitionV12
   | CompiledWorkflowDefinitionV13
-  | CompiledWorkflowDefinitionV14 {
-  const compiled = compileValidatedWoml(document, moduleRuntime);
+  | CompiledWorkflowDefinitionV14
+  | CompiledWorkflowDefinitionV15 {
+  const compiled = compileValidatedWoml(
+    document,
+    moduleRuntime,
+    false,
+    options.forceModelV15 === true
+  );
   if (
     compiled.schemaVersion !== 9 &&
     compiled.schemaVersion !== 10 &&
     compiled.schemaVersion !== 11 &&
     compiled.schemaVersion !== 12 &&
     compiled.schemaVersion !== 13 &&
-    compiled.schemaVersion !== 14
+    compiled.schemaVersion !== 14 &&
+    compiled.schemaVersion !== 15
   ) {
     throw new Error(
-      'module compilation did not produce Model v9, v10, v11, v12, v13, or v14'
+      'module compilation did not produce Model v9, v10, v11, v12, v13, v14, or v15'
     );
   }
   return compiled;

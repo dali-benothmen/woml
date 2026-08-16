@@ -1291,7 +1291,8 @@ function promoteForLifecycleAuthority(
     workflow.schemaVersion === 11 ||
     workflow.schemaVersion === 12 ||
     workflow.schemaVersion === 13 ||
-    workflow.schemaVersion === 14
+    workflow.schemaVersion === 14 ||
+    workflow.schemaVersion === 15
   ) {
     return workflow;
   }
@@ -1325,6 +1326,34 @@ function promoteForLifecycleAuthority(
       ? { moduleRuntime: workflow.moduleRuntime }
       : {}),
   };
+}
+
+function reusableCommunicationAliasDiagnostics(
+  document: WomlSourceDocument,
+  graph: WomlReusableDefinitionGraph
+): readonly WomlAdvisoryDiagnostic[] {
+  const providerAliases = new Set(
+    graph.definitions
+      .filter(definition => definition.kind === 'notification-provider')
+      .map(definition => definition.alias)
+  );
+  return graph.root.imports.flatMap(imported =>
+    imported.kind === 'reusable-definition' &&
+    imported.name === 'telegram' &&
+    providerAliases.has(imported.name)
+      ? [{
+          severity: 'warning' as const,
+          code: 'WOML_BUILTIN_PROVIDER_SHADOWED',
+          phase: 'validation' as const,
+          message:
+            'The imported notification provider <telegram> shadows WOML\'s built-in Telegram notification tag in this workflow.',
+          file: document.file,
+          location: imported.element.openTagSpan,
+          hint:
+            'WOML preserves this local provider. Rename the import only when you want the built-in <telegram chats="..."> contract.',
+        }]
+      : []
+  );
 }
 
 function runtimeModulesFromPackage(
@@ -1538,6 +1567,12 @@ async function compileWorkflowSources(
       );
     }
     const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
+    if (frontendWorkflow.schemaVersion === 15) {
+      throw new CliInputError(
+        'WOML_TELEGRAM_RUNTIME_UNAVAILABLE',
+        'Telegram authoring is valid, but Telegram execution begins in ACP3. Use `woml check` to validate this workflow now.'
+      );
+    }
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
@@ -1547,7 +1582,7 @@ async function compileWorkflowSources(
       workflow,
       definitionHash,
       runtimeModules:
-        runtimePackage === undefined
+        runtimePackage === undefined || runtimePackage.schemaVersion === 10
           ? []
           : runtimeModulesFromPackage(runtimePackage),
       sourceSnapshot: packageSources.map(item => ({
@@ -1557,7 +1592,7 @@ async function compileWorkflowSources(
       migrationDiagnostics:
         reusableGraph.definitions.length === 0
           ? inspectWomlMigrationDiagnostics(document)
-          : [],
+          : reusableCommunicationAliasDiagnostics(document, reusableGraph),
     });
   }
   const workflowIds = new Set<string>();
@@ -1807,11 +1842,19 @@ async function runSingleCheckCommand(
             )
           : undefined;
       if (options[0] === '--json') {
+        printMigrationDiagnostics(
+          io,
+          reusableCommunicationAliasDiagnostics(document, reusableGraph)
+        );
         io.stdout(
           `${JSON.stringify(reusablePackage ?? reusableGraph, null, 2)}\n`
         );
         return 0;
       }
+      printMigrationDiagnostics(
+        io,
+        reusableCommunicationAliasDiagnostics(document, reusableGraph)
+      );
       if (reusableGraph.root.kind !== 'workflow') {
         io.stdout(
           `WOML check passed for ${reusableGraph.root.kind === 'reusable-step' ? 'reusable step' : 'notification provider'} definition "${filePath}".\n`
@@ -1829,7 +1872,9 @@ async function runSingleCheckCommand(
         );
       }
       io.stdout(
-        reusablePackage !== undefined
+        reusablePackage?.schemaVersion === 10
+          ? `Compiled Model v15 package: ${reusablePackage.rootHash}\nExecution: custom definitions and Telegram authoring compose; Telegram network execution begins in ACP3.\n`
+          : reusablePackage !== undefined
           ? `Compiled Model v14 package: ${reusablePackage.rootHash}\nExecution: custom steps and notification providers are runnable.\n`
           : reusableGraph.root.kind === 'workflow'
             ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
@@ -1856,14 +1901,20 @@ async function runSingleCheckCommand(
       workflowElement.children.some(
         child => child.kind === 'element' && child.name === 'config'
       );
+    const executablePackage =
+      inspectionPackage.modules.length === 0
+        ? undefined
+        : await buildWomlExecutableDefinitionPackage(document, {
+            sourcePath: filePath,
+            projectRoot,
+          });
     const definitionPackage =
       inspectionPackage.modules.length === 0
         ? inspectionPackage
-        : declaresLifecycle || declaresRuntimePolicy
-          ? await buildWomlExecutableDefinitionPackage(document, {
-              sourcePath: filePath,
-              projectRoot,
-            })
+        : executablePackage?.schemaVersion === 10 ||
+            declaresLifecycle ||
+            declaresRuntimePolicy
+          ? executablePackage!
           : await buildWomlRuntimeDefinitionPackage(document, {
               sourcePath: filePath,
               projectRoot,
@@ -1912,26 +1963,33 @@ async function runSingleCheckCommand(
       (compiledWorkflow.schemaVersion === 11 ||
         compiledWorkflow.schemaVersion === 12 ||
         compiledWorkflow.schemaVersion === 13 ||
-        compiledWorkflow.schemaVersion === 14) &&
+        compiledWorkflow.schemaVersion === 14 ||
+        compiledWorkflow.schemaVersion === 15) &&
       compiledWorkflow.lifecycle !== undefined;
     const hasRuntimePolicy =
       compiledWorkflow.schemaVersion === 12 ||
       compiledWorkflow.schemaVersion === 13 ||
-      compiledWorkflow.schemaVersion === 14;
+      compiledWorkflow.schemaVersion === 14 ||
+      compiledWorkflow.schemaVersion === 15;
     const hasFork =
       (compiledWorkflow.schemaVersion === 13 ||
-        compiledWorkflow.schemaVersion === 14) &&
+        compiledWorkflow.schemaVersion === 14 ||
+        compiledWorkflow.schemaVersion === 15) &&
       compiledWorkflow.graph.forks.length > 0;
     const hasSwitch =
-      compiledWorkflow.schemaVersion === 14 &&
+      (compiledWorkflow.schemaVersion === 14 ||
+        compiledWorkflow.schemaVersion === 15) &&
       compiledWorkflow.graph.choices.some(
         choice => choice.stringSelector !== undefined
       );
+    const hasTelegram = compiledWorkflow.schemaVersion === 15;
     const workflowCallsFrontendOnly =
       compiledWorkflow.triggers.length === 0 ||
       usage.referencedServices.includes('workflows');
     io.stdout(
-      hasSwitch
+      hasTelegram
+        ? 'Execution: Telegram tags and services.telegram.send() compile to Model v15; network execution begins in ACP3.\n'
+        : hasSwitch
         ? 'Execution: Model v14 exact-string switch routing and merged results are executable through the durable Rust runtime.\n'
         : hasFork
           ? 'Execution: Model v13 all, selected, and non-blocking fork joins are executable through the durable Rust runtime.\n'
@@ -2346,7 +2404,7 @@ function workflowSecretReferences(
     }
   }
   for (const definition of
-    workflow.schemaVersion === 14
+    workflow.schemaVersion === 14 || workflow.schemaVersion === 15
       ? (workflow.reusableDefinitions ?? [])
       : []) {
     for (const prop of definition.props) {
@@ -2445,7 +2503,7 @@ async function runNotificationWorkflow(
     const waiting = outcome;
     printNotificationApproval(io, waiting, args.filePath, args.statePath);
     const hasCustomProvider =
-      workflow.schemaVersion === 14 &&
+      (workflow.schemaVersion === 14 || workflow.schemaVersion === 15) &&
       (workflow.reusableDefinitions ?? []).some(
         definition => definition.kind === 'notification-provider'
       );
@@ -2745,7 +2803,8 @@ async function executeOneShot(
     workflow.schemaVersion !== 11 &&
     workflow.schemaVersion !== 12 &&
     workflow.schemaVersion !== 13 &&
-    workflow.schemaVersion !== 14
+    workflow.schemaVersion !== 14 &&
+    workflow.schemaVersion !== 15
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -2773,7 +2832,8 @@ async function executeOneShot(
     workflow.schemaVersion === 11 ||
     workflow.schemaVersion === 12 ||
     workflow.schemaVersion === 13 ||
-    workflow.schemaVersion === 14
+    workflow.schemaVersion === 14 ||
+    workflow.schemaVersion === 15
   ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);

@@ -1,0 +1,21 @@
+<woml>
+  <imports>
+    <module name="telegramHelper" from="./telegram-helper.ts" />
+  </imports>
+  <workflow id="telegram-module" name="Telegram module discovery" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="send">
+        <script>
+          return services.telegramHelper.sendReply(
+            secrets.TELEGRAM_BOT_TOKEN,
+            context.payload.conversationId,
+            'Hello from a local module'
+          );
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

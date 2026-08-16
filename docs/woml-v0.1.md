@@ -61,6 +61,7 @@ includes conditional choices and bounded parallel groups:
 | Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
 | Multiple triggers, webhook, and inline payload schema | Completed in Production Triggers T13 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
 | Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
+| Telegram trigger, notifications, and `services.telegram.send()` | ACP2 authoring/lowering completed | Validates through `woml check` and lowers to Model v15 / Package v10; activation fails clearly until ACP3 adds the network adapter |
 | Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
 | `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
@@ -463,12 +464,17 @@ approval       := <approval approval-attributes>
                     when-rejected
                   </approval>
 
-notify         := <notify> slack+ </notify>
+notify         := <notify> (slack | telegram)+ </notify>
 
 slack          := <slack
                     channels="slack-destination-list"
                     bot-token="secret-reference"
                     app-token="secret-reference"
+                  />
+
+telegram       := <telegram
+                    chats="telegram-chat-id-list"
+                    bot-token="secret-reference"
                   />
 
 when-approved  := <when-approved>
@@ -721,8 +727,9 @@ Structural rules:
 - Lifecycle scripts do not create `context.steps` outputs.
 - Lifecycle scripts receive the read-only `lifecycle` binding. It is unavailable
   in normal step scripts.
-- Lifecycle Slack notifications are informational and require `channels`,
-  `message`, `bot-token`, and `app-token`. They never create approval buttons or
+- Lifecycle Slack and Telegram notifications are informational. Slack requires
+  `channels`, `message`, `bot-token`, and `app-token`; Telegram requires
+  `chats`, `message`, and `bot-token`. They never create approval buttons or
   decision capabilities.
 - Notification messages use WOML Template v1: bounded literal text and scalar
   `{{context...}}` or `{{lifecycle...}}` placeholders. Secrets are forbidden in
@@ -863,6 +870,22 @@ workspace identifiers. Bot/self messages, edits, deletes, provider envelopes,
 and credentials never enter `context.payload`. T6 validates this syntax and
 lowers it to Model v7. Slack event ingestion remains unavailable until T7, so
 the CLI must reject activation instead of pretending that the trigger is live.
+
+### 9.3.1 `<telegram>`
+
+```xml
+<telegram
+  id="agentMessage"
+  events="message"
+  bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+/>
+```
+
+Telegram v1 supports the single `message` event. The trigger is empty and is
+valid only directly inside `<triggers>`. Its bot token is one exact symbolic
+secret reference. ACP2 validates and lowers it to Model v15; `woml run` reports
+`WOML_TELEGRAM_RUNTIME_UNAVAILABLE` until ACP3 supplies polling and durable
+admission.
 
 ### 9.4 `<schedule>`
 
@@ -1255,7 +1278,8 @@ resolve to a positive safe integer number of milliseconds.
 
 The child order is fixed:
 
-1. Optional `<notify>` containing one or more `<slack>` deliveries.
+1. Optional `<notify>` containing one or more built-in Slack/Telegram or
+   explicitly imported custom-provider deliveries.
 2. Required `<when-approved>`.
 3. Required `<when-rejected>`.
 
@@ -1303,6 +1327,20 @@ wins. Literal credentials, interpolation, and context/service references in
 notification credential attributes are invalid. JavaScript-style
 `secrets.NAME` is a separate Model v8 script binding and is not attribute
 syntax.
+
+One built-in `<telegram>` tag targets one bot credential and one or more
+comma-separated numeric chat IDs:
+
+```xml
+<telegram
+  chats="-1001234567890,123456789"
+  bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+/>
+```
+
+Approval Telegram tags forbid `message`; lifecycle Telegram tags require it.
+Every chat becomes one ordered delivery while every delivery for the approval
+shares the same first-valid-decision-wins authority.
 
 ### 12.2 Resolving an approval
 
@@ -1836,8 +1874,8 @@ conditions hold.
 - `<approval>` is missing `<when-approved>` or `<when-rejected>`, duplicates
   either arm, or declares them out of order.
 - `<approval>` contains more than one `<notify>`, or `<notify>` is empty.
-- `<notify>` contains anything other than one or more `<slack>` tags in the
-  Slack-first profile.
+- `<notify>` contains anything other than supported built-in Slack/Telegram
+  tags or explicitly imported custom notification-provider tags.
 - A structural element contains `<name>` or `<description>` child elements
   instead of the corresponding attributes.
 
@@ -2022,8 +2060,8 @@ provider host, real Socket Mode integration, recovery, packaging, and
 publication hardening. The remaining approval-adjacent work is later product
 expansion:
 
-- Discord, shared-provider delivery, WhatsApp, and generic signed webhook
-  notifications follow the Slack milestone.
+- Discord, WhatsApp, and generic signed webhook notifications follow the
+  Telegram milestone.
 - Remote hosting waits for TLS, reviewer authentication/authorization, and
   deployment ownership.
 - Structured reviewer metadata, custom forms, and validated decision payloads

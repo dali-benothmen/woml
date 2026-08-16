@@ -58,6 +58,21 @@ interface WomlWorkflowStartResult {
   readonly duplicate: boolean;
 }
 
+interface WomlTelegramSendRequest {
+  readonly botToken: string;
+  readonly conversationId: string;
+  readonly text: string;
+  readonly replyToMessageId?: string;
+}
+
+interface WomlTelegramSendResult {
+  readonly provider: 'telegram';
+  readonly conversationId: string;
+  readonly messageId: string;
+  readonly acceptedAt: string;
+  readonly threadId?: string;
+}
+
 interface WomlHttpRequest {
   readonly url: string;
   readonly method?: string;
@@ -173,6 +188,12 @@ interface WomlBuiltinServices {
       payload: Readonly<Record<string, WomlJsonValue>>,
       options?: WomlWorkflowStartOptions
     ) => Promise<WomlWorkflowStartResult>;
+  };
+  readonly telegram: {
+    readonly send: (
+      input: WomlTelegramSendRequest,
+      options?: Readonly<{ readonly name?: string }>
+    ) => Promise<WomlTelegramSendResult>;
   };
 }
 

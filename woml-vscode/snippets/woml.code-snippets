@@ -30,5 +30,23 @@
       "  </script>",
       "</step>"
     ]
+  },
+  "WOML Telegram trigger": {
+    "prefix": "woml-telegram-trigger",
+    "description": "Create a Telegram message trigger.",
+    "body": [
+      "<telegram id=\"${1:agentMessage}\" events=\"message\" bot-token=\"{{secrets.${2:TELEGRAM_BOT_TOKEN}}}\" />"
+    ]
+  },
+  "WOML Telegram message": {
+    "prefix": "woml-telegram-send",
+    "description": "Send a Telegram message from a WOML script.",
+    "body": [
+      "const message = await services.telegram.send({",
+      "  botToken: secrets.${1:TELEGRAM_BOT_TOKEN},",
+      "  conversationId: ${2:context.payload.conversationId},",
+      "  text: ${3:\"Hello from WOML\"}",
+      "}, { name: \"${4:send-message}\" });"
+    ]
   }
 }

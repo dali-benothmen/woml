@@ -32,6 +32,7 @@ import type {
   CompiledWorkflowDefinitionV12,
   CompiledWorkflowDefinitionV13,
   CompiledWorkflowDefinitionV14,
+  CompiledWorkflowDefinitionV15,
   CompiledWorkflowDefinitionV9,
 } from './model';
 import type { WomlReusableDefinitionGraph } from './reusable-definitions';
@@ -62,6 +63,8 @@ export const WOML_FORK_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v8' as const;
 export const WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v9' as const;
+export const WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v10' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -356,6 +359,21 @@ export interface WomlDefinitionPackageV9
     readonly model: CompiledWorkflowDefinitionV14;
   };
   readonly definitions: readonly WomlDefinitionPackageReusableDefinitionV9[];
+}
+
+export interface WomlDefinitionPackageV10
+  extends Omit<
+    WomlDefinitionPackageV9,
+    'schemaVersion' | 'profile' | 'workflow'
+  > {
+  readonly schemaVersion: 10;
+  readonly profile: typeof WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE;
+  readonly workflow: {
+    readonly id: string;
+    readonly source: string;
+    readonly modelDigest: string;
+    readonly model: CompiledWorkflowDefinitionV15;
+  };
 }
 
 export interface WomlDefinitionPackageReusableDefinitionV9 {
@@ -1134,6 +1152,7 @@ export async function buildWomlExecutableDefinitionPackage(
   | WomlDefinitionPackageV7
   | WomlDefinitionPackageV8
   | WomlDefinitionPackageV9
+  | WomlDefinitionPackageV10
 > {
   const resolved = buildWomlDefinitionPackage(document, options);
   if (resolved.modules.length === 0) {
@@ -1252,10 +1271,18 @@ export async function buildWomlExecutableDefinitionPackage(
     sourceMapDigest: module.sourceMap.digest,
     exports: module.exports,
   }));
-  const model = compileWomlWithModules(document, {
-    profileVersion: 1,
-    modules: bindings,
-  });
+  const moduleServiceUsage = inspectWomlModuleServiceUsage(document, options);
+  const forceModelV15 =
+    moduleServiceUsage.referencedServices.includes('telegram') &&
+    !resolved.modules.some(module => module.name === 'telegram');
+  const model = compileWomlWithModules(
+    document,
+    {
+      profileVersion: 1,
+      modules: bindings,
+    },
+    { forceModelV15 }
+  );
   const modelContent = canonicalJson(model);
   const modelDigest = sha256(modelContent);
   const declarations = generatedServiceDeclarations(resolved.modules);
@@ -1300,6 +1327,16 @@ export async function buildWomlExecutableDefinitionPackage(
     },
     permissions: resolved.permissions,
   };
+  if (model.schemaVersion === 15) {
+    const unsigned = {
+      schemaVersion: 10 as const,
+      profile: WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE,
+      ...common,
+      workflow: { ...common.workflow, model },
+      definitions: [] as const,
+    };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   if (model.schemaVersion === 14) {
     const unsigned = {
       schemaVersion: 9 as const,
@@ -1364,7 +1401,7 @@ export async function buildWomlReusableDefinitionPackage(
   document: WomlSourceDocument,
   graph: WomlReusableDefinitionGraph,
   options: WomlModuleResolverOptions = {}
-): Promise<WomlDefinitionPackageV9> {
+): Promise<WomlDefinitionPackageV9 | WomlDefinitionPackageV10> {
   if (graph.root.kind !== 'workflow') {
     throw compileDiagnostic(
       document.file,
@@ -1484,7 +1521,7 @@ export async function buildWomlReusableDefinitionPackage(
   ].join('\n');
   const artifacts: WomlDefinitionPackageArtifactV2[] = ([
     {
-      path: 'workflow.compiled.v14.json',
+      path: `workflow.compiled.v${model.schemaVersion}.json`,
       kind: 'workflow-model',
       mediaType: 'application/json',
       digest: modelDigest,
@@ -1519,17 +1556,22 @@ export async function buildWomlReusableDefinitionPackage(
     }))
     .sort((left, right) => left.alias.localeCompare(right.alias));
   const secrets = [...new Set(
-    [...prepared.invocations, ...prepared.providerInvocations].flatMap(invocation =>
-      invocation.props.flatMap(prop =>
-        prop.expression.kind === 'secret' ? [prop.expression.name] : []
-      )
-    )
+    [
+      ...[...prepared.invocations, ...prepared.providerInvocations].flatMap(invocation =>
+        invocation.props.flatMap(prop =>
+          prop.expression.kind === 'secret' ? [prop.expression.name] : []
+        )
+      ),
+      ...(model.schemaVersion === 15
+        ? model.communication.providers.flatMap(provider =>
+            provider.credentialNames
+          )
+        : []),
+      ...(basePackage?.permissions.secrets ?? []),
+    ]
   )].sort();
-  const unsigned = {
-    schemaVersion: 9 as const,
-    profile: WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE,
+  const common = {
     executable: true as const,
-    runtimeReady: true,
     workflow: {
       id: model.workflowId,
       source: prepared.rootSource,
@@ -1557,6 +1599,21 @@ export async function buildWomlReusableDefinitionPackage(
       networkOrigins: basePackage?.permissions.networkOrigins ?? [],
     },
   };
+  const unsigned = model.schemaVersion === 15
+    ? {
+        schemaVersion: 10 as const,
+        profile: WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE,
+        runtimeReady: false,
+        ...common,
+        workflow: { ...common.workflow, model },
+      }
+    : {
+        schemaVersion: 9 as const,
+        profile: WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE,
+        runtimeReady: true,
+        ...common,
+        workflow: { ...common.workflow, model },
+      };
   return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
 }
 
@@ -1569,12 +1626,23 @@ export async function buildWomlRuntimeDefinitionPackage(
   document: WomlSourceDocument,
   options: WomlModuleResolverOptions = {}
 ): Promise<
-  WomlDefinitionPackageV3 | WomlDefinitionPackageV5 | WomlDefinitionPackageV9
+  | WomlDefinitionPackageV3
+  | WomlDefinitionPackageV5
+  | WomlDefinitionPackageV9
 > {
   const compiled = await buildWomlExecutableDefinitionPackage(
     document,
     options
   );
+  if (compiled.schemaVersion === 10) {
+    throw compileDiagnostic(
+      document.file,
+      'WOML_TELEGRAM_RUNTIME_UNAVAILABLE',
+      'Telegram syntax and services compiled successfully, but Telegram execution begins in ACP3.',
+      document.root.openTagSpan,
+      'Use `woml check <file>` to review the Model v15 / Definition Package v10 output.'
+    );
+  }
   if (compiled.schemaVersion === 9) {
     const { rootHash: _compilationRootHash, ...rest } = compiled;
     const unsigned = { ...rest, runtimeReady: true as const };
@@ -1650,6 +1718,7 @@ export function canonicalizeWomlDefinitionPackage(
     | WomlDefinitionPackageV7
     | WomlDefinitionPackageV8
     | WomlDefinitionPackageV9
+    | WomlDefinitionPackageV10
 ): string {
   return canonicalJson(definitionPackage);
 }

@@ -298,7 +298,8 @@ function parseIssue(
 
 function analyzeScript(
   source: string,
-  mode: 'step' | 'lifecycle' | 'reusable-step' | 'notification-provider'
+  mode: 'step' | 'lifecycle' | 'reusable-step' | 'notification-provider',
+  options: { readonly shadowedServices?: readonly string[] } = {}
 ): ScriptAnalysis {
   let program: AstNode;
   try {
@@ -528,6 +529,182 @@ function analyzeScript(
                       'Use milliseconds or a whole duration such as "30s", "5m", or "24h".'
                     )
                   );
+                }
+              }
+            }
+          }
+        }
+      }
+      if (
+        path?.[0] === 'services' &&
+        path[1] === 'telegram' &&
+        !options.shadowedServices?.includes('telegram')
+      ) {
+        if (path.length !== 3 || path[2] !== 'send') {
+          fail(
+            issueAt(
+              callee,
+              source.length,
+              'WOML_TELEGRAM_OPERATION_UNSUPPORTED',
+              `Telegram service operation "${path.slice(2).join('.') || ''}" is unsupported.`,
+              'Use services.telegram.send({ botToken, conversationId, text }).'
+            )
+          );
+        } else {
+          const args = (node.arguments as readonly unknown[] | undefined) ?? [];
+          if (args.length < 1 || args.length > 2) {
+            fail(
+              issueAt(
+                node,
+                source.length,
+                'WOML_TELEGRAM_SEND_ARGUMENTS_INVALID',
+                'services.telegram.send() requires one request object and optional operation options.',
+                'Use services.telegram.send({ botToken: secrets.TELEGRAM_BOT_TOKEN, conversationId, text }, { name: "reply" }).'
+              )
+            );
+          } else {
+            const input = args[0];
+            if (!isNode(input) || input.type !== 'ObjectExpression') {
+              fail(
+                issueAt(
+                  isNode(input) ? input : node,
+                  source.length,
+                  'WOML_TELEGRAM_SEND_INPUT_INVALID',
+                  'A workflow script must pass a direct object to services.telegram.send().',
+                  'Use the required botToken, conversationId, and text properties.'
+                )
+              );
+            } else {
+              const seen = new Set<string>();
+              for (const property of (input.properties as readonly unknown[] | undefined) ?? []) {
+                if (
+                  !isNode(property) ||
+                  property.type !== 'Property' ||
+                  property.computed === true ||
+                  property.kind !== 'init'
+                ) {
+                  fail(
+                    issueAt(
+                      isNode(property) ? property : input,
+                      source.length,
+                      'WOML_TELEGRAM_SEND_INPUT_INVALID',
+                      'Telegram send input does not support spreads, computed keys, getters, or setters.'
+                    )
+                  );
+                  continue;
+                }
+                const name = isNode(property.key)
+                  ? property.key.type === 'Identifier'
+                    ? property.key.name
+                    : literalString(property.key)
+                  : undefined;
+                if (
+                  name !== 'botToken' &&
+                  name !== 'conversationId' &&
+                  name !== 'text' &&
+                  name !== 'replyToMessageId'
+                ) {
+                  fail(
+                    issueAt(
+                      property,
+                      source.length,
+                      'WOML_TELEGRAM_SEND_PROPERTY_UNKNOWN',
+                      `Unknown Telegram send property "${name ?? ''}".`,
+                      'Telegram Send v1 accepts botToken, conversationId, text, and replyToMessageId.'
+                    )
+                  );
+                  continue;
+                }
+                if (seen.has(name)) {
+                  fail(
+                    issueAt(
+                      property,
+                      source.length,
+                      'WOML_TELEGRAM_SEND_PROPERTY_DUPLICATE',
+                      `Telegram send property "${name}" is declared more than once.`
+                    )
+                  );
+                }
+                seen.add(name);
+                if (name === 'botToken') {
+                  const credentialPath = isNode(property.value)
+                    ? staticMemberPath(property.value)
+                    : undefined;
+                  if (
+                    credentialPath?.length !== 2 ||
+                    credentialPath[0] !== 'secrets' ||
+                    !isValidSecretName(credentialPath[1])
+                  ) {
+                    fail(
+                      issueAt(
+                        isNode(property.value) ? property.value : property,
+                        source.length,
+                        'WOML_TELEGRAM_CREDENTIAL_INVALID',
+                        'Telegram botToken must be one direct secrets.NAME value.',
+                        'Example: botToken: secrets.TELEGRAM_BOT_TOKEN'
+                      )
+                    );
+                  }
+                }
+                const literal = literalString(property.value);
+                if (
+                  literal !== undefined &&
+                  (literal.length === 0 ||
+                    literal.length > (name === 'text' ? 40_000 : 320))
+                ) {
+                  fail(
+                    issueAt(
+                      property.value as AstNode,
+                      source.length,
+                      'WOML_TELEGRAM_SEND_VALUE_INVALID',
+                      `Telegram send property "${name}" has an invalid literal value.`
+                    )
+                  );
+                }
+              }
+              for (const required of ['botToken', 'conversationId', 'text']) {
+                if (!seen.has(required)) {
+                  fail(
+                    issueAt(
+                      input,
+                      source.length,
+                      'WOML_TELEGRAM_SEND_PROPERTY_REQUIRED',
+                      `services.telegram.send() requires the "${required}" property.`
+                    )
+                  );
+                }
+              }
+            }
+            const options = args[1];
+            if (isNode(options)) {
+              if (options.type !== 'ObjectExpression') {
+                fail(
+                  issueAt(
+                    options,
+                    source.length,
+                    'WOML_TELEGRAM_SEND_OPTIONS_INVALID',
+                    'Telegram send operation options must be an object containing an optional stable name.'
+                  )
+                );
+              } else {
+                for (const property of (options.properties as readonly unknown[] | undefined) ?? []) {
+                  const name =
+                    isNode(property) && property.type === 'Property' && isNode(property.key)
+                      ? property.key.type === 'Identifier'
+                        ? property.key.name
+                        : literalString(property.key)
+                      : undefined;
+                  if (name !== 'name') {
+                    fail(
+                      issueAt(
+                        isNode(property) ? property : options,
+                        source.length,
+                        'WOML_TELEGRAM_SEND_OPTION_UNKNOWN',
+                        `Unknown Telegram send option "${name ?? ''}".`,
+                        'Telegram Send v1 accepts only the stable name option.'
+                      )
+                    );
+                  }
                 }
               }
             }
@@ -919,12 +1096,18 @@ function analyzeScript(
   };
 }
 
-export function analyzeWomlScript(source: string): ScriptAnalysis {
-  return analyzeScript(source, 'step');
+export function analyzeWomlScript(
+  source: string,
+  options: { readonly shadowedServices?: readonly string[] } = {}
+): ScriptAnalysis {
+  return analyzeScript(source, 'step', options);
 }
 
-export function analyzeWomlLifecycleScript(source: string): ScriptAnalysis {
-  return analyzeScript(source, 'lifecycle');
+export function analyzeWomlLifecycleScript(
+  source: string,
+  options: { readonly shadowedServices?: readonly string[] } = {}
+): ScriptAnalysis {
+  return analyzeScript(source, 'lifecycle', options);
 }
 
 export function analyzeWomlReusableScript(source: string): ScriptAnalysis {

@@ -428,6 +428,29 @@ export interface CompiledWorkflowDefinitionV14
   readonly reusableDefinitions?: readonly CompiledReusableInvocationV1[];
 }
 
+export interface CompiledCommunicationProviderRequirementV1 {
+  readonly provider: 'telegram' | 'discord' | 'whatsapp';
+  readonly triggerIds: readonly string[];
+  readonly notificationDeliveryIds: readonly string[];
+  readonly messaging: boolean;
+  readonly credentialNames: readonly string[];
+}
+
+export interface CompiledCommunicationRequirementsV1 {
+  readonly profileVersion: 1;
+  readonly providers: readonly CompiledCommunicationProviderRequirementV1[];
+}
+
+/**
+ * Model v15 adds built-in communication-provider requirements while retaining
+ * the complete v14 graph, switch, reusable-definition, and policy contracts.
+ */
+export interface CompiledWorkflowDefinitionV15
+  extends Omit<CompiledWorkflowDefinitionV14, 'schemaVersion'> {
+  readonly schemaVersion: 15;
+  readonly communication: CompiledCommunicationRequirementsV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -442,7 +465,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV11
   | CompiledWorkflowDefinitionV12
   | CompiledWorkflowDefinitionV13
-  | CompiledWorkflowDefinitionV14;
+  | CompiledWorkflowDefinitionV14
+  | CompiledWorkflowDefinitionV15;
 
 export interface CompiledGraphIssue {
   readonly code:
@@ -624,6 +648,7 @@ function isApprovalDecisionCondition(
 
 const compiledSlackAliasPattern = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
 const compiledSlackConversationIdPattern = /^[CG][A-Z0-9]{8,31}$/;
+const compiledTelegramChatIdPattern = /^-?[1-9][0-9]{0,19}$/;
 const compiledSecretNamePattern = /^[A-Z][A-Z0-9_]*$/;
 
 function hasExactlyKeys(
@@ -661,22 +686,30 @@ function validApprovalNotifications(
       return false;
     }
     const { deliveryId, provider, destination, credentials } = item.fields;
+    const providerName = provider?.kind === 'literal' ? provider.value : undefined;
+    const slackDelivery = providerName === 'slack';
+    const telegramDelivery = providerName === 'telegram';
     if (
       deliveryId?.kind !== 'literal' ||
       typeof deliveryId.value !== 'string' ||
-      provider?.kind !== 'literal' ||
-      provider.value !== 'slack' ||
+      (!slackDelivery && !telegramDelivery) ||
       destination?.kind !== 'literal' ||
       typeof destination.value !== 'string' ||
-      (!compiledSlackAliasPattern.test(destination.value) &&
+      (slackDelivery &&
+        !compiledSlackAliasPattern.test(destination.value) &&
         !compiledSlackConversationIdPattern.test(destination.value)) ||
+      (telegramDelivery &&
+        !compiledTelegramChatIdPattern.test(destination.value)) ||
       credentials?.kind !== 'object' ||
-      !hasExactlyKeys(credentials.fields, ['botToken', 'appToken'])
+      !hasExactlyKeys(
+        credentials.fields,
+        slackDelivery ? ['botToken', 'appToken'] : ['botToken']
+      )
     ) {
       return false;
     }
     const match = new RegExp(
-      `^${approvalId}:notify:([0-9]+):channel:([0-9]+)$`
+      `^${approvalId}:notify:([0-9]+):${slackDelivery ? 'channel' : 'chat'}:([0-9]+)$`
     ).exec(deliveryId.value);
     const botToken = credentials.fields.botToken;
     const appToken = credentials.fields.appToken;
@@ -684,9 +717,10 @@ function validApprovalNotifications(
       match === null ||
       deliveryIds.has(deliveryId.value) ||
       botToken?.kind !== 'secretReference' ||
-      appToken?.kind !== 'secretReference' ||
       !compiledSecretNamePattern.test(botToken.name) ||
-      !compiledSecretNamePattern.test(appToken.name)
+      (slackDelivery &&
+        (appToken?.kind !== 'secretReference' ||
+          !compiledSecretNamePattern.test(appToken.name)))
     ) {
       return false;
     }
@@ -699,7 +733,7 @@ function validApprovalNotifications(
         : providerIndex === previousProviderIndex
           ? channelIndex === previousChannelIndex + 1
           : providerIndex === previousProviderIndex + 1 && channelIndex === 0;
-    const destinationKey = `${botToken.name}\u0000${appToken.name}\u0000${destination.value}`;
+    const destinationKey = `${providerName}\u0000${botToken.name}\u0000${appToken?.kind === 'secretReference' ? appToken.name : ''}\u0000${destination.value}`;
     if (!followsPrevious || destinationKeys.has(destinationKey)) return false;
 
     deliveryIds.add(deliveryId.value);

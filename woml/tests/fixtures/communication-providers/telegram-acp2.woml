@@ -1,0 +1,66 @@
+<woml>
+  <workflow
+    id="telegram-agent"
+    name="Telegram Agent"
+    description="Receives, reviews, and replies to Telegram messages."
+    version="1.0.0"
+  >
+    <triggers>
+      <telegram
+        id="agentMessage"
+        events="message"
+        bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+      />
+    </triggers>
+
+    <steps>
+      <step id="prepare" name="Prepare reply">
+        <script>
+          return {
+            text: `Reply to ${context.payload.conversationId}`
+          };
+        </script>
+      </step>
+
+      <approval id="review" name="Approve Telegram reply" timeout="1h" on-timeout="reject">
+        <notify>
+          <telegram
+            chats="-1001234567890,123456789"
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+        </notify>
+        <when-approved>
+          <step id="approved"><script>return { approved: true };</script></step>
+        </when-approved>
+        <when-rejected>
+          <step id="rejected"><script>return { approved: false };</script></step>
+        </when-rejected>
+      </approval>
+
+      <step id="reply" name="Send Telegram reply">
+        <script>
+          const sent = await services.telegram.send({
+            botToken: secrets.TELEGRAM_BOT_TOKEN,
+            conversationId: context.payload.conversationId,
+            text: context.steps.prepare.text,
+            replyToMessageId: context.payload.messageId
+          }, { name: 'reply-to-message' });
+
+          return sent;
+        </script>
+      </step>
+    </steps>
+
+    <lifecycle>
+      <on-error>
+        <notify>
+          <telegram
+            chats="-1001234567890"
+            message="Workflow {{lifecycle.workflow.id}} failed."
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+        </notify>
+      </on-error>
+    </lifecycle>
+  </workflow>
+</woml>

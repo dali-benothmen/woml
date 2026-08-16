@@ -1,0 +1,17 @@
+<woml>
+  <imports>
+    <module name="telegram" from="./telegram-shadow.ts" />
+  </imports>
+  <workflow id="telegram-shadow" name="Telegram alias compatibility" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="send">
+        <script>
+          return services.telegram.send('local behavior');
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

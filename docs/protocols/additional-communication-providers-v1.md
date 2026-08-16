@@ -125,7 +125,7 @@ await services.telegram.send({
   conversationId: '-1001234567890',
   text: 'Build completed',
   replyToMessageId: '41'
-});
+}, { name: 'build-completed' });
 
 await services.discord.send({
   botToken: secrets.DISCORD_BOT_TOKEN,
@@ -151,6 +151,10 @@ accept optional `replyToMessageId`. WhatsApp requires `accessToken`,
 `phoneNumberId`, `conversationId`, and the exact `template` object shown above.
 Unknown keys are rejected. V1 does not expose edit, delete, media, Discord
 embeds, Telegram parse modes, or unreviewed raw provider JSON.
+
+Every messaging call accepts an optional second `{ name }` operation-options
+object. The stable lowercase name participates in WOML's existing durable
+idempotency identity; it does not change the provider request body.
 
 Successful calls return:
 
@@ -245,5 +249,7 @@ message bodies, recipients, raw provider responses, signatures, decision
 capabilities, and credentials may not appear in default diagnostics.
 
 The normative machine-readable artifacts are the six
-`docs/schemas/communication-*.v1.schema.json` files and the reviewed fixtures in
-`woml/tests/fixtures/communication-providers`.
+`docs/schemas/communication-*.v1.schema.json` files, the assembled
+`compiled-workflow-model.v15.schema.json` and
+`woml-definition-package.v10.schema.json` contracts, and the reviewed fixtures
+in `woml/tests/fixtures/communication-providers`.
