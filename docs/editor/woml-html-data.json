@@ -17,6 +17,22 @@
       { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "version" }
     ] },
     { "name": "triggers", "description": "Workflow trigger declarations." },
+    { "name": "manual", "description": "Starts a run when Enter is pressed.", "attributes": [{ "name": "id" }] },
+    { "name": "slack", "description": "Built-in Slack trigger or notification destination.", "attributes": [
+      { "name": "id" }, { "name": "events" }, { "name": "channels" }, { "name": "message" },
+      { "name": "bot-token" }, { "name": "app-token" }
+    ] },
+    { "name": "telegram", "description": "Built-in Telegram trigger or notification destination.", "attributes": [
+      { "name": "id" }, { "name": "events" }, { "name": "chats" }, { "name": "message" }, { "name": "bot-token" }
+    ] },
+    { "name": "discord", "description": "Built-in Discord trigger or notification destination.", "attributes": [
+      { "name": "id" }, { "name": "events" }, { "name": "channels" }, { "name": "message" }, { "name": "bot-token" }
+    ] },
+    { "name": "whatsapp", "description": "Built-in WhatsApp trigger or approved-template notification destination.", "attributes": [
+      { "name": "id" }, { "name": "events" }, { "name": "recipients" }, { "name": "message" },
+      { "name": "access-token" }, { "name": "app-secret" }, { "name": "verify-token" },
+      { "name": "phone-number-id" }, { "name": "template" }, { "name": "language" }
+    ] },
     { "name": "steps", "description": "The workflow's executable route." },
     { "name": "step", "description": "A named executable operation.", "attributes": [
       { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "retry" },

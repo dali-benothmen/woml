@@ -20,9 +20,10 @@ the loader explicitly distinguishes glibc from musl.
 | Linux ARM64 musl | `@woml/cli-linux-arm64-musl` |
 
 The native packages contain only one `.node` binary, package metadata, README,
-and Apache-2.0 license. The main package contains the CLI and Bun hosts but no
-native binary. Its exact-version optional dependencies select the platform
-package. Linux selection distinguishes glibc from musl at runtime.
+and Apache-2.0 license. The main package contains the CLI, script hosts,
+communication-provider host, and built-in Slack/Telegram/Discord/WhatsApp
+adapters but no native binary. Its exact-version optional dependencies select
+the platform package. Linux selection distinguishes glibc from musl at runtime.
 
 Local development remains simple: `bun run build` stages the current machine's
 binary directly under `woml-cli/dist`, and that colocated binary takes priority.
@@ -53,6 +54,7 @@ Run the local contract check:
 ```bash
 cd woml-cli
 bun run test:native-platform-release
+bun run test:communication-provider-release
 ```
 
 Commit the version change, then create and push the exact matching tag:

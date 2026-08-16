@@ -71,9 +71,9 @@ An inbound message exposes the stable fields under `context.payload`:
 - `conversationId` (the sender number);
 - `conversationType` (`"direct"`);
 - `messageId`;
-- `phoneNumberId`;
 - `text` when the incoming message contains text;
-- `occurredAt` (plus the original provider `timestamp`); and
+- `occurredAt` in normalized RFC 3339 form;
+- `providerData.phoneNumberId`; and
 - `replyToMessageId` when present.
 
 `services.whatsapp.send()` returns the provider, conversation ID, accepted

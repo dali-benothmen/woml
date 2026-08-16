@@ -1,11 +1,11 @@
 # WOML Additional Communication Providers v1
 
-Status: **frozen for ACP0; runtime implementation is staged by provider**.
+Status: **frozen in ACP0 and implemented through ACP10**.
 
 This document freezes the public and internal shapes shared by Slack,
-Telegram, Discord, and WhatsApp. It does not make the three new providers
-executable. Telegram becomes executable in ACP3, Discord in ACP5, and WhatsApp
-in ACP7.
+Telegram, Discord, and WhatsApp. Telegram became executable in ACP3, Discord
+in ACP5, and WhatsApp in ACP7; ACP10 packages and publishes all three without
+changing these frozen shapes.
 
 ## 1. Version decision
 

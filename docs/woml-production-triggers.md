@@ -1,8 +1,8 @@
 # Operating WOML Production Triggers
 
 Production Triggers turn a compiled WOML definition into a long-lived
-automation. The supported trigger types are webhook, Slack, schedule, interval,
-and named event. A foreground manual trigger waits for keyboard input; it does
+automation. The supported trigger types are webhook, Slack, Telegram, Discord,
+WhatsApp, schedule, interval, and named event. A foreground manual trigger waits for keyboard input; it does
 not create a startup run. One-shot manual journeys use `woml test`.
 
 The exact trigger headers, activation instructions, manual selection, and
@@ -30,8 +30,8 @@ paths are deduplicated, directory loading is non-recursive, and duplicate
 workflow IDs fail before any workflow starts.
 
 `woml run` validates all definitions and required secrets before it becomes
-ready. It then keeps webhook and event endpoints, Slack Socket Mode connections,
-and Rust-owned schedulers active until SIGINT or SIGTERM. Completing a workflow
+ready. It then keeps webhook and event endpoints, communication-provider
+connections, and Rust-owned schedulers active until SIGINT or SIGTERM. Completing a workflow
 run does not stop the automation.
 
 Use `woml test workflow.woml` only for an intentional one-shot manual run.
@@ -42,6 +42,9 @@ Use `woml test workflow.woml` only for an intentional one-shot manual run.
 |---|---|---|---|
 | Webhook | HTTP POST | `Idempotency-Key`, or a fresh identity | Validated request body |
 | Slack | App mention or direct message | Workspace and Slack event identity | Normalized conversation fields |
+| Telegram | Bot message | Bot and Telegram update/message identity | Normalized conversation fields |
+| Discord | App mention or direct message | Bot and Discord event identity | Normalized conversation fields |
+| WhatsApp | Signed Cloud API message callback | Phone Number ID and Meta message identity | Normalized conversation fields |
 | Schedule | Five-field WOML cron and IANA timezone | Planned UTC instant | `{ scheduledAt, triggeredAt }` |
 | Interval | Fixed-rate duration from `1s` through `30d` | Durable anchor and sequence | `{ scheduledAt, triggeredAt }` |
 | Event | Authenticated named publication | Publisher event ID per subscriber | Validated event data |
@@ -128,6 +131,15 @@ redelivery therefore resolves to the same run. Bot/self messages, edits,
 deletes, unsupported subtypes, and unmatched channels are ignored without
 entering workflow context.
 
+## Telegram, Discord, and WhatsApp ingress
+
+Telegram uses shared long polling, Discord uses a shared resumable Gateway
+connection, and WhatsApp uses a signed public callback on the production HTTP
+listener. All three normalize inbound messages to the same bounded
+`context.payload` contract and enter the same durable Rust admission boundary.
+Setup, permissions, exact payloads, and doctor commands are documented in
+[WOML Communication Providers](woml-communication-providers.md).
+
 ## Schedule and interval operation
 
 Rust owns time decisions and durable cursors. Schedule uses the frozen numeric
@@ -191,6 +203,7 @@ Production Runtime roadmap milestone.
 | `WOML_TRIGGER_IDEMPOTENCY_CONFLICT` | Do not reuse one webhook key or event ID for changed data. |
 | `WOML_TRIGGER_UNAVAILABLE` | Check state-file permissions, free disk space, SQLite ownership, and whether another process holds the database. |
 | Slack connects but messages do nothing | Enable event subscriptions, verify app mention/DM subscriptions, channel filters, scopes, and bot membership. |
+| A communication provider does not become ready | Run `woml <provider> doctor`; then verify credentials, provider-side subscriptions/intents, destination permissions, and network access. |
 | Schedule or interval did not catch up repeatedly | This is intentional: `skip` creates none and `run-once` creates at most one missed occurrence. |
 | A run failed as `interrupted` after a crash | WOML cannot prove the effect did not happen and intentionally refuses to replay it. |
 | Port binding fails | Stop the other listener or choose a different `--port`; keep one owner per state database. |
@@ -215,7 +228,8 @@ operator contract.
 2. Use an explicit persistent `--state` path with restricted permissions.
 3. Keep HTTP on loopback behind TLS ingress unless public binding is deliberate.
 4. Use authenticated webhooks and events for untrusted networks.
-5. Give Slack only the required scopes and enable the required subscriptions.
+5. Give each communication bot only the required scopes/permissions and enable
+   the required subscriptions or intents.
 6. Configure a supervisor to restart `woml run` and send SIGTERM on deployment.
 7. Back up SQLite consistently and test recovery using a copy.
 8. Use source idempotency keys and `attempt.idempotencyKey` with external

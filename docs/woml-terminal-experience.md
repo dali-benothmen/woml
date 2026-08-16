@@ -58,6 +58,9 @@ activated:
 | Webhook | HTTP method, bound URL, authentication warning, and copyable `curl`. |
 | Event | Event name, authenticated publication URL, and copyable request. |
 | Slack | Workspace, event type, and channel or conversation scope. |
+| Telegram | Bot identity and accepted message event. |
+| Discord | Bot identity, event type, and channel scope. |
+| WhatsApp | Phone Number ID and public callback URL. |
 | Schedule | Cron expression, timezone, and next due instant. |
 | Interval | Fixed interval and next due instant. |
 

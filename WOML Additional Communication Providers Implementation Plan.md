@@ -1,6 +1,6 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0 through ACP9 were completed on 2026-08-16.
+Status: Completed. ACP0 through ACP10 were completed on 2026-08-16.
 Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
 end to end through the durable production runtime. Discord authoring, imported
 module discovery, validation, Model v15 / Definition Package v10 lowering, and
@@ -1110,6 +1110,23 @@ background, backup/retention, and resource-budget suites pass with no skipped
 provider-host coverage.
 
 ### ACP10 — Package, document, benchmark, and publish
+
+Status: **Completed on 2026-08-16.** Telegram, Discord, and WhatsApp now have
+manually runnable conversational examples, and one reviewed workflow composes
+all four built-ins in a shared Human Approval and lifecycle journey. The
+author-facing communication guide pins setup, permissions, secrets,
+destinations, normalized trigger payloads, messaging requests/results, local
+testing, production operation, and recovery. A clean tarball installation
+loads the bundled provider host and completes the fake-provider protocol
+journey without source files or credential leakage. Communication-specific
+contract, foundation, provider, convergence, diagnostic, package,
+cross-platform, benchmark, typecheck, and scoped warning-denying Rust gates are
+available through descriptive package commands. The benchmark records idle
+credential connections, durable inbound conformance, outbound sends, callback
+resolution, Discord reconnect, concurrent providers, and memory under the
+versioned `woml.communication-provider-benchmark/v1` profile. Publication to
+npm remains an explicit release action; ACP10 makes the artifact publish-ready
+without changing external registries.
 
 Changes:
 

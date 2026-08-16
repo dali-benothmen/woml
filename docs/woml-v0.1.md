@@ -63,6 +63,7 @@ includes conditional choices and bounded parallel groups:
 | Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
 | Telegram trigger, notifications, and `services.telegram.send()` | ACP3 implemented | Runs through the shared long-polling Telegram host and durable Rust execution authority |
 | Discord trigger, notifications, approvals, and `services.discord.send()` | ACP5 implemented | Executable through one shared Gateway session per bot credential, Discord REST, durable Rust admission, and supervised messaging |
+| WhatsApp trigger, notifications, approvals, and `services.whatsapp.send()` | ACP7 implemented | Executable through signed Meta callbacks, approved templates, durable Rust admission, and supervised Cloud API messaging |
 | Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
 | Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
 | `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
@@ -728,10 +729,12 @@ Structural rules:
 - Lifecycle scripts do not create `context.steps` outputs.
 - Lifecycle scripts receive the read-only `lifecycle` binding. It is unavailable
   in normal step scripts.
-- Lifecycle Slack, Telegram, and Discord notifications are informational. Slack requires
+- Lifecycle Slack, Telegram, Discord, and WhatsApp notifications are informational. Slack requires
   `channels`, `message`, `bot-token`, and `app-token`; Telegram requires
   `chats`, `message`, and `bot-token`; Discord requires `channels`, `message`,
-  and `bot-token`. They never create approval buttons or decision capabilities.
+  and `bot-token`; WhatsApp requires `recipients`, `access-token`,
+  `phone-number-id`, `template`, `language`, and `message`. They never create
+  approval buttons or decision capabilities.
 - Notification messages use WOML Template v1: bounded literal text and scalar
   `{{context...}}` or `{{lifecycle...}}` placeholders. Secrets are forbidden in
   message content.
@@ -1940,8 +1943,8 @@ conditions hold.
 - `<approval>` is missing `<when-approved>` or `<when-rejected>`, duplicates
   either arm, or declares them out of order.
 - `<approval>` contains more than one `<notify>`, or `<notify>` is empty.
-- `<notify>` contains anything other than supported built-in Slack/Telegram
-  tags or explicitly imported custom notification-provider tags.
+- `<notify>` contains anything other than supported built-in Slack, Telegram,
+  Discord, or WhatsApp tags or explicitly imported custom notification-provider tags.
 - A structural element contains `<name>` or `<description>` child elements
   instead of the corresponding attributes.
 
@@ -2126,8 +2129,8 @@ provider host, real Socket Mode integration, recovery, packaging, and
 publication hardening. The remaining approval-adjacent work is later product
 expansion:
 
-- WhatsApp and generic signed webhook notifications remain later work. Discord
-  trigger, messaging, notification, and approval execution is available.
+- Generic signed-webhook notifications remain later work. Telegram, Discord,
+  and WhatsApp trigger, messaging, notification, and approval execution is available.
 - Remote hosting waits for TLS, reviewer authentication/authorization, and
   deployment ownership.
 - Structured reviewer metadata, custom forms, and validated decision payloads

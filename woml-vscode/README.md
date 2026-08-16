@@ -24,7 +24,8 @@ WOML (Workflow Orchestration Markup Language) is a markup language for building 
 - **Structured workflow markup** — define workflows through semantic elements
   such as `<triggers>`, `<steps>`, `<step>`, `<script>`, and `<lifecycle>`.
 - **Flexible automation triggers** — start workflows manually or through
-  webhooks, Slack, schedules, intervals, and internal events.
+  webhooks, Slack, Telegram, Discord, WhatsApp, schedules, intervals, and
+  internal events.
 - **Embedded JavaScript** — use the familiar `context` binding to read the
   trigger payload, previous step results, and run information.
 - **Durable execution** — runs are supervised by the Rust core and represented
@@ -139,12 +140,21 @@ theme:
 - `{{...}}` expressions are highlighted inside attribute values.
 - `.woml` files receive a dedicated file icon.
 
-Two snippets are currently available:
+Provider and workflow snippets are available:
 
 | Prefix          | Creates                                                  |
 | --------------- | -------------------------------------------------------- |
 | `woml-workflow` | A complete workflow with a manual trigger and first step |
 | `woml-step`     | A named script step with an optional description         |
+| `woml-telegram-trigger` | A Telegram message trigger |
+| `woml-telegram-send` | A supervised Telegram reply |
+| `woml-telegram-notify` | A Telegram notification destination |
+| `woml-discord-trigger` | A Discord mention/direct-message trigger |
+| `woml-discord-send` | A supervised Discord reply |
+| `woml-discord-notify` | A Discord notification destination |
+| `woml-whatsapp-trigger` | A signed WhatsApp message trigger |
+| `woml-whatsapp-send` | An approved WhatsApp template send |
+| `woml-whatsapp-notify` | A WhatsApp notification destination |
 
 ## Documentation
 

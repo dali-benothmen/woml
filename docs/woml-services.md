@@ -20,8 +20,8 @@ documented in [Durable User State v1](protocols/durable-state-v1.md).
 Concurrency, backup, recovery, permissions, encryption, and corruption handling
 are covered in [Durable User State Operations](woml-durable-state.md).
 
-WOML scripts expose seven built-in services without installing
-an npm package:
+WOML scripts expose core services and built-in communication services without
+installing an npm package:
 
 ```js
 services.http
@@ -31,6 +31,9 @@ services.cache
 services.events
 services.workflows
 services.state
+services.telegram
+services.discord
+services.whatsapp
 ```
 
 `services.workflows.call()` starts exactly one activated child workflow by ID,
@@ -77,6 +80,9 @@ step. See [Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
 | Delegate work and use one workflow's answer | `services.workflows.call()` | One independently durable child run and direct JSON result |
 | Start exact background workflow work | `services.workflows.start()` | Durable child run ID without waiting for completion |
 | Small workflow-owned correctness data | `services.state` | Versioned durable JSON state shared by future runs of the same workflow ID |
+| Send a Telegram message or reply | `services.telegram.send()` | Supervised Bot API delivery with a stable result |
+| Send a Discord message or reply | `services.discord.send()` | Supervised REST delivery using a shared bot identity |
+| Send an approved WhatsApp template | `services.whatsapp.send()` | Supervised official Cloud API template delivery |
 
 The expanded decision tree, limits, ownership, and migration signals are in
 [Choosing Where Workflow Data Lives](woml-data-guide.md).
@@ -167,3 +173,4 @@ stop the active runtime.
 - Durable User State operations: `docs/woml-durable-state.md`
 - Data choice guide: `docs/woml-data-guide.md`
 - Local data security: `docs/woml-data-security.md`
+- Communication providers: `docs/woml-communication-providers.md`

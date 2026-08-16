@@ -2417,10 +2417,6 @@ async fn handle_whatsapp_callback(
           Value::String(message_id.to_string()),
         );
         payload.insert(
-          "phoneNumberId".to_string(),
-          Value::String(phone_number_id.to_string()),
-        );
-        payload.insert(
           "providerData".to_string(),
           Value::Object(Map::from_iter([(
             "phoneNumberId".to_string(),
@@ -2436,10 +2432,6 @@ async fn handle_whatsapp_callback(
               && value.bytes().all(|byte| byte.is_ascii_digit())
           })
         {
-          payload.insert(
-            "timestamp".to_string(),
-            Value::String(timestamp.to_string()),
-          );
           if let Some(occurred_at) = timestamp
             .parse::<i64>()
             .ok()

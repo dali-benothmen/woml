@@ -213,6 +213,16 @@ async fn verifies_handshake_signature_and_durably_deduplicates_messages() {
     Some(&json!("hello WOML"))
   );
   assert!(projection.context.trigger.get("occurredAt").is_some());
+  assert_eq!(
+    projection
+      .context
+      .trigger
+      .get("providerData")
+      .and_then(|value| value.get("phoneNumberId")),
+    Some(&json!(PHONE_NUMBER_ID))
+  );
+  assert!(projection.context.trigger.get("phoneNumberId").is_none());
+  assert!(projection.context.trigger.get("timestamp").is_none());
   server.stop_with_deadline(Duration::from_millis(100)).await;
 }
 

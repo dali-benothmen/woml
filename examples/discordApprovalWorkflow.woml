@@ -9,7 +9,7 @@
       <on-complete>
         <notify>
           <discord
-            channels="1538412925264461877"
+            channels="200000000000000001"
             message="Workflow completed successfully."
             bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
           />
@@ -30,7 +30,7 @@
       >
         <notify>
           <discord
-            channels="1538412925264461877"
+            channels="200000000000000001"
             bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
           />
         </notify>

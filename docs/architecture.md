@@ -266,6 +266,16 @@ adapter, while trigger events acknowledge only after durable Rust admission.
 Slack event decoding, normalization, filtering, redelivery deduplication, and
 execution are active in the T13 Production Triggers profile.
 
+Telegram, Discord, and WhatsApp reuse that durable provider boundary without
+pretending their transports are identical. Telegram owns long polling, Discord
+owns Gateway resume and heartbeat, and Rust owns the signed WhatsApp callback.
+All normalize to Communication Trigger Payload v1, while outbound messaging
+and notification operations converge on one supervised capability/approval
+authority. The public surface and runtime topology are summarized in
+`docs/woml-communication-providers.md`. Future third-party trigger or messaging
+extensions must cross a reviewed protocol boundary; they are not dynamically
+loaded into the Rust core.
+
 `woml run` is the long-lived activation lifecycle. The Bun CLI preflights the
 definitions and symbolic secrets, then starts the Rust listener through N-API
 and waits for SIGINT or SIGTERM. Rust runs Actix on a dedicated runtime thread,

@@ -6,6 +6,10 @@ deliberately separate products: actionable Human Approval messages and
 informational lifecycle notifications. Sharing transport code does not share
 authority.
 
+For provider setup, exact normalized trigger payloads, messaging service
+requests/results, and a runnable multi-provider journey, see
+[WOML Communication Providers](woml-communication-providers.md).
+
 ## Approval notifications
 
 An `<approval>` may send messages through several providers and destinations in

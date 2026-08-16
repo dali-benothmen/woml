@@ -53,8 +53,8 @@ woml run hello.woml
 ```
 
 For a manual trigger, WOML remains active and waits for Enter. Webhook,
-schedule, interval, named-event, and Slack triggers remain active until the
-runtime is stopped.
+schedule, interval, named-event, Slack, Telegram, Discord, and WhatsApp
+triggers remain active until the runtime is stopped.
 
 ## Everyday commands
 
@@ -93,6 +93,7 @@ contracts. It never parses XML or owns editor syntax.
 - [Production runtime](docs/woml-production-runtime.md)
 - [Production deployment](docs/woml-production-deployment.md)
 - [Triggers](docs/woml-production-triggers.md)
+- [Communication providers](docs/woml-communication-providers.md)
 - [Services and data](docs/woml-data-guide.md)
 - [Modules](docs/woml-modules.md)
 - [Lifecycle and run controls](docs/woml-lifecycle-and-run-control.md)

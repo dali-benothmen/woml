@@ -10,7 +10,7 @@
         <notify>
           <!-- Replace this with your numeric user, group, or channel ID. -->
           <telegram
-            chats="8979363187"
+            chats="123456789"
             message="Workflow completed successfully."
             bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
           />
@@ -33,7 +33,7 @@
         <notify>
           <!-- Replace this with your numeric user, group, or channel ID. -->
           <telegram
-            chats="8979363187"
+            chats="123456789"
             bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
           />
         </notify>

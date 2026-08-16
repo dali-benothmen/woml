@@ -336,6 +336,9 @@ production checklist are documented in
 [Lifecycle and Local Run Control](../docs/woml-lifecycle-and-run-control.md).
 Slack approval and informational lifecycle delivery are compared in
 [WOML Notifications](../docs/woml-notifications.md).
+Telegram, Discord, and WhatsApp setup, normalized trigger payloads, messaging
+requests/results, diagnostics, and the multi-provider approval journey are in
+[WOML Communication Providers](../docs/woml-communication-providers.md).
 
 ## Call an HTTP API
 

@@ -137,6 +137,12 @@ directory membership immediately before opening admission. If a source changes
 or Slack/provider startup fails, the partial runtime is closed and no new
 trigger occurrence is admitted.
 
+Telegram long polling, Discord Gateway connections, and WhatsApp signed
+callbacks follow the same atomic readiness and shutdown boundary. Their setup,
+runtime diagnostics, credential rotation, and recovery procedures are in
+[WOML Communication Providers](woml-communication-providers.md) and
+[Communication Provider Diagnostics and Operations](communication-provider-operations.md).
+
 The runtime prints a short form of its internal activation identity after
 readiness. That identity is derived from exact compiled definitions and module
 artifacts; it is not a new artifact users need to build or manage.

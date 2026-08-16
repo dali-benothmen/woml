@@ -44,6 +44,15 @@ machine.
 - Reusable definitions receive only secret props explicitly bound with an exact
   `{{secrets.NAME}}` reference. Those values are omitted from Definition
   Package v9, Event v13, Inspection v5, provider receipts, and normal logs.
+- Communication providers receive only their explicitly referenced symbolic
+  credentials. Normalized inbound text and routing identities can enter
+  workflow input because execution requires them, but raw envelopes, headers,
+  signatures, access tokens, and provider profiles never do. Accepted content
+  follows the same backup, retention, and prune policy as other run input.
+
+Provider-specific credential rotation, diagnostics, callback verification, and
+recovery are documented in
+[Communication Provider Diagnostics and Operations](communication-provider-operations.md).
 
 WOML cannot determine whether an arbitrary value authored by JavaScript is
 sensitive. If a script stores a secret in state, that secret is present in the
