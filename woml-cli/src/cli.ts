@@ -57,6 +57,7 @@ import {
   executeWorkflowWithRustDurable,
   type ExecutionProgressV1,
   ApprovalDecisionError,
+  type NotificationDispatchReport,
   NotificationProviderError,
   type NotificationJourneyDiagnostics,
   resolveApprovalWithRust,
@@ -1177,7 +1178,11 @@ function formatNotificationDeliveryFailures(
             ? 'Telegram'
             : provider === 'discord'
               ? 'Discord'
-            : provider;
+              : provider === 'whatsapp'
+                ? 'WhatsApp'
+                : provider === 'custom'
+                  ? 'Custom provider'
+                  : provider;
       return `\n${label} notification to ${destination} failed [${failure.code}]: ${failure.message}`;
     })
     .join('');
@@ -1185,13 +1190,29 @@ function formatNotificationDeliveryFailures(
 
 function printNotificationWarnings(
   io: CliIo,
-  diagnostics: NotificationJourneyDiagnostics
+  diagnostics: NotificationJourneyDiagnostics,
+  updates?: NotificationDispatchReport
 ): void {
-  if (diagnostics.deliveryFailures.length === 0) return;
+  if (
+    diagnostics.deliveryFailures.length === 0 &&
+    (updates?.updatesFailed ?? 0) === 0
+  ) {
+    return;
+  }
+  const deliveryWarning =
+    diagnostics.deliveryFailures.length === 0
+      ? ''
+      : `some approval notifications could not be delivered.${formatNotificationDeliveryFailures(
+          diagnostics
+        )}`;
+  const updateWarning =
+    (updates?.updatesFailed ?? 0) === 0
+      ? ''
+      : `${deliveryWarning.length === 0 ? '' : '\n'}${updates!.updatesFailed} delivered provider message${
+          updates!.updatesFailed === 1 ? '' : 's'
+        } could not be updated after the decision. The durable decision is still recorded.`;
   io.stderr(
-    `\nWOML notification warning: some approval notifications could not be delivered.${formatNotificationDeliveryFailures(
-      diagnostics
-    )}\n\n`
+    `\nWOML notification warning: ${deliveryWarning}${updateWarning}\n\n`
   );
 }
 
@@ -2614,7 +2635,7 @@ async function runNotificationWorkflow(
         }
       );
     }
-    printNotificationWarnings(io, journey.diagnostics);
+    printNotificationWarnings(io, journey.diagnostics, journey.updates);
     outcome = await resumeApprovalWorkflowWithRust(
       workflow,
       args.statePath,
@@ -2733,7 +2754,7 @@ async function resumeStoredRun(
         controller.abort();
         await server;
       }
-      printNotificationWarnings(io, journey.diagnostics);
+      printNotificationWarnings(io, journey.diagnostics, journey.updates);
     } else {
       await serveApprovalAndWait({
         outcome: waiting,

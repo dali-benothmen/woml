@@ -1,6 +1,6 @@
 # WOML Additional Communication Providers Implementation Plan
 
-Status: In progress. ACP0 through ACP7 were completed on 2026-08-16.
+Status: In progress. ACP0 through ACP8 were completed on 2026-08-16.
 Telegram now validates, lowers to Model v15 / Definition Package v10, and runs
 end to end through the durable production runtime. Discord authoring, imported
 module discovery, validation, Model v15 / Definition Package v10 lowering, and
@@ -1026,6 +1026,18 @@ approval, lifecycle, delivery-status, rate-limit, restart, public-runtime, and
 clean-package tests pass; an opt-in Meta test-number journey is documented.
 
 ### ACP8 — Complete cross-provider convergence and composition
+
+Status: **Completed on 2026-08-16.** Mixed notification delivery now settles
+every configured destination without abandoning retryable siblings after the
+first success. Slack, Telegram, Discord, WhatsApp, and local custom providers
+compile together through approvals and lifecycle notifications, including
+nested choice and fork control flow. The SQLite approval authority was tested
+under simultaneous cross-provider decisions: exactly one valid decision wins,
+matching repeats are idempotent, and update failures cannot change the winner.
+Every editable built-in message receives a durable update request; WhatsApp's
+immutable approved templates produce a safe visible warning instead of a false
+update success. Model v15 definition packages containing WhatsApp plus reusable
+providers are now correctly marked runtime-ready.
 
 Changes:
 

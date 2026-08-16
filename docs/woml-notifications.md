@@ -1,15 +1,23 @@
 # WOML Notifications
 
-WOML supports built-in Slack and local custom notification providers for two
+WOML supports built-in Slack, Telegram, Discord, and WhatsApp providers plus
+local custom notification providers for two
 deliberately separate products: actionable Human Approval messages and
 informational lifecycle notifications. Sharing transport code does not share
 authority.
 
 ## Approval notifications
 
-An `<approval>` may send one or more Slack messages. Every delivery receives a
-separate capability token, but all tokens resolve the same durable approval.
-The first valid approve or reject decision wins; later clicks cannot change it.
+An `<approval>` may send messages through several providers and destinations in
+one `<notify>`. Every delivery receives a separate capability token, but all
+tokens resolve the same durable approval. The first valid approve or reject
+decision wins; a matching repeated decision is idempotent and an opposing later
+decision is rejected.
+
+WOML settles every configured delivery before it starts waiting for the human
+decision. One successful destination is enough to continue waiting, but that
+success does not abandon a retryable sibling provider. If every destination
+fails, the run fails rather than waiting for a decision nobody can make.
 
 Approval messages may contain interactive buttons and are handled by
 Notification Provider Host v1. See the Human Approval implementation plan and
@@ -38,6 +46,12 @@ Informational delivery uses Notification Provider Host v2. It has no approval
 token, approve/reject callback, or interactive decision authority. A provider
 failure records a bounded lifecycle warning and does not rewrite the workflow's
 business outcome.
+
+After an approval is resolved, WOML updates every editable delivered built-in
+provider message. An update failure is recorded and shown as a safe warning; it
+cannot change the durable decision. WhatsApp approved-template messages cannot
+be edited after delivery, so WOML reports that provider limitation truthfully
+while retaining the accepted decision.
 
 Multiple channels may be supplied as a space-separated `channels` attribute.
 WOML resolves symbolic channel names, caches IDs, and uses the existing shared
@@ -83,7 +97,5 @@ for the complete authoring and security contract.
   approval-message state, so WOML does not falsely update cancellation as
   rejection. A visible cancelled update requires a later protocol version.
 
-Built-in Discord, WhatsApp, Telegram, custom webhooks, and additional adapters
-remain roadmap items. A user-authored local provider can integrate those APIs
-today, but it must preserve the same separation between transport and WOML's
-decision authority.
+Project-specific integrations can use a local custom provider while preserving
+the same separation between provider transport and WOML's decision authority.

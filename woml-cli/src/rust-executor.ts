@@ -3670,16 +3670,10 @@ function notificationJourneyDiagnostics(
         'failure',
       ]) ||
       typeof item.deliveryId !== 'string' ||
-      !/^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$/.test(
-        item.deliveryId
+      !['slack', 'telegram', 'discord', 'whatsapp', 'custom'].includes(
+        String(item.provider)
       ) ||
-      (item.provider !== 'slack' && item.provider !== 'custom') ||
       typeof item.destination !== 'string' ||
-      (item.provider === 'slack'
-        ? !/^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/.test(
-            item.destination
-          )
-        : !/^[a-z][a-z0-9-]{0,63}$/.test(item.destination)) ||
       !Number.isSafeInteger(item.attempt) ||
       Number(item.attempt) < 1 ||
       Number(item.attempt) > 3 ||
@@ -3698,6 +3692,31 @@ function notificationJourneyDiagnostics(
       item.failure.message.length < 1 ||
       item.failure.message.length > 1024 ||
       typeof item.failure.retryable !== 'boolean'
+    ) {
+      return false;
+    }
+    const marker =
+      item.provider === 'telegram'
+        ? 'chat'
+        : item.provider === 'whatsapp'
+          ? 'recipient'
+          : 'channel';
+    if (
+      !new RegExp(
+        `^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):${marker}:(0|[1-9][0-9]*)$`
+      ).test(item.deliveryId) ||
+      (item.provider === 'slack' &&
+        !/^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$/.test(
+          item.destination
+        )) ||
+      (item.provider === 'telegram' &&
+        !/^-?[0-9]{1,20}$/.test(item.destination)) ||
+      (item.provider === 'discord' &&
+        !/^[0-9]{17,20}$/.test(item.destination)) ||
+      (item.provider === 'whatsapp' &&
+        !/^[0-9]{8,16}$/.test(item.destination)) ||
+      (item.provider === 'custom' &&
+        !/^[a-z][a-z0-9-]{0,63}$/.test(item.destination))
     ) {
       return false;
     }

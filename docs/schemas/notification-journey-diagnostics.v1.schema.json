@@ -35,17 +35,65 @@
       "properties": {
         "deliveryId": {
           "type": "string",
-          "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$"
+          "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):(channel|chat|recipient):(0|[1-9][0-9]*)$"
         },
-        "provider": { "const": "slack" },
+        "provider": {
+          "enum": ["slack", "telegram", "discord", "whatsapp", "custom"]
+        },
         "destination": {
-          "type": "string",
-          "pattern": "^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$"
+          "type": "string"
         },
         "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
         "final": { "type": "boolean" },
         "failure": { "$ref": "#/$defs/failure" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "provider": { "const": "slack" } } },
+          "then": {
+            "properties": {
+              "deliveryId": { "pattern": ":channel:" },
+              "destination": { "pattern": "^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "telegram" } } },
+          "then": {
+            "properties": {
+              "deliveryId": { "pattern": ":chat:" },
+              "destination": { "pattern": "^-?[0-9]{1,20}$" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "discord" } } },
+          "then": {
+            "properties": {
+              "deliveryId": { "pattern": ":channel:" },
+              "destination": { "pattern": "^[0-9]{17,20}$" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "whatsapp" } } },
+          "then": {
+            "properties": {
+              "deliveryId": { "pattern": ":recipient:" },
+              "destination": { "pattern": "^[0-9]{8,16}$" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "custom" } } },
+          "then": {
+            "properties": {
+              "deliveryId": { "pattern": ":channel:" },
+              "destination": { "pattern": "^[a-z][a-z0-9-]{0,63}$" }
+            }
+          }
+        }
+      ]
     },
     "failure": {
       "type": "object",

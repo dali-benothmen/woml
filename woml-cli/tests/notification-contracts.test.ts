@@ -105,6 +105,22 @@ describe('Slack notification N0 contracts', () => {
     };
     expect(diagnostics(value), errors(diagnostics)).toBe(true);
 
+    for (const [provider, marker, destination] of [
+      ['telegram', 'chat', '-1001234567890'],
+      ['discord', 'channel', '200000000000000001'],
+      ['whatsapp', 'recipient', '15551234567'],
+      ['custom', 'channel', 'local-approval'],
+    ] as const) {
+      const mixed = structuredClone(value);
+      const failure = mixed.deliveryFailures[0]!;
+      failure.provider = provider;
+      failure.deliveryId = `releaseApproval:notify:1:${marker}:0`;
+      failure.destination = destination;
+      expect(diagnostics(mixed), `${provider}: ${errors(diagnostics)}`).toBe(
+        true
+      );
+    }
+
     const leaked = structuredClone(value) as JsonObject;
     (leaked.deliveryFailures as JsonObject[])[0]!.decisionCapability =
       'ncap_forbidden';

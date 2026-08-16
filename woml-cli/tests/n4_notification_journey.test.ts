@@ -44,6 +44,10 @@ const rateLimitedHostPath = resolve(
   packageRoot,
   'tests/fixtures/rate-limited-notification-provider-host.ts'
 );
+const mixedOutcomeHostPath = resolve(
+  packageRoot,
+  'tests/fixtures/mixed-outcome-notification-provider-host.ts'
+);
 const multiWorkspaceHostPath = resolve(
   packageRoot,
   'tests/fixtures/multi-workspace-notification-provider-host.ts'
@@ -461,6 +465,48 @@ describe('N4/N5 Rust and Slack provider journey', () => {
       expect(
         eventTypes.filter(type => type === 'notification_delivery_succeeded')
       ).toHaveLength(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  nativeTest('settles a retryable sibling even after another provider destination succeeds', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'woml-mixed-delivery-'));
+    const database = join(directory, 'state.sqlite');
+    try {
+      const compiled = routedWorkflow();
+      const waiting = await executeApprovalWorkflowWithRust(compiled, database, {
+        nativeCorePath,
+        scriptHostPath,
+      });
+      if (waiting.status !== 'waiting') throw new Error('expected waiting');
+
+      const journey = await runNotificationProviderJourneyWithRust(
+        database,
+        waiting.runId,
+        {
+          nativeCorePath,
+          notificationHostPath: mixedOutcomeHostPath,
+          interactionTimeoutMs: 5_000,
+        }
+      );
+      expect(journey.deliveries).toMatchObject({
+        attempted: 3,
+        succeeded: 2,
+        failed: 1,
+        runFailed: false,
+      });
+      expect(journey.updates).toMatchObject({
+        updatesAttempted: 2,
+        updatesSucceeded: 2,
+        updatesFailed: 0,
+      });
+      expect(journey.resolution).toBe('approved');
+      expect(
+        durableEventTypes(database).filter(
+          type => type === 'notification_delivery_failed'
+        )
+      ).toHaveLength(1);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

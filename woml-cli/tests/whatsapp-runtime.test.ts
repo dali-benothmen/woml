@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
 import { assertNotificationInvocation } from '../src/notification-provider/protocol';
-import { SharedWhatsAppTransport, WhatsAppTransportError } from '../src/whatsapp';
+import {
+  SharedWhatsAppTransport,
+  WhatsAppNotificationAdapter,
+  WhatsAppTransportError,
+} from '../src/whatsapp';
 
 describe('ACP7 WhatsApp runtime', () => {
   test('sends approved templates with stable approval capability buttons', async () => {
@@ -116,5 +120,28 @@ describe('ACP7 WhatsApp runtime', () => {
       language: 'en_US',
       message: 'Workflow completed.',
     })).not.toThrow();
+  });
+
+  test('reports immutable template updates without changing the durable decision', async () => {
+    const adapter = new WhatsAppNotificationAdapter(
+      new SharedWhatsAppTransport({
+        fetch: (async () => {
+          throw new Error('an update must not send another template');
+        }) as unknown as typeof fetch,
+      })
+    );
+    try {
+      await adapter.update();
+      throw new Error('expected a safe immutable-template warning');
+    } catch (error) {
+      expect(adapter.safeFailure(error, ['secret-token'])).toEqual({
+        kind: 'update_failed',
+        code: 'WOML_WHATSAPP_UPDATE_UNAVAILABLE',
+        message:
+          'WhatsApp template messages cannot be edited after delivery; the approval decision was still recorded.',
+        retryable: false,
+      });
+    }
+    await adapter.close();
   });
 });

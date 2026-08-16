@@ -1608,7 +1608,8 @@ export async function buildWomlReusableDefinitionPackage(
     model.communication.providers.every(
       provider =>
         provider.provider === 'telegram' ||
-        provider.provider === 'discord'
+        provider.provider === 'discord' ||
+        provider.provider === 'whatsapp'
     );
   const unsigned = model.schemaVersion === 15
     ? {

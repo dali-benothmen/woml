@@ -1,4 +1,7 @@
-import type { CommunicationNotificationAdapter } from '../communication-provider';
+import {
+  CommunicationProviderAdapterError,
+  type CommunicationNotificationAdapter,
+} from '../communication-provider';
 import { SecretStoreError, type SecretStore } from '../secrets';
 import type {
   NotificationInvocation,
@@ -103,8 +106,16 @@ export class WhatsAppNotificationAdapter
   }
 
   async update(): Promise<void> {
-    // Cloud API template messages cannot be edited after delivery. The durable
-    // decision is authoritative; ACP8 will provide provider-specific follow-up.
+    // Cloud API template messages cannot be edited after delivery. Report that
+    // limitation truthfully so WOML records a bounded durable warning while the
+    // already-accepted approval decision remains authoritative.
+    throw new CommunicationProviderAdapterError<NotificationProviderFailure>({
+      kind: 'update_failed',
+      code: 'WOML_WHATSAPP_UPDATE_UNAVAILABLE',
+      message:
+        'WhatsApp template messages cannot be edited after delivery; the approval decision was still recorded.',
+      retryable: false,
+    });
   }
 
   validMessageIdentity(value: unknown): value is ProviderMessageIdentity {
@@ -128,6 +139,9 @@ export class WhatsAppNotificationAdapter
     error: unknown,
     resolvedValues: readonly string[]
   ): NotificationProviderFailure {
+    if (error instanceof CommunicationProviderAdapterError) {
+      return error.failure;
+    }
     if (error instanceof WhatsAppTransportError) {
       return { ...error.failure, message: redact(error.failure.message, resolvedValues) };
     }
@@ -151,4 +165,3 @@ export class WhatsAppNotificationAdapter
     await this.#transport.close();
   }
 }
-

@@ -333,12 +333,17 @@ pub async fn run_notification_provider_journey_with_custom(
       delivery_report.run_failed = true;
       break;
     }
-    if projection.notification_deliveries.values().any(|delivery| {
+    // A successful delivery makes the approval usable, but it must not abandon
+    // a retryable sibling provider. Settle every configured destination first
+    // so a mixed <notify> has deterministic, restart-safe delivery state.
+    let all_deliveries_settled = projection.notification_deliveries.values().all(|delivery| {
       matches!(
         delivery.status,
         NotificationDeliveryStatus::Succeeded { .. }
+          | NotificationDeliveryStatus::Failed { final_: true, .. }
       )
-    }) {
+    });
+    if all_deliveries_settled {
       break;
     }
     let Some(wait) = delivery_retry_wait(&projection, Utc::now()) else {

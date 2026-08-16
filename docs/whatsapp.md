@@ -79,3 +79,15 @@ An inbound message exposes the stable fields under `context.payload`:
 `services.whatsapp.send()` returns the provider, conversation ID, accepted
 message ID, and acceptance time. Tokens are never copied into the workflow
 result, event metadata, terminal output, or diagnostics.
+
+## Approval convergence
+
+WhatsApp can appear beside Slack, Telegram, Discord, and local custom providers
+in the same approval `<notify>`. A decision from any delivered message resolves
+the one shared durable approval, so buttons in the other providers cannot
+reverse it.
+
+Meta does not allow an already-delivered approved-template message to be
+edited. WOML therefore records a bounded `WOML_WHATSAPP_UPDATE_UNAVAILABLE`
+warning after resolution. This warning is informational: the accepted approval
+decision and workflow route remain unchanged.
