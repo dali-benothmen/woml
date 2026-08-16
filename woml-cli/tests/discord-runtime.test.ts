@@ -6,6 +6,10 @@ import {
   SharedDiscordTransport,
   type DiscordGatewaySocket,
 } from '../src/discord';
+import {
+  assertNotificationInvocation,
+  type InformationalDeliverMessage,
+} from '../src/notification-provider';
 import type { SecretStore } from '../src/secrets';
 import type { TriggerIngressAdmit } from '../src/rust-executor';
 
@@ -330,6 +334,7 @@ describe('Discord production runtime', () => {
       decisionCapability: `ncap_${'a'.repeat(16)}.${'b'.repeat(32)}`,
       message: { workflowId: 'discord-approval', approvalName: 'Approve order 42' },
     } as const;
+    expect(() => assertNotificationInvocation(invocation)).not.toThrow();
     const resolved = await adapter.resolveCredentials(secrets(), invocation as never);
     await adapter.prepare(invocation as never, resolved.credentials);
     const first = await adapter.deliver(invocation as never, resolved.credentials);
@@ -345,17 +350,51 @@ describe('Discord production runtime', () => {
         ],
       },
     ]);
-    await adapter.update({
-      ...invocation,
+    const update = {
+      protocol: invocation.protocol,
+      protocolVersion: invocation.protocolVersion,
       messageType: 'update',
+      invocationId: 'discord-update-1',
+      runId: invocation.runId,
+      approvalId: invocation.approvalId,
+      requestId: invocation.requestId,
+      deliveryId: invocation.deliveryId,
       updateId: 'nupdate_discord_1',
+      idempotencyKey: `sha256:${'d'.repeat(64)}`,
+      provider: invocation.provider,
+      credentials: invocation.credentials,
       providerMessage: first,
       resolution: 'approved',
-    } as never, resolved.credentials);
+    } as const;
+    expect(() => assertNotificationInvocation(update)).not.toThrow();
+    await adapter.update(update as never, resolved.credentials);
     expect(requests.at(-1)).toMatchObject({
       method: 'PATCH',
       body: { components: [] },
     });
     await adapter.close();
+  });
+
+  test('accepts Discord lifecycle notification envelopes', () => {
+    const invocation: InformationalDeliverMessage = {
+      protocol: 'woml.notification-provider-host',
+      protocolVersion: 2,
+      messageType: 'deliver',
+      mode: 'informational',
+      invocationId: 'discord-lifecycle-delivery-1',
+      runId: 'run-discord-lifecycle-1',
+      hookInvocationId: `sha256:${'d'.repeat(64)}`,
+      actionId: 'lifecycle:run_complete:action:0',
+      deliveryId: 'lifecycle:run_complete:action:0:provider:0:channel:0',
+      provider: 'discord',
+      destination: CHANNEL_ID,
+      idempotencyKey: `sha256:${'e'.repeat(64)}`,
+      credentials: {
+        botToken: { kind: 'secretReference', name: BOT_SECRET },
+      },
+      message: 'Workflow completed successfully.',
+    };
+
+    expect(() => assertNotificationInvocation(invocation)).not.toThrow();
   });
 });

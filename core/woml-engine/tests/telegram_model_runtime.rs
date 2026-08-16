@@ -1,10 +1,27 @@
 use chrono::{TimeZone, Utc};
 use serde_json::{json, Map, Value};
 use woml_engine::{
+  event::is_notification_delivery_id,
   run_event_schema_version_for_model, CompiledWorkflowDefinition, DurableEventStore,
   ProviderMessageIdentity, RunEvent, TriggerAdmissionRequest, COMPILED_MODEL_SCHEMA_VERSION_V15,
   RUN_EVENT_SCHEMA_VERSION_V14,
 };
+
+#[test]
+fn durable_notification_identity_accepts_telegram_chat_destinations() {
+  assert!(is_notification_delivery_id(
+    "review:notify:0:chat:0",
+    "review"
+  ));
+  assert!(is_notification_delivery_id(
+    "review:notify:2:channel:3",
+    "review"
+  ));
+  assert!(!is_notification_delivery_id(
+    "review:notify:00:chat:0",
+    "review"
+  ));
+}
 
 const MODEL_V14: &str =
   include_str!("../../../woml/tests/fixtures/reusable-definitions/model-v14.reviewed.json");

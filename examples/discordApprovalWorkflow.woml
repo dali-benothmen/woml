@@ -1,10 +1,22 @@
 <woml>
   <workflow
     id="discord-approval-demo"
-    name="Discord Approval"
-    description="Requests one durable approval through Discord buttons."
+    name="Discord Approval and Lifecycle"
+    description="Requests approval through Discord and reports when the workflow completes."
     version="1.0.0"
   >
+    <lifecycle>
+      <on-complete>
+        <notify>
+          <discord
+            channels="1538412925264461877"
+            message="Workflow completed successfully."
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+
     <triggers>
       <manual id="start" />
     </triggers>
@@ -18,7 +30,7 @@
       >
         <notify>
           <discord
-            channels="200000000000000001"
+            channels="1538412925264461877"
             bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
           />
         </notify>

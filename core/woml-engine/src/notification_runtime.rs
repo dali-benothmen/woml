@@ -164,7 +164,15 @@ pub async fn run_notification_provider_journey_with_custom(
     .iter()
     .any(|definition| definition.provider == "custom");
   let client = if has_builtin {
-    Some(Arc::new(NotificationHostClient::spawn(host_options).await?))
+    // Runtime execution configures its default provider host for informational
+    // lifecycle notifications (v2). Approval delivery is a separate, durable
+    // protocol journey and must always start an approval-capable v1 session.
+    Some(Arc::new(
+      NotificationHostClient::spawn(
+        host_options.with_protocol_version(NOTIFICATION_PROVIDER_PROTOCOL_VERSION),
+      )
+      .await?,
+    ))
   } else {
     None
   };

@@ -1,10 +1,23 @@
 <woml>
   <workflow
     id="telegram-approval-demo"
-    name="Telegram Approval Demo"
-    description="Requests one durable approval through Telegram."
+    name="Telegram Approval and Lifecycle"
+    description="Requests approval through Telegram and reports when the workflow completes."
     version="1.0.0"
   >
+    <lifecycle>
+      <on-complete>
+        <notify>
+          <!-- Replace this with your numeric user, group, or channel ID. -->
+          <telegram
+            chats="8979363187"
+            message="Workflow completed successfully."
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+
     <triggers>
       <manual id="start" />
     </triggers>
@@ -20,7 +33,7 @@
         <notify>
           <!-- Replace this with your numeric user, group, or channel ID. -->
           <telegram
-            chats="123456789"
+            chats="8979363187"
             bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
           />
         </notify>

@@ -1020,10 +1020,13 @@ pub fn is_notification_delivery_id(value: &str, approval_id: &str) -> bool {
   let Some(suffix) = value.strip_prefix(&format!("{approval_id}:notify:")) else {
     return false;
   };
-  let Some((tag, channel)) = suffix.split_once(":channel:") else {
+  let Some((tag, destination)) = suffix
+    .split_once(":channel:")
+    .or_else(|| suffix.split_once(":chat:"))
+  else {
     return false;
   };
-  [tag, channel].iter().all(|part| {
+  [tag, destination].iter().all(|part| {
     !part.is_empty()
       && part.bytes().all(|byte| byte.is_ascii_digit())
       && (*part == "0" || !part.starts_with('0'))
