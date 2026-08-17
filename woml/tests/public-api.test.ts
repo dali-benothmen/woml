@@ -1,0 +1,39 @@
+import { describe, expect, test } from 'bun:test';
+
+import * as woml from '../src';
+
+describe('WOML frontend public API', () => {
+  test('exports the validation pass independently from model lowering', () => {
+    expect(woml.validateWoml).toBeFunction();
+  });
+
+  test('exports deterministic module packaging without moving execution into the frontend', () => {
+    expect(woml.buildWomlDefinitionPackage).toBeFunction();
+    expect(woml.buildWomlExecutableDefinitionPackage).toBeFunction();
+    expect(woml.WOML_EXECUTABLE_DEFINITION_PACKAGE_PROFILE).toBe(
+      'woml.definition-package/v2'
+    );
+    expect(woml.buildWomlRuntimeDefinitionPackage).toBeFunction();
+    expect(woml.generateWomlEditorDeclarations).toBeFunction();
+    expect(woml.inspectWomlModuleUsage).toBeFunction();
+    expect(woml.withWomlModuleTestRuntime).toBeFunction();
+    expect(woml.WOML_RUNTIME_DEFINITION_PACKAGE_PROFILE).toBe(
+      'woml.definition-package/v3'
+    );
+    expect(woml.WOML_WORKFLOW_CALL_DEFINITION_PACKAGE_PROFILE).toBe(
+      'woml.definition-package/v4'
+    );
+    expect(woml.WOML_WORKFLOW_CALL_RUNTIME_DEFINITION_PACKAGE_PROFILE).toBe(
+      'woml.definition-package/v5'
+    );
+    expect(woml).not.toHaveProperty('loadWomlModuleArtifacts');
+  });
+
+  test('does not export the retired TypeScript execution surface', () => {
+    expect(woml).not.toHaveProperty('executeWorkflow');
+    expect(woml).not.toHaveProperty('createRuntimeHandlerRegistry');
+    expect(woml).not.toHaveProperty('HandlerRegistry');
+    expect(woml).not.toHaveProperty('runScriptInWorker');
+    expect(woml).not.toHaveProperty('WorkflowExecutionError');
+  });
+});

@@ -1,0 +1,37 @@
+╭─ WOML WORKFLOW ──────────────────────────────────────────────────────────────────────────────────╮
+│ Automation Triggers                                                                       v1.0.0 │
+│ Shows the activation instructions for every trigger currently supported by WOML.                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+TRIGGERS
+
+  ● Manual
+    Press Enter to start a run
+
+  ● Webhook
+    POST  http://127.0.0.1:3000/webhooks/orders
+
+    Try it
+    curl --request POST 'http://127.0.0.1:3000/webhooks/orders'
+
+  ● Event
+    Event  order.created
+    POST   http://127.0.0.1:3000/events/order.created
+
+    Try it
+    curl --request POST 'http://127.0.0.1:3000/events/order.created'
+
+  ● Slack
+    Workspace  T0BNLAP0DRT
+    Scope      #woml-testing · app mentions
+
+  ● Schedule
+    Schedule   0 9 * * *
+    Timezone   Europe/Berlin
+    Next       2026-08-15T07:00:00.000Z
+
+  ● Interval
+    Every      5m
+    Next       2026-08-14T08:47:18.000Z
+
+  ● Ready · Press Ctrl+C to stop

@@ -1,0 +1,52 @@
+<woml>
+  <workflow
+    id="discord-approval-demo"
+    name="Discord Approval and Lifecycle"
+    description="Requests approval through Discord and reports when the workflow completes."
+    version="1.0.0"
+  >
+    <lifecycle>
+      <on-complete>
+        <notify>
+          <discord
+            channels="200000000000000001"
+            message="Workflow completed successfully."
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <approval
+        id="review"
+        name="Approve the WOML test run"
+        timeout="24h"
+        on-timeout="reject"
+      >
+        <notify>
+          <discord
+            channels="200000000000000001"
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+        </notify>
+
+        <when-approved>
+          <step id="approved" name="Approval accepted">
+            <script>return { decision: 'approved' };</script>
+          </step>
+        </when-approved>
+
+        <when-rejected>
+          <step id="rejected" name="Approval rejected">
+            <script>return { decision: 'rejected' };</script>
+          </step>
+        </when-rejected>
+      </approval>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,24 @@
+<woml>
+  <workflow
+    id="terminal-sequential"
+    name="Terminal sequential demo"
+    description="Prepares a customer and builds a greeting in two visible steps."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="prepare" name="Prepare customer" description="Normalize the input used by the greeting.">
+        <script>
+          return { customer: "Alex", language: "en" };
+        </script>
+      </step>
+      <step id="greet" name="Build greeting" description="Use the previous step through context.steps.">
+        <script>
+          return { message: `Hello ${context.steps.prepare.customer}` };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

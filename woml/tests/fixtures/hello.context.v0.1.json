@@ -1,0 +1,25 @@
+{
+  "beforeA": {
+    "trigger": {},
+    "steps": {}
+  },
+  "afterA": {
+    "trigger": {},
+    "steps": {
+      "a": {
+        "x": "World"
+      }
+    }
+  },
+  "afterB": {
+    "trigger": {},
+    "steps": {
+      "a": {
+        "x": "World"
+      },
+      "b": {
+        "message": "Hello World"
+      }
+    }
+  }
+}

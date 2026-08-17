@@ -1,0 +1,18 @@
+{
+  "eventSchemaVersion": 1,
+  "eventId": "evt_host_crashed_001",
+  "runId": "run_host_crashed_01",
+  "sequence": 3,
+  "occurredAt": "2026-08-06T12:00:01.000Z",
+  "type": "step_attempt_failed",
+  "data": {
+    "nodeId": "a",
+    "attempt": 1,
+    "invocationId": "inv_host_crashed_01",
+    "failure": {
+      "kind": "host_crashed",
+      "code": "WOML_SCRIPT_HOST_CRASHED",
+      "message": "The Bun script host exited while the invocation was in flight."
+    }
+  }
+}

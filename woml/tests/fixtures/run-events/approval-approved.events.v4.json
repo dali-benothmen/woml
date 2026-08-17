@@ -1,0 +1,52 @@
+[
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_001", "runId": "run_approval_ok", "sequence": 1,
+    "occurredAt": "2026-08-07T10:00:00.000Z", "type": "run_started",
+    "data": { "workflowId": "publish-article", "definitionHash": "sha256:c85377270773c4abb178ba2811109843be53df66c91fedea04bb37d586901aa9", "trigger": {} }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_002", "runId": "run_approval_ok", "sequence": 2,
+    "occurredAt": "2026-08-07T10:00:00.001Z", "type": "step_attempt_started",
+    "data": { "nodeId": "prepareArticle", "attempt": 1, "invocationId": "inv_prepare_ok", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_003", "runId": "run_approval_ok", "sequence": 3,
+    "occurredAt": "2026-08-07T10:00:00.002Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "prepareArticle", "attempt": 1, "invocationId": "inv_prepare_ok", "output": { "title": "WOML reaches human review", "ready": true } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_004", "runId": "run_approval_ok", "sequence": 4,
+    "occurredAt": "2026-08-07T10:00:00.003Z", "type": "approval_requested",
+    "data": { "approvalId": "editorApproval", "requestId": "aprreq_editor_ok", "expiresAt": "2026-08-08T10:00:00.003Z", "onTimeout": "reject" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_005", "runId": "run_approval_ok", "sequence": 5,
+    "occurredAt": "2026-08-07T10:05:00.000Z", "type": "approval_resolved",
+    "data": { "approvalId": "editorApproval", "requestId": "aprreq_editor_ok", "resolution": { "kind": "decision", "decision": "approved", "source": "human" } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_006", "runId": "run_approval_ok", "sequence": 6,
+    "occurredAt": "2026-08-07T10:05:00.001Z", "type": "step_attempt_started",
+    "data": { "nodeId": "publish", "attempt": 1, "invocationId": "inv_publish_ok", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_007", "runId": "run_approval_ok", "sequence": 7,
+    "occurredAt": "2026-08-07T10:05:00.002Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "publish", "attempt": 1, "invocationId": "inv_publish_ok", "output": { "published": true, "title": "WOML reaches human review" } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_008", "runId": "run_approval_ok", "sequence": 8,
+    "occurredAt": "2026-08-07T10:05:00.003Z", "type": "step_attempt_started",
+    "data": { "nodeId": "finalStatus", "attempt": 1, "invocationId": "inv_final_ok", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_009", "runId": "run_approval_ok", "sequence": 9,
+    "occurredAt": "2026-08-07T10:05:00.004Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "finalStatus", "attempt": 1, "invocationId": "inv_final_ok", "output": { "decision": "approved", "source": "human", "published": true } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_ok_010", "runId": "run_approval_ok", "sequence": 10,
+    "occurredAt": "2026-08-07T10:05:00.005Z", "type": "run_succeeded",
+    "data": { "terminalNodeId": "finalStatus", "result": { "decision": "approved", "source": "human", "published": true } }
+  }
+]

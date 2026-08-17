@@ -1,0 +1,11 @@
+<woml>
+<workflow id="terminal-fork" version="1.0.0">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="mainResult"><script>return { accepted: true };</script></step>
+    <fork id="terminalDistribution" join="none">
+      <branch id="audit"><step id="recordAudit"><script>return { recorded: true };</script></step></branch>
+    </fork>
+  </steps>
+</workflow>
+</woml>

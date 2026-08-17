@@ -1,0 +1,45 @@
+[
+  {
+    "eventSchemaVersion": 13,
+    "eventId": "event_1",
+    "runId": "run_reusable_1",
+    "sequence": 1,
+    "occurredAt": "2026-08-13T10:00:00.000Z",
+    "type": "reusable_lifecycle_requested",
+    "data": {
+      "invocationId": "discount",
+      "definitionDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "hook": "on-success"
+    }
+  },
+  {
+    "eventSchemaVersion": 13,
+    "eventId": "event_2",
+    "runId": "run_reusable_1",
+    "sequence": 2,
+    "occurredAt": "2026-08-13T10:00:00.010Z",
+    "type": "reusable_lifecycle_action_failed",
+    "data": {
+      "invocationId": "discount",
+      "definitionDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "hook": "on-success",
+      "actionId": "discount:on-success:0",
+      "outcome": "failed",
+      "warningCode": "WOML_REUSABLE_LIFECYCLE_ACTION_FAILED"
+    }
+  },
+  {
+    "eventSchemaVersion": 13,
+    "eventId": "event_3",
+    "runId": "run_reusable_1",
+    "sequence": 3,
+    "occurredAt": "2026-08-13T10:00:00.020Z",
+    "type": "reusable_lifecycle_completed",
+    "data": {
+      "invocationId": "discount",
+      "definitionDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "hook": "on-success",
+      "outcome": "completed_with_warnings"
+    }
+  }
+]

@@ -1,0 +1,113 @@
+{
+  "WOML manual workflow": {
+    "prefix": "woml-workflow",
+    "description": "Create a WOML workflow with a manual trigger.",
+    "body": [
+      "<woml>",
+      "  <workflow id=\"${1:workflow-id}\" name=\"${2:Workflow name}\" description=\"${3:What this workflow does}\" version=\"${4:1.0.0}\">",
+      "    <triggers>",
+      "      <manual id=\"${5:start}\" />",
+      "    </triggers>",
+      "",
+      "    <steps>",
+      "      <step id=\"${6:firstStep}\" name=\"${7:First step}\">",
+      "        <script>",
+      "          return { ${8:message}: \"${9:Hello WOML}\" };",
+      "        </script>",
+      "      </step>",
+      "    </steps>",
+      "  </workflow>",
+      "</woml>"
+    ]
+  },
+  "WOML step": {
+    "prefix": "woml-step",
+    "description": "Create a named WOML script step.",
+    "body": [
+      "<step id=\"${1:stepId}\" name=\"${2:Step name}\" description=\"${3:What this step does}\">",
+      "  <script>",
+      "    ${4:return { ok: true };}",
+      "  </script>",
+      "</step>"
+    ]
+  },
+  "WOML Telegram trigger": {
+    "prefix": "woml-telegram-trigger",
+    "description": "Create a Telegram message trigger.",
+    "body": [
+      "<telegram id=\"${1:agentMessage}\" events=\"message\" bot-token=\"{{secrets.${2:TELEGRAM_BOT_TOKEN}}}\" />"
+    ]
+  },
+  "WOML Telegram message": {
+    "prefix": "woml-telegram-send",
+    "description": "Send a Telegram message from a WOML script.",
+    "body": [
+      "const message = await services.telegram.send({",
+      "  botToken: secrets.${1:TELEGRAM_BOT_TOKEN},",
+      "  conversationId: ${2:context.payload.conversationId},",
+      "  text: ${3:\"Hello from WOML\"}",
+      "}, { name: \"${4:send-message}\" });"
+    ]
+  },
+  "WOML Discord trigger": {
+    "prefix": "woml-discord-trigger",
+    "description": "Create a Discord mention and direct-message trigger.",
+    "body": [
+      "<discord id=\"${1:agentMessage}\" events=\"${2:app-mention,direct-message}\" channels=\"${3:200000000000000001}\" bot-token=\"{{secrets.${4:DISCORD_BOT_TOKEN}}}\" />"
+    ]
+  },
+  "WOML Discord message": {
+    "prefix": "woml-discord-send",
+    "description": "Send a Discord message from a WOML script.",
+    "body": [
+      "const message = await services.discord.send({",
+      "  botToken: secrets.${1:DISCORD_BOT_TOKEN},",
+      "  conversationId: ${2:context.payload.conversationId},",
+      "  text: ${3:\"Hello from WOML\"},",
+      "  replyToMessageId: ${4:context.payload.messageId}",
+      "}, { name: \"${5:send-message}\" });"
+    ]
+  },
+  "WOML WhatsApp trigger": {
+    "prefix": "woml-whatsapp-trigger",
+    "description": "Create a WhatsApp Cloud API message trigger.",
+    "body": [
+      "<whatsapp",
+      "  id=\"${1:customerMessage}\"",
+      "  events=\"message\"",
+      "  phone-number-id=\"${2:123456789012345}\"",
+      "  verify-token=\"{{secrets.${3:WHATSAPP_VERIFY_TOKEN}}}\"",
+      "  app-secret=\"{{secrets.${4:WHATSAPP_APP_SECRET}}}\"",
+      "/>"
+    ]
+  },
+  "WOML WhatsApp notification": {
+    "prefix": "woml-whatsapp-notify",
+    "description": "Add an approved WhatsApp template notification.",
+    "body": [
+      "<whatsapp",
+      "  recipients=\"${1:15551234567}\"",
+      "  access-token=\"{{secrets.${2:WHATSAPP_ACCESS_TOKEN}}}\"",
+      "  phone-number-id=\"${3:123456789012345}\"",
+      "  template=\"${4:woml_approval_v1}\"",
+      "  language=\"${5:en_US}\"",
+      "/>"
+    ]
+  },
+  "WOML WhatsApp template message": {
+    "prefix": "woml-whatsapp-send",
+    "description": "Send an approved WhatsApp template from a WOML script.",
+    "body": [
+      "const message = await services.whatsapp.send({",
+      "  accessToken: secrets.${1:WHATSAPP_ACCESS_TOKEN},",
+      "  phoneNumberId: '${2:123456789012345}',",
+      "  conversationId: ${3:context.payload.conversationId},",
+      "  template: {",
+      "    name: '${4:workflow_completed}',",
+      "    language: '${5:en_US}',",
+      "    parameters: [${6:'build-42'}]",
+      "  }",
+      "}, { name: \"${7:send-template}\" });"
+    ]
+  }
+}

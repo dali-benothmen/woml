@@ -15,14 +15,17 @@
 # chore:    Changes to the build process or auxiliary tools
 
 # Scopes:
-# sdk:      Node.js SDK changes
-# core:     Rust core engine changes
-# services: Built-in services changes
+# frontend: WOML parser, validation, and lowering changes
+# cli:      Command-line and runtime-host changes
+# engine:   Rust execution engine changes
+# native:   N-API adapter changes
+# services: Built-in capability changes
+# editor:   VS Code extension changes
 # docs:     Documentation changes
 # build:    Build system changes
 
 # Examples:
-# feat(sdk): add parallel workflow execution
-# fix(core): resolve memory leak in state manager
-# docs: update API reference
+# feat(frontend): add workflow syntax validation
+# fix(engine): preserve retry state during recovery
+# docs: update the language reference
 # chore(build): update TypeScript configuration

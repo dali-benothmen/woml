@@ -1,0 +1,109 @@
+<woml>
+<workflow
+  id="manual-fork-demo"
+  name="Manual fork demo"
+  description="Three branches, two joined routes, and conditions inside a branch and on the main route."
+  version="1.0.0"
+>
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="prepareOrder">
+      <script>
+        return {
+          orderId: "order-42",
+          total: 120,
+          inStock: true
+        };
+      </script>
+    </step>
+
+    <!-- Only inventory and payment must join before the main route continues. -->
+    <fork id="processOrder" join="inventory payment">
+      <branch id="inventory">
+        <!-- This condition runs inside the inventory branch. -->
+        <choose id="inventoryOutcome">
+          <when test="{{context.steps.prepareOrder.inStock}}">
+            <step id="reserveInventory">
+              <script>
+                return { reserved: true, status: "items-reserved" };
+              </script>
+            </step>
+            <result value="{{context.steps.reserveInventory}}" />
+          </when>
+
+          <otherwise>
+            <step id="rejectInventory">
+              <script>
+                return { reserved: false, status: "out-of-stock" };
+              </script>
+            </step>
+            <result value="{{context.steps.rejectInventory}}" />
+          </otherwise>
+        </choose>
+      </branch>
+
+      <branch id="payment">
+        <step id="collectPayment">
+          <script>
+            return {
+              paid: true,
+              amount: context.steps.prepareOrder.total
+            };
+          </script>
+        </step>
+      </branch>
+
+      <!-- This branch remains owned by the run but does not block the selected join. -->
+      <branch id="analytics">
+        <step id="recordAnalytics">
+          <script>
+            await new Promise(resolve => setTimeout(resolve, 500));
+            return { recorded: true, orderId: context.steps.prepareOrder.orderId };
+          </script>
+        </step>
+      </branch>
+    </fork>
+
+    <!-- This condition runs on the main route after the selected join. -->
+    <choose id="fulfillmentOutcome">
+      <when test="{{context.steps.inventoryOutcome.reserved}}">
+        <step id="createShipment">
+          <script>
+            return {
+              status: "ready-to-ship",
+              orderId: context.steps.prepareOrder.orderId
+            };
+          </script>
+        </step>
+        <result value="{{context.steps.createShipment}}" />
+      </when>
+
+      <otherwise>
+        <step id="refundPayment">
+          <script>
+            return {
+              status: "refund-required",
+              amount: context.steps.collectPayment.amount
+            };
+          </script>
+        </step>
+        <result value="{{context.steps.refundPayment}}" />
+      </otherwise>
+    </choose>
+
+    <step id="finish">
+      <script>
+        return {
+          orderId: context.steps.prepareOrder.orderId,
+          inventory: context.steps.inventoryOutcome.status,
+          payment: context.steps.collectPayment,
+          fulfillment: context.steps.fulfillmentOutcome
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

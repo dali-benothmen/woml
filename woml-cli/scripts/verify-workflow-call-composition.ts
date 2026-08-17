@@ -1,0 +1,41 @@
+#!/usr/bin/env bun
+
+import { resolve } from 'node:path';
+
+const repositoryRoot = resolve(import.meta.dir, '../..');
+
+for (const [file, required] of [
+  [
+    'docs/protocols/workflow-calls-v1.md',
+    'Workflow Call Progress v1 is a separate operator surface',
+  ],
+  [
+    'docs/woml-workflow-calls.md',
+    'contains `parentCall` for a',
+  ],
+  [
+    'docs/schemas/workflow-call-progress.v1.schema.json',
+    'woml.workflow-call-progress',
+  ],
+  [
+    'core/woml-engine/tests/workflow_call_composition.rs',
+    'nested_cross_process_calls_compose_with_branch_and_parallel_targets',
+  ],
+  [
+    'woml-cli/tests/workflow-call-composition-cli.test.ts',
+    'calls a module-backed child and inspects both durable runs',
+  ],
+] as const) {
+  const contents = await Bun.file(resolve(repositoryRoot, file)).text();
+  if (!contents.includes(required)) {
+    throw new Error(`WC6 artifact ${file} is missing ${required}.`);
+  }
+}
+
+process.stdout.write(
+  '[WC6] composition, safe call progress, bounded inspection, and approval preflight are complete\n'
+);
+
+await import('./verify-workflow-call-routing.ts');
+
+process.stdout.write('[WC6] Workflow Call product-completion gate passed\n');

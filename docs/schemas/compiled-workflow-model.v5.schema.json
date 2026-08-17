@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v5",
+  "title": "WOML Compiled Workflow Model v5",
+  "description": "Language-neutral DAG contract adding Slack-first approval notification delivery definitions with symbolic secret references.",
+  "x-status": "notification-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v4",
+  "x-frozenProfile": {
+    "name": "woml-cli-slack-notification",
+    "sourceFixture": "woml/tests/fixtures/approval-slack.woml",
+    "compiledFixture": "woml/tests/fixtures/approval-slack.compiled.v5.json",
+    "deliveryId": "<approvalId>:notify:<zeroBasedSlackTagIndex>:channel:<zeroBasedChannelIndex>"
+  },
+  "x-invariants": [
+    "The model remains a directed acyclic graph.",
+    "Notifications are declarative approval-wait inputs, not executable provider callbacks.",
+    "One expanded channel produces one deterministic delivery definition.",
+    "Only typed secret names enter the model; resolved secret values are forbidden.",
+    "Rust treats provider, destination, and credential bindings as opaque delivery data and does not implement Slack API rules."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 5 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "#/$defs/workflowGraph" }
+  },
+  "$defs": {
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges"],
+      "properties": {
+        "entryNodeIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" }
+        },
+        "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/workflowNode" } },
+        "edges": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/workflowEdge" } }
+      }
+    },
+    "workflowNode": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/nonApprovalNode" },
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/approvalWaitNode" },
+        { "$ref": "#/$defs/notifyingApprovalWaitNode" },
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/approvalJoinNode" }
+      ]
+    },
+    "notifyingApprovalWaitNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/publicStructuralId" },
+        "handler": { "const": "engine.approval-wait" },
+        "inputs": { "$ref": "#/$defs/notifyingApprovalWaitInputs" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "description": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "notifyingApprovalWaitInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["onTimeout", "notifications"],
+          "properties": {
+            "timeoutMs": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "const": "literal" },
+                "value": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+              }
+            },
+            "onTimeout": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "const": "literal" },
+                "value": { "enum": ["reject", "fail"] }
+              }
+            },
+            "notifications": { "$ref": "#/$defs/notificationArray" }
+          }
+        }
+      }
+    },
+    "notificationArray": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/slackDelivery" } }
+      }
+    },
+    "slackDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/deliveryIdLiteral" },
+            "provider": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": { "kind": { "const": "literal" }, "value": { "const": "slack" } }
+            },
+            "destination": { "$ref": "#/$defs/slackDestinationLiteral" },
+            "credentials": { "$ref": "#/$defs/slackCredentials" }
+          }
+        }
+      }
+    },
+    "deliveryIdLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$", "maxLength": 320 }
+      }
+    },
+    "slackDestinationLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "type": "string", "pattern": "^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$" }
+      }
+    },
+    "slackCredentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["botToken", "appToken"],
+          "properties": {
+            "botToken": { "$ref": "#/$defs/secretReference" },
+            "appToken": { "$ref": "#/$defs/secretReference" }
+          }
+        }
+      }
+    },
+    "secretReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "const": "secretReference" },
+        "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 255 }
+      }
+    }
+  }
+}

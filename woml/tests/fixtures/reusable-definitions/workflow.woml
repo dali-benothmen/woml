@@ -1,0 +1,43 @@
+<woml>
+  <imports>
+    <module name="calculate-discount" from="./calculate-discount.woml" />
+    <module name="telegram" from="./telegram.woml" />
+  </imports>
+  <workflow id="reusable-definitions" name="Reusable definitions">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="order">
+        <script>
+          return { price: 120, percentage: 20 };
+        </script>
+      </step>
+      <calculate-discount
+        id="discount"
+        price="{{context.steps.order.price}}"
+        percentage="{{context.steps.order.percentage}}"
+        retry="3"
+      />
+      <approval id="review" name="Review discount">
+        <notify>
+          <telegram
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+            chat-id="finance-team"
+          />
+        </notify>
+        <when-approved>
+          <step id="approved"><script>return { approved: true };</script></step>
+        </when-approved>
+        <when-rejected>
+          <step id="rejected"><script>return { approved: false };</script></step>
+        </when-rejected>
+      </approval>
+      <step id="finish">
+        <script>
+          return context.steps.discount;
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

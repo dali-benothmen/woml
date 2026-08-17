@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/trigger-ingress/v1",
+  "title": "WOML Trigger Ingress v1",
+  "description": "Language-neutral admission protocol used by listeners, provider adapters, schedulers, and event publishers to ask Rust for one durable workflow run.",
+  "x-status": "production-trigger-contract-frozen",
+  "x-invariants": [
+    "Rust is the only authority that accepts, deduplicates, conflicts, or rejects an occurrence.",
+    "Accepted means occurrence, run, and run_started committed atomically.",
+    "A repeated source identity and payload returns the original run as duplicate.",
+    "A repeated source identity with a different payload is rejected as an idempotency conflict.",
+    "Resolved credentials never appear in this protocol."
+  ],
+  "oneOf": [
+    { "$ref": "#/$defs/admit" },
+    { "$ref": "#/$defs/accepted" },
+    { "$ref": "#/$defs/rejected" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["contract", "contractVersion", "messageType", "requestId"],
+      "properties": {
+        "contract": { "const": "woml.trigger-ingress" },
+        "contractVersion": { "const": 1 },
+        "messageType": { "enum": ["admit", "accepted", "rejected"] },
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "admit": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contract", "contractVersion", "messageType", "requestId",
+            "workflowId", "definitionHash", "triggerId", "triggerHandler",
+            "sourceIdentity", "payload", "receivedAt"
+          ],
+          "properties": {
+            "contract": { "const": "woml.trigger-ingress" },
+            "contractVersion": { "const": 1 },
+            "messageType": { "const": "admit" },
+            "requestId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "workflowId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+            "definitionHash": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/definitionHash" },
+            "triggerId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+            "triggerHandler": { "$ref": "https://cronflow.dev/schemas/run-event/v7#/$defs/triggerHandler" },
+            "sourceIdentity": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "payload": { "type": "object" },
+            "receivedAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "accepted": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contract", "contractVersion", "messageType", "requestId",
+            "occurrenceId", "runId", "duplicate"
+          ],
+          "properties": {
+            "contract": { "const": "woml.trigger-ingress" },
+            "contractVersion": { "const": 1 },
+            "messageType": { "const": "accepted" },
+            "requestId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "occurrenceId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+            "runId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+            "duplicate": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "rejected": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contract", "contractVersion", "messageType", "requestId", "failure"],
+          "properties": {
+            "contract": { "const": "woml.trigger-ingress" },
+            "contractVersion": { "const": 1 },
+            "messageType": { "const": "rejected" },
+            "requestId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "failure": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "message", "retryable"],
+              "properties": {
+                "code": {
+                  "enum": [
+                    "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+                    "WOML_TRIGGER_DEFINITION_MISMATCH",
+                    "WOML_TRIGGER_PAYLOAD_INVALID",
+                    "WOML_TRIGGER_PAYLOAD_TOO_LARGE",
+                    "WOML_TRIGGER_UNAVAILABLE",
+                    "WOML_TRIGGER_HISTORY_INVALID"
+                  ]
+                },
+                "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+                "retryable": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,83 @@
+<woml>
+<workflow id="services-order-publisher" name="Services order publisher" version="1.0.0">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="prepareOrder" name="Persist and cache an order">
+      <script>
+        const order = {
+          id: 'order-42',
+          customer: 'Alex',
+          total: 125
+        };
+        const db = services.db({
+          driver: 'sqlite',
+          connection: './.woml/services-composition.sqlite'
+        });
+
+        await db.execute({
+          text: `CREATE TABLE IF NOT EXISTS orders (
+            id TEXT PRIMARY KEY,
+            customer TEXT NOT NULL,
+            total INTEGER NOT NULL
+          )`
+        }, { name: 'create-orders-table' });
+
+        const [databaseWrite, object, cached] = await Promise.all([
+          db.execute({
+            text: `INSERT INTO orders (id, customer, total) VALUES (?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                customer = excluded.customer,
+                total = excluded.total`,
+            values: [order.id, order.customer, order.total]
+          }, { name: 'save-order' }),
+          services.storage.put({
+            key: `examples/orders/${order.id}.json`,
+            value: order,
+            overwrite: true
+          }, { name: 'store-order-document' }),
+          services.cache.set(
+            `order:${order.id}`,
+            order,
+            { ttl: '15m', name: 'cache-order' }
+          )
+        ]);
+
+        const [databaseRead, stored, cachedOrder] = await Promise.all([
+          db.query({
+            text: 'SELECT id, customer, total FROM orders WHERE id = ?',
+            values: [order.id]
+          }),
+          services.storage.get({
+            key: object.key,
+            responseType: 'json',
+            ifVersion: object.version
+          }),
+          services.cache.get(`order:${order.id}`)
+        ]);
+
+        return {
+          order: databaseRead.rows[0],
+          databaseRowsChanged: databaseWrite.rowsAffected,
+          storageKey: object.key,
+          storageMatches: stored.data.id === order.id,
+          cacheHit: cached.stored && cachedOrder.hit
+        };
+      </script>
+    </step>
+
+    <step id="announceOrder" name="Announce the prepared order">
+      <script>
+        return await services.events.emit('order.prepared', {
+          orderId: context.steps.prepareOrder.order.id,
+          customer: context.steps.prepareOrder.order.customer,
+          total: context.steps.prepareOrder.order.total,
+          storageKey: context.steps.prepareOrder.storageKey
+        });
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

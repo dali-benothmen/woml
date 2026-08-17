@@ -1,0 +1,123 @@
+{
+  "profile": "woml.run-presentation/v1",
+  "workflow": {
+    "id": "order-processing",
+    "name": "Order Processing",
+    "description": "Validates an order, calculates its total, and selects delivery.",
+    "version": "1.4.0",
+    "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "triggers": [
+      {
+        "id": "start",
+        "type": "manual"
+      }
+    ]
+  },
+  "runId": "run_8f21c4",
+  "trigger": {
+    "id": "start",
+    "type": "manual"
+  },
+  "status": "succeeded",
+  "admittedAt": "2026-08-14T08:42:18.000Z",
+  "startedAt": "2026-08-14T08:42:18.001Z",
+  "completedAt": "2026-08-14T08:42:18.073Z",
+  "durationMs": 73,
+  "steps": [
+    {
+      "id": "prepareOrder",
+      "name": "Prepare order",
+      "description": "Normalize and validate the submitted order.",
+      "kind": "script",
+      "status": "succeeded",
+      "depth": 0,
+      "startedAt": "2026-08-14T08:42:18.001Z",
+      "completedAt": "2026-08-14T08:42:18.019Z",
+      "durationMs": 18,
+      "attempts": 1,
+      "result": {
+        "orderId": "order-42",
+        "customer": "Dali",
+        "items": 3
+      }
+    },
+    {
+      "id": "calculateTotal",
+      "name": "Calculate total",
+      "description": "Calculate taxes and final price.",
+      "kind": "custom_step",
+      "status": "succeeded",
+      "depth": 0,
+      "startedAt": "2026-08-14T08:42:18.019Z",
+      "completedAt": "2026-08-14T08:42:18.050Z",
+      "durationMs": 31,
+      "attempts": 1,
+      "result": {
+        "subtotal": 120,
+        "tax": 24,
+        "total": 144
+      }
+    },
+    {
+      "id": "selectDelivery",
+      "name": "Select delivery",
+      "kind": "switch",
+      "status": "succeeded",
+      "depth": 0,
+      "startedAt": "2026-08-14T08:42:18.050Z",
+      "completedAt": "2026-08-14T08:42:18.054Z",
+      "durationMs": 4,
+      "attempts": 1,
+      "detail": "Selected case \"express\".",
+      "result": {
+        "provider": "express",
+        "estimatedDays": 1
+      }
+    },
+    {
+      "id": "buildConfirmation",
+      "name": "Build confirmation",
+      "description": "Generate the final customer response.",
+      "kind": "script",
+      "status": "succeeded",
+      "depth": 0,
+      "startedAt": "2026-08-14T08:42:18.054Z",
+      "completedAt": "2026-08-14T08:42:18.066Z",
+      "durationMs": 12,
+      "attempts": 1,
+      "result": {
+        "message": "Order order-42 was accepted",
+        "total": 144
+      }
+    }
+  ],
+  "summary": {
+    "succeeded": 4,
+    "failed": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "total": 4
+  },
+  "lifecycle": [
+    {
+      "hook": "on-success",
+      "status": "succeeded",
+      "durationMs": 6,
+      "provider": "console",
+      "detail": "Workflow completed successfully"
+    },
+    {
+      "hook": "on-complete",
+      "status": "succeeded",
+      "durationMs": 2,
+      "provider": "console",
+      "detail": "Final outcome: succeeded"
+    }
+  ],
+  "result": {
+    "message": "Order order-42 was accepted",
+    "total": 144,
+    "delivery": "express"
+  },
+  "warnings": []
+}

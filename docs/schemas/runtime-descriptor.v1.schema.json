@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-descriptor/v1",
+  "title": "WOML Local Runtime Descriptor v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "x-security": "Owner-only local file; capability expires with runtime instance.",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "runtimeInstanceId", "deploymentId", "pid", "adminUrl", "capability", "createdAt", "expiresAt"],
+  "properties": {
+    "profile": { "const": "woml.runtime-descriptor/v1" },
+    "runtimeInstanceId": { "$ref": "#/$defs/id" }, "deploymentId": { "$ref": "#/$defs/id" },
+    "pid": { "type": "integer", "minimum": 1 },
+    "adminUrl": { "type": "string", "pattern": "^http://(?:127\\.0\\.0\\.1|localhost|\\[::1\\]):[1-9][0-9]{0,4}$", "maxLength": 128 },
+    "capability": { "type": "string", "minLength": 43, "maxLength": 256 },
+    "createdAt": { "type": "string", "format": "date-time" }, "expiresAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": { "id": { "type": "string", "minLength": 1, "maxLength": 320 } }
+}

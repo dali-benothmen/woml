@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/trigger-progress/v1",
+  "title": "WOML Trigger Progress v1",
+  "description": "Secret-safe operational progress emitted by the Rust trigger runtime to a long-lived CLI.",
+  "x-status": "production-trigger-contract-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/occurrence" },
+    { "$ref": "#/$defs/runStarted" },
+    { "$ref": "#/$defs/runTerminal" },
+    { "$ref": "#/$defs/rejected" }
+  ],
+  "$defs": {
+    "commonProperties": {
+      "contract": { "const": "woml.trigger-progress" },
+      "contractVersion": { "const": 1 },
+      "occurredAt": { "type": "string", "format": "date-time" }
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "type", "registrationCount", "occurredAt"],
+      "properties": {
+        "contract": { "const": "woml.trigger-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "ready" },
+        "registrationCount": { "type": "integer", "minimum": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "occurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract", "contractVersion", "type", "workflowId", "triggerId",
+        "triggerHandler", "occurrenceId", "runId", "duplicate", "occurredAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.trigger-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "occurrence_accepted" },
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerHandler": { "$ref": "https://cronflow.dev/schemas/run-event/v7#/$defs/triggerHandler" },
+        "occurrenceId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "duplicate": { "type": "boolean" },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "runStarted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract", "contractVersion", "type", "workflowId", "triggerId",
+        "triggerHandler", "occurrenceId", "runId", "occurredAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.trigger-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "run_started" },
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerHandler": { "$ref": "https://cronflow.dev/schemas/run-event/v7#/$defs/triggerHandler" },
+        "occurrenceId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "runTerminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "type", "workflowId", "runId", "status", "occurredAt"],
+      "properties": {
+        "contract": { "const": "woml.trigger-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "run_terminal" },
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "enum": ["succeeded", "failed"] },
+        "failureCode": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "rejected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "type", "triggerHandler", "code", "message", "occurredAt"],
+      "properties": {
+        "contract": { "const": "woml.trigger-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "occurrence_rejected" },
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerHandler": { "$ref": "https://cronflow.dev/schemas/run-event/v7#/$defs/triggerHandler" },
+        "code": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

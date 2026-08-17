@@ -1,0 +1,15 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "inv_worker_crash_01",
+  "outcome": {
+    "kind": "failure",
+    "error": {
+      "kind": "worker_crashed",
+      "code": "WOML_SCRIPT_WORKER_CRASHED",
+      "message": "The isolated script Worker exited without a result."
+    }
+  },
+  "durationMs": 6
+}

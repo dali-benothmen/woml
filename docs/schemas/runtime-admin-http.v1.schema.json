@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-admin-http/v1",
+  "title": "WOML Runtime Admin HTTP v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "oneOf": [
+    {
+      "type": "object", "additionalProperties": false, "required": ["profile", "kind", "requestId", "operation"],
+      "properties": {
+        "profile": { "const": "woml.runtime-admin-http/v1" }, "kind": { "const": "request" },
+        "requestId": { "$ref": "#/$defs/id" }, "operation": { "enum": ["snapshot", "stream", "health", "metrics", "list_runs", "get_run", "cancel_run", "stop"] },
+        "subjectId": { "$ref": "#/$defs/id" }
+      }
+    },
+    {
+      "type": "object", "additionalProperties": false, "required": ["profile", "kind", "requestId", "status"],
+      "properties": {
+        "profile": { "const": "woml.runtime-admin-http/v1" }, "kind": { "const": "response" },
+        "requestId": { "$ref": "#/$defs/id" }, "status": { "enum": ["accepted", "succeeded", "failed"] },
+        "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$", "maxLength": 128 }
+      }
+    }
+  ],
+  "$defs": { "id": { "type": "string", "minLength": 1, "maxLength": 320 } }
+}

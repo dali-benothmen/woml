@@ -1,0 +1,16 @@
+<woml>
+  <workflow id="switch-control-review">
+    <steps>
+      <step id="classify"><script>return { platform: "telegram" };</script></step>
+      <switch value="{{context.steps.classify.platform}}">
+        <case value="telegram">
+          <step id="sendTelegram"><script>return { sent: true };</script></step>
+        </case>
+        <default>
+          <step id="unsupported"><script>return { sent: false };</script></step>
+        </default>
+      </switch>
+      <step id="finish"><script>return { done: true };</script></step>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,26 @@
+[
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_failed_001", "runId": "run-services-failed", "sequence": 1, "occurredAt": "2026-08-09T08:10:00.000Z", "type": "run_started",
+    "data": { "workflowId": "services-bindings-contract", "definitionHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "triggerId": "start", "triggerHandler": "trigger.manual", "triggerOccurrenceId": "occurrence-services-failed", "trigger": {} }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_failed_002", "runId": "run-services-failed", "sequence": 2, "occurredAt": "2026-08-09T08:10:00.001Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-service-failed", "handler": "runtime.script", "idempotencyKey": "sha256:ff3f848f1abaca96b1e56cd9483623301935b57378158ac61db3f3e91e27742a" }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_failed_003", "runId": "run-services-failed", "sequence": 3, "occurredAt": "2026-08-09T08:10:00.002Z", "type": "operation_started",
+    "data": { "nodeId": "loadCustomer", "attemptNumber": 1, "invocationId": "invocation-service-failed", "callId": "call-http-timeout", "operationKey": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "capability": "http", "operation": "request", "executionMode": "managed", "metadata": { "method": "GET", "origin": "https://api.example.test" } }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_failed_004", "runId": "run-services-failed", "sequence": 4, "occurredAt": "2026-08-09T08:10:30.002Z", "type": "operation_failed",
+    "data": { "nodeId": "loadCustomer", "attemptNumber": 1, "invocationId": "invocation-service-failed", "callId": "call-http-timeout", "operationKey": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "capability": "http", "operation": "request", "executionMode": "managed", "metadata": { "method": "GET", "origin": "https://api.example.test" }, "durationMs": 30000, "failure": { "kind": "timed_out", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.", "retryable": true, "ambiguous": false } }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_failed_005", "runId": "run-services-failed", "sequence": 5, "occurredAt": "2026-08-09T08:10:30.003Z", "type": "step_attempt_failed",
+    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-service-failed", "failure": { "kind": "service_failed", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.", "capability": "http", "operation": "request", "callId": "call-http-timeout", "retryable": true, "ambiguous": false, "cause": { "kind": "timed_out", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.", "retryable": true, "ambiguous": false } } }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_failed_006", "runId": "run-services-failed", "sequence": 6, "occurredAt": "2026-08-09T08:10:30.004Z", "type": "run_failed",
+    "data": { "failureScope": "attempt", "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-service-failed", "failure": { "kind": "service_failed", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.", "capability": "http", "operation": "request", "callId": "call-http-timeout", "retryable": true, "ambiguous": false, "cause": { "kind": "timed_out", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.", "retryable": true, "ambiguous": false } } }
+  }
+]

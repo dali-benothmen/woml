@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/communication-messaging/v1",
+  "title": "WOML Communication Messaging Capability v1",
+  "description": "Versioned logical request/result layered on the existing supervised Capability Call v1 boundary.",
+  "x-status": "additional-communication-providers-acp0-frozen",
+  "oneOf": [{ "$ref": "#/$defs/request" }, { "$ref": "#/$defs/result" }, { "$ref": "#/$defs/failureResult" }],
+  "$defs": {
+    "provider": { "enum": ["slack", "telegram", "discord", "whatsapp"] },
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "secretReference": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "name"],
+      "properties": { "kind": { "const": "secretReference" }, "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } }
+    },
+    "botCredentials": {
+      "type": "object", "additionalProperties": false, "required": ["botToken"],
+      "properties": { "botToken": { "$ref": "#/$defs/secretReference" } }
+    },
+    "whatsappCredentials": {
+      "type": "object", "additionalProperties": false, "required": ["accessToken", "phoneNumberId"],
+      "properties": { "accessToken": { "$ref": "#/$defs/secretReference" }, "phoneNumberId": { "$ref": "#/$defs/id" } }
+    },
+    "credentialSet": { "oneOf": [{ "$ref": "#/$defs/botCredentials" }, { "$ref": "#/$defs/whatsappCredentials" }] },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "runId", "stepId", "provider", "operation", "destination", "credentials", "message", "idempotencyKey"],
+      "properties": {
+        "protocol": { "const": "woml.communication-messaging" }, "protocolVersion": { "const": 1 }, "messageType": { "const": "request" },
+        "invocationId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" }, "stepId": { "$ref": "#/$defs/id" },
+        "provider": { "$ref": "#/$defs/provider" }, "operation": { "const": "send" }, "destination": { "$ref": "#/$defs/id" },
+        "credentials": { "$ref": "#/$defs/credentialSet" },
+        "message": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": { "kind": { "const": "text" }, "text": { "type": "string", "minLength": 1, "maxLength": 40000 }, "replyToMessageId": { "$ref": "#/$defs/id" } } },
+            { "type": "object", "additionalProperties": false, "required": ["kind", "templateName", "language", "parameters"], "properties": { "kind": { "const": "whatsappTemplate" }, "templateName": { "type": "string", "pattern": "^[a-z0-9_]+$" }, "language": { "type": "string", "minLength": 2, "maxLength": 16 }, "parameters": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 1024 } } } }
+          ]
+        },
+        "idempotencyKey": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        { "if": { "properties": { "provider": { "const": "whatsapp" } }, "required": ["provider"] }, "then": { "properties": { "credentials": { "$ref": "#/$defs/whatsappCredentials" }, "message": { "properties": { "kind": { "const": "whatsappTemplate" } }, "required": ["kind"] } } } },
+        { "if": { "properties": { "provider": { "enum": ["slack", "telegram", "discord"] } }, "required": ["provider"] }, "then": { "properties": { "credentials": { "$ref": "#/$defs/botCredentials" }, "message": { "properties": { "kind": { "const": "text" } }, "required": ["kind"] } } } }
+      ]
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "providerMessage", "acceptedAt"],
+      "properties": {
+        "protocol": { "const": "woml.communication-messaging" }, "protocolVersion": { "const": 1 }, "messageType": { "const": "result" }, "invocationId": { "$ref": "#/$defs/id" },
+        "outcome": { "const": "sent" }, "acceptedAt": { "type": "string", "format": "date-time" }, "providerMessage": { "type": "object", "additionalProperties": false, "required": ["provider", "conversationId", "messageId"], "properties": { "provider": { "$ref": "#/$defs/provider" }, "conversationId": { "$ref": "#/$defs/id" }, "messageId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" } } }
+      }
+    },
+    "failureResult": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "error"],
+      "properties": {
+        "protocol": { "const": "woml.communication-messaging" }, "protocolVersion": { "const": 1 }, "messageType": { "const": "result" }, "invocationId": { "$ref": "#/$defs/id" }, "outcome": { "const": "failed" },
+        "error": { "type": "object", "additionalProperties": false, "required": ["kind", "code", "message", "retryable", "ambiguous"], "properties": { "kind": { "enum": ["request_invalid", "secret_not_found", "authentication_failed", "permission_denied", "destination_not_found", "rate_limited", "provider_unavailable", "transport_failed", "response_invalid", "size_limit_exceeded"] }, "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }, "message": { "type": "string", "minLength": 1, "maxLength": 2048 }, "retryable": { "type": "boolean" }, "ambiguous": { "type": "boolean" }, "retryAfterMs": { "type": "integer", "minimum": 0 } } }
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "contract": "woml.database",
+  "contractVersion": 1,
+  "kind": "request",
+  "driver": "postgres",
+  "connection": "postgresql://user:password@database.example.test:5432/app?sslmode=require",
+  "operation": "transaction",
+  "input": {
+    "operations": [
+      {
+        "operation": "insert",
+        "table": "customers",
+        "values": { "name": "Dali", "active": true }
+      },
+      {
+        "operation": "query",
+        "text": "SELECT id, name FROM customers WHERE active = $1",
+        "values": [true]
+      }
+    ]
+  }
+}

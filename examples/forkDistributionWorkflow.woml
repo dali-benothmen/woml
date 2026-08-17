@@ -1,0 +1,91 @@
+<woml>
+<workflow
+  id="social-distribution"
+  name="Social distribution"
+  description="Prepare one campaign and publish it through independent platform branches."
+  version="1.0.0"
+>
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="prepareCampaign">
+      <script>
+        return {
+          title: context.payload.title ?? "WOML launch",
+          url: context.payload.url ?? "https://woml.dev"
+        };
+      </script>
+    </step>
+
+    <fork id="distribution" join="all">
+      <branch id="tiktok">
+        <step id="formatTikTok">
+          <script>
+            return { caption: `${context.steps.prepareCampaign.title} #automation` };
+          </script>
+        </step>
+        <step id="publishTikTok">
+          <script>
+            return { platform: "tiktok", caption: context.steps.formatTikTok.caption };
+          </script>
+        </step>
+      </branch>
+
+      <branch id="instagram">
+        <step id="formatInstagram">
+          <script>
+            return { caption: `${context.steps.prepareCampaign.title}\n${context.steps.prepareCampaign.url}` };
+          </script>
+        </step>
+        <step id="publishInstagram">
+          <script>
+            return { platform: "instagram", caption: context.steps.formatInstagram.caption };
+          </script>
+        </step>
+      </branch>
+
+      <branch id="facebook">
+        <step id="formatFacebook">
+          <script>
+            return { text: `${context.steps.prepareCampaign.title}: ${context.steps.prepareCampaign.url}` };
+          </script>
+        </step>
+        <step id="publishFacebook">
+          <script>
+            return { platform: "facebook", text: context.steps.formatFacebook.text };
+          </script>
+        </step>
+      </branch>
+
+      <branch id="pinterest">
+        <step id="formatPinterest">
+          <script>
+            return { description: context.steps.prepareCampaign.title, link: context.steps.prepareCampaign.url };
+          </script>
+        </step>
+        <step id="publishPinterest">
+          <script>
+            return { platform: "pinterest", link: context.steps.formatPinterest.link };
+          </script>
+        </step>
+      </branch>
+    </fork>
+
+    <step id="distributionSummary">
+      <script>
+        return {
+          campaign: context.steps.prepareCampaign.title,
+          published: [
+            context.steps.publishTikTok.platform,
+            context.steps.publishInstagram.platform,
+            context.steps.publishFacebook.platform,
+            context.steps.publishPinterest.platform
+          ]
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

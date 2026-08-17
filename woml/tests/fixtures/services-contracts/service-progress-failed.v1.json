@@ -1,0 +1,7 @@
+{
+  "contract": "woml.service-progress", "contractVersion": 1, "status": "failed", "runId": "run-services-b", "nodeId": "loadCustomer",
+  "invocationId": "invocation-b", "callId": "call-http-b", "capability": "http", "operation": "request", "executionMode": "managed",
+  "occurredAt": "2026-08-09T08:01:00.000Z", "durationMs": 30000,
+  "error": { "kind": "timed_out", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.", "retryable": true, "ambiguous": false },
+  "metadata": { "method": "GET", "origin": "https://api.example.test" }
+}

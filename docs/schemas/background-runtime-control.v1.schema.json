@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/background-runtime-control/v1",
+  "title": "WOML Background Runtime Control v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "oneOf": [
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "kind", "runtimeInstanceId", "pid", "status", "descriptorPath", "logPath"],
+      "properties": {
+        "profile": { "const": "woml.background-runtime-control/v1" }, "kind": { "const": "started" },
+        "runtimeInstanceId": { "$ref": "#/$defs/id" }, "pid": { "type": "integer", "minimum": 1 },
+        "status": { "const": "ready" }, "descriptorPath": { "$ref": "#/$defs/path" }, "logPath": { "$ref": "#/$defs/path" }
+      }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "kind", "runtimeInstanceId", "status"],
+      "properties": {
+        "profile": { "const": "woml.background-runtime-control/v1" }, "kind": { "const": "stop" },
+        "runtimeInstanceId": { "$ref": "#/$defs/id" }, "status": { "enum": ["requested", "already_draining", "stopped"] }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096 }
+  }
+}

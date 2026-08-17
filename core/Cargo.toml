@@ -1,15 +1,10 @@
-[package]
-name = "core"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
+members = ["woml-engine", "woml-native"]
+default-members = ["woml-engine", "woml-native"]
 
-[lib]
-name = "core"
-crate-type = ["cdylib", "rlib"]
-
-# Optimize for Bun compatibility
 [profile.release]
-opt-level = "z"  # Optimize for size instead of speed
+opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
@@ -21,54 +16,3 @@ incremental = false
 [profile.dev]
 opt-level = 0
 debug = true
-
-[build-dependencies]
-napi-build = "2.0"
-
-[dependencies]
-# N-API for Node.js communication
-napi = { version = "2.15", default-features = false, features = ["napi4", "tokio_rt"] }
-napi-derive = "2.15"
-
-# JSON serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order"] }
-
-# Database operations
-rusqlite = { version = "0.30", features = ["bundled"] }
-
-# Error handling
-thiserror = "1.0"
-
-# Logging
-log = "0.4"
-env_logger = "0.11"
-
-# Async runtime
-tokio = { version = "1.0", features = ["full"] }
-
-# HTTP client for webhooks (using rustls instead of native OpenSSL for cross-platform builds)
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
-
-# HTTP server for webhooks
-actix-web = "4.4"
-actix-rt = "2.9"
-
-# Cron parsing
-cron = "0.12"
-
-# UUID generation
-uuid = { version = "1.0", features = ["v4", "serde"] }
-
-# Time handling
-chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.8"
-
-# Cryptographic functions for webhook signature validation
-hmac = "0.12"
-sha2 = "0.10"
-sha1 = "0.10"
-hex = "0.4"
-
-[dev-dependencies]
-tempfile = "3.8"

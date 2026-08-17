@@ -1,0 +1,38 @@
+{
+  "contract": "woml.events",
+  "contractVersion": 1,
+  "kind": "result",
+  "operation": "emit",
+  "data": {
+    "publicationId": "internal:v1:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "eventName": "customer.updated",
+    "status": "partial",
+    "depth": 1,
+    "acceptedCount": 1,
+    "duplicateCount": 0,
+    "rejectedCount": 1,
+    "deliveries": [
+      {
+        "workflowId": "sync-search-index",
+        "triggerId": "customerUpdated",
+        "status": "accepted",
+        "runId": "run_customer_42",
+        "duplicate": false
+      },
+      {
+        "workflowId": "update-crm",
+        "triggerId": "customerUpdated",
+        "status": "rejected",
+        "code": "WOML_TRIGGER_SCHEMA_INVALID",
+        "message": "Event payload does not match this subscriber schema.",
+        "retryable": false,
+        "issues": [
+          {
+            "path": "/customerId",
+            "message": "Event payload does not satisfy this subscriber schema."
+          }
+        ]
+      }
+    ]
+  }
+}

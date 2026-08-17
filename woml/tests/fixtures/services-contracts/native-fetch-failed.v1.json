@@ -1,0 +1,5 @@
+{
+  "contract": "woml.native-fetch-observation", "contractVersion": 1, "observationType": "failed",
+  "invocationId": "invocation-fetch-b", "requestId": "fetch-b", "durationMs": 4.2, "failedAt": "2026-08-09T08:00:01.004Z",
+  "error": { "kind": "fetch_rejected", "code": "WOML_NATIVE_FETCH_REJECTED", "message": "Bun Fetch rejected the request." }
+}

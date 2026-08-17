@@ -1,0 +1,132 @@
+# WOML Durable Recovery
+
+WOML records run decisions and outcomes in SQLite so the Rust core can rebuild
+a run without trusting an in-memory context object. Recovery folds the event
+history, identifies the only legal next action, and either continues safely or
+fails closed.
+
+## Resuming a run
+
+Use the exact recovery command printed by the CLI after a retry is first
+scheduled or a Human Approval begins:
+
+```bash
+woml run "workflow.woml" \
+  --state ".woml/state.sqlite" \
+  --resume "run_..."
+```
+
+The workflow file and state path must identify the definition and database
+bound to the original run. Do not edit the workflow and try to resume the old
+run as though it used the new definition; each run is immutable against its
+compiled definition.
+
+## Recovery rules
+
+| Durable state | Recovery result |
+|---|---|
+| Retry scheduled, next attempt not started | Wait until its recorded due time, then run that exact attempt. |
+| Attempt started, no terminal outcome | Record `interrupted` and fail closed; do not replay an ambiguous effect. |
+| Step succeeded | Keep its published output and never run that step again. |
+| Retry exhausted or non-retryable failure | Keep the run failed; do not invent another attempt. |
+| Run stopped after success but before downstream dispatch | Rebuild context from events and continue only the remaining nodes. |
+
+An attempt failure and its next schedule are committed atomically. The engine
+therefore cannot recover a half-decision where a retry was intended but its due
+time or attempt number is missing.
+
+## What is safe to retry
+
+The first retry profile automatically retries only `script_threw`. It does not
+retry timeouts, invalid/non-JSON or oversized results, oversized context, host
+crashes, Worker crashes, cancellation, or interruption. Those outcomes cannot
+prove that an external effect did not happen.
+
+All attempts of one logical step share `attempt.idempotencyKey`. Pass it to an
+external API that guarantees duplicate handling. With managed HTTP, use the
+reviewed `idempotency` request field and a stable operation name. The key
+enables that service to deduplicate; it does not turn an arbitrary side effect
+into exactly-once execution.
+
+A managed `operation_started` without `operation_succeeded` or
+`operation_failed` is closed as `interrupted` with `ambiguous: true` before the
+surrounding attempt is recovered. WOML never reconstructs a JavaScript
+instruction pointer or releases an unpersisted service result after restart.
+
+## Workflow Calls
+
+A workflow call admits one independent child before executing it. Retries and
+duplicate delivery with the same logical identity reconnect to that child;
+they never manufacture another run. The mutable call index is reconstructed
+from the child's authoritative events during startup recovery.
+
+If the child succeeded but the parent crashed before durably committing its
+step result, the child remains successful and inspectable. The ambiguous parent
+attempt still fails closed. WOML does not replay the parent script or pretend
+that receiving the child's result proves the parent finished using it.
+
+Across local processes, the child is durable before WOML sends the private
+loopback wake-up. The target periodically scans admitted children, so a lost
+wake-up is repaired without another child admission. Renewable ownership leases
+expire crashed targets; graceful shutdown removes their routes immediately.
+The loopback acknowledgement is never treated as proof of child completion.
+
+Use `woml get <runId> --state <path>` to move between the two independent
+runs. The frozen inspection v2 surface deliberately omits raw results and the
+separate workflow-call relation query. Runtime progress still prints both run
+IDs without payloads, results, secrets, hashes, or internal routing identity.
+
+Workflow Calls v1 rejects a selected definition containing Human Approval
+before child admission. Approval workflows must be triggered independently
+until a calling JavaScript continuation can be suspended durably.
+
+## Lifecycle and cancellation recovery
+
+For Model v11 runs, a cancellation request and every lifecycle action are
+durable Event v10 facts. Restart recovery continues a cancellation request,
+invalidates waiting approval credentials, settles supported active work, runs
+`on-cancel` and `on-complete`, and finalizes the same cancelled outcome. An
+action recorded as started without a terminal event is ambiguous and fails
+closed without automatic replay.
+
+`woml list --status cancelling --state <path>` discovers unsettled requests.
+`woml get <runId> --json` reports cancellation and lifecycle state without
+exposing context, payloads, results, messages, or secrets. See
+[Lifecycle and Local Run Control](woml-lifecycle-and-run-control.md).
+
+## Operational output
+
+Attempt failures, schedules, successes, and the recovery command are written to
+stderr. Only the final JSON result is written to stdout. Exhaustion reports
+`WOML_STEP_RETRIES_EXHAUSTED`, the final attempt count, the safe underlying
+failure code, and the authored script location.
+
+Secrets and runtime capabilities are forbidden from the event log, folded
+context, progress protocol, errors, and durable step output.
+
+## Runtime Policy recovery
+
+Model v12 queue rows, rate indexes, claims, and run summaries are coordination
+state. Store v12 rebuilds them from immutable Event v11 histories and bound
+definitions. An expired scheduler lease permits ownership recovery but never
+makes an ambiguous started step safe to replay. Queued runs retain admission
+order after restart; rate history does not reset; and the timeout deadline
+remains the immutable first-start deadline. See
+[WOML Runtime Policies](woml-runtime-policies.md).
+
+## Durable User State recovery
+
+State values are authoritative application data and are not rebuilt from run
+events. A named State v1 mutation commits its value/version, immutable original
+result, quotas, and settlement proof together. If the host stops before the
+ordinary `operation_succeeded` event, startup validates that proof and records
+the missing operation success without applying the mutation again. The
+surrounding interrupted script attempt still fails closed because unrelated
+JavaScript effects may remain ambiguous.
+
+Store v14 startup validates one consistent SQLite snapshot, including the
+Store v13 State v1 schema, digests, canonical results, versions, quotas, and
+runtime coordination records. Corruption returns
+`WOML_STATE_STORE_CORRUPT`; state is never guessed from event history. Restore
+the complete database from a known-good coherent backup as described in
+[Durable User State Operations](woml-durable-state.md).

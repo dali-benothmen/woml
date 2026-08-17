@@ -1,0 +1,37 @@
+<woml>
+  <workflow
+    id="telegram-reply-demo"
+    name="Telegram Reply Demo"
+    description="Receives a Telegram message and replies in the same conversation."
+    version="1.0.0"
+  >
+    <triggers>
+      <telegram
+        id="messageReceived"
+        events="message"
+        bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+      />
+    </triggers>
+
+    <steps>
+      <step id="prepareReply" name="Prepare reply">
+        <script>
+          return {
+            text: `Hello! WOML received: ${context.payload.text}`
+          };
+        </script>
+      </step>
+
+      <step id="sendReply" name="Send Telegram reply">
+        <script>
+          return services.telegram.send({
+            botToken: secrets.TELEGRAM_BOT_TOKEN,
+            conversationId: context.payload.conversationId,
+            text: context.steps.prepareReply.text,
+            replyToMessageId: context.payload.messageId
+          }, { name: 'telegram-reply' });
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

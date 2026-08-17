@@ -1,0 +1,27 @@
+<woml>
+<workflow id="send-confirmation" name="Send order confirmation" version="1.0.0">
+  <triggers>
+    <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+  <steps>
+    <step id="confirmation">
+      <script>
+        return {
+          workflow: "send-confirmation",
+          message: `Confirmation sent for ${context.payload.orderId}`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

@@ -1,0 +1,13 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "inv_01",
+  "outcome": {
+    "kind": "success",
+    "value": {
+      "x": "World"
+    }
+  },
+  "durationMs": 3
+}

@@ -1,0 +1,11 @@
+{
+  "contract": "woml.trigger-ingress",
+  "contractVersion": 1,
+  "messageType": "rejected",
+  "requestId": "request_webhook_corrupt_001",
+  "failure": {
+    "code": "WOML_TRIGGER_HISTORY_INVALID",
+    "message": "The durable occurrence and run history are contradictory.",
+    "retryable": false
+  }
+}

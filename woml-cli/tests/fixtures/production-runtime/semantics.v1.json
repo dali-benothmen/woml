@@ -1,0 +1,50 @@
+{
+  "startup": [
+    "configuration_validated",
+    "source_snapshot_compiled",
+    "store_validated",
+    "ownership_acquired",
+    "definitions_registered",
+    "secrets_resolved",
+    "recovery_completed",
+    "workers_started",
+    "admin_bound",
+    "providers_started",
+    "readiness_opened"
+  ],
+  "shutdown": [
+    "readiness_closed",
+    "ingress_closed",
+    "providers_disconnected",
+    "new_claims_stopped",
+    "active_work_signalled",
+    "drain_deadline_waited",
+    "durable_truth_settled",
+    "telemetry_flushed",
+    "ownership_released",
+    "process_exited"
+  ],
+  "background": {
+    "parentReturnsOnlyAfter": ["ready", "startup_failed"],
+    "stopTargets": "runtime_instance_id",
+    "pidAloneIsAuthority": false,
+    "survivesTerminalClose": true,
+    "survivesMachineRestart": false
+  },
+  "readinessRequires": [
+    "store",
+    "ownership",
+    "definitions",
+    "secrets",
+    "recovery",
+    "required_providers",
+    "ingress"
+  ],
+  "retentionNeverOwns": [
+    "active_runs",
+    "services_state",
+    "services_storage",
+    "services_database",
+    "secrets"
+  ]
+}

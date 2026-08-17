@@ -1,0 +1,37 @@
+<woml>
+<workflow
+  version="1.0.0"
+  id="retry-demo"
+  name="Retry Demo">
+
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step
+      id="prepare"
+      name="Prepare greeting">
+      <script>
+        return { name: context.payload.name ?? "World" };
+      </script>
+    </step>
+
+    <step
+      id="greet"
+      name="Build greeting"
+      retry="3"
+      retry-backoff="exponential"
+      retry-delay="1s"
+      retry-max-delay="30s">
+      <script>
+        if (attempt.number < 3) {
+          throw new Error("Temporary greeting failure");
+        }
+
+        return { message: `Hello ${context.steps.prepare.name}` };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

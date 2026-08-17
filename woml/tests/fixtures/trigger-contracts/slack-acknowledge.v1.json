@@ -1,0 +1,8 @@
+{
+  "protocol": "woml.slack-trigger",
+  "protocolVersion": 1,
+  "messageType": "acknowledge",
+  "envelopeId": "env_001",
+  "runId": "run_slack_001",
+  "duplicate": false
+}

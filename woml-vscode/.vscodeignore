@@ -1,0 +1,5 @@
+.gitignore
+.vscode/**
+scripts/**
+*.vsix
+CHANGELOG.md

@@ -1,0 +1,11 @@
+{
+  "contract": "woml.cache",
+  "contractVersion": 1,
+  "kind": "result",
+  "operation": "set_if_absent",
+  "data": {
+    "stored": true,
+    "value": { "name": "Ada" },
+    "expiresAt": "2026-08-10T12:15:00.000Z"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "contract": "woml.event-publication",
+  "contractVersion": 1,
+  "messageType": "publish",
+  "requestId": "publish_request_1",
+  "eventId": "order-42-created",
+  "eventName": "order.created",
+  "payload": { "orderId": "order-42" },
+  "receivedAt": "2026-08-08T12:00:00.000Z"
+}

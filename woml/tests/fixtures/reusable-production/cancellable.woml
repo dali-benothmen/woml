@@ -1,0 +1,13 @@
+<woml>
+  <imports>
+    <module name="wait-value" from="./wait-value.woml" />
+  </imports>
+  <workflow id="reusable-cancellation" name="Reusable cancellation" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <wait-value id="longOperation" delay-ms="30000" />
+    </steps>
+  </workflow>
+</woml>

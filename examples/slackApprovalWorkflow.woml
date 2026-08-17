@@ -1,0 +1,49 @@
+<woml>
+<workflow version="1.0.0" id="slack-approval-demo" name="Slack Approval Demo">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <approval
+      id="review"
+      name="Approve the WOML test run"
+      description="This message was sent by the WOML Slack provider."
+      timeout="24h"
+      on-timeout="reject"
+    >
+      <notify>
+        <slack
+          channels="#woml-testing"
+          bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+          app-token="{{secrets.SLACK_APP_TOKEN}}"
+        />
+      </notify>
+
+      <when-approved>
+        <step id="approvedRoute" name="Approved route">
+          <script>
+            return { route: 'approved' };
+          </script>
+        </step>
+      </when-approved>
+
+      <when-rejected>
+        <step id="rejectedRoute" name="Rejected route">
+          <script>
+            return { route: 'rejected' };
+          </script>
+        </step>
+      </when-rejected>
+    </approval>
+
+    <step id="result" name="Final result">
+      <script>
+        return {
+          decision: context.steps.review.decision
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

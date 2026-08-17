@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 5,
+  "workflowId": "release-article",
+  "metadata": {
+    "name": "Release Article",
+    "version": "0.1"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": { "kind": "object", "fields": {} }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["releaseApproval"],
+    "nodes": [
+      {
+        "id": "releaseApproval",
+        "handler": "engine.approval-wait",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "timeoutMs": { "kind": "literal", "value": 86400000 },
+            "onTimeout": { "kind": "literal", "value": "reject" },
+            "notifications": {
+              "kind": "array",
+              "items": [
+                {
+                  "kind": "object",
+                  "fields": {
+                    "deliveryId": {
+                      "kind": "literal",
+                      "value": "releaseApproval:notify:0:channel:0"
+                    },
+                    "provider": { "kind": "literal", "value": "slack" },
+                    "destination": { "kind": "literal", "value": "#approvals" },
+                    "credentials": {
+                      "kind": "object",
+                      "fields": {
+                        "botToken": {
+                          "kind": "secretReference",
+                          "name": "SLACK_BOT_TOKEN"
+                        },
+                        "appToken": {
+                          "kind": "secretReference",
+                          "name": "SLACK_APP_TOKEN"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "object",
+                  "fields": {
+                    "deliveryId": {
+                      "kind": "literal",
+                      "value": "releaseApproval:notify:0:channel:1"
+                    },
+                    "provider": { "kind": "literal", "value": "slack" },
+                    "destination": {
+                      "kind": "literal",
+                      "value": "#engineering"
+                    },
+                    "credentials": {
+                      "kind": "object",
+                      "fields": {
+                        "botToken": {
+                          "kind": "secretReference",
+                          "name": "SLACK_BOT_TOKEN"
+                        },
+                        "appToken": {
+                          "kind": "secretReference",
+                          "name": "SLACK_APP_TOKEN"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "metadata": {
+          "name": "Release approval",
+          "description": "Approve the article before release"
+        }
+      },
+      {
+        "id": "__woml_approval__releaseApproval__join",
+        "handler": "engine.approval-join",
+        "inputs": { "kind": "object", "fields": {} }
+      },
+      {
+        "id": "finalStatus",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          decision: context.steps.releaseApproval.decision\n        };\n      "
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "releaseApproval:approved",
+        "from": "releaseApproval",
+        "to": "__woml_approval__releaseApproval__join",
+        "condition": {
+          "kind": "equals",
+          "left": {
+            "kind": "contextReference",
+            "path": ["steps", "releaseApproval", "decision"]
+          },
+          "right": { "kind": "literal", "value": "approved" }
+        },
+        "approvalId": "releaseApproval"
+      },
+      {
+        "id": "releaseApproval:rejected",
+        "from": "releaseApproval",
+        "to": "__woml_approval__releaseApproval__join",
+        "condition": {
+          "kind": "equals",
+          "left": {
+            "kind": "contextReference",
+            "path": ["steps", "releaseApproval", "decision"]
+          },
+          "right": { "kind": "literal", "value": "rejected" }
+        },
+        "approvalId": "releaseApproval"
+      },
+      {
+        "id": "__woml_approval__releaseApproval__join-to-finalStatus",
+        "from": "__woml_approval__releaseApproval__join",
+        "to": "finalStatus",
+        "condition": { "kind": "always" }
+      }
+    ]
+  }
+}

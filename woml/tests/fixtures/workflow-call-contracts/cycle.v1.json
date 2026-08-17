@@ -1,0 +1,10 @@
+{
+  "contract": "woml.workflow-call",
+  "contractVersion": 1,
+  "kind": "failed",
+  "workflowId": "calculate-risk",
+  "code": "WOML_WORKFLOW_CALL_CYCLE",
+  "message": "The target workflow already exists in the immutable call lineage.",
+  "retryable": false,
+  "ambiguous": false
+}

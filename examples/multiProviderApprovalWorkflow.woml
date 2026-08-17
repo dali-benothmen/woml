@@ -1,0 +1,104 @@
+<woml>
+  <workflow
+    id="multi-provider-approval-demo"
+    name="Multi-Provider Approval"
+    description="Requests one durable decision through several providers and reports completion everywhere."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="prepare" name="Prepare request">
+        <script>
+          return { orderId: 'order-42', amount: 144 };
+        </script>
+      </step>
+
+      <approval
+        id="review"
+        name="Approve order order-42"
+        description="Approve the 144 USD order from any configured provider."
+        timeout="24h"
+        on-timeout="reject"
+      >
+        <notify>
+          <!-- Replace every destination below with one from your accounts. -->
+          <slack
+            channels="#woml-testing"
+            bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+            app-token="{{secrets.SLACK_APP_TOKEN}}"
+          />
+          <telegram
+            chats="123456789"
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+          <discord
+            channels="200000000000000001"
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+          <whatsapp
+            recipients="15551234567"
+            access-token="{{secrets.WHATSAPP_ACCESS_TOKEN}}"
+            phone-number-id="123456789012345"
+            template="woml_approval_v1"
+            language="en_US"
+          />
+        </notify>
+
+        <when-approved>
+          <step id="approved" name="Approved route">
+            <script>return { decision: 'approved' };</script>
+          </step>
+        </when-approved>
+
+        <when-rejected>
+          <step id="rejected" name="Rejected route">
+            <script>return { decision: 'rejected' };</script>
+          </step>
+        </when-rejected>
+      </approval>
+
+      <step id="result" name="Build final result">
+        <script>
+          return {
+            orderId: context.steps.prepare.orderId,
+            decision: context.steps.review.decision
+          };
+        </script>
+      </step>
+    </steps>
+
+    <lifecycle>
+      <on-complete>
+        <notify>
+          <slack
+            channels="#woml-testing"
+            message="Multi-provider approval workflow completed."
+            bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+            app-token="{{secrets.SLACK_APP_TOKEN}}"
+          />
+          <telegram
+            chats="123456789"
+            message="Multi-provider approval workflow completed."
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+          <discord
+            channels="200000000000000001"
+            message="Multi-provider approval workflow completed."
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+          <whatsapp
+            recipients="15551234567"
+            access-token="{{secrets.WHATSAPP_ACCESS_TOKEN}}"
+            phone-number-id="123456789012345"
+            template="workflow_completed"
+            language="en_US"
+            message="Multi-provider approval workflow completed."
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+  </workflow>
+</woml>

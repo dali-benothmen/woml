@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 10,
+  "workflowId": "calculate-risk",
+  "metadata": {
+    "name": "Calculate customer risk",
+    "version": "1.0.0"
+  },
+  "triggers": [],
+  "graph": {
+    "entryNodeIds": ["calculate"],
+    "nodes": [
+      {
+        "id": "calculate",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n          return {\n            score: context.trigger.customerId === 'customer-42' ? 90 : 20\n          };\n        "
+            }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      }
+    ],
+    "edges": []
+  }
+}

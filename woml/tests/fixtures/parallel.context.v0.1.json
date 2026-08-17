@@ -1,0 +1,8 @@
+{
+  "trigger": {},
+  "steps": {
+    "loadField": {
+      "fieldId": "field-42"
+    }
+  }
+}

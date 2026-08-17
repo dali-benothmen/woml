@@ -1,0 +1,5 @@
+{
+  "contract": "woml.service-progress", "contractVersion": 1, "status": "succeeded", "runId": "run-services-a", "nodeId": "loadCustomer",
+  "invocationId": "invocation-a", "callId": "call-http-a", "capability": "http", "operation": "request", "executionMode": "managed",
+  "occurredAt": "2026-08-09T08:00:00.019Z", "durationMs": 18.4, "metadata": { "status": 200, "resultBytes": 142 }
+}

@@ -1,0 +1,454 @@
+{
+  "schemaVersion": 11,
+  "workflowId": "lifecycle-demo",
+  "metadata": {
+    "name": "Lifecycle demo",
+    "version": "1.0.0"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": {
+        "kind": "object",
+        "fields": {}
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["prepare"],
+    "nodes": [
+      {
+        "id": "prepare",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n          return { ready: true, orderId: context.payload.orderId };\n        "
+            }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      },
+      {
+        "id": "finish",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n          return { done: context.steps.prepare.ready };\n        "
+            }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "prepare-to-finish",
+        "from": "prepare",
+        "to": "finish",
+        "condition": {
+          "kind": "always"
+        }
+      }
+    ]
+  },
+  "lifecycle": {
+    "profileVersion": 1,
+    "hooks": [
+      {
+        "hookId": "lifecycle:run_start",
+        "event": "run_start",
+        "actions": [
+          {
+            "actionId": "lifecycle:run_start:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log(`Starting ${lifecycle.workflow.id}`);\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:step_start",
+        "event": "step_start",
+        "stepIds": ["prepare", "finish"],
+        "actions": [
+          {
+            "actionId": "lifecycle:step_start:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log(`Starting step ${lifecycle.step.id}`);\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:step_success",
+        "event": "step_success",
+        "stepIds": ["prepare"],
+        "actions": [
+          {
+            "actionId": "lifecycle:step_success:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log(`Step ${lifecycle.step.id} succeeded`);\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:step_failure",
+        "event": "step_failure",
+        "actions": [
+          {
+            "actionId": "lifecycle:step_failure:action:0",
+            "handler": "notification.informational",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "deliveries": {
+                  "kind": "array",
+                  "items": [
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "deliveryId": {
+                          "kind": "literal",
+                          "value": "lifecycle:3:action:0:provider:0:channel:0"
+                        },
+                        "provider": {
+                          "kind": "literal",
+                          "value": "slack"
+                        },
+                        "destination": {
+                          "kind": "literal",
+                          "value": "#woml-testing"
+                        },
+                        "credentials": {
+                          "kind": "object",
+                          "fields": {
+                            "botToken": {
+                              "kind": "secretReference",
+                              "name": "SLACK_BOT_TOKEN"
+                            },
+                            "appToken": {
+                              "kind": "secretReference",
+                              "name": "SLACK_APP_TOKEN"
+                            }
+                          }
+                        },
+                        "message": {
+                          "kind": "template",
+                          "parts": [
+                            {
+                              "kind": "text",
+                              "text": "Step "
+                            },
+                            {
+                              "kind": "lifecycleReference",
+                              "path": ["step", "id"]
+                            },
+                            {
+                              "kind": "text",
+                              "text": " failed with "
+                            },
+                            {
+                              "kind": "lifecycleReference",
+                              "path": ["failure", "code"]
+                            },
+                            {
+                              "kind": "text",
+                              "text": " for "
+                            },
+                            {
+                              "kind": "contextReference",
+                              "path": ["trigger", "orderId"]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "deliveryId": {
+                          "kind": "literal",
+                          "value": "lifecycle:3:action:0:provider:0:channel:1"
+                        },
+                        "provider": {
+                          "kind": "literal",
+                          "value": "slack"
+                        },
+                        "destination": {
+                          "kind": "literal",
+                          "value": "C0123456789"
+                        },
+                        "credentials": {
+                          "kind": "object",
+                          "fields": {
+                            "botToken": {
+                              "kind": "secretReference",
+                              "name": "SLACK_BOT_TOKEN"
+                            },
+                            "appToken": {
+                              "kind": "secretReference",
+                              "name": "SLACK_APP_TOKEN"
+                            }
+                          }
+                        },
+                        "message": {
+                          "kind": "template",
+                          "parts": [
+                            {
+                              "kind": "text",
+                              "text": "Step "
+                            },
+                            {
+                              "kind": "lifecycleReference",
+                              "path": ["step", "id"]
+                            },
+                            {
+                              "kind": "text",
+                              "text": " failed with "
+                            },
+                            {
+                              "kind": "lifecycleReference",
+                              "path": ["failure", "code"]
+                            },
+                            {
+                              "kind": "text",
+                              "text": " for "
+                            },
+                            {
+                              "kind": "contextReference",
+                              "path": ["trigger", "orderId"]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:step_complete",
+        "event": "step_complete",
+        "actions": [
+          {
+            "actionId": "lifecycle:step_complete:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log(`Completed step ${lifecycle.step.id}`);\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:run_success",
+        "event": "run_success",
+        "actions": [
+          {
+            "actionId": "lifecycle:run_success:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log('Workflow succeeded');\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:run_failure",
+        "event": "run_failure",
+        "actions": [
+          {
+            "actionId": "lifecycle:run_failure:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log(`Workflow failed: ${lifecycle.failure.code}`);\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:run_cancel",
+        "event": "run_cancel",
+        "actions": [
+          {
+            "actionId": "lifecycle:run_cancel:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log('Workflow cancelled');\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      },
+      {
+        "hookId": "lifecycle:run_complete",
+        "event": "run_complete",
+        "actions": [
+          {
+            "actionId": "lifecycle:run_complete:action:0",
+            "handler": "runtime.lifecycle-script",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "source": {
+                  "kind": "literal",
+                  "value": "\n          console.log(`Final outcome: ${lifecycle.workflow.outcome}`);\n        "
+                }
+              }
+            },
+            "scriptRuntime": {
+              "bindingVersion": 2,
+              "bindings": [
+                "context",
+                "lifecycle",
+                "attempt",
+                "services",
+                "secrets"
+              ],
+              "requiredSecrets": []
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

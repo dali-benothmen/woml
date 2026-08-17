@@ -1,0 +1,24 @@
+<woml>
+  <workflow id="atomic-order-counter" name="Atomic Order Counter" version="1.0.0">
+    <config concurrency="8" />
+
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="countOrder" name="Count one processed order">
+        <script>
+          const counter = await services.state.increment("processed-orders", 1, {
+            name: "count-processed-order"
+          });
+
+          return {
+            processedOrders: counter.value,
+            version: counter.version
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,28 @@
+<woml>
+  <imports>
+    <module name="calculate-discount" from="./calculate-discount.woml" />
+  </imports>
+  <workflow id="custom-step-compilation" name="Custom step compilation">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="order">
+        <script>
+          return { price: 120, percentage: 20 };
+        </script>
+      </step>
+      <calculate-discount
+        id="discount"
+        price="{{context.steps.order.price}}"
+        percentage="{{context.steps.order.percentage}}"
+        retry="3"
+      />
+      <step id="finish">
+        <script>
+          return context.steps.discount;
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,32 @@
+<woml>
+<workflow id="webhook-trigger-contract">
+  <triggers>
+    <manual id="manualStart" />
+    <webhook
+      id="newOrder"
+      path="/webhooks/orders"
+      method="POST"
+      auth="bearer"
+      secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
+      <schema>
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      </schema>
+    </webhook>
+  </triggers>
+  <steps>
+    <step id="capture">
+      <script>
+        return context.trigger;
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

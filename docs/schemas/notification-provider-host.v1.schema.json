@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/notification-provider-host/v1",
+  "title": "WOML Notification Provider Host Protocol v1",
+  "description": "Asynchronous multiplexed Rust/Bun boundary for Slack-first approval delivery, message updates, and decision interactions.",
+  "x-status": "slack-notification-profile-frozen",
+  "x-multiplexing": "Multiple deliver and update messages may be in flight. Completed messages may arrive out of order and correlate only by invocationId. Interaction messages are unsolicited and correlate by deliveryId plus an opaque capability.",
+  "x-sensitiveFields": ["decisionCapability"],
+  "x-forbiddenFields": ["botTokenValue", "appTokenValue", "secretValue", "workflowContext", "providerPayload"],
+  "oneOf": [
+    { "$ref": "#/$defs/readyMessage" },
+    { "$ref": "#/$defs/deliverMessage" },
+    { "$ref": "#/$defs/updateMessage" },
+    { "$ref": "#/$defs/completedMessage" },
+    { "$ref": "#/$defs/interactionMessage" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "base": {
+      "type": "object",
+      "properties": {
+        "protocol": { "const": "woml.notification-provider-host" },
+        "protocolVersion": { "const": 1 }
+      }
+    },
+    "secretReference": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "name"],
+      "properties": { "kind": { "const": "secretReference" }, "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 255 } }
+    },
+    "credentials": {
+      "type": "object", "additionalProperties": false, "required": ["botToken", "appToken"],
+      "properties": { "botToken": { "$ref": "#/$defs/secretReference" }, "appToken": { "$ref": "#/$defs/secretReference" } }
+    },
+    "providerMessage": {
+      "type": "object", "additionalProperties": false, "required": ["workspaceId", "channelId", "messageId"],
+      "properties": {
+        "workspaceId": { "type": "string", "pattern": "^T[A-Z0-9]{8,31}$" },
+        "channelId": { "type": "string", "pattern": "^[CGD][A-Z0-9]{8,31}$" },
+        "messageId": { "type": "string", "pattern": "^[0-9]{10,}\\.[0-9]{6}$" }
+      }
+    },
+    "readyMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "hostInstanceId", "providers"],
+      "properties": {
+        "protocol": { "const": "woml.notification-provider-host" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "ready" }, "hostInstanceId": { "$ref": "#/$defs/id" },
+        "providers": { "type": "array", "prefixItems": [{ "const": "slack" }], "minItems": 1, "maxItems": 1 }
+      }
+    },
+    "deliverMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "runId", "approvalId", "requestId", "deliveryId", "provider", "destination", "idempotencyKey", "credentials", "decisionCapability", "message"],
+      "properties": {
+        "protocol": { "const": "woml.notification-provider-host" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "deliver" }, "invocationId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" },
+        "approvalId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "requestId": { "type": "string", "pattern": "^aprreq_[A-Za-z0-9_-]+$" },
+        "deliveryId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$" },
+        "provider": { "const": "slack" }, "destination": { "type": "string", "pattern": "^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$" },
+        "idempotencyKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "credentials": { "$ref": "#/$defs/credentials" }, "decisionCapability": { "type": "string", "minLength": 43, "maxLength": 512 },
+        "message": { "$ref": "#/$defs/approvalMessage" }
+      }
+    },
+    "approvalMessage": {
+      "type": "object", "additionalProperties": false, "required": ["workflowId", "approvalName"],
+      "properties": {
+        "workflowId": { "$ref": "#/$defs/id" }, "approvalName": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "approvalDescription": { "type": "string", "minLength": 1, "maxLength": 2000 }, "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "updateMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "runId", "approvalId", "requestId", "deliveryId", "updateId", "idempotencyKey", "provider", "credentials", "providerMessage", "resolution"],
+      "properties": {
+        "protocol": { "const": "woml.notification-provider-host" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "update" }, "invocationId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" },
+        "approvalId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "requestId": { "type": "string", "pattern": "^aprreq_[A-Za-z0-9_-]+$" },
+        "deliveryId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$" },
+        "updateId": { "type": "string", "pattern": "^nupdate_[A-Za-z0-9_-]+$", "minLength": 11, "maxLength": 256 },
+        "idempotencyKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "provider": { "const": "slack" }, "credentials": { "$ref": "#/$defs/credentials" },
+        "providerMessage": { "$ref": "#/$defs/providerMessage" }, "resolution": { "enum": ["approved", "rejected", "timeout_failed"] }
+      }
+    },
+    "completedMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "durationMs"],
+      "properties": {
+        "protocol": { "const": "woml.notification-provider-host" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "completed" }, "invocationId": { "$ref": "#/$defs/id" },
+        "outcome": { "oneOf": [{ "$ref": "#/$defs/deliverySuccess" }, { "$ref": "#/$defs/updateSuccess" }, { "$ref": "#/$defs/failure" }] },
+        "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "deliverySuccess": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "providerMessage"],
+      "properties": { "kind": { "const": "delivery_success" }, "providerMessage": { "$ref": "#/$defs/providerMessage" } }
+    },
+    "updateSuccess": {
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": { "kind": { "const": "update_success" } }
+    },
+    "failure": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "error"],
+      "properties": {
+        "kind": { "const": "failure" },
+        "error": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "code", "message", "retryable"],
+          "properties": {
+            "kind": { "enum": ["secret_not_found", "provider_auth_failed", "destination_invalid", "rate_limited", "provider_unavailable", "delivery_ambiguous", "request_invalid", "host_crashed", "size_limit_exceeded", "update_failed"] },
+            "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }, "message": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "retryable": { "type": "boolean" }, "retryAfterMs": { "type": "integer", "minimum": 0, "maximum": 86400000 }
+          }
+        }
+      }
+    },
+    "interactionMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "interactionId", "deliveryId", "provider", "decisionCapability", "decision", "providerActorId", "occurredAt"],
+      "properties": {
+        "protocol": { "const": "woml.notification-provider-host" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "interaction" }, "interactionId": { "$ref": "#/$defs/id" },
+        "deliveryId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$" },
+        "provider": { "const": "slack" }, "decisionCapability": { "type": "string", "minLength": 43, "maxLength": 512 },
+        "decision": { "enum": ["approved", "rejected"] }, "providerActorId": { "type": "string", "pattern": "^U[A-Z0-9]{8,31}$" },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

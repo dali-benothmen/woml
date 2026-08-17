@@ -1,0 +1,72 @@
+[
+  {
+    "eventSchemaVersion": 11,
+    "eventId": "evt_admitted",
+    "runId": "run_policy",
+    "sequence": 1,
+    "occurredAt": "2026-08-11T12:00:00.000Z",
+    "type": "run_admitted",
+    "data": {
+      "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "policyHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "trigger": { "id": "start", "handler": "trigger.manual" },
+      "payload": { "orderId": "order-42" },
+      "queue": { "name": "orders", "discipline": "work_conserving_fifo" },
+      "admittedAt": "2026-08-11T12:00:00.000Z",
+      "occurrenceSequence": 42
+    }
+  },
+  {
+    "eventSchemaVersion": 11,
+    "eventId": "evt_started",
+    "runId": "run_policy",
+    "sequence": 2,
+    "occurredAt": "2026-08-11T12:00:01.000Z",
+    "type": "run_execution_started",
+    "data": {
+      "startedAt": "2026-08-11T12:00:01.000Z",
+      "timeoutAt": "2026-08-11T12:10:01.000Z"
+    }
+  },
+  {
+    "eventSchemaVersion": 11,
+    "eventId": "evt_timeout",
+    "runId": "run_policy",
+    "sequence": 3,
+    "occurredAt": "2026-08-11T12:10:01.000Z",
+    "type": "run_timeout_reached",
+    "data": {
+      "deadlineAt": "2026-08-11T12:10:01.000Z",
+      "code": "WOML_WORKFLOW_TIMED_OUT"
+    }
+  },
+  {
+    "eventSchemaVersion": 11,
+    "eventId": "evt_outcome",
+    "runId": "run_policy",
+    "sequence": 4,
+    "occurredAt": "2026-08-11T12:10:01.001Z",
+    "type": "run_outcome_decided",
+    "data": {
+      "outcome": "failed",
+      "failure": {
+        "kind": "timed_out",
+        "code": "WOML_WORKFLOW_TIMED_OUT",
+        "message": "Workflow timeout 10m was reached."
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 11,
+    "eventId": "evt_finalized",
+    "runId": "run_policy",
+    "sequence": 5,
+    "occurredAt": "2026-08-11T12:10:01.002Z",
+    "type": "run_finalized",
+    "data": {
+      "outcome": "failed",
+      "lifecycleStatus": "completed",
+      "warnings": []
+    }
+  }
+]

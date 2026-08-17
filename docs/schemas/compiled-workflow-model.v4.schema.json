@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v4",
+  "title": "WOML Compiled Workflow Model v4",
+  "description": "Language-neutral DAG contract for sequential, branch, bounded parallel, and durable human-approval execution.",
+  "x-status": "approval-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v3",
+  "x-frozenProfile": {
+    "name": "woml-cli-approval",
+    "sourceFixture": "woml/tests/fixtures/approval.woml",
+    "compiledFixture": "woml/tests/fixtures/approval.compiled.v4.json",
+    "waitId": "<approvalId>",
+    "joinId": "__woml_approval__<approvalId>__join",
+    "routeEdgeId": "<approvalId>:<approved|rejected>",
+    "joinEdgeId": "<approvalId>:<approved|rejected>:join"
+  },
+  "x-invariants": [
+    "Model v4 remains a directed acyclic graph; waiting is a node state, never an in-memory callback chain.",
+    "The approval wait node uses the public approval ID and publishes the decision output only after approval_resolved.",
+    "The approval join is control-only; a terminal approval returns the public approval decision rather than an internal join value.",
+    "Approved and rejected route edges use typed equals conditions over context.steps.<approvalId>.decision.",
+    "Every approval-owned route and join edge carries approvalId.",
+    "Empty arms connect their selected route directly to the deterministic join.",
+    "Tokens, URLs, ports, request IDs, run IDs, timestamps, and random values never enter the compiled definition."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 4 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "#/$defs/workflowGraph" }
+  },
+  "$defs": {
+    "publicStructuralId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges"],
+      "properties": {
+        "entryNodeIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/workflowNode" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflowEdge" }
+        }
+      }
+    },
+    "workflowNode": {
+      "oneOf": [
+        { "$ref": "#/$defs/nonApprovalNode" },
+        { "$ref": "#/$defs/approvalWaitNode" },
+        { "$ref": "#/$defs/approvalJoinNode" }
+      ]
+    },
+    "nonApprovalNode": {
+      "allOf": [
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v3#/$defs/workflowNode" },
+        {
+          "properties": {
+            "handler": {
+              "not": { "enum": ["engine.approval-wait", "engine.approval-join"] }
+            }
+          }
+        }
+      ]
+    },
+    "approvalWaitNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/publicStructuralId" },
+        "handler": { "const": "engine.approval-wait" },
+        "inputs": { "$ref": "#/$defs/approvalWaitInputs" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "description": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "approvalWaitInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["onTimeout"],
+          "properties": {
+            "timeoutMs": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "const": "literal" },
+                "value": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+              }
+            },
+            "onTimeout": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "const": "literal" },
+                "value": { "enum": ["reject", "fail"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "approvalJoinNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^__woml_approval__[a-z][A-Za-z0-9]*__join$",
+          "maxLength": 300
+        },
+        "handler": { "const": "engine.approval-join" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": { "type": "object", "maxProperties": 0 }
+          }
+        }
+      }
+    },
+    "workflowEdge": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v3#/$defs/workflowEdge" },
+        { "$ref": "#/$defs/approvalRouteEdge" },
+        { "$ref": "#/$defs/approvalJoinEdge" }
+      ]
+    },
+    "approvalRouteEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition", "approvalId"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:(approved|rejected)$", "maxLength": 275 },
+        "from": { "$ref": "#/$defs/publicStructuralId" },
+        "to": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "condition": { "$ref": "#/$defs/approvalDecisionCondition" },
+        "approvalId": { "$ref": "#/$defs/publicStructuralId" }
+      }
+    },
+    "approvalJoinEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition", "approvalId"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:(approved|rejected):join$", "maxLength": 280 },
+        "from": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "to": { "type": "string", "pattern": "^__woml_approval__[a-z][A-Za-z0-9]*__join$", "maxLength": 300 },
+        "condition": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/alwaysCondition" },
+        "approvalId": { "$ref": "#/$defs/publicStructuralId" }
+      }
+    },
+    "approvalDecisionCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "left", "right"],
+      "properties": {
+        "kind": { "const": "equals" },
+        "left": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": { "const": "contextReference" },
+            "path": {
+              "type": "array",
+              "prefixItems": [
+                { "const": "steps" },
+                { "$ref": "#/$defs/publicStructuralId" },
+                { "const": "decision" }
+              ],
+              "minItems": 3,
+              "maxItems": 3
+            }
+          }
+        },
+        "right": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "literal" },
+            "value": { "enum": ["approved", "rejected"] }
+          }
+        }
+      }
+    }
+  }
+}

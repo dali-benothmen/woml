@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-list/v1",
+  "title": "WOML Run List v1",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "type": "object", "additionalProperties": false, "required": ["profile", "runs"],
+  "properties": {
+    "profile": { "const": "woml.run-list/v1" },
+    "runs": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/summary" } }
+  },
+  "$defs": {
+    "summary": { "type": "object", "additionalProperties": false, "required": ["runId", "workflowId", "status", "startedAt", "updatedAt"], "properties": {
+      "runId": { "type": "string", "minLength": 1, "maxLength": 320 }, "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+      "status": { "enum": ["not_started", "running", "waiting", "cancelling", "finalizing", "succeeded", "failed", "cancelled"] },
+      "startedAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" }
+    } }
+  }
+}

@@ -1,0 +1,17 @@
+<woml>
+<workflow id="interval-demo" name="Interval Demo" version="1.0.0">
+  <triggers>
+    <interval id="heartbeat" every="5s" on-missed="skip" />
+  </triggers>
+  <steps>
+    <step id="report">
+      <script>
+        return {
+          message: `Interval fired at ${context.payload.triggeredAt}`,
+          scheduledAt: context.payload.scheduledAt
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

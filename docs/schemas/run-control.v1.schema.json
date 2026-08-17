@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-control/v1",
+  "title": "WOML Local Run Control v1",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "oneOf": [{ "$ref": "#/$defs/request" }, { "$ref": "#/$defs/result" }],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "request": { "type": "object", "additionalProperties": false, "required": ["profile", "commandId", "runId"], "properties": { "profile": { "const": "woml.run-control.request/v1" }, "commandId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" } } },
+    "result": { "type": "object", "additionalProperties": false, "required": ["profile", "commandId", "runId", "status"], "properties": { "profile": { "const": "woml.run-control.result/v1" }, "commandId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" }, "status": { "enum": ["accepted", "already_requested", "already_cancelled", "rejected"] }, "code": { "enum": ["WOML_RUN_NOT_FOUND", "WOML_RUN_OUTCOME_ALREADY_DECIDED", "WOML_RUN_ALREADY_TERMINAL", "WOML_RUN_CONTROL_VERSION_UNSUPPORTED", "WOML_RUN_CANCELLATION_FAILED"] } } }
+  }
+}

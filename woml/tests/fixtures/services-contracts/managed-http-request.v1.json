@@ -1,0 +1,7 @@
+{
+  "contract": "woml.managed-http", "contractVersion": 1, "kind": "request", "method": "POST",
+  "url": "https://api.example.test/orders", "headers": { "content-type": "application/json" },
+  "json": { "orderId": "order-42" }, "responseType": "json", "timeoutMs": 10000,
+  "acceptedStatus": { "minimum": 200, "maximum": 299 }, "redirect": "follow", "maximumRedirects": 10,
+  "idempotency": { "header": "Idempotency-Key", "value": "operation-order-42" }
+}

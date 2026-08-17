@@ -1,0 +1,71 @@
+<woml>
+  <workflow
+    id="whatsapp-customer-approval"
+    name="WhatsApp Customer Approval"
+    description="Reviews a customer request using approved WhatsApp templates."
+    version="1.0.0"
+  >
+    <triggers>
+      <whatsapp
+        id="customerMessage"
+        events="message"
+        phone-number-id="123456789012345"
+        verify-token="{{secrets.WHATSAPP_VERIFY_TOKEN}}"
+        app-secret="{{secrets.WHATSAPP_APP_SECRET}}"
+      />
+    </triggers>
+
+    <steps>
+      <approval
+        id="review"
+        name="Review customer request"
+        description="Approve or reject the request from WhatsApp."
+        timeout="24h"
+        on-timeout="reject"
+      >
+        <notify>
+          <whatsapp
+            recipients="15551234567,15551234568"
+            access-token="{{secrets.WHATSAPP_ACCESS_TOKEN}}"
+            phone-number-id="123456789012345"
+            template="woml_approval_v1"
+            language="en_US"
+          />
+        </notify>
+        <when-approved />
+        <when-rejected />
+      </approval>
+
+      <step id="reply" name="Reply to customer">
+        <script>
+          const sent = await services.whatsapp.send({
+            accessToken: secrets.WHATSAPP_ACCESS_TOKEN,
+            phoneNumberId: '123456789012345',
+            conversationId: context.payload.conversationId,
+            template: {
+              name: 'request_reviewed',
+              language: 'en_US',
+              parameters: [context.steps.review.decision]
+            }
+          }, { name: 'request-reviewed' });
+          return sent;
+        </script>
+      </step>
+    </steps>
+
+    <lifecycle>
+      <on-complete>
+        <notify>
+          <whatsapp
+            recipients="15551234567"
+            access-token="{{secrets.WHATSAPP_ACCESS_TOKEN}}"
+            phone-number-id="123456789012345"
+            template="workflow_completed"
+            language="en_US"
+            message="Workflow {{lifecycle.workflow.id}} completed."
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+  </workflow>
+</woml>

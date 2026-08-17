@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-configuration/v1",
+  "title": "WOML Runtime Configuration v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "deploymentName": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", "maxLength": 128 },
+    "statePath": { "$ref": "#/$defs/path" },
+    "public": { "$ref": "#/$defs/listener" },
+    "admin": { "$ref": "#/$defs/listener" },
+    "logging": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "format": { "enum": ["text", "json"] },
+        "level": { "enum": ["error", "warn", "info", "debug"] },
+        "directory": { "$ref": "#/$defs/path" }
+      }
+    },
+    "workers": { "type": "integer", "minimum": 1, "maximum": 256 },
+    "shutdownTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000 },
+    "observability": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "health": { "type": "boolean" }, "metrics": { "type": "boolean" } }
+    },
+    "retention": {
+      "type": "object", "additionalProperties": false, "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "succeededAfterDays": { "$ref": "#/$defs/days" },
+        "failedAfterDays": { "$ref": "#/$defs/days" },
+        "cancelledAfterDays": { "$ref": "#/$defs/days" },
+        "maintenanceHourUtc": { "type": "integer", "minimum": 0, "maximum": 23 }
+      }
+    },
+    "backup": {
+      "type": "object", "additionalProperties": false, "required": ["directory"],
+      "properties": { "directory": { "$ref": "#/$defs/path" } }
+    }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000]+$" },
+    "days": { "type": "integer", "minimum": 1, "maximum": 3650 },
+    "listener": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[^\\s/]+$" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}

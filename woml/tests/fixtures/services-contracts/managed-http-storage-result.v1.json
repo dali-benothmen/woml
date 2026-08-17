@@ -1,0 +1,22 @@
+{
+  "contract": "woml.managed-http",
+  "contractVersion": 1,
+  "kind": "result",
+  "status": 200,
+  "ok": true,
+  "headers": { "content-type": "text/csv" },
+  "data": {
+    "contract": "woml.storage-object",
+    "contractVersion": 1,
+    "key": "imports/export.csv",
+    "version": "v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": {
+      "algorithm": "sha256",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "size": 5242880,
+    "contentType": "text/csv"
+  },
+  "url": "https://files.example.test/export.csv",
+  "redirected": false
+}

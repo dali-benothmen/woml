@@ -1,0 +1,56 @@
+<woml>
+<workflow version="0.1" id="review-content" name="Review Content">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="checkContent">
+      <script>
+        return {
+          needsReview: true
+        };
+      </script>
+    </step>
+
+    <choose
+      id="decision"
+      name="Choose review route"
+      description="Send uncertain content to review">
+      <when test="{{context.steps.checkContent.needsReview}}">
+        <step id="reviewContent">
+          <script>
+            return {
+              status: "reviewed",
+              accepted: true
+            };
+          </script>
+        </step>
+
+        <result value="{{context.steps.reviewContent}}" />
+      </when>
+
+      <otherwise>
+        <step id="acceptContent">
+          <script>
+            return {
+              status: "accepted-automatically",
+              accepted: true
+            };
+          </script>
+        </step>
+
+        <result value="{{context.steps.acceptContent}}" />
+      </otherwise>
+    </choose>
+
+    <step id="publishDecision">
+      <script>
+        return {
+          message: `Final status: ${context.steps.decision.status}`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

@@ -1,0 +1,641 @@
+import { describe, expect, test } from 'bun:test';
+
+import {
+  RealSlackTransport,
+  SharedSlackTransport,
+  SlackTransportError,
+  type DeliverMessage,
+  type InteractionMessage,
+  type ProviderMessageIdentity,
+  type SlackSocket,
+  type UpdateMessage,
+} from '../src/notification-provider';
+import type { SecretStore } from '../src/secrets';
+import { SlackTriggerHost } from '../src/slack-trigger';
+
+const fixtureDirectory = new URL(
+  './fixtures/notification-provider/',
+  import.meta.url
+);
+
+async function fixture<T>(name: string): Promise<T> {
+  return (await Bun.file(new URL(name, fixtureDirectory)).json()) as T;
+}
+
+class MockSocket implements SlackSocket {
+  readyState = 0;
+  readonly sent: string[] = [];
+  readonly #listeners = new Map<string, Array<(event: never) => void>>();
+
+  constructor() {
+    queueMicrotask(() => {
+      this.readyState = 1;
+      this.#emit('open', {});
+    });
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.#emit('close', {});
+  }
+
+  addEventListener(
+    type: string,
+    listener: (event: never) => void
+  ): void {
+    const listeners = this.#listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.#listeners.set(type, listeners);
+  }
+
+  receive(value: unknown): void {
+    this.#emit('message', { data: JSON.stringify(value) });
+  }
+
+  #emit(type: string, event: unknown): void {
+    for (const listener of this.#listeners.get(type) ?? []) {
+      listener(event as never);
+    }
+  }
+}
+
+interface ApiCall {
+  readonly method: string;
+  readonly authorization: string | null;
+  readonly body: Record<string, unknown>;
+}
+
+function slackFetch(
+  calls: ApiCall[],
+  handler: (call: ApiCall) => {
+    readonly body: Record<string, unknown>;
+    readonly status?: number;
+    readonly headers?: Record<string, string>;
+  }
+): typeof fetch {
+  return (async (input, init) => {
+    const method = new URL(String(input)).pathname.split('/').pop()!;
+    const headers = new Headers(init?.headers);
+    const call: ApiCall = {
+      method,
+      authorization: headers.get('authorization'),
+      body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+    };
+    calls.push(call);
+    const result = handler(call);
+    return new Response(JSON.stringify(result.body), {
+      status: result.status ?? 200,
+      headers: result.headers,
+    });
+  }) as typeof fetch;
+}
+
+function successfulApi(call: ApiCall): {
+  readonly body: Record<string, unknown>;
+} {
+  if (call.method === 'apps.connections.open') {
+    return { body: { ok: true, url: 'wss://wss.slack.test/link/?ticket=secret' } };
+  }
+  if (call.method === 'auth.test') {
+    return {
+      body: { ok: true, team_id: 'T12345678', user_id: 'U87654321' },
+    };
+  }
+  if (call.method === 'conversations.list') {
+    return {
+      body: {
+        ok: true,
+        channels: [{ id: 'C12345678', name: 'approvals' }],
+        response_metadata: { next_cursor: '' },
+      },
+    };
+  }
+  if (call.method === 'chat.postMessage') {
+    return {
+      body: { ok: true, channel: 'C12345678', ts: '1723024800.000001' },
+    };
+  }
+  if (call.method === 'chat.update') {
+    return { body: { ok: true } };
+  }
+  throw new Error(`Unexpected Slack method ${call.method}`);
+}
+
+function slackTriggerSecrets(): SecretStore {
+  const values = new Map([
+    ['SLACK_BOT_TOKEN', 'xoxb-real-test-token'],
+    ['SLACK_APP_TOKEN', 'xapp-real-test-token'],
+  ]);
+  return {
+    provider: 'environment',
+    get: async name => values.get(name),
+    has: async name => values.has(name),
+    list: async () => [],
+    set: async () => {
+      throw new Error('read only');
+    },
+    delete: async () => false,
+  };
+}
+
+async function delivery(): Promise<DeliverMessage> {
+  return await fixture<DeliverMessage>('deliver.v1.json');
+}
+
+describe('Real Slack transport', () => {
+  test('ships the reviewed Socket Mode app manifest with the required scopes', async () => {
+    const manifest = await Bun.file(
+      new URL('../slack/manifest.json', import.meta.url)
+    ).json();
+    expect(manifest.oauth_config.scopes.bot).toEqual([
+      'chat:write',
+      'chat:write.public',
+      'app_mentions:read',
+      'channels:read',
+      'groups:read',
+      'im:history',
+    ]);
+    expect(manifest.settings).toMatchObject({
+      event_subscriptions: {
+        bot_events: ['app_mention', 'message.im'],
+      },
+      interactivity: { is_enabled: true },
+      socket_mode_enabled: true,
+    });
+    expect(JSON.stringify(manifest)).not.toContain('xox');
+  });
+
+  test('sends Block Kit, acknowledges a native action, and disables the message', async () => {
+    const calls: ApiCall[] = [];
+    const sockets: MockSocket[] = [];
+    const interactions: InteractionMessage[] = [];
+    const transport = new RealSlackTransport({
+      emit: message => {
+        interactions.push(message);
+      },
+      fetch: slackFetch(calls, successfulApi),
+      createWebSocket: () => {
+        const socket = new MockSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const invocation = await delivery();
+    const credentials = {
+      botToken: 'xoxb-real-test-token',
+      appToken: 'xapp-real-test-token',
+    };
+
+    await transport.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
+    const providerMessage = await transport.deliver({
+      invocation,
+      credentials,
+    });
+
+    expect(providerMessage).toEqual({
+      workspaceId: 'T12345678',
+      channelId: 'C12345678',
+      messageId: '1723024800.000001',
+    });
+    const post = calls.find(call => call.method === 'chat.postMessage')!;
+    const blocks = post.body.blocks as Array<Record<string, unknown>>;
+    const actions = blocks.find(block => block.type === 'actions')!;
+    const approve = (actions.elements as Array<Record<string, unknown>>)[0]!;
+    expect(post.body.channel).toBe('C12345678');
+    expect(approve.action_id).toBe('woml_approval_approved');
+    expect(JSON.parse(String(approve.value))).toMatchObject({
+      deliveryId: invocation.deliveryId,
+      decisionCapability: invocation.decisionCapability,
+      decision: 'approved',
+    });
+
+    sockets[0]!.receive({
+      envelope_id: 'env_action_01',
+      type: 'interactive',
+      payload: {
+        type: 'block_actions',
+        user: { id: 'U12345678' },
+        actions: [
+          {
+            block_id: 'woml_approval_actions',
+            action_id: 'woml_approval_approved',
+            value: approve.value,
+          },
+        ],
+      },
+    });
+    await Bun.sleep(0);
+    expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({
+      envelope_id: 'env_action_01',
+    });
+    expect(interactions).toHaveLength(1);
+    expect(interactions[0]).toMatchObject({
+      deliveryId: invocation.deliveryId,
+      decision: 'approved',
+      providerActorId: 'U12345678',
+    });
+
+    const update = await fixture<UpdateMessage>('update.v1.json');
+    await transport.update({
+      invocation: { ...update, providerMessage },
+      credentials,
+    });
+    const updated = calls.find(call => call.method === 'chat.update')!;
+    expect(updated.body).toMatchObject({
+      channel: providerMessage.channelId,
+      ts: providerMessage.messageId,
+      text: 'Approved',
+    });
+    expect(JSON.stringify(updated.body)).not.toContain('button');
+    expect(calls.every(call => !JSON.stringify(call.body).includes('xox'))).toBe(
+      true
+    );
+    await transport.close();
+  });
+
+  test('reuses one Socket connection and one delivery for duplicate work', async () => {
+    const calls: ApiCall[] = [];
+    const sockets: MockSocket[] = [];
+    const transport = new RealSlackTransport({
+      emit: () => {},
+      fetch: slackFetch(calls, successfulApi),
+      createWebSocket: () => {
+        const socket = new MockSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const invocation = await delivery();
+    const credentials = {
+      botToken: 'xoxb-real-test-token',
+      appToken: 'xapp-real-test-token',
+    };
+    await Promise.all([
+      transport.ensureConnection('SLACK_APP_TOKEN', credentials.appToken),
+      transport.ensureConnection('SLACK_APP_TOKEN', credentials.appToken),
+    ]);
+    const first = transport.deliver({ invocation, credentials });
+    const second = transport.deliver({ invocation, credentials });
+    expect(await first).toEqual(await second);
+    expect(sockets).toHaveLength(1);
+    expect(calls.filter(call => call.method === 'apps.connections.open')).toHaveLength(1);
+    expect(calls.filter(call => call.method === 'chat.postMessage')).toHaveLength(1);
+    await transport.close();
+  });
+
+  test('shares one Socket connection across approval and trigger listeners without stealing event acknowledgement', async () => {
+    const calls: ApiCall[] = [];
+    const sockets: MockSocket[] = [];
+    const shared = new SharedSlackTransport({
+      fetch: slackFetch(calls, successfulApi),
+      createWebSocket: () => {
+        const socket = new MockSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const approval = new RealSlackTransport({
+      emit: () => {},
+      sharedTransport: shared,
+    });
+    const triggerEnvelopes: string[] = [];
+    const unsubscribe = shared.subscribe(
+      'SECOND_APP_TOKEN_NAME',
+      'slack-trigger-adapter',
+      envelope => {
+        if (envelope.envelopeId !== undefined) {
+          triggerEnvelopes.push(envelope.envelopeId);
+        }
+      }
+    );
+
+    await Promise.all([
+      approval.ensureConnection('SLACK_APP_TOKEN', 'xapp-shared-token'),
+      shared.ensureConnection('SECOND_APP_TOKEN_NAME', 'xapp-shared-token'),
+    ]);
+    expect(sockets).toHaveLength(1);
+    expect(
+      calls.filter(call => call.method === 'apps.connections.open')
+    ).toHaveLength(1);
+
+    sockets[0]!.receive({
+      envelope_id: 'env_event_01',
+      type: 'events_api',
+      payload: { event: { type: 'app_mention' } },
+    });
+    await Bun.sleep(0);
+    expect(triggerEnvelopes).toEqual(['env_event_01']);
+    expect(sockets[0]!.sent).toEqual([]);
+
+    unsubscribe();
+    await approval.close();
+    await shared.close();
+  });
+
+  test('routes approval actions and Slack triggers independently on one shared connection', async () => {
+    const calls: ApiCall[] = [];
+    const sockets: MockSocket[] = [];
+    const interactions: InteractionMessage[] = [];
+    const shared = new SharedSlackTransport({
+      fetch: slackFetch(calls, successfulApi),
+      createWebSocket: () => {
+        const socket = new MockSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const approval = new RealSlackTransport({
+      emit: message => {
+        interactions.push(message);
+      },
+      sharedTransport: shared,
+    });
+    const triggerRequests: string[] = [];
+    const trigger = new SlackTriggerHost({
+      registrations: [
+        {
+          workflowId: 'approval-trigger-coexistence',
+          definitionHash: 'sha256:coexistence',
+          triggerId: 'agentMessage',
+          events: ['app-mention', 'direct-message'],
+          channels: [],
+          credentialNames: {
+            botToken: 'SLACK_BOT_TOKEN',
+            appToken: 'SLACK_APP_TOKEN',
+          },
+        },
+      ],
+      secretStore: slackTriggerSecrets(),
+      transport: shared,
+      submit: async request => {
+        triggerRequests.push(request.sourceIdentity);
+        return {
+          contract: 'woml.trigger-ingress',
+          contractVersion: 1,
+          messageType: 'accepted',
+          requestId: request.requestId,
+          occurrenceId: 'occ_coexistence',
+          runId: 'run_coexistence',
+          duplicate: false,
+        };
+      },
+    });
+    const invocation = await delivery();
+    const credentials = {
+      botToken: 'xoxb-real-test-token',
+      appToken: 'xapp-real-test-token',
+    };
+
+    await trigger.start();
+    await approval.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
+    await approval.deliver({ invocation, credentials });
+    expect(sockets).toHaveLength(1);
+    const post = calls.find(call => call.method === 'chat.postMessage')!;
+    const blocks = post.body.blocks as Array<Record<string, unknown>>;
+    const actions = blocks.find(block => block.type === 'actions')!;
+    const approve = (actions.elements as Array<Record<string, unknown>>)[0]!;
+
+    sockets[0]!.receive({
+      envelope_id: 'env_coexist_approval',
+      type: 'interactive',
+      payload: {
+        type: 'block_actions',
+        user: { id: 'U12345678' },
+        actions: [
+          {
+            block_id: 'woml_approval_actions',
+            action_id: 'woml_approval_approved',
+            value: approve.value,
+          },
+        ],
+      },
+    });
+    await Bun.sleep(0);
+    expect(interactions).toHaveLength(1);
+    expect(triggerRequests).toEqual([]);
+
+    sockets[0]!.receive({
+      envelope_id: 'env_coexist_trigger',
+      type: 'events_api',
+      payload: {
+        type: 'event_callback',
+        event_id: 'EvCoexistence',
+        team_id: 'T12345678',
+        event: {
+          type: 'app_mention',
+          user: 'U12345678',
+          channel: 'C12345678',
+          text: '<@U87654321> continue',
+          ts: '1710000005.000100',
+        },
+      },
+    });
+    await Bun.sleep(0);
+    expect(triggerRequests).toEqual([
+      'slack:T12345678:EvCoexistence:approval-trigger-coexistence:agentMessage',
+    ]);
+    expect(interactions).toHaveLength(1);
+    expect(sockets[0]!.sent.map(value => JSON.parse(value))).toEqual([
+      { envelope_id: 'env_coexist_approval' },
+      { envelope_id: 'env_coexist_trigger' },
+    ]);
+
+    await trigger.close();
+    await approval.close();
+    await shared.close();
+  });
+
+  test('classifies rate limits, permissions, expired tokens, and ambiguous sends', async () => {
+    const invocation = await delivery();
+    const credentials = {
+      botToken: 'xoxb-real-test-token',
+      appToken: 'xapp-real-test-token',
+    };
+    const make = (
+      override: (call: ApiCall) =>
+        | ReturnType<typeof successfulApi>
+        | { body: Record<string, unknown>; status?: number; headers?: Record<string, string> }
+    ) => {
+      const transport = new RealSlackTransport({
+        emit: () => {},
+        fetch: slackFetch([], override),
+        createWebSocket: () => new MockSocket(),
+      });
+      return transport;
+    };
+
+    const limited = make(call =>
+      call.method === 'chat.postMessage'
+        ? {
+            body: { ok: false, error: 'ratelimited' },
+            status: 429,
+            headers: { 'Retry-After': '3' },
+          }
+        : successfulApi(call)
+    );
+    await limited.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
+    await expect(limited.deliver({ invocation, credentials })).rejects.toMatchObject({
+      failure: {
+        kind: 'rate_limited',
+        code: 'WOML_SLACK_RATE_LIMITED',
+        retryable: true,
+        retryAfterMs: 3_000,
+      },
+    });
+
+    const denied = make(call =>
+      call.method === 'conversations.list'
+        ? {
+            body: {
+              ok: false,
+              error: 'missing_scope',
+              needed: 'channels:read,groups:read,mpim:read,im:read',
+              provided: 'channels:history,chat:write',
+            },
+          }
+        : successfulApi(call)
+    );
+    await denied.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
+    await expect(denied.deliver({ invocation, credentials })).rejects.toMatchObject({
+      failure: {
+        kind: 'provider_auth_failed',
+        code: 'WOML_SLACK_PERMISSION_DENIED',
+        message:
+          'Slack operation conversations.list needs additional app permissions. Missing scopes: channels:read, groups:read, mpim:read, im:read. Granted scopes: channels:history, chat:write. Add the missing Bot Token Scopes and reinstall the Slack app to the workspace.',
+        retryable: false,
+      },
+    });
+
+    const maliciousScope = 'xoxb-must-not-appear';
+    const unsafeDenied = make(call =>
+      call.method === 'conversations.list'
+        ? {
+            body: {
+              ok: false,
+              error: 'missing_scope',
+              needed: maliciousScope,
+              provided: 'chat:write',
+            },
+          }
+        : successfulApi(call)
+    );
+    await unsafeDenied.ensureConnection(
+      'SLACK_APP_TOKEN',
+      credentials.appToken
+    );
+    try {
+      await unsafeDenied.deliver({ invocation, credentials });
+      throw new Error('Expected Slack permission failure.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(SlackTransportError);
+      expect(JSON.stringify(error)).not.toContain(maliciousScope);
+      expect(error).toMatchObject({
+        failure: {
+          code: 'WOML_SLACK_PERMISSION_DENIED',
+          message:
+            'Slack operation conversations.list needs additional app permissions. Granted scopes: chat:write. Add the missing Bot Token Scopes and reinstall the Slack app to the workspace.',
+        },
+      });
+    }
+
+    const expired = make(call =>
+      call.method === 'auth.test'
+        ? { body: { ok: false, error: 'token_expired' } }
+        : successfulApi(call)
+    );
+    await expired.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
+    await expect(expired.deliver({ invocation, credentials })).rejects.toMatchObject({
+      failure: {
+        kind: 'provider_auth_failed',
+        code: 'WOML_SLACK_AUTH_FAILED',
+        retryable: false,
+      },
+    });
+
+    const ambiguous = new RealSlackTransport({
+      emit: () => {},
+      fetch: (async (input, init) => {
+        const method = new URL(String(input)).pathname.split('/').pop();
+        if (method === 'chat.postMessage') throw new Error('connection lost');
+        return slackFetch([], successfulApi)(input, init);
+      }) as typeof fetch,
+      createWebSocket: () => new MockSocket(),
+    });
+    await ambiguous.ensureConnection('SLACK_APP_TOKEN', credentials.appToken);
+    await expect(
+      ambiguous.deliver({ invocation, credentials })
+    ).rejects.toMatchObject({
+      failure: {
+        kind: 'delivery_ambiguous',
+        code: 'WOML_NOTIFICATION_DELIVERY_AMBIGUOUS',
+        retryable: false,
+      },
+    });
+  });
+
+  test('refreshes Socket Mode and rejects in-process credential rotation', async () => {
+    const calls: ApiCall[] = [];
+    const sockets: MockSocket[] = [];
+    const transport = new RealSlackTransport({
+      emit: () => {},
+      fetch: slackFetch(calls, successfulApi),
+      createWebSocket: () => {
+        const socket = new MockSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      reconnectBaseDelayMs: 1,
+    });
+    await transport.ensureConnection('SLACK_APP_TOKEN', 'xapp-first-token');
+    await expect(
+      transport.ensureConnection('SLACK_APP_TOKEN', 'xapp-rotated-token')
+    ).rejects.toBeInstanceOf(SlackTransportError);
+
+    sockets[0]!.receive({ type: 'disconnect', reason: 'refresh_requested' });
+    await Bun.sleep(10);
+    expect(sockets.length).toBeGreaterThanOrEqual(2);
+    expect(
+      calls.filter(call => call.method === 'apps.connections.open').length
+    ).toBeGreaterThanOrEqual(2);
+    await transport.close();
+  });
+
+  test('rejects a message update bound to another Slack workspace', async () => {
+    const transport = new RealSlackTransport({
+      emit: () => {},
+      fetch: slackFetch([], successfulApi),
+      createWebSocket: () => new MockSocket(),
+    });
+    const update = await fixture<UpdateMessage>('update.v1.json');
+    if (!('workspaceId' in update.providerMessage)) {
+      throw new Error('The Slack fixture must contain a Slack message identity.');
+    }
+    const foreign: ProviderMessageIdentity = {
+      channelId: update.providerMessage.channelId,
+      messageId: update.providerMessage.messageId,
+      workspaceId: 'T87654321',
+    };
+    await transport.ensureConnection('SLACK_APP_TOKEN', 'xapp-real-test-token');
+    await expect(
+      transport.update({
+        invocation: { ...update, providerMessage: foreign },
+        credentials: {
+          botToken: 'xoxb-real-test-token',
+          appToken: 'xapp-real-test-token',
+        },
+      })
+    ).rejects.toMatchObject({
+      failure: {
+        kind: 'update_failed',
+        code: 'WOML_SLACK_UPDATE_FAILED',
+        retryable: false,
+      },
+    });
+    await transport.close();
+  });
+});

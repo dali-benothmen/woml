@@ -1,0 +1,29 @@
+<woml>
+  <workflow
+    id="runtime-policy-demo"
+    name="Runtime Policy Demo"
+    description="Demonstrates workflow concurrency, rate, timeout, and queue policy"
+    version="1.0.0"
+  >
+    <config
+      concurrency="2"
+      timeout="30s"
+      rate-limit="5/1m"
+      queue="examples"
+    />
+
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="greet">
+        <script>
+          return {
+            message: `Hello ${context.payload.name ?? 'World'}`
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,11 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 2,
+  "messageType": "completed",
+  "invocationId": "inv_load_weather_01",
+  "outcome": {
+    "kind": "success",
+    "value": { "temperature": 22 }
+  },
+  "durationMs": 81.2
+}

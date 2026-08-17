@@ -1,0 +1,33 @@
+<woml>
+  <props>
+    <prop name="label" required="true" />
+    <prop name="relay-url" required="true" />
+  </props>
+  <provider kind="notification">
+    <script>
+      if (notification.kind === "approval") {
+        await services.http.request({
+          url: props.relayUrl,
+          method: "POST",
+          json: {
+            approve: notification.actions.approve.url,
+            reject: notification.actions.reject.url
+          }
+        });
+      }
+      return { messageId: `${props.label}:${notification.deliveryId}` };
+    </script>
+  </provider>
+  <lifecycle>
+    <on-success>
+      <script>
+        console.log(`Provider ${props.label} ${lifecycle.outcome}`);
+      </script>
+    </on-success>
+    <on-complete>
+      <script>
+        console.log(`Provider ${props.label} complete`);
+      </script>
+    </on-complete>
+  </lifecycle>
+</woml>

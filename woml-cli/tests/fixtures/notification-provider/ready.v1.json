@@ -1,0 +1,7 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "ready",
+  "hostInstanceId": "notification-host-01",
+  "providers": ["slack"]
+}

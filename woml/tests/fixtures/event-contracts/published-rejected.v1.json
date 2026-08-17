@@ -1,0 +1,20 @@
+{
+  "contract": "woml.event-publication",
+  "contractVersion": 1,
+  "messageType": "published",
+  "requestId": "publish_request_4",
+  "eventId": "order-42-created",
+  "eventName": "order.created",
+  "status": "rejected",
+  "deliveries": [
+    {
+      "workflowId": "send-confirmation",
+      "triggerId": "orderCreated",
+      "status": "rejected",
+      "code": "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+      "message": "This event ID is already bound to a different payload.",
+      "retryable": false
+    }
+  ],
+  "completedAt": "2026-08-08T12:00:03.000Z"
+}

@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v1",
+  "title": "WOML Run Event v1",
+  "description": "Append-only workflow run events used by the first event-driven Rust execution slice.",
+  "x-status": "frozen-for-rust-hello-slice",
+  "x-currentEventTypes": [
+    "run_started",
+    "step_attempt_started",
+    "step_attempt_succeeded",
+    "step_attempt_failed",
+    "run_succeeded",
+    "run_failed"
+  ],
+  "x-reservedEventTypes": [
+    "step_retry_scheduled",
+    "run_paused",
+    "run_resumed",
+    "branch_selected",
+    "parallel_group_started",
+    "parallel_group_completed"
+  ],
+  "x-invariants": [
+    "Events are immutable and append-only.",
+    "The pair (runId, sequence) is unique and sequence increases monotonically within a run.",
+    "run_started is the first event and binds the run to workflowId and the RFC 8785 JCS SHA-256 definitionHash.",
+    "Context and run status are projections derived by folding events.",
+    "Only step_attempt_succeeded publishes an output into context.steps.",
+    "A terminal attempt event corresponds to one earlier step_attempt_started with the same nodeId, attempt, and invocationId.",
+    "A recovered started attempt without a terminal event fails as interrupted and is not automatically replayed.",
+    "Resolved secret values never appear in event data or failure messages.",
+    "Readers reject unsupported eventSchemaVersion values."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventSchemaVersion",
+    "eventId",
+    "runId",
+    "sequence",
+    "occurredAt",
+    "type",
+    "data"
+  ],
+  "properties": {
+    "eventSchemaVersion": { "const": 1 },
+    "eventId": { "$ref": "#/$defs/nonEmptyId" },
+    "runId": { "$ref": "#/$defs/nonEmptyId" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_started",
+        "step_attempt_started",
+        "step_attempt_succeeded",
+        "step_attempt_failed",
+        "run_succeeded",
+        "run_failed"
+      ]
+    },
+    "data": {}
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "run_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptSucceededData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptFailedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "run_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runSucceededData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "run_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runFailedData" } } }
+    }
+  ],
+  "$defs": {
+    "nonEmptyId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "definitionHash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "SHA-256 of the RFC 8785 JSON Canonicalization Scheme encoding of the complete compiled workflow model, rendered as sha256 followed by a colon and lowercase hexadecimal."
+    },
+    "runStartedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowId", "definitionHash", "trigger"],
+      "properties": {
+        "workflowId": { "$ref": "#/$defs/nonEmptyId" },
+        "definitionHash": { "$ref": "#/$defs/definitionHash" },
+        "trigger": { "type": "object" }
+      }
+    },
+    "stepAttemptStartedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "handler"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "handler": { "$ref": "#/$defs/nonEmptyId" }
+      }
+    },
+    "stepAttemptSucceededData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "output"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "output": {}
+      }
+    },
+    "stepAttemptFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "failure"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "failure": {
+          "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/attemptFailure"
+        }
+      }
+    },
+    "runSucceededData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminalNodeId", "result"],
+      "properties": {
+        "terminalNodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "result": {}
+      }
+    },
+    "runFailedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failure"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "failure": {
+          "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/attemptFailure"
+        }
+      }
+    }
+  }
+}

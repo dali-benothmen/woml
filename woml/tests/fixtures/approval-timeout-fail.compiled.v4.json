@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 4,
+  "workflowId": "publish-article",
+  "metadata": {
+    "name": "Publish Article",
+    "version": "0.1"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": { "kind": "object", "fields": {} }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["prepareArticle"],
+    "nodes": [
+      {
+        "id": "prepareArticle",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          title: \"WOML reaches human review\",\n          ready: true\n        };\n      "
+            }
+          }
+        }
+      },
+      {
+        "id": "editorApproval",
+        "handler": "engine.approval-wait",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "timeoutMs": { "kind": "literal", "value": 86400000 },
+            "onTimeout": { "kind": "literal", "value": "fail" }
+          }
+        },
+        "metadata": {
+          "name": "Editorial approval",
+          "description": "Approve the prepared article for publication"
+        }
+      },
+      {
+        "id": "publish",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n            return {\n              published: true,\n              title: context.steps.prepareArticle.title\n            };\n          "
+            }
+          }
+        }
+      },
+      {
+        "id": "recordRejection",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n            return {\n              published: false,\n              reason: \"Human review rejected publication\"\n            };\n          "
+            }
+          }
+        }
+      },
+      {
+        "id": "__woml_approval__editorApproval__join",
+        "handler": "engine.approval-join",
+        "inputs": { "kind": "object", "fields": {} }
+      },
+      {
+        "id": "finalStatus",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          decision: context.steps.editorApproval.decision,\n          source: context.steps.editorApproval.source,\n          published:\n            context.steps.editorApproval.decision === \"approved\"\n        };\n      "
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "prepareArticle-to-editorApproval",
+        "from": "prepareArticle",
+        "to": "editorApproval",
+        "condition": { "kind": "always" }
+      },
+      {
+        "id": "editorApproval:approved",
+        "from": "editorApproval",
+        "to": "publish",
+        "condition": {
+          "kind": "equals",
+          "left": {
+            "kind": "contextReference",
+            "path": ["steps", "editorApproval", "decision"]
+          },
+          "right": { "kind": "literal", "value": "approved" }
+        },
+        "approvalId": "editorApproval"
+      },
+      {
+        "id": "editorApproval:rejected",
+        "from": "editorApproval",
+        "to": "recordRejection",
+        "condition": {
+          "kind": "equals",
+          "left": {
+            "kind": "contextReference",
+            "path": ["steps", "editorApproval", "decision"]
+          },
+          "right": { "kind": "literal", "value": "rejected" }
+        },
+        "approvalId": "editorApproval"
+      },
+      {
+        "id": "editorApproval:approved:join",
+        "from": "publish",
+        "to": "__woml_approval__editorApproval__join",
+        "condition": { "kind": "always" },
+        "approvalId": "editorApproval"
+      },
+      {
+        "id": "editorApproval:rejected:join",
+        "from": "recordRejection",
+        "to": "__woml_approval__editorApproval__join",
+        "condition": { "kind": "always" },
+        "approvalId": "editorApproval"
+      },
+      {
+        "id": "__woml_approval__editorApproval__join-to-finalStatus",
+        "from": "__woml_approval__editorApproval__join",
+        "to": "finalStatus",
+        "condition": { "kind": "always" }
+      }
+    ]
+  }
+}

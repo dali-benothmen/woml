@@ -1,0 +1,19 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "inv_result_size_01",
+  "outcome": {
+    "kind": "failure",
+    "error": {
+      "kind": "result_too_large",
+      "code": "WOML_SCRIPT_RESULT_TOO_LARGE",
+      "message": "Script result exceeds the configured byte limit.",
+      "details": {
+        "actualBytes": 1500,
+        "limitBytes": 1000
+      }
+    }
+  },
+  "durationMs": 4
+}

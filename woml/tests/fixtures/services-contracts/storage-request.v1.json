@@ -1,0 +1,11 @@
+{
+  "contract": "woml.storage",
+  "contractVersion": 1,
+  "kind": "request",
+  "operation": "put",
+  "input": {
+    "key": "reports/2026-08-10.json",
+    "value": { "customers": 42 },
+    "contentType": "application/json"
+  }
+}

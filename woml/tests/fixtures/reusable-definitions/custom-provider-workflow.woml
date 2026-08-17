@@ -1,0 +1,44 @@
+<woml>
+  <imports>
+    <module name="telegram" from="./telegram.woml" />
+  </imports>
+  <workflow id="custom-provider-compilation" name="Custom provider compilation">
+    <lifecycle>
+      <on-success>
+        <notify>
+          <telegram
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+            chat-id="operations"
+            message="Workflow {{context.steps.finish.status}}"
+          />
+        </notify>
+      </on-success>
+    </lifecycle>
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="prepare">
+        <script>return { orderId: "order-42" };</script>
+      </step>
+      <approval id="review" name="Review order">
+        <notify>
+          <telegram
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+            chat-id="finance-team"
+            message="Review {{context.steps.prepare.orderId}}"
+          />
+        </notify>
+        <when-approved>
+          <step id="approved"><script>return { approved: true };</script></step>
+        </when-approved>
+        <when-rejected>
+          <step id="rejected"><script>return { approved: false };</script></step>
+        </when-rejected>
+      </approval>
+      <step id="finish">
+        <script>return { status: "complete" };</script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

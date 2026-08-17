@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v11",
+  "title": "WOML Compiled Workflow Model v11",
+  "description": "Language-neutral DAG contract with an optional workflow-owned lifecycle definition outside the business graph.",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v10",
+  "x-invariants": [
+    "Lifecycle hooks and actions are not business DAG nodes and cannot produce context.steps outputs.",
+    "Hook and action identities are deterministic from lifecycle event and source order.",
+    "Lifecycle scripts use Script Runtime Bindings v2; normal script nodes retain Bindings v1.",
+    "Lifecycle notification credentials remain symbolic secret references.",
+    "Models v1-v10 remain immutable and executable under their original contracts."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 11 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": { "type": "array", "maxItems": 64, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" } },
+    "graph": {
+      "allOf": [
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowGraph" },
+        { "properties": { "nodes": { "items": { "not": { "type": "object", "required": ["handler"], "properties": { "handler": { "enum": ["runtime.lifecycle-script", "notification.informational"] } } } } } } }
+      ]
+    },
+    "moduleRuntime": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime" },
+    "lifecycle": { "$ref": "#/$defs/lifecycle" }
+  },
+  "$defs": {
+    "lifecycleEvent": { "enum": ["run_start", "step_start", "step_success", "step_failure", "step_complete", "run_success", "run_failure", "run_cancel", "run_complete"] },
+    "lifecycle": {
+      "type": "object", "additionalProperties": false, "required": ["profileVersion", "hooks"],
+      "properties": {
+        "profileVersion": { "const": 1 },
+        "hooks": { "type": "array", "minItems": 1, "maxItems": 9, "items": { "$ref": "#/$defs/hook" } }
+      }
+    },
+    "hook": {
+      "type": "object", "additionalProperties": false, "required": ["hookId", "event", "actions"],
+      "properties": {
+        "hookId": { "type": "string", "pattern": "^lifecycle:(run|step)_[a-z]+$", "maxLength": 128 },
+        "event": { "$ref": "#/$defs/lifecycleEvent" },
+        "stepIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 } },
+        "actions": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/action" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "event": { "enum": ["step_start", "step_success", "step_failure", "step_complete"] } } },
+          "else": { "not": { "required": ["stepIds"] } }
+        }
+      ]
+    },
+    "action": { "oneOf": [{ "$ref": "#/$defs/scriptAction" }, { "$ref": "#/$defs/notificationAction" }] },
+    "scriptAction": {
+      "type": "object", "additionalProperties": false, "required": ["actionId", "handler", "inputs", "scriptRuntime"],
+      "properties": {
+        "actionId": { "$ref": "#/$defs/actionId" },
+        "handler": { "const": "runtime.lifecycle-script" },
+        "inputs": { "$ref": "#/$defs/scriptInputs" },
+        "scriptRuntime": { "$ref": "#/$defs/scriptRuntimeV2" }
+      }
+    },
+    "notificationAction": {
+      "type": "object", "additionalProperties": false, "required": ["actionId", "handler", "inputs"],
+      "properties": {
+        "actionId": { "$ref": "#/$defs/actionId" },
+        "handler": { "const": "notification.informational" },
+        "inputs": { "$ref": "#/$defs/notificationInputs" }
+      }
+    },
+    "actionId": { "type": "string", "pattern": "^lifecycle:(run|step)_[a-z]+:action:(0|[1-9][0-9]*)$", "maxLength": 160 },
+    "scriptRuntimeV2": {
+      "type": "object", "additionalProperties": false, "required": ["bindingVersion", "bindings", "requiredSecrets"],
+      "properties": {
+        "bindingVersion": { "const": 2 },
+        "bindings": { "const": ["context", "lifecycle", "attempt", "services", "secrets"] },
+        "requiredSecrets": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } }
+      }
+    },
+    "scriptInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": {
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "const": "literal" },
+                "value": { "type": "string", "maxLength": 1048576 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notificationInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveries"],
+          "properties": {
+            "deliveries": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "items"],
+              "properties": {
+                "kind": { "const": "array" },
+                "items": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/delivery" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials", "message"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/literalString" },
+            "provider": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "const": "slack" } } },
+            "destination": { "$ref": "#/$defs/literalString" },
+            "credentials": {
+              "type": "object", "additionalProperties": false, "required": ["kind", "fields"],
+              "properties": {
+                "kind": { "const": "object" },
+                "fields": { "type": "object", "additionalProperties": false, "required": ["botToken", "appToken"], "properties": { "botToken": { "$ref": "#/$defs/secretReference" }, "appToken": { "$ref": "#/$defs/secretReference" } } }
+              }
+            },
+            "message": { "$ref": "#/$defs/template" }
+          }
+        }
+      }
+    },
+    "literalString": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "type": "string", "minLength": 1, "maxLength": 512 } } },
+    "valueExpression": {
+      "oneOf": [
+        { "$ref": "#/$defs/literal" }, { "$ref": "#/$defs/contextReference" }, { "$ref": "#/$defs/lifecycleReference" },
+        { "$ref": "#/$defs/secretReference" }, { "$ref": "#/$defs/object" }, { "$ref": "#/$defs/array" }, { "$ref": "#/$defs/template" }
+      ]
+    },
+    "literal": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": {} } },
+    "path": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 256 } },
+    "contextReference": { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "const": "contextReference" }, "path": { "$ref": "#/$defs/path" } } },
+    "lifecycleReference": { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "const": "lifecycleReference" }, "path": { "$ref": "#/$defs/path" } } },
+    "secretReference": { "type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": { "kind": { "const": "secretReference" }, "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } } },
+    "object": { "type": "object", "additionalProperties": false, "required": ["kind", "fields"], "properties": { "kind": { "const": "object" }, "fields": { "type": "object", "additionalProperties": { "$ref": "#/$defs/valueExpression" } } } },
+    "array": { "type": "object", "additionalProperties": false, "required": ["kind", "items"], "properties": { "kind": { "const": "array" }, "items": { "type": "array", "items": { "$ref": "#/$defs/valueExpression" } } } },
+    "template": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "parts"],
+      "properties": {
+        "kind": { "const": "template" },
+        "parts": { "type": "array", "minItems": 1, "maxItems": 65, "items": { "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": { "kind": { "const": "text" }, "text": { "type": "string", "maxLength": 4096 } } },
+          { "$ref": "#/$defs/contextReference" }, { "$ref": "#/$defs/lifecycleReference" }
+        ] } }
+      }
+    }
+  }
+}

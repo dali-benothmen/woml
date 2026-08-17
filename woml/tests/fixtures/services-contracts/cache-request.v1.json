@@ -1,0 +1,11 @@
+{
+  "contract": "woml.cache",
+  "contractVersion": 1,
+  "kind": "request",
+  "operation": "set_if_absent",
+  "input": {
+    "key": "customer:42",
+    "value": { "name": "Ada" },
+    "ttlMs": 900000
+  }
+}

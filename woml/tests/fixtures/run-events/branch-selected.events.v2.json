@@ -1,0 +1,163 @@
+[
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_001",
+    "runId": "run_branch_01",
+    "sequence": 1,
+    "occurredAt": "2026-08-06T13:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "review-content",
+      "definitionHash": "sha256:6a9b3aa53e81ae0e95414f80df0192de5ff11489e9b65b1254b69b71a496155a",
+      "trigger": {}
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_002",
+    "runId": "run_branch_01",
+    "sequence": 2,
+    "occurredAt": "2026-08-06T13:00:00.001Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "checkContent",
+      "attempt": 1,
+      "invocationId": "inv_branch_check_01",
+      "handler": "runtime.script"
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_003",
+    "runId": "run_branch_01",
+    "sequence": 3,
+    "occurredAt": "2026-08-06T13:00:00.002Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "checkContent",
+      "attempt": 1,
+      "invocationId": "inv_branch_check_01",
+      "output": {
+        "needsReview": true
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_004",
+    "runId": "run_branch_01",
+    "sequence": 4,
+    "occurredAt": "2026-08-06T13:00:00.003Z",
+    "type": "branch_selected",
+    "data": {
+      "branchId": "decision",
+      "armId": "decision:when:0"
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_005",
+    "runId": "run_branch_01",
+    "sequence": 5,
+    "occurredAt": "2026-08-06T13:00:00.004Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "reviewContent",
+      "attempt": 1,
+      "invocationId": "inv_branch_review_01",
+      "handler": "runtime.script"
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_006",
+    "runId": "run_branch_01",
+    "sequence": 6,
+    "occurredAt": "2026-08-06T13:00:00.005Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "reviewContent",
+      "attempt": 1,
+      "invocationId": "inv_branch_review_01",
+      "output": {
+        "status": "reviewed",
+        "accepted": true
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_007",
+    "runId": "run_branch_01",
+    "sequence": 7,
+    "occurredAt": "2026-08-06T13:00:00.006Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "decision",
+      "attempt": 1,
+      "invocationId": "inv_branch_decision_01",
+      "handler": "engine.branch-result"
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_008",
+    "runId": "run_branch_01",
+    "sequence": 8,
+    "occurredAt": "2026-08-06T13:00:00.007Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "decision",
+      "attempt": 1,
+      "invocationId": "inv_branch_decision_01",
+      "output": {
+        "status": "reviewed",
+        "accepted": true
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_009",
+    "runId": "run_branch_01",
+    "sequence": 9,
+    "occurredAt": "2026-08-06T13:00:00.008Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "publishDecision",
+      "attempt": 1,
+      "invocationId": "inv_branch_publish_01",
+      "handler": "runtime.script"
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_010",
+    "runId": "run_branch_01",
+    "sequence": 10,
+    "occurredAt": "2026-08-06T13:00:00.009Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "publishDecision",
+      "attempt": 1,
+      "invocationId": "inv_branch_publish_01",
+      "output": {
+        "message": "Final status: reviewed"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 2,
+    "eventId": "evt_branch_011",
+    "runId": "run_branch_01",
+    "sequence": 11,
+    "occurredAt": "2026-08-06T13:00:00.010Z",
+    "type": "run_succeeded",
+    "data": {
+      "terminalNodeId": "publishDecision",
+      "result": {
+        "message": "Final status: reviewed"
+      }
+    }
+  }
+]

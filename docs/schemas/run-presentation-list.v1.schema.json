@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-presentation-list/v1",
+  "title": "WOML Run Presentation List v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "workflowId", "runs"],
+  "properties": {
+    "profile": { "const": "woml.run-presentation-list/v1" },
+    "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "runs": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "$ref": "https://woml.dev/schemas/run-presentation/v1" }
+    }
+  }
+}

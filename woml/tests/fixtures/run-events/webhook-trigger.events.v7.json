@@ -1,0 +1,59 @@
+[
+  {
+    "eventSchemaVersion": 7,
+    "eventId": "event_webhook_001",
+    "runId": "run_webhook_001",
+    "sequence": 1,
+    "occurredAt": "2026-08-08T12:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "webhook-trigger-contract",
+      "definitionHash": "sha256:4b4899d13cefc7ed88033d24c898549a4eb8862bebf4a73ed1c26f0af99bd082",
+      "triggerId": "newOrder",
+      "triggerHandler": "trigger.webhook",
+      "triggerOccurrenceId": "occ_webhook_001",
+      "trigger": { "orderId": "order-42" }
+    }
+  },
+  {
+    "eventSchemaVersion": 7,
+    "eventId": "event_webhook_002",
+    "runId": "run_webhook_001",
+    "sequence": 2,
+    "occurredAt": "2026-08-08T12:00:00.010Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "capture",
+      "attempt": 1,
+      "invocationId": "invocation_webhook_001",
+      "handler": "runtime.script",
+      "idempotencyKey": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  },
+  {
+    "eventSchemaVersion": 7,
+    "eventId": "event_webhook_003",
+    "runId": "run_webhook_001",
+    "sequence": 3,
+    "occurredAt": "2026-08-08T12:00:00.020Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "capture",
+      "attempt": 1,
+      "invocationId": "invocation_webhook_001",
+      "output": { "orderId": "order-42" }
+    }
+  },
+  {
+    "eventSchemaVersion": 7,
+    "eventId": "event_webhook_004",
+    "runId": "run_webhook_001",
+    "sequence": 4,
+    "occurredAt": "2026-08-08T12:00:00.030Z",
+    "type": "run_succeeded",
+    "data": {
+      "terminalNodeId": "capture",
+      "result": { "orderId": "order-42" }
+    }
+  }
+]

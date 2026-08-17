@@ -1,0 +1,17 @@
+<woml>
+<workflow id="distribution-all" version="1.0.0">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="prepare"><script>return { enabled: true };</script></step>
+    <fork id="distribution" join="all">
+      <branch id="instagram">
+        <step id="publishInstagram"><script>return { platform: "instagram" };</script></step>
+      </branch>
+      <branch id="facebook">
+        <step id="publishFacebook"><script>return { platform: "facebook" };</script></step>
+      </branch>
+    </fork>
+    <step id="finish"><script>return { instagram: context.steps.publishInstagram, facebook: context.steps.publishFacebook };</script></step>
+  </steps>
+</workflow>
+</woml>

@@ -1,0 +1,23 @@
+<woml>
+  <workflow
+    id="runtime-policy-timeout-demo"
+    name="Runtime Policy Timeout Demo"
+    description="Fails when the total workflow execution exceeds one second"
+    version="1.0.0"
+  >
+    <config timeout="1s" queue="examples" />
+
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="slowWork">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 5_000));
+          return { completed: true };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/service-progress/v1",
+  "title": "WOML Service Progress v1",
+  "description": "Ephemeral, redacted service-operation progress for terminal and observability consumers.",
+  "x-status": "services-capabilities-contract-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/started" },
+    { "$ref": "#/$defs/succeeded" },
+    { "$ref": "#/$defs/failed" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "baseProperties": {
+      "type": "object",
+      "properties": {
+        "contract": { "const": "woml.service-progress" }, "contractVersion": { "const": 1 },
+        "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" },
+        "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "capability": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operation": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "executionMode": { "enum": ["observed", "managed"] },
+        "metadata": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/safeMetadata" }
+      }
+    },
+    "started": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "status", "runId", "nodeId", "invocationId", "callId", "capability", "operation", "executionMode", "occurredAt", "metadata"],
+      "properties": {
+        "contract": { "const": "woml.service-progress" }, "contractVersion": { "const": 1 }, "status": { "const": "started" },
+        "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "capability": { "type": "string", "minLength": 1, "maxLength": 128 }, "operation": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "executionMode": { "enum": ["observed", "managed"] }, "occurredAt": { "type": "string", "format": "date-time" },
+        "metadata": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/safeMetadata" }
+      }
+    },
+    "succeeded": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "status", "runId", "nodeId", "invocationId", "callId", "capability", "operation", "executionMode", "occurredAt", "durationMs", "metadata"],
+      "properties": {
+        "contract": { "const": "woml.service-progress" }, "contractVersion": { "const": 1 }, "status": { "const": "succeeded" },
+        "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "capability": { "type": "string", "minLength": 1, "maxLength": 128 }, "operation": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "executionMode": { "enum": ["observed", "managed"] }, "occurredAt": { "type": "string", "format": "date-time" }, "durationMs": { "type": "number", "minimum": 0 },
+        "metadata": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/safeMetadata" }
+      }
+    },
+    "failed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "status", "runId", "nodeId", "invocationId", "callId", "capability", "operation", "executionMode", "occurredAt", "durationMs", "error", "metadata"],
+      "properties": {
+        "contract": { "const": "woml.service-progress" }, "contractVersion": { "const": 1 }, "status": { "const": "failed" },
+        "runId": { "$ref": "#/$defs/id" }, "nodeId": { "$ref": "#/$defs/id" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "capability": { "type": "string", "minLength": 1, "maxLength": 128 }, "operation": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "executionMode": { "enum": ["observed", "managed"] }, "occurredAt": { "type": "string", "format": "date-time" }, "durationMs": { "type": "number", "minimum": 0 },
+        "error": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/failure" }, "metadata": { "$ref": "https://cronflow.dev/schemas/capability-call/v1#/$defs/safeMetadata" }
+      }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+<woml>
+  <imports><module name="cycle-b" from="./cycle-b.woml" /></imports>
+  <step><script>return props.value;</script></step>
+</woml>

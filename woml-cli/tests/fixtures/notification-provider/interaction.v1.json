@@ -1,0 +1,12 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "interaction",
+  "interactionId": "slack-envelope-01",
+  "deliveryId": "releaseApproval:notify:0:channel:0",
+  "provider": "slack",
+  "decisionCapability": "capability_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+  "decision": "approved",
+  "providerActorId": "U12345678",
+  "occurredAt": "2026-08-07T10:05:00.000Z"
+}

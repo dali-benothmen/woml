@@ -1,0 +1,30 @@
+<woml>
+<workflow id="customer-indexer" name="Customer indexer" version="1.0.0">
+  <triggers>
+    <event id="customerUpdated" name="customer.updated">
+      <schema>
+        {
+          "type": "object",
+          "required": ["customerId", "displayName"],
+          "properties": {
+            "customerId": { "type": "string" },
+            "displayName": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+
+  <steps>
+    <step id="updateIndex" name="Update search index">
+      <script>
+        return {
+          indexed: true,
+          customerId: context.payload.customerId,
+          displayName: context.payload.displayName
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

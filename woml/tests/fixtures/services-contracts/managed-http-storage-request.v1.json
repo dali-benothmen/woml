@@ -1,0 +1,18 @@
+{
+  "contract": "woml.managed-http",
+  "contractVersion": 1,
+  "kind": "request",
+  "method": "GET",
+  "url": "https://files.example.test/export.csv",
+  "headers": {},
+  "responseType": "storage",
+  "storage": {
+    "key": "imports/export.csv",
+    "contentType": "text/csv",
+    "overwrite": true
+  },
+  "timeoutMs": 30000,
+  "acceptedStatus": { "minimum": 200, "maximum": 299 },
+  "redirect": "follow",
+  "maximumRedirects": 10
+}

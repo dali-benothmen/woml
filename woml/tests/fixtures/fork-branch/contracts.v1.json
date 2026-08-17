@@ -1,0 +1,67 @@
+{
+  "storeDecision": {
+    "storeVersion": 14,
+    "migrationRequired": false,
+    "reason": "Model v13 definitions and Event v12 histories fit existing immutable definition and append-only event storage; fork projections are rebuildable caches, not new authority."
+  },
+  "contextViews": {
+    "preFork": { "payload": { "campaignId": "campaign-1" }, "steps": { "prepare": { "ready": true } } },
+    "instagramBranch": { "payload": { "campaignId": "campaign-1" }, "steps": { "prepare": { "ready": true }, "publishInstagram": { "status": "published" } } },
+    "facebookBranch": { "payload": { "campaignId": "campaign-1" }, "steps": { "prepare": { "ready": true }, "publishFacebook": { "status": "published" } } },
+    "selectedJoinMain": { "payload": { "campaignId": "campaign-1" }, "steps": { "prepare": { "ready": true }, "instagramOutcome": { "status": "published" }, "publishFacebook": { "status": "published" } } },
+    "noneJoinMain": { "payload": { "campaignId": "campaign-1" }, "steps": { "prepare": { "ready": true } } },
+    "laterMainDescendant": { "payload": { "campaignId": "campaign-1" }, "steps": { "prepare": { "ready": true }, "instagramOutcome": { "status": "published" }, "publishFacebook": { "status": "published" }, "finish": { "done": true } } },
+    "terminalLifecycle": { "payload": { "campaignId": "campaign-1" }, "steps": { "prepare": { "ready": true }, "instagramOutcome": { "status": "published" }, "publishFacebook": { "status": "published" }, "recordAnalytics": { "recorded": true }, "finish": { "done": true } } }
+  },
+  "outcomes": {
+    "success": { "status": "succeeded", "publicResultSource": "main", "publicResult": { "done": true } },
+    "joinedFailure": { "status": "failed", "downstreamMain": "inactive", "publicResult": "unavailable" },
+    "earlyUnjoinedFailure": { "status": "failed", "selectedJoin": "released", "downstreamMain": "completed", "publicResult": "unavailable" },
+    "lateUnjoinedFailure": { "status": "failed", "selectedJoin": "released", "mainResultRecorded": true, "publicResult": "unavailable" },
+    "mainFailureWithActiveBranches": { "status": "failed", "openedBranches": "settle-before-lifecycle", "laterForks": "not-opened", "publicResult": "unavailable" }
+  },
+  "lifecycleOrder": {
+    "joinedFailure": ["owned-branches-settled", "on-error", "on-complete", "run-finalized"],
+    "lateUnjoinedFailure": ["main-result-recorded", "owned-branches-settled", "on-error", "on-complete", "run-finalized"],
+    "mainFailure": ["active-owned-branches-settled", "on-error", "on-complete", "run-finalized"]
+  },
+  "recovery": {
+    "sourceOfTruth": "folded-event-history",
+    "safePendingWork": "resume",
+    "ambiguousExternalEffect": "fail-closed",
+    "unresolvedForkRunIsTerminal": false,
+    "openedForkBlocksRetention": true
+  },
+  "diagnostics": {
+    "legacyChoiceWarning": "WOML_DEPRECATED_CONDITIONAL_BRANCH",
+    "invalidJoin": "WOML_FORK_JOIN_INVALID",
+    "unknownJoinedBranch": "WOML_FORK_JOIN_UNKNOWN_BRANCH",
+    "nestedFork": "WOML_FORK_NESTED_UNSUPPORTED",
+    "unjoinedReference": "WOML_FORK_REFERENCE_NOT_VISIBLE",
+    "malformedModel": "WOML_INVALID_FORK_GRAPH",
+    "contradictoryHistory": "WOML_FORK_HISTORY_INVALID"
+  },
+  "inspection": {
+    "profile": "woml.run-inspection/v4",
+    "runId": "run_distribution",
+    "workflowId": "distribution-selected",
+    "status": "running",
+    "businessOutcome": "undecided",
+    "lifecycleStatus": "idle",
+    "hooks": [],
+    "warnings": [],
+    "cancellation": { "requested": false },
+    "policy": { "queue": "workflow:distribution-selected" },
+    "forks": {
+      "counts": { "opened": 1, "active": 1, "waiting": 0, "succeeded": 0, "failed": 0, "cancelled": 0 },
+      "items": [
+        {
+          "forkId": "distribution",
+          "status": "active",
+          "join": { "mode": "selected", "branchIds": ["instagram", "facebook"], "status": "pending" },
+          "branches": { "opened": 3, "active": 1, "waiting": 0, "succeeded": 2, "failed": 0, "cancelled": 0 }
+        }
+      ]
+    }
+  }
+}

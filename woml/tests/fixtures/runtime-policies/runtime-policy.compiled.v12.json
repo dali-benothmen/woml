@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 12,
+  "workflowId": "policy-demo",
+  "metadata": {
+    "name": "Runtime Policy Demo",
+    "version": "1.0.0"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": { "kind": "object", "fields": {} }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["processOrder"],
+    "nodes": [
+      {
+        "id": "processOrder",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": { "kind": "literal", "value": "return { ok: true };" }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      }
+    ],
+    "edges": []
+  },
+  "runtimePolicy": {
+    "profileVersion": 1,
+    "concurrency": 4,
+    "timeoutMs": 600000,
+    "rateLimit": {
+      "count": 100,
+      "windowMs": 60000,
+      "algorithm": "rolling_window"
+    },
+    "queue": {
+      "name": "orders",
+      "discipline": "work_conserving_fifo"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "trigger": {},
+  "steps": {
+    "prepareArticle": {
+      "title": "WOML reaches human review",
+      "ready": true
+    },
+    "editorApproval": {
+      "decision": "approved",
+      "source": "human",
+      "decidedAt": "2026-08-07T10:05:00.000Z"
+    },
+    "publish": {
+      "published": true,
+      "title": "WOML reaches human review"
+    },
+    "finalStatus": {
+      "decision": "approved",
+      "source": "human",
+      "published": true
+    }
+  }
+}

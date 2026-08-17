@@ -1,0 +1,5 @@
+{
+  "contract": "woml.capability-call", "contractVersion": 1, "messageType": "result",
+  "invocationId": "invocation-b", "callId": "call-http-b", "outcome": "failed", "durationMs": 30000,
+  "error": { "kind": "timed_out", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded 30000 ms.", "retryable": true, "ambiguous": false, "details": { "method": "GET", "origin": "https://api.example.test" } }
+}

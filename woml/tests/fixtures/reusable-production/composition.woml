@@ -1,0 +1,73 @@
+<woml>
+  <imports>
+    <module name="scale-value" from="./scale-value.woml" />
+    <module name="read-secret" from="./read-secret.woml" />
+  </imports>
+  <workflow id="reusable-composition" name="Reusable production composition" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="prepare">
+        <script>return { mode: "scale", value: 3, enabled: true };</script>
+      </step>
+
+      <switch id="selectedScale" value="{{context.steps.prepare.mode}}">
+        <case value="scale">
+          <scale-value id="switchScale" value="{{context.steps.prepare.value}}" factor="2" />
+          <result value="{{context.steps.switchScale}}" />
+        </case>
+        <default>
+          <step id="defaultScale"><script>return { value: 0 };</script></step>
+          <result value="{{context.steps.defaultScale}}" />
+        </default>
+      </switch>
+
+      <choose id="chosenScale">
+        <when test="{{context.steps.prepare.enabled}}">
+          <scale-value id="chooseScale" value="{{context.steps.selectedScale.value}}" factor="2" />
+          <result value="{{context.steps.chooseScale}}" />
+        </when>
+        <otherwise>
+          <step id="disabledScale"><script>return { value: 0 };</script></step>
+          <result value="{{context.steps.disabledScale}}" />
+        </otherwise>
+      </choose>
+
+      <parallel id="parallelScales" concurrency="2" on-error="wait-all">
+        <scale-value id="parallelLeft" value="{{context.steps.chosenScale.value}}" factor="2" />
+        <scale-value
+          id="parallelRight"
+          value="{{context.steps.chosenScale.value}}"
+          factor="3"
+          fail-once="true"
+          retry="2"
+          retry-delay="1ms"
+        />
+      </parallel>
+
+      <fork id="forkScales" join="all">
+        <branch id="leftBranch">
+          <scale-value id="forkLeft" value="{{context.steps.parallelLeft.value}}" factor="2" />
+        </branch>
+        <branch id="rightBranch">
+          <scale-value id="forkRight" value="{{context.steps.parallelRight.value}}" factor="2" />
+        </branch>
+      </fork>
+
+      <read-secret id="secretCheck" token="{{secrets.REUSABLE_TEST_TOKEN}}" />
+
+      <step id="finish">
+        <script>
+          return {
+            switchValue: context.steps.selectedScale.value,
+            chooseValue: context.steps.chosenScale.value,
+            parallelValue: context.steps.parallelLeft.value + context.steps.parallelRight.value,
+            forkValue: context.steps.forkLeft.value + context.steps.forkRight.value,
+            secretConfigured: context.steps.secretCheck.configured
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

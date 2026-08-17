@@ -1,0 +1,14 @@
+<woml>
+<workflow id="distribution-none" version="1.0.0">
+  <triggers><manual id="start" /></triggers>
+  <steps>
+    <step id="prepare"><script>return { ready: true };</script></step>
+    <fork id="analyticsFork" join="none">
+      <branch id="analytics">
+        <step id="recordAnalytics"><script>return { recorded: true };</script></step>
+      </branch>
+    </fork>
+    <step id="finish"><script>return { accepted: context.steps.prepare.ready };</script></step>
+  </steps>
+</workflow>
+</woml>

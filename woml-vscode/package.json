@@ -1,0 +1,95 @@
+{
+  "name": "woml-language",
+  "displayName": "WOML",
+  "description": "markup language that turns workflow automation into a document you can read, run, and trust.",
+  "version": "1.0.0",
+  "publisher": "woml",
+  "license": "Apache-2.0",
+  "icon": "images/icon.png",
+  "pricing": "Free",
+  "galleryBanner": {
+    "color": "#050806",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "woml",
+    "workflow",
+    "automation",
+    "markup",
+    "orchestration",
+    "workflow-as-code",
+    "javascript",
+    "bun",
+    "xml"
+  ],
+  "homepage": "https://github.com/dali-benothmen/woml/",
+  "bugs": {
+    "url": "https://github.com/dali-benothmen/woml/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dali-benothmen/woml.git",
+    "directory": "woml-vscode"
+  },
+  "scripts": {
+    "check": "bun scripts/check-extension.ts",
+    "package": "bun run check && bunx @vscode/vsce package"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "woml",
+        "aliases": [
+          "WOML",
+          "woml"
+        ],
+        "extensions": [
+          ".woml"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/woml-file.svg",
+          "dark": "./icons/woml-file.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "woml",
+        "scopeName": "text.html.woml",
+        "path": "./syntaxes/woml.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.js": "javascript",
+          "source.js.embedded.html": "javascript"
+        }
+      },
+      {
+        "scopeName": "woml.javascript.injection",
+        "path": "./syntaxes/woml-javascript.injection.tmLanguage.json",
+        "injectTo": [
+          "text.html.woml"
+        ]
+      },
+      {
+        "scopeName": "woml.references.injection",
+        "path": "./syntaxes/woml-references.injection.tmLanguage.json",
+        "injectTo": [
+          "text.html.woml"
+        ]
+      }
+    ],
+    "snippets": [
+      {
+        "language": "woml",
+        "path": "./snippets/woml.code-snippets"
+      }
+    ]
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/workflow-call-routing/v1",
+  "title": "WOML Local Workflow Call Routing v1",
+  "description": "Local runtime ownership registration and authenticated wake-up messages for already admitted child runs.",
+  "x-status": "workflow-calls-wc0-frozen",
+  "x-security": "Loopback only. WOML generates the session credential; authors never configure it as a workflow secret.",
+  "oneOf": [
+    { "$ref": "#/$defs/registration" },
+    { "$ref": "#/$defs/wakeup" },
+    { "$ref": "#/$defs/acknowledgement" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "workflowId": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 256 },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "runtimeId", "workflowId", "definitionHash", "endpoint", "sessionCredentialHash", "leaseExpiresAt"],
+      "properties": {
+        "contract": { "const": "woml.workflow-call-routing" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "registration" },
+        "runtimeId": { "$ref": "#/$defs/id" },
+        "workflowId": { "$ref": "#/$defs/workflowId" },
+        "definitionHash": { "$ref": "#/$defs/digest" },
+        "endpoint": { "type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]{1,5}$", "maxLength": 64 },
+        "sessionCredentialHash": { "$ref": "#/$defs/digest" },
+        "leaseExpiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "wakeup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "runtimeId", "childRunId", "callKey"],
+      "properties": {
+        "contract": { "const": "woml.workflow-call-routing" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "wakeup" },
+        "runtimeId": { "$ref": "#/$defs/id" },
+        "childRunId": { "$ref": "#/$defs/id" },
+        "callKey": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "acknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "childRunId", "accepted"],
+      "properties": {
+        "contract": { "const": "woml.workflow-call-routing" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "acknowledgement" },
+        "childRunId": { "$ref": "#/$defs/id" },
+        "accepted": { "type": "boolean" },
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 }
+      }
+    }
+  }
+}

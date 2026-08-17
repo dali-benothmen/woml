@@ -1,0 +1,96 @@
+{
+  "profile": "woml.run-presentation/v1",
+  "workflow": {
+    "id": "order-processing",
+    "name": "Order Processing",
+    "description": "Validates an order, calculates its total, and selects delivery.",
+    "version": "1.4.0",
+    "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "triggers": [
+      {
+        "id": "orders",
+        "type": "webhook",
+        "method": "POST",
+        "url": "http://127.0.0.1:3000/webhooks/orders"
+      }
+    ]
+  },
+  "runId": "run_35ca91",
+  "trigger": {
+    "id": "orders",
+    "type": "webhook"
+  },
+  "status": "failed",
+  "admittedAt": "2026-08-14T08:44:03.000Z",
+  "startedAt": "2026-08-14T08:44:03.001Z",
+  "completedAt": "2026-08-14T08:44:03.890Z",
+  "durationMs": 890,
+  "steps": [
+    {
+      "id": "prepareOrder",
+      "name": "Prepare order",
+      "kind": "script",
+      "status": "succeeded",
+      "depth": 0,
+      "durationMs": 15,
+      "attempts": 1,
+      "result": {
+        "orderId": "order-43"
+      }
+    },
+    {
+      "id": "chargeCustomer",
+      "name": "Charge customer",
+      "description": "Submit the payment to the configured provider.",
+      "kind": "script",
+      "status": "failed",
+      "depth": 0,
+      "durationMs": 840,
+      "attempts": 3,
+      "failure": {
+        "code": "WOML_HTTP_REQUEST_FAILED",
+        "message": "Payment provider returned HTTP 503.",
+        "kind": "http",
+        "retryable": true
+      }
+    },
+    {
+      "id": "buildConfirmation",
+      "name": "Build confirmation",
+      "kind": "script",
+      "status": "skipped",
+      "depth": 0,
+      "attempts": 1
+    }
+  ],
+  "summary": {
+    "succeeded": 1,
+    "failed": 1,
+    "skipped": 1,
+    "cancelled": 0,
+    "total": 3
+  },
+  "lifecycle": [
+    {
+      "hook": "on-error",
+      "status": "succeeded",
+      "durationMs": 7,
+      "provider": "console",
+      "detail": "Payment processing failed"
+    },
+    {
+      "hook": "on-complete",
+      "status": "succeeded",
+      "durationMs": 2,
+      "provider": "console",
+      "detail": "Final outcome: failed"
+    }
+  ],
+  "failure": {
+    "code": "WOML_HTTP_REQUEST_FAILED",
+    "message": "Step \"Charge customer\" failed after 3 attempts.",
+    "kind": "step_failed",
+    "retryable": false
+  },
+  "warnings": []
+}

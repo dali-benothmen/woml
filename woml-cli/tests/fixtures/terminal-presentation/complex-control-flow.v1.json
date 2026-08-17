@@ -1,0 +1,148 @@
+{
+  "profile": "woml.run-presentation/v1",
+  "workflow": {
+    "id": "order-automation",
+    "name": "Order Automation",
+    "description": "Routes, reviews, and distributes an order across durable automation paths.",
+    "version": "2.0.0",
+    "definitionHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "triggers": [{ "id": "orders", "type": "webhook", "method": "POST", "url": "/webhooks/orders" }]
+  },
+  "runId": "run_complex_01",
+  "trigger": { "id": "orders", "type": "webhook" },
+  "status": "waiting",
+  "admittedAt": "2026-08-15T12:00:00.000Z",
+  "startedAt": "2026-08-15T12:00:00.002Z",
+  "steps": [
+    {
+      "id": "delivery",
+      "name": "Select delivery",
+      "kind": "switch",
+      "status": "succeeded",
+      "depth": 0,
+      "durationMs": 2,
+      "attempts": 1,
+      "detail": "Selected \"express\".",
+      "result": { "provider": "express" }
+    },
+    {
+      "id": "enrichment",
+      "name": "Enrich order",
+      "kind": "parallel",
+      "status": "succeeded",
+      "depth": 0,
+      "durationMs": 24,
+      "attempts": 1,
+      "detail": "2 children · up to 2 at once · wait for all · all children completed."
+    },
+    {
+      "id": "loadCustomer",
+      "name": "Load customer",
+      "kind": "script",
+      "status": "succeeded",
+      "depth": 1,
+      "durationMs": 20,
+      "attempts": 1,
+      "result": { "customerId": "customer-42" }
+    },
+    {
+      "id": "distribution",
+      "name": "Distribute order",
+      "kind": "fork",
+      "status": "running",
+      "depth": 0,
+      "attempts": 1,
+      "detail": "3 branches · join slack, email · waiting for 2 joined branches."
+    },
+    {
+      "id": "slack",
+      "kind": "branch",
+      "status": "succeeded",
+      "depth": 1,
+      "durationMs": 7,
+      "attempts": 1,
+      "detail": "Joins the continuation; the fork waits for this branch."
+    },
+    {
+      "id": "sendSlack",
+      "name": "Send Slack update",
+      "kind": "script",
+      "status": "succeeded",
+      "depth": 2,
+      "durationMs": 7,
+      "attempts": 1,
+      "result": { "sent": true }
+    },
+    {
+      "id": "analytics",
+      "kind": "branch",
+      "status": "running",
+      "depth": 1,
+      "attempts": 1,
+      "detail": "Runs independently; this branch does not delay the continuation."
+    },
+    {
+      "id": "recordAnalytics",
+      "name": "Record analytics",
+      "kind": "script",
+      "status": "retrying",
+      "depth": 2,
+      "attempts": 2,
+      "detail": "Attempt 3 scheduled for 2026-08-15T12:00:02Z.",
+      "failure": {
+        "code": "WOML_SCRIPT_THROWN",
+        "message": "Analytics endpoint is temporarily unavailable.",
+        "kind": "script_threw",
+        "retryable": true
+      }
+    },
+    {
+      "id": "riskReview",
+      "name": "Calculate risk",
+      "kind": "workflow_call",
+      "status": "running",
+      "depth": 0,
+      "attempts": 1,
+      "detail": "Waiting for calculate-risk · run_call_42"
+    },
+    {
+      "id": "auditTrail",
+      "name": "Start audit trail",
+      "kind": "workflow_start",
+      "status": "succeeded",
+      "depth": 0,
+      "durationMs": 3,
+      "attempts": 1,
+      "detail": "Started audit-trail · run_call_43 · detached",
+      "result": { "runId": "run_call_43" }
+    },
+    {
+      "id": "managerApproval",
+      "name": "Manager approval",
+      "kind": "approval",
+      "status": "waiting",
+      "depth": 0,
+      "attempts": 1,
+      "detail": "Waiting for decision until 2026-08-16T12:00:00Z · Notifications 1/1 delivered via slack"
+    },
+    {
+      "id": "confirmOrder",
+      "name": "Confirm order",
+      "kind": "script",
+      "status": "queued",
+      "depth": 0,
+      "attempts": 1
+    }
+  ],
+  "summary": { "succeeded": 6, "failed": 0, "skipped": 0, "cancelled": 0, "total": 12 },
+  "lifecycle": [
+    {
+      "hook": "on-step-success",
+      "status": "succeeded",
+      "durationMs": 1,
+      "provider": "slack",
+      "detail": "Step sendSlack · 1 action"
+    }
+  ],
+  "warnings": []
+}

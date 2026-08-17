@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 9,
+  "workflowId": "customer-import",
+  "metadata": {
+    "name": "Customer import",
+    "version": "1.0.0"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": { "kind": "object", "fields": {} }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["cleanRows"],
+    "nodes": [
+      {
+        "id": "cleanRows",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n          const rows = context.trigger.rows ?? [];\n          return {\n            rows: await services.spreadsheet.removeEmptyRows(rows)\n          };\n        "
+            }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      }
+    ],
+    "edges": []
+  },
+  "moduleRuntime": {
+    "profileVersion": 1,
+    "modules": [
+      {
+        "name": "spreadsheet",
+        "bundleDigest": "sha256:8a474bbae11ac5793e2bcaaede1d78e0a691592f98c165c6ffa2a93b2319dcb1",
+        "sourceMapDigest": "sha256:8ad1e63c024bce96ac458f62543d93cec5523889c706c52e79f309a9a70a3bed",
+        "exports": ["read", "removeEmptyRows"]
+      }
+    ]
+  }
+}

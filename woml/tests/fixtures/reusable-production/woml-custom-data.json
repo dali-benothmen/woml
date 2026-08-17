@@ -1,0 +1,31 @@
+{
+  "version": 1.1,
+  "tags": [
+    {
+      "name": "wait-value",
+      "description": "Reusable WOML step from tests/fixtures/reusable-production/wait-value.woml",
+      "attributes": [
+        {
+          "name": "id",
+          "description": "Required workflow-wide step identity."
+        },
+        {
+          "name": "name",
+          "description": "Optional invocation display name."
+        },
+        {
+          "name": "description",
+          "description": "Optional invocation description."
+        },
+        {
+          "name": "retry",
+          "description": "Optional total attempt count."
+        },
+        {
+          "name": "delay-ms",
+          "description": "Required prop; available as props.delayMs."
+        }
+      ]
+    }
+  ]
+}

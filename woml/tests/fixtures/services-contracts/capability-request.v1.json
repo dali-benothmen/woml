@@ -1,0 +1,17 @@
+{
+  "contract": "woml.capability-call", "contractVersion": 1, "messageType": "request",
+  "invocationId": "invocation-a", "callId": "call-http-a", "runId": "run-services-a", "nodeId": "loadCustomer", "attemptNumber": 1,
+  "capability": "http", "operation": "request", "inputContractVersion": 1, "resultContractVersion": 1,
+  "identity": {
+    "mode": "named",
+    "stepIdempotencyKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "operationName": "load-customer",
+    "operationKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "limits": { "inputBytes": 1048576, "resultBytes": 4194304, "timeoutMs": 30000 },
+  "input": {
+    "contract": "woml.managed-http", "contractVersion": 1, "kind": "request", "method": "GET",
+    "url": "https://api.example.test/customers/42", "headers": {}, "responseType": "json", "timeoutMs": 30000,
+    "acceptedStatus": { "minimum": 200, "maximum": 299 }, "redirect": "follow", "maximumRedirects": 10
+  }
+}

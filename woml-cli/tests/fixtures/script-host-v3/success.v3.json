@@ -1,0 +1,13 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 3,
+  "messageType": "completed",
+  "invocationId": "inv_retry_greet_03",
+  "outcome": {
+    "kind": "success",
+    "value": {
+      "message": "Hello World"
+    }
+  },
+  "durationMs": 1.25
+}

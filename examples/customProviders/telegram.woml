@@ -1,0 +1,20 @@
+<woml>
+  <props>
+    <prop name="bot-token" required="true" secret="true" />
+    <prop name="chat-id" required="true" secret="true" />
+  </props>
+  <provider kind="notification">
+    <script>
+      const response = await services.http.request({
+        url: `https://api.telegram.org/bot${props.botToken}/sendMessage`,
+        method: "POST",
+        json: {
+          chat_id: props.chatId,
+          text: notification.message
+        }
+      });
+
+      return { messageId: String(response.data.result.message_id) };
+    </script>
+  </provider>
+</woml>

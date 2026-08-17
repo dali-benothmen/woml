@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/lifecycle-progress/v1",
+  "title": "WOML Lifecycle Progress v1",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "runId", "workflowId", "phase", "hookId", "actionId"],
+  "properties": {
+    "profile": { "const": "woml.lifecycle-progress/v1" },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "phase": { "enum": ["hook_requested", "action_started", "action_succeeded", "action_failed", "hook_completed", "run_finalizing", "run_finalized"] },
+    "hookId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "actionId": { "type": "string", "minLength": 1, "maxLength": 192 },
+    "stepId": { "type": "string", "maxLength": 256 },
+    "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "lifecycleOrder": {
+    "success": ["operation-success-committed", "on-success", "on-complete", "downstream-released"],
+    "permanentFailure": ["operation-failure-committed", "on-error", "on-complete", "workflow-failure-settled"],
+    "cancelledWithinBudget": ["operation-cancelled", "on-complete", "workflow-cancellation-settled"],
+    "cancelledAfterBudget": ["operation-cancelled", "workflow-cancellation-settled"]
+  },
+  "recovery": {
+    "definitionSource": "pinned-package-v9",
+    "completedEffectReplay": "forbidden",
+    "ambiguousEffect": "fail-closed",
+    "hookFailure": "durable-warning"
+  },
+  "approval": {
+    "deliveries": ["slack:0", "telegram:0"],
+    "capabilities": "separate-per-delivery",
+    "decisionAuthority": "one-shared-approval",
+    "settlement": "first-valid-decision-wins",
+    "laterDecision": "already-resolved"
+  },
+  "results": {
+    "customStep": "context.steps.invocationId",
+    "customProvider": "none",
+    "controlSwitch": "none",
+    "resultSwitch": "context.steps.switchId"
+  }
+}

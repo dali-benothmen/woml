@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/state-operation-metadata/v1",
+  "title": "WOML State Operation Metadata v1",
+  "description": "Redacted metadata safe for durable operation events. Raw keys and values are forbidden by shape.",
+  "x-status": "durable-user-state-ds0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "operation", "keyDigest", "inputDigest", "outcome", "durationMs"],
+  "properties": {
+    "profile": { "const": "woml.state-operation-metadata/v1" },
+    "operation": { "enum": ["get", "has", "set", "delete", "increment", "set_if_absent"] },
+    "keyDigest": { "$ref": "#/$defs/sha256" },
+    "inputDigest": { "$ref": "#/$defs/sha256" },
+    "resultDigest": { "$ref": "#/$defs/sha256" },
+    "version": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "valueBytes": { "type": "integer", "minimum": 0, "maximum": 262144 },
+    "outcome": { "enum": ["succeeded", "conflict", "quota_exceeded", "failed", "cancelled", "interrupted"] },
+    "durationMs": { "type": "number", "minimum": 0 }
+  },
+  "$defs": { "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" } }
+}

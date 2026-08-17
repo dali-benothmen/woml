@@ -1,0 +1,23 @@
+<woml>
+  <imports>
+    <module name="call-workflow" from="./call-workflow.woml" />
+    <module name="start-workflow" from="./start-workflow.woml" />
+  </imports>
+  <workflow id="reusable-workflow-caller" name="Reusable workflow caller" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <call-workflow id="synchronousCall" workflow-id="reusable-calculator" value="21" />
+      <start-workflow id="backgroundStart" workflow-id="reusable-calculator" value="5" />
+      <step id="finish">
+        <script>
+          return {
+            called: context.steps.synchronousCall.doubled,
+            backgroundRunId: context.steps.backgroundStart.runId
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

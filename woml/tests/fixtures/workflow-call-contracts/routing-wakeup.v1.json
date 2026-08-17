@@ -1,0 +1,8 @@
+{
+  "contract": "woml.workflow-call-routing",
+  "contractVersion": 1,
+  "kind": "wakeup",
+  "runtimeId": "runtime_target_001",
+  "childRunId": "run_child_risk_001",
+  "callKey": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

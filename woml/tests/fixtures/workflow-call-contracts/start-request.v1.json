@@ -1,0 +1,8 @@
+{
+  "contract": "woml.workflow-start",
+  "contractVersion": 1,
+  "kind": "request",
+  "workflowId": "calculate-risk",
+  "payload": { "customerId": "customer-42" },
+  "options": { "name": "background-risk" }
+}

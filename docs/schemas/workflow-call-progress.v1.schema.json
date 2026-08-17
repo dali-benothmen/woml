@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/workflow-call-progress.v1.schema.json",
+  "title": "WOML Workflow Call Progress v1",
+  "description": "Bounded, non-sensitive CLI progress for durable workflow calls.",
+  "x-status": "workflow-calls-wc6-frozen",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "contractVersion",
+        "type",
+        "parentRunId",
+        "parentNodeId",
+        "targetWorkflowId",
+        "childRunId",
+        "duplicate",
+        "occurredAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.workflow-call-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "call_admitted" },
+        "parentRunId": { "type": "string", "minLength": 1 },
+        "parentNodeId": { "type": "string", "minLength": 1 },
+        "targetWorkflowId": { "type": "string", "minLength": 1 },
+        "childRunId": { "type": "string", "minLength": 1 },
+        "duplicate": { "type": "boolean" },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "contractVersion",
+        "type",
+        "parentRunId",
+        "targetWorkflowId",
+        "childRunId",
+        "status",
+        "occurredAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.workflow-call-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "child_terminal" },
+        "parentRunId": { "type": "string", "minLength": 1 },
+        "targetWorkflowId": { "type": "string", "minLength": 1 },
+        "childRunId": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["succeeded", "failed"] },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "contractVersion",
+        "type",
+        "parentRunId",
+        "parentNodeId",
+        "targetWorkflowId",
+        "code",
+        "message",
+        "occurredAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.workflow-call-progress" },
+        "contractVersion": { "const": 1 },
+        "type": { "const": "call_rejected" },
+        "parentRunId": { "type": "string", "minLength": 1 },
+        "parentNodeId": { "type": "string", "minLength": 1 },
+        "targetWorkflowId": { "type": "string", "minLength": 1 },
+        "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" },
+        "message": { "type": "string", "minLength": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  ]
+}

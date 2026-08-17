@@ -1,4 +1,4 @@
-# CronFlow
+# WOML
 
 Copyright 2025 Mohamed Ali Ben Othmen
 
@@ -6,9 +6,9 @@ This product includes software developed by Mohamed Ali Ben Othmen.
 
 ## Project Information
 
-- Project Name: CronFlow
-- Description: Workflow automation and scheduling platform
-- Repository: https://github.com/dali-benothmen/cronflow
+- Project Name: WOML
+- Description: Markup-first workflow automation language and durable runtime
+- Repository: https://github.com/dali-benothmen/woml
 - Author: Mohamed Ali Ben Othmen
 
 ## Third-Party Dependencies

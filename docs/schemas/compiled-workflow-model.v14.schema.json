@@ -1,0 +1,304 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v14",
+  "title": "WOML Reusable Definition Compiled Workflow Model v14",
+  "description": "Model v13 DAG plus deterministic string choices and immutable reusable step and notification-provider descriptors. Source tags never cross the frontend/core boundary.",
+  "x-status": "switch-custom-definitions-scp0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v13",
+  "x-invariants": [
+    "Every reusable step invocation identifies one existing runtime.script node.",
+    "Every reusable definition digest identifies bytes pinned by Definition Package v9.",
+    "Prop expressions contain literals, context references, or symbolic secret names, never resolved secrets.",
+    "Reusable lifecycle hooks are invocation-scoped and observational; they cannot change the committed operation outcome.",
+    "Every notification-provider descriptor identifies exactly one generic custom delivery and every generic custom delivery resolves one descriptor.",
+    "Built-in Slack deliveries retain their frozen provider-specific credentials and destination validation.",
+    "String choices select exactly one exact-match case or their required default and persist that arm through choice_selected."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy"],
+  "properties": {
+    "schemaVersion": { "const": 14 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": { "type": "array", "maxItems": 64, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" } },
+    "graph": { "$ref": "#/$defs/workflowGraph" },
+    "moduleRuntime": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime" },
+    "lifecycle": { "$ref": "#/$defs/workflowLifecycle" },
+    "runtimePolicy": { "$ref": "https://woml.dev/schemas/runtime-policy/v1" },
+    "reusableDefinitions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/reusableInvocation" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "publicId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 },
+    "alias": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 128 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "portablePath": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$" },
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges", "forks", "choices", "contextVisibility", "settlement"],
+      "properties": {
+        "entryNodeIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "nodes": {
+          "type": "array", "minItems": 1,
+          "items": { "oneOf": [
+            { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowNode" },
+            { "$ref": "#/$defs/reusableScriptNode" },
+            { "$ref": "#/$defs/customApprovalWaitNode" }
+          ] }
+        },
+        "edges": { "type": "array", "items": { "oneOf": [
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/workflowEdge" },
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoiceBooleanEdge" }
+        ] } },
+        "forks": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/fork" } },
+        "choices": { "type": "array", "items": { "oneOf": [
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoice" },
+          { "$ref": "#/$defs/stringChoice" }
+        ] } },
+        "contextVisibility": { "type": "array", "minItems": 1, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/contextVisibility" } },
+        "settlement": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/settlement" }
+      }
+    },
+    "stringChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["choiceId", "selectorNodeId", "joinNodeId", "armIds", "stringSelector", "stringCases", "defaultArmId"],
+      "properties": {
+        "choiceId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "selectorNodeId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "joinNodeId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "armIds": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" } },
+        "stringSelector": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/contextReferenceExpression" },
+        "stringCases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["armId", "value"],
+            "properties": {
+              "armId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+              "value": { "type": "string", "minLength": 1, "maxLength": 65536 }
+            }
+          }
+        },
+        "defaultArmId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/internalId" },
+        "resultNodeId": { "$ref": "#/$defs/publicId" }
+      }
+    },
+    "reusableScriptNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs", "scriptRuntime"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "handler": { "const": "runtime.script" },
+        "inputs": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/objectExpression" },
+        "metadata": { "type": "object", "additionalProperties": true },
+        "retryPolicy": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v6#/$defs/retryPolicy" },
+        "scriptRuntime": {
+          "type": "object", "additionalProperties": false,
+          "required": ["bindingVersion", "bindings", "requiredSecrets"],
+          "properties": {
+            "bindingVersion": { "const": 3 },
+            "bindings": { "const": ["props", "context", "attempt", "services"] },
+            "requiredSecrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" } }
+          }
+        }
+      }
+    },
+    "literalString": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "literal" }, "value": { "type": "string", "minLength": 1, "maxLength": 16384 } }
+    },
+    "emptyCredentials": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": { "type": "object", "maxProperties": 0 }
+      }
+    },
+    "customProviderDelivery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["deliveryId", "provider", "destination", "credentials", "providerId", "domain"],
+              "properties": {
+                "deliveryId": { "$ref": "#/$defs/literalString" },
+                "provider": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "const": "custom" } } },
+                "destination": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "$ref": "#/$defs/alias" } } },
+                "credentials": { "$ref": "#/$defs/emptyCredentials" },
+                "providerId": { "$ref": "#/$defs/literalString" },
+                "domain": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "const": "approval" } } },
+                "message": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/template" }
+              }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["deliveryId", "provider", "destination", "credentials", "providerId", "domain", "message"],
+              "properties": {
+                "deliveryId": { "$ref": "#/$defs/literalString" },
+                "provider": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "const": "custom" } } },
+                "destination": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "$ref": "#/$defs/alias" } } },
+                "credentials": { "$ref": "#/$defs/emptyCredentials" },
+                "providerId": { "$ref": "#/$defs/literalString" },
+                "domain": { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "const": "informational" } } },
+                "message": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/template" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "customDeliveryArray": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": {
+          "type": "array", "minItems": 1, "maxItems": 256,
+          "items": { "oneOf": [
+            { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v5#/$defs/slackDelivery" },
+            { "$ref": "#/$defs/customProviderDelivery" }
+          ] },
+          "contains": { "$ref": "#/$defs/customProviderDelivery" },
+          "minContains": 1
+        }
+      }
+    },
+    "customApprovalWaitNode": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/publicId" },
+        "handler": { "const": "engine.approval-wait" },
+        "inputs": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object", "additionalProperties": false,
+              "required": ["onTimeout", "notifications"],
+              "properties": {
+                "timeoutMs": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/literalExpression" },
+                "onTimeout": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/literalExpression" },
+                "notifications": { "$ref": "#/$defs/customDeliveryArray" }
+              }
+            }
+          }
+        },
+        "metadata": { "type": "object", "additionalProperties": false, "properties": { "name": { "type": "string", "minLength": 1 }, "description": { "type": "string", "minLength": 1 } } }
+      }
+    },
+    "customNotificationAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actionId", "handler", "inputs"],
+      "properties": {
+        "actionId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/actionId" },
+        "handler": { "const": "notification.informational" },
+        "inputs": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": { "type": "object", "additionalProperties": false, "required": ["deliveries"], "properties": { "deliveries": { "$ref": "#/$defs/customDeliveryArray" } } }
+          }
+        }
+      }
+    },
+    "workflowLifecycle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profileVersion", "hooks"],
+      "properties": {
+        "profileVersion": { "const": 1 },
+        "hooks": { "type": "array", "minItems": 1, "maxItems": 9, "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["hookId", "event", "actions"],
+          "properties": {
+            "hookId": { "type": "string", "pattern": "^lifecycle:(run|step)_[a-z]+$", "maxLength": 128 },
+            "event": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/lifecycleEvent" },
+            "stepIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/publicId" } },
+            "actions": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "oneOf": [
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/scriptAction" },
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/notificationAction" },
+              { "$ref": "#/$defs/customNotificationAction" }
+            ] } }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "event": { "enum": ["step_start", "step_success", "step_failure", "step_complete"] } } },
+              "else": { "not": { "required": ["stepIds"] } }
+            }
+          ]
+        } }
+      }
+    },
+    "propExpression": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "type": "string", "maxLength": 65536 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "const": "context" }, "path": { "type": "string", "pattern": "^(payload(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\\.[a-z][A-Za-z0-9]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*)$", "maxLength": 1024 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": { "kind": { "const": "secret" }, "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } } }
+      ]
+    },
+    "boundProp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "bindingName", "secret", "expression"],
+      "properties": {
+        "name": { "$ref": "#/$defs/alias" },
+        "bindingName": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 128 },
+        "secret": { "type": "boolean" },
+        "expression": { "$ref": "#/$defs/propExpression" }
+      }
+    },
+    "reusableLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "onSuccess": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "onError": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "onComplete": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } }
+      },
+      "minProperties": 1
+    },
+    "reusableInvocation": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "invocationId", "nodeId", "alias", "definitionDigest", "source", "scriptArtifactId", "props"],
+          "properties": {
+            "kind": { "const": "step" }, "invocationId": { "$ref": "#/$defs/publicId" }, "nodeId": { "$ref": "#/$defs/id" },
+            "alias": { "$ref": "#/$defs/alias" }, "definitionDigest": { "$ref": "#/$defs/sha256" }, "source": { "$ref": "#/$defs/portablePath" },
+            "scriptArtifactId": { "$ref": "#/$defs/id" }, "props": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/boundProp" } },
+            "lifecycle": { "$ref": "#/$defs/reusableLifecycle" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "providerId", "alias", "definitionDigest", "source", "scriptArtifactId", "props"],
+          "properties": {
+            "kind": { "const": "notification-provider" }, "providerId": { "$ref": "#/$defs/id" },
+            "alias": { "$ref": "#/$defs/alias" }, "definitionDigest": { "$ref": "#/$defs/sha256" }, "source": { "$ref": "#/$defs/portablePath" },
+            "scriptArtifactId": { "$ref": "#/$defs/id" }, "props": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/boundProp" } },
+            "lifecycle": { "$ref": "#/$defs/reusableLifecycle" }
+          }
+        }
+      ]
+    }
+  }
+}

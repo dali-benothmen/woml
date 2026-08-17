@@ -1,0 +1,43 @@
+<woml>
+<workflow version="0.1" id="field-report" name="Build Field Report">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+  <steps>
+    <step id="loadField">
+      <script>
+        return {
+          fieldId: "field-42"
+        };
+      </script>
+    </step>
+    <parallel id="fieldData" name="Load field data" description="Load independent readings" concurrency="2" on-error="wait-all">
+      <step id="loadWeather">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 80));
+          return {
+            fieldId: context.steps.loadField.fieldId,
+            temperature: 22
+          };
+        </script>
+      </step>
+      <step id="loadSoil">
+        <script>
+          await new Promise(resolve => setTimeout(resolve, 80));
+          return {
+            fieldId: context.steps.loadField.fieldId,
+            moisture: 41
+          };
+        </script>
+      </step>
+    </parallel>
+    <step id="buildReport">
+      <script>
+        return {
+          summary: `Weather ${context.steps.loadWeather.temperature}°C, soil ${context.steps.loadSoil.moisture}%`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

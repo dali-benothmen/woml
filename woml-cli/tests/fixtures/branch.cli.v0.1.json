@@ -1,0 +1,7 @@
+{
+  "command": "woml run branch.woml",
+  "trigger": {},
+  "stdout": "{\"message\":\"Final status: reviewed\"}\n",
+  "stderr": "",
+  "exitCode": 0
+}

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 13,
+  "workflowId": "distribution-all",
+  "metadata": { "version": "1.0.0" },
+  "triggers": [
+    { "id": "start", "handler": "trigger.manual", "config": { "kind": "object", "fields": {} } }
+  ],
+  "graph": {
+    "entryNodeIds": ["prepare"],
+    "nodes": [
+      { "id": "prepare", "handler": "runtime.script", "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "return { enabled: true };" } } }, "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] } },
+      { "id": "__woml_fork__distribution__open", "handler": "engine.fork-open", "inputs": { "kind": "object", "fields": {} } },
+      { "id": "publishInstagram", "handler": "runtime.script", "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "return { platform: \"instagram\" };" } } }, "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] } },
+      { "id": "__woml_fork__distribution__instagram__terminal", "handler": "engine.fork-branch-terminal", "inputs": { "kind": "object", "fields": {} } },
+      { "id": "publishFacebook", "handler": "runtime.script", "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "return { platform: \"facebook\" };" } } }, "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] } },
+      { "id": "__woml_fork__distribution__facebook__terminal", "handler": "engine.fork-branch-terminal", "inputs": { "kind": "object", "fields": {} } },
+      { "id": "__woml_fork__distribution__join", "handler": "engine.fork-join", "inputs": { "kind": "object", "fields": {} } },
+      { "id": "finish", "handler": "runtime.script", "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "return { instagram: context.steps.publishInstagram, facebook: context.steps.publishFacebook };" } } }, "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] } },
+      { "id": "__woml_workflow__settlement", "handler": "engine.workflow-settlement", "inputs": { "kind": "object", "fields": {} } }
+    ],
+    "edges": [
+      { "id": "prepare-to-__woml_fork__distribution__open", "from": "prepare", "to": "__woml_fork__distribution__open", "condition": { "kind": "always" } },
+      { "id": "distribution:branch:instagram", "from": "__woml_fork__distribution__open", "to": "publishInstagram", "condition": { "kind": "always" } },
+      { "id": "distribution:branch:facebook", "from": "__woml_fork__distribution__open", "to": "publishFacebook", "condition": { "kind": "always" } },
+      { "id": "distribution:terminal:instagram", "from": "publishInstagram", "to": "__woml_fork__distribution__instagram__terminal", "condition": { "kind": "always" } },
+      { "id": "distribution:terminal:facebook", "from": "publishFacebook", "to": "__woml_fork__distribution__facebook__terminal", "condition": { "kind": "always" } },
+      { "id": "distribution:join:instagram", "from": "__woml_fork__distribution__instagram__terminal", "to": "__woml_fork__distribution__join", "condition": { "kind": "always" } },
+      { "id": "distribution:join:facebook", "from": "__woml_fork__distribution__facebook__terminal", "to": "__woml_fork__distribution__join", "condition": { "kind": "always" } },
+      { "id": "__woml_fork__distribution__join-to-finish", "from": "__woml_fork__distribution__join", "to": "finish", "condition": { "kind": "always" } },
+      { "id": "__woml_workflow__:main:settlement", "from": "finish", "to": "__woml_workflow__settlement", "condition": { "kind": "always" } },
+      { "id": "__woml_fork__distribution__instagram__terminal:settlement", "from": "__woml_fork__distribution__instagram__terminal", "to": "__woml_workflow__settlement", "condition": { "kind": "always" } },
+      { "id": "__woml_fork__distribution__facebook__terminal:settlement", "from": "__woml_fork__distribution__facebook__terminal", "to": "__woml_workflow__settlement", "condition": { "kind": "always" } }
+    ],
+    "forks": [
+      {
+        "forkId": "distribution",
+        "openNodeId": "__woml_fork__distribution__open",
+        "joinNodeId": "__woml_fork__distribution__join",
+        "branches": [
+          { "branchId": "instagram", "entryNodeId": "publishInstagram", "terminalNodeId": "__woml_fork__distribution__instagram__terminal" },
+          { "branchId": "facebook", "entryNodeId": "publishFacebook", "terminalNodeId": "__woml_fork__distribution__facebook__terminal" }
+        ],
+        "joinedBranchIds": ["instagram", "facebook"]
+      }
+    ],
+    "choices": [],
+    "contextVisibility": [
+      { "nodeId": "prepare", "stepIds": [] },
+      { "nodeId": "publishInstagram", "stepIds": ["prepare"] },
+      { "nodeId": "publishFacebook", "stepIds": ["prepare"] },
+      { "nodeId": "finish", "stepIds": ["prepare", "publishInstagram", "publishFacebook"] }
+    ],
+    "settlement": {
+      "nodeId": "__woml_workflow__settlement",
+      "mainResultNodeId": "finish",
+      "ownedBranchTerminalNodeIds": ["__woml_fork__distribution__instagram__terminal", "__woml_fork__distribution__facebook__terminal"]
+    }
+  },
+  "runtimePolicy": { "profileVersion": 1, "concurrency": 1 }
+}
