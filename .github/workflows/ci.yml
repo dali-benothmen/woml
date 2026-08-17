@@ -30,6 +30,9 @@ jobs:
       - name: Install locked dependencies
         working-directory: woml-cli
         run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
+        run: bun install --frozen-lockfile
       - name: Test parsing, validation, and compilation
         working-directory: woml-cli
         run: bun test ../woml/tests --max-concurrency=1
@@ -53,6 +56,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install locked dependencies
         working-directory: woml-cli
+        run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
         run: bun install --frozen-lockfile
       - name: Build the local runtime once
         working-directory: woml-cli
@@ -130,6 +136,9 @@ jobs:
       - name: Install locked dependencies
         working-directory: woml-cli
         run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
+        run: bun install --frozen-lockfile
       - name: Verify the WOML-only boundary
         working-directory: woml-cli
         run: bun run test:architecture-separation
@@ -147,6 +156,9 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install locked dependencies
         working-directory: woml-cli
+        run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
         run: bun install --frozen-lockfile
       - name: Verify docs, links, examples, and clean quick start
         working-directory: woml-cli
@@ -169,6 +181,9 @@ jobs:
           package-manager-cache: false
       - name: Install locked dependencies
         working-directory: woml-cli
+        run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
         run: bun install --frozen-lockfile
       - name: Build the portable release package
         working-directory: woml-cli

@@ -43,6 +43,9 @@ jobs:
       - name: Install locked dependencies
         working-directory: woml-cli
         run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
+        run: bun install --frozen-lockfile
       - name: Freeze the source ref and release identity
         id: contract
         shell: bash
@@ -99,6 +102,9 @@ jobs:
           package-manager-cache: false
       - name: Install locked dependencies
         working-directory: woml-cli
+        run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
         run: bun install --frozen-lockfile
       - name: Build the platform-neutral package
         working-directory: woml-cli

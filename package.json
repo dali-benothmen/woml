@@ -10,7 +10,7 @@
     "url": "git+https://github.com/dali-benothmen/woml.git"
   },
   "scripts": {
-    "install:check": "bun install --cwd woml-cli --frozen-lockfile",
+    "install:check": "bun install --cwd woml --frozen-lockfile && bun install --cwd woml-cli --frozen-lockfile",
     "build": "bun run --cwd woml-cli build",
     "build:release": "bun run --cwd woml-cli build:release",
     "test": "bun run --cwd woml-cli test:portable",
