@@ -49,19 +49,6 @@ for (const required of [
   }
 }
 
-const plan = await Bun.file(
-  resolve(projectRoot, 'WOML Services and Capabilities Implementation Plan.md')
-).text();
-for (const required of [
-  '### SC12 — Freeze the usable queue contract\n\nStatus: postponed',
-  '### SC13 — Execute and publish the durable local queue\n\nStatus: postponed',
-  '### SC14 — Complete Services and Capabilities\n\nStatus: completed',
-]) {
-  if (!plan.includes(required)) {
-    throw new Error(`SC14 implementation plan is missing: ${required}`);
-  }
-}
-
 const language = await Bun.file(
   resolve(projectRoot, 'docs/woml-v0.1.md')
 ).text();
@@ -76,11 +63,11 @@ if (
 }
 
 process.stdout.write(
-  '[SC14] five built-ins, native Fetch, composition example, docs, and queue deferral are publishable\n'
+  '[services] five built-ins, native Fetch, composition example, docs, and queue deferral are publishable\n'
 );
 
 await import('./verify-events-release.ts');
 
 process.stdout.write(
-  '[SC14] complete Services and Capabilities release gate passed\n'
+  '[services] complete Services and Capabilities release gate passed\n'
 );

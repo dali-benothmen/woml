@@ -32,7 +32,6 @@ const required = new Map([
   ['examples/production/deployment/prometheus-alerts.yaml', ['WomlRuntimeNotReady', 'WomlRetentionFailure']],
   ['examples/production/complete/README.md', ['complete Production Runtime v1 surface']],
   ['woml-cli/tests/production-runtime-release.test.ts', ['a clean consumer installs, activates, serves, observes, backs up, stops, restores, and prunes']],
-  ['WOML Production Runtime and Operations Implementation Plan.md', ['PRO9 — Harden and publish Production Runtime v1']],
 ]);
 for (const [path, markers] of required) {
   const contents = await readFile(join(rootPath, path), 'utf8');

@@ -5,10 +5,6 @@ import { resolve } from 'node:path';
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
 for (const [file, required] of [
-  [
-    'WOML Production Runtime and Operations Implementation Plan.md',
-    'PRO3 — Durable ownership, background mode, recovery, and shutdown (completed)',
-  ],
   ['core/woml-engine/src/durable.rs', 'migrate_store_v13_to_v14'],
   ['core/woml-engine/src/durable.rs', 'acquire_runtime_owner'],
   ['core/woml-native/src/bridge.rs', 'WOML_DEPLOYMENT_ALREADY_RUNNING'],

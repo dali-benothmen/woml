@@ -13,10 +13,6 @@ const cliRoot = resolve(import.meta.dir, '..');
 const schemaRoot = resolve(repositoryRoot, 'docs/schemas');
 
 for (const [file, required] of [
-  [
-    'WOML Runtime Policies and Durable User State Implementation Plan.md',
-    'RP7 — Harden and publish Runtime Policies',
-  ],
   ['docs/woml-runtime-policies.md', '## Performance and publication gate'],
   ['docs/woml-runtime-policies.md', 'WOML_POLICY_QUEUE_FULL'],
   ['docs/woml-v0.1.md', 'RP0–RP7 completed and hardened'],

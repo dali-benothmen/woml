@@ -5,10 +5,6 @@ import { resolve } from 'node:path';
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
 for (const [file, required] of [
-  [
-    'WOML Production Runtime and Operations Implementation Plan.md',
-    'PRO4 — Production secrets and administration security (completed)',
-  ],
   ['woml-cli/src/secrets/mounted-file-secret-store.ts', 'WOML_SECRET_FILE_UNSAFE'],
   ['woml-cli/src/secrets/production-secret-store.ts', 'WOML_SECRET_SOURCE_CONFLICT'],
   ['woml-cli/src/runtime-control.ts', 'DEFAULT_MAX_REQUEST_BYTES'],

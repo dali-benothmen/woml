@@ -1,8 +1,8 @@
-# WOML Provider Extension Architecture Notes
+# WOML Provider Extension Architecture
 
-Status: Deferred architecture decision. This document records the product and
-technical direction discovered before ACP10. It does not authorize an
-implementation or remove an existing provider.
+Status: Deferred post-v1 architecture direction. WOML v1 keeps its existing
+built-in providers supported. This document does not authorize an extraction,
+new extension runtime, or removal of an existing provider.
 
 ## 1. Why This Note Exists
 
@@ -233,17 +233,18 @@ for the extension API and can become official optional modules.
 - Do not promise a public provider registry before local versioned extensions
   are secure and useful.
 
-## 10. Relationship to ACP10
+## 10. Relationship to WOML v1
 
-ACP10 can still complete examples, documentation, packaging verification, and
-benchmarks for the implementations that exist today. However, the final public
-release surface should consciously decide whether Slack, Discord, and WhatsApp
-ship as permanent built-ins or later become optional extensions.
+WOML v1 ships the communication-provider implementations that exist today.
+They remain supported product behavior while the extension architecture is
+deferred. A future extraction into optional extensions must preserve syntax or
+provide an explicit compatibility path, and must first prove equivalent
+triggers, notifications, approvals, messaging, diagnostics, security, and
+recovery.
 
-Publishing them as frozen permanent language features and extracting them
-after users depend on that shape would be more expensive. The distribution
-decision is therefore a product gate before the initial public WOML release,
-even if the provider-extension implementation itself is postponed.
+The extension system is a later product decision, not a prerequisite for the
+initial release. It must not weaken the current durable contracts or turn
+provider distribution into a second workflow execution authority.
 
 ## 11. Open Decisions for Later Review
 
@@ -260,4 +261,3 @@ even if the provider-extension implementation itself is postponed.
 - What is the minimum permission model needed before third-party extensions
   are enabled?
 - Which existing provider syntax remains compatible during extraction?
-

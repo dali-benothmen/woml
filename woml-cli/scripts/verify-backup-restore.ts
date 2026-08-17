@@ -17,10 +17,6 @@ const required = new Map([
     'docs/woml-backup-and-restore.md',
     ['Online backup', 'Offline restore', 'Secret providers are separate'],
   ],
-  [
-    'WOML Production Runtime and Operations Implementation Plan.md',
-    ['PRO7 — Backup, restore, and upgrades ✅ Completed'],
-  ],
 ]);
 
 for (const [path, markers] of required) {

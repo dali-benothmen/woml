@@ -22,25 +22,17 @@ for (const file of requiredFiles) {
   }
 }
 
-const plan = readFileSync(
-  resolve(repositoryRoot, 'WOML Durable Workflow Calls Implementation Plan.md'),
-  'utf8'
-);
 const protocol = readFileSync(
   resolve(repositoryRoot, 'docs/protocols/workflow-calls-v1.md'),
   'utf8'
 );
 if (
-  !plan.includes('WC0 and WC1 completed') ||
-  !plan.includes(
-    '### WC1 — Compile call-only workflows and expose editor contracts'
-  ) ||
   !protocol.includes('Compiled Workflow Model v10') ||
   !protocol.includes('approval')
 ) {
-  throw new Error('WC0/WC1 plan or frozen protocol is incomplete.');
+  throw new Error('The frozen Workflow Calls protocol is incomplete.');
 }
 
 process.stdout.write(
-  '[WC1] frozen contracts, call-only lowering, workflow-call analysis, and editor types remain publishable\n'
+  '[workflow calls] frozen contracts, call-only lowering, workflow-call analysis, and editor types remain publishable\n'
 );

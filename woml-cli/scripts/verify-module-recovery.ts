@@ -56,21 +56,6 @@ for (const required of [
   }
 }
 
-const plan = readFileSync(
-  resolve(repositoryRoot, 'WOML Module System Implementation Plan.md'),
-  'utf8'
-);
-if (
-  !plan.includes(
-    'Status: MS0 through MS4 and the essential local-authoring portion of MS6'
-  ) ||
-  !plan.includes(
-    '### MS4 — Make local modules recoverable and observable — completed'
-  )
-) {
-  throw new Error('MS4 implementation-plan status is stale.');
-}
-
 process.stdout.write(
-  '[MS4] durable artifacts, source-free recovery, Script Host v6, safe diagnostics, and composition are publishable\n'
+  '[module recovery] durable artifacts, source-free recovery, Script Host v6, safe diagnostics, and composition are publishable\n'
 );

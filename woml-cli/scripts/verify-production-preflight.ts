@@ -23,7 +23,6 @@ async function filesBelow(path: string): Promise<string[]> {
 }
 
 for (const [file, required] of [
-  ['WOML Production Runtime and Operations Implementation Plan.md', 'PRO1 — Runtime configuration and production preflight (completed)'],
   ['docs/protocols/production-runtime-operations-v1.md', 'There is no public `woml build` command'],
   ['docs/woml-production-runtime.md', 'woml check workflows/ --config woml.runtime.json'],
   ['docs/architecture.md', 'Production Runtime and Operations PRO0'],

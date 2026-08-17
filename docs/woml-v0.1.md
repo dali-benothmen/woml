@@ -2118,8 +2118,9 @@ Define an explicit failed-output or outcome model before adding
 ### 18.3 Approval notifications and production hosting
 
 A0 froze the local HTTP, token, store, event, native-outcome, timeout, and
-diagnostic contracts in `WOML Human Approval Implementation Plan.md` and
-`docs/protocols/approval-*.md`. HTTP is the only public decision mechanism.
+diagnostic contracts in `docs/protocols/approval-*.md`. HTTP is the public
+decision mechanism shared by browser, command-line, mobile, and provider
+integrations.
 
 N0 freezes Slack notification and secret contracts in
 `docs/protocols/notification-contracts-v1.md`; N1 implements the secret

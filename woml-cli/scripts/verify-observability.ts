@@ -5,10 +5,6 @@ import { resolve } from 'node:path';
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
 for (const [file, required] of [
-  [
-    'WOML Production Runtime and Operations Implementation Plan.md',
-    'PRO5 — Observability foundation (completed)',
-  ],
   ['woml-cli/src/runtime-observability.ts', 'woml.runtime-operations-snapshot/v1'],
   ['woml-cli/src/runtime-observability.ts', 'WOML_OBSERVABILITY_STREAM_GAP'],
   ['woml-cli/src/runtime-observability.ts', 'woml.runtime-log-record/v1'],

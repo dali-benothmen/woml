@@ -13,10 +13,6 @@ const cliRoot = resolve(import.meta.dir, '..');
 const schemaRoot = resolve(repositoryRoot, 'docs/schemas');
 
 for (const [file, required] of [
-  [
-    'WOML Lifecycle and Engine Controls Implementation Plan.md',
-    'LEC8 — Harden and publish Lifecycle and Engine Controls',
-  ],
   ['docs/woml-lifecycle-and-run-control.md', '## Cancellation semantics'],
   ['docs/woml-lifecycle-and-run-control.md', '## Production checklist'],
   ['docs/woml-notifications.md', 'Informational lifecycle notifications'],

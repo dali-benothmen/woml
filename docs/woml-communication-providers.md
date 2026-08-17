@@ -221,5 +221,4 @@ is in [Communication Provider Diagnostics and Operations](communication-provider
 Built-ins are the polished baseline, not a promise that WOML core will absorb
 every provider. Project-owned reusable notification providers remain available
 today. Broader trigger and messaging extensions are a future reviewed boundary;
-see [Provider Extension Architecture Notes](../WOML%20Provider%20Extension%20Architecture%20Notes.md).
-
+see [Provider Extension Architecture](provider-extension-architecture.md).

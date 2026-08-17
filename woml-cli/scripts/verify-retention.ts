@@ -17,10 +17,6 @@ const required = new Map([
     'docs/woml-retention-and-maintenance.md',
     ['stateEntriesDeleted: 0', '30-day safety window', 'woml_retention_total'],
   ],
-  [
-    'WOML Production Runtime and Operations Implementation Plan.md',
-    ['PRO8 — Retention and storage maintenance ✅ Completed'],
-  ],
 ]);
 
 for (const [path, markers] of required) {

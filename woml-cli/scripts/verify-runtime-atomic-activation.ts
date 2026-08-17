@@ -6,10 +6,6 @@ const repositoryRoot = resolve(import.meta.dir, '../..');
 
 for (const [file, required] of [
   [
-    'WOML Production Runtime and Operations Implementation Plan.md',
-    'PRO2 — Atomic direct-source activation (completed)',
-  ],
-  [
     'docs/woml-production-runtime.md',
     'A bound webhook or event listener returns HTTP 503',
   ],

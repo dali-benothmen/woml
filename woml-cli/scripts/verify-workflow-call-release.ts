@@ -12,10 +12,6 @@ const cliRoot = resolve(import.meta.dir, '..');
 
 for (const [file, required] of [
   [
-    'WOML Durable Workflow Calls Implementation Plan.md',
-    'WC7 — Harden and publish Durable Workflow Calls',
-  ],
-  [
     'docs/woml-workflow-calls-production.md',
     '## Security boundary',
   ],
@@ -36,7 +32,7 @@ for (const [file, required] of [
     "services.workflows.call('calculate-risk'",
   ],
   [
-    'core/woml-engine/tests/workflow_call_migration.rs',
+    'core/woml-engine/tests/workflow_call_release.rs',
     'v9_to_v10_migration_preserves_calls_definitions_and_event_histories',
   ],
   [

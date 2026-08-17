@@ -5,10 +5,6 @@ import { resolve } from 'node:path';
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
 for (const [file, required] of [
-  [
-    'WOML Durable Workflow Calls Implementation Plan.md',
-    'WC4 — Make same-runtime calls retry-safe and recoverable',
-  ],
   ['docs/protocols/workflow-calls-v1.md', 'single-executor claiming'],
   ['docs/woml-recovery.md', 'The ambiguous parent'],
   ['docs/woml-services.md', 'requires stable names for repeated calls'],

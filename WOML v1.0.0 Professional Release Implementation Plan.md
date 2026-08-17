@@ -1,6 +1,6 @@
 # WOML v1.0.0 Professional Release Implementation Plan
 
-Status: V1R0 and V1R1 completed on 2026-08-17. V1R2 through V1R9 are planned. No npm
+Status: V1R0 through V1R2 completed on 2026-08-17. V1R3 through V1R9 are planned. No npm
 package has been published by this plan. Publishing is the final gated phase
 and will be performed only with the product owner present.
 
@@ -253,6 +253,8 @@ Gate:
 - frontend, CLI, and Rust test discovery still finds every expected suite.
 
 ### V1R2 — Remove obsolete files and completed planning residue
+
+Status: completed on 2026-08-17.
 
 Changes:
 

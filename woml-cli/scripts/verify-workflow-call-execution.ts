@@ -26,10 +26,6 @@ if (
 }
 
 for (const [file, required] of [
-  [
-    'WOML Durable Workflow Calls Implementation Plan.md',
-    'Status: **completed on 2026-08-11.**',
-  ],
   ['docs/protocols/workflow-calls-v1.md', 'same-runtime children'],
   ['docs/woml-services.md', 'woml run examples/workflowCalls'],
 ] as const) {

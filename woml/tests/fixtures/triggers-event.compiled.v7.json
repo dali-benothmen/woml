@@ -33,7 +33,7 @@
         "inputs": {
           "kind": "object",
           "fields": {
-            "source": { "kind": "literal", "value": "\n        return context.trigger;\n      " }
+            "source": { "kind": "literal", "value": "\n        return context.payload;\n      " }
           }
         }
       }

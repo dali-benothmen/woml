@@ -50,9 +50,6 @@ const required = new Map<string, readonly string[]>([
     'retainedAttachAverageMs',
     'memoryPerActiveRunBytes',
   ]],
-  ['WOML Terminal Experience and Manual Triggers Implementation Plan.md', [
-    'TM8 — Package, document, benchmark, and publish',
-  ]],
 ]);
 for (const [path, markers] of required) {
   const contents = await readFile(join(rootPath, path), 'utf8');

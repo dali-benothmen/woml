@@ -26,10 +26,6 @@ async function filesBelow(path: string): Promise<string[]> {
 }
 
 for (const [file, required] of [
-  [
-    'WOML Runtime Policies and Durable User State Implementation Plan.md',
-    'DS5 — Publish Durable User State (completed)',
-  ],
   ['docs/woml-durable-state.md', 'DS5 publishes the feature'],
   ['docs/woml-data-guide.md', 'Choosing Where Workflow Data Lives'],
   ['docs/woml-data-security.md', 'WOML Local Data Security'],

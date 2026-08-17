@@ -54,24 +54,18 @@ for (const forbidden of [
   }
 }
 
-const plan = readFileSync(
-  resolve(repositoryRoot, 'WOML Module System Implementation Plan.md'),
-  'utf8'
-);
 const guide = readFileSync(
   resolve(repositoryRoot, 'docs/woml-modules.md'),
   'utf8'
 );
 if (
-  !plan.includes('essential local-authoring portion of MS6') ||
-  !plan.includes('MS5 — Add locked package dependencies — postponed') ||
   !guide.includes('## Editor autocomplete is automatic') ||
   !guide.includes('`woml run` refreshes `woml-env.d.ts`') ||
   !guide.includes('## Unit-test a module')
 ) {
-  throw new Error('Essential MS6 plan or authoring guide is incomplete.');
+  throw new Error('The module authoring guide is incomplete.');
 }
 
 process.stdout.write(
-  '[MS6-local] editor types, alias diagnostics, mocked tests, and authoring guidance are publishable\n'
+  '[modules] editor types, alias diagnostics, mocked tests, and authoring guidance are publishable\n'
 );

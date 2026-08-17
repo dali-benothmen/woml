@@ -43,10 +43,6 @@ if (
 for (const [file, required] of [
   ['docs/woml-events-service.md', '## Internal-only and public events'],
   ['docs/protocols/services-capabilities-v1.md', '## Events Service v1'],
-  [
-    'WOML Services and Capabilities Implementation Plan.md',
-    'Status: completed on 2026-08-10.',
-  ],
 ] as const) {
   const text = await Bun.file(resolve(projectRoot, file)).text();
   if (!text.includes(required)) {

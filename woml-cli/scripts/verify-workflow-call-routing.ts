@@ -5,10 +5,6 @@ import { resolve } from 'node:path';
 const repositoryRoot = resolve(import.meta.dir, '../..');
 
 for (const [file, required] of [
-  [
-    'WOML Durable Workflow Calls Implementation Plan.md',
-    'WC5 — Route calls between local WOML processes',
-  ],
   ['docs/protocols/workflow-calls-v1.md', 'ownership lease in durable store v10'],
   [
     'core/woml-engine/tests/workflow_call_routing.rs',

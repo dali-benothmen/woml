@@ -6,16 +6,12 @@ const repositoryRoot = resolve(import.meta.dir, '../..');
 
 for (const [file, required] of [
   [
-    'WOML Durable Workflow Calls Implementation Plan.md',
-    'WC6 — Complete composition, diagnostics, and inspection',
-  ],
-  [
     'docs/protocols/workflow-calls-v1.md',
     'Workflow Call Progress v1 is a separate operator surface',
   ],
   [
     'docs/woml-workflow-calls.md',
-    'workflowCalls.childCalls',
+    'contains `parentCall` for a',
   ],
   [
     'docs/schemas/workflow-call-progress.v1.schema.json',
