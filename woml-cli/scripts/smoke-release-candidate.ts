@@ -126,7 +126,7 @@ async function main(): Promise<void> {
     };
     install();
 
-    const packageRoot = join(consumer, 'node_modules', 'woml');
+    const packageRoot = join(consumer, 'node_modules', '@woml-org', 'woml');
     const nativeRoot = join(
       consumer,
       'node_modules',

@@ -48,7 +48,7 @@ describe('WOML v1 release identity', () => {
       private: true,
     });
     expect(runtime).toMatchObject({
-      name: 'woml',
+      name: '@woml-org/woml',
       version: '1.0.0',
       private: false,
       bin: { woml: './dist/cli.js' },
@@ -95,7 +95,7 @@ describe('WOML v1 release identity', () => {
       resolve(repositoryRoot, '.github/workflows/release.yml'),
       'utf8',
     );
-    expect(releaseWorkflow).toContain('npm view "woml@${version}"');
+    expect(releaseWorkflow).toContain('npm view "@woml-org/woml@${version}"');
     expect(releaseWorkflow).not.toContain('npm view "woml-cli@${version}"');
 
     for (const path of [
