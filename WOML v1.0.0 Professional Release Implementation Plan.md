@@ -1,6 +1,6 @@
 # WOML v1.0.0 Professional Release Implementation Plan
 
-Status: V1R0 through V1R4 completed on 2026-08-17. V1R5 through V1R9 are planned. No npm
+Status: V1R0 through V1R5 completed on 2026-08-17. V1R6 through V1R9 are planned. No npm
 package has been published by this plan. Publishing is the final gated phase
 and will be performed only with the product owner present.
 
@@ -372,6 +372,11 @@ Gate:
 - README installation uses only `bun add --global woml`.
 
 ### V1R5 — Make local builds deterministic and release-shaped
+
+Status: completed on 2026-08-17. The repository now has one deterministic
+JavaScript build, a fail-closed source publication boundary, a verified staging
+and packing path, bounded local verification, and a single readable release
+check.
 
 Changes:
 

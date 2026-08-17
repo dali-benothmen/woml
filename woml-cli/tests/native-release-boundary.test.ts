@@ -73,7 +73,7 @@ describe('WOML native release boundary', () => {
     );
 
     expect(executed.exitCode, executed.stderr.toString()).toBe(0);
-    expect(executed.stdout.toString()).toBe('{"message":"Hello Dali"}\n');
+    expect(executed.stdout.toString()).toBe('{"message":"Hello Alex"}\n');
 
     const missing = Bun.spawnSync(
       [Bun.which('bun')!, packagedCli, 'list', '--json'],

@@ -14,6 +14,7 @@ permissions:
 
 env:
   BUN_VERSION: '1.3.14'
+  CARGO_BUILD_JOBS: '1'
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -58,12 +59,9 @@ jobs:
         working-directory: woml-cli
         run: bun install --frozen-lockfile
 
-      - name: Build portable Bun hosts and CLI
+      - name: Build and verify the platform-neutral npm package
         working-directory: woml-cli
-        run: bun run build:js
-
-      - name: Stage the platform-neutral npm package
-        run: bun woml-cli/scripts/native-release.ts prepare-main --output release/main
+        run: bun run build:release
 
       - name: Inspect the package before upload
         working-directory: release/main

@@ -37,6 +37,13 @@ bun run test:architecture-separation
 bun run test:documentation
 ```
 
+Before proposing a release, run `bun run release:check` from the repository
+root. The checker installs from the frozen lockfile, builds once, runs the
+portable language/CLI/Rust baseline serially, verifies architecture and
+documentation, and proves that two clean package builds are identical.
+Use `bun run format:check` from the repository root for a quick formatting
+gate.
+
 For Rust engine or adapter changes, also run:
 
 ```bash

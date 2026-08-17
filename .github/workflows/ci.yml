@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [master, main]
 
+env:
+  CARGO_BUILD_JOBS: '1'
+
 jobs:
   architecture-separation:
     name: WOML architecture separation

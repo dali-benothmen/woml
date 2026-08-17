@@ -27,8 +27,17 @@ the platform package. Linux selection distinguishes glibc from musl at runtime.
 
 Local development remains simple: `bun run build` stages the current machine's
 binary directly under the internal `woml-cli/dist` development directory, and
-that colocated binary takes priority.
+that colocated binary takes priority. The public package is never created from
+that directory directly: `bun run build:release` copies only the frozen public
+allowlist into `release/main` and deliberately excludes every `.node` file.
 `WOML_RUST_CORE_PATH` remains the explicit development/test override.
+
+The public JavaScript build produces six entrypoints and their source maps in
+one deterministic build operation. The package verifier checks the CLI
+shebang and executable bit, worker and provider-host paths, Slack assets,
+license, native-loader dependency metadata, forbidden runtime files, and the
+exact `npm pack --dry-run` inventory. Two builds must produce the same content
+hash before the package is accepted.
 
 ## One-time npm setup
 
@@ -44,19 +53,20 @@ Never place the token in source, workflow arguments, artifacts, or logs.
 
 ## Release procedure
 
-Use one version across:
-
-- `woml-cli/package.json`;
-- `woml/package.json`; and
-- `core/woml-native/Cargo.toml`.
-
-Run the local contract check:
+Use one version across the repository root, public CLI, private compiler,
+native crates, and editor extension. Before creating a release candidate, run
+the locked local gate from the repository root:
 
 ```bash
-cd woml-cli
-bun run test:native-platform-release
-bun run test:communication-provider-release
+bun run install:check
+bun run release:check
+bun run build:release
 ```
+
+To create a local tarball for inspection, use `bun run pack`. It writes
+`release/packages/woml-1.0.0.tgz`. Publishing directly from `woml-cli/` is
+blocked intentionally; only the verified staging directory may become the
+main npm package.
 
 Commit the version change, then create and push the exact matching tag:
 

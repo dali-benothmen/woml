@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import {
+  chmod,
   copyFile,
   cp,
   mkdir,
@@ -19,6 +20,11 @@ import {
   womlNativeTargets,
   womlNativeTargetSpecs,
 } from '../src/native-platform';
+import {
+  publicJavaScriptFiles,
+  publicPackageFiles,
+  publicSourceMapFiles,
+} from './release-contract';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const cliRoot = resolve(repositoryRoot, 'woml-cli');
@@ -36,6 +42,8 @@ interface PackageMetadata {
   readonly bin: Readonly<Record<string, string>>;
   readonly publishConfig: Readonly<Record<string, string>>;
   readonly engines: Readonly<Record<string, string>>;
+  readonly files?: readonly string[];
+  readonly scripts?: Readonly<Record<string, string>>;
 }
 
 async function sourceMetadata(): Promise<PackageMetadata> {
@@ -180,9 +188,10 @@ export async function prepareMainPackage(output: string): Promise<void> {
   const sourceDist = resolve(cliRoot, 'dist');
   const outputDist = resolve(output, 'dist');
   await mkdir(outputDist, { recursive: true });
-  for (const entry of await readdir(sourceDist, { withFileTypes: true })) {
-    if (!entry.isFile() || entry.name.endsWith('.node')) continue;
-    await copyFile(resolve(sourceDist, entry.name), resolve(outputDist, entry.name));
+  for (const path of [...publicJavaScriptFiles, ...publicSourceMapFiles]) {
+    const name = basename(path);
+    await copyFile(resolve(sourceDist, name), resolve(outputDist, name));
+    if (path.endsWith('.js')) await chmod(resolve(outputDist, name), 0o755);
   }
   await cp(resolve(cliRoot, 'slack'), resolve(output, 'slack'), {
     recursive: true,
@@ -204,7 +213,7 @@ export async function prepareMainPackage(output: string): Promise<void> {
         bugs: metadata.bugs,
         type: metadata.type,
         bin: metadata.bin,
-        files: ['dist', 'slack', 'README.md', 'LICENSE'],
+        files: publicPackageFiles,
         publishConfig: metadata.publishConfig,
         engines: metadata.engines,
         optionalDependencies: optionalNativeDependencies(metadata.version),

@@ -9,12 +9,18 @@
     "url": "git+https://github.com/dali-benothmen/woml.git"
   },
   "scripts": {
+    "install:check": "bun install --cwd woml-cli --frozen-lockfile",
     "build": "bun run --cwd woml-cli build",
-    "test": "bun run --cwd woml-cli test",
+    "build:release": "bun run --cwd woml-cli build:release",
+    "test": "bun run --cwd woml-cli test:portable",
     "typecheck": "bun run --cwd woml-cli typecheck",
+    "format:check": "cargo fmt --all --manifest-path core/Cargo.toml -- --check",
+    "lint": "bun run --cwd woml-cli test:communication-provider-clippy",
+    "pack": "bun run --cwd woml-cli pack:release",
     "test:identity": "bun run --cwd woml-cli test:release-identity",
     "test:documentation": "bun run --cwd woml-cli test:documentation",
     "test:architecture": "bun run --cwd woml-cli test:architecture-separation",
-    "test:release": "bun run --cwd woml-cli test:release"
+    "release:check": "bun woml-cli/scripts/release-check.ts",
+    "test:release": "bun run release:check"
   }
 }

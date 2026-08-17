@@ -11,5 +11,14 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/build-javascript.ts",
+    "scripts/guard-source-publish.ts",
+    "scripts/release-check.ts",
+    "scripts/release-contract.ts",
+    "scripts/release-package.ts",
+    "scripts/run-cli-test-shards.ts"
+  ]
 }
