@@ -86,7 +86,7 @@ export const womlNativeTargetSpecs: Readonly<
 };
 
 export function nativePackageName(target: WomlNativeTarget): string {
-  return `@woml/cli-${target}`;
+  return `@woml-org/cli-${target}`;
 }
 
 export function nativePackageBinaryName(target: WomlNativeTarget): string {

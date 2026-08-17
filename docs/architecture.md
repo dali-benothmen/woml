@@ -243,7 +243,7 @@ security, monitoring, and backup protection.
 ## Packaging
 
 The public `woml` package is platform-neutral and contains no `.node` file. It
-declares exact optional dependencies on the supported `@woml/cli-*` native
+declares exact optional dependencies on the supported `@woml-org/cli-*` native
 packages. The loader selects the matching macOS, Windows, or Linux glibc/musl
 x64/ARM64 artifact automatically.
 

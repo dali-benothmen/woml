@@ -10,14 +10,14 @@ the loader explicitly distinguishes glibc from musl.
 
 | Runtime | Native package |
 | --- | --- |
-| macOS x64 | `@woml/cli-darwin-x64` |
-| macOS ARM64 | `@woml/cli-darwin-arm64` |
-| Windows x64 | `@woml/cli-win32-x64-msvc` |
-| Windows ARM64 | `@woml/cli-win32-arm64-msvc` |
-| Linux x64 glibc | `@woml/cli-linux-x64-gnu` |
-| Linux x64 musl | `@woml/cli-linux-x64-musl` |
-| Linux ARM64 glibc | `@woml/cli-linux-arm64-gnu` |
-| Linux ARM64 musl | `@woml/cli-linux-arm64-musl` |
+| macOS x64 | `@woml-org/cli-darwin-x64` |
+| macOS ARM64 | `@woml-org/cli-darwin-arm64` |
+| Windows x64 | `@woml-org/cli-win32-x64-msvc` |
+| Windows ARM64 | `@woml-org/cli-win32-arm64-msvc` |
+| Linux x64 glibc | `@woml-org/cli-linux-x64-gnu` |
+| Linux x64 musl | `@woml-org/cli-linux-x64-musl` |
+| Linux ARM64 glibc | `@woml-org/cli-linux-arm64-gnu` |
+| Linux ARM64 musl | `@woml-org/cli-linux-arm64-musl` |
 
 The native packages contain only one `.node` binary, package metadata, README,
 and Apache-2.0 license. The main package contains the CLI, script hosts,
@@ -41,8 +41,8 @@ hash before the package is accepted.
 
 ## One-time npm setup
 
-1. Own or create the `@woml` npm scope.
-2. Own or create `woml` and every `@woml/cli-*` package.
+1. Own or create the `@woml-org` npm scope.
+2. Own or create `woml` and every `@woml-org/cli-*` package.
 3. Configure npm trusted publishing for `.github/workflows/release.yml` in this
    repository for every package in the family.
 4. Create the protected GitHub environment `npm-production` and require an
