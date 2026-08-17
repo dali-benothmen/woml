@@ -17,10 +17,10 @@
   },
   {
     "eventSchemaVersion": 8, "eventId": "event_services_005", "runId": "run-services-a", "sequence": 5, "occurredAt": "2026-08-09T08:00:00.021Z", "type": "step_attempt_succeeded",
-    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-a", "output": { "id": "customer-42", "name": "Dali" } }
+    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-a", "output": { "id": "customer-42", "name": "Alex" } }
   },
   {
     "eventSchemaVersion": 8, "eventId": "event_services_006", "runId": "run-services-a", "sequence": 6, "occurredAt": "2026-08-09T08:00:00.022Z", "type": "run_succeeded",
-    "data": { "terminalNodeId": "loadCustomer", "result": { "id": "customer-42", "name": "Dali" } }
+    "data": { "terminalNodeId": "loadCustomer", "result": { "id": "customer-42", "name": "Alex" } }
   }
 ]

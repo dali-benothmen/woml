@@ -2,6 +2,9 @@
 name = "woml-engine"
 version = "1.0.0"
 edition = "2021"
+description = "Durable event-sourced workflow execution engine for WOML"
+license = "Apache-2.0"
+repository = "https://github.com/dali-benothmen/woml"
 
 [lib]
 name = "woml_engine"
@@ -26,7 +29,7 @@ hmac = "0.12"
 serde_urlencoded = "0.7"
 subtle = "2.6"
 rusqlite = { version = "0.30", features = ["backup", "bundled"] }
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "deflate"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "deflate"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 thiserror = "1.0"
 tokio = { version = "1.0", features = ["io-util", "macros", "process", "rt", "sync", "time"] }

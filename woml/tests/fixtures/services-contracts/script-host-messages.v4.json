@@ -36,7 +36,7 @@
   },
   {
     "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "capability_result", "invocationId": "invocation-a", "callId": "call-http-a",
-    "result": { "contract": "woml.capability-call", "contractVersion": 1, "messageType": "result", "invocationId": "invocation-a", "callId": "call-http-a", "outcome": "succeeded", "resultContractVersion": 1, "resultBytes": 22, "durationMs": 10.1, "result": { "name": "Dali" } }
+    "result": { "contract": "woml.capability-call", "contractVersion": 1, "messageType": "result", "invocationId": "invocation-a", "callId": "call-http-a", "outcome": "succeeded", "resultContractVersion": 1, "resultBytes": 22, "durationMs": 10.1, "result": { "name": "Alex" } }
   },
   {
     "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "fetch_observation", "invocationId": "invocation-a", "requestId": "fetch-a",

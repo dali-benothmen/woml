@@ -22,7 +22,7 @@ TRIGGERS
     curl --request POST 'http://127.0.0.1:3000/events/order.created'
 
   ● Slack
-    Workspace  T0BNLAP0DRT
+    Workspace  T0123456789
     Scope      #woml-testing · app mentions
 
   ● Schedule

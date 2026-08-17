@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "WOML workflow automation monorepo",
+  "author": "Mohamed Ali Ben Othmen",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -21,6 +22,7 @@
     "test:release-automation": "bun run --cwd woml-cli test:release-automation",
     "test:documentation": "bun run --cwd woml-cli test:documentation",
     "test:architecture": "bun run --cwd woml-cli test:architecture-separation",
+    "test:final-review": "bun run --cwd woml-cli test:final-review",
     "release:check": "bun woml-cli/scripts/release-check.ts",
     "test:release": "bun run release:check"
   }

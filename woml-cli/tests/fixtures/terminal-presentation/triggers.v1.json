@@ -26,7 +26,7 @@
     {
       "id": "agentMessage",
       "type": "slack",
-      "workspace": "T0BNLAP0DRT",
+      "workspace": "T0123456789",
       "scope": "#woml-testing · app mentions"
     },
     {

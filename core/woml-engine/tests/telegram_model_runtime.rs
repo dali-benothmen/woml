@@ -94,7 +94,7 @@ fn model_v15_durably_admits_a_telegram_message() {
         ("event".to_string(), json!("message")),
         ("text".to_string(), json!("hello")),
         ("senderId".to_string(), json!("111222333")),
-        ("senderName".to_string(), json!("Dali")),
+        ("senderName".to_string(), json!("Alex")),
         ("conversationId".to_string(), json!("111222333")),
         ("conversationType".to_string(), json!("direct")),
         ("messageId".to_string(), json!("7")),

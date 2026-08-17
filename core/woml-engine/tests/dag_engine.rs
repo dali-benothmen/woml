@@ -562,7 +562,7 @@ fn engine_selects_ready_nodes_in_model_order_and_blocks_in_flight_work() {
 fn engine_can_start_a_run_without_creating_mutable_context_state() {
   let mut engine = InMemoryDagEngine::new(hello_model(), HELLO_HASH).unwrap();
   let mut trigger = Map::new();
-  trigger.insert("name".to_string(), json!("Dali"));
+  trigger.insert("name".to_string(), json!("Alex"));
   let projection = engine
     .start_run(
       "evt_new_001",

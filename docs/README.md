@@ -56,6 +56,7 @@ Provider-specific setup is available for [Telegram](telegram.md),
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)
 - [Support](../SUPPORT.md)
+- [WOML 1.0.0 release notes](release/v1.0.0-release-notes.md)
 - [Release runbook](woml-release.md)
 - [Provider extension direction](provider-extension-architecture.md)
 

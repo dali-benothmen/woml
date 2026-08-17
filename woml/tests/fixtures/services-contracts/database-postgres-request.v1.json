@@ -10,7 +10,7 @@
       {
         "operation": "insert",
         "table": "customers",
-        "values": { "name": "Dali", "active": true }
+        "values": { "name": "Alex", "active": true }
       },
       {
         "operation": "query",

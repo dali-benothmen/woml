@@ -39,6 +39,7 @@ interface PackageMetadata {
   readonly version: string;
   readonly private?: boolean;
   readonly description: string;
+  readonly author: string;
   readonly license: string;
   readonly repository: Readonly<Record<string, string>>;
   readonly homepage: string;
@@ -109,6 +110,22 @@ export async function verifySourceReleaseIdentity(
     );
   }
   if (
+    releaseMetadata.author !== 'Mohamed Ali Ben Othmen' ||
+    frontend.author !== releaseMetadata.author ||
+    root.author !== releaseMetadata.author ||
+    extension.author !== releaseMetadata.author ||
+    releaseMetadata.license !== 'Apache-2.0' ||
+    frontend.license !== releaseMetadata.license ||
+    root.license !== releaseMetadata.license ||
+    extension.license !== releaseMetadata.license ||
+    !nativeManifest.includes('license = "Apache-2.0"') ||
+    !engineManifest.includes('license = "Apache-2.0"') ||
+    !nativeManifest.includes('repository = "https://github.com/dali-benothmen/woml"') ||
+    !engineManifest.includes('repository = "https://github.com/dali-benothmen/woml"')
+  ) {
+    throw new Error('Release author, license, or repository metadata is inconsistent.');
+  }
+  if (
     frontend.version !== releaseMetadata.version ||
     root.version !== releaseMetadata.version ||
     extension.version !== releaseMetadata.version ||
@@ -160,6 +177,7 @@ export async function createPlatformPackage(
   await Promise.all([
     copyFile(artifact, resolve(output, binary)),
     copyFile(resolve(repositoryRoot, 'LICENSE'), resolve(output, 'LICENSE')),
+    copyFile(resolve(repositoryRoot, 'NOTICE.md'), resolve(output, 'NOTICE.md')),
   ]);
   await writeFile(
     resolve(output, 'README.md'),
@@ -172,12 +190,13 @@ export async function createPlatformPackage(
         name: nativePackageName(target),
         version: metadata.version,
         description: `WOML native execution engine for ${target}`,
+        author: metadata.author,
         license: metadata.license,
         repository: metadata.repository,
         homepage: metadata.homepage,
         bugs: metadata.bugs,
         main: `./${binary}`,
-        files: [binary, 'README.md', 'LICENSE'],
+        files: [binary, 'README.md', 'LICENSE', 'NOTICE.md'],
         os: [spec.os],
         cpu: [spec.cpu],
         ...(spec.libc === undefined ? {} : { libc: [spec.libc] }),
@@ -208,6 +227,7 @@ export async function prepareMainPackage(output: string): Promise<void> {
   await Promise.all([
     copyFile(resolve(cliRoot, 'README.md'), resolve(output, 'README.md')),
     copyFile(resolve(repositoryRoot, 'LICENSE'), resolve(output, 'LICENSE')),
+    copyFile(resolve(repositoryRoot, 'NOTICE.md'), resolve(output, 'NOTICE.md')),
   ]);
   await writeFile(
     resolve(output, 'package.json'),
@@ -216,6 +236,7 @@ export async function prepareMainPackage(output: string): Promise<void> {
         name: metadata.name,
         version: metadata.version,
         description: metadata.description,
+        author: metadata.author,
         license: metadata.license,
         repository: metadata.repository,
         homepage: metadata.homepage,
@@ -299,6 +320,7 @@ export async function verifyCollectedRelease(
   ]);
   await Promise.all([
     assertFile(resolve(mainRoot, 'LICENSE')),
+    assertFile(resolve(mainRoot, 'NOTICE.md')),
     assertFile(resolve(mainRoot, 'dist/cli.js')),
     assertFile(resolve(mainRoot, 'dist/script-host.js')),
   ]);
@@ -318,9 +340,11 @@ export async function verifyCollectedRelease(
       target === undefined ||
       spec === undefined ||
       manifest.version !== metadata.version ||
+      manifest.author !== metadata.author ||
+      manifest.license !== metadata.license ||
       manifest.main !== `./${nativePackageBinaryName(target)}` ||
       JSON.stringify(manifest.files) !==
-        JSON.stringify([nativePackageBinaryName(target), 'README.md', 'LICENSE']) ||
+        JSON.stringify([nativePackageBinaryName(target), 'README.md', 'LICENSE', 'NOTICE.md']) ||
       JSON.stringify(manifest.os) !== JSON.stringify([spec.os]) ||
       JSON.stringify(manifest.cpu) !== JSON.stringify([spec.cpu]) ||
       JSON.stringify(manifest.libc) !==
@@ -337,6 +361,7 @@ export async function verifyCollectedRelease(
     assertArtifactFiles(`Native artifact ${target}`, artifact.files, [
       nativePackageBinaryName(target),
       'LICENSE',
+      'NOTICE.md',
       'README.md',
       'package.json',
       nativeLoadReceiptName,
@@ -344,6 +369,7 @@ export async function verifyCollectedRelease(
     await Promise.all([
       assertFile(resolve(directory, nativePackageBinaryName(target))),
       assertFile(resolve(directory, 'LICENSE')),
+      assertFile(resolve(directory, 'NOTICE.md')),
     ]);
   }
   const missing = womlNativeTargets.filter(target => !seen.has(target));

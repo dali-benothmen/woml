@@ -82,6 +82,7 @@ describe('WOML cross-platform native release', () => {
     expect(manifest.cpu).toEqual(['x64']);
     expect(manifest.libc).toEqual(['musl']);
     expect(await Bun.file(resolve(output, 'LICENSE')).exists()).toBe(true);
+    expect(await Bun.file(resolve(output, 'NOTICE.md')).exists()).toBe(true);
     expect(
       await Bun.file(resolve(output, 'woml-core.linux-x64-musl.node')).text(),
     ).toBe('test-native-bytes');

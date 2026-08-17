@@ -2,7 +2,7 @@ RUN  run_8f21c4                                   14 Aug 2026 · 08:42:18
 
   01  ✓  Prepare order                                             18 ms
           Normalize and validate the submitted order.
-          → { orderId: "order-42", customer: "Dali", items: 3 }
+          → { orderId: "order-42", customer: "Alex", items: 3 }
 
   02  ✓  Calculate total                                           31 ms
           Reusable step · Calculate taxes and final price.

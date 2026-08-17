@@ -22,6 +22,7 @@ export const publicPackageFiles = [
   ...publicSlackFiles,
   'README.md',
   'LICENSE',
+  'NOTICE.md',
 ] as const;
 
 export const packedPackageFiles = [

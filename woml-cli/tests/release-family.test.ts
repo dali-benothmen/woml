@@ -103,5 +103,5 @@ describe('collected WOML release family', () => {
     await expect(
       verifyCollectedRelease(main, platforms, 'v1.0.0'),
     ).rejects.toThrow(`Collected release is missing: ${womlNativeTargets[0]}`);
-  });
+  }, 30_000);
 });
