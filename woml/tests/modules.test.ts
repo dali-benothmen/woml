@@ -48,7 +48,7 @@ function validationCode(source: string): string {
   throw new Error('Expected WOML validation to fail.');
 }
 
-describe('MS0 and MS1 Module System', () => {
+describe('Module System', () => {
   test('deep-equals the reviewed immutable package and validates its schema', () => {
     const actual = buildWomlDefinitionPackage(sourceDocument(), {
       sourcePath: workflowPath,
@@ -248,7 +248,7 @@ describe('MS0 and MS1 Module System', () => {
   });
 });
 
-describe('essential MS6 module diagnostics', () => {
+describe('Module diagnostics', () => {
   test('reports referenced and unused module aliases without rejecting unused code', () => {
     const inspection = inspectWomlModuleUsage(sourceDocument());
     expect(inspection).toEqual({
@@ -285,7 +285,7 @@ describe('essential MS6 module diagnostics', () => {
   });
 });
 
-describe('MS2 deterministic module compilation', () => {
+describe('Deterministic module compilation', () => {
   test('pins Model v9, bundle, source map, declarations, and package identity', async () => {
     const actual = await buildWomlExecutableDefinitionPackage(sourceDocument(), {
       sourcePath: workflowPath,
@@ -419,7 +419,7 @@ describe('MS2 deterministic module compilation', () => {
   });
 });
 
-describe('MS3 runtime definition package', () => {
+describe('Runtime definition package', () => {
   test('promotes unchanged compilation artifacts into a deterministic runtime-ready package', async () => {
     const actual = await buildWomlRuntimeDefinitionPackage(sourceDocument(), {
       sourcePath: workflowPath,

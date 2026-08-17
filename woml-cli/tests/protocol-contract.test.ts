@@ -475,7 +475,7 @@ describe('compiled workflow model v2 branch contract', () => {
   });
 });
 
-describe('parallel P0 contracts', () => {
+describe('Parallel contracts', () => {
   test('the reviewed compiled fixture validates against model v3 and pins its hash', async () => {
     const { compiledModelV3 } = await validators();
     const compiled = await readJson(
@@ -976,7 +976,7 @@ describe('run-event v2 branch contract', () => {
   });
 });
 
-describe('Human Approval A0 contracts', () => {
+describe('Human Approval contracts', () => {
   const approvalHttpFixtureDirectory = resolve(
     import.meta.dir,
     'fixtures/approval-http'

@@ -7,7 +7,7 @@ import {
   WhatsAppTransportError,
 } from '../src/whatsapp';
 
-describe('ACP7 WhatsApp runtime', () => {
+describe('WhatsApp runtime', () => {
   test('sends approved templates with stable approval capability buttons', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = new SharedWhatsAppTransport({

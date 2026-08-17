@@ -996,7 +996,7 @@ Completion notes:
 - Store v14 is frozen as a required future transactional migration for runtime
   owner, maintenance lease, and verified-backup coordination. PRO0 adds no
   database table or runtime behavior.
-- `bun run test:pro0` is the focused contract/type gate.
+- `bun run test:production-runtime-contracts` is the focused contract/type gate.
 
 ### PRO1 — Runtime configuration and production preflight (completed)
 
@@ -1042,7 +1042,7 @@ Completion notes:
   the SQLite state file, acquires ownership, or creates a run.
 - Historical single-workflow `woml check` and `woml check --json` output remain
   compatible when no runtime config is supplied.
-- `bun run test:pro1` composes the PRO0 contract gate with configuration,
+- `bun run test:production-preflight` composes the PRO0 contract gate with configuration,
   multi-input, storage, secrets, redaction, route-conflict, every historical
   Model/Event fixture, and all-schema compatibility tests. It is included in
   the repository release gate.
@@ -1106,7 +1106,7 @@ Completion notes:
   existing `finally` rollback path and creates no trigger occurrence.
 - Existing engine callers keep immediate-start behavior unless they explicitly
   request suspended preparation, preserving the pre-PRO2 runtime API behavior.
-- `bun run test:pro2` composes PRO0/PRO1 compatibility with stable-source,
+- `bun run test:runtime-atomic-activation` composes PRO0/PRO1 compatibility with stable-source,
   deterministic-identity, closed-ingress, durable-pinning, provider-rollback,
   typecheck, and focused Rust compatibility coverage. It is included in the
   repository release gate.
@@ -1176,7 +1176,7 @@ Completion notes:
 - The first SIGINT/SIGTERM or authenticated stop closes admission and drains
   tracked work through the configured deadline. A second signal forces exit;
   interrupted effects retain the existing fail-closed recovery semantics.
-- `bun run test:pro3` composes all earlier production gates with Store v14
+- `bun run test:runtime-ownership` composes all earlier production gates with Store v14
   migration/ownership, background readiness/failure, second-owner rejection,
   descriptor permissions, exact stop, stale cleanup, typecheck, and packaged
   runtime coverage. It is included in the repository release gate.
@@ -1240,7 +1240,7 @@ Completion notes:
   are documented alongside the OS/container memory, CPU, process, file,
   filesystem, and egress controls required for hostile code. WOML v1 does not
   claim Bun is a multi-tenant sandbox.
-- `bun run test:pro4` composes the complete PRO3 gate with mounted-file modes,
+- `bun run test:production-security` composes the complete PRO3 gate with mounted-file modes,
   source conflicts, symbolic-name resolution, capability rotation/expiry,
   public/admin confusion, live operation dispatch, flooding/size bounds,
   redaction, verification, and typecheck. It is included in the repository
@@ -1306,7 +1306,7 @@ Completion notes:
   protection. A failed store/size read, stale sequence, slow stream, malformed
   query, or broken telemetry client returns a safe telemetry failure and never
   decides a workflow business outcome.
-- `bun run test:pro5` composes PRO4 with frozen-schema golden fixtures,
+- `bun run test:observability` composes PRO4 with frozen-schema golden fixtures,
   sequence/gap/backpressure cases, readiness/authentication and disabled-state
   transitions, cardinality/redaction checks, broken telemetry isolation, a
   packaged `.woml` runtime journey, overhead budgets, verification, and
@@ -1361,7 +1361,7 @@ Completed implementation:
 - Alternate-screen, cursor, raw-input, signal, disconnect, and render-failure
   cleanup restore the terminal. The inspector rejects non-TTY use and points
   automation users to `woml list --json`.
-- `bun run test:pro6` composes PRO5 with deterministic virtual-terminal tests,
+- `bun run test:runtime-inspector` composes PRO5 with deterministic virtual-terminal tests,
   the PRO6 verifier, and type checking; it is included in the release gate.
 
 ### PRO7 — Backup, restore, and upgrades ✅ Completed
@@ -1423,7 +1423,7 @@ Completed implementation:
   separate operator-owned recovery assets. The new operations guide documents
   persistent storage, supervisor, off-host backup, encryption, and restore
   responsibilities.
-- `bun run test:pro7` builds the packaged native/CLI boundary, runs online-WAL,
+- `bun run test:backup-restore` builds the packaged native/CLI boundary, runs online-WAL,
   missing-artifact, maintenance-conflict, old/future-store, approval-wait,
   corruption, partial-input, symlink, active-target, replacement/rollback, and
   moved-State-v1 journeys, verifies frozen artifacts, type-checks, and runs
@@ -1503,7 +1503,7 @@ Changes:
 - Audit the installed CLI package, source activation boundary, and internal
   definition records; scan all public/durable outputs for active secrets and
   sensitive state.
-- Add `test:pro9` and include it in the repository release gate.
+- Add `test:production-runtime` and include it in the repository release gate.
 
 Result:
 
@@ -1553,7 +1553,7 @@ Completed implementation:
 - Release scans cover the installed CLI, production examples, documentation,
   definitions, outputs, and durable behavior for active secret-like values and
   sensitive payload markers. Corrupt stores fail closed.
-- `bun run test:pro9` is the independent Production Runtime v1 gate; it builds
+- `bun run test:production-runtime` is the independent Production Runtime v1 gate; it builds
   the packaged native boundary, runs the complete frontend and Rust engine
   suites, all PRO1-PRO9 operations journeys, benchmarks, compatibility and
   security verification, type checking, and clippy. It is included in the

@@ -87,7 +87,7 @@ const sc3SecretFixturePath = join(
   'woml',
   'tests',
   'fixtures',
-  'sc3-secret-runtime.woml'
+  'services-secret-runtime.woml'
 );
 let temporaryDirectory: string;
 
@@ -217,7 +217,7 @@ describe('woml test one-shot compatibility', () => {
     await writeFile(
       workflowPath,
       `<woml>
-<workflow id="sc4-cli-fetch" version="1.0.0" name="SC4 CLI Fetch">
+<workflow id="sc4-cli-fetch" version="1.0.0" name="CLI Fetch">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="request">
@@ -268,7 +268,7 @@ describe('woml test one-shot compatibility', () => {
     await writeFile(
       workflowPath,
       `<woml>
-<workflow id="sc6-http-composition" version="1.0.0" name="SC6 HTTP Composition">
+<workflow id="sc6-http-composition" version="1.0.0" name="HTTP Composition">
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="choose"><script>return { useHttp: true };</script></step>
@@ -901,7 +901,7 @@ describe('woml test one-shot compatibility', () => {
       [
         Bun.which('bun')!,
         '-e',
-        `const server = Bun.serve({ hostname: '127.0.0.1', port: ${httpPort}, fetch: () => Response.json({ userId: 1, id: 1, title: 'SC6 package smoke', completed: false }) }); console.log('ready'); process.on('SIGTERM', () => { server.stop(true); process.exit(0); }); await new Promise(() => {});`,
+        `const server = Bun.serve({ hostname: '127.0.0.1', port: ${httpPort}, fetch: () => Response.json({ userId: 1, id: 1, title: 'package smoke', completed: false }) }); console.log('ready'); process.on('SIGTERM', () => { server.stop(true); process.exit(0); }); await new Promise(() => {});`,
       ],
       { cwd: consumerDirectory, stdout: 'pipe', stderr: 'pipe' }
     );
@@ -1019,14 +1019,14 @@ describe('woml test one-shot compatibility', () => {
       nativeFetch: {
         status: 200,
         data: {
-          title: 'SC6 package smoke',
+          title: 'package smoke',
         },
       },
       managedHttp: {
         status: 200,
         ok: true,
         data: {
-          title: 'SC6 package smoke',
+          title: 'package smoke',
         },
         url: localHttpUrl,
         redirected: false,

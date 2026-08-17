@@ -162,7 +162,7 @@ reported separately from policy overhead.
 The complete publication gate is:
 
 ```bash
-bun run test:rp7
+bun run test:runtime-policies
 ```
 
 It builds the native package, validates frozen schemas and historical fixtures,

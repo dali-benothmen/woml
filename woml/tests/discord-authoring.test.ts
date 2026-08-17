@@ -85,9 +85,9 @@ function approvalWorkflow(provider: string): string {
 </woml>`;
 }
 
-describe('ACP4 Discord authoring and lowering', () => {
+describe('Discord authoring and lowering', () => {
   test('lowers the reviewed complete fixture into schema-valid Model v15', () => {
-    const compiled = compileWoml(document('discord-acp4.woml'));
+    const compiled = compileWoml(document('discord.woml'));
     expect(compiled.schemaVersion).toBe(15);
     if (compiled.schemaVersion !== 15) throw new Error('expected Model v15');
 
@@ -133,7 +133,7 @@ describe('ACP4 Discord authoring and lowering', () => {
       communication: compiled.communication,
     };
     expect(actual).toEqual(
-      json(resolve(fixtureRoot, 'discord-acp4.expected.json'))
+      json(resolve(fixtureRoot, 'discord.expected.json'))
     );
 
     const validate = validators().getSchema(
@@ -143,7 +143,7 @@ describe('ACP4 Discord authoring and lowering', () => {
   });
 
   test('discovers services.discord in imported TypeScript and promotes it for runtime', async () => {
-    const source = document('discord-module-acp4.woml');
+    const source = document('discord-module.woml');
     const definitionPackage = await buildWomlExecutableDefinitionPackage(
       source,
       { sourcePath: source.file, projectRoot: fixtureRoot }
@@ -181,7 +181,7 @@ describe('ACP4 Discord authoring and lowering', () => {
   });
 
   test('requires imported Discord messaging credentials to be explicit workflow secrets', async () => {
-    const path = resolve(fixtureRoot, 'discord-module-acp4.woml');
+    const path = resolve(fixtureRoot, 'discord-module.woml');
     const source = readFileSync(path, 'utf8').replace(
       'secrets.DISCORD_BOT_TOKEN',
       'context.payload.botToken'
@@ -201,7 +201,7 @@ describe('ACP4 Discord authoring and lowering', () => {
   });
 
   test('preserves an explicit local services.discord alias with a warning', async () => {
-    const source = document('discord-shadow-acp4.woml');
+    const source = document('discord-shadow.woml');
     const definitionPackage = await buildWomlExecutableDefinitionPackage(
       source,
       { sourcePath: source.file, projectRoot: fixtureRoot }
@@ -217,7 +217,7 @@ describe('ACP4 Discord authoring and lowering', () => {
   });
 
   test('resolves a built-in Discord trigger beside a local <discord> provider', async () => {
-    const source = document('discord-contextual-alias-acp4.woml');
+    const source = document('discord-contextual-alias.woml');
     const graph = resolveWomlReusableDefinitionGraph(source, {
       sourcePath: source.file,
       projectRoot: fixtureRoot,

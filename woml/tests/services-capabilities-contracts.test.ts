@@ -161,7 +161,7 @@ function inspectOperationHistory(
   return issues;
 }
 
-describe('SC0 frozen service and capability contracts', () => {
+describe('Frozen service and capability contracts', () => {
   test('all reviewed standalone fixtures validate against their versioned schema', async () => {
     const names = (await readdir(fixtureDirectory))
       .filter(name => name.endsWith('.json'))
@@ -405,7 +405,7 @@ describe('SC0 frozen service and capability contracts', () => {
   });
 });
 
-describe('SC1 script analysis and Model v8 lowering', () => {
+describe('Script analysis and Model v8 lowering', () => {
   test('lowers the reviewed WOML fixture exactly and records names only', async () => {
     const source = readFileSync(
       resolve(import.meta.dir, 'fixtures/services-bindings.woml'),
@@ -545,7 +545,7 @@ describe('SC1 script analysis and Model v8 lowering', () => {
   });
 });
 
-describe('SC6 HTTP composition compatibility', () => {
+describe('HTTP composition compatibility', () => {
   test('composes native Fetch and managed HTTP with every published control-flow and trigger surface', () => {
     const fixtures = [
       'retry-composition.woml',

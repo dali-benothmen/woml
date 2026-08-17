@@ -686,7 +686,7 @@ Completed proof:
   outcomes, context/results, event projections, SQLite, WAL, and SHM files.
   Provider protocol, diagnostics, and clean-package tests retain only symbolic
   secret names.
-- `bun run test:n6` is the repeatable release gate. It builds and stages the
+- `bun run test:slack-notifications` is the repeatable release gate. It builds and stages the
   production native module, then passes 76 frontend tests, 95 Rust WOML-engine
   tests, 130 process-isolated CLI/provider tests, both TypeScript type checks,
   strict Clippy across every WOML-engine target, the production core-library

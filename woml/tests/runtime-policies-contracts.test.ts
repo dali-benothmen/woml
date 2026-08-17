@@ -69,7 +69,7 @@ async function contractValidators() {
   return ajv;
 }
 
-describe('RP0 frozen runtime-policy contracts', () => {
+describe('Frozen runtime-policy contracts', () => {
   test('validates Model v12, Event v11, Store v12, claim, list, inspection, and progress fixtures', async () => {
     const ajv = await contractValidators();
     const model = JSON.parse(fixture('runtime-policy.compiled.v12.json'));
@@ -178,7 +178,7 @@ describe('RP0 frozen runtime-policy contracts', () => {
   });
 });
 
-describe('RP1 runtime-policy frontend', () => {
+describe('Runtime-policy frontend', () => {
   test('deep-equals the reviewed Model v12 fixture', () => {
     const compiled = compileWoml(
       parseWoml(fixture('runtime-policy.woml'), {

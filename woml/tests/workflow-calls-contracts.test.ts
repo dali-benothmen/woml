@@ -135,7 +135,7 @@ function packageIdentity(definitionPackage: WorkflowCallDefinitionPackage) {
   };
 }
 
-describe('WC0 frozen Workflow Call contracts', () => {
+describe('Frozen Workflow Call contracts', () => {
   test('lowers the reviewed parent and call-only child fixtures exactly', () => {
     for (const [sourceName, modelName] of [
       ['calculate-risk', 'calculate-risk.compiled.v10.json'],
@@ -263,7 +263,7 @@ describe('WC0 frozen Workflow Call contracts', () => {
   });
 });
 
-describe('WC1 call-only frontend and workflow service analysis', () => {
+describe('Call-only frontend and workflow service analysis', () => {
   test('uses omitted triggers as the one call-only source shape', () => {
     const callOnly = `<woml><workflow id="worker"><steps>
       <step id="done"><script>return null;</script></step>
@@ -386,7 +386,7 @@ describe('WC1 call-only frontend and workflow service analysis', () => {
   });
 });
 
-describe('WC6 Workflow Call composition contracts', () => {
+describe('Workflow Call composition contracts', () => {
   test('allows a workflow call from every current parent trigger type', () => {
     const triggers = [
       '<manual id="start" />',

@@ -90,7 +90,7 @@ check pass. Those records are part of retry safety.
 From `woml-cli/`:
 
 ```bash
-bun run test:ds4
+bun run test:durable-state-hardening
 bun run benchmark:state
 ```
 
@@ -100,7 +100,7 @@ recovery after a committed mutation, corrupt digests/quotas/results, Unix file
 permissions, run-inspection redaction, run/state ownership separation, and
 state operation latency/database-size budgets.
 
-DS5 publishes the feature through `bun run test:ds5`, which adds clean package
+DS5 publishes the feature through `bun run test:durable-state`, which adds clean package
 installation, packaged native execution across process restarts, both public
 examples, every-schema compilation, historical model/event fixtures, package
 auditing, and secret/redaction scans.

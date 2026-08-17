@@ -175,7 +175,7 @@ composition, inspection, Human Approval limits, and troubleshooting.
 Production deployment, security, upgrade, recovery, and performance guidance
 is in [Operating Durable Workflow Calls](../docs/woml-workflow-calls-production.md).
 After building, `bun run benchmark:workflow-calls` prints a same-runtime versus
-local cross-process baseline. `bun run test:wc7` is the complete Workflow Calls
+local cross-process baseline. `bun run test:workflow-calls` is the complete Workflow Calls
 publication gate.
 
 Try both workflow-to-workflow behaviors from the repository root:
@@ -296,7 +296,7 @@ manual, webhook, Slack, schedule, interval, event, Workflow Call, and Workflow
 Start runs. `woml list --status queued` shows waiting work; `woml get run_...`
 shows its redacted wait/deadline state. See
 [WOML Runtime Policies](../docs/woml-runtime-policies.md) for semantics,
-recovery, saturation, deployment, and the `bun run test:rp7` publication gate.
+recovery, saturation, deployment, and the `bun run test:runtime-policies` publication gate.
 
 ## Author durable workflow memory
 
@@ -414,7 +414,7 @@ again.
 cd woml-cli
 bun install
 bun run build
-bun run test:sc6
+bun run test:http
 ```
 
 The SC6 gate builds the distributable CLI/native core and verifies the

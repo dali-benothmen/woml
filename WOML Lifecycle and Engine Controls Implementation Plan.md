@@ -11,7 +11,7 @@ commands are shipped as of LEC7.
 
 LEC8 completed the clean-package journey, adversarial release matrix, schema
 compatibility audit, migration/recovery gate, secret/package scan, performance
-budgets, operator documentation, and the unified `bun run test:lec8`
+budgets, operator documentation, and the unified `bun run test:lifecycle`
 publication command. Lifecycle and local run control are now supported WOML
 features rather than staged syntax.
 
@@ -1105,7 +1105,7 @@ Frontend, Rust, Bun, protocol/schema, TypeScript, Clippy, integration,
 cross-process, approval, notification, crash, migration, packaging, benchmark,
 and secret scans pass from a clean project.
 
-The completed `bun run test:lec8` gate builds the release package, runs the
+The completed `bun run test:lifecycle` gate builds the release package, runs the
 frontend lifecycle contracts, Script Host v7, Notification Provider Host v2,
 Rust LEC2-LEC6 authority/runtime suites, direct CLI management, and a clean
 consumer install that executes, inspects, cancels, and shuts down. It compiles

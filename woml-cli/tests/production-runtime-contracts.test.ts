@@ -34,7 +34,7 @@ async function validators() {
   return ajv;
 }
 
-describe('PRO0 frozen Production Runtime contracts', () => {
+describe('Frozen Production Runtime contracts', () => {
   test('validates every reviewed production contract and Store v14 record', async () => {
     const ajv = await validators();
     const config = await Bun.file(resolve(fixtureRoot, 'runtime-config.v1.json')).json();

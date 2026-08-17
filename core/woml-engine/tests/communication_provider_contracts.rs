@@ -19,32 +19,32 @@ const CONTRACT_FIXTURES: &str =
   include_str!("../../../woml/tests/fixtures/communication-providers/contracts.v1.json");
 
 fn parse(source: &str) -> Value {
-  serde_json::from_str(source).expect("ACP0 artifact must be valid JSON")
+  serde_json::from_str(source).expect("artifact must be valid JSON")
 }
 
 fn validator(schema: &Value, resources: &[(&str, Value)]) -> jsonschema::Validator {
   for (_, resource) in resources {
     jsonschema::draft202012::meta::validate(resource)
-      .expect("ACP0 resource must be a valid Draft 2020-12 schema");
+      .expect("resource must be a valid Draft 2020-12 schema");
   }
   jsonschema::draft202012::meta::validate(schema)
-    .expect("ACP0 contract must be a valid Draft 2020-12 schema");
+    .expect("contract must be a valid Draft 2020-12 schema");
   let mut registry = Registry::new();
   for (uri, resource) in resources {
     registry = registry
       .add(*uri, resource)
-      .expect("ACP0 schema resource must register");
+      .expect("schema resource must register");
   }
-  let registry = registry.prepare().expect("ACP0 registry must prepare");
+  let registry = registry.prepare().expect("registry must prepare");
   jsonschema::draft202012::options()
     .with_registry(&registry)
     .should_validate_formats(true)
     .build(schema)
-    .expect("ACP0 schema must compile")
+    .expect("schema must compile")
 }
 
 #[test]
-fn rust_independently_validates_the_acp0_fixtures() {
+fn rust_independently_validates_the_communication_provider_fixtures() {
   let payload_schema = parse(PAYLOAD_SCHEMA);
   let payload_validator = validator(&payload_schema, &[]);
   for payload in parse(PAYLOAD_FIXTURES).as_array().unwrap() {

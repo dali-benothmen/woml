@@ -64,7 +64,7 @@ function contractValidators(): Ajv2020 {
   return ajv;
 }
 
-describe('FJ0 frozen fork and branch contracts', () => {
+describe('Frozen fork and branch contracts', () => {
   test('validates Model v13, Event v12, Definition Package v8, and Run Inspection v4 artifacts', () => {
     const ajv = contractValidators();
     const model = jsonFixture('join-all.compiled.v13.json');
@@ -269,7 +269,7 @@ describe('FJ0 frozen fork and branch contracts', () => {
   });
 });
 
-describe('FJ1 canonical conditional choice migration', () => {
+describe('Canonical conditional choice migration', () => {
   test('canonical <choose> and legacy conditional <branch> lower identically', () => {
     const canonicalDocument = parseWoml(sharedFixture('branch.woml'), {
       file: 'branch.woml',
@@ -346,10 +346,10 @@ function fj2Diagnostic(source: string): string {
     }
     throw error;
   }
-  throw new Error('Expected FJ2 validation to fail.');
+  throw new Error('Expected  validation to fail.');
 }
 
-describe('FJ2 fork and branch authoring', () => {
+describe('Fork and branch authoring', () => {
   test('accepts all reviewed forks, including omitted/all/selected/none joins, root-first, terminal, and multi-step branches', () => {
     for (const name of [
       'join-all.woml',
@@ -545,7 +545,7 @@ describe('FJ2 fork and branch authoring', () => {
   });
 });
 
-describe('FJ3 Model v13 lowering', () => {
+describe('Model v13 lowering', () => {
   test('deep-equals the corrected reviewed join-all graph', () => {
     const source = fixture('join-all.woml');
     const compiled = compileWoml(

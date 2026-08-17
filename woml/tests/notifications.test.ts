@@ -214,13 +214,13 @@ describe('WOML Slack notification lowering', () => {
     }
   });
 
-  test('rejects invalid placement, provider structure, and Slack attributes', () => {
+  test('Rejects invalid placement and incomplete provider attributes', () => {
     const cases = [
       [workflow(`<notify>${slack()}</notify>`), 'WOML_NOTIFY_INVALID_ORDER'],
       [workflow(approval('<notify />')), 'WOML_NOTIFY_EMPTY'],
       [
         workflow(approval('<notify><discord /></notify>')),
-        'WOML_NOTIFY_UNSUPPORTED_PROVIDER',
+        'WOML_DISCORD_ATTRIBUTE_REQUIRED',
       ],
       [
         workflow(`<approval id="review">

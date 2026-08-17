@@ -1147,7 +1147,7 @@ return {
     });
   });
 
-  test('WC3/WC4 lowers workflows.call, bounds waiting, and enforces stable repeated identities', async () => {
+  test('Lowers workflows.call, bounds waiting, and enforces stable repeated identities', async () => {
     const completed: CompletedMessage[] = [];
     const calls: CapabilityCallMessage[] = [];
     let host!: ScriptHost;
@@ -2163,7 +2163,7 @@ return {
   });
 });
 
-describe('MS3 Script Host v5 module runtime', () => {
+describe('Script Host v5 module runtime', () => {
   test('keeps an explicitly imported services.telegram module ahead of the built-in capability', async () => {
     const bundle = `export async function send(value) {
       return { source: 'local-module', value };
@@ -2353,7 +2353,7 @@ export function value() { return 1; }`;
   });
 });
 
-describe('MS4 Script Host v6 recoverability and diagnostics', () => {
+describe('Script Host v6 recoverability and diagnostics', () => {
   test('re-registers immutable artifacts after a host restart', async () => {
     const bundle = `export function value() { return { recovered: true }; }`;
     const sourceMap = JSON.stringify({
@@ -2500,7 +2500,7 @@ describe('MS4 Script Host v6 recoverability and diagnostics', () => {
   });
 });
 
-describe('LEC3 Script Host v7 lifecycle mode', () => {
+describe('Script Host v7 lifecycle mode', () => {
   test('injects a deeply read-only lifecycle binding and accepts an undefined return', async () => {
     const result = await runHost(
       [
@@ -2620,7 +2620,7 @@ describe('Reusable custom-step Script Host v8', () => {
   });
 });
 
-describe('DS1 Script Host v7 / DS3 managed Durable User State', () => {
+describe('Script Host v7 durable user state', () => {
   test('is deeply read-only and lowers calls to the frozen State v1 contract', async () => {
     const completed: CompletedMessage[] = [];
     const calls: CapabilityCallMessage[] = [];

@@ -937,7 +937,7 @@ Implementation notes:
   idempotency identities.
 - Webhook-originated runs are proven to compose with retry, branch, parallel,
   durable approval waiting, and the existing Slack notification journey.
-- `bun run test:t5` is the webhook release gate, and `test:release` now points
+- `bun run test:webhooks` is the webhook release gate, and `test:release` now points
   to it.
 
 ### T6 — Compile Slack triggers and extract shared transport
@@ -989,7 +989,7 @@ Implementation notes:
 - The reviewed app manifest now subscribes to `app_mention` and `message.im`
   and includes `app_mentions:read` and `im:history`. Scope failures continue to
   tell the user to update permissions and reinstall the app.
-- `bun run test:t6` remains the standalone T6 contract/transport gate. Slack
+- `bun run test:slack-trigger-authoring` remains the standalone T6 contract/transport gate. Slack
   event decoding, Rust admission, and actual run creation were deliberately
   deferred to—and are now completed by—T7.
 
@@ -1043,7 +1043,7 @@ Implementation notes:
   consuming or acknowledging the other's message.
 - `examples/slackTriggerWorkflow.woml` is the runnable one-channel product
   example and compiles through the reviewed Model v7 contract. The separate
-  two-channel fixture preserves broader contract coverage. `bun run test:t7`
+  two-channel fixture preserves broader contract coverage. `bun run test:slack-triggers`
   remains the historical T7 gate.
 
 ### T8 — Compile schedules and freeze time semantics
@@ -1082,7 +1082,7 @@ Implementation notes:
 - Misfire behavior, occurrence identity, and the exact two-field
   `context.payload` contract were frozen before Rust began driving the clock.
 - `examples/scheduleWorkflow.woml` is the reviewed Model v7 product fixture.
-  `bun run test:t8` remains the historical T8 gate.
+  `bun run test:schedule-authoring` remains the historical T8 gate.
 
 ### T9 — Execute and publish durable schedules
 
@@ -1126,7 +1126,7 @@ Implementation notes:
   RFC 3339 UTC. Occurrence identity is stable from workflow ID, trigger ID, and
   planned UTC instant.
 - `woml run examples/scheduleWorkflow.woml` remains active and reports its next
-  due instant. `bun run test:t9` remains the historical T9 gate.
+  due instant. `bun run test:schedules` remains the historical T9 gate.
 
 ### T10 — Execute and publish durable intervals
 
@@ -1169,7 +1169,7 @@ Implementation notes:
   instant, recovery reason, and safe runtime errors without widening Trigger
   Progress v1.
 - `woml run examples/intervalWorkflow.woml` stays active, needs no HTTP socket,
-  prints its next due instant, and fires every five seconds. `bun run test:t10`
+  prints its next due instant, and fires every five seconds. `bun run test:intervals`
   is the T10 release gate.
 
 ### T11 — Freeze and compile named events
@@ -1225,7 +1225,7 @@ Implementation notes:
 - T11 originally gave an explicit T12 diagnostic instead of opening an inactive
   listener. T12 replaces that staging boundary with the authenticated runtime.
   `examples/eventWorkflow.woml` remains the reviewed T11 contract source, and
-  `bun run test:t11` remains its compiler/contract gate.
+  `bun run test:event-authoring` remains its compiler/contract gate.
 
 ### T12 — Execute event publication and fan-out
 
@@ -1314,7 +1314,7 @@ Implementation notes:
 - `docs/woml-production-triggers.md` is the unified deployment, security,
   state, recovery, migration, and troubleshooting guide. The webhook-specific
   guide remains as focused HTTP material.
-- `bun run test:t13` is the completed milestone gate, and `test:release` now
+- `bun run test:production-triggers` is the completed milestone gate, and `test:release` now
   points to it. The transitive gate rebuilds the package and runs all frontend,
   Rust, isolated CLI, schema, packaging, crash/recovery, contention, and secret
   safety checks.

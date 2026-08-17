@@ -147,7 +147,7 @@ async function delivery(): Promise<DeliverMessage> {
   return await fixture<DeliverMessage>('deliver.v1.json');
 }
 
-describe('N5 real Slack transport', () => {
+describe('Real Slack transport', () => {
   test('ships the reviewed Socket Mode app manifest with the required scopes', async () => {
     const manifest = await Bun.file(
       new URL('../slack/manifest.json', import.meta.url)

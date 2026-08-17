@@ -2,7 +2,7 @@
 
 Status: frozen and executed through SC8 on 2026-08-10. SQLite and PostgreSQL
 share this JavaScript contract. The PostgreSQL driver activation is pinned in
-`database-v1-sc8-activation.md`.
+`database-postgresql-activation-v1.md`.
 
 ## JavaScript surface
 

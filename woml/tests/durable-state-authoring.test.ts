@@ -12,7 +12,7 @@ import {
   WomlDiagnosticError,
 } from '../src';
 
-describe('DS1 Durable User State authoring surface', () => {
+describe('Durable User State authoring surface', () => {
   test('discovers services.state in steps and lifecycle scripts', () => {
     const document = parseWoml(`<woml>
 <workflow id="state-authoring" name="State authoring" version="1.0.0">

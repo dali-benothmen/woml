@@ -18,7 +18,7 @@ import {
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const schemaRoot = resolve(repositoryRoot, 'docs/schemas');
 const fixtureRoot = resolve(import.meta.dir, 'fixtures/communication-providers');
-const fixturePath = resolve(fixtureRoot, 'whatsapp-acp6.woml');
+const fixturePath = resolve(fixtureRoot, 'whatsapp.woml');
 
 function document() {
   return parseWoml(readFileSync(fixturePath, 'utf8'), { file: fixturePath });
@@ -41,7 +41,7 @@ function invalid(source: string): WomlDiagnosticError {
   throw new Error('Expected invalid WhatsApp WOML.');
 }
 
-describe('ACP6 WhatsApp authoring and callback contracts', () => {
+describe('WhatsApp authoring and callback contracts', () => {
   test('lowers trigger, approval, lifecycle, and messaging requirements into Model v15', () => {
     const compiled = compileWoml(document());
     expect(compiled.schemaVersion).toBe(15);
@@ -89,7 +89,7 @@ describe('ACP6 WhatsApp authoring and callback contracts', () => {
 
   test('pins callback handshake and exact raw-byte signature verification', () => {
     const contract = JSON.parse(
-      readFileSync(resolve(fixtureRoot, 'whatsapp-callback-acp6.json'), 'utf8')
+      readFileSync(resolve(fixtureRoot, 'whatsapp-callback.json'), 'utf8')
     );
     expect(WOML_WHATSAPP_CALLBACK_PATH).toBe(contract.route);
     expect(verifyWhatsAppCallbackHandshake(contract.handshake.query, 'synthetic-verify-token')).toEqual({ accepted: true, status: contract.handshake.expectedStatus, body: contract.handshake.expectedBody });

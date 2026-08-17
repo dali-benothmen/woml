@@ -87,7 +87,7 @@ describe('services.workflows.start()', () => {
       .split('\n')
       .find(line => line.includes(' result: {"message"'));
     expect(resultLine).toBeDefined();
-    const parentResult = JSON.parse(resultLine!.split(' result: ', 2)[1]!) as {
+    const parentResult = JSON.parse(resultLine!.split('Result: ', 2)[1]!) as {
       childRunId: string;
     };
 

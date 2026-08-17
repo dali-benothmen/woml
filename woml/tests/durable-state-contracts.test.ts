@@ -24,7 +24,7 @@ async function validator() {
   return ajv;
 }
 
-describe('DS0 frozen Durable User State contracts', () => {
+describe('Frozen Durable User State contracts', () => {
   test('validates every reviewed request, result, identity, metadata, and Store v13 record', async () => {
     const ajv = await validator();
     const contracts = await Bun.file(resolve(fixtureRoot, 'contracts.v1.json')).json();

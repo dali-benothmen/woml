@@ -21,7 +21,7 @@ async function invoke(args: readonly string[]) {
 
 describe('Telegram frontend CLI boundary', () => {
   test('checks tag and imported-module workflows without network access', async () => {
-    for (const name of ['telegram-acp2.woml', 'telegram-module-acp2.woml']) {
+    for (const name of ['telegram.woml', 'telegram-module.woml']) {
       const result = await invoke(['check', resolve(fixtureRoot, name)]);
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
@@ -35,7 +35,7 @@ describe('Telegram frontend CLI boundary', () => {
   test('publishes Model v15 as runtime-ready without contacting Telegram during check', async () => {
     const result = await invoke([
       'check',
-      resolve(fixtureRoot, 'telegram-acp2.woml'),
+      resolve(fixtureRoot, 'telegram.woml'),
       '--json',
     ]);
     expect(result.exitCode).toBe(0);
@@ -47,7 +47,7 @@ describe('Telegram frontend CLI boundary', () => {
   });
 
   test('keeps a local <telegram> provider while the trigger resolves to the built-in', async () => {
-    const path = resolve(fixtureRoot, 'telegram-contextual-alias-acp2.woml');
+    const path = resolve(fixtureRoot, 'telegram-contextual-alias.woml');
     const checked = await invoke(['check', path]);
     expect(checked.exitCode).toBe(0);
     expect(checked.stderr).toContain('WOML_BUILTIN_PROVIDER_SHADOWED');

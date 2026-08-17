@@ -74,7 +74,7 @@ async function contractValidators() {
   return ajv;
 }
 
-describe('LEC0 frozen lifecycle contracts', () => {
+describe('Frozen lifecycle contracts', () => {
   test('validates every reviewed v1/v2/v10/v11 artifact and event fixture', async () => {
     const ajv = await contractValidators();
     const compiled = JSON.parse(source('lifecycle.compiled.v11.json'));
@@ -158,7 +158,7 @@ describe('LEC0 frozen lifecycle contracts', () => {
   });
 });
 
-describe('LEC1 lifecycle frontend', () => {
+describe('Lifecycle frontend', () => {
   test('deep-equals the reviewed Model v11 fixture and keeps hooks outside the DAG', () => {
     const value = source('lifecycle.woml');
     const compiled = compileWoml(parseWoml(value, { file: 'lifecycle.woml' }));

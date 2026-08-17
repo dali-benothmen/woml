@@ -238,7 +238,7 @@ operator contract.
    can influence destinations; the local profile is not an SSRF sandbox.
 10. Monitor readiness, rejection, run-terminal, scheduler, provider, and
     managed-service messages.
-11. Run `bun run test:sc6` from `woml-cli` before publishing a build.
+11. Run `bun run test:http` from `woml-cli` before publishing a build.
 12. When using Workflow Calls across local processes, give every process the
     exact same persistent state path, keep one owner per workflow ID, and apply
     `docs/woml-workflow-calls-production.md`.

@@ -28,7 +28,7 @@ const ajv = new Ajv2020({
 const validatePublication = ajv.compile(publicationSchema);
 const validateHttp = ajv.compile(httpSchema);
 
-describe('T11 Event Publication v1 contracts', () => {
+describe('Event Publication v1 contracts', () => {
   test('accepts every reviewed publish, fan-out, duplicate, and rejection fixture', async () => {
     const names = (await readdir(fixturesDirectory))
       .filter(name => name.endsWith('.json'))

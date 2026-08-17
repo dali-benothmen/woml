@@ -252,7 +252,7 @@ Before deploying a long-lived WOML runtime:
 8. Set retention and backup policy for the event database and its WAL files.
 9. Preserve the exact CLI/core package version across all local processes that
    share one state database.
-10. Run `bun run test:lec8` from `woml-cli` before publishing a build.
+10. Run `bun run test:lifecycle` from `woml-cli` before publishing a build.
 
 Hosted multi-node ownership, remote authenticated run control, cancellation
 propagation, compensation, retention automation, and distributed scheduling

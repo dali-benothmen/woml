@@ -30,7 +30,7 @@ const fixture = (await Bun.file(
   new URL('./fixtures/schedule-semantics.v1.json', import.meta.url)
 ).json()) as ScheduleSemanticsFixture;
 
-describe('T8 WOML Cron v1 semantics', () => {
+describe('WOML Cron v1 semantics', () => {
   test('validates the versioned schedule semantics artifact', async () => {
     const schema = await Bun.file(
       new URL(

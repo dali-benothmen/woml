@@ -109,7 +109,7 @@ async function validators(): Promise<{
   };
 }
 
-describe('T0 production trigger contracts', () => {
+describe('Production trigger contracts', () => {
   test('all reviewed trigger models validate and pin the six handler shapes', async () => {
     const { model } = await validators();
     const fixtureNames = [
@@ -137,7 +137,7 @@ describe('T0 production trigger contracts', () => {
     ]);
   });
 
-  test('T1 compiles the reviewed webhook source exactly to Model v7', async () => {
+  test('Compiles the reviewed webhook source exactly to Model v7', async () => {
     const source = await Bun.file(
       join(fixtureDirectory, 'triggers-webhook.woml')
     ).text();

@@ -86,9 +86,9 @@ function approvalWorkflow(provider: string): string {
 </woml>`;
 }
 
-describe('ACP2 Telegram authoring and lowering', () => {
+describe('Telegram authoring and lowering', () => {
   test('lowers the reviewed complete fixture into Model v15', () => {
-    const compiled = compileWoml(document('telegram-acp2.woml'));
+    const compiled = compileWoml(document('telegram.woml'));
     expect(compiled.schemaVersion).toBe(15);
     if (compiled.schemaVersion !== 15) throw new Error('expected Model v15');
 
@@ -106,7 +106,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
     if (trigger.config.kind !== 'object') throw new Error('expected config');
     const eventExpression = trigger.config.fields.events;
     const tokenExpression = trigger.config.fields.botToken;
-    const expected = json(resolve(fixtureRoot, 'telegram-acp2.expected.json'));
+    const expected = json(resolve(fixtureRoot, 'telegram.expected.json'));
     expect({
       schemaVersion: compiled.schemaVersion,
       trigger: {
@@ -136,7 +136,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
   });
 
   test('discovers services.telegram in imported TypeScript and emits Package v10', async () => {
-    const source = document('telegram-module-acp2.woml');
+    const source = document('telegram-module.woml');
     const definitionPackage = await buildWomlExecutableDefinitionPackage(
       source,
       { sourcePath: source.file, projectRoot: fixtureRoot }
@@ -175,7 +175,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
   });
 
   test('requires imported Telegram messaging to remain rooted in an explicit workflow secret', async () => {
-    const path = resolve(fixtureRoot, 'telegram-module-acp2.woml');
+    const path = resolve(fixtureRoot, 'telegram-module.woml');
     const source = readFileSync(path, 'utf8').replace(
       'secrets.TELEGRAM_BOT_TOKEN',
       'context.payload.botToken'
@@ -196,7 +196,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
   });
 
   test('reserves Discord and WhatsApp requirements in the same frozen Model v15 shape', () => {
-    const base = compileWoml(document('telegram-acp2.woml')) as any;
+    const base = compileWoml(document('telegram.woml')) as any;
     const validate = validators().getSchema(
       'https://woml.dev/schemas/compiled-workflow-model/v15'
     )!;
@@ -253,7 +253,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
   });
 
   test('preserves an explicit local services.telegram alias with a warning', async () => {
-    const source = document('telegram-shadow-acp2.woml');
+    const source = document('telegram-shadow.woml');
     const definitionPackage = await buildWomlExecutableDefinitionPackage(
       source,
       { sourcePath: source.file, projectRoot: fixtureRoot }
@@ -269,7 +269,7 @@ describe('ACP2 Telegram authoring and lowering', () => {
   });
 
   test('resolves built-in Telegram triggers beside a local <telegram> notification provider', async () => {
-    const source = document('telegram-contextual-alias-acp2.woml');
+    const source = document('telegram-contextual-alias.woml');
     const graph = resolveWomlReusableDefinitionGraph(source, {
       sourcePath: source.file,
       projectRoot: fixtureRoot,

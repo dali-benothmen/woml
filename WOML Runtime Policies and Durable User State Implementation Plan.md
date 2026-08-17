@@ -11,7 +11,7 @@ run ingress. `woml run` and `woml test` execute all four Runtime Policy v1
 fields, including workflows that use local modules.
 Runtime Policies are publication-hardened through the clean-package,
 compatibility, adversarial durability, performance-budget, package-audit, and
-secret-scan `bun run test:rp7` gate.
+secret-scan `bun run test:runtime-policies` gate.
 `services.state` is now a published, protected, typed authoring and runtime
 surface in scripts and local modules. Calls execute through the Store v13 Rust
 authority and never fall back to cache or process memory. Runtime Policies and
@@ -940,7 +940,7 @@ Completed implementation:
   `WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE` instead of stripping or ignoring
   policy.
 - `examples/runtimePolicyWorkflow.woml` is the manual RP1 authoring fixture and
-  `bun run test:rp1` is the focused contract/frontend/CLI gate.
+  `bun run test:runtime-policy-authoring` is the focused contract/frontend/CLI gate.
 
 ### RP2 — Build durable Event v11 admission and Store v12 (completed)
 
@@ -1043,7 +1043,7 @@ Completed implementation:
 - Definition Package v7 workflows that combine local modules with Model v12
   remain explicitly gated for the all-ingress/package integration in RP6.
 - `examples/runtimePolicyConcurrencyWorkflow.woml` is the manual RP3 example;
-  `bun run test:rp3` is the focused Rust/frontend/CLI gate.
+  `bun run test:runtime-policy-scheduler` is the focused Rust/frontend/CLI gate.
 
 ### RP4 — Execute rolling-window rate limits (completed)
 
@@ -1075,7 +1075,7 @@ Completion notes (2026-08-12):
   rebuildable authority after restart.
 - Rate waits expose `waitingFor: rate_limit` and an exact `eligibleAt` boundary.
 - `examples/runtimePolicyRateLimitWorkflow.woml` is the manual RP4 example;
-  `bun run test:rp4` is the focused gate.
+  `bun run test:rate-limits` is the focused gate.
 
 ### RP5 — Execute workflow timeouts (completed)
 
@@ -1114,7 +1114,7 @@ Completion notes (2026-08-12):
 - Active Bun work receives cancellation, late success cannot commit, and the
   public failure code is `WOML_WORKFLOW_TIMED_OUT`.
 - `examples/runtimePolicyTimeoutWorkflow.woml` is the manual RP5 example;
-  `bun run test:rp5` is the focused release gate.
+  `bun run test:workflow-timeouts` is the focused release gate.
 
 ### RP6 — Integrate all ingress, controls, and operator surfaces (completed)
 
@@ -1162,7 +1162,7 @@ Completed implementation:
   exact frozen compiled artifacts at activation time; the immutable compilation
   package shape is unchanged.
 - The concurrency, rate-limit, timeout, and mixed-policy examples are the RP6
-  manual suite. `bun run test:rp6` is the integrated release gate.
+  manual suite. `bun run test:runtime-policy-ingress` is the integrated release gate.
 
 ### RP7 — Harden and publish Runtime Policies (completed)
 
@@ -1178,7 +1178,7 @@ Changes:
   recovery, and secret scans.
 - Update language, architecture, triggers, workflow calls, lifecycle, recovery,
   deployment, CLI, and migration documentation.
-- Add one `test:rp7` publication gate.
+- Add one `test:runtime-policies` publication gate.
 
 Result:
 
@@ -1206,10 +1206,10 @@ Completed implementation:
 - The operator guide now connects language syntax, architecture, every trigger,
   Workflow Calls, lifecycle, recovery, webhook deployment, SDK migration, and
   CLI usage to one production contract.
-- `verify-rp7.ts` compiles all schemas, validates historical fixtures, enforces
+- `verify-runtime-policy-release.ts` compiles all schemas, validates historical fixtures, enforces
   benchmark budgets, audits the package allowlist, and scans built artifacts
   for active WOML secrets.
-- `bun run test:rp7` builds and installs the release package, runs frontend/CLI
+- `bun run test:runtime-policies` builds and installs the release package, runs frontend/CLI
   and Rust adversarial suites, checks TypeScript and strict Rust Clippy, then
   runs the publication verifier. The gate passes on 2026-08-12.
 
@@ -1254,7 +1254,7 @@ Completed implementation:
 - Capability Call v1 and Script Host v7 require no shape change: State v1 fits
   their existing versioned generic operation boundary.
 - `docs/protocols/durable-state-v1.md` answers all 14 DS0 review questions, and
-  `bun run test:ds0` is the contract gate. No user value is stored by DS0.
+  `bun run test:durable-state-contracts` is the contract gate. No user value is stored by DS0.
 
 ### DS1 — Add frontend discovery, types, and Bun facade (completed)
 
@@ -1293,7 +1293,7 @@ Completed implementation:
 - Every call is deliberately rejected with
   `WOML_STATE_RUNTIME_UNAVAILABLE` before a capability request is emitted, so
   DS1 cannot accidentally mutate cache, memory, or an undeclared backend.
-- `bun run test:ds1` is the authoring-surface gate.
+- `bun run test:durable-state-authoring` is the authoring-surface gate.
 
 ### DS2 — Build Store v13 transactional state authority (completed)
 
@@ -1339,7 +1339,7 @@ Completed implementation:
   keys, values, workflow/run IDs, and operation identities remain absent.
 - Startup rejects missing or malformed v13 objects, and a failed migration
   rolls back without claiming schema version 13.
-- `bun run test:ds2` is the direct Rust authority and compatibility gate. WOML
+- `bun run test:durable-state-store` is the direct Rust authority and compatibility gate. WOML
   scripts remain deliberately gated until DS3.
 
 ### DS3 — Execute `services.state` end to end (completed)
@@ -1380,7 +1380,7 @@ Completion notes:
   are excluded.
 - `examples/durableStateWorkflow.woml` is the manual product journey: running
   it repeatedly with the same state path returns a growing durable counter.
-- `bun run test:ds3` covers the frozen authoring/authority gates plus real
+- `bun run test:durable-state-runtime` covers the frozen authoring/authority gates plus real
   Bun-to-Rust execution, restart persistence, redaction, retry reattachment,
   branches, parallel children, lifecycle scripts, and imported modules.
 
@@ -1433,7 +1433,7 @@ Completion notes:
 - `docs/woml-durable-state.md` documents contention, cancellation, coherent
   backup/restore, fail-closed corruption, local permissions, and the lack of
   transparent encryption.
-- `bun run test:ds4` composes DS0 through DS3 compatibility with the DS4
+- `bun run test:durable-state-hardening` composes DS0 through DS3 compatibility with the DS4
   concurrency, recovery, corruption, redaction, permissions, and performance
   suite.
 
@@ -1447,7 +1447,7 @@ Changes:
   deployment, CLI, and SDK migration documentation.
 - Add a clear cache-versus-state decision guide.
 - Validate every repository schema together and preserve historical fixtures.
-- Add one `test:ds5` publication gate and a combined milestone release check.
+- Add one `test:durable-state` publication gate and a combined milestone release check.
 
 Result:
 
@@ -1473,11 +1473,11 @@ Completion notes:
   model. Services, cache, storage, database, architecture, recovery, local data
   security, deployment, CLI, language, and SDK migration documents now carry
   the published State v1 boundary.
-- `verify-ds5.ts` compiles every repository schema together, validates Models
+- `verify-durable-state-release.ts` compiles every repository schema together, validates Models
   v1-v12 and Events v1-v11 against historical fixtures, validates all State v1
   fixtures, runs both examples twice, enforces the state benchmark, audits the
   package allowlist, and scans public artifacts for active WOML secrets.
-- `bun run test:ds5` is the State publication gate.
+- `bun run test:durable-state` is the State publication gate.
   `bun run test:runtime-state-release` composes the RP7 Runtime Policies gate
   with DS5, and the repository release command now includes that combined
   milestone check.

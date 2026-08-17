@@ -29,7 +29,7 @@ class FakeTriggerAdapter implements CommunicationTriggerAdapter {
   }
 }
 
-describe('ACP1 communication-provider foundation', () => {
+describe('Communication-provider foundation', () => {
   test('starts adapters in registration order and closes them in reverse order', async () => {
     const events: string[] = [];
     const host = new CommunicationTriggerHost([

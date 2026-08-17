@@ -36,7 +36,7 @@ function workflow(id: string, trigger: string): string {
   return `<woml><workflow id="${id}"><triggers>${trigger}</triggers><steps><step id="done"><script>return { ok: true };</script></step></steps></workflow></woml>`;
 }
 
-describe('PRO1 Runtime Configuration and production preflight', () => {
+describe('Runtime Configuration and production preflight', () => {
   test('applies CLI, reviewed environment, config, and default precedence with relative paths', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'woml-pro1-config-'));
     try {

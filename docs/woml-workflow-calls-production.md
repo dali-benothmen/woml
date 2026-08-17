@@ -97,7 +97,7 @@ fixed latency promise or a pass/fail threshold.
 From `woml-cli`, run:
 
 ```bash
-bun run test:wc7
+bun run test:workflow-calls
 ```
 
 The gate covers the frontend contracts, Bun transport, Rust identity and
@@ -120,5 +120,5 @@ leak checks.
    migration and recovery on a copy.
 6. Monitor both parent and child run IDs; do not infer child cancellation from
    a parent timeout.
-7. Run `bun run test:wc7` and record the benchmark output for the release
+7. Run `bun run test:workflow-calls` and record the benchmark output for the release
    environment.

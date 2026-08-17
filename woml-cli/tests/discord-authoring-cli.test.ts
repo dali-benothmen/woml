@@ -28,7 +28,7 @@ describe('Discord CLI boundary', () => {
   test('checks a complete Discord workflow without contacting Discord', async () => {
     const result = await invoke([
       'check',
-      resolve(fixtureRoot, 'discord-acp4.woml'),
+      resolve(fixtureRoot, 'discord.woml'),
     ]);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
@@ -40,7 +40,7 @@ describe('Discord CLI boundary', () => {
   test('checks imported Discord messaging as executable Model v15', async () => {
     const result = await invoke([
       'check',
-      resolve(fixtureRoot, 'discord-module-acp4.woml'),
+      resolve(fixtureRoot, 'discord-module.woml'),
     ]);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
@@ -51,7 +51,7 @@ describe('Discord CLI boundary', () => {
   test('publishes an executable Discord definition package', async () => {
     const result = await invoke([
       'check',
-      resolve(fixtureRoot, 'discord-module-acp4.woml'),
+      resolve(fixtureRoot, 'discord-module.woml'),
       '--json',
     ]);
     expect(result.exitCode).toBe(0);
@@ -62,7 +62,7 @@ describe('Discord CLI boundary', () => {
   test('keeps a local <discord> provider while the trigger stays built-in', async () => {
     const result = await invoke([
       'check',
-      resolve(fixtureRoot, 'discord-contextual-alias-acp4.woml'),
+      resolve(fixtureRoot, 'discord-contextual-alias.woml'),
     ]);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain('WOML_BUILTIN_PROVIDER_SHADOWED');

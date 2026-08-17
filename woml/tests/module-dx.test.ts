@@ -5,7 +5,7 @@ import {
   withWomlModuleTestRuntime,
 } from '../src';
 
-describe('essential MS6 local module DX', () => {
+describe('Local module DX', () => {
   test('generates self-contained built-in and imported service autocomplete', () => {
     const declarations = generateWomlEditorDeclarations([
       { name: 'spreadsheet', exports: ['read', 'removeEmptyRows'] },

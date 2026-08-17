@@ -5,7 +5,7 @@ import { runCli, type CliIo } from '../src/cli';
 
 const fixture = resolve(
   import.meta.dir,
-  '../../woml/tests/fixtures/communication-providers/whatsapp-acp6.woml'
+  '../../woml/tests/fixtures/communication-providers/whatsapp.woml'
 );
 
 async function invoke(args: readonly string[]) {
@@ -19,7 +19,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('ACP6 WhatsApp CLI boundary', () => {
+describe('WhatsApp CLI boundary', () => {
   test('checks WhatsApp authoring without contacting Meta', async () => {
     const result = await invoke(['check', fixture]);
     expect(result.exitCode).toBe(0);

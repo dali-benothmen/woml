@@ -20,7 +20,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('DS1 Durable User State CLI authoring journey', () => {
+describe('Durable User State CLI authoring journey', () => {
   test('normal woml check generates StateService types without requiring a module', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'woml-ds1-cli-'));
     try {

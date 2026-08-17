@@ -203,7 +203,7 @@ function encodeFrame(message: unknown): Buffer {
   ]);
 }
 
-describe('RI0 retry and idempotency contracts', () => {
+describe('Retry and idempotency contracts', () => {
   test('the CLI strictly decodes every frozen progress message', async () => {
     for (const name of readdirSync(progressFixtureDirectory).sort()) {
       const json = await Bun.file(join(progressFixtureDirectory, name)).text();

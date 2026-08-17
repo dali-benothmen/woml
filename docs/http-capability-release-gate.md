@@ -9,16 +9,16 @@ protocol.
 
 | Boundary | Required behavior | Executable evidence |
 |---|---|---|
-| Before `operation_started` persistence | Do not dispatch the external request; return a safe failure. | `sc2_capability_authority::durable_authority_commits_terminal_event_before_returning_result` proves the authority owns ordering; invalid request/metadata tests stop before registry dispatch. |
-| After persisted start, before or during send | Recovery closes the operation and attempt as `interrupted`, ambiguous, and final. | `sc2_capability_authority::recovery_closes_interrupted_managed_operation_as_ambiguous_before_the_attempt`. |
-| HTTP server disconnects before a response | Return `WOML_HTTP_TRANSPORT_FAILED`; never persist a body or credential. | `sc5_managed_http::managed_http_classifies_timeout_status_and_invalid_json_without_leaking_bodies`. |
-| Handler panics | Convert panic to `handler_crashed`; keep the long-lived authority alive. | `sc2_capability_authority::registry_enforces_results_sizes_cancellation_crashes_and_concurrency`. |
+| Before `operation_started` persistence | Do not dispatch the external request; return a safe failure. | `capability_authority::durable_authority_commits_terminal_event_before_returning_result` proves the authority owns ordering; invalid request/metadata tests stop before registry dispatch. |
+| After persisted start, before or during send | Recovery closes the operation and attempt as `interrupted`, ambiguous, and final. | `capability_authority::recovery_closes_interrupted_managed_operation_as_ambiguous_before_the_attempt`. |
+| HTTP server disconnects before a response | Return `WOML_HTTP_TRANSPORT_FAILED`; never persist a body or credential. | `managed_http::managed_http_classifies_timeout_status_and_invalid_json_without_leaking_bodies`. |
+| Handler panics | Convert panic to `handler_crashed`; keep the long-lived authority alive. | `capability_authority::registry_enforces_results_sizes_cancellation_crashes_and_concurrency`. |
 | Worker crashes or is cancelled with calls active | Emit one terminal invocation outcome, cancel active calls, and discard known late replies. | Script Host tests `Worker crash racing with cancel` and `cancellation drops a known late reply`. |
-| Bun host exits during an attempt | Rust reports `host_crashed`; retry/recovery policy fails closed. | `r3_host`, `ri7_retry_hardening`, and Script Host crash fixtures. |
-| Terminal event persistence | Persist the terminal operation before releasing the result to Bun. | `sc2_capability_authority::durable_authority_commits_terminal_event_before_returning_result`. |
+| Bun host exits during an attempt | Rust reports `host_crashed`; retry/recovery policy fails closed. | `script_host_protocol`, `retry_hardening`, and Script Host crash fixtures. |
+| Terminal event persistence | Persist the terminal operation before releasing the result to Bun. | `capability_authority::durable_authority_commits_terminal_event_before_returning_result`. |
 | Terminal persisted, reply lost | Recovery observes a terminal operation, never dispatches it again, and closes only the interrupted script attempt. | Capability duplicate-correlation and RI7 interrupted-attempt recovery tests. |
-| Process stops after a successful step | Fold the durable result and continue only downstream work. | `r4_durable`, `p7_parallel_recovery`, and CLI native recovery tests. |
-| Oversized/malformed response | Fail with a bounded typed error without exposing the provider body. | `sc5_managed_http` oversized, rejected-status, and invalid-JSON cases. |
+| Process stops after a successful step | Fold the durable result and continue only downstream work. | `durable_event_store`, `parallel_recovery`, and CLI native recovery tests. |
+| Oversized/malformed response | Fail with a bounded typed error without exposing the provider body. | `managed_http` oversized, rejected-status, and invalid-JSON cases. |
 
 The durable authority is deliberately ordered:
 
@@ -49,11 +49,11 @@ same Model v8 script runtime after their control boundary selects a node.
 From `woml-cli`:
 
 ```bash
-bun run test:sc6
+bun run test:http
 bun run benchmark:http
 ```
 
-`test:sc6` includes the transitive T13/N6 gate: clean build, frontend tests,
+`test:http` includes the transitive T13/N6 gate: clean build, frontend tests,
 Rust tests and lint, isolated CLI suites, clean-package execution, crash and
 recovery suites, compatibility checks, type checks, and secret scanning. The
 clean-package test copies and executes `examples/httpComparisonWorkflow.woml`

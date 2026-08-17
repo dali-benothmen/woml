@@ -43,7 +43,7 @@ function nativeDependencies() {
       delete: async () => false,
     }),
     readSecret: async () => {
-      throw new Error('MS3 fixtures have no secrets.');
+      throw new Error('fixtures have no secrets.');
     },
   };
 }
@@ -63,7 +63,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('MS3 module runtime CLI', () => {
+describe('Module runtime CLI', () => {
   test('checks, compiles, and explains a deterministic local module graph', async () => {
     const result = await invoke(['check', workflowPath]);
     expect(result.exitCode).toBe(0);
@@ -213,7 +213,7 @@ describe('MS3 module runtime CLI', () => {
   );
 });
 
-describe('MS4 module recovery and composition', () => {
+describe('Module recovery and composition', () => {
   nativeTest(
     'composes modules with branch, parallel, retry, and later references',
     async () => {
@@ -412,7 +412,7 @@ export function retry(attempt) {
   });
 });
 
-describe('essential MS6 module authoring DX', () => {
+describe('Local module authoring DX', () => {
   nativeTest('normal woml run refreshes editor types automatically', async () => {
     const directory = await mkdtemp(resolve(tmpdir(), 'woml-ms6-run-types-'));
     const womlPath = resolve(directory, 'workflow.woml');

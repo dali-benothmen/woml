@@ -73,8 +73,8 @@ function completions(
   );
 }
 
-describe('N4 notification provider host', () => {
-  test('LEC5 v2 sends informational messages without approval capabilities', async () => {
+describe('Notification provider host', () => {
+  test('Notification Provider v2 sends informational messages without approval capabilities', async () => {
     const sent: NotificationProviderOutbound[] = [];
     const interactions: InteractionMessage[] = [];
     const transport = new FakeSlackTransport({

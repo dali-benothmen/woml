@@ -144,7 +144,7 @@ function accepted(
   };
 }
 
-describe('T7 Slack trigger host', () => {
+describe('Slack trigger host', () => {
   test('waits for durable admission before acknowledging and preserves the normalized payload', async () => {
     const sockets: MockSocket[] = [];
     const messages: SlackTriggerProtocolMessage[] = [];

@@ -47,7 +47,7 @@ function validWorkflow(
 }
 
 describe('compileWoml', () => {
-  test('A2 lowers the reviewed approval fixture exactly to model v4', () => {
+  test('Lowers the reviewed approval fixture exactly to model v4', () => {
     const source = readFileSync(
       new URL('./fixtures/approval.woml', import.meta.url),
       'utf8'
@@ -648,7 +648,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('RI1 lowers the reviewed retry fixture exactly to model v6', () => {
+  test('Lowers the reviewed retry fixture exactly to model v6', () => {
     const source = readFileSync(
       new URL('./fixtures/retry.woml', import.meta.url),
       'utf8'
@@ -1184,7 +1184,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T1 accepts multiple manual triggers with order-independent workflow sections', () => {
+  test('Accepts multiple manual triggers with order-independent workflow sections', () => {
     const multipleManual = `<woml>
 <workflow version="1.0.0" id="test-workflow">
   <triggers><manual id="first" /><manual id="second" /></triggers>
@@ -1209,7 +1209,7 @@ describe('compileWoml', () => {
     expect(reordered.graph.nodes.map(node => node.id)).toEqual(['a']);
   });
 
-  test('T1 lowers the reviewed manual and webhook fixture exactly to Model v7', () => {
+  test('Lowers the reviewed manual and webhook fixture exactly to Model v7', () => {
     const source = readFileSync(
       new URL('./fixtures/triggers-webhook.woml', import.meta.url),
       'utf8'
@@ -1233,7 +1233,7 @@ describe('compileWoml', () => {
     });
   });
 
-  test('T1 applies webhook defaults and explicit unauthenticated intent', () => {
+  test('Applies webhook defaults and explicit unauthenticated intent', () => {
     const source = `<woml>
 <workflow id="public-hook">
   <triggers>
@@ -1263,7 +1263,7 @@ describe('compileWoml', () => {
     ]);
   });
 
-  test('T1 reports webhook path, method, auth, and duplicate IDs at their source', () => {
+  test('Reports webhook path, method, auth, and duplicate IDs at their source', () => {
     const webhookWorkflow = (markup: string) => `<woml>
 <workflow id="hook-errors">
   <triggers>${markup}</triggers>
@@ -1312,7 +1312,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T1 validates inline webhook JSON Schema without guessing bad input', () => {
+  test('Validates inline webhook JSON Schema without guessing bad input', () => {
     const withSchema = (schema: string) => `<woml>
 <workflow id="schema-hook">
   <triggers>
@@ -1358,7 +1358,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T6 lowers the reviewed Slack trigger fixture exactly to Model v7', () => {
+  test('Lowers the reviewed Slack trigger fixture exactly to Model v7', () => {
     const source = readFileSync(
       new URL('./fixtures/triggers-slack.woml', import.meta.url),
       'utf8'
@@ -1375,7 +1375,7 @@ describe('compileWoml', () => {
     expect(compiled.schemaVersion).toBe(7);
   });
 
-  test('T6 accepts an omitted Slack channel filter as all visible channels', () => {
+  test('Accepts an omitted Slack channel filter as all visible channels', () => {
     const source = `<woml>
 <workflow id="slack-all-channels">
   <triggers>
@@ -1399,7 +1399,7 @@ describe('compileWoml', () => {
     });
   });
 
-  test('T6 reports malformed Slack events and channel filters at their source', () => {
+  test('Reports malformed Slack events and channel filters at their source', () => {
     const slackWorkflow = (attributes: string) => `<woml>
 <workflow id="slack-errors">
   <triggers><slack id="message" ${attributes} bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" /></triggers>
@@ -1461,7 +1461,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T6 keeps notification-only and trigger-only Slack attributes separate', () => {
+  test('Keeps notification-only and trigger-only Slack attributes separate', () => {
     const source = validWorkflow(`<approval id="review">
       <notify><slack id="triggerOnly" events="app-mention" channels="#approvals" bot-token="{{secrets.SLACK_BOT_TOKEN}}" app-token="{{secrets.SLACK_APP_TOKEN}}" /></notify>
       <when-approved></when-approved><when-rejected></when-rejected>
@@ -1471,7 +1471,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T8 lowers the reviewed schedule fixture exactly to Model v7', () => {
+  test('Lowers the reviewed schedule fixture exactly to Model v7', () => {
     const source = readFileSync(
       new URL('./fixtures/triggers-schedule.woml', import.meta.url),
       'utf8'
@@ -1489,7 +1489,7 @@ describe('compileWoml', () => {
     expect(compile(source)).toEqual(expected);
   });
 
-  test('T8 applies UTC, skip, and cron-step defaults deterministically', () => {
+  test('Applies UTC, skip, and cron-step defaults deterministically', () => {
     const source = `<woml>
 <workflow id="schedule-defaults">
   <triggers><schedule id="everySixHours" cron="0 */6 * * *" /></triggers>
@@ -1511,7 +1511,7 @@ describe('compileWoml', () => {
     });
   });
 
-  test('T8 reports cron, timezone, misfire, and structure errors at their source', () => {
+  test('Reports cron, timezone, misfire, and structure errors at their source', () => {
     const scheduleWorkflow = (attributes: string, body = '') =>
       `<woml>
 <workflow id="schedule-errors">
@@ -1554,7 +1554,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T10 lowers the reviewed interval fixture exactly to Model v7', () => {
+  test('Lowers the reviewed interval fixture exactly to Model v7', () => {
     const source = readFileSync(
       new URL('./fixtures/triggers-interval.woml', import.meta.url),
       'utf8'
@@ -1571,7 +1571,7 @@ describe('compileWoml', () => {
     expect(compile(source)).toEqual(expected);
   });
 
-  test('T10 validates the fixed-rate duration bounds and defaults', () => {
+  test('Validates the fixed-rate duration bounds and defaults', () => {
     const interval = (attributes: string) => `<woml>
 <workflow id="interval-errors">
   <triggers><interval id="refresh" ${attributes} /></triggers>
@@ -1603,7 +1603,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('T11 lowers the reviewed named-event fixture exactly to Model v7', () => {
+  test('Lowers the reviewed named-event fixture exactly to Model v7', () => {
     const source = readFileSync(
       new URL('./fixtures/triggers-event.woml', import.meta.url),
       'utf8'
@@ -1617,7 +1617,7 @@ describe('compileWoml', () => {
     expect(compile(source)).toEqual(expected);
   });
 
-  test('T11 accepts an event without a schema and pins the name grammar', () => {
+  test('Accepts an event without a schema and pins the name grammar', () => {
     const event = (name: string) => `<woml>
 <workflow id="event-errors">
   <triggers><event id="message" name="${name}" secret="{{secrets.EVENT_CONTROL_TOKEN}}" /></triggers>
@@ -1654,7 +1654,7 @@ describe('compileWoml', () => {
     }
   });
 
-  test('T11 validates event schema JSON, Draft 2020-12, and structure', () => {
+  test('Validates event schema JSON, Draft 2020-12, and structure', () => {
     const event = (children: string) => `<woml>
 <workflow id="event-schema-errors">
   <triggers><event id="message" name="message.received" secret="{{secrets.EVENT_CONTROL_TOKEN}}">${children}</event></triggers>
@@ -1677,7 +1677,7 @@ describe('compileWoml', () => {
     );
   });
 
-  test('SC11 allows internal-only events and validates optional public publisher secrets', () => {
+  test('Allows internal-only events and validates optional public publisher secrets', () => {
     const source = (secret: string) => `<woml>
 <workflow id="event-secret-errors">
   <triggers><event id="message" name="message.received"${secret} /></triggers>

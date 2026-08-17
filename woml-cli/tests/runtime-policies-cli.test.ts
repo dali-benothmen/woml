@@ -39,7 +39,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('RP6 integrated runtime-policy CLI boundary', () => {
+describe('Integrated runtime-policy CLI boundary', () => {
   test('woml check accepts config and reports the executable policy set', async () => {
     const result = await invoke([
       'check',

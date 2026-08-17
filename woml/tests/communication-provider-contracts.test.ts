@@ -50,7 +50,7 @@ function expectValid(
   expect(validate(value), JSON.stringify(validate.errors)).toBe(true);
 }
 
-describe('ACP0 frozen communication-provider contracts', () => {
+describe('Frozen communication-provider contracts', () => {
   test('validates every reviewed provider-neutral artifact', () => {
     const ajv = validators();
     const payloads = fixture('payloads.v1.json');

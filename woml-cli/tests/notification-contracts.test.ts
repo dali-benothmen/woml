@@ -81,8 +81,8 @@ function errors(validator: ValidateFunction): string {
   return JSON.stringify(validator.errors, null, 2);
 }
 
-describe('Slack notification N0 contracts', () => {
-  test('pins the secret-safe N6.1 journey diagnostic envelope', async () => {
+describe('Slack notification contracts', () => {
+  test('Pins the secret-safe journey diagnostic envelope', async () => {
     const { diagnostics } = await validators();
     const value = {
       version: 1,

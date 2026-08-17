@@ -151,7 +151,7 @@ alternative.
 Run from `woml-cli`:
 
 ```bash
-bun run test:pro6
+bun run test:runtime-inspector
 ```
 
 The gate composes PRO5 and validates golden snapshots/logs/metrics, schemas,

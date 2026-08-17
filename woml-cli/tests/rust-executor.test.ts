@@ -130,7 +130,7 @@ const resultLimitedHostPath = resolve(
 const nativeTest = nativeCorePath === undefined ? test.skip : test;
 
 describe('Trigger Progress v1 decoding', () => {
-  test('accepts every frozen T4 progress fixture', async () => {
+  test('Accepts every frozen progress fixture', async () => {
     const directory = resolve(
       packageRoot,
       '../woml/tests/fixtures/trigger-contracts'
@@ -782,7 +782,7 @@ describe('Rust to Bun workflow execution', () => {
   );
 
   nativeTest(
-    'LEC4 observes selected branch and parallel steps once across retries',
+    'observes selected branch and parallel steps once across retries',
     async () => {
       const directory = await mkdtemp(
         join(tmpdir(), 'woml-lec4-control-flow-')
@@ -827,7 +827,7 @@ describe('Rust to Bun workflow execution', () => {
   );
 
   nativeTest(
-    'LEC4 drains step hooks across approval pause and resume',
+    'drains step hooks across approval pause and resume',
     async () => {
       const directory = await mkdtemp(join(tmpdir(), 'woml-lec4-approval-'));
       const database = join(directory, 'state.sqlite');

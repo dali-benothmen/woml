@@ -23,7 +23,7 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('WC3 Workflow Calls CLI boundary', () => {
+describe('Workflow Calls CLI boundary', () => {
   test('checks a call-only workflow without manufacturing a trigger', async () => {
     const result = await invoke([
       'check',

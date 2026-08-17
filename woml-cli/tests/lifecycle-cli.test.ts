@@ -23,8 +23,8 @@ async function invoke(args: readonly string[]) {
   return { exitCode, stdout, stderr };
 }
 
-describe('LEC5 lifecycle CLI admission', () => {
-  test('LEC4 progress identifies the observed step', () => {
+describe('Lifecycle CLI admission', () => {
+  test('Progress identifies the observed step', () => {
     expect(
       formatExecutionProgress({
         profile: 'woml.lifecycle-progress/v1',
