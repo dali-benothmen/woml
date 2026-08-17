@@ -76,7 +76,11 @@ export async function verifyNativeExports(
 
     return actual.length;
   } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    try {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    } catch {
+      // Windows holds file locks on loaded native addons after dlopen
+    }
   }
 }
 

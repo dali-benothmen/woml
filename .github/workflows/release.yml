@@ -199,7 +199,7 @@ jobs:
       - name: Build the isolated WOML native adapter
         shell: bash
         env:
-          RUSTFLAGS: ${{ matrix.musl && '-C target-feature=-crt-static' || '' }}
+          RUSTFLAGS: ''
         run: >-
           cargo build -j 1 --release --locked
           --manifest-path core/woml-native/Cargo.toml
