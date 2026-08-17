@@ -11,7 +11,7 @@ import {
   parseWoml,
   type CompiledWorkflowDefinition,
   type WomlSourceElement,
-} from 'woml';
+} from '@woml/compiler';
 
 type JsonObject = Record<string, unknown>;
 

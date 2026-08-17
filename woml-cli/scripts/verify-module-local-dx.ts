@@ -7,7 +7,7 @@ import {
   generateWomlEditorDeclarations,
   inspectWomlModuleUsage,
   parseWoml,
-} from 'woml';
+} from '@woml/compiler';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const fixture = resolve(

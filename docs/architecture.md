@@ -130,7 +130,7 @@ adapter through one exact-version optional `@woml/cli-<target>` package. The
 loader prefers a colocated development binary, then resolves the current
 macOS, Windows, or Linux glibc/musl package. The tag release matrix builds and
 load-tests eight x64/ARM64 targets from `woml-native`, publishes native packages
-first, and publishes `woml-cli` only after the complete set is verified.
+first, and publishes the `woml` package only after the complete set is verified.
 
 This separation is enforced rather than documented by convention. The
 `test:architecture-separation` gate rejects a restored chaining SDK or retired

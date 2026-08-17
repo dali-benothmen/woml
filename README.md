@@ -10,7 +10,7 @@ triggers, workflow calls, lifecycle, and runtime policy.
 Install Bun 1.3.14 or later, then install the CLI:
 
 ```bash
-bun add --global woml-cli
+bun add --global woml
 ```
 
 Confirm the installation:
@@ -103,8 +103,9 @@ contracts. It never parses XML or owns editor syntax.
 
 ## Development
 
-The active product packages are `woml`, `woml-cli`, `core/woml-engine`, and
-`core/woml-native`. Install and run package commands from `woml-cli`:
+The public package is `woml`; its private compiler lives in the `woml/`
+directory as `@woml/compiler`. Runtime development commands remain in the
+`woml-cli/` directory alongside `core/woml-engine` and `core/woml-native`:
 
 ```bash
 cd woml-cli

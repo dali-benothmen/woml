@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { buildWomlRuntimeDefinitionPackage, parseWoml } from 'woml';
+import { buildWomlRuntimeDefinitionPackage, parseWoml } from '@woml/compiler';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const fixtureRoot = resolve(repositoryRoot, 'woml/tests/fixtures/modules');

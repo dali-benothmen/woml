@@ -1,4 +1,4 @@
-import type { CompiledWorkflowDefinition, ValueExpression } from 'woml';
+import type { CompiledWorkflowDefinition, ValueExpression } from '@woml/compiler';
 
 import type { TelegramTriggerRegistration } from './types';
 

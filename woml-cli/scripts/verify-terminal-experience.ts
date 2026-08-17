@@ -4,7 +4,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { compileWoml, parseWoml } from 'woml';
+import { compileWoml, parseWoml } from '@woml/compiler';
 
 const rootPath = fileURLToPath(new URL('../../', import.meta.url));
 

@@ -339,7 +339,7 @@ async function assertCleanPackage(root: string): Promise<void> {
       );
     }
 
-    const installedRoot = join(consumer, 'node_modules/woml-cli');
+    const installedRoot = join(consumer, 'node_modules/woml');
     const installedManifest = JSON.parse(
       await readFile(join(installedRoot, 'package.json'), 'utf8')
     ) as Readonly<Record<string, unknown>>;

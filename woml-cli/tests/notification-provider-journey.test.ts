@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { compileWoml, parseWoml } from 'woml';
+import { compileWoml, parseWoml } from '@woml/compiler';
 import {
   executeApprovalWorkflowWithRust,
   NotificationProviderError,

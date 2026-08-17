@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { compileWoml, parseWoml, type CompiledWorkflowDefinition } from 'woml';
+import { compileWoml, parseWoml, type CompiledWorkflowDefinition } from '@woml/compiler';
 import {
   compiledDefinitionHash,
   executeApprovalWorkflowWithRust,

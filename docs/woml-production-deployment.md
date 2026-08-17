@@ -45,14 +45,14 @@ the supervisor and must own the actual runtime process.
 Build the reference image from `examples/production`:
 
 ```bash
-docker build -f deployment/Dockerfile -t my-woml:0.1.0 .
+docker build -f deployment/Dockerfile -t my-woml:1.0.0 .
 docker run --name woml --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
   -v woml-data:/app/data \
   -v /secure/woml-secrets:/run/secrets/woml:ro \
   -e WOML_SECRETS_PROVIDER=files \
   -e WOML_SECRETS_DIRECTORY=/run/secrets/woml \
-  my-woml:0.1.0
+  my-woml:1.0.0
 ```
 
 Pin both the Bun image and WOML version. The image runs as a non-root user and

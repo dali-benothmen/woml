@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import {
   buildWomlExecutableDefinitionPackage,
   parseWoml,
-} from 'woml';
+} from '@woml/compiler';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const fixtureRoot = resolve(repositoryRoot, 'woml/tests/fixtures/modules');

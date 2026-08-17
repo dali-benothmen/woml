@@ -8,7 +8,7 @@ import {
   compileWoml,
   parseWoml,
   type CompiledWorkflowDefinition,
-} from 'woml';
+} from '@woml/compiler';
 
 import {
   executeWorkflowWithRustDurable,

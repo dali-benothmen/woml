@@ -26,6 +26,7 @@ const cliRoot = resolve(repositoryRoot, 'woml-cli');
 interface PackageMetadata {
   readonly name: string;
   readonly version: string;
+  readonly private?: boolean;
   readonly description: string;
   readonly license: string;
   readonly repository: Readonly<Record<string, string>>;
@@ -43,23 +44,62 @@ async function sourceMetadata(): Promise<PackageMetadata> {
   ) as PackageMetadata;
 }
 
-async function verifySourceVersions(metadata: PackageMetadata): Promise<void> {
+function cargoPackageVersion(manifest: string, packageName: string): string | undefined {
+  const packageSection = manifest.match(/\[package\]([\s\S]*?)(?=\n\[|$)/u)?.[1];
+  if (
+    packageSection?.match(/^name\s*=\s*"([^"]+)"\s*$/mu)?.[1] !== packageName
+  ) {
+    return undefined;
+  }
+  return packageSection.match(/^version\s*=\s*"([^"]+)"\s*$/mu)?.[1];
+}
+
+export async function verifySourceReleaseIdentity(
+  metadata?: PackageMetadata,
+): Promise<void> {
+  const releaseMetadata = metadata ?? (await sourceMetadata());
   const frontend = JSON.parse(
     await readFile(resolve(repositoryRoot, 'woml/package.json'), 'utf8'),
-  ) as { readonly version?: string };
+  ) as PackageMetadata;
+  const root = JSON.parse(
+    await readFile(resolve(repositoryRoot, 'package.json'), 'utf8'),
+  ) as PackageMetadata;
+  const extension = JSON.parse(
+    await readFile(resolve(repositoryRoot, 'woml-vscode/package.json'), 'utf8'),
+  ) as PackageMetadata;
   const nativeManifest = await readFile(
     resolve(repositoryRoot, 'core/woml-native/Cargo.toml'),
     'utf8',
   );
-  const nativeVersion = nativeManifest.match(
-    /^version\s*=\s*"([^"]+)"\s*$/mu,
-  )?.[1];
+  const engineManifest = await readFile(
+    resolve(repositoryRoot, 'core/woml-engine/Cargo.toml'),
+    'utf8',
+  );
+  const nativeVersion = cargoPackageVersion(nativeManifest, 'woml-native');
+  const engineVersion = cargoPackageVersion(engineManifest, 'woml-engine');
   if (
-    frontend.version !== metadata.version ||
-    nativeVersion !== metadata.version
+    releaseMetadata.name !== 'woml' ||
+    releaseMetadata.private !== false ||
+    releaseMetadata.bin?.woml !== './dist/cli.js' ||
+    frontend.name !== '@woml/compiler' ||
+    frontend.private !== true ||
+    root.name !== 'woml-repository' ||
+    root.private !== true ||
+    extension.name !== 'woml-language'
   ) {
     throw new Error(
-      `Release versions must match: woml-cli=${metadata.version}, woml=${String(frontend.version)}, woml-native=${String(nativeVersion)}.`,
+      'Release package identities must be public woml, private @woml/compiler, private woml-repository, and woml-language.',
+    );
+  }
+  if (
+    frontend.version !== releaseMetadata.version ||
+    root.version !== releaseMetadata.version ||
+    extension.version !== releaseMetadata.version ||
+    nativeVersion !== releaseMetadata.version ||
+    engineVersion !== releaseMetadata.version
+  ) {
+    throw new Error(
+      `Release versions must match: woml=${releaseMetadata.version}, @woml/compiler=${String(frontend.version)}, woml-repository=${String(root.version)}, woml-language=${String(extension.version)}, woml-native=${String(nativeVersion)}, woml-engine=${String(engineVersion)}.`,
     );
   }
 }
@@ -93,6 +133,7 @@ export async function createPlatformPackage(
   output: string,
 ): Promise<void> {
   const metadata = await sourceMetadata();
+  await verifySourceReleaseIdentity(metadata);
   const spec = womlNativeTargetSpecs[target];
   const binary = nativePackageBinaryName(target);
   if ((await stat(artifact)).size === 0) {
@@ -105,7 +146,7 @@ export async function createPlatformPackage(
   ]);
   await writeFile(
     resolve(output, 'README.md'),
-    `# ${nativePackageName(target)}\n\nNative WOML execution engine for ${target}. This package is installed automatically by \`woml-cli\`; do not install it directly.\n`,
+    `# ${nativePackageName(target)}\n\nNative WOML execution engine for ${target}. This package is installed automatically by \`woml\`; do not install it directly.\n`,
   );
   await writeFile(
     resolve(output, 'package.json'),
@@ -134,6 +175,7 @@ export async function createPlatformPackage(
 
 export async function prepareMainPackage(output: string): Promise<void> {
   const metadata = await sourceMetadata();
+  await verifySourceReleaseIdentity(metadata);
   await resetDirectory(output);
   const sourceDist = resolve(cliRoot, 'dist');
   const outputDist = resolve(output, 'dist');
@@ -173,10 +215,10 @@ export async function prepareMainPackage(output: string): Promise<void> {
   );
 }
 
-function exactTag(version: string, tag: string): void {
+export function verifyReleaseTag(version: string, tag: string): void {
   if (tag !== `v${version}`) {
     throw new Error(
-      `Release tag ${JSON.stringify(tag)} must exactly match woml-cli version v${version}.`,
+      `Release tag ${JSON.stringify(tag)} must exactly match woml version v${version}.`,
     );
   }
 }
@@ -191,19 +233,20 @@ export async function verifyCollectedRelease(
   tag: string,
 ): Promise<void> {
   const metadata = await sourceMetadata();
-  exactTag(metadata.version, tag);
+  await verifySourceReleaseIdentity(metadata);
+  verifyReleaseTag(metadata.version, tag);
   const main = JSON.parse(
     await readFile(resolve(mainRoot, 'package.json'), 'utf8'),
   ) as PackageMetadata & {
     readonly optionalDependencies?: Readonly<Record<string, string>>;
   };
   if (
-    main.name !== 'woml-cli' ||
+    main.name !== 'woml' ||
     main.version !== metadata.version ||
     JSON.stringify(main.optionalDependencies) !==
       JSON.stringify(optionalNativeDependencies(metadata.version))
   ) {
-    throw new Error('The staged woml-cli manifest has an invalid native package set.');
+    throw new Error('The staged woml manifest has an invalid native package set.');
   }
   await Promise.all([
     assertFile(resolve(mainRoot, 'LICENSE')),
@@ -262,8 +305,8 @@ async function main(): Promise<void> {
   const command = process.argv[2];
   if (command === 'verify-tag') {
     const metadata = await sourceMetadata();
-    await verifySourceVersions(metadata);
-    exactTag(metadata.version, requiredOption('--tag'));
+    await verifySourceReleaseIdentity(metadata);
+    verifyReleaseTag(metadata.version, requiredOption('--tag'));
     return;
   }
   if (command === 'package-platform') {

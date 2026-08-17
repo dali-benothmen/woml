@@ -71,7 +71,7 @@ describe('communication-provider clean package', () => {
     });
     expect(installed.exitCode, installed.stderr.toString()).toBe(0);
 
-    const installedRoot = join(consumer, 'node_modules/woml-cli');
+    const installedRoot = join(consumer, 'node_modules/woml');
     for (const artifact of [
       'dist/cli.js',
       'dist/script-host.js',
@@ -96,7 +96,7 @@ describe('communication-provider clean package', () => {
     const runner = join(consumer, 'provider-host-runner.mjs');
     await writeFile(
       runner,
-      `import { runNotificationProviderHost } from './node_modules/woml-cli/dist/notification-provider-host.js';\nawait runNotificationProviderHost({ adapter: 'fake' });\n`
+      `import { runNotificationProviderHost } from './node_modules/woml/dist/notification-provider-host.js';\nawait runNotificationProviderHost({ adapter: 'fake' });\n`
     );
     const invocation = await Bun.file(
       resolve(packageRoot, 'tests/fixtures/notification-provider/deliver.v1.json')

@@ -145,7 +145,7 @@ describe('Packaged Workflow Calls release journey', () => {
         join(
           consumerDirectory,
           'node_modules',
-          'woml-cli',
+          'woml',
           'dist',
           `woml-core.${process.platform}-${process.arch}.node`
         )
@@ -156,7 +156,7 @@ describe('Packaged Workflow Calls release journey', () => {
         join(
           consumerDirectory,
           'node_modules',
-          'woml-cli',
+          'woml',
           'dist',
           'script-host.js'
         )

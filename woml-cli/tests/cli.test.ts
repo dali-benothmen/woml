@@ -1077,7 +1077,7 @@ describe('woml test one-shot compatibility', () => {
         join(
           consumerDirectory,
           'node_modules',
-          'woml-cli',
+          'woml',
           'dist',
           `woml-core.${process.platform}-${process.arch}.node`
         )
@@ -1088,7 +1088,7 @@ describe('woml test one-shot compatibility', () => {
         join(
           consumerDirectory,
           'node_modules',
-          'woml-cli',
+          'woml',
           'dist',
           'notification-provider-host.js'
         )
@@ -1099,7 +1099,7 @@ describe('woml test one-shot compatibility', () => {
         join(
           consumerDirectory,
           'node_modules',
-          'woml-cli',
+          'woml',
           'slack',
           'manifest.json'
         )

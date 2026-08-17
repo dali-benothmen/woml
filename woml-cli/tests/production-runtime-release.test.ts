@@ -141,7 +141,7 @@ describe('Clean package and server release', () => {
 
     const installedPackage = join(
       consumerDirectory,
-      'node_modules/woml-cli'
+      'node_modules/woml'
     );
     const installedFiles = await filesBelow(installedPackage);
     const relativeFiles = installedFiles.map(path => relative(installedPackage, path));

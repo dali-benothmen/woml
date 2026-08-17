@@ -1,6 +1,6 @@
 {
-  "name": "woml-cli",
-  "version": "0.1.0",
+  "name": "woml",
+  "version": "1.0.0",
   "private": false,
   "description": "WOML workflow automation runtime and command-line interface",
   "license": "Apache-2.0",
@@ -111,7 +111,7 @@
     "test:cache-engine": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine cache::tests --lib && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test cache",
     "test:events-engine": "cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test events_service --test event_runtime",
     "test:postgres-engine": "cargo test --manifest-path ../core/Cargo.toml -p woml-engine --test database_postgres",
-    "test:release": "bun run test:architecture-separation && bun run test:native-release-boundary && bun run test:native-platform-release && bun run test:services && bun run test:module-compilation && bun run test:module-runtime && bun run test:module-recovery && bun run test:module-local-dx && bun run test:workflow-calls && bun run test:lifecycle && bun run test:runtime-state-release && bun run test:runtime-inspector && bun run test:backup-restore && bun run test:retention && bun run test:production-runtime && bun run test:fork-branch && bun run test:reusable-release",
+    "test:release": "bun run test:release-identity && bun run test:architecture-separation && bun run test:native-release-boundary && bun run test:native-platform-release && bun run test:services && bun run test:module-compilation && bun run test:module-runtime && bun run test:module-recovery && bun run test:module-local-dx && bun run test:workflow-calls && bun run test:lifecycle && bun run test:runtime-state-release && bun run test:runtime-inspector && bun run test:backup-restore && bun run test:retention && bun run test:production-runtime && bun run test:fork-branch && bun run test:reusable-release",
     "benchmark:http": "bun scripts/benchmark-http.ts",
     "benchmark:workflow-calls": "bun scripts/benchmark-workflow-calls.ts",
     "benchmark:lifecycle": "bun scripts/benchmark-lifecycle.ts",
@@ -138,6 +138,7 @@
     "verify:native-release-boundary": "bun scripts/verify-native-release-boundary.ts",
     "test:native-platform-release": "bun test tests/native-platform-release.test.ts && bun scripts/verify-native-platform-release.ts && bun run typecheck",
     "verify:native-platform-release": "bun scripts/verify-native-platform-release.ts",
+    "test:release-identity": "bun test tests/release-identity.test.ts && bun run typecheck",
     "test:architecture-separation": "bun run build && cargo test -j 1 --locked --release --manifest-path ../core/woml-native/Cargo.toml --test separation && bun test tests/architecture-separation.test.ts && bun scripts/verify-architecture-separation.ts && bun run typecheck",
     "verify:architecture-separation": "bun scripts/verify-architecture-separation.ts",
     "test:communication-provider-contracts": "bun test ../woml/tests/communication-provider-contracts.test.ts && cargo test --config profile.dev.debug=0 --config profile.dev.incremental=false -j 1 --manifest-path ../core/Cargo.toml -p woml-engine --test communication_provider_contracts",
@@ -160,6 +161,6 @@
     "ajv": "8.17.1",
     "ajv-formats": "3.0.1",
     "typescript": "7.0.2",
-    "woml": "file:../woml"
+    "@woml/compiler": "file:../woml"
   }
 }

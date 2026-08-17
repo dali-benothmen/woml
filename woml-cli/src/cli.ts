@@ -49,7 +49,7 @@ import {
   type WomlDefinitionPackageV7,
   type WomlDefinitionPackageV9,
   type WomlDefinitionPackageV10,
-} from 'woml';
+} from '@woml/compiler';
 import {
   compiledDefinitionHash,
   executeApprovalWorkflowWithRust,

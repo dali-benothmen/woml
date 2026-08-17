@@ -44,7 +44,7 @@ jobs:
           bun run typecheck
 
   build-main:
-    name: Build woml-cli
+    name: Build woml
     runs-on: ubuntu-24.04
     needs: validate
     steps:
@@ -238,13 +238,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish woml-cli
+      - name: Publish woml
         shell: bash
         run: |
           set -euo pipefail
           version=$(node -p "require('./release/main/package.json').version")
-          if npm view "woml-cli@${version}" version >/dev/null 2>&1; then
-            echo "Skipping woml-cli@${version}; it is already published."
+          if npm view "woml@${version}" version >/dev/null 2>&1; then
+            echo "Skipping woml@${version}; it is already published."
           else
             npm publish release/main --access public --provenance
           fi

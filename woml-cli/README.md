@@ -6,7 +6,7 @@ Rust core, and runs embedded JavaScript in isolated Bun Workers.
 Install the published CLI with Bun 1.3.14 or later:
 
 ```bash
-bun add --global woml-cli
+bun add --global woml
 ```
 
 Production Runtime v1 is the supported continuous single-machine profile. See

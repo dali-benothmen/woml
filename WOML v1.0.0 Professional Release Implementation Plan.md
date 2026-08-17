@@ -1,6 +1,6 @@
 # WOML v1.0.0 Professional Release Implementation Plan
 
-Status: V1R0 through V1R2 completed on 2026-08-17. V1R3 through V1R9 are planned. No npm
+Status: V1R0 through V1R3 completed on 2026-08-17. V1R4 through V1R9 are planned. No npm
 package has been published by this plan. Publishing is the final gated phase
 and will be performed only with the product owner present.
 
@@ -294,6 +294,9 @@ Gate:
   databases.
 
 ### V1R3 — Finalize package, repository, and version identity
+
+Status: completed on 2026-08-17. The GitHub repository rename and local
+`origin` cutover remain an owner-controlled prerequisite before V1R9.
 
 Changes:
 

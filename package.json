@@ -1,6 +1,6 @@
 {
   "name": "woml-repository",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "WOML workflow automation monorepo",
   "license": "Apache-2.0",
@@ -12,6 +12,7 @@
     "build": "bun run --cwd woml-cli build",
     "test": "bun run --cwd woml-cli test",
     "typecheck": "bun run --cwd woml-cli typecheck",
+    "test:identity": "bun run --cwd woml-cli test:release-identity",
     "test:architecture": "bun run --cwd woml-cli test:architecture-separation",
     "test:release": "bun run --cwd woml-cli test:release"
   }

@@ -1,4 +1,4 @@
-import { isValidSecretName } from 'woml';
+import { isValidSecretName } from '@woml/compiler';
 
 import {
   INFORMATIONAL_NOTIFICATION_PROVIDER_PROTOCOL_VERSION,

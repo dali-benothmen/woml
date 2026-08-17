@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
-import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from 'woml';
+import type { CompiledWorkflowDefinition, JsonObject, JsonValue } from '@woml/compiler';
 
 import {
   decodeRunPresentationListV1,
@@ -1169,7 +1169,7 @@ function defaultNativeCorePath(): string {
     return createRequire(import.meta.url).resolve(packageName);
   } catch {
     throw new Error(
-      `WOML native package ${packageName} is unavailable. Reinstall woml-cli on this machine and make sure optional dependencies are enabled.`,
+      `WOML native package ${packageName} is unavailable. Reinstall woml on this machine and make sure optional dependencies are enabled.`,
     );
   }
 }

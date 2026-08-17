@@ -76,6 +76,7 @@ describe('WOML cross-platform native release', () => {
       await readFile(resolve(output, 'package.json'), 'utf8'),
     ) as Record<string, unknown>;
     expect(manifest.name).toBe('@woml/cli-linux-x64-musl');
+    expect(manifest.version).toBe('1.0.0');
     expect(manifest.main).toBe('./woml-core.linux-x64-musl.node');
     expect(manifest.os).toEqual(['linux']);
     expect(manifest.cpu).toEqual(['x64']);
@@ -84,5 +85,8 @@ describe('WOML cross-platform native release', () => {
     expect(
       await Bun.file(resolve(output, 'woml-core.linux-x64-musl.node')).text(),
     ).toBe('test-native-bytes');
+    expect(await Bun.file(resolve(output, 'README.md')).text()).toContain(
+      'installed automatically by `woml`',
+    );
   });
 });

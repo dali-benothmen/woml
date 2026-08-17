@@ -1,4 +1,4 @@
-import { isValidSecretName, type SecretReferenceExpression } from 'woml';
+import { isValidSecretName, type SecretReferenceExpression } from '@woml/compiler';
 
 export const WOML_SECRET_SERVICE = 'dev.woml.cli.secrets.v1';
 export const WOML_SECRET_ENV_PREFIX = 'WOML_SECRET_';

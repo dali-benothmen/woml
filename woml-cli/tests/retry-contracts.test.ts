@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
-import { compileWoml, parseWoml, type CompiledWorkflowDefinition } from 'woml';
+import { compileWoml, parseWoml, type CompiledWorkflowDefinition } from '@woml/compiler';
 import { parseExecutionProgress } from '../src/rust-executor';
 
 type JsonObject = Record<string, unknown>;

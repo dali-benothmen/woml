@@ -9,7 +9,7 @@ import {
   executeWorkflowWithRustDurable,
   resumeWorkflowWithRustDurable,
 } from '../src/rust-executor';
-import { compileWoml, parseWoml } from 'woml';
+import { compileWoml, parseWoml } from '@woml/compiler';
 
 const example = resolve(import.meta.dir, '../../examples/switchWorkflow.woml');
 const nativeCorePath = resolve(

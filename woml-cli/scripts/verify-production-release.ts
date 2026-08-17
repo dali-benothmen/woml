@@ -109,12 +109,14 @@ const packageJson = JSON.parse(
   await readFile(join(rootPath, 'woml-cli/package.json'), 'utf8')
 );
 if (
+  packageJson.name !== 'woml' ||
+  packageJson.version !== '1.0.0' ||
   packageJson.private !== false ||
   packageJson.bin?.woml !== './dist/cli.js' ||
   !packageJson.files?.includes('dist') ||
   packageJson.license !== 'Apache-2.0'
 ) {
-  throw new Error('woml-cli package metadata is not publishable as Production Runtime v1.');
+  throw new Error('The woml package metadata is not publishable as Production Runtime v1.');
 }
 const distBytes = (
   await Promise.all(

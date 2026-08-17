@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
-import { compileWoml, parseWoml } from 'woml';
+import { compileWoml, parseWoml } from '@woml/compiler';
 
 type JsonObject = Record<string, unknown>;
 

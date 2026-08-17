@@ -2,7 +2,7 @@
 
 import { resolve } from 'node:path';
 
-import { compileWoml, parseWoml } from 'woml';
+import { compileWoml, parseWoml } from '@woml/compiler';
 
 const projectRoot = resolve(import.meta.dir, '../..');
 const exampleDirectory = resolve(projectRoot, 'examples/internalEvents');

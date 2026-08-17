@@ -81,7 +81,7 @@ describe('clean installed terminal experience', () => {
     ).toBe(0);
 
     const executable = join(consumer, 'node_modules/.bin/woml');
-    const installedPackage = join(consumer, 'node_modules/woml-cli');
+    const installedPackage = join(consumer, 'node_modules/woml');
     expect(await Bun.file(join(installedPackage, 'dist/cli.js')).exists()).toBe(true);
     expect(await Bun.file(join(
       installedPackage,

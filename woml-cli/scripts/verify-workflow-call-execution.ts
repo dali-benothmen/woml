@@ -2,7 +2,7 @@
 
 import { resolve } from 'node:path';
 
-import { compileWoml, parseWoml } from 'woml';
+import { compileWoml, parseWoml } from '@woml/compiler';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const exampleDirectory = resolve(repositoryRoot, 'examples/workflowCalls');

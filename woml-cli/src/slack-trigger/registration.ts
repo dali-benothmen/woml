@@ -1,7 +1,7 @@
 import type {
   CompiledWorkflowDefinition,
   ValueExpression,
-} from 'woml';
+} from '@woml/compiler';
 
 import type {
   SlackTriggerEventType,
