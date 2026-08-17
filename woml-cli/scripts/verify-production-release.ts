@@ -109,7 +109,7 @@ const packageJson = JSON.parse(
   await readFile(join(rootPath, 'woml-cli/package.json'), 'utf8')
 );
 if (
-  packageJson.name !== 'woml' ||
+  packageJson.name !== '@woml-org/woml' ||
   packageJson.version !== '1.0.0' ||
   packageJson.private !== false ||
   packageJson.bin?.woml !== './dist/cli.js' ||

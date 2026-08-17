@@ -9,7 +9,7 @@ policy in readable `.woml` files; write ordinary JavaScript inside `<script>`.
 WOML requires Bun 1.3.14 or later:
 
 ```bash
-bun add --global woml
+bun add --global @woml-org/woml
 woml --version
 ```
 

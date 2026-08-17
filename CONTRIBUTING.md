@@ -19,7 +19,7 @@ The active repository packages are:
 
 - `woml` — the private `@woml/compiler` parser, validator, compiler, source
   diagnostics, and types;
-- `woml-cli` — the public `woml` package, CLI, runtime hosting, Bun workers,
+- `woml-cli` — the public `@woml-org/woml` package, CLI, runtime hosting, Bun workers,
   and provider adapters;
 - `core/woml-engine` — durable, language-neutral execution authority;
 - `core/woml-native` — the narrow N-API adapter; and

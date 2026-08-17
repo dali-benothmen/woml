@@ -389,8 +389,8 @@ jobs:
           set -euo pipefail
           version=$(node -p "require('./release/collected/main/package.json').version")
           archive=$(find release/collected/main -maxdepth 1 -name '*.tgz' -type f -print -quit)
-          if npm view "woml@${version}" version >/dev/null 2>&1; then
-            echo "Skipping woml@${version}; it is already published."
+          if npm view "@woml-org/woml@${version}" version >/dev/null 2>&1; then
+            echo "Skipping @woml-org/woml@${version}; it is already published."
           else
             npm publish "${archive}" --access public --provenance
           fi
