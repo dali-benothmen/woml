@@ -184,7 +184,7 @@ SIGINT and SIGTERM stop new admission, close provider connections and the HTTP
 listener, and join the Rust runtime. Already committed state remains available
 for restart recovery.
 
-Production Triggers T13 is a durable single-node profile. Workflow Calls v1 may
+Production Triggers v1 is a durable single-node profile. Workflow Calls v1 may
 intentionally use multiple local processes against one SQLite file when each
 workflow ID has exactly one owner; that narrow call-routing profile does not
 turn trigger schedulers into distributed schedulers. Do not run multiple owners

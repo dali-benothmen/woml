@@ -9,7 +9,7 @@
       <script>
         const publication = await services.events.emit('customer.updated', {
           customerId: 'customer-42',
-          displayName: 'Dali'
+          displayName: 'Alex'
         });
 
         return publication;

@@ -1,6 +1,6 @@
 # WOML v1.0.0 Professional Release Implementation Plan
 
-Status: V1R0 through V1R3 completed on 2026-08-17. V1R4 through V1R9 are planned. No npm
+Status: V1R0 through V1R4 completed on 2026-08-17. V1R5 through V1R9 are planned. No npm
 package has been published by this plan. Publishing is the final gated phase
 and will be performed only with the product owner present.
 
@@ -332,6 +332,10 @@ Gate:
 - no user-facing install command mentions `woml-cli`.
 
 ### V1R4 — Rebuild documentation and examples for users
+
+Status: completed on 2026-08-17. The repository now has one validated newcomer
+path, a v1 language and CLI reference, a curated example progression, permanent
+support/security routes, and an executable documentation gate.
 
 Changes:
 

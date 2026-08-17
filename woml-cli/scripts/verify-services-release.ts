@@ -50,14 +50,14 @@ for (const required of [
 }
 
 const language = await Bun.file(
-  resolve(projectRoot, 'docs/woml-v0.1.md')
+  resolve(projectRoot, 'docs/language-reference.md')
 ).text();
 const architecture = await Bun.file(
   resolve(projectRoot, 'docs/architecture.md')
 ).text();
 if (
-  !language.includes('SC0–SC14 completed and hardened') ||
-  !architecture.includes('Queue remains intentionally postponed')
+  !language.includes('`services.http.request()` returns') ||
+  !architecture.includes('Managed capabilities use a full-duplex Rust/Bun')
 ) {
   throw new Error('SC14 architecture or language status is stale.');
 }

@@ -2,7 +2,7 @@
   <imports>
     <module name="telegram" from="./telegram.woml" />
   </imports>
-  <workflow id="telegram-provider-demo" name="Telegram provider demo">
+  <workflow id="telegram-provider-demo" name="Telegram provider demo" version="1.0.0">
     <lifecycle>
       <on-success>
         <notify>

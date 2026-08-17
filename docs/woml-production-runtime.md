@@ -1,7 +1,7 @@
 # WOML Production Runtime and Operations
 
-Production Runtime v1 (PRO0 through PRO9) provides the reviewed contracts,
-deployment preflight, atomic direct-source activation, durable ownership,
+Production Runtime v1 provides deployment preflight, atomic direct-source
+activation, durable ownership,
 restart recovery, graceful shutdown, foreground/background operation,
 observability, the terminal inspector, verified backup/restore, retention,
 deployment recipes, compatibility auditing, and release performance budgets. Runtime hosting uses
@@ -207,7 +207,7 @@ isolation is not an application-level promise.
 
 ## Observability
 
-PRO5 exposes minimal local liveness/readiness probes plus authenticated detail,
+WOML exposes minimal local liveness/readiness probes plus authenticated detail,
 bounded snapshots, ordered SSE updates, JSON/text runtime records, and stable
 Prometheus metrics on the loopback operations listener. Telemetry is derived
 from durable recent-run state and live component state; it never becomes
@@ -254,18 +254,12 @@ explicit compaction.
 
 ## Supported release boundary
 
-PRO0 freezes the production contracts, PRO1 implements configuration and
-non-activating preflight, PRO2 implements atomic activation, and PRO3
-implements Store v14 ownership, recovery, background operation, exact stop,
-and graceful shutdown. PRO4 implements production secret sources, authenticated
-live run control, rotating capabilities, request bounds, and isolation
-guidance. PRO5 implements the observability foundation, PRO6 adds the live
-terminal inspector, and PRO7 adds coherent backup, verified guarded restore,
-and supported-store upgrade safety. PRO8 adds Rust-owned retention, bounded WAL
-maintenance, and optional scheduled cleanup. PRO9 hardens the package, clean
-server journey, deployment recipes, security/compatibility audit, full example,
-and production performance gate. Production Runtime v1 is now the supported
-continuous single-machine release profile.
+Production Runtime v1 includes non-activating preflight, atomic activation,
+durable ownership, recovery, foreground/background operation, graceful
+shutdown, production secret sources, authenticated run control, observability,
+the live terminal inspector, coherent backup, guarded restore, store upgrades,
+retention, and bounded SQLite maintenance. It is the supported continuous
+single-machine release profile.
 
 Current production operations include:
 
@@ -277,7 +271,7 @@ woml prune --before 30d --dry-run
 woml prune --before 30d
 ```
 
-The frozen PRO9 performance budgets and the latest local release-gate results
+The frozen performance budgets and latest local release-gate results
 are published in
 [`examples/production/performance-budgets.v1.json`](../examples/production/performance-budgets.v1.json).
 On the reference development machine, the gate measured approximately 590 ms

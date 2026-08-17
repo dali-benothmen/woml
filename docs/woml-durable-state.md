@@ -75,17 +75,17 @@ If startup reports corruption:
 4. Run WOML against that restored path and let the startup integrity audit
    verify it before replacing anything.
 
-PRO7 `woml backup` persists the versioned State v1 location identity before
+`woml backup` persists the versioned State v1 location identity before
 creating its online SQLite snapshot. `woml restore` carries that identity into
 the restored store, so `services.state` remains visible even when the restored
 database is placed at a different absolute path. Raw database copies made
-before PRO7 should be restored to their original path unless separately
-migrated.
+made outside the supported backup command should be restored to their original
+path unless separately migrated.
 
 Do not drop tables, edit digests or quotas, or delete mutation rows to make the
 check pass. Those records are part of retry safety.
 
-## DS4 verification
+## Verification
 
 From `woml-cli/`:
 
@@ -100,7 +100,7 @@ recovery after a committed mutation, corrupt digests/quotas/results, Unix file
 permissions, run-inspection redaction, run/state ownership separation, and
 state operation latency/database-size budgets.
 
-DS5 publishes the feature through `bun run test:durable-state`, which adds clean package
-installation, packaged native execution across process restarts, both public
-examples, every-schema compilation, historical model/event fixtures, package
-auditing, and secret/redaction scans.
+The complete `bun run test:durable-state` gate adds clean-package installation,
+packaged native execution across process restarts, public examples,
+every-schema compilation, historical model/event fixtures, package auditing,
+and secret/redaction scans.

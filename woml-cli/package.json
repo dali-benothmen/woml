@@ -33,6 +33,7 @@
     "build": "bun run build:native && bun run build:js",
     "build:native": "cargo build -j 1 --locked --manifest-path ../core/woml-native/Cargo.toml --lib --release && bun scripts/stage-native.ts",
     "build:js": "bun build src/cli.ts --outfile dist/cli.js --target bun && bun build src/script-host.ts --outfile dist/script-host.js --target bun && bun build src/script-host-worker.ts --outfile dist/script-host-worker.js --target bun && bun build src/notification-provider-host.ts --outfile dist/notification-provider-host.js --target bun && bun build src/custom-notification-provider-host.ts --outfile dist/custom-notification-provider-host.js --target bun && bun build src/custom-notification-provider/worker.ts --outfile dist/custom-notification-provider-worker.js --target bun",
+    "test:documentation": "bun run build:js && bun scripts/verify-documentation.ts",
     "test": "bun test",
     "test:reusable-definitions": "bun test ../woml/tests/reusable-definition-contracts.test.ts ../woml/tests/reusable-definitions.test.ts tests/reusable-definitions-cli.test.ts",
     "test:switch": "bun run build && bun test ../woml/tests/switch-control-flow.test.ts tests/switch-cli.test.ts && bun run typecheck",

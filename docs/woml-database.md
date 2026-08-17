@@ -1,6 +1,6 @@
 # WOML Database Service
 
-SC8 provides Rust-managed SQLite and PostgreSQL databases inside `<script>`:
+WOML provides Rust-managed SQLite and PostgreSQL databases inside `<script>`:
 
 ```js
 const db = services.db({
@@ -21,9 +21,9 @@ cancellation, result conversion, operation events, and recovery policy.
 
 ## Configuration and ownership
 
-Database v1 accepts exactly `driver` and `connection`. SC7 introduced
-`driver: "sqlite"`; SC8 adds `driver: "postgres"` without changing the methods
-or result envelopes. SQLite `connection` must be a filesystem path. In-memory
+Database v1 accepts exactly `driver` and `connection`. The supported drivers are
+`sqlite` and `postgres`, with the same methods and result envelopes. SQLite
+`connection` must be a filesystem path. In-memory
 databases, SQLite URI strings, directories, and the SQLite file used for WOML
 runtime state are rejected.
 
@@ -177,9 +177,9 @@ native to the selected database: SQLite and PostgreSQL have different
 placeholder syntax, schema features, functions, conflict syntax, and types.
 PostgreSQL results support Booleans, safe integers, finite numbers, text,
 binary, UUID, date/time, and JSON serialized as text. Cast an unsupported
-PostgreSQL type explicitly. Document and NoSQL databases are not supported by
-SC8; they will receive a separate method contract rather than pretending to be
-SQL drivers.
+PostgreSQL type explicitly. Document and NoSQL databases are not supported;
+they require a separate method contract rather than pretending to be SQL
+drivers.
 
 ## Database or durable state?
 

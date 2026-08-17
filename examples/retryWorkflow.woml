@@ -1,6 +1,6 @@
 <woml>
 <workflow
-  version="0.1"
+  version="1.0.0"
   id="retry-demo"
   name="Retry Demo">
 

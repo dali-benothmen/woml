@@ -72,7 +72,7 @@ Create a file named `hello.woml`:
       >
         <script>
           return {
-            name: "Dali"
+            name: "World"
           };
         </script>
       </step>
@@ -105,7 +105,7 @@ first step's result through `context.steps.person` and returns:
 
 ```json
 {
-  "message": "Hello Dali"
+  "message": "Hello World"
 }
 ```
 

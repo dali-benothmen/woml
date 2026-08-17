@@ -9,7 +9,7 @@
       <script>
         const order = {
           id: 'order-42',
-          customer: 'Dali',
+          customer: 'Alex',
           total: 125
         };
         const db = services.db({

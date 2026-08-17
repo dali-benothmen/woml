@@ -62,11 +62,11 @@ const architecture = await Bun.file(
   resolve(projectRoot, 'docs/architecture.md')
 ).text();
 const language = await Bun.file(
-  resolve(projectRoot, 'docs/woml-v0.1.md')
+  resolve(projectRoot, 'docs/language-reference.md')
 ).text();
 if (
-  !architecture.includes('internal named Events Service v1 are active') ||
-  !language.includes('SC0–SC14 completed and hardened')
+  !architecture.includes('`services.cache`;') ||
+  !language.includes('`services.cache` provides workflow-scoped')
 ) {
   throw new Error('SC10 architecture or language status is stale.');
 }

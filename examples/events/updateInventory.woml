@@ -1,5 +1,5 @@
 <woml>
-<workflow id="update-inventory" name="Update order inventory">
+<workflow id="update-inventory" name="Update order inventory" version="1.0.0">
   <triggers>
     <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
       <schema>

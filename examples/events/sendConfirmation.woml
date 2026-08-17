@@ -1,5 +1,5 @@
 <woml>
-<workflow id="send-confirmation" name="Send order confirmation">
+<workflow id="send-confirmation" name="Send order confirmation" version="1.0.0">
   <triggers>
     <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
       <schema>

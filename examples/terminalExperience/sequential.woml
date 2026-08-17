@@ -11,7 +11,7 @@
     <steps>
       <step id="prepare" name="Prepare customer" description="Normalize the input used by the greeting.">
         <script>
-          return { customer: "Dali", language: "en" };
+          return { customer: "Alex", language: "en" };
         </script>
       </step>
       <step id="greet" name="Build greeting" description="Use the previous step through context.steps.">

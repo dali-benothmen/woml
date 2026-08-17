@@ -1,7 +1,7 @@
 # WOML Internal Events
 
-SC11 lets one running workflow start every workflow subscribed to a named
-event. The publisher uses normal JavaScript:
+`services.events.emit()` lets one running workflow start every workflow
+subscribed to a named event. The publisher uses normal JavaScript:
 
 ```js
 const publication = await services.events.emit('customer.updated', {

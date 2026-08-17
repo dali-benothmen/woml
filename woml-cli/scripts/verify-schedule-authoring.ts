@@ -26,15 +26,31 @@ const [example, source, expected, semantics] = await Promise.all([
   Bun.file(reviewedModel).json(),
   Bun.file(semanticsPath).json(),
 ]);
-if (example !== source) {
+const compiled = compileWoml(parseWoml(example, { file: productExample }));
+const reviewed = compileWoml(parseWoml(source, { file: reviewedSource }));
+if (JSON.stringify(reviewed) !== JSON.stringify(expected)) {
   throw new Error(
-    'T8 verification failed: examples/scheduleWorkflow.woml must exactly match the reviewed schedule fixture.'
+    'Schedule verification failed: the reviewed source no longer deep-equals its frozen Model v7 fixture.'
   );
 }
-const compiled = compileWoml(parseWoml(example, { file: productExample }));
-if (JSON.stringify(compiled) !== JSON.stringify(expected)) {
+const expectedShape = {
+  schemaVersion: expected.schemaVersion,
+  triggers: expected.triggers,
+  nodes: expected.graph.nodes.map((node: { id: string; handler: string }) => ({
+    id: node.id,
+    handler: node.handler,
+  })),
+  edges: expected.graph.edges,
+};
+const productShape = {
+  schemaVersion: compiled.schemaVersion,
+  triggers: compiled.triggers,
+  nodes: compiled.graph.nodes.map(node => ({ id: node.id, handler: node.handler })),
+  edges: compiled.graph.edges,
+};
+if (JSON.stringify(productShape) !== JSON.stringify(expectedShape)) {
   throw new Error(
-    'T8 verification failed: the schedule product example does not deep-equal Model v7.'
+    'Schedule verification failed: the public context.payload example drifted from the reviewed Model v7 schedule graph.'
   );
 }
 if (

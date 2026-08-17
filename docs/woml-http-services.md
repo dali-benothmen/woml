@@ -114,7 +114,7 @@ sandbox.
 5. Give every repeated write a stable operation name and provider-supported
    idempotency value.
 6. Monitor safe service failure codes and ambiguous interruptions.
-7. Run the SC6 release gate and the local benchmark on deployment-class
+7. Run the HTTP release gate and local benchmark on deployment-class
    hardware before publishing performance expectations.
 
 ## Benchmarking
@@ -129,5 +129,5 @@ The benchmark uses one local loopback server and measures inside one script
 attempt, excluding CLI/process startup. It reports sequential latency and
 concurrent throughput for both paths. Results are environment-specific: native
 Fetch has less bookkeeping, while managed HTTP deliberately pays for the
-Rust/Bun round trip and two durable event appends. SC6 makes no claim that the
+Rust/Bun round trip and two durable event appends. WOML does not claim that the
 managed path is universally faster; its value is supervision and durability.

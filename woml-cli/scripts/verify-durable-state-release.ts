@@ -33,11 +33,11 @@ for (const [file, required] of [
   ['docs/woml-cache.md', 'Cache or durable state?'],
   ['docs/woml-storage.md', 'Storage or durable state?'],
   ['docs/woml-database.md', 'Database or durable state?'],
-  ['docs/architecture.md', 'Durable User State DS0–DS5 publishes'],
+  ['docs/architecture.md', '## Durable state and data'],
   ['docs/woml-recovery.md', 'Durable User State recovery'],
   ['docs/woml-webhook-deployment.md', 'For workflows using `services.state`'],
   ['docs/woml-data-guide.md', 'small JSON fact owned by one workflow'],
-  ['woml-cli/README.md', 'Supported Durable User State'],
+  ['docs/language-reference.md', '`services.state` provides workflow-scoped durable'],
   ['examples/atomicCounterWorkflow.woml', 'services.state.increment'],
   ['examples/conversationStateWorkflow.woml', 'services.state.set'],
   [

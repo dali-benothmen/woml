@@ -1,6 +1,6 @@
 # WOML Durable Object Storage
 
-SC9 adds a Rust-owned local object store through `services.storage`. It is for
+`services.storage` is a Rust-owned local object store for
 files and larger durable values that should not be copied into every workflow
 event or context projection.
 

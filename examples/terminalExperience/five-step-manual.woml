@@ -18,7 +18,7 @@
         <script>
           return {
             orderId: "order-42",
-            customer: "Dali",
+            customer: "Alex",
             quantity: 3,
             unitPrice: 25
           };

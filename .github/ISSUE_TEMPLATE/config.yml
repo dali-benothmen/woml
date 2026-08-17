@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and workflow design
+    url: https://github.com/dali-benothmen/woml/discussions
+    about: Ask for help or discuss an automation design.
+  - name: Security vulnerability
+    url: https://github.com/dali-benothmen/woml/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue.

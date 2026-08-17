@@ -30,9 +30,9 @@ const required = new Map<string, readonly string[]>([
     'NO_COLOR',
     'WOML_LOG_STATE_UNAVAILABLE',
   ]],
-  ['woml-cli/README.md', [
-    'press Enter for each independent durable',
-    'WOML Terminal Experience',
+  ['docs/getting-started.md', [
+    'Press Enter to create a run',
+    'The process stays active',
   ]],
   ['examples/terminalExperience/README.md', [
     'Sequential and repeated manual runs',
@@ -64,7 +64,7 @@ const staleClaims = [
   '`woml run` executes a selected manual trigger once at startup',
   'Manual triggers remain available for startup',
 ];
-for (const path of ['woml-cli/README.md', 'docs/woml-production-triggers.md']) {
+for (const path of ['docs/getting-started.md', 'docs/woml-production-triggers.md']) {
   const contents = await readFile(join(rootPath, path), 'utf8');
   for (const claim of staleClaims) {
     if (contents.includes(claim)) {

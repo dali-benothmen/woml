@@ -1,10 +1,10 @@
 # WOML Runtime Observability
 
-PRO5 provides the safe local observability layer used by the future
-`woml inspect`. Workflow events and the SQLite store remain execution truth;
+`woml inspect` provides a safe local observability view. Workflow events and
+the SQLite store remain execution truth;
 telemetry is a bounded projection and can be discarded or re-created.
 
-`woml inspect` is the full-screen runtime operations view. In contrast,
+It is the full-screen runtime operations view. In contrast,
 `woml <run-id|workflow-id> --logs` shows durable author-facing workflow history
 and follows matching changes. See
 [WOML Terminal Experience](woml-terminal-experience.md) for that read-only
@@ -154,7 +154,7 @@ Run from `woml-cli`:
 bun run test:runtime-inspector
 ```
 
-The gate composes PRO5 and validates golden snapshots/logs/metrics, schemas,
+The gate validates golden snapshots/logs/metrics, schemas,
 the packaged runtime, readiness changes, authentication, response and rate
 bounds, stream ordering/gaps/backpressure, disabled endpoints, broken-client
 isolation, redaction, type checking, the observability overhead budget, and the

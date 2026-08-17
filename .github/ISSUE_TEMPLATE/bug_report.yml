@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a reproducible WOML problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve WOML. Remove tokens, approval URLs, private payloads, databases, and `.woml/` state before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: WOML version
+      description: Paste the output of `woml --version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: Ubuntu 24.04 x64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include a sanitized workflow and exact command.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the stable WOML error code and safe logs when available.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, approval URLs, private data, databases, and runtime state.
+          required: true
+        - label: This is not a security vulnerability; I will use private vulnerability reporting for security issues.
+          required: true

@@ -1,6 +1,6 @@
 # WOML Workflow Cache
 
-SC10 adds a Rust-owned local cache through `services.cache`. Use it to avoid
+`services.cache` is a Rust-owned local cache. Use it to avoid
 repeating an expensive API request, database lookup, or calculation when a
 temporarily stale or missing value is safe.
 

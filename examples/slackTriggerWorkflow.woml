@@ -1,5 +1,5 @@
 <woml>
-<workflow id="slack-trigger-contract">
+<workflow id="slack-trigger-contract" name="Slack Agent Message" version="1.0.0">
   <triggers>
     <slack
       id="agentMessage"

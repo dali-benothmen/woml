@@ -15,10 +15,12 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-The active product packages are:
+The active repository packages are:
 
-- `woml` — parser, validator, compiler, source diagnostics, and public types;
-- `woml-cli` — CLI, runtime hosting, Bun workers, and provider adapters;
+- `woml` — the private `@woml/compiler` parser, validator, compiler, source
+  diagnostics, and types;
+- `woml-cli` — the public `woml` package, CLI, runtime hosting, Bun workers,
+  and provider adapters;
 - `core/woml-engine` — durable, language-neutral execution authority;
 - `core/woml-native` — the narrow N-API adapter; and
 - `woml-vscode` — editor grammar, snippets, and language configuration.
@@ -32,6 +34,7 @@ Run the checks relevant to your change. The minimum repository checks are:
 bun run typecheck
 bun test ../woml/tests
 bun run test:architecture-separation
+bun run test:documentation
 ```
 
 For Rust engine or adapter changes, also run:
@@ -82,6 +85,10 @@ docs(runtime): clarify background log following
 
 Do not include generated build output, runtime databases, secrets, or local
 `.woml/` state in a pull request.
+
+User-facing behavior changes must update the appropriate permanent guide and a
+validation-tested example. Do not add milestone plans or phase codes to public
+documentation, test filenames, or package commands.
 
 ## License
 

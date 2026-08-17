@@ -1,6 +1,6 @@
 # WOML Retention and Storage Maintenance
 
-PRO8 gives a long-running WOML deployment a safe way to remove old execution
+`woml prune` gives a long-running deployment a safe way to remove old execution
 history. Rust remains the only authority that decides whether a run is safe to
 delete. The Bun CLI only validates operator input and displays the versioned
 plan or result.

@@ -1,5 +1,5 @@
 <woml>
-<workflow version="0.1" id="postgres-customer-demo" name="PostgreSQL Customer Visits">
+<workflow version="1.0.0" id="postgres-customer-demo" name="PostgreSQL Customer Visits">
   <triggers>
     <manual id="start" />
   </triggers>

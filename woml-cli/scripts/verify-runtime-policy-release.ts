@@ -15,14 +15,14 @@ const schemaRoot = resolve(repositoryRoot, 'docs/schemas');
 for (const [file, required] of [
   ['docs/woml-runtime-policies.md', '## Performance and publication gate'],
   ['docs/woml-runtime-policies.md', 'WOML_POLICY_QUEUE_FULL'],
-  ['docs/woml-v0.1.md', 'RP0–RP7 completed and hardened'],
-  ['docs/architecture.md', 'Runtime Policies RP0–RP7 publish'],
+  ['docs/language-reference.md', '## 7. `<config>`'],
+  ['docs/architecture.md', 'Runtime policy is compiled outside the business DAG'],
   ['docs/woml-production-triggers.md', '## Runtime Policy backpressure'],
   ['docs/woml-workflow-calls.md', '## Runtime Policies on parent and child'],
   ['docs/woml-lifecycle-and-run-control.md', '## Runtime Policy timeout interaction'],
   ['docs/woml-recovery.md', '## Runtime Policy recovery'],
-  ['docs/woml-v0.1.md', '<config concurrency='],
-  ['woml-cli/README.md', '## Control workflow runtime capacity'],
+  ['docs/language-reference.md', 'rate-limit="100/1m"'],
+  ['docs/woml-runtime-policies.md', '## Authoring `<config>`'],
   ['woml-cli/tests/runtime-policy-packaged-release.test.ts', 'a clean consumer can check'],
   ['woml-cli/scripts/benchmark-runtime-policies.ts', 'woml-runtime-policies-local-v1'],
 ] as const) {

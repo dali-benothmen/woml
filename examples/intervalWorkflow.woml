@@ -1,5 +1,5 @@
 <woml>
-<workflow id="interval-demo" name="Interval Demo">
+<workflow id="interval-demo" name="Interval Demo" version="1.0.0">
   <triggers>
     <interval id="heartbeat" every="5s" on-missed="skip" />
   </triggers>

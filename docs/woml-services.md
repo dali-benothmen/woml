@@ -13,8 +13,8 @@ await services.state.set('previous-sales', 700, {
 ```
 
 Normal `woml check`/`woml run` preparation generates the `StateService` editor
-types automatically, including for local modules. DS3 routes every call from
-Bun through Capability Call v1 to Rust's workflow-scoped Store v13 authority;
+types automatically, including for local modules. Every call travels from Bun
+through Capability Call v1 to Rust's workflow-scoped durable authority;
 it never substitutes Cache v1 or process memory. The frozen boundary is
 documented in [Durable User State v1](protocols/durable-state-v1.md).
 Concurrency, backup, recovery, permissions, encryption, and corruption handling
@@ -38,7 +38,7 @@ services.whatsapp
 
 `services.workflows.call()` starts exactly one activated child workflow by ID,
 passes a JSON object as its `context.payload`, and resolves to its final JSON
-result. WC4 safely reconnects retries and duplicate delivery to that same child,
+result. WOML safely reconnects retries and duplicate delivery to that same child,
 requires stable names for repeated calls to one target in a step, rejects call
 cycles, and fails ambiguous parent attempts closed. The target may be loaded by
 the same `woml run` runtime or owned by another local `woml run` process sharing
@@ -55,9 +55,9 @@ parallel groups, retries, modules, native Fetch, and all current services keep
 their normal behavior. Human Approval targets are rejected before admission in
 v1. The CLI prints both run IDs, while `woml get` exposes each run's bounded,
 redacted lifecycle status; see `docs/woml-workflow-calls.md`.
-WC7 hardens migration, corrupted-store rejection, clean packaging, benchmark
-coverage, and the documented one-machine production boundary in
-`docs/woml-workflow-calls-production.md`.
+Migration, corrupted-store rejection, packaging, benchmarks, and the
+one-machine production boundary are documented in
+[Operating workflow calls](woml-workflow-calls-production.md).
 
 Bun's native `fetch()` is also available. Bun executes JavaScript, while Rust
 supervises managed service calls, records bounded operation events, applies

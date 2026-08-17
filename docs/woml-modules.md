@@ -31,8 +31,11 @@ tag with declared props, durable attempts, results, and lifecycle. See
 The module uses ordinary named exports:
 
 ```ts
-export async function chat(message: string) {
-  const response = await services.http.request<{ reply: string }>({
+export async function chat(
+  message: string,
+  http = services.http
+) {
+  const response = await http.request<{ reply: string }>({
     url: 'https://api.example.com/chat',
     method: 'POST',
     json: { message }
@@ -109,39 +112,34 @@ source-located `WOML_MODULE_SERVICE_UNKNOWN` error before execution.
 
 ## Unit-test a module
 
-Use ordinary Bun tests and install read-only service mocks for one test:
+The public `woml` package is a global CLI, not a JavaScript testing library.
+Keep pure transformations directly testable and accept a capability as an
+optional function argument when a module needs an isolated mock. The production
+default can still use WOML's injected `services` binding:
 
 ```ts
 import { expect, test } from 'bun:test';
-import { withWomlModuleTestRuntime } from 'woml';
+import { chat } from './modules/openai.ts';
 
 test('builds a response', async () => {
-  await withWomlModuleTestRuntime(
-    {
-      services: {
-        http: {
-          request: async () => ({
-            status: 200,
-            ok: true,
-            headers: {},
-            data: { reply: 'Hello Dali' },
-            url: 'https://api.example.com/chat',
-            redirected: false
-          })
-        }
-      }
-    },
-    async () => {
-      const { chat } = await import('./modules/openai.ts');
-      expect(await chat('Hello')).toBe('Hello Dali');
-    }
-  );
+  const http = {
+    request: async () => ({
+      status: 200,
+      ok: true,
+      headers: {},
+      data: { reply: 'Hello World' },
+      url: 'https://api.example.com/chat',
+      redirected: false
+    })
+  };
+
+  expect(await chat('Hello', http)).toBe('Hello World');
 });
 ```
 
-Test runtimes cannot overlap in one process, and the injected service object is
-read-only. This helper is for unit tests only; production always uses the
-Rust-supervised WOML runtime.
+Use `woml test path/to/workflow.woml` for an integration test through the real
+compiler, Rust engine, module bundle, and isolated Bun Worker. Production always
+uses the Rust-supervised WOML runtime.
 
 ## Runtime and recovery
 

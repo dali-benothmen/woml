@@ -1,6 +1,6 @@
 # WOML Backup, Restore, and Store Upgrades
 
-PRO7 adds a tested recovery path for WOML's durable SQLite authority. It keeps
+WOML provides a tested recovery path for its durable SQLite authority. It keeps
 the ordinary product experience small: there is no archive format to build and
 no backup service that must remain running.
 
@@ -118,7 +118,6 @@ backup, not an implicit reverse migration.
 - Logs are operational output and are not part of the durable backup. Archive
   them separately if your audit policy requires it.
 
-PRO8 adds bounded retention and storage maintenance. It does not change the
-PRO7 rule that only a verified coherent snapshot is a supported recovery point.
-Retention is not a backup: it intentionally removes eligible history, while a
-verified coherent snapshot remains the supported recovery point.
+Retention and storage maintenance do not change the rule that only a verified
+coherent snapshot is a supported recovery point. Retention is not a backup: it
+intentionally removes eligible history.

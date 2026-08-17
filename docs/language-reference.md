@@ -1,20 +1,18 @@
-# WOML v0.1 Fundamental Syntax
+# WOML v1.0 Language Reference
 
-Status: executable language profile; sequential scripts, retries, choices,
-exact-string switches, parallel groups, and forked multi-step routes are publishable through the
-Rust-backed CLI with durable recovery
-Scope: fundamental workflow structure, triggers, script and approval steps,
-parallel flow, conditional flow, configuration, and lifecycle hooks
-
-This document defines the proposed fundamental authoring syntax for WOML v0.1.
-It contains both a language-design catalog and an executable-profile contract.
-A construct appearing in the design catalog is not automatically implemented,
-publishable, or accepted by a runtime. Elements whose lowering or runtime
-semantics remain open must not be silently implemented with guessed behavior.
+This document defines the public WOML v1.0 authoring language implemented by
+the `woml` command. It covers workflow documents, reusable definitions,
+triggers, steps, control flow, approvals, lifecycle hooks, runtime policies,
+references, modules, and script bindings.
 
 WOML is a frontend for WOML's language-neutral compiled workflow model. The
 WOML compiler validates this source and lowers it to that model; the execution
 core never parses or interprets WOML.
+
+For a guided first workflow, start with [Getting started](getting-started.md).
+For command-line behavior, see the [CLI reference](cli-reference.md). Protocol
+and schema files under `docs/protocols/` and `docs/schemas/` are maintainer
+contracts rather than prerequisites for authoring a workflow.
 
 ## 1. Design Principles
 
@@ -33,58 +31,28 @@ The fundamental syntax follows these rules:
    capability vocabularies.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** describe normative
-requirements within this draft.
+requirements for the v1.0 language.
 
-### 1.1 Feature maturity and publication
+### 1.1 Supported v1.0 surface
 
-WOML separates syntax design from executable availability:
+WOML v1.0 executes:
 
-- **Designed** means the proposed source shape and author-facing intent are
-  documented for review.
-- **Executable** means the construct has an approved lowering, runtime
-  semantics, diagnostics, and end-to-end tests.
-- **Publishable** means an executable construct is included in an advertised
-  runtime profile. A runtime MUST reject every designed-only construct with an
-  unsupported-feature diagnostic.
+- manual, webhook, schedule, interval, event, Slack, Telegram, Discord, and
+  WhatsApp triggers;
+- sequential steps, retries, parallel groups, conditional choices, exact-string
+  switches, forked multi-step branches, and human approvals;
+- workflow and step lifecycle hooks;
+- concurrency, rate-limit, timeout, and queue runtime policies;
+- local JavaScript/TypeScript modules, reusable WOML steps, and reusable
+  notification providers;
+- HTTP, SQL database, storage, cache, events, durable state, messaging, and
+  workflow call/start services; and
+- durable foreground/background operation, recovery, inspection, backup, and
+  retention through the CLI.
 
-The CLI profile grows only through reviewed vertical milestones. The original
-walking skeleton proved sequential scripts; the current published profile also
-includes conditional choices and bounded parallel groups:
-
-| Feature | Design status | Current CLI profile |
-|---|---|---|
-| Workflow `id`/`name`/`description`, manual trigger, sequential steps | Frozen | Executable and publishable |
-| `<script>` with `context.payload` and `context.steps` | Frozen | Executable and publishable |
-| `{{context...}}` attribute-reference grammar | Frozen | Executable for choice `test` and `result` |
-| Workflow `version` | Frozen | Executable as user-defined workflow metadata |
-| Workflow `tags` and step `timeout` | Frozen, runtime-staged attributes | Unavailable; the attributes must be omitted |
-| Step `retry` and backoff attributes | Frozen; RI0–RI7 implemented and hardened | Executable and publishable through Model v6, Script Host v3, durable Run Events v6, and the Rust-backed CLI |
-| Multiple triggers, webhook, and inline payload schema | Completed in Production Triggers T13 | Executable and publishable through Model v7, Event v7, durable Rust admission, and long-lived `woml run` |
-| Slack trigger | Completed in Production Triggers T13 | Executable and publishable through the shared Socket Mode transport and durable Rust admission |
-| Telegram trigger, notifications, and `services.telegram.send()` | ACP3 implemented | Runs through the shared long-polling Telegram host and durable Rust execution authority |
-| Discord trigger, notifications, approvals, and `services.discord.send()` | ACP5 implemented | Executable through one shared Gateway session per bot credential, Discord REST, durable Rust admission, and supervised messaging |
-| WhatsApp trigger, notifications, approvals, and `services.whatsapp.send()` | ACP7 implemented | Executable through signed Meta callbacks, approved templates, durable Rust admission, and supervised Cloud API messaging |
-| Schedule and interval triggers | Completed in Production Triggers T13 | Executable and publishable with Rust-owned clocks, durable cursors, bounded misfire recovery, and long-lived `woml run` |
-| Event trigger | Completed in Production Triggers T13 | Authenticated publication fans out durably to every exact-name subscriber |
-| `<config>` runtime policy | RP0–RP7 completed and hardened | Concurrency, durable work-conserving FIFO queueing, strict rolling-window rate limits, and total workflow timeouts execute through every ingress using Model v12/Event v11/Store v12 |
-| Lifecycle | LEC0–LEC8 completed and hardened | Workflow/step hooks, informational Slack notification, cancellation, and direct run management are executable and publishable through Model v11/Event v10/Store v11 |
-| Conditional `<choose>` | Frozen; canonical source name introduced in FJ1 | Executable and publishable; legacy conditional `<branch>` remains compatible with a deprecation warning |
-| Exact-string `<switch>` | SCP2 completed | Executable and publishable through Model v14 and the existing durable `choice_selected` authority; supports control-only and merged-result profiles |
-| Parallel | Frozen | Executable and publishable with bounded concurrency, `wait-all`, and `fail-fast` |
-| `<fork>` with multi-item `<branch>` routes | Frozen; FJ0–FJ8 completed and hardened | Executable and publishable through Model v13, Event v12, Store v14, deterministic join visibility, recovery, and the Rust-backed CLI |
-| Approval | Frozen; A1–A7 implemented and hardened | Executable and publishable in the local profile: `woml run` pauses durably, prints a local approval URL, accepts an HTTP decision through Rust, recovers, and continues only the selected route |
-| `{{secrets.NAME}}` and `woml secrets` | Frozen; N1 implemented | Secret references, secure local/CI secret management, and typed Slack credential sinks are available |
-| `<notify><slack>` approval delivery | Frozen; N0–N6 implemented and hardened | Executable and publishable: the built-in Slack provider delivers through Socket Mode, one action resolves durably in Rust, the selected route continues, and every delivered message converges |
-| Script `services`, script `secrets.NAME`, native Fetch tracking | SC0–SC14 completed and hardened | Model v8, Script Host v4, durable operation events, native Fetch observation, Rust-managed HTTP, SQLite/PostgreSQL Database v1, durable Storage v1, workflow-scoped Cache v1, and internal Events Service v1 are executable and publishable; queue is postponed |
-| `<woml>`, `<imports>`, and local `<module>` declarations | Module System MS0–MS4 plus essential MS6 DX completed | Canonical documents, safe local resolution, deterministic ESM bundles/maps, Definition Package v3, Model v9, isolated execution, durable recovery, Script Host v6, editor type generation, alias diagnostics, and mocked module tests are implemented; package support remains postponed |
-| Reusable `<step>` and `<provider kind="notification">` definition files | SCP0–SCP8 completed and hardened | Custom tags, immutable props, custom-step retries/results, approval and informational providers, definition-owned lifecycle, recovery, inspection, clean-package installation, and performance gates are executable and publishable through Model v14, Definition Package v9, Event v13, and Inspection v5 |
-| Call-only workflows and `services.workflows.call()` / `.start()` | Workflow Calls WC0–WC7 plus Workflow Start v1 implemented | Model v10 call-only definitions support waiting for a direct child result or continuing after durable background admission, with exact targeting, retry/duplicate reattachment, cycle protection, and local cross-process routing |
-| Queue, document/NoSQL databases, and other capabilities | Planned in Services and Capabilities | Unavailable until their individual implementation phases |
-| RAK | Deferred | Unavailable |
-
-The complete example in Section 3 demonstrates the design catalog; it is not a
-claim that the first CLI profile can execute every element shown. The minimum
-publishable example is in Section 20.
+Unknown elements and attributes are rejected. Designed future syntax is not
+accepted early, so a workflow that passes `woml check` targets the implemented
+v1.0 authoring surface.
 
 ## 2. WOML Is XML-Like, Not XML
 
@@ -113,7 +81,7 @@ The frontend lexer has at least two modes:
 - **Raw-content mode** preserves `<script>` JavaScript and inline `<schema>`
   JSON without source rewriting.
 
-Raw-content termination is deterministic in v0.1:
+Raw-content termination is deterministic in v1.0:
 
 - The first literal, case-sensitive `</script>` terminates a `<script>` body.
 - The first literal, case-sensitive `</schema>` terminates a `<schema>` body.
@@ -125,8 +93,9 @@ Raw-content termination is deterministic in v0.1:
 - The frontend MUST preserve the raw body exactly and MUST retain an offset map
   to the original source for diagnostics.
 
-This simple raw-text rule is part of the v0.1 grammar. A future WOML version may
-introduce a JavaScript-aware terminator without changing v0.1 parsing.
+This raw-text rule is part of the v1.0 grammar. A future language version may
+introduce a JavaScript-aware terminator only through a reviewed compatibility
+change.
 
 Outside raw-content elements:
 
@@ -146,7 +115,6 @@ Outside raw-content elements:
   id="content-moderator"
   name="AI Content Moderator"
   description="Analyze submitted content and select a review path"
-  tags="ai,moderation,safety"
   version="1.0.0">
 
   <config
@@ -199,8 +167,7 @@ Outside raw-content elements:
     <step
       id="preprocessContent"
       name="Preprocess content"
-      description="Normalize the submitted content before analysis"
-      timeout="30s">
+      description="Normalize the submitted content before analysis">
       <script>
         const { content } = context.payload;
 
@@ -339,15 +306,11 @@ definition. The wrapper remains required, so tools can classify a file before
 compilation. Only the workflow profile is runnable; reusable files are imported
 dependencies.
 
-The `<workflow>` children appear in this order:
-
-1. Optional `<config>`.
-2. Optional `<lifecycle>`.
-3. Optional `<triggers>`; omission declares a call-only workflow.
-4. Required `<steps>`.
-
-The order is deliberate. Metadata and runtime policy are declared before entry
-points, and entry points are declared before executable steps.
+`<workflow>` contains optional singleton `<config>`, `<lifecycle>`, and
+`<triggers>` containers plus exactly one `<steps>` container. These containers
+may appear in any order. Omitting `<triggers>` declares a call-only workflow.
+Authors are encouraged to use config, lifecycle, triggers, then steps for
+readability, but order never changes behavior.
 
 The structural grammar is:
 
@@ -375,27 +338,19 @@ reusable-step  := <step name=text? description=text?> script </step>
 notification-provider
                := <provider kind="notification"> script </provider>
 reusable-lifecycle
-               := <lifecycle> on-success? on-error? on-complete? </lifecycle>
+               := <lifecycle> reusable-lifecycle-hook+ </lifecycle>
+reusable-lifecycle-hook
+               := on-success | on-error | on-complete
 
 workflow       := <workflow workflow-attributes>
-                    config?
-                    lifecycle?
-                    triggers?
-                    steps
+                    workflow-child+
                   </workflow>
+workflow-child := config | lifecycle | triggers | steps
 
 config         := <config config-attributes />
 
 lifecycle      := <lifecycle>
-                    on-start?
-                    on-step-start?
-                    on-step-success?
-                    on-step-failure?
-                    on-step-complete?
-                    on-success?
-                    on-error?
-                    on-cancel?
-                    on-complete?
+                    lifecycle-hook+
                   </lifecycle>
 
 lifecycle-hook := <hook steps=step-id-list?> (script | notify)+ </hook>
@@ -405,6 +360,9 @@ triggers       := <triggers> trigger+ </triggers>
 trigger        := manual
                 | webhook
                 | slack
+                | telegram
+                | discord
+                | whatsapp
                 | schedule
                 | interval
                 | event
@@ -466,7 +424,9 @@ approval       := <approval approval-attributes>
                     when-rejected
                   </approval>
 
-notify         := <notify> (slack | telegram)+ </notify>
+notify         := <notify>
+                    (slack | telegram | discord | whatsapp | custom-provider)+
+                  </notify>
 
 slack          := <slack
                     channels="slack-destination-list"
@@ -488,19 +448,13 @@ when-rejected  := <when-rejected>
                   </when-rejected>
 ```
 
-MS1 accepts local `.js` and `.ts` module graphs for validation and immutable
-packaging. MS2 compiles those graphs into deterministic ESM bundles, canonical
-source maps, generated declarations, Definition Package v2, and Model v9. The alias/path/export grammar, project boundary, stable
-diagnostics, and `woml check` output are frozen in
-`docs/protocols/module-system-v1.md` and
-`docs/protocols/module-compilation-v1.md`. MS3 promotes the exact compilation to
-Definition Package v3 and executes named exports as
-`services.<alias>.<function>()` through Script Host v6. Each step receives fresh
-module state; initialization effects are rejected; calls to Fetch and built-in
-services retain their tracked runtime boundaries. See
-`docs/protocols/module-runtime-v1.md`. Durable Store v8 binds exact artifacts to
-the compiled definition, allowing recovery after source files change or
-disappear without reading the current project tree.
+Local `.js` and `.ts` module graphs are validated, bundled as deterministic ESM,
+and exposed through `services.<alias>.<function>()`. Each step receives fresh
+module state; initialization effects are rejected; Fetch and built-in service
+calls retain their tracked runtime boundaries. Durable definitions bind the
+exact compiled artifacts so recovery does not read changed source files. See
+[Modules](woml-modules.md) for authoring and
+[Module System v1](protocols/module-system-v1.md) for the maintainer contract.
 
 This is a structural grammar. Identifier and raw-content tokenization are fixed
 by Sections 2 and 5. Attribute-reference tokenization is defined in Section 15.
@@ -540,7 +494,7 @@ lower-camel identifiers matching:
 [a-z][A-Za-z0-9]*
 ```
 
-Quoted or bracket context paths are not part of WOML v0.1. This keeps JavaScript
+Quoted or bracket context paths are not part of WOML v1.0. This keeps JavaScript
 access and `{{context...}}` access identical.
 
 Workflow IDs MUST use lowercase kebab-case matching:
@@ -589,21 +543,16 @@ Rules:
 | `id` | Yes | Workflow ID | Stable workflow identity. |
 | `name` | No | String | Human-readable display name. |
 | `description` | No | String | Short human-readable description. |
-| `tags` | No | Tag list | Comma-separated classification tags. |
 | `version` | No | Version string | User-defined workflow version. It does not select the WOML grammar. |
 
 When present, workflow `name`, `description`, and `version` must each contain
 at least one non-whitespace character.
-
-`tags` is a comma-separated list. Whitespace surrounding each item is removed.
-Empty items and duplicate items are invalid.
 
 ```xml
 <workflow
   id="daily-report"
   name="Daily Report"
   description="Generate and publish the daily report"
-  tags="reporting,daily"
   version="1.2.0">
   ...
 </workflow>
@@ -612,10 +561,10 @@ Empty items and duplicate items are invalid.
 Runtime settings such as concurrency and timeout MUST NOT also appear on
 `<workflow>`. They have one canonical location: `<config>`.
 
-In the first CLI profile, `name`, `description`, and `version` lower to
+`name`, `description`, and `version` lower to
 `metadata.name`, `metadata.description`, and `metadata.version` on the
-compiled workflow. The `tags` attribute remains staged because its compiled
-representation is not yet frozen.
+compiled workflow. The v1.0 compiler rejects a `tags` attribute rather than
+silently discarding it.
 
 ## 7. `<config>`
 
@@ -656,15 +605,10 @@ duration := positive-number ("ms" | "s" | "m" | "h" | "d")
 
 Bare numeric durations are invalid because their unit would be ambiguous.
 
-`<config>` contains data only, requires at least one attribute, and occurs before
-`<lifecycle>`. Lifecycle scripts MUST NOT be nested inside it.
-
-RP1 validates these attributes and lowers them into the language-neutral
-`runtimePolicy` object in Compiled Workflow Model v12, outside the business DAG.
-`woml check` accepts and displays that model. `woml run` and `woml test` reject
-it with `WOML_RUNTIME_POLICY_RUNTIME_UNAVAILABLE` until RP2 adds the Event v11 /
-Store v12 authority and RP3 executes concurrency and queue policy. No policy is
-silently ignored.
+`<config>` contains data only and requires at least one attribute. Lifecycle
+scripts MUST NOT be nested inside it. The compiler lowers the policy outside
+the business DAG, and the Rust scheduler enforces it for every ingress. No
+policy is silently ignored.
 
 Runtime Policy v1 limits counts to 1,000,000, durations to whole milliseconds
 from 1 ms through 365 days, and queue names to 128-character lowercase dot,
@@ -739,10 +683,9 @@ Structural rules:
   `{{context...}}` or `{{lifecycle...}}` placeholders. Secrets are forbidden in
   message content.
 
-LEC1 validates this syntax and lowers it into Compiled Workflow Model v11 outside
-the business DAG. Durable Event v10 execution begins in LEC2 and LEC3. Until
-then, `woml check` accepts lifecycle source and `woml run` rejects it with
-`WOML_LIFECYCLE_RUNTIME_UNAVAILABLE` rather than silently ignoring hooks.
+Lifecycle definitions lower outside the business DAG and execute through the
+same durable event authority as workflow steps. Hook failures and outcomes are
+inspectable and recoverable; hooks are never silently ignored.
 
 ## 9. `<triggers>`
 
@@ -751,20 +694,19 @@ container declares a call-only workflow for `services.workflows.call()`.
 Writing an empty `<triggers />` container is invalid; omission is the one
 canonical call-only source shape.
 
-All triggers in one workflow start the same `<steps>`. WOML v0.1 does not expose
+All triggers in one workflow start the same `<steps>`. WOML v1.0 does not expose
 an attribute that routes different triggers to different entry nodes. Workflows
 with different graphs MUST be separate workflow definitions.
 
 This corrects an ambiguity in the TypeScript SDK where triggers and steps are
 stored in unrelated flat arrays.
 
-Call-only source compiles to Model v10 with an empty trigger list. WC1 validates
-and lowers this shape, WC2 registers exact targets and durably admits one child,
-and WC3 executes that same-runtime child through the normal Rust DAG engine and
-returns its terminal JSON result. Workflow Calls v1 cannot target any workflow
-containing Human Approval because an arbitrary Bun script continuation cannot
-yet be serialized across a long durable wait. Rust rejects the target before
-child admission.
+Call-only source compiles with an empty trigger list and is registered by its
+workflow ID. `services.workflows.call()` waits for the child's terminal result;
+`services.workflows.start()` returns the admitted child run ID immediately.
+Synchronous calls cannot target a workflow containing Human Approval because a
+Bun script continuation cannot be serialized across a long durable wait. Rust
+rejects that target before child admission.
 
 ### 9.1 `<manual>`
 
@@ -871,9 +813,8 @@ resolution and portability rules are designed.
 
 The normalized trigger value contains safe message, user, channel, thread, and
 workspace identifiers. Bot/self messages, edits, deletes, provider envelopes,
-and credentials never enter `context.payload`. T6 validates this syntax and
-lowers it to Model v7. Slack event ingestion remains unavailable until T7, so
-the CLI must reject activation instead of pretending that the trigger is live.
+and credentials never enter `context.payload`. Slack event ingestion uses one
+shared Socket Mode connection per credential pair and durable Rust admission.
 
 ### 9.3.1 `<telegram>`
 
@@ -887,8 +828,7 @@ the CLI must reject activation instead of pretending that the trigger is live.
 
 Telegram v1 supports the single `message` event. The trigger is empty and is
 valid only directly inside `<triggers>`. Its bot token is one exact symbolic
-secret reference. ACP2 validates and lowers it to Model v15; ACP3 supplies
-long polling and durable admission.
+secret reference. The runtime uses long polling and durable admission.
 
 ### 9.3.2 `<discord>`
 
@@ -905,7 +845,7 @@ Discord v1 supports `app-mention` and `direct-message`. `channels` is optional;
 when present it is a comma-separated list of numeric Discord channel IDs with
 17 to 20 digits. Channel names are rejected because they are mutable display
 labels, not durable routing identities. `bot-token` is one exact secret
-reference. ACP5 executes Discord through a shared resumable Gateway connection
+reference. The runtime uses a shared resumable Gateway connection
 and supervised REST operations. Slash-command syntax is explicitly deferred.
 `woml check` remains offline and does not read credentials or contact Discord.
 
@@ -934,11 +874,9 @@ template boundary. Script messaging uses the same reviewed shape through
 `services.whatsapp.send({ accessToken, phoneNumberId, conversationId,
 template: { name, language, parameters } })`.
 
-ACP6 validates and lowers this authoring surface to Model v15. The stable
-callback route is `/callbacks/whatsapp`; handshake and exact raw-body
-signature verification are frozen and conformance-tested. Actual Cloud API
-ingestion and delivery remain unavailable until ACP7, so `woml run` fails
-before resolving credentials or contacting Meta while `woml check` succeeds.
+The stable callback route is `/callbacks/whatsapp`; handshake and exact raw-body
+signature verification are conformance-tested. The runtime validates signed
+callbacks and supervises Cloud API delivery.
 
 ### 9.4 `<schedule>`
 
@@ -958,7 +896,7 @@ before resolving credentials or contacting Meta while `woml check` succeeds.
 | `timezone` | No | IANA timezone | Evaluation timezone; defaults to `UTC`. |
 | `on-missed` | No | `skip` or `run-once` | Restart policy; defaults to `skip`. |
 
-T8 validates and lowers schedules through **WOML Cron v1**: five numeric fields
+WOML schedules use **WOML Cron v1**: five numeric fields
 (`minute hour day-of-month month day-of-week`) separated by single spaces.
 Wildcards, lists, inclusive ranges, and `/step` are supported. Seconds, names,
 macros, wrapping ranges, and Quartz-only tokens are rejected. Day-of-week uses
@@ -1012,16 +950,16 @@ lowercase letter, and contains at least two lowercase alphanumeric segments
 separated by one `.`, `_`, or `-`. Examples are `order.created`,
 `payment_failed`, and `agent-response`.
 
-When `secret` is present, Event Publication v1 freezes authenticated publishing at
+When `secret` is present, authenticated publication is available at
 `POST /_woml/events/{eventName}` with a required `Event-ID`, a bearer control
 credential, and one top-level JSON object of at most 1 MiB. Publication fans
 out in loaded workflow and trigger order. Each matching subscriber validates
 and admits independently, so the response may be `accepted`, `partial`, or
-`rejected`. The T12 Rust runtime serves this endpoint, and `woml emit` provides
+`rejected`. The Rust runtime serves this endpoint, and `woml emit` provides
 the built-in secret-store-backed publisher client. Without `secret`, no public
 publisher route is opened for that event name.
 
-SC11 also exposes `services.events.emit(name, payload, options?)`. It publishes
+`services.events.emit(name, payload, options?)` publishes
 directly through Rust without HTTP or a control token, derives stable
 idempotency from the managed operation identity, returns safe per-subscriber
 run results, and stores bounded hidden lineage for cycle/depth protection.
@@ -1065,13 +1003,13 @@ Empty and control-only behavior is explicit:
 - A workflow whose only item is an approval is valid: it waits durably, records
   the decision output at `context.steps.<approvalId>`, runs the selected arm if
   non-empty, and then completes.
-- The first executable result-choice profile requires `<otherwise>`, so a
+- A result-producing choice requires `<otherwise>`, so a
   successful choice always selects one route and publishes one stable merged result.
 - Structural containers do not need to contain a `<script>` specifically, but
   the lowered graph must contain at least one reachable executable or durable
   control node. A graph made only of grouping metadata is invalid.
 
-WOML v0.1 does not expose arbitrary `after`, `depends-on`, `from`, or `to`
+WOML v1.0 does not expose arbitrary `after`, `depends-on`, `from`, or `to`
 attributes. The frontend still produces a DAG, but the source language describes
 that DAG through structured sequencing, parallelism, and conditional flow.
 
@@ -1110,7 +1048,6 @@ wrapped in `<step>`.
 | `retry-backoff` | No | `fixed` or `exponential` | Backoff strategy; defaults to `exponential` when `retry > 1`. |
 | `retry-delay` | No | Positive duration up to `24h` | Fixed delay or initial exponential delay; defaults to `1s`. |
 | `retry-max-delay` | No | Positive duration up to `24h` | Exponential cap; invalid with fixed backoff. |
-| `timeout` | No | Duration | Reserved maximum duration of each attempt; not executable yet. |
 
 Human-readable name and description are attributes, as defined in Section 5.1.
 They lower to `metadata.name` and `metadata.description` on the compiled node.
@@ -1173,14 +1110,10 @@ Script Bindings v1 provides the capability profile:
 - `secrets` exposes only literal `secrets.NAME` values proven necessary by the
   frontend; the Model v8 definition records names only.
 
-Using either binding, or native `fetch`, selects Model v8. SC2–SC14 implement
-its event authority, Script Host v4, observed native Fetch, Rust-managed HTTP,
-SQLite/PostgreSQL Database v1, Storage v1, Cache v1, and internal Events
-Service v1, composition coverage, documentation, packaging, and a unified
-release gate. Queue remains unavailable until its producer-and-consumer product
-contract is justified. There is no fallback that runs an untracked service
-call. Service clients and secret values never become context or persisted step
-output. The author-facing entry point is `docs/woml-services.md`.
+Using either binding or native `fetch()` selects the capability-aware script
+profile. There is no fallback that runs an untracked managed service call.
+Service clients and secret values never become context or persisted step
+output. Start with [Services](woml-services.md).
 
 Native `fetch()` preserves Bun's standard `Request`/`Response` behavior.
 `services.http.request()` returns `{ status, ok, headers, data, url,
@@ -1224,7 +1157,7 @@ derives a stable publication identity, durably admits child runs, and protects
 against duplicate retry, cycles, and unbounded lineage. The complete contract
 and internal-only example are documented in `docs/woml-events-service.md`.
 
-The public v0.1 context paths are:
+The public v1.0 context paths are:
 
 ```text
 context.payload
@@ -1238,7 +1171,7 @@ projection, and Script Host transport contracts. `context.trigger` remains a
 deprecated runtime compatibility alias for already compiled scripts; new WOML
 source and documentation use `context.payload`.
 
-`context.run` is not present in WOML v0.1. A runtime MUST NOT expose internal run
+`context.run` is not present in WOML v1.0. A runtime MUST NOT expose internal run
 fields through that name. A future WOML version may add `context.run` only after
 its minimal public schema and versioning policy are approved.
 
@@ -1256,9 +1189,8 @@ enters the context projection only after the handler succeeds:
 return value -> successful handler outcome -> context.steps.<stepId>
 ```
 
-The first CLI profile publishes that outcome to its in-memory projection. A
-durable runtime first appends the versioned success event and then folds the
-event history into the same projection. Storage changes how the projection is
+The runtime appends the versioned success event and then folds event history
+into the context projection. Storage changes how the projection is
 reconstructed, not the script-facing context contract.
 
 The following do not persist:
@@ -1356,12 +1288,10 @@ A process restart leaves the approval waiting. An in-memory Promise, callback,
 or timer is never the authoritative state. The token is runtime identity; it is
 not WOML source text and is not a compiled constant.
 
-N0 freezes the Slack-first syntax, compiled model v5, event vocabulary v5,
-provider-host v1, delivery identity, failure behavior, and secret boundary in
-`docs/protocols/notification-contracts-v1.md`. N1 implements secure secret
-management. N2 implements source validation and Model v5 lowering. Until N3,
-`woml run` stops after successful compilation with
-`WOML_NOTIFICATION_RUNTIME_UNAVAILABLE`; it never silently ignores delivery.
+Notification delivery is supervised, persisted, and recoverable. Provider
+credentials remain symbolic secret references in compiled definitions; literal
+credentials are rejected. See [Notifications](woml-notifications.md) and the
+[notification contract](protocols/notification-contracts-v1.md).
 
 One `<slack>` tag targets one credential set and one or more destinations:
 
@@ -1407,9 +1337,7 @@ comma-separated numeric channel IDs:
 
 Approval Discord tags forbid `message`; lifecycle Discord tags require it.
 Every channel becomes one ordered delivery and all deliveries share the same
-first-valid-decision-wins approval authority. ACP4 freezes authoring and
-lowering; ACP5 executes delivery, durable button decisions, and message
-convergence.
+first-valid-decision-wins approval authority.
 
 ### 12.2 Resolving an approval
 
@@ -1424,7 +1352,7 @@ Content-Type: application/json
 }
 ```
 
-Only the exact decisions `"approved"` and `"rejected"` are accepted in v0.1.
+Only the exact decisions `"approved"` and `"rejected"` are accepted in v1.0.
 HTTP is the public decision mechanism. WOML does not expose a `woml.resume()`
 package API or an in-script control-flow function.
 
@@ -1593,7 +1521,7 @@ TypeScript SDK's `.if()`, `.elseIf()`, `.else()`, and `.endIf()` marker chain.
   successful result at `context.steps.<choiceId>`.
 - Optional `name` and `description` attributes describe the choice.
 - It contains one or more `<when>` elements.
-- It contains exactly one `<otherwise>` in the first executable result-choice profile.
+- It contains exactly one `<otherwise>` in the result-producing profile.
 - `<otherwise>` MUST be last.
 - Each `<when>` and `<otherwise>` contains one or more step items followed by
   exactly one `<result>`.
@@ -1762,7 +1690,7 @@ The frontend accepts and validates the minimal concurrent-route syntax:
 - A terminal fork preserves the last earlier value-producing main-route
   result. A workflow whose only terminal structure is a fork is rejected.
 
-FJ2 also accepts an ID-less control-only `<choose>` whose non-empty arms omit
+An ID-less control-only `<choose>` has non-empty arms that omit
 `<result>`. It controls execution but publishes no `context.steps` result. The
 existing `<choose id="...">` profile remains the form for a path-stable merged
 result.
@@ -1889,7 +1817,7 @@ a string:
 
 `<operation>` is illustrative, not accepted syntax.
 
-### 15.4 Frozen v0.1 reference grammar
+### 15.4 Reference grammar
 
 The frozen language grammar defines exact references with no internal
 whitespace:
@@ -1908,11 +1836,11 @@ not WOML references. A referenced step must exist and dominate the consumer in
 the lowered DAG. A missing nested property at runtime produces
 `WOML_REFERENCE_NOT_AVAILABLE`; it never becomes `undefined` or an empty string.
 
-The published result-choice profile resolves exact references in `<when test>` and
+The result-producing choice profile resolves exact references in `<when test>` and
 `<result value>` without passing them through JavaScript. Scripts continue to
 read `context.steps.<id>` directly through the injected JavaScript context.
-Mixed templates remain in the design catalog; their escaping rules must be
-approved before a publishable profile accepts them.
+Mixed templates are accepted only by attributes whose contract explicitly
+allows templates, such as lifecycle notification messages.
 
 ## 16. Static Validation
 
@@ -1922,7 +1850,7 @@ conditions hold.
 ### 16.1 Structural errors
 
 - The document has no `<workflow>` root or has more than one root.
-- Required root children are missing or out of order.
+- Required root children are missing, duplicated, or under the wrong parent.
 - An element appears under an invalid parent.
 - A required attribute is missing.
 - An attribute is duplicated.
@@ -2097,82 +2025,35 @@ Human formatting may improve without changing the diagnostic object or code.
 Webhook input-schema failures use the transport response contract in Section
 9.2 because their location is the request payload, not WOML source.
 
-## 18. Remaining Open Design Decisions
+## 18. v1.0 boundaries
 
-Identifier grammar, raw-content termination, and conditional merge results are
-closed by Sections 5, 2, and 14. The following items remain open and block only
-the executable profiles that depend on them.
+The following syntax is intentionally not part of WOML v1.0:
 
-### 18.1 Lifecycle execution
+- arbitrary DAG-edge attributes such as `after`, `from`, or `depends-on`;
+- structural loops, for-each, batching, race, or first-success groups;
+- declarative HTTP/database/storage tags inside `<step>`;
+- npm/package imports or dynamic module installation;
+- external schema-file references;
+- `context.env`, `context.run`, or dynamic secret enumeration;
+- a package-level `woml.resume()` API; and
+- long approval-waiting synchronous workflow calls.
 
-Approve the event boundaries, ordering, retry behavior, timeout behavior, and
-error recording for lifecycle scripts. In particular, decide whether hook
-failure can change an already determined workflow outcome.
+Authors may use ordinary JavaScript inside `<script>` for local computation.
+Durable external effects should use the reviewed `services` capabilities. New
+language constructs require their own versioned compilation, event, recovery,
+and diagnostic contracts; the v1.0 compiler rejects them instead of guessing.
 
-### 18.2 Continuing after parallel failure
+`<parallel on-error>` accepts only `fail-fast` and `wait-all`. Both fail the
+group when any child fails. There is no missing-output continuation mode.
 
-Define an explicit failed-output or outcome model before adding
-`on-error="continue"`. The current grammar accepts only `fail-fast` and
-`wait-all`, both of which fail the parallel group when any child fails.
+## 19. Minimal workflow
 
-### 18.3 Approval notifications and production hosting
-
-A0 froze the local HTTP, token, store, event, native-outcome, timeout, and
-diagnostic contracts in `docs/protocols/approval-*.md`. HTTP is the public
-decision mechanism shared by browser, command-line, mobile, and provider
-integrations.
-
-N0 freezes Slack notification and secret contracts in
-`docs/protocols/notification-contracts-v1.md`; N1 implements the secret
-reference primitive and secure secret-management CLI; N2 implements source
-validation and Model v5 lowering. N3–N6 complete the durable outbox, built-in
-provider host, real Socket Mode integration, recovery, packaging, and
-publication hardening. The remaining approval-adjacent work is later product
-expansion:
-
-- Generic signed-webhook notifications remain later work. Telegram, Discord,
-  and WhatsApp trigger, messaging, notification, and approval execution is available.
-- Remote hosting waits for TLS, reviewer authentication/authorization, and
-  deployment ownership.
-- Structured reviewer metadata, custom forms, and validated decision payloads
-  require a later language version.
-- Credential cleanup waits for an explicit retention/audit contract.
-
-None of these changes the frozen two-decision flow or timeout behavior. WOML
-will not add a package-level resume function.
-
-## 19. Explicitly Deferred Syntax
-
-The following concepts are not part of the fundamental grammar in this draft:
-
-- Background `<action>` execution.
-- Race/first-success concurrency.
-- `while`, `for-each`, and batching.
-- Subflows.
-- Cache and circuit-breaker policies.
-- Durable event waiting.
-- Pause and cancellation syntax.
-- Explicit arbitrary DAG edges.
-- External schema files.
-- Resolved secrets in source/models/events, dynamic script secret access, or
-  `context.env`.
-- RAK, packages, `<requires>`, and dynamic capability vocabularies.
-- Declarative capability operations.
-- Database, non-approval Slack operations, email, and other
-  integration operations.
-
-These features require their own durable execution and context semantics. Their
-absence from this grammar does not prevent the compiled workflow model from
-supporting future DAG execution features.
-
-## 20. Minimum Executable-Profile Example
-
-The walking-skeleton workflow exercises raw script execution and direct context
-threading between two sequential script steps:
+This workflow exercises manual triggering and direct context threading between
+two sequential script steps:
 
 ```xml
 <woml>
-<workflow version="0.1" id="hello" name="Hello WOML">
+<workflow version="1.0.0" id="hello" name="Hello WOML">
   <triggers>
     <manual id="start" />
   </triggers>
@@ -2203,35 +2084,14 @@ threading between two sequential script steps:
 </woml>
 ```
 
-For `woml run hello.woml` or one-shot `woml test hello.woml`, the manual trigger
-payload is `{}`. `woml run` remains active after the startup occurrence;
-`woml test` prints the result and exits. The successful context is:
+For `woml run hello.woml`, press Enter to create a run. The manual payload is
+`{}` and the final result is:
 
 ```json
-{
-  "trigger": {},
-  "steps": {
-    "a": {
-      "x": "World"
-    },
-    "b": {
-      "message": "Hello World"
-    }
-  }
-}
+{ "message": "Hello World" }
 ```
 
-The Rust engine builds this projection by folding run events. Its durable mode
-reconstructs the same public shape from persisted events; the context is never
-an authoritative mutable object exposed to scripts.
-
-The Phase 0 acceptance contracts are checked in at:
-
-- `woml/tests/fixtures/hello.woml` — canonical source workflow.
-- `woml/tests/fixtures/hello.compiled.v1.json` — exact compiled DAG.
-- `woml/tests/fixtures/hello.context.v0.1.json` — context before and after each
-  node.
-- `woml-cli/tests/fixtures/hello.cli.v0.1.json` — exact public process contract.
-
-The successful CLI result is compact JSON followed by one line feed on stdout,
-empty stderr, and exit status `0`.
+The engine builds `context.steps` by folding durable run events; scripts never
+receive an authoritative mutable workflow state object. Use `woml test
+hello.woml` when an automated test or CI job needs a one-shot execution that
+exits.
