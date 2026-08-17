@@ -4,10 +4,16 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { formatWorkflowCallProgress } from '../src/cli';
+import { inspectRunWithRust, listRunsWithRust } from '../src/rust-executor';
 
 const packageRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(packageRoot, '..');
 const executable = join(packageRoot, 'dist', 'cli.js');
+const nativeCorePath = join(
+  packageRoot,
+  'dist',
+  `woml-core.${process.platform}-${process.arch}.node`
+);
 const moduleExample = join(projectRoot, 'examples', 'workflowCallsModule');
 let temporaryDirectory: string;
 
@@ -99,29 +105,41 @@ describe('Workflow Call product journey', () => {
 
   test('calls a module-backed child and inspects both durable runs', async () => {
     const state = join(temporaryDirectory, 'module-call.sqlite');
-    const runtime = start(['run', moduleExample, '--state', state]);
-    await waitFor(runtime, 'result: {"score":90}');
-    const progress = runtime.stderr();
-    const ids = progress.match(
-      /Workflow call (run_[^/]+)\/requestRisk started child (run_call_[^ ]+) for/
+    const parentPath = join(temporaryDirectory, 'module-call-parent.woml');
+    await writeFile(
+      parentPath,
+      (await Bun.file(join(moduleExample, 'request-risk.woml')).text()).replace(
+        '<manual id="start" />',
+        '<webhook id="start" path="/module-risk" method="POST" auth="none" />'
+      )
     );
-    expect(ids).not.toBeNull();
-    const [, parentRunId, childRunId] = ids!;
+    const port = availablePort();
+    const runtime = start([
+      'run',
+      parentPath,
+      join(moduleExample, 'calculate-risk.woml'),
+      '--state',
+      state,
+      '--port',
+      String(port),
+    ]);
+    await waitFor(runtime, 'WOML automation is active. Press Ctrl+C to stop.');
+    const response = await fetch(`http://127.0.0.1:${port}/module-risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(response.status).toBe(202);
+    await waitFor(runtime, '{ score: 90 }');
+    const runs = listRunsWithRust(state, { limit: 10 }, { nativeCorePath }).runs;
+    const parentRunId = runs.find(run => run.workflowId === 'request-module-risk')!.runId;
+    const childRunId = runs.find(run => run.workflowId === 'calculate-risk-module')!.runId;
 
     for (const [runId, relation] of [
       [parentRunId!, 'childCalls'],
       [childRunId!, 'parentCall'],
     ] as const) {
-      const inspection = Bun.spawnSync([
-        executable,
-        'runs',
-        'get',
-        runId,
-        '--state',
-        state,
-      ], { cwd: projectRoot });
-      expect(inspection.exitCode).toBe(0);
-      const decoded = JSON.parse(inspection.stdout.toString());
+      const decoded = inspectRunWithRust(state, runId, { nativeCorePath });
       expect(decoded.workflowCalls[relation]).toBeDefined();
       expect(JSON.stringify(decoded.workflowCalls)).not.toContain('customer-42');
       expect(JSON.stringify(decoded.workflowCalls)).not.toContain('payloadDigest');
@@ -134,7 +152,7 @@ describe('Workflow Call product journey', () => {
     await mkdir(directory, { recursive: true });
     await writeFile(
       join(directory, 'parent.woml'),
-      `<woml><workflow id="approval-caller"><triggers><manual id="start" /></triggers>
+      `<woml><workflow id="approval-caller"><triggers><webhook id="start" path="/approval-call" method="POST" auth="none" /></triggers>
         <steps><step id="callApproval"><script>
           return services.workflows.call('approval-target', {});
         </script></step></steps></workflow></woml>`
@@ -153,14 +171,22 @@ describe('Workflow Call product journey', () => {
       </steps></workflow></woml>`
     );
     const state = join(temporaryDirectory, 'approval-call.sqlite');
+    const port = availablePort();
     const runtime = start([
       'run',
-      directory,
+      join(directory, 'parent.woml'),
+      join(directory, 'target.woml'),
       '--state',
       state,
       '--port',
-      String(availablePort()),
+      String(port),
     ]);
+    await waitFor(runtime, 'WOML automation is active. Press Ctrl+C to stop.');
+    const response = await fetch(
+      `http://127.0.0.1:${port}/approval-call`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }
+    );
+    expect(response.status).toBe(202);
     await waitFor(runtime, 'WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED');
     expect(runtime.stderr()).toContain('contains Human Approval');
     expect(runtime.stderr()).toContain('Run it independently');

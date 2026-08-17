@@ -4494,7 +4494,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         let output = match resolve_context_reference(expression, &projection.context) {
           Ok(output) => output,
           Err(error) => {
-            return fail_choice(
+            return fail_branch(
               engine,
               run_id,
               BranchEvaluationError {
@@ -4503,6 +4503,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
                 path: Some(error.path),
                 kind: BranchEvaluationErrorKind::ReferenceNotAvailable,
               },
+              BranchFailureSite::Result,
             );
           }
         };

@@ -1,11 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+import { inspectRunWithRust } from '../src/rust-executor';
 
 const packageRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(packageRoot, '..');
 const executable = join(packageRoot, 'dist', 'cli.js');
+const nativeCorePath = join(
+  packageRoot,
+  'dist',
+  `woml-core.${process.platform}-${process.arch}.node`
+);
 const exampleDirectory = join(projectRoot, 'examples', 'workflowStartManual');
 let temporaryDirectory: string;
 
@@ -15,15 +22,24 @@ interface CapturedProcess {
   readonly stderrDone: Promise<void>;
 }
 
-function startRuntime(state: string): CapturedProcess {
+function availablePort(): number {
+  const probe = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
+  const port = probe.port!;
+  probe.stop(true);
+  return port;
+}
+
+function startRuntime(parent: string, state: string, port: number): CapturedProcess {
   const child = Bun.spawn(
     [
       executable,
       'run',
-      join(exampleDirectory, 'workflow1.woml'),
+      parent,
       join(exampleDirectory, 'workflow2.woml'),
       '--state',
       state,
+      '--port',
+      String(port),
     ],
     { cwd: projectRoot, stdout: 'pipe', stderr: 'pipe' }
   );
@@ -54,16 +70,7 @@ async function waitFor(process: CapturedProcess, text: string): Promise<void> {
 }
 
 function inspect(runId: string, state: string): Record<string, unknown> {
-  const result = Bun.spawnSync([
-    executable,
-    'runs',
-    'get',
-    runId,
-    '--state',
-    state,
-  ], { cwd: projectRoot });
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-  return JSON.parse(result.stdout.toString()) as Record<string, unknown>;
+  return inspectRunWithRust(state, runId, { nativeCorePath }) as unknown as Record<string, unknown>;
 }
 
 beforeAll(async () => {
@@ -80,16 +87,32 @@ afterAll(async () => {
 describe('services.workflows.start()', () => {
   test('returns after durable admission while the child continues independently', async () => {
     const state = join(temporaryDirectory, 'state.sqlite');
-    const runtime = startRuntime(state);
-    await waitFor(runtime, '"message":"The child is running and the parent continued"');
-    const resultLine = runtime
-      .stderr()
-      .split('\n')
-      .find(line => line.includes(' result: {"message"'));
-    expect(resultLine).toBeDefined();
-    const parentResult = JSON.parse(resultLine!.split('Result: ', 2)[1]!) as {
+    const parentPath = join(temporaryDirectory, 'workflow1-webhook.woml');
+    await writeFile(
+      parentPath,
+      (await readFile(join(exampleDirectory, 'workflow1.woml'), 'utf8')).replace(
+        '<manual id="start" />',
+        '<webhook id="start" path="/start-background" method="POST" auth="none" />'
+      )
+    );
+    const port = availablePort();
+    const runtime = startRuntime(parentPath, state, port);
+    await waitFor(runtime, 'WOML automation is active. Press Ctrl+C to stop.');
+    const response = await fetch(`http://127.0.0.1:${port}/start-background`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(response.status).toBe(202);
+    const admission = (await response.json()) as { runId: string };
+    await waitFor(runtime, 'The child is running and the parent continued');
+    const parentResult = inspect(admission.runId, state).result as {
+      message: string;
       childRunId: string;
     };
+    expect(parentResult).toMatchObject({
+      message: 'The child is running and the parent continued',
+    });
 
     const whileParentIsDone = inspect(parentResult.childRunId, state);
     expect(whileParentIsDone.status).toBe('running');

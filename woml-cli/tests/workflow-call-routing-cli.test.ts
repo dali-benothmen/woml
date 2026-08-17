@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -16,6 +16,13 @@ const fixtures = join(
 const parentWorkflow = join(fixtures, 'request-risk.woml');
 const childWorkflow = join(fixtures, 'calculate-risk.woml');
 let temporaryDirectory: string;
+
+function availablePort(): number {
+  const probe = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
+  const port = probe.port!;
+  probe.stop(true);
+  return port;
+}
 
 interface CapturedProcess {
   readonly child: ReturnType<typeof Bun.spawn>;
@@ -79,33 +86,71 @@ afterAll(async () => {
 });
 
 describe('Local Workflow Call routing', () => {
-  test('two woml run processes communicate through shared local state', async () => {
+  test('rejects a second persistence authority for the same local state', async () => {
     const state = join(temporaryDirectory, 'cross-process.sqlite');
-    const target = start(['run', childWorkflow, '--state', state]);
-    await waitFor(target, 'WOML runtime is ready with 0 registered triggers.');
+    const target = start([
+      'run',
+      childWorkflow,
+      '--state',
+      state,
+      '--port',
+      String(availablePort()),
+    ]);
+    await waitFor(target, 'WOML automation is active. Press Ctrl+C to stop.');
 
-    const parent = start(['run', parentWorkflow, '--state', state]);
-    await waitFor(parent, 'result: {"score":90}');
-    expect(parent.stderr()).toContain('Run ');
-    expect(parent.stderr()).toContain(' succeeded.');
-
-    await stop(parent);
+    const webhookParent = join(temporaryDirectory, 'cross-process-parent.woml');
+    await writeFile(
+      webhookParent,
+      (await readFile(parentWorkflow, 'utf8')).replace(
+        '<manual id="start" />',
+        '<webhook id="start" path="/cross-process-risk" method="POST" auth="none" />'
+      )
+    );
+    const parentPort = availablePort();
+    const parent = start([
+      'run',
+      webhookParent,
+      '--state',
+      state,
+      '--port',
+      String(parentPort),
+    ]);
+    expect(await parent.child.exited).toBe(1);
+    await parent.stderrDone;
+    expect(parent.stderr()).toContain('WOML_DEPLOYMENT_ALREADY_RUNNING');
+    expect(parent.stderr()).toContain('already owned by runtime');
     await stop(target);
   }, 30_000);
 
   test('explicit files form the same runtime unit as a workflow directory', async () => {
     const state = join(temporaryDirectory, 'multiple-files.sqlite');
+    const webhookParent = join(temporaryDirectory, 'request-risk-webhook.woml');
+    await writeFile(
+      webhookParent,
+      (await readFile(parentWorkflow, 'utf8')).replace(
+        '<manual id="start" />',
+        '<webhook id="start" path="/request-risk" method="POST" auth="none" />'
+      )
+    );
+    const port = availablePort();
     const runtime = start([
       'run',
-      parentWorkflow,
+      webhookParent,
       childWorkflow,
+      '--port',
+      String(port),
       '--state',
       state,
     ]);
-    await waitFor(runtime, 'result: {"score":90}');
-    expect(runtime.stderr()).toContain(
-      'WOML runtime is ready with 1 registered trigger.'
-    );
+    await waitFor(runtime, 'WOML automation is active. Press Ctrl+C to stop.');
+    const response = await fetch(`http://127.0.0.1:${port}/request-risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(response.status).toBe(202);
+    await waitFor(runtime, '{ score: 90 }');
+    expect(runtime.stderr()).toContain('Workflow call · calculate-risk completed');
     await stop(runtime);
   }, 30_000);
 });

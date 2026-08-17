@@ -115,7 +115,7 @@ jobs:
 
   build-native:
     name: Build and load-test ${{ matrix.package }}
-    needs: validate
+    needs: [validate, build-main]
     strategy:
       fail-fast: false
       matrix:
@@ -170,6 +170,10 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - uses: actions/download-artifact@v6
+        with:
+          name: woml-main
+          path: release/main
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust }}
@@ -218,6 +222,26 @@ jobs:
           bun woml-cli/scripts/release-artifact.ts pack --root release/native
           bun woml-cli/scripts/release-artifact.ts seal --root release/native --kind native --target ${{ matrix.package }}
           bun woml-cli/scripts/release-artifact.ts verify --root release/native
+      - name: Clean-install and execute the release candidate
+        if: ${{ !matrix.musl }}
+        shell: bash
+        run: >-
+          bun woml-cli/scripts/smoke-release-candidate.ts
+          --main-root release/main
+          --native-root release/native
+          --target ${{ matrix.package }}
+      - name: Clean-install and execute the musl release candidate
+        if: matrix.musl
+        shell: bash
+        run: >-
+          docker run --rm
+          -v "${{ github.workspace }}:/work"
+          -w /work
+          oven/bun:${{ env.BUN_VERSION }}-alpine
+          bun woml-cli/scripts/smoke-release-candidate.ts
+          --main-root release/main
+          --native-root release/native
+          --target ${{ matrix.package }}
       - uses: actions/upload-artifact@v6
         with:
           name: native-${{ matrix.package }}
@@ -234,10 +258,39 @@ jobs:
           find release dist/target -maxdepth 5 -type f -print 2>/dev/null || true
           git status --short
 
+  container-smoke:
+    name: Test the Linux release candidate in Docker
+    runs-on: ubuntu-24.04
+    needs: [build-main, build-native]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/download-artifact@v6
+        with:
+          name: woml-main
+          path: release/main
+      - uses: actions/download-artifact@v6
+        with:
+          name: native-linux-x64-gnu
+          path: release/native-linux-x64-gnu
+      - name: Verify reachability, isolation, and state persistence
+        run: >-
+          bun woml-cli/scripts/smoke-docker-release-candidate.ts
+          --main-root release/main
+          --native-root release/native-linux-x64-gnu
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          docker version || true
+          docker ps --all || true
+          docker volume ls || true
+
   collect:
     name: Verify the complete package family
     runs-on: ubuntu-24.04
-    needs: [validate, build-main, build-native]
+    needs: [validate, build-main, build-native, container-smoke]
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2

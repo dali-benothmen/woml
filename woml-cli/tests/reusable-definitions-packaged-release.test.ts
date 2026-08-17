@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const packageRoot = resolve(import.meta.dir, '..');
-const projectRoot = resolve(packageRoot, '..');
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
+const projectRoot = resolve(import.meta.dir, '../..');
 let temporaryDirectory: string;
 
 beforeAll(async () => {
@@ -17,43 +18,20 @@ afterAll(async () => {
 
 describe('reusable definitions clean package', () => {
   test('an installed package compiles providers and executes composed custom steps', async () => {
-    const archives = join(temporaryDirectory, 'archives');
     const consumer = join(temporaryDirectory, 'consumer');
     const cache = join(temporaryDirectory, 'bun-cache');
     const workflows = join(consumer, 'workflows');
     await Promise.all(
-      [archives, consumer, cache, workflows].map(path =>
+      [consumer, cache, workflows].map(path =>
         mkdir(path, { recursive: true })
       )
     );
-
-    const packed = Bun.spawnSync(
-      [Bun.which('bun')!, 'pm', 'pack', '--ignore-scripts', '--destination', archives],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
-    const archive = (await readdir(archives))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(archives, name))[0];
-    expect(archive).toBeDefined();
 
     await writeFile(
       join(consumer, 'package.json'),
       JSON.stringify({ name: 'woml-reusable-clean-consumer', private: true })
     );
-    const installed = Bun.spawnSync(
-      [Bun.which('bun')!, 'add', archive!, '--no-save'],
-      {
-        cwd: consumer,
-        env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    expect(
-      installed.exitCode,
-      `${installed.stdout.toString()}${installed.stderr.toString()}`
-    ).toBe(0);
+    await installLocalReleaseCandidate(consumer, { cache });
 
     const reusableFixtures = resolve(
       projectRoot,

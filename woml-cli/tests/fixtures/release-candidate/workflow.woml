@@ -1,0 +1,12 @@
+<woml>
+  <workflow id="container-smoke" name="Container smoke" version="1.0.0">
+    <triggers>
+      <webhook id="ping" path="/container-smoke" method="POST" auth="none" />
+    </triggers>
+    <steps>
+      <step id="reply" name="Reply"><script>
+        return { message: "WOML container is running", value: context.payload.value };
+      </script></step>
+    </steps>
+  </workflow>
+</woml>

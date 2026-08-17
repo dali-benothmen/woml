@@ -54,6 +54,8 @@ for (const marker of [
   'release-artifact.ts load-native',
   'release-artifact.ts seal',
   'release-artifact.ts verify',
+  'smoke-release-candidate.ts',
+  'smoke-docker-release-candidate.ts',
   'native-load-test.json',
   'artifact-sha256.json',
   'actions/upload-artifact@v6',
