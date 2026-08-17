@@ -1,0 +1,15 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "notify-invocation-01",
+  "outcome": {
+    "kind": "delivery_success",
+    "providerMessage": {
+      "workspaceId": "T12345678",
+      "channelId": "C12345678",
+      "messageId": "1723024800.000001"
+    }
+  },
+  "durationMs": 42.5
+}

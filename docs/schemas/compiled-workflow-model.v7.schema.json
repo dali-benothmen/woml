@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v7",
+  "title": "WOML Compiled Workflow Model v7",
+  "description": "Language-neutral DAG contract activating production trigger definitions while preserving every v1-v6 graph and node contract.",
+  "x-status": "production-trigger-contract-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v6",
+  "x-invariants": [
+    "The model remains a directed acyclic graph and all v1-v6 node semantics remain unchanged.",
+    "Trigger IDs are unique within one workflow definition.",
+    "Every trigger starts the same graph entry nodes.",
+    "Resolved secret values never appear in the compiled model.",
+    "Webhook v1 executes POST only and uses an exact static path.",
+    "Manual, webhook, Slack, schedule, interval, and event shapes are frontend- and runtime-active in the completed T13 Production Triggers profile."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 7 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v6#/$defs/workflowGraph" }
+  },
+  "$defs": {
+    "compiledTrigger": {
+      "oneOf": [
+        { "$ref": "#/$defs/manualTrigger" },
+        { "$ref": "#/$defs/webhookTrigger" },
+        { "$ref": "#/$defs/slackTrigger" },
+        { "$ref": "#/$defs/scheduleTrigger" },
+        { "$ref": "#/$defs/intervalTrigger" },
+        { "$ref": "#/$defs/eventTrigger" }
+      ]
+    },
+    "manualTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "trigger.manual" },
+        "config": { "$ref": "#/$defs/emptyObjectExpression" }
+      }
+    },
+    "webhookTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "trigger.webhook" },
+        "config": { "$ref": "#/$defs/webhookConfig" }
+      }
+    },
+    "slackTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "trigger.slack" },
+        "config": { "$ref": "#/$defs/slackConfig" }
+      }
+    },
+    "scheduleTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "trigger.schedule" },
+        "config": { "$ref": "#/$defs/scheduleConfig" }
+      }
+    },
+    "intervalTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "trigger.interval" },
+        "config": { "$ref": "#/$defs/intervalConfig" }
+      }
+    },
+    "eventTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "trigger.event" },
+        "config": { "$ref": "#/$defs/eventConfig" }
+      }
+    },
+    "emptyObjectExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": { "type": "object", "maxProperties": 0 }
+      }
+    },
+    "webhookConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "method", "authentication"],
+          "properties": {
+            "path": { "$ref": "#/$defs/webhookPathLiteral" },
+            "method": { "$ref": "#/$defs/postLiteral" },
+            "authentication": { "$ref": "#/$defs/webhookAuthentication" },
+            "schema": { "$ref": "#/$defs/schemaLiteral" }
+          }
+        }
+      }
+    },
+    "webhookAuthentication": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": { "$ref": "#/$defs/authNoneLiteral" }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "secret"],
+              "properties": {
+                "kind": { "$ref": "#/$defs/authBearerLiteral" },
+                "secret": { "$ref": "#/$defs/secretReference" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "slackConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["events", "channels", "botToken", "appToken"],
+          "properties": {
+            "events": { "$ref": "#/$defs/slackEventArray" },
+            "channels": { "$ref": "#/$defs/stringArray" },
+            "botToken": { "$ref": "#/$defs/secretReference" },
+            "appToken": { "$ref": "#/$defs/secretReference" }
+          }
+        }
+      }
+    },
+    "scheduleConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cron", "timezone", "onMissed"],
+          "properties": {
+            "cron": { "$ref": "#/$defs/nonEmptyStringLiteral" },
+            "timezone": { "$ref": "#/$defs/nonEmptyStringLiteral" },
+            "onMissed": { "$ref": "#/$defs/onMissedLiteral" }
+          }
+        }
+      }
+    },
+    "intervalConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["everyMs", "onMissed"],
+          "properties": {
+            "everyMs": { "$ref": "#/$defs/positiveIntegerLiteral" },
+            "onMissed": { "$ref": "#/$defs/onMissedLiteral" }
+          }
+        }
+      }
+    },
+    "eventConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": { "$ref": "#/$defs/eventNameLiteral" },
+            "secret": { "$ref": "#/$defs/secretReference" },
+            "schema": { "$ref": "#/$defs/schemaLiteral" }
+          }
+        }
+      }
+    },
+    "secretReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "const": "secretReference" },
+        "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
+      }
+    },
+    "schemaLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "type": "object" }
+      }
+    },
+    "webhookPathLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)?$",
+          "not": { "pattern": "^/_woml(?:/|$)" }
+        }
+      }
+    },
+    "postLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "const": "POST" }
+      }
+    },
+    "authNoneLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "const": "none" }
+      }
+    },
+    "authBearerLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "const": "bearer" }
+      }
+    },
+    "nonEmptyStringLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    },
+    "eventNameLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$", "maxLength": 256 }
+      }
+    },
+    "onMissedLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "enum": ["skip", "run-once"] }
+      }
+    },
+    "positiveIntegerLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "type": "integer", "minimum": 1000, "maximum": 2592000000 }
+      }
+    },
+    "stringArray": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyStringLiteral" }
+        }
+      }
+    },
+    "slackEventArray": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": { "const": "literal" },
+              "value": { "enum": ["app-mention", "direct-message"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

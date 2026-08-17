@@ -1,0 +1,31 @@
+groups:
+  - name: woml-production
+    rules:
+      - alert: WomlRuntimeNotReady
+        expr: woml_runtime_ready == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: WOML runtime is not ready
+      - alert: WomlRunFailures
+        expr: increase(woml_runs_total{status="failed"}[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: WOML workflows are failing
+      - alert: WomlWaitingApprovals
+        expr: woml_approvals_waiting > 0
+        for: 24h
+        labels: { severity: warning }
+        annotations:
+          summary: WOML approvals have remained unresolved
+      - alert: WomlRetentionFailure
+        expr: increase(woml_retention_total{status="failed"}[24h]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: WOML retention failed
+      - alert: WomlStoreGrowth
+        expr: deriv(woml_store_size_bytes[6h]) > 1048576
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: WOML durable store is growing quickly

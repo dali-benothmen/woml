@@ -1,0 +1,24 @@
+<woml>
+  <workflow
+    id="terminal-failure"
+    name="Terminal failure demo"
+    description="Shows a successful preparation followed by an actionable step failure."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="prepare" name="Prepare request">
+        <script>
+          return { requestId: "request-42" };
+        </script>
+      </step>
+      <step id="send" name="Send request" description="Fails intentionally for terminal testing.">
+        <script>
+          throw new Error(`Demo delivery failed for ${context.steps.prepare.requestId}`);
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

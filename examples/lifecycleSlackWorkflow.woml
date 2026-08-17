@@ -1,0 +1,26 @@
+<woml>
+  <workflow id="lifecycle-slack-demo" name="Lifecycle Slack notification" version="1.0.0">
+    <lifecycle>
+      <on-success>
+        <notify>
+          <slack
+            channels="#woml-testing"
+            message="Workflow {{lifecycle.workflow.id}} completed with {{lifecycle.workflow.outcome}}."
+            bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+            app-token="{{secrets.SLACK_APP_TOKEN}}"
+          />
+        </notify>
+      </on-success>
+    </lifecycle>
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="finish">
+        <script>
+          return { message: 'Lifecycle notification sent' };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

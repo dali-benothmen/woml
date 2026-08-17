@@ -1,0 +1,117 @@
+<woml>
+  <imports>
+    <module name="local-approval" from="./local-approval-provider.woml" />
+  </imports>
+  <workflow
+    id="mixed-provider-composition"
+    name="Mixed provider composition"
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="prepare" name="Prepare review">
+        <script>return { needsReview: true, orderId: "order-42" };</script>
+      </step>
+
+      <choose>
+        <when test="{{context.steps.prepare.needsReview}}">
+          <approval id="review" name="Review order" timeout="24h" on-timeout="reject">
+            <notify>
+              <slack
+                channels="#approvals"
+                bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+                app-token="{{secrets.SLACK_APP_TOKEN}}"
+              />
+              <telegram
+                chats="-1001234567890"
+                bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+              />
+              <discord
+                channels="200000000000000001"
+                bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+              />
+              <whatsapp
+                recipients="15551234567"
+                access-token="{{secrets.WHATSAPP_ACCESS_TOKEN}}"
+                phone-number-id="123456789012345"
+                template="woml_approval_v1"
+                language="en_US"
+              />
+              <local-approval
+                label="review"
+                relay-url="http://127.0.0.1:7360/notify"
+                message="Review {{context.steps.prepare.orderId}}"
+              />
+            </notify>
+            <when-approved>
+              <step id="approved"><script>return { approved: true };</script></step>
+            </when-approved>
+            <when-rejected>
+              <step id="rejected"><script>return { approved: false };</script></step>
+            </when-rejected>
+          </approval>
+        </when>
+        <otherwise>
+          <step id="reviewSkipped"><script>return { skipped: true };</script></step>
+        </otherwise>
+      </choose>
+
+      <fork id="postReview" join="all">
+        <branch id="audit">
+          <step id="writeAudit" retry="2"><script>return { stored: true };</script></step>
+        </branch>
+        <branch id="metrics">
+          <choose>
+            <when test="{{context.steps.prepare.needsReview}}">
+              <step id="countReview"><script>return { counted: true };</script></step>
+            </when>
+            <otherwise>
+              <step id="countSkip"><script>return { counted: false };</script></step>
+            </otherwise>
+          </choose>
+        </branch>
+      </fork>
+
+      <step id="finish"><script>return { status: "complete" };</script></step>
+    </steps>
+
+    <lifecycle>
+      <on-complete>
+        <notify>
+          <slack
+            channels="#operations"
+            message="Workflow completed"
+            bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+            app-token="{{secrets.SLACK_APP_TOKEN}}"
+          />
+          <telegram
+            chats="-1001234567890"
+            message="Workflow completed"
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+          <discord
+            channels="200000000000000001"
+            message="Workflow completed"
+            bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+          />
+          <whatsapp
+            recipients="15551234567"
+            access-token="{{secrets.WHATSAPP_ACCESS_TOKEN}}"
+            phone-number-id="123456789012345"
+            template="workflow_completed"
+            language="en_US"
+            message="Workflow completed"
+          />
+          <local-approval
+            label="complete"
+            relay-url="http://127.0.0.1:7360/notify"
+            message="Workflow completed"
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+  </workflow>
+</woml>

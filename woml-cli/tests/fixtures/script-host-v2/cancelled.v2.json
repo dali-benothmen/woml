@@ -1,0 +1,15 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 2,
+  "messageType": "completed",
+  "invocationId": "inv_load_weather_01",
+  "outcome": {
+    "kind": "failure",
+    "error": {
+      "kind": "invocation_cancelled",
+      "code": "WOML_SCRIPT_CANCELLED",
+      "message": "Invocation was cancelled by parallel fail-fast."
+    }
+  },
+  "durationMs": 12.4
+}

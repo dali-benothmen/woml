@@ -1,0 +1,61 @@
+<woml>
+  <workflow
+    id="telegram-approval-demo"
+    name="Telegram Approval and Lifecycle"
+    description="Requests approval through Telegram and reports when the workflow completes."
+    version="1.0.0"
+  >
+    <lifecycle>
+      <on-complete>
+        <notify>
+          <!-- Replace this with your numeric user, group, or channel ID. -->
+          <telegram
+            chats="123456789"
+            message="Workflow completed successfully."
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+        </notify>
+      </on-complete>
+    </lifecycle>
+
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <approval
+        id="review"
+        name="Approve the WOML test run"
+        description="Approve or reject from the Telegram buttons."
+        timeout="24h"
+        on-timeout="reject"
+      >
+        <notify>
+          <!-- Replace this with your numeric user, group, or channel ID. -->
+          <telegram
+            chats="123456789"
+            bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}"
+          />
+        </notify>
+
+        <when-approved>
+          <step id="approvedRoute" name="Approved route">
+            <script>return { route: 'approved' };</script>
+          </step>
+        </when-approved>
+
+        <when-rejected>
+          <step id="rejectedRoute" name="Rejected route">
+            <script>return { route: 'rejected' };</script>
+          </step>
+        </when-rejected>
+      </approval>
+
+      <step id="result" name="Final result">
+        <script>
+          return { decision: context.steps.review.decision };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

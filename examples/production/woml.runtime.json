@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "deploymentName": "my-automation",
+  "statePath": "./data/state.sqlite",
+  "public": { "host": "127.0.0.1", "port": 3000 },
+  "admin": { "host": "127.0.0.1", "port": 3001 },
+  "logging": {
+    "format": "text",
+    "level": "info",
+    "directory": "./logs"
+  },
+  "workers": 4,
+  "shutdownTimeoutMs": 30000,
+  "observability": { "health": true, "metrics": true },
+  "retention": {
+    "enabled": true,
+    "succeededAfterDays": 30,
+    "failedAfterDays": 90,
+    "cancelledAfterDays": 30,
+    "maintenanceHourUtc": 3
+  },
+  "backup": { "directory": "./backups" }
+}

@@ -1,0 +1,49 @@
+{
+  "version": 1.1,
+  "tags": [
+    {
+      "name": "console",
+      "description": "Reusable WOML notification provider from examples/reusableConsoleDemo/console.woml",
+      "attributes": [
+        {
+          "name": "message",
+          "description": "Required for informational lifecycle notifications."
+        },
+        {
+          "name": "level",
+          "description": "Required prop; available as props.level."
+        }
+      ]
+    },
+    {
+      "name": "prepare-message",
+      "description": "Reusable WOML step from examples/reusableConsoleDemo/prepare-message.woml",
+      "attributes": [
+        {
+          "name": "id",
+          "description": "Required workflow-wide step identity."
+        },
+        {
+          "name": "name",
+          "description": "Optional invocation display name."
+        },
+        {
+          "name": "description",
+          "description": "Optional invocation description."
+        },
+        {
+          "name": "retry",
+          "description": "Optional total attempt count."
+        },
+        {
+          "name": "person",
+          "description": "Required prop; available as props.person."
+        },
+        {
+          "name": "mode",
+          "description": "Required prop; available as props.mode."
+        }
+      ]
+    }
+  ]
+}

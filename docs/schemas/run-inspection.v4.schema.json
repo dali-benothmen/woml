@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-inspection/v4",
+  "title": "WOML Fork-Aware Safe Run Inspection v4",
+  "x-status": "fork-branch-fj8-published",
+  "x-forbiddenFields": ["context", "payload", "result", "secret", "credentials", "messageBody", "stack", "operationKey", "idempotencyKey", "ownerId", "claimId"],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "runId", "workflowId", "status", "businessOutcome", "lifecycleStatus", "hooks", "warnings", "cancellation", "policy", "forks"],
+  "properties": {
+    "profile": { "const": "woml.run-inspection/v4" },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "status": { "enum": ["not_started", "queued", "running", "waiting", "cancelling", "finalizing", "succeeded", "failed", "cancelled"] },
+    "businessOutcome": { "enum": ["undecided", "succeeded", "failed", "cancelled"] },
+    "lifecycleStatus": { "enum": ["idle", "running", "finalizing", "completed_with_warnings", "completed"] },
+    "hooks": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/hooks" },
+    "warnings": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/warnings" },
+    "cancellation": { "$ref": "https://woml.dev/schemas/run-inspection/v2#/properties/cancellation" },
+    "policy": { "$ref": "https://woml.dev/schemas/run-inspection/v3#/properties/policy" },
+    "forks": { "$ref": "#/$defs/forks" }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "counts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["opened", "active", "waiting", "succeeded", "failed", "cancelled"],
+      "properties": {
+        "opened": { "$ref": "#/$defs/count" }, "active": { "$ref": "#/$defs/count" }, "waiting": { "$ref": "#/$defs/count" },
+        "succeeded": { "$ref": "#/$defs/count" }, "failed": { "$ref": "#/$defs/count" }, "cancelled": { "$ref": "#/$defs/count" }
+      }
+    },
+    "forks": {
+      "type": "object", "additionalProperties": false, "required": ["counts", "items"],
+      "properties": { "counts": { "$ref": "#/$defs/counts" }, "items": { "type": "array", "items": { "$ref": "#/$defs/fork" } } }
+    },
+    "fork": {
+      "type": "object", "additionalProperties": false, "required": ["forkId", "status", "join", "branches"],
+      "properties": {
+        "forkId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "status": { "enum": ["active", "waiting", "succeeded", "failed", "cancelled"] },
+        "join": {
+          "type": "object", "additionalProperties": false, "required": ["mode", "branchIds", "status"],
+          "properties": {
+            "mode": { "enum": ["all", "selected", "none"] },
+            "branchIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" } },
+            "status": { "enum": ["pending", "succeeded", "failed", "cancelled"] }
+          }
+        },
+        "branches": { "$ref": "#/$defs/counts" }
+      }
+    }
+  }
+}

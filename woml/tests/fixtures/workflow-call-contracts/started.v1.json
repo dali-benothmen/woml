@@ -1,0 +1,8 @@
+{
+  "contract": "woml.workflow-start",
+  "contractVersion": 1,
+  "kind": "started",
+  "workflowId": "calculate-risk",
+  "runId": "run_call_0123456789abcdef",
+  "duplicate": false
+}

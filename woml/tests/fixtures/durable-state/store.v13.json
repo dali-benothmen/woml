@@ -1,0 +1,25 @@
+[
+  {
+    "profile": "woml.state-store.entry/v13",
+    "scopeDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "keyDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "keyText": "conversation:slack:C123",
+    "valueJson": "{\"messageCount\":2}",
+    "valueBytes": 18,
+    "version": 2,
+    "updatedAt": "2026-08-12T20:01:00.000Z"
+  },
+  {
+    "profile": "woml.state-store.mutation/v13",
+    "operationKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "inputDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "resultJson": "{\"stored\":true,\"version\":2,\"updatedAt\":\"2026-08-12T20:01:00.000Z\"}",
+    "committedAt": "2026-08-12T20:01:00.000Z"
+  },
+  {
+    "profile": "woml.state-store.quota/v13",
+    "scopeDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "liveKeys": 1,
+    "valueBytes": 18
+  }
+]

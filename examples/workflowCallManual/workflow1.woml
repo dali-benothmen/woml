@@ -1,0 +1,26 @@
+<woml>
+  <workflow id="invoice-request" name="Request invoice calculation" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="calculateInvoice">
+        <script>
+          const invoice = await services.workflows.call('invoice-calculator', {
+            price: 25,
+            quantity: 4,
+            taxRate: 0.20
+          });
+
+          return {
+            message: `The final invoice total is $${invoice.total}`,
+            subtotal: invoice.subtotal,
+            tax: invoice.tax,
+            total: invoice.total
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

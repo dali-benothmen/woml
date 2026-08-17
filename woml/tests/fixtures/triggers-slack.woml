@@ -1,0 +1,20 @@
+<woml>
+<workflow id="slack-trigger-contract">
+  <triggers>
+    <slack
+      id="agentMessage"
+      events="app-mention,direct-message"
+      channels="woml-testing,agent-support"
+      bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+      app-token="{{secrets.SLACK_APP_TOKEN}}"
+    />
+  </triggers>
+  <steps>
+    <step id="capture">
+      <script>
+        return context.trigger;
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

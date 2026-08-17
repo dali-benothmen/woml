@@ -1,0 +1,89 @@
+[
+  {
+    "eventSchemaVersion": 1,
+    "eventId": "evt_hello_001",
+    "runId": "run_hello_01",
+    "sequence": 1,
+    "occurredAt": "2026-08-06T12:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "hello",
+      "definitionHash": "sha256:97788d011d2306b254e9ab36ec9262887517a682357a955d770242774317939a",
+      "trigger": {}
+    }
+  },
+  {
+    "eventSchemaVersion": 1,
+    "eventId": "evt_hello_002",
+    "runId": "run_hello_01",
+    "sequence": 2,
+    "occurredAt": "2026-08-06T12:00:00.001Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "a",
+      "attempt": 1,
+      "invocationId": "inv_hello_a_01",
+      "handler": "runtime.script"
+    }
+  },
+  {
+    "eventSchemaVersion": 1,
+    "eventId": "evt_hello_003",
+    "runId": "run_hello_01",
+    "sequence": 3,
+    "occurredAt": "2026-08-06T12:00:00.002Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "a",
+      "attempt": 1,
+      "invocationId": "inv_hello_a_01",
+      "output": {
+        "x": "World"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 1,
+    "eventId": "evt_hello_004",
+    "runId": "run_hello_01",
+    "sequence": 4,
+    "occurredAt": "2026-08-06T12:00:00.003Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "b",
+      "attempt": 1,
+      "invocationId": "inv_hello_b_01",
+      "handler": "runtime.script"
+    }
+  },
+  {
+    "eventSchemaVersion": 1,
+    "eventId": "evt_hello_005",
+    "runId": "run_hello_01",
+    "sequence": 5,
+    "occurredAt": "2026-08-06T12:00:00.004Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "b",
+      "attempt": 1,
+      "invocationId": "inv_hello_b_01",
+      "output": {
+        "message": "Hello World"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 1,
+    "eventId": "evt_hello_006",
+    "runId": "run_hello_01",
+    "sequence": 6,
+    "occurredAt": "2026-08-06T12:00:00.005Z",
+    "type": "run_succeeded",
+    "data": {
+      "terminalNodeId": "b",
+      "result": {
+        "message": "Hello World"
+      }
+    }
+  }
+]

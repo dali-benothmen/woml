@@ -1,0 +1,8 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "update-invocation-01",
+  "outcome": { "kind": "update_success" },
+  "durationMs": 20
+}

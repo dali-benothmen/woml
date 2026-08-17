@@ -1,0 +1,25 @@
+{
+  "protocol": "woml.slack-trigger",
+  "protocolVersion": 1,
+  "messageType": "event",
+  "envelopeId": "env_001",
+  "eventId": "Ev001",
+  "workspaceId": "T123",
+  "workflowId": "slack-trigger-contract",
+  "definitionHash": "sha256:076bc37ede8c1a05c38944a82bf55bc11cbff2409ff96dc27c8b3d5d88c33363",
+  "triggerId": "agentMessage",
+  "credentialNames": {
+    "botToken": "SLACK_BOT_TOKEN",
+    "appToken": "SLACK_APP_TOKEN"
+  },
+  "payload": {
+    "type": "app-mention",
+    "text": "@WOML summarize order 42",
+    "userId": "U123",
+    "channelId": "C123",
+    "messageTs": "1710000000.000100",
+    "threadTs": "1710000000.000100",
+    "teamId": "T123"
+  },
+  "occurredAt": "2026-08-08T12:00:00.000Z"
+}

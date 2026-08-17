@@ -1,0 +1,587 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/compiled-workflow-model/v15",
+  "title": "WOML Communication Provider Compiled Workflow Model v15",
+  "description": "Model v14 plus explicit built-in communication requirements and Telegram trigger, notification, and messaging lowering.",
+  "x-status": "additional-communication-providers-acp2-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v14",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy", "communication"],
+  "properties": {
+    "schemaVersion": { "const": 15 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "oneOf": [
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" },
+          { "$ref": "#/$defs/telegramTrigger" },
+          { "$ref": "#/$defs/discordTrigger" },
+          { "$ref": "#/$defs/whatsappTrigger" }
+        ]
+      }
+    },
+    "graph": { "$ref": "#/$defs/workflowGraph" },
+    "moduleRuntime": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime" },
+    "lifecycle": { "$ref": "#/$defs/workflowLifecycle" },
+    "runtimePolicy": { "$ref": "https://woml.dev/schemas/runtime-policy/v1" },
+    "reusableDefinitions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v14#/$defs/reusableInvocation" }
+    },
+    "communication": { "$ref": "#/$defs/communicationRequirements" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "publicId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 },
+    "literalString": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "literal" },
+        "value": { "type": "string", "minLength": 1, "maxLength": 16384 }
+      }
+    },
+    "telegramTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "#/$defs/publicId" },
+        "handler": { "const": "trigger.telegram" },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["events", "botToken"],
+              "properties": {
+                "events": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "items"],
+                  "properties": {
+                    "kind": { "const": "array" },
+                    "items": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 1,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "value"],
+                        "properties": { "kind": { "const": "literal" }, "value": { "const": "message" } }
+                      }
+                    }
+                  }
+                },
+                "botToken": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/secretReference" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "literalStringArray": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": { "const": "literal" },
+              "value": { "type": "string", "minLength": 1, "maxLength": 320 }
+            }
+          }
+        }
+      }
+    },
+    "discordEvents": {
+      "allOf": [
+        { "$ref": "#/$defs/literalStringArray" },
+        { "properties": { "items": { "properties": { "items": { "items": { "properties": { "value": { "enum": ["app-mention", "direct-message"] } } } } } } } }
+      ]
+    },
+    "discordChannels": {
+      "allOf": [
+        { "$ref": "#/$defs/literalStringArray" },
+        { "properties": { "items": { "properties": { "items": { "items": { "properties": { "value": { "pattern": "^[0-9]{17,20}$" } } } } } } } }
+      ]
+    },
+    "whatsappEvents": {
+      "allOf": [
+        { "$ref": "#/$defs/literalStringArray" },
+        { "properties": { "items": { "properties": { "items": { "maxItems": 1, "items": { "properties": { "value": { "const": "message" } } } } } } } }
+      ]
+    },
+    "discordTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "#/$defs/publicId" },
+        "handler": { "const": "trigger.discord" },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["events", "botToken"],
+              "properties": {
+                "events": { "$ref": "#/$defs/discordEvents" },
+                "channels": { "$ref": "#/$defs/discordChannels" },
+                "botToken": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/secretReference" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "whatsappTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "config"],
+      "properties": {
+        "id": { "$ref": "#/$defs/publicId" },
+        "handler": { "const": "trigger.whatsapp" },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["events", "phoneNumberId", "verifyToken", "appSecret"],
+              "properties": {
+                "events": { "$ref": "#/$defs/whatsappEvents" },
+                "phoneNumberId": { "$ref": "#/$defs/literalString" },
+                "verifyToken": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/secretReference" },
+                "appSecret": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/secretReference" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "telegramCredentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["botToken"],
+          "properties": { "botToken": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/secretReference" } }
+        }
+      }
+    },
+    "telegramProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "literal" }, "value": { "const": "telegram" } }
+    },
+    "telegramDestination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "literal" }, "value": { "type": "string", "pattern": "^-?[1-9][0-9]{0,19}$" } }
+    },
+    "discordDestination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "literal" }, "value": { "type": "string", "pattern": "^[0-9]{17,20}$" } }
+    },
+    "whatsappDestination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "literal" }, "value": { "type": "string", "pattern": "^[1-9][0-9]{7,15}$" } }
+    },
+    "discordProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "literal" }, "value": { "const": "discord" } }
+    },
+    "whatsappProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": { "kind": { "const": "literal" }, "value": { "const": "whatsapp" } }
+    },
+    "whatsappCredentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accessToken", "phoneNumberId"],
+          "properties": {
+            "accessToken": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/secretReference" },
+            "phoneNumberId": { "$ref": "#/$defs/literalString" }
+          }
+        }
+      }
+    },
+    "telegramApprovalDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/literalString" },
+            "provider": { "$ref": "#/$defs/telegramProvider" },
+            "destination": { "$ref": "#/$defs/telegramDestination" },
+            "credentials": { "$ref": "#/$defs/telegramCredentials" }
+          }
+        }
+      }
+    },
+    "telegramInformationalDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials", "message"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/literalString" },
+            "provider": { "$ref": "#/$defs/telegramProvider" },
+            "destination": { "$ref": "#/$defs/telegramDestination" },
+            "credentials": { "$ref": "#/$defs/telegramCredentials" },
+            "message": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/template" }
+          }
+        }
+      }
+    },
+    "discordApprovalDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/literalString" },
+            "provider": { "$ref": "#/$defs/discordProvider" },
+            "destination": { "$ref": "#/$defs/discordDestination" },
+            "credentials": { "$ref": "#/$defs/telegramCredentials" }
+          }
+        }
+      }
+    },
+    "discordInformationalDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials", "message"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/literalString" },
+            "provider": { "$ref": "#/$defs/discordProvider" },
+            "destination": { "$ref": "#/$defs/discordDestination" },
+            "credentials": { "$ref": "#/$defs/telegramCredentials" },
+            "message": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/template" }
+          }
+        }
+      }
+    },
+    "whatsappApprovalDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials", "templateName", "language"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/literalString" },
+            "provider": { "$ref": "#/$defs/whatsappProvider" },
+            "destination": { "$ref": "#/$defs/whatsappDestination" },
+            "credentials": { "$ref": "#/$defs/whatsappCredentials" },
+            "templateName": { "$ref": "#/$defs/literalString" },
+            "language": { "$ref": "#/$defs/literalString" }
+          }
+        }
+      }
+    },
+    "whatsappInformationalDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deliveryId", "provider", "destination", "credentials", "templateName", "language", "message"],
+          "properties": {
+            "deliveryId": { "$ref": "#/$defs/literalString" },
+            "provider": { "$ref": "#/$defs/whatsappProvider" },
+            "destination": { "$ref": "#/$defs/whatsappDestination" },
+            "credentials": { "$ref": "#/$defs/whatsappCredentials" },
+            "templateName": { "$ref": "#/$defs/literalString" },
+            "language": { "$ref": "#/$defs/literalString" },
+            "message": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/template" }
+          }
+        }
+      }
+    },
+    "communicationApprovalDeliveryArray": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "oneOf": [
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v5#/$defs/slackDelivery" },
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v14#/$defs/customProviderDelivery" },
+              { "$ref": "#/$defs/telegramApprovalDelivery" },
+              { "$ref": "#/$defs/discordApprovalDelivery" },
+              { "$ref": "#/$defs/whatsappApprovalDelivery" }
+            ]
+          },
+          "contains": { "oneOf": [
+            { "$ref": "#/$defs/telegramApprovalDelivery" },
+            { "$ref": "#/$defs/discordApprovalDelivery" },
+            { "$ref": "#/$defs/whatsappApprovalDelivery" }
+          ] },
+          "minContains": 1
+        }
+      }
+    },
+    "communicationInformationalDeliveryArray": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "oneOf": [
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/delivery" },
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v14#/$defs/customProviderDelivery" },
+              { "$ref": "#/$defs/telegramInformationalDelivery" },
+              { "$ref": "#/$defs/discordInformationalDelivery" },
+              { "$ref": "#/$defs/whatsappInformationalDelivery" }
+            ]
+          },
+          "contains": { "oneOf": [
+            { "$ref": "#/$defs/telegramInformationalDelivery" },
+            { "$ref": "#/$defs/discordInformationalDelivery" },
+            { "$ref": "#/$defs/whatsappInformationalDelivery" }
+          ] },
+          "minContains": 1
+        }
+      }
+    },
+    "communicationApprovalWaitNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/publicId" },
+        "handler": { "const": "engine.approval-wait" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["onTimeout", "notifications"],
+              "properties": {
+                "timeoutMs": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/literalExpression" },
+                "onTimeout": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/literalExpression" },
+                "notifications": { "$ref": "#/$defs/communicationApprovalDeliveryArray" }
+              }
+            }
+          }
+        },
+        "metadata": { "type": "object", "additionalProperties": false, "properties": { "name": { "type": "string", "minLength": 1 }, "description": { "type": "string", "minLength": 1 } } }
+      }
+    },
+    "communicationNotificationAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actionId", "handler", "inputs"],
+      "properties": {
+        "actionId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/actionId" },
+        "handler": { "const": "notification.informational" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["deliveries"],
+              "properties": { "deliveries": { "$ref": "#/$defs/communicationInformationalDeliveryArray" } }
+            }
+          }
+        }
+      }
+    },
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges", "forks", "choices", "contextVisibility", "settlement"],
+      "properties": {
+        "entryNodeIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowNode" },
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v14#/$defs/reusableScriptNode" },
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v14#/$defs/customApprovalWaitNode" },
+              { "$ref": "#/$defs/communicationApprovalWaitNode" }
+            ]
+          }
+        },
+        "edges": { "type": "array", "items": { "oneOf": [
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/workflowEdge" },
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoiceBooleanEdge" }
+        ] } },
+        "forks": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/fork" } },
+        "choices": { "type": "array", "items": { "oneOf": [
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/controlChoice" },
+          { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v14#/$defs/stringChoice" }
+        ] } },
+        "contextVisibility": { "type": "array", "minItems": 1, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/contextVisibility" } },
+        "settlement": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/settlement" }
+      }
+    },
+    "workflowLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileVersion", "hooks"],
+      "properties": {
+        "profileVersion": { "const": 1 },
+        "hooks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 9,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["hookId", "event", "actions"],
+            "properties": {
+              "hookId": { "type": "string", "pattern": "^lifecycle:(run|step)_[a-z]+$", "maxLength": 128 },
+              "event": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/lifecycleEvent" },
+              "stepIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/publicId" } },
+              "actions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "items": {
+                  "oneOf": [
+                    { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/scriptAction" },
+                    { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/notificationAction" },
+                    { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v14#/$defs/customNotificationAction" },
+                    { "$ref": "#/$defs/communicationNotificationAction" }
+                  ]
+                }
+              }
+            },
+            "allOf": [{
+              "if": { "properties": { "event": { "enum": ["step_start", "step_success", "step_failure", "step_complete"] } } },
+              "else": { "not": { "required": ["stepIds"] } }
+            }]
+          }
+        }
+      }
+    },
+    "communicationRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileVersion", "providers"],
+      "properties": {
+        "profileVersion": { "const": 1 },
+        "providers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "triggerIds", "notificationDeliveryIds", "messaging", "credentialNames"],
+            "properties": {
+              "provider": { "enum": ["telegram", "discord", "whatsapp"] },
+              "triggerIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/publicId" } },
+              "notificationDeliveryIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 512 } },
+              "messaging": { "type": "boolean" },
+              "credentialNames": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } }
+            },
+            "anyOf": [
+              { "properties": { "triggerIds": { "minItems": 1 } } },
+              { "properties": { "notificationDeliveryIds": { "minItems": 1 } } },
+              { "properties": { "messaging": { "const": true } } }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

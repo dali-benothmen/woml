@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/workflow-call-index/v1",
+  "title": "WOML Durable Workflow Call Index v1",
+  "description": "Transactional uniqueness and routing index for one admitted workflow child run.",
+  "x-status": "workflow-calls-wc0-frozen",
+  "x-authority": "The parent operation history and child run history remain authoritative; this index is reconstructible and never stores a competing result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "callKey", "parentRunId", "parentNodeId", "parentAttempt", "targetWorkflowId",
+    "targetDefinitionHash", "childRunId", "payloadDigest", "depth", "state", "admittedAt"
+  ],
+  "properties": {
+    "callKey": { "$ref": "#/$defs/digest" },
+    "parentRunId": { "$ref": "#/$defs/id" },
+    "parentNodeId": { "$ref": "#/$defs/id" },
+    "parentAttempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "targetWorkflowId": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 256 },
+    "targetDefinitionHash": { "$ref": "#/$defs/digest" },
+    "childRunId": { "$ref": "#/$defs/id" },
+    "payloadDigest": { "$ref": "#/$defs/digest" },
+    "depth": { "type": "integer", "minimum": 1, "maximum": 32 },
+    "state": { "enum": ["admitted", "running", "succeeded", "failed"] },
+    "admittedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

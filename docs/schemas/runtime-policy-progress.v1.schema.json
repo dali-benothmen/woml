@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-policy-progress/v1",
+  "title": "WOML Runtime Policy Progress v1",
+  "x-status": "runtime-policies-rp0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "runId", "workflowId", "phase", "queue"],
+  "properties": {
+    "profile": { "const": "woml.runtime-policy-progress/v1" },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "phase": { "enum": ["queued", "eligible", "started", "timed_out"] },
+    "queue": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "waitingFor": { "enum": ["concurrency", "rate_limit"] },
+    "eligibleAt": { "type": "string", "format": "date-time" },
+    "code": { "const": "WOML_WORKFLOW_TIMED_OUT" }
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/woml-definition-package.v1.schema.json",
+  "title": "WOML Definition Package Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile", "executable", "workflow", "modules", "sources", "compiler", "permissions", "rootHash"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "profile": { "const": "woml.definition-package/v1" },
+    "executable": { "const": false },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+        "source": { "$ref": "#/$defs/portablePath" }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "entrypoint", "exports"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 128 },
+          "entrypoint": { "$ref": "#/$defs/portablePath" },
+          "exports": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$" }
+          }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 513,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "mediaType", "digest", "dependencies"],
+        "properties": {
+          "path": { "$ref": "#/$defs/portablePath" },
+          "mediaType": { "enum": ["application/woml+xml", "text/javascript", "text/typescript"] },
+          "digest": { "$ref": "#/$defs/sha256" },
+          "dependencies": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/portablePath" }
+          }
+        }
+      }
+    },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "resolverProfile"],
+      "properties": {
+        "name": { "const": "woml" },
+        "version": { "const": "0.1.0" },
+        "resolverProfile": { "const": "woml.module-resolver/v1" }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secrets", "networkOrigins"],
+      "properties": {
+        "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "networkOrigins": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "rootHash": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "portablePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secrets", "networkOrigins"],
+      "properties": {
+        "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "networkOrigins": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mediaType", "digest", "dependencies"],
+      "properties": {
+        "path": { "$ref": "#/$defs/portablePath" },
+        "mediaType": { "enum": ["application/woml+xml", "text/javascript", "text/typescript"] },
+        "digest": { "$ref": "#/$defs/sha256" },
+        "dependencies": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/portablePath" } }
+      }
+    }
+  }
+}

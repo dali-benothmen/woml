@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/attempt-failure/v1",
+  "title": "WOML Attempt Failure v1",
+  "description": "Canonical failure taxonomy shared by the script-host protocol and durable run events.",
+  "x-status": "frozen-for-rust-hello-slice",
+  "$ref": "#/$defs/attemptFailure",
+  "$defs": {
+    "attemptFailure": {
+      "oneOf": [
+        { "$ref": "#/$defs/scriptThrew" },
+        { "$ref": "#/$defs/scriptTimedOut" },
+        { "$ref": "#/$defs/invalidScriptResult" },
+        { "$ref": "#/$defs/contextTooLarge" },
+        { "$ref": "#/$defs/resultTooLarge" },
+        { "$ref": "#/$defs/workerCrashed" },
+        { "$ref": "#/$defs/hostCrashed" },
+        { "$ref": "#/$defs/interrupted" }
+      ]
+    },
+    "hostReportedFailure": {
+      "oneOf": [
+        { "$ref": "#/$defs/scriptThrew" },
+        { "$ref": "#/$defs/scriptTimedOut" },
+        { "$ref": "#/$defs/invalidScriptResult" },
+        { "$ref": "#/$defs/contextTooLarge" },
+        { "$ref": "#/$defs/resultTooLarge" },
+        { "$ref": "#/$defs/workerCrashed" }
+      ]
+    },
+    "failureKind": {
+      "enum": [
+        "script_threw",
+        "script_timed_out",
+        "invalid_script_result",
+        "context_too_large",
+        "result_too_large",
+        "worker_crashed",
+        "host_crashed",
+        "interrupted"
+      ]
+    },
+    "scriptThrew": {
+      "$ref": "#/$defs/simpleFailureScriptThrew"
+    },
+    "scriptTimedOut": {
+      "$ref": "#/$defs/simpleFailureScriptTimedOut"
+    },
+    "invalidScriptResult": {
+      "$ref": "#/$defs/simpleFailureInvalidScriptResult"
+    },
+    "workerCrashed": {
+      "$ref": "#/$defs/simpleFailureWorkerCrashed"
+    },
+    "hostCrashed": {
+      "$ref": "#/$defs/simpleFailureHostCrashed"
+    },
+    "interrupted": {
+      "$ref": "#/$defs/simpleFailureInterrupted"
+    },
+    "simpleFailureScriptThrew": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "script_threw" },
+        "code": { "const": "WOML_SCRIPT_THROWN" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "simpleFailureScriptTimedOut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "script_timed_out" },
+        "code": { "const": "WOML_SCRIPT_TIMEOUT" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "simpleFailureInvalidScriptResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "invalid_script_result" },
+        "code": { "const": "WOML_SCRIPT_NON_JSON_RESULT" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "simpleFailureWorkerCrashed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "worker_crashed" },
+        "code": { "const": "WOML_SCRIPT_WORKER_CRASHED" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "simpleFailureHostCrashed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "host_crashed" },
+        "code": { "const": "WOML_SCRIPT_HOST_CRASHED" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "simpleFailureInterrupted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "interrupted" },
+        "code": { "const": "WOML_STEP_INTERRUPTED" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "contextTooLarge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "context_too_large" },
+        "code": { "const": "WOML_SCRIPT_CONTEXT_TOO_LARGE" },
+        "message": { "$ref": "#/$defs/message" },
+        "details": { "$ref": "#/$defs/sizeDetails" }
+      }
+    },
+    "resultTooLarge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "result_too_large" },
+        "code": { "const": "WOML_SCRIPT_RESULT_TOO_LARGE" },
+        "message": { "$ref": "#/$defs/message" },
+        "details": { "$ref": "#/$defs/sizeDetails" }
+      }
+    },
+    "sizeDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "actualBytes": { "type": "integer", "minimum": 0 },
+        "limitBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

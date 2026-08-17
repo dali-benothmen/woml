@@ -1,0 +1,7 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 3,
+  "messageType": "cancel",
+  "invocationId": "inv_retry_greet_02",
+  "reason": "parallel_fail_fast"
+}

@@ -1,300 +1,264 @@
-# Cronflow Final Architecture Design
+# WOML Architecture
 
-## Overview
+WOML separates authoring, durable execution, and JavaScript execution so each
+layer has one clear responsibility.
 
-cronflow is a sophisticated workflow automation engine built on a **hybrid architecture** that combines the developer-friendly experience of Node.js with the rock-solid reliability and performance of Rust. This document provides the complete architectural reference for the entire system.
-
-## Core Philosophy
-
-The architecture follows a clear separation of concerns:
-
-- **Node.js (The SDK)**: Handles the **Developer Experience (DX)**. It's the friendly, flexible, and dynamic "frontend" for the developer.
-- **Rust (The Core Engine)**: Handles **Reliability and Performance**. It's the powerful, durable, and stateful "backend" that does the heavy lifting.
-
-## High-Level Architecture
-
-### Architectural Diagram
-
-```mermaid
-graph TD
-subgraph " "
-direction LR
-A["<b style='font-size:16px'>Your Application Code</b><br>workflows/orders/workflow.ts"]
-end
-
-    subgraph "cronflow (The SDK - In Node.js Process)"
-        direction TB
-        B["<b>Cronflow Singleton</b><br> .define(), .start(), .inspect()"]
-        C["<b>Workflow Instance</b><br> .onWebhook(), .step(), .if(), .test()"]
-        D["<b>Service Definitions</b><br> defineService(), .withConfig()"]
-        E["<b>Task Runner</b><br> Receives jobs from Rust, executes JS code"]
-        F["<b>Testing Harness</b><br> In-memory runner, .mockStep()"]
-    end
-
-    subgraph "cronflow-core (The Engine - Rust Native Addon)"
-        direction TB
-        H["<b>Engine Controller (N-API)</b><br> register_workflow(), trigger_workflow()"]
-        I["<b>State Manager & Orchestrator</b>"]
-        J["<b>Scheduler & Trigger Listeners</b><br>(Webhooks, Cron, Pollers)"]
-        K["<b>Dispatcher & Worker Pool</b><br>(Manages retries, timeouts, queues)"]
-        L["<b>Persistence Layer</b><br>(Trait over SQLite/Postgres)"]
-
-        J -->|Event| I
-        I -->|Job| K
-        K -->|Result| I
-        I -->|State Change| L
-    end
-
-    G["<b>N-API Bridge (Neon)</b><br>The Communication Channel"]
-
-    A --> B
-    B -- "Creates" --> C
-    A -- "Imports/Defines" --> D
-
-    C -- "Builds Workflow Definition (JSON)" --> B
-    B -- "1. Register Workflows" --> G
-    G -- " " --> H
-
-    K -- "2. Request Task Execution" --> G
-    G -- " " --> E
-    E -- "Finds correct JS function" --> C
-    E -- "Uses configured services" --> D
-    E -- "3. Return Result/Error" --> G
-    G -- " " --> K
-
-    F -- "Uses" --> C & D
-
-    style A fill:#FFF,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
-    style B fill:#D6EAF8,stroke:#333
-    style C fill:#D6EAF8,stroke:#333
-    style D fill:#D6EAF8,stroke:#333
-    style E fill:#D6EAF8,stroke:#333
-    style F fill:#E8DAEF,stroke:#333
-
-    style H fill:#D5F5E3,stroke:#333
-    style I fill:#A9DFBF,stroke:#333
-    style J fill:#D5F5E3,stroke:#333
-    style K fill:#D5F5E3,stroke:#333
-    style L fill:#FADBD8,stroke:#333
-
-    style G fill:#FCF3CF,stroke:#333,stroke-width:3px
+```text
+.woml source
+    -> Bun/TypeScript parser, validator, and compiler
+    -> versioned compiled workflow DAG
+    -> Bun CLI through the WOML N-API adapter
+    -> durable Rust execution engine and SQLite event store
+    -> long-lived Bun host
+    -> isolated Worker for one JavaScript attempt
+    -> durable outcome event
+    -> folded context and terminal presentation
 ```
 
-## Division of Responsibilities
+## Layer boundaries
 
-The architecture leverages each language's strengths through a clear division of responsibilities:
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| TypeScript frontend | WOML markup, raw `<script>` bodies, references, source locations, modules, reusable definitions, validation, DAG lowering | Execution, retries, persistence, scheduling |
+| Bun CLI/hosts | Commands, terminal rendering, configuration, secret resolution, trigger/provider transports, worker isolation | Durable graph truth, retry decisions, run settlement |
+| Rust engine | Model validation, scheduling, events, folding, recovery, retries, control flow, services, policies, run control | XML/WOML syntax, editor grammar, JavaScript meaning |
+| N-API adapter | Narrow typed calls between Bun and Rust | Workflow behavior or a second engine |
 
-| Responsibility / Domain            | Node.js (The SDK)                                                                                                                                                                                                                      | Rust (The Core Engine)                                                                                                                                                                                                                                 |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Workflow Definition**            | **PRIMARY**. Provides the entire fluent API: `cronflow.define()`, `.step()`, `.if()`, `.retry()`, etc. Its job is to build a declarative JSON representation (WDO) of the workflow.                                                    | **SECONDARY**. Receives the final JSON WDO. Its only job is to parse this JSON into its internal Rust structs for storage and execution. It has no knowledge of how the JSON was built.                                                                |
-| **State Management & Persistence** | **STATELESS**. It holds no state between steps. It receives a `ctx` object for each job, uses it, and then forgets it.                                                                                                                 | **PRIMARY**. The "brain" of the system. Manages the state of every workflow and step (`RUNNING`, `FAILED`, etc.). It owns the database connection and is responsible for all CRUD operations on the internal SQLite/Postgres database.                 |
-| **Scheduling & Triggers**          | **DEFINITION**. Defines what the trigger is (`.onSchedule(...)`, `.onWebhook(...)`). This information is serialized into the WDO.                                                                                                      | **IMPLEMENTATION**. Runs the actual cron scheduler. Runs the actual web server to listen for webhooks. Manages the stateful logic for polling. It is the active "listener" for all events.                                                             |
-| **Task Execution**                 | **PRIMARY**. This is where the user's business logic runs. The "Task Runner" module receives a job from Rust, finds the correct JavaScript function `(ctx) => ...`, and executes it (e.g., fetch calls, db queries).                   | **SECONDARY**. Acts as a "Dispatcher." It tells the Node.js Task Runner which step to execute and then waits for a result. It treats the Node.js side as a "function execution service."                                                               |
-| **Integrations & Services**        | **PRIMARY**. `defineService` and `.withConfig` are pure Node.js concepts. All the logic for talking to external APIs (Stripe, Slack, etc.) is written in TypeScript and lives here.                                                    | **SECONDARY**. Knows nothing about specific services like Slack or JIRA. It only provides the generic, low-level primitives that integrations can use (e.g., `engine.storage`, `engine.createWebhookTrigger`).                                         |
-| **Error Handling & Retry Logic**   | **PRODUCES ERRORS**. When a user's step throws an exception, the Node.js Task Runner catches it and passes the serialized error back to Rust.                                                                                          | **MANAGES RETRIES**. Receives the error from Node.js. It then reads the step's retry configuration, manages the backoff delay, updates the attempt count in the database, and decides whether to re-dispatch the job or mark it as permanently failed. |
-| **Concurrency & Performance**      | **SECONDARY**. The Node.js event loop handles I/O concurrency for the tasks it is told to run.                                                                                                                                         | **PRIMARY**. The tokio multi-threaded runtime manages the engine's worker pool for high-throughput job dispatching. It's responsible for connection pooling (DB, HTTP) and keeping overall CPU/memory usage low.                                       |
-| **Testing**                        | **PRIMARY**. Provides the entire `.test()` harness (`.mockStep`, `.expectAction`, etc.). It includes an in-memory workflow runner that simulates the Rust engine's behavior to enable fast, easy testing without any Rust interaction. | **NOT INVOLVED** in the user-facing testing API. The Rust core's correctness is verified by its own separate suite of Rust unit and integration tests (`cargo test`).                                                                                  |
-| **Configuration & Lifecycle**      | **PRIMARY**. Provides the user-facing API to start and stop the system (`cronflow.start()`, `cronflow.stop()`). It's also where the user provides `.env` or other configuration.                                                       | **IMPLEMENTATION**. Implements the actual lifecycle. It receives the start command and boots up all its internal components (scheduler, web server, DB pool). On stop, it gracefully shuts them down.                                                  |
-| **Logging**                        | **SECONDARY**. The user's code can `console.log` within a step. The SDK can also provide a structured logger on the `ctx` object.                                                                                                      | **PRIMARY**. The engine performs its own structured logging for all core events (e.g., "Run Started", "Dispatching Job", "State Updated", "Engine Shutdown"). This provides a complete audit trail of the engine's internal operations.                |
+The TypeScript frontend is the only WOML compiler. Rust never parses XML and
+Bun never advances the graph based on console output. A future compiler move is
+valid only as a reviewed complete migration; WOML does not maintain two
+competing compilers.
 
-## Component Breakdown
+The canonical adapter lives in `core/woml-native` and depends locally only on
+`woml-engine`. The old combined core and JavaScript-chaining execution paths are
+not part of the product.
 
-### 1. Node.js SDK Layer
+## Compilation
 
-The public-facing package that provides the developer experience.
+The frontend reads one `<woml>` document, validates its workflow or reusable
+definition profile, resolves safe local imports, and lowers the result to a
+versioned language-neutral model.
 
-#### **Cronflow Singleton**
+The model is a DAG from the first compilation boundary. Sequential source order
+creates edges, while choices, switches, parallels, forks, approvals, lifecycle,
+and workflow settlement add explicit control nodes and descriptors. The model
+also records deterministic identity, metadata, retry policy, runtime policy,
+trigger configuration, reference visibility, required secret names, and exact
+module artifact digests.
 
-- **Entry Point**: `import { cronflow } from 'cronflow'`
-- **Responsibilities**:
-  - Maintains registry of all defined Workflow instances
-  - Provides `.define()`, `.start()`, `.trigger()`, `.inspect()` methods
-  - Serializes workflow definitions to JSON for Rust engine
-  - Manages engine state (`STOPPED`, `STARTING`, `STARTED`)
+Only the frontend understands:
 
-#### **Workflow Instance**
+- `<workflow>`, `<steps>`, and other WOML elements;
+- `{{context.payload...}}` and `{{context.steps...}}` references;
+- raw JavaScript and inline JSON schema source locations;
+- import paths, ESM exports, reusable props, and custom tags; and
+- author-facing diagnostic codes, messages, hints, line, and column.
 
-- **Creation**: Object created by `cronflow.define()`
-- **Responsibilities**:
-  - Builder pattern for workflow definition
-  - Builds **Workflow Definition Object (WDO)** in memory
-  - Provides fluent API: `.onWebhook()`, `.step()`, `.if()`, `.parallel()`
-  - Serializable JSON representation of entire workflow
+`woml check` exercises this boundary without activating ingress or executing
+JavaScript.
 
-#### **Task Runner**
+## Durable execution and event folding
 
-- **Role**: Internal callback target for Rust engine
-- **Responsibilities**:
-  - Receives job requests via N-API bridge
-  - Re-hydrates context object (`ctx.payload`, `ctx.steps`)
-  - Executes user-defined JavaScript functions
-  - Returns results or errors to Rust engine
+Rust validates the compiled model independently before accepting a definition.
+For each run it selects ready nodes, supervises attempts, and appends immutable
+versioned events. The current context is derived by folding those events; an
+authoritative mutable context object is never persisted.
 
-#### **Testing Harness**
-
-- **Purpose**: In-memory workflow execution for testing
-- **Responsibilities**:
-  - Bypasses Rust engine for fast testing
-  - Provides `.mockStep()`, `.expectAction()` methods
-  - Enables unit and integration testing without external dependencies
-
-### 2. Rust Engine Layer
-
-The high-performance core that handles orchestration and reliability.
-
-#### **Engine Controller (N-API)**
-
-- **Role**: Public-facing Rust module exposed to Node.js
-- **Responsibilities**:
-  - Provides N-API interface for Node.js communication
-  - Handles workflow registration and triggering
-  - Manages serialization/deserialization of data
-
-#### **State Manager & Orchestrator**
-
-- **Role**: The "brain" of the system
-- **Responsibilities**:
-  - Maintains state of every workflow run (`PENDING`, `RUNNING`, `SUCCESS`, `FAILED`)
-  - Reads workflow JSON graphs from database
-  - Determines next steps based on current state and graph
-  - Understands control flow logic (`.if`, `.parallel`, `.batch`)
-  - Creates jobs and sends them to Dispatcher
-
-#### **Scheduler & Trigger Listeners**
-
-- **Responsibilities**:
-  - Manages time-based events (`onSchedule`, `onInterval`)
-  - Runs high-performance web server for webhooks (`onWebhook`)
-  - Handles polling triggers with stateful logic
-  - Manages event buffering for complex triggers
-  - Notifies State Manager when trigger conditions are met
-
-#### **Dispatcher & Worker Pool**
-
-- **Role**: The "hands" of the engine
-- **Responsibilities**:
-  - Receives jobs from State Manager
-  - Manages concurrent worker pool for job processing
-  - Handles retry, timeout, and delay logic
-  - Makes calls to Node.js Task Runner via N-API
-  - Reports task results back to State Manager
-
-#### **Persistence Layer**
-
-- **Implementation**: Abstraction over database connection
-- **Default**: `rusqlite` for zero-config setup
-- **Responsibilities**:
-  - Stores workflow definitions and run history
-  - Manages step results and logs
-  - Handles engine primitives (idempotency keys, rate limits)
-  - Supports pluggable backends (SQLite, Postgres)
-
-## Communication Protocol
-
-### N-API Bridge Design
-
-The communication between Node.js and Rust happens through a well-defined protocol:
-
-#### **Workflow Registration**
-
-1. Node.js serializes workflow definitions to JSON
-2. JSON sent to Rust via N-API
-3. Rust parses JSON into internal structs
-4. Workflow stored in database
-
-#### **Job Execution**
-
-1. Rust determines next step to execute
-2. Job request sent to Node.js via N-API
-3. Node.js Task Runner executes user function
-4. Result/error returned to Rust
-5. Rust updates state and determines next action
-
-#### **Data Flow**
-
-- **Node.js → Rust**: Workflow definitions, job results, errors
-- **Rust → Node.js**: Job requests, context data, state updates
-
-## State Management
-
-### Workflow State Machine
-
-The engine maintains a sophisticated state machine for each workflow run:
-
-```rust
-enum RunState {
-    Pending { run_id: RunId, workflow: WorkflowDefinition, payload: Value },
-    Running { run_id: RunId, current_step: String, completed_steps: HashMap<String, Value> },
-    Completed { run_id: RunId, result: Value },
-    Failed { run_id: RunId, error: String },
-}
+```text
+run_started(payload)
+  -> step_attempt_started
+  -> step_attempt_succeeded(result)
+  -> fold result into context.steps.<id>
+  -> next ready node
+  -> run_succeeded(finalResult)
 ```
 
-### Context Object
+In-memory projections and indexes are rebuildable acceleration. Immutable run
+events, definition bindings, attempt results, approval decisions, trigger
+occurrences, and managed-operation settlement records are durable truth.
 
-Each step receives a context object with:
+Event sourcing does not claim exactly-once arbitrary effects. If recovery finds
+an attempt that started without a terminal outcome, the effect is ambiguous and
+fails closed as interrupted. WOML replays derivation, not an unknown external
+side effect.
 
-- **`ctx.payload`**: Data from the trigger that started the workflow
-- **`ctx.steps`**: Outputs from all previously completed steps
-- **`ctx.run`**: Metadata about the current run (`runId`, `workflowId`)
-- **`ctx.state`**: Persistent state shared across workflow runs
-- **`ctx.last`**: Output from the previous step (convenience property)
-- **`ctx.trigger`**: Information about what triggered this workflow
+## JavaScript host and bindings
 
-## Key Architectural Benefits
+One long-lived Bun host multiplexes invocation messages by invocation ID.
+Responses may arrive out of order. Each script attempt runs in a fresh isolated
+Worker, giving it independent module state and a real termination boundary.
 
-### **Clear Separation of Concerns**
+Depending on the compiled profile, a Worker receives deeply read-only bindings:
 
-- **Node.js**: Handles the "what" (DX, defining workflows, integrations)
-- **Rust**: Handles the "how" (scheduling, state, reliability)
-- Makes the system easier to develop, test, and maintain
+- `context.payload` and visible `context.steps` values;
+- `attempt` retry identity and counters;
+- `services` built-ins and imported module aliases;
+- source-proven `secrets.NAME` values; and
+- `lifecycle` only for lifecycle scripts.
 
-### **Performance and Reliability**
+The host returns JSON-compatible outcomes. It does not decide retries,
+branch selection, cancellation, or workflow completion.
 
-- **Rust**: Handles stateful, complex, performance-critical orchestration
-- **Node.js**: Handles flexible, I/O-heavy, application-specific logic
-- Leverages the world's largest ecosystem of libraries
+## Services and capability calls
 
-### **Superior Developer Experience**
+Native `fetch()` remains Bun's Fetch implementation and is observed with
+redacted operation events. Managed capabilities use a full-duplex Rust/Bun
+protocol whose nested calls correlate by invocation and call ID.
 
-- Designed from the ground up to support elegant APIs
-- Fully integrated testing harness
-- Type-safe throughout with TypeScript
+Rust owns limits, cancellation, stable operation identity, durable settlement,
+and recovery for:
 
-### **Scalability**
+- `services.http.request()`;
+- `services.db()` for SQLite and PostgreSQL;
+- `services.storage`;
+- `services.cache`;
+- `services.events.emit()`;
+- `services.state`;
+- `services.workflows.call()` and `.start()`; and
+- supervised Telegram, Discord, and WhatsApp messaging.
 
-- Worker pool in the Rust engine
-- Pluggable persistence layer
-- Scales from single process on laptop to multi-worker deployment
-- Supports production Postgres database
+Resolved credentials exist only in bounded invocation/transport memory. Models,
+events, progress, logs, and inspection contain secret names or redacted
+metadata—not values.
 
-## Development Phases
+## Triggers and admission
 
-### **Phase 1: Core Foundation**
+The frontend compiles trigger definitions; it never creates runs. Manual input,
+HTTP listeners, clocks, event publication, and communication-provider adapters
+normalize an occurrence and submit it to Rust.
 
-- Basic workflow definition and builder pattern
-- Minimal Rust engine with N-API bridge
-- Simple communication protocol
-- SQLite persistence layer
+Rust atomically binds:
 
-### **Phase 2: Advanced Features**
+1. the immutable trigger occurrence;
+2. the exact compiled definition; and
+3. the first run event.
 
-- State management and persistence
-- Trigger system (webhooks, schedules, events)
-- Error handling and retry logic
+Stable occurrence identity makes provider redelivery and caller retries return
+the original run instead of executing a second one. Payload hashes use
+canonical JSON. Conflicting identities or payloads fail closed.
 
-### **Phase 3: Production Features**
+Schedules and intervals use durable cursors owned by Rust. Webhook schemas and
+authentication are checked before admission. Named events fan out through the
+same authority, whether published over authenticated HTTP, `woml emit`, or
+`services.events.emit()`.
 
-- Testing harness and mocking
-- Advanced control flow (parallel, race, forEach, batch)
-- Human-in-the-loop capabilities
-- Monitoring and observability
+Communication transports remain provider-specific—Slack Socket Mode, Telegram
+long polling, Discord Gateway, and signed WhatsApp callbacks—but converge on
+the same durable trigger, notification, approval, and capability authorities.
 
-## Summary
+## Control flow and settlement
 
-This architecture provides the best of both worlds:
+Sequential steps advance by DAG edges. Other structures remain engine-owned:
 
-- **Node.js** for the developer-friendly experience, rich ecosystem, and flexible business logic
-- **Rust** for the rock-solid reliability, high performance, and durable state management
+- `<choose>` and `<switch>` select one durable route and may publish one stable
+  merged result;
+- `<parallel>` starts independent child steps and applies `fail-fast` or
+  `wait-all`;
+- `<fork>` runs independent multi-step branches and releases the continuation
+  according to its selected join set;
+- `<approval>` persists a wait before notifying reviewers and resumes only from
+  a committed decision or timeout; and
+- lifecycle actions run at versioned workflow/step event boundaries.
 
-The clear division of responsibilities ensures that each language handles what it does best, while the N-API bridge provides clean, efficient communication between the two layers. This design enables developers to build complex, reliable workflows with the simplicity and power they need.
+The workflow settlement node prevents a run from reporting success while owned
+fork work remains active. A joined failure blocks its continuation; an unjoined
+failure does not block the selected join but still contributes to final run
+failure after all owned work settles.
+
+Lifecycle uses a separate durable vocabulary (including Event v10 history) so
+the business outcome and lifecycle finalization remain distinguishable.
+
+## Modules and reusable definitions
+
+`<imports><module ... /></imports>` has two local forms:
+
+- `.js`/`.ts` modules expose named exports at `services.<alias>`; and
+- reusable `.woml` definitions compile custom step or notification-provider
+  tags away before the model reaches Rust.
+
+The frontend follows only safe static local module edges, creates deterministic
+ESM bundles and source maps, and records exact artifact digests. The durable
+definition store owns those bytes, so recovery never reads changed source from
+the project directory.
+
+`woml-env.d.ts` is editor support and does not enter definition identity.
+Imported modules receive `services`; workflow context, attempts, and secrets are
+passed as explicit function arguments.
+
+## Workflow calls
+
+Call-only workflows omit `<triggers>` and are registered by exact workflow ID.
+Both workflow operations reuse ordinary trigger admission and the normal DAG
+engine:
+
+- `services.workflows.call()` waits for an independent durable child result;
+- `services.workflows.start()` returns the child run ID after durable dispatch.
+
+Stable call identity reconnects retries to the same child. Hidden lineage
+rejects direct and indirect cycles. Synchronous calls reject Human Approval
+targets before admission because an arbitrary Bun continuation cannot be stored
+across a long wait.
+
+## Runtime policy
+
+Runtime policy is compiled outside the business DAG. Rust applies concurrency,
+work-conserving FIFO queues, strict rolling-window rate limits, and total
+workflow deadlines consistently to manual, trigger, event, and workflow-call
+ingress. Scheduler claims and queue indexes are rebuildable; events and exact
+definitions remain authoritative.
+
+## Durable state and data
+
+`services.state` stores bounded workflow-owned JSON across runs. Rust supplies
+the workflow namespace, canonical JSON, versions, compare-and-set, quotas,
+atomic increments, mutation reattachment, and cross-process SQLite
+transactions. State never enters run context and is not removed with run
+history.
+
+Cache, storage, database, and state have separate promises:
+
+- cache may expire or evict;
+- storage holds checksummed larger objects;
+- databases provide application-owned querying and transactions; and
+- durable state holds small workflow-owned facts.
+
+## Runtime ownership and operations
+
+`woml run` activates direct `.woml` files and directories—there is no build
+artifact required from authors. Activation validates the complete unit, pins
+definitions/artifacts, prepares transports with admission closed, performs
+recovery, and opens ingress only after every required component is ready.
+
+One live runtime owns one local SQLite state boundary through a durable lease.
+The production runtime provides foreground/background operation, exact stop,
+graceful drain, authenticated loopback administration, redacted structured
+logs, metrics, health, the terminal inspector, coherent online backup, guarded
+offline restore, retention, and bounded SQLite maintenance.
+
+This is a continuous single-machine runtime, not a distributed scheduler or a
+multi-tenant hostile-code sandbox. Operators must provide TLS, host/container
+resource limits, filesystem permissions, network egress policy, secret-provider
+security, monitoring, and backup protection.
+
+## Packaging
+
+The public `woml` package is platform-neutral and contains no `.node` file. It
+declares exact optional dependencies on the supported `@woml/cli-*` native
+packages. The loader selects the matching macOS, Windows, or Linux glibc/musl
+x64/ARM64 artifact automatically.
+
+The public package bundles the private TypeScript compiler, CLI, hosts, and
+workers. Users install one package and one `woml` executable; native packages
+are implementation details.
+
+## Versioned contracts and enforcement
+
+Compiled models, definition packages, script/capability protocols, event
+vocabularies, store generations, inspection projections, and operational
+responses are explicitly versioned under [`schemas/`](schemas/) and
+[`protocols/`](protocols/). Historical versions remain compatibility artifacts.
+
+Automated separation gates reject a restored chaining SDK, a second compiler
+or execution path, markup knowledge in Rust, unexpected native dependencies,
+adapter export drift, and native binaries embedded in the platform-neutral
+package.

@@ -1,0 +1,227 @@
+{
+  "activation": {
+    "profile": "woml.deployment-activation/v1",
+    "deploymentId": "customer-automation",
+    "activationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "configurationDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "state": "ready",
+    "workflows": [
+      {
+        "workflowId": "process-order",
+        "definitionHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "moduleArtifacts": ["sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"]
+      }
+    ],
+    "requiredSecrets": ["ORDER_WEBHOOK_TOKEN", "SLACK_BOT_TOKEN"]
+  },
+  "preflight": {
+    "profile": "woml.production-preflight/v1",
+    "status": "passed",
+    "configuration": {
+      "profile": "woml.runtime-configuration/v1",
+      "schemaVersion": 1,
+      "configPath": "/srv/woml/woml.runtime.json",
+      "deploymentName": "customer-automation",
+      "statePath": "/srv/woml/data/state.sqlite",
+      "public": { "host": "127.0.0.1", "port": 3000 },
+      "admin": { "host": "127.0.0.1", "port": 3001 },
+      "logging": { "format": "json", "level": "info", "directory": "/srv/woml/logs" },
+      "workers": 8,
+      "shutdownTimeoutMs": 30000,
+      "observability": { "health": true, "metrics": true },
+      "sources": {
+        "deploymentName": "config", "statePath": "config", "public.host": "config", "public.port": "config",
+        "admin.host": "config", "admin.port": "config", "logging.format": "config", "logging.level": "config",
+        "logging.directory": "config", "workers": "config", "shutdownTimeoutMs": "config"
+      }
+    },
+    "environment": {
+      "profile": "woml.runtime-preflight/v1",
+      "state": { "path": "/srv/woml/data/state.sqlite", "existing": false, "writableAncestor": "/srv/woml", "availableBytes": 1073741824 },
+      "logging": { "directory": "/srv/woml/logs", "writableAncestor": "/srv/woml" },
+      "ports": { "public": "127.0.0.1:3000", "admin": "127.0.0.1:3001", "distinct": true }
+    },
+    "secretProvider": "environment",
+    "workflows": [{
+      "workflowId": "process-order", "sourcePath": "/srv/woml/workflows/order.woml",
+      "definitionHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "triggerCount": 1, "moduleCount": 1, "requiredSecrets": ["ORDER_WEBHOOK_TOKEN"]
+    }]
+  },
+  "backgroundStarted": {
+    "profile": "woml.background-runtime-control/v1",
+    "kind": "started",
+    "runtimeInstanceId": "runtime_01",
+    "pid": 18427,
+    "status": "ready",
+    "descriptorPath": "/srv/woml/.woml/runtime.json",
+    "logPath": "/srv/woml/.woml/logs/runtime.log"
+  },
+  "backgroundStop": {
+    "profile": "woml.background-runtime-control/v1",
+    "kind": "stop",
+    "runtimeInstanceId": "runtime_01",
+    "status": "requested"
+  },
+  "runtimeInstance": {
+    "profile": "woml.runtime-instance/v1",
+    "deploymentId": "customer-automation",
+    "activationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtimeInstanceId": "runtime_01",
+    "runtimeVersion": "1.0.0",
+    "nativeVersion": "1.0.0",
+    "lifecycle": "ready",
+    "startedAt": "2026-08-12T10:00:00Z",
+    "heartbeatAt": "2026-08-12T10:00:05Z",
+    "leaseExpiresAt": "2026-08-12T10:00:20Z"
+  },
+  "descriptor": {
+    "profile": "woml.runtime-descriptor/v1",
+    "runtimeInstanceId": "runtime_01",
+    "deploymentId": "customer-automation",
+    "pid": 18427,
+    "adminUrl": "http://127.0.0.1:3001",
+    "capability": "z7Qx6WJ2lTJyU3tJ4SOk2vM8h9Hh0vQ2C5wRbN8p0kw",
+    "createdAt": "2026-08-12T10:00:00Z",
+    "expiresAt": "2026-08-13T10:00:00Z"
+  },
+  "adminRequest": {
+    "profile": "woml.runtime-admin-http/v1",
+    "kind": "request",
+    "requestId": "request_01",
+    "operation": "stop"
+  },
+  "adminResponse": {
+    "profile": "woml.runtime-admin-http/v1",
+    "kind": "response",
+    "requestId": "request_01",
+    "status": "accepted"
+  },
+  "store": {
+    "schemaVersion": 14,
+    "runtimeOwner": {
+      "deploymentId": "customer-automation",
+      "activationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtimeInstanceId": "runtime_01",
+      "heartbeatAt": "2026-08-12T10:00:05Z",
+      "leaseExpiresAt": "2026-08-12T10:00:20Z"
+    },
+    "maintenance": null,
+    "lastBackup": {
+      "backupId": "backup_01",
+      "completedAt": "2026-08-12T09:00:00Z",
+      "verified": true
+    }
+  },
+  "snapshot": {
+    "profile": "woml.runtime-operations-snapshot/v1",
+    "runtimeInstanceId": "runtime_01",
+    "sequence": 42,
+    "capturedAt": "2026-08-12T10:01:00Z",
+    "lifecycle": "ready",
+    "ready": true,
+    "uptimeMs": 60000,
+    "workflows": [
+      {
+        "workflowId": "process-order",
+        "definitionHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "active": 1,
+        "queued": 2,
+        "waiting": 1,
+        "failed": 0,
+        "triggerTypes": ["webhook"]
+      }
+    ],
+    "runs": [
+      {
+        "runId": "run_01",
+        "workflowId": "process-order",
+        "status": "waiting",
+        "currentNodeId": "manager-approval",
+        "durationMs": 12000
+      }
+    ],
+    "components": [
+      { "name": "sqlite", "kind": "store", "status": "ready" },
+      { "name": "orders-webhook", "kind": "trigger", "status": "ready" }
+    ],
+    "alerts": []
+  },
+  "stream": {
+    "profile": "woml.runtime-operations-stream/v1",
+    "runtimeInstanceId": "runtime_01",
+    "sequence": 43,
+    "occurredAt": "2026-08-12T10:01:01Z",
+    "kind": "run",
+    "subject": { "id": "run_01", "status": "succeeded" }
+  },
+  "log": {
+    "profile": "woml.runtime-log-record/v1",
+    "timestamp": "2026-08-12T10:01:01Z",
+    "level": "info",
+    "code": "WOML_RUN_SUCCEEDED",
+    "message": "Workflow run succeeded.",
+    "runtimeInstanceId": "runtime_01",
+    "deploymentId": "customer-automation",
+    "workflowId": "process-order",
+    "runId": "run_01"
+  },
+  "metric": {
+    "profile": "woml.runtime-metrics/v1",
+    "name": "woml_runs_total",
+    "type": "counter",
+    "value": 1,
+    "labels": { "workflow_id": "process-order", "status": "succeeded" }
+  },
+  "liveness": {
+    "profile": "woml.runtime-health/v1",
+    "kind": "liveness",
+    "status": "ok"
+  },
+  "readiness": {
+    "profile": "woml.runtime-health/v1",
+    "kind": "readiness",
+    "status": "ok"
+  },
+  "healthDetail": {
+    "profile": "woml.runtime-health/v1",
+    "kind": "detail",
+    "status": "ready",
+    "runtimeInstanceId": "runtime_01",
+    "components": [{ "name": "sqlite", "status": "ready" }]
+  },
+  "backup": {
+    "profile": "woml.backup-manifest/v1",
+    "backupId": "backup_01",
+    "createdAt": "2026-08-12T09:00:00Z",
+    "deploymentId": "customer-automation",
+    "activationId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "storeVersion": 14,
+    "database": {
+      "file": "state.sqlite",
+      "sizeBytes": 1048576,
+      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "definitionHashes": ["sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
+    "verified": true
+  },
+  "retentionPlan": {
+    "profile": "woml.retention/v1",
+    "kind": "plan",
+    "policyId": "retention_01",
+    "succeededBefore": "2026-07-13T00:00:00Z",
+    "failedBefore": "2026-05-14T00:00:00Z",
+    "cancelledBefore": "2026-07-13T00:00:00Z",
+    "eligibleRuns": 1200,
+    "estimatedBytes": 125829120
+  },
+  "retentionResult": {
+    "profile": "woml.retention/v1",
+    "kind": "result",
+    "policyId": "retention_01",
+    "completedAt": "2026-08-12T10:05:00Z",
+    "deletedRuns": 1200,
+    "deletedBytes": 120000000,
+    "stateEntriesDeleted": 0
+  }
+}

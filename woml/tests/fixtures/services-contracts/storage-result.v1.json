@@ -1,0 +1,18 @@
+{
+  "contract": "woml.storage",
+  "contractVersion": 1,
+  "kind": "result",
+  "operation": "put",
+  "data": {
+    "contract": "woml.storage-object",
+    "contractVersion": 1,
+    "key": "reports/2026-08-10.json",
+    "version": "v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "checksum": {
+      "algorithm": "sha256",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "size": 16,
+    "contentType": "application/json"
+  }
+}

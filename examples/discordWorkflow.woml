@@ -1,0 +1,31 @@
+<woml>
+  <workflow
+    id="discord-conversation"
+    name="Discord Conversation"
+    description="Replies when the bot is mentioned or receives a direct message."
+    version="1.0.0"
+  >
+    <triggers>
+      <discord
+        id="messageReceived"
+        events="app-mention,direct-message"
+        bot-token="{{secrets.DISCORD_BOT_TOKEN}}"
+      />
+    </triggers>
+
+    <steps>
+      <step id="reply" name="Reply in Discord">
+        <script>
+          const sent = await services.discord.send({
+            botToken: secrets.DISCORD_BOT_TOKEN,
+            conversationId: context.payload.conversationId,
+            replyToMessageId: context.payload.messageId,
+            text: `Hello! WOML received: ${context.payload.text}`
+          }, { name: 'reply-to-incoming-message' });
+
+          return sent;
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

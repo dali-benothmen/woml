@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/workflow-start/v1",
+  "title": "WOML Workflow Start v1",
+  "description": "Durable non-blocking workflow admission for services.workflows.start().",
+  "x-status": "workflow-start-v1-frozen",
+  "x-invariants": [
+    "Exactly one activated workflow ID is selected and pinned before child execution.",
+    "The payload becomes the child author-facing context.payload.",
+    "A stable operation identity admits at most one child run.",
+    "Success confirms durable admission and dispatch, not child completion.",
+    "A later child failure does not retroactively fail the starting parent."
+  ],
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/started" }
+  ],
+  "$defs": {
+    "workflowId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "operationName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "workflowId", "payload", "options"],
+      "properties": {
+        "contract": { "const": "woml.workflow-start" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "request" },
+        "workflowId": { "$ref": "#/$defs/workflowId" },
+        "payload": { "type": "object" },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "#/$defs/operationName" }
+          }
+        }
+      }
+    },
+    "started": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "workflowId", "runId", "duplicate"],
+      "properties": {
+        "contract": { "const": "woml.workflow-start" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "started" },
+        "workflowId": { "$ref": "#/$defs/workflowId" },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "duplicate": { "type": "boolean" }
+      }
+    }
+  }
+}

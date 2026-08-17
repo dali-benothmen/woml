@@ -1,0 +1,24 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "deliver",
+  "invocationId": "notify-invocation-01",
+  "runId": "run_notification_01",
+  "approvalId": "releaseApproval",
+  "requestId": "aprreq_release_01",
+  "deliveryId": "releaseApproval:notify:0:channel:0",
+  "provider": "slack",
+  "destination": "#approvals",
+  "idempotencyKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "credentials": {
+    "botToken": { "kind": "secretReference", "name": "SLACK_BOT_TOKEN" },
+    "appToken": { "kind": "secretReference", "name": "SLACK_APP_TOKEN" }
+  },
+  "decisionCapability": "capability_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+  "message": {
+    "workflowId": "release-article",
+    "approvalName": "Release approval",
+    "approvalDescription": "Approve the article before release",
+    "expiresAt": "2026-08-08T10:00:00.000Z"
+  }
+}

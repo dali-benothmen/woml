@@ -1,0 +1,24 @@
+<woml>
+<workflow id="event-trigger-contract">
+  <triggers>
+    <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+  <steps>
+    <step id="capture">
+      <script>
+        return context.payload;
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

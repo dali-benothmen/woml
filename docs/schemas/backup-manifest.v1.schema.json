@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/backup-manifest/v1",
+  "title": "WOML Backup Manifest v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "backupId", "createdAt", "deploymentId", "activationId", "storeVersion", "database", "definitionHashes", "verified"],
+  "properties": {
+    "profile": { "const": "woml.backup-manifest/v1" }, "backupId": { "$ref": "#/$defs/id" }, "createdAt": { "type": "string", "format": "date-time" },
+    "deploymentId": { "$ref": "#/$defs/id" }, "activationId": { "$ref": "#/$defs/digest" }, "storeVersion": { "type": "integer", "minimum": 13 },
+    "database": { "type": "object", "additionalProperties": false, "required": ["file", "sizeBytes", "digest"], "properties": { "file": { "const": "state.sqlite" }, "sizeBytes": { "type": "integer", "minimum": 1 }, "digest": { "$ref": "#/$defs/digest" } } },
+    "definitionHashes": { "type": "array", "minItems": 1, "maxItems": 10000, "uniqueItems": true, "items": { "$ref": "#/$defs/digest" } },
+    "verified": { "const": true }
+  },
+  "$defs": { "id": { "type": "string", "minLength": 1, "maxLength": 320 }, "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

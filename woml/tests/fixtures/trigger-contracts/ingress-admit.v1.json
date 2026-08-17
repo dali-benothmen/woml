@@ -1,0 +1,13 @@
+{
+  "contract": "woml.trigger-ingress",
+  "contractVersion": 1,
+  "messageType": "admit",
+  "requestId": "request_webhook_001",
+  "workflowId": "webhook-trigger-contract",
+  "definitionHash": "sha256:4b4899d13cefc7ed88033d24c898549a4eb8862bebf4a73ed1c26f0af99bd082",
+  "triggerId": "newOrder",
+  "triggerHandler": "trigger.webhook",
+  "sourceIdentity": "order-delivery-123",
+  "payload": { "orderId": "order-42" },
+  "receivedAt": "2026-08-08T12:00:00.000Z"
+}

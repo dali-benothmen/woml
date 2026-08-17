@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v3",
+  "title": "WOML Compiled Workflow Model v3",
+  "description": "Language-neutral DAG contract for sequential, branch, and bounded parallel execution.",
+  "x-status": "parallel-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v2",
+  "x-frozenProfile": {
+    "name": "woml-cli-parallel",
+    "sourceFixture": "woml/tests/fixtures/parallel.woml",
+    "compiledFixture": "woml/tests/fixtures/parallel.compiled.v3.json",
+    "startId": "__woml_parallel__<parallelId>__start",
+    "childEdgeId": "<parallelId>:child:<zeroBasedIndex>",
+    "joinEdgeId": "<parallelId>:join:<zeroBasedIndex>",
+    "joinId": "<parallelId>"
+  },
+  "x-invariants": [
+    "Model v3 remains a directed acyclic graph; parallelism is never represented as an ordered list executor contract.",
+    "A parallel start uses engine.parallel-start and typed literal concurrency and onError inputs.",
+    "A parallel join uses the public parallel ID, engine.parallel-join, and empty object inputs.",
+    "Every group-owned fan-out and join edge carries parallelId; ordinary and branch edges do not.",
+    "Child and join ordinals are contiguous, zero-based, and preserve source document order.",
+    "The parallel join is control-only and never publishes context.steps.<parallelId>.",
+    "The current CLI terminal node must be output-producing and cannot be an engine.parallel-join."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "#/$defs/workflowGraph" }
+  },
+  "$defs": {
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges"],
+      "properties": {
+        "entryNodeIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/workflowNode" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflowEdge" }
+        }
+      }
+    },
+    "workflowNode": {
+      "oneOf": [
+        { "$ref": "#/$defs/nonParallelNode" },
+        { "$ref": "#/$defs/parallelStartNode" },
+        { "$ref": "#/$defs/parallelJoinNode" }
+      ]
+    },
+    "nonParallelNode": {
+      "allOf": [
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/workflowNode" },
+        {
+          "properties": {
+            "handler": {
+              "not": { "enum": ["engine.parallel-start", "engine.parallel-join"] }
+            }
+          }
+        }
+      ]
+    },
+    "parallelStartNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^__woml_parallel__[a-z][A-Za-z0-9]*__start$",
+          "maxLength": 300
+        },
+        "handler": { "const": "engine.parallel-start" },
+        "inputs": { "$ref": "#/$defs/parallelStartInputs" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Language-neutral name and description metadata."
+        }
+      }
+    },
+    "parallelStartInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fields"],
+      "properties": {
+        "kind": { "const": "object" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["concurrency", "onError"],
+          "properties": {
+            "concurrency": {
+              "type": "object", "additionalProperties": false, "required": ["kind", "value"],
+              "properties": { "kind": { "const": "literal" }, "value": { "type": "integer", "minimum": 1 } }
+            },
+            "onError": {
+              "type": "object", "additionalProperties": false, "required": ["kind", "value"],
+              "properties": { "kind": { "const": "literal" }, "value": { "enum": ["fail-fast", "wait-all"] } }
+            }
+          }
+        }
+      }
+    },
+    "parallelJoinNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/publicStructuralId" },
+        "handler": { "const": "engine.parallel-join" },
+        "inputs": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "object" },
+            "fields": { "type": "object", "maxProperties": 0 }
+          }
+        }
+      }
+    },
+    "workflowEdge": {
+      "oneOf": [
+        { "$ref": "#/$defs/ordinaryAlwaysEdge" },
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/branchBooleanEdge" },
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/branchOtherwiseEdge" },
+        { "$ref": "#/$defs/parallelChildEdge" },
+        { "$ref": "#/$defs/parallelJoinEdge" }
+      ]
+    },
+    "ordinaryAlwaysEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition"],
+      "properties": {
+        "id": {
+          "allOf": [
+            { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+            { "not": { "pattern": "^[a-z][A-Za-z0-9]*:(?:child|join):(0|[1-9][0-9]*)$" } }
+          ]
+        },
+        "from": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "to": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "condition": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/alwaysCondition" }
+      }
+    },
+    "parallelChildEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition", "parallelId"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:child:(0|[1-9][0-9]*)$", "maxLength": 256 },
+        "from": { "type": "string", "pattern": "^__woml_parallel__[a-z][A-Za-z0-9]*__start$", "maxLength": 300 },
+        "to": { "$ref": "#/$defs/publicStructuralId" },
+        "condition": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/alwaysCondition" },
+        "parallelId": { "$ref": "#/$defs/publicStructuralId" }
+      }
+    },
+    "parallelJoinEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition", "parallelId"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:join:(0|[1-9][0-9]*)$", "maxLength": 256 },
+        "from": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "to": { "$ref": "#/$defs/publicStructuralId" },
+        "condition": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/alwaysCondition" },
+        "parallelId": { "$ref": "#/$defs/publicStructuralId" }
+      }
+    },
+    "publicStructuralId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    }
+  }
+}

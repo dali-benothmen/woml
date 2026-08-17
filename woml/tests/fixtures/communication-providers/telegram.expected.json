@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 15,
+  "trigger": {
+    "id": "agentMessage",
+    "handler": "trigger.telegram",
+    "events": ["message"],
+    "credential": "TELEGRAM_BOT_TOKEN"
+  },
+  "approvalDestinations": ["-1001234567890", "123456789"],
+  "notificationDeliveryIds": [
+    "review:notify:0:chat:0",
+    "review:notify:0:chat:1",
+    "lifecycle:0:action:0:provider:0:chat:0"
+  ],
+  "communication": {
+    "profileVersion": 1,
+    "providers": [
+      {
+        "provider": "telegram",
+        "triggerIds": ["agentMessage"],
+        "notificationDeliveryIds": [
+          "review:notify:0:chat:0",
+          "review:notify:0:chat:1",
+          "lifecycle:0:action:0:provider:0:chat:0"
+        ],
+        "messaging": true,
+        "credentialNames": ["TELEGRAM_BOT_TOKEN"]
+      }
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 15,
+  "trigger": {
+    "id": "agentMessage",
+    "handler": "trigger.discord",
+    "events": ["app-mention", "direct-message"],
+    "channels": ["200000000000000001", "200000000000000002"],
+    "credential": "DISCORD_BOT_TOKEN"
+  },
+  "approvalDestinations": [
+    "200000000000000001",
+    "200000000000000002"
+  ],
+  "notificationDeliveryIds": [
+    "review:notify:0:channel:0",
+    "review:notify:0:channel:1",
+    "lifecycle:0:action:0:provider:0:channel:0"
+  ],
+  "communication": {
+    "profileVersion": 1,
+    "providers": [
+      {
+        "provider": "discord",
+        "triggerIds": ["agentMessage"],
+        "notificationDeliveryIds": [
+          "review:notify:0:channel:0",
+          "review:notify:0:channel:1",
+          "lifecycle:0:action:0:provider:0:channel:0"
+        ],
+        "messaging": true,
+        "credentialNames": ["DISCORD_BOT_TOKEN"]
+      }
+    ]
+  }
+}

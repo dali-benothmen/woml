@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/scheduler-claim/v1",
+  "title": "WOML Scheduler Claim v1",
+  "description": "Bounded Store v12 coordination record for one actively executing Event v11 run.",
+  "x-status": "runtime-policies-rp0-frozen",
+  "x-authoritative": false,
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "runId", "workflowId", "ownerId", "claimId", "claimedAt", "expiresAt"],
+  "properties": {
+    "profile": { "const": "woml.scheduler-claim/v1" },
+    "runId": { "$ref": "#/$defs/id" },
+    "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "ownerId": { "$ref": "#/$defs/id" },
+    "claimId": { "$ref": "#/$defs/id" },
+    "claimedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 }
+  }
+}

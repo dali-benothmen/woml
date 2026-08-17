@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/retention/v1",
+  "title": "WOML Retention v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "oneOf": [
+    {
+      "type": "object", "additionalProperties": false, "required": ["profile", "kind", "policyId", "succeededBefore", "failedBefore", "cancelledBefore"],
+      "properties": { "profile": { "const": "woml.retention/v1" }, "kind": { "const": "plan" }, "policyId": { "$ref": "#/$defs/id" }, "succeededBefore": { "type": "string", "format": "date-time" }, "failedBefore": { "type": "string", "format": "date-time" }, "cancelledBefore": { "type": "string", "format": "date-time" }, "eligibleRuns": { "type": "integer", "minimum": 0 }, "estimatedBytes": { "type": "integer", "minimum": 0 } }
+    },
+    {
+      "type": "object", "additionalProperties": false, "required": ["profile", "kind", "policyId", "completedAt", "deletedRuns", "deletedBytes", "stateEntriesDeleted"],
+      "properties": { "profile": { "const": "woml.retention/v1" }, "kind": { "const": "result" }, "policyId": { "$ref": "#/$defs/id" }, "completedAt": { "type": "string", "format": "date-time" }, "deletedRuns": { "type": "integer", "minimum": 0 }, "deletedBytes": { "type": "integer", "minimum": 0 }, "stateEntriesDeleted": { "const": 0 } }
+    }
+  ],
+  "$defs": { "id": { "type": "string", "minLength": 1, "maxLength": 320 } }
+}

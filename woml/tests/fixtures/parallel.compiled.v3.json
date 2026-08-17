@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 3,
+  "workflowId": "field-report",
+  "metadata": {
+    "name": "Build Field Report",
+    "version": "0.1"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": { "kind": "object", "fields": {} }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["loadField"],
+    "nodes": [
+      {
+        "id": "loadField",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          fieldId: \"field-42\"\n        };\n      "
+            }
+          }
+        }
+      },
+      {
+        "id": "__woml_parallel__fieldData__start",
+        "handler": "engine.parallel-start",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "concurrency": { "kind": "literal", "value": 2 },
+            "onError": { "kind": "literal", "value": "wait-all" }
+          }
+        },
+        "metadata": {
+          "name": "Load field data",
+          "description": "Load independent readings"
+        }
+      },
+      {
+        "id": "loadWeather",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n          await new Promise(resolve => setTimeout(resolve, 80));\n          return {\n            fieldId: context.steps.loadField.fieldId,\n            temperature: 22\n          };\n        "
+            }
+          }
+        }
+      },
+      {
+        "id": "loadSoil",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n          await new Promise(resolve => setTimeout(resolve, 80));\n          return {\n            fieldId: context.steps.loadField.fieldId,\n            moisture: 41\n          };\n        "
+            }
+          }
+        }
+      },
+      {
+        "id": "fieldData",
+        "handler": "engine.parallel-join",
+        "inputs": { "kind": "object", "fields": {} }
+      },
+      {
+        "id": "buildReport",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          summary: `Weather ${context.steps.loadWeather.temperature}°C, soil ${context.steps.loadSoil.moisture}%`\n        };\n      "
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "loadField-to-__woml_parallel__fieldData__start",
+        "from": "loadField",
+        "to": "__woml_parallel__fieldData__start",
+        "condition": { "kind": "always" }
+      },
+      {
+        "id": "fieldData:child:0",
+        "from": "__woml_parallel__fieldData__start",
+        "to": "loadWeather",
+        "condition": { "kind": "always" },
+        "parallelId": "fieldData"
+      },
+      {
+        "id": "fieldData:child:1",
+        "from": "__woml_parallel__fieldData__start",
+        "to": "loadSoil",
+        "condition": { "kind": "always" },
+        "parallelId": "fieldData"
+      },
+      {
+        "id": "fieldData:join:0",
+        "from": "loadWeather",
+        "to": "fieldData",
+        "condition": { "kind": "always" },
+        "parallelId": "fieldData"
+      },
+      {
+        "id": "fieldData:join:1",
+        "from": "loadSoil",
+        "to": "fieldData",
+        "condition": { "kind": "always" },
+        "parallelId": "fieldData"
+      },
+      {
+        "id": "fieldData-to-buildReport",
+        "from": "fieldData",
+        "to": "buildReport",
+        "condition": { "kind": "always" }
+      }
+    ]
+  }
+}

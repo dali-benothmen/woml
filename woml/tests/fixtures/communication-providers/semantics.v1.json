@@ -1,0 +1,10 @@
+{
+  "versions": { "payload": 1, "triggerHost": 1, "notificationAdapter": 1, "messaging": 1, "model": 15, "definitionPackage": 10, "event": 14, "store": 14, "scriptHost": 8, "capabilityCall": 1, "presentation": 1 },
+  "providerOrder": ["telegram", "discord", "whatsapp"],
+  "transports": { "telegram": "long-polling", "discord": "gateway", "whatsapp": "official-cloud-api-webhook" },
+  "acknowledgement": "durable-accepted-or-duplicate-only",
+  "localAliasResolution": "explicit-local-wins-with-warning",
+  "approvalResolution": "first-valid-durable-decision-wins",
+  "whatsappProactiveDelivery": "approved-template-required",
+  "unsupportedV1": ["telegram-webhook", "discord-slash-command", "media", "edit", "delete", "raw-provider-json"]
+}

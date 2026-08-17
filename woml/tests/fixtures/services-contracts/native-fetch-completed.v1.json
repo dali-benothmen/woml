@@ -1,0 +1,5 @@
+{
+  "contract": "woml.native-fetch-observation", "contractVersion": 1, "observationType": "completed",
+  "invocationId": "invocation-fetch-a", "requestId": "fetch-a", "status": 202, "responseBodyBytes": null,
+  "durationMs": 12.5, "completedAt": "2026-08-09T08:00:00.013Z"
+}

@@ -1,0 +1,21 @@
+<woml>
+  <workflow id="request-risk" name="Request customer risk" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="requestRisk">
+        <script>
+          const risk = await services.workflows.call('calculate-risk', {
+            customerId: 'customer-42'
+          });
+
+          return {
+            message: `Customer risk score: ${risk.score}`,
+            score: risk.score
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,58 @@
+{
+  "immediateStart": [
+    "run_admitted",
+    "run_execution_started",
+    "step_attempt_started",
+    "step_attempt_succeeded",
+    "run_outcome_decided",
+    "run_finalized"
+  ],
+  "queuedStart": [
+    "run_admitted",
+    "run_execution_started",
+    "step_attempt_started",
+    "step_attempt_succeeded",
+    "run_outcome_decided",
+    "run_finalized"
+  ],
+  "approvalWaitResume": [
+    "run_admitted",
+    "run_execution_started",
+    "approval_requested",
+    "approval_resolved",
+    "step_attempt_started",
+    "step_attempt_succeeded",
+    "run_outcome_decided",
+    "run_finalized"
+  ],
+  "rateDelay": [
+    "run_admitted",
+    "run_execution_started",
+    "step_attempt_started",
+    "step_attempt_succeeded",
+    "run_outcome_decided",
+    "run_finalized"
+  ],
+  "timeout": [
+    "run_admitted",
+    "run_execution_started",
+    "run_timeout_reached",
+    "run_outcome_decided",
+    "run_finalized"
+  ],
+  "queuedCancellation": [
+    "run_admitted",
+    "run_cancellation_requested",
+    "run_outcome_decided",
+    "run_finalized"
+  ],
+  "ownerCrash": [
+    "run_admitted",
+    "run_execution_started",
+    "step_attempt_started",
+    "step_attempt_failed",
+    "run_outcome_decided",
+    "run_finalized"
+  ],
+  "policyConflict": []
+}

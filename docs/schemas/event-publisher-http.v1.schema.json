@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/event-publisher-http/v1",
+  "title": "WOML Event Publisher HTTP v1",
+  "description": "Public JSON response contract for authenticated named-event publication.",
+  "x-status": "production-trigger-contract-frozen",
+  "x-http-request": {
+    "method": "POST",
+    "path": "/_woml/events/{eventName}",
+    "requiredHeaders": ["Authorization: Bearer <control-token>", "Event-ID: <event-id>", "Content-Type: application/json"],
+    "body": "One top-level JSON object, limited to 1 MiB"
+  },
+  "x-http-status": {
+    "published": 200,
+    "payloadOrIdInvalid": 400,
+    "unauthorized": 401,
+    "notFound": 404,
+    "methodNotAllowed": 405,
+    "payloadTooLarge": 413,
+    "unavailable": 503
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/published" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "eventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "eventName": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$"
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "message"],
+      "properties": {
+        "path": { "type": "string", "maxLength": 2048 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "delivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workflowId", "triggerId", "status", "runId", "duplicate"],
+          "properties": {
+            "workflowId": { "type": "string", "minLength": 1 },
+            "triggerId": { "type": "string", "minLength": 1 },
+            "status": { "const": "accepted" },
+            "runId": { "type": "string", "minLength": 1 },
+            "duplicate": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workflowId", "triggerId", "status", "code", "message", "retryable"],
+          "properties": {
+            "workflowId": { "type": "string", "minLength": 1 },
+            "triggerId": { "type": "string", "minLength": 1 },
+            "status": { "const": "rejected" },
+            "code": {
+              "enum": [
+                "WOML_TRIGGER_SCHEMA_INVALID",
+                "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+                "WOML_TRIGGER_DEFINITION_MISMATCH",
+                "WOML_TRIGGER_UNAVAILABLE",
+                "WOML_TRIGGER_HISTORY_INVALID"
+              ]
+            },
+            "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "retryable": { "type": "boolean" },
+            "issues": {
+              "type": "array",
+              "maxItems": 100,
+              "items": { "$ref": "#/$defs/issue" }
+            }
+          }
+        }
+      ]
+    },
+    "published": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "eventName", "status", "deliveries"],
+      "properties": {
+        "eventId": { "$ref": "#/$defs/eventId" },
+        "eventName": { "$ref": "#/$defs/eventName" },
+        "status": { "enum": ["accepted", "partial", "rejected"] },
+        "deliveries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/delivery" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "accepted" } } },
+          "then": {
+            "properties": {
+              "deliveries": {
+                "items": {
+                  "properties": { "status": { "const": "accepted" } },
+                  "required": ["status"]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } } },
+          "then": {
+            "properties": {
+              "deliveries": {
+                "allOf": [
+                  { "contains": { "properties": { "status": { "const": "accepted" } }, "required": ["status"] }, "minContains": 1 },
+                  { "contains": { "properties": { "status": { "const": "rejected" } }, "required": ["status"] }, "minContains": 1 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "rejected" } } },
+          "then": {
+            "properties": {
+              "deliveries": {
+                "items": {
+                  "properties": { "status": { "const": "rejected" } },
+                  "required": ["status"]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "WOML_EVENT_ID_INVALID",
+                "WOML_EVENT_NAME_INVALID",
+                "WOML_EVENT_PAYLOAD_INVALID",
+                "WOML_EVENT_PAYLOAD_TOO_LARGE",
+                "WOML_EVENT_UNAUTHORIZED",
+                "WOML_EVENT_NOT_FOUND",
+                "WOML_EVENT_METHOD_NOT_ALLOWED",
+                "WOML_EVENT_SUBSCRIBER_LIMIT",
+                "WOML_EVENT_UNAVAILABLE"
+              ]
+            },
+            "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+          }
+        }
+      }
+    }
+  }
+}

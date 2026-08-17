@@ -1,0 +1,25 @@
+<woml>
+  <props>
+    <prop name="level" required="true" />
+  </props>
+
+  <provider kind="notification">
+    <script>
+      const colors = {
+        error: "\u001b[31;1m",
+        success: "\u001b[32;1m",
+        info: "\u001b[36;1m"
+      };
+      const reset = "\u001b[0m";
+      const level = String(props.level).toLowerCase();
+      const color = colors[level] ?? colors.info;
+      const label = level in colors ? level.toUpperCase() : "INFO";
+
+      console.log(`${color}[${label}] ${notification.message}${reset}`);
+
+      return {
+        messageId: `console:${notification.deliveryId}`
+      };
+    </script>
+  </provider>
+</woml>

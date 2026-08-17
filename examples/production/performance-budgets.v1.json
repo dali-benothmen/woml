@@ -1,0 +1,14 @@
+{
+  "profile": "woml.production-performance-budgets/v1",
+  "cliVersionMs": 1000,
+  "startupMs": 15000,
+  "recoveryMs": 15000,
+  "admissionAverageMs": 250,
+  "snapshotMs": 500,
+  "metricsMs": 500,
+  "streamEventsMs": 2000,
+  "inspectorRenderMs": 100,
+  "backupMs": 5000,
+  "retentionMs": 5000,
+  "installedRuntimeBytes": 26214400
+}

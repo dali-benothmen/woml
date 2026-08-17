@@ -1,0 +1,27 @@
+<woml>
+<workflow id="update-inventory" name="Update order inventory" version="1.0.0">
+  <triggers>
+    <event id="orderCreated" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
+      <schema>
+        {
+          "type": "object",
+          "required": ["orderId"],
+          "properties": {
+            "orderId": { "type": "string" }
+          }
+        }
+      </schema>
+    </event>
+  </triggers>
+  <steps>
+    <step id="inventory">
+      <script>
+        return {
+          workflow: "update-inventory",
+          message: `Inventory updated for ${context.payload.orderId}`
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

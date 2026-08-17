@@ -1,0 +1,17 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "completed",
+  "invocationId": "notify-invocation-02",
+  "outcome": {
+    "kind": "failure",
+    "error": {
+      "kind": "rate_limited",
+      "code": "WOML_SLACK_RATE_LIMITED",
+      "message": "Slack temporarily rate limited the destination.",
+      "retryable": true,
+      "retryAfterMs": 1000
+    }
+  },
+  "durationMs": 15
+}

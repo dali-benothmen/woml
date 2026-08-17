@@ -1,0 +1,5 @@
+{
+  "contract": "woml.capability-call", "contractVersion": 1, "messageType": "result",
+  "invocationId": "invocation-crashed", "callId": "call-ambiguous-write", "outcome": "failed", "durationMs": 7.1,
+  "error": { "kind": "host_crashed", "code": "WOML_SCRIPT_HOST_CRASHED", "message": "The script host exited while the managed operation was active.", "retryable": false, "ambiguous": true }
+}

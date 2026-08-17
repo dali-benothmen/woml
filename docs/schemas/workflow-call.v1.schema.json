@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/workflow-call/v1",
+  "title": "WOML Workflow Call v1",
+  "description": "Author-facing request, terminal result, and safe error contract for services.workflows.call().",
+  "x-status": "workflow-calls-wc0-frozen",
+  "x-limits": {
+    "payloadBytes": 1048576,
+    "resultBytes": 4194304,
+    "lineageDepth": 32,
+    "inFlightPerInvocation": 32
+  },
+  "x-invariants": [
+    "Exactly one activated workflow ID is selected and pinned to one definition hash before child execution.",
+    "The payload is a top-level JSON object and becomes the complete child author-facing context.payload.",
+    "A stable call identity admits at most one child run.",
+    "Null is a valid result; missing or undefined is not a result.",
+    "Payloads, results, and secrets never enter safe operation metadata."
+  ],
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/succeeded" },
+    { "$ref": "#/$defs/failed" }
+  ],
+  "$defs": {
+    "workflowId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "operationName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/operationName" },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 86400000 }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "workflowId", "payload", "options"],
+      "properties": {
+        "contract": { "const": "woml.workflow-call" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "request" },
+        "workflowId": { "$ref": "#/$defs/workflowId" },
+        "payload": { "type": "object" },
+        "options": { "$ref": "#/$defs/options" }
+      }
+    },
+    "succeeded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "workflowId", "definitionHash", "childRunId", "result"],
+      "properties": {
+        "contract": { "const": "woml.workflow-call" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "succeeded" },
+        "workflowId": { "$ref": "#/$defs/workflowId" },
+        "definitionHash": { "$ref": "#/$defs/digest" },
+        "childRunId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "result": {}
+      }
+    },
+    "failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "workflowId", "code", "message", "retryable", "ambiguous"],
+      "properties": {
+        "contract": { "const": "woml.workflow-call" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "failed" },
+        "workflowId": { "$ref": "#/$defs/workflowId" },
+        "childRunId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "code": {
+          "enum": [
+            "WOML_WORKFLOW_TARGET_INVALID",
+            "WOML_WORKFLOW_TARGET_NOT_FOUND",
+            "WOML_WORKFLOW_TARGET_AMBIGUOUS",
+            "WOML_WORKFLOW_TARGET_UNAVAILABLE",
+            "WOML_WORKFLOW_DEFINITION_MISMATCH",
+            "WOML_WORKFLOW_PAYLOAD_TOO_LARGE",
+            "WOML_WORKFLOW_RESULT_MISSING",
+            "WOML_WORKFLOW_RESULT_TOO_LARGE",
+            "WOML_WORKFLOW_CALL_FAILED",
+            "WOML_WORKFLOW_CALL_TIMED_OUT",
+            "WOML_WORKFLOW_CALL_IDEMPOTENCY_CONFLICT",
+            "WOML_WORKFLOW_CALL_CYCLE",
+            "WOML_WORKFLOW_CALL_DEPTH_EXCEEDED",
+            "WOML_WORKFLOW_CALL_WAIT_UNSUPPORTED"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retryable": { "type": "boolean" },
+        "ambiguous": { "type": "boolean" }
+      }
+    }
+  }
+}

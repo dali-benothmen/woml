@@ -1,0 +1,13 @@
+{
+  "callKey": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "parentRunId": "run_parent_001",
+  "parentNodeId": "requestRisk",
+  "parentAttempt": 1,
+  "targetWorkflowId": "calculate-risk",
+  "targetDefinitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "childRunId": "run_child_risk_001",
+  "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "depth": 1,
+  "state": "succeeded",
+  "admittedAt": "2026-08-10T12:00:00Z"
+}

@@ -1,0 +1,12 @@
+{
+  "contract": "woml.event-publication",
+  "contractVersion": 1,
+  "messageType": "rejected",
+  "requestId": "publish_request_5",
+  "failure": {
+    "code": "WOML_EVENT_UNAUTHORIZED",
+    "message": "Event publisher authentication failed.",
+    "retryable": false
+  },
+  "rejectedAt": "2026-08-08T12:00:04.000Z"
+}

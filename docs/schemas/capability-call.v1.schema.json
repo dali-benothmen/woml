@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/capability-call/v1",
+  "title": "WOML Capability Call v1",
+  "description": "Generic, asynchronous, invocation-scoped call and result contract for Rust-managed services.",
+  "x-status": "services-capabilities-contract-frozen",
+  "x-correlation": "Every reply correlates by invocationId and callId; replies may arrive out of order.",
+  "x-idempotency": "operationKey is sha256(UTF8('woml.capability-operation\\0v1\\0' + stepIdempotencyKey + '\\0' + operationName)). automatic identity is limited to one effectful call per capability operation per step attempt; authors must supply a stable name when multiple effectful calls can occur.",
+  "x-defaultLimits": { "inputBytes": 1048576, "resultBytes": 4194304, "frameBytes": 8388608, "timeoutMs": 30000, "inFlightPerInvocation": 32, "inFlightGlobal": 256 },
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/succeeded" },
+    { "$ref": "#/$defs/failed" },
+    { "$ref": "#/$defs/cancelled" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", "maxLength": 128 },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "base": {
+      "type": "object",
+      "properties": {
+        "contract": { "const": "woml.capability-call" },
+        "contractVersion": { "const": 1 },
+        "invocationId": { "$ref": "#/$defs/id" },
+        "callId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "messageType", "invocationId", "callId", "runId", "nodeId", "attemptNumber", "capability", "operation", "inputContractVersion", "resultContractVersion", "identity", "limits", "input"],
+      "properties": {
+        "contract": { "const": "woml.capability-call" },
+        "contractVersion": { "const": 1 },
+        "messageType": { "const": "request" },
+        "invocationId": { "$ref": "#/$defs/id" },
+        "callId": { "$ref": "#/$defs/id" },
+        "runId": { "$ref": "#/$defs/id" },
+        "nodeId": { "$ref": "#/$defs/id" },
+        "attemptNumber": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "capability": { "$ref": "#/$defs/name" },
+        "operation": { "$ref": "#/$defs/name" },
+        "inputContractVersion": { "type": "integer", "minimum": 1 },
+        "resultContractVersion": { "type": "integer", "minimum": 1 },
+        "identity": { "$ref": "#/$defs/identity" },
+        "limits": { "$ref": "#/$defs/limits" },
+        "input": {}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "stepIdempotencyKey", "operationName", "operationKey"],
+      "properties": {
+        "mode": { "enum": ["automatic", "named"] },
+        "stepIdempotencyKey": { "$ref": "#/$defs/digest" },
+        "operationName": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "operationKey": { "$ref": "#/$defs/digest" },
+        "providerIdempotencyKey": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputBytes", "resultBytes", "timeoutMs"],
+      "properties": {
+        "inputBytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "resultBytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 86400000 }
+      }
+    },
+    "resultBase": {
+      "type": "object",
+      "properties": {
+        "contract": { "const": "woml.capability-call" },
+        "contractVersion": { "const": 1 },
+        "invocationId": { "$ref": "#/$defs/id" },
+        "callId": { "$ref": "#/$defs/id" },
+        "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "succeeded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "messageType", "invocationId", "callId", "outcome", "resultContractVersion", "resultBytes", "durationMs", "result"],
+      "properties": {
+        "contract": { "const": "woml.capability-call" }, "contractVersion": { "const": 1 },
+        "messageType": { "const": "result" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "outcome": { "const": "succeeded" }, "resultContractVersion": { "type": "integer", "minimum": 1 },
+        "resultBytes": { "type": "integer", "minimum": 0, "maximum": 8388608 }, "durationMs": { "type": "number", "minimum": 0 }, "result": {}
+      }
+    },
+    "failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "messageType", "invocationId", "callId", "outcome", "durationMs", "error"],
+      "properties": {
+        "contract": { "const": "woml.capability-call" }, "contractVersion": { "const": 1 },
+        "messageType": { "const": "result" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "outcome": { "const": "failed" }, "durationMs": { "type": "number", "minimum": 0 }, "error": { "$ref": "#/$defs/failure" }
+      }
+    },
+    "cancelled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "messageType", "invocationId", "callId", "outcome", "durationMs", "error"],
+      "properties": {
+        "contract": { "const": "woml.capability-call" }, "contractVersion": { "const": 1 },
+        "messageType": { "const": "result" }, "invocationId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" },
+        "outcome": { "const": "cancelled" }, "durationMs": { "type": "number", "minimum": 0 }, "error": { "$ref": "#/$defs/failure" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message", "retryable", "ambiguous"],
+      "properties": {
+        "kind": { "enum": ["invalid_input", "invalid_result", "unsupported_capability", "unsupported_operation", "unsupported_version", "input_too_large", "result_too_large", "frame_too_large", "timed_out", "cancelled", "handler_crashed", "worker_crashed", "host_crashed", "transport_failed", "service_rejected", "interrupted", "ambiguous"] },
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retryable": { "type": "boolean" },
+        "ambiguous": { "type": "boolean" },
+        "details": { "$ref": "#/$defs/safeMetadata" }
+      }
+    },
+    "safeMetadata": {
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": { "pattern": "^(?!(?:authorization|cookie|set-cookie|token|secret|password|body|query|url|headers|input|output|data|value)$)[A-Za-z][A-Za-z0-9_.-]{0,63}$" },
+      "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+    }
+  }
+}

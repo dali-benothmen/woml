@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-event/v14",
+  "title": "WOML Communication Provider Run Event v14",
+  "description": "Event v13 with provider-neutral message identities on the existing notification and capability event vocabulary.",
+  "x-status": "additional-communication-providers-acp3-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v13",
+  "x-invariants": [
+    "Communication providers reuse notification delivery, notification decision, and capability operation events; they do not create a second overlapping event vocabulary.",
+    "Credentials, raw provider updates, destination values, message text, and capability tokens never enter provider message identities.",
+    "Existing Slack message identity remains byte-compatible.",
+    "Telegram, Discord, and WhatsApp message identities use the provider-neutral communication shape."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 14 },
+    "eventId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_admitted", "run_execution_started", "run_timeout_reached", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled", "branch_selected", "choice_selected", "parallel_group_started", "parallel_group_completed", "approval_requested", "notification_delivery_requested", "notification_delivery_attempt_started", "notification_delivery_succeeded", "notification_delivery_failed", "notification_decision_accepted", "notification_message_update_requested", "notification_message_update_attempt_started", "notification_message_updated", "notification_message_update_failed", "approval_resolved", "operation_started", "operation_succeeded", "operation_failed", "fork_opened", "fork_branch_settled", "fork_join_settled", "run_cancellation_requested", "lifecycle_hook_requested", "lifecycle_action_attempt_started", "lifecycle_action_succeeded", "lifecycle_action_failed", "lifecycle_hook_completed", "reusable_lifecycle_requested", "reusable_lifecycle_action_started", "reusable_lifecycle_action_succeeded", "reusable_lifecycle_action_failed", "reusable_lifecycle_completed", "run_outcome_decided", "run_finalized"
+      ]
+    },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "notification_delivery_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/notificationDeliverySucceeded" } } }
+    },
+    {
+      "if": { "properties": { "type": { "enum": ["reusable_lifecycle_requested", "reusable_lifecycle_action_started", "reusable_lifecycle_action_succeeded", "reusable_lifecycle_action_failed", "reusable_lifecycle_completed"] } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/reusableLifecycle" } } }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "attemptId": { "type": "string", "pattern": "^nattempt_[A-Za-z0-9_-]+$" },
+    "slackMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspaceId", "channelId", "messageId"],
+      "properties": {
+        "workspaceId": { "type": "string", "pattern": "^T[A-Z0-9]{8,31}$" },
+        "channelId": { "type": "string", "pattern": "^[CGD][A-Z0-9]{8,31}$" },
+        "messageId": { "type": "string", "pattern": "^[0-9]{10,}\\.[0-9]{6}$" }
+      }
+    },
+    "communicationMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "accountId", "conversationId", "messageId"],
+      "properties": {
+        "provider": { "enum": ["telegram", "discord", "whatsapp"] },
+        "accountId": { "$ref": "#/$defs/id" },
+        "conversationId": { "$ref": "#/$defs/id" },
+        "messageId": { "$ref": "#/$defs/id" },
+        "threadId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "providerMessage": {
+      "oneOf": [
+        { "$ref": "#/$defs/slackMessage" },
+        { "$ref": "#/$defs/communicationMessage" }
+      ]
+    },
+    "notificationDeliverySucceeded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "attempt", "attemptId", "providerMessage"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/id" },
+        "requestId": { "$ref": "#/$defs/id" },
+        "deliveryId": { "$ref": "#/$defs/id" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "attemptId": { "$ref": "#/$defs/attemptId" },
+        "providerMessage": { "$ref": "#/$defs/providerMessage" }
+      }
+    },
+    "reusableLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocationId", "definitionDigest", "hook"],
+      "properties": {
+        "invocationId": { "$ref": "#/$defs/id" },
+        "definitionDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "hook": { "enum": ["on-success", "on-error", "on-complete"] },
+        "actionId": { "$ref": "#/$defs/id" },
+        "outcome": { "enum": ["succeeded", "failed", "completed_with_warnings"] },
+        "warningCode": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }
+      }
+    }
+  }
+}

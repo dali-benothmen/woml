@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 14,
+  "workflowId": "reusable-definitions",
+  "metadata": { "name": "Reusable definitions", "version": "1.0.0" },
+  "triggers": [
+    { "id": "start", "handler": "trigger.manual", "config": { "kind": "object", "fields": {} } }
+  ],
+  "graph": {
+    "entryNodeIds": ["discount"],
+    "nodes": [
+      {
+        "id": "discount",
+        "handler": "runtime.script",
+        "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "return services.pricing.discount(props.price, props.percentage);" } } },
+        "scriptRuntime": { "bindingVersion": 3, "bindings": ["props", "context", "attempt", "services"], "requiredSecrets": [] }
+      },
+      { "id": "__woml_workflow__settlement", "handler": "engine.workflow-settlement", "inputs": { "kind": "object", "fields": {} } }
+    ],
+    "edges": [
+      { "id": "discount:settlement", "from": "discount", "to": "__woml_workflow__settlement", "condition": { "kind": "always" } }
+    ],
+    "forks": [],
+    "choices": [],
+    "contextVisibility": [
+      { "nodeId": "discount", "stepIds": [] }
+    ],
+    "settlement": {
+      "nodeId": "__woml_workflow__settlement",
+      "mainResultNodeId": "discount",
+      "ownedBranchTerminalNodeIds": []
+    }
+  },
+  "runtimePolicy": { "profileVersion": 1, "concurrency": 1 },
+  "lifecycle": {
+    "profileVersion": 1,
+    "hooks": [
+      {
+        "hookId": "lifecycle:run_success",
+        "event": "run_success",
+        "actions": [
+          {
+            "actionId": "lifecycle:run_success:action:0",
+            "handler": "notification.informational",
+            "inputs": {
+              "kind": "object",
+              "fields": {
+                "deliveries": {
+                  "kind": "array",
+                  "items": [
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "deliveryId": { "kind": "literal", "value": "lifecycle:run_success:action:0:provider:0:channel:0" },
+                        "provider": { "kind": "literal", "value": "custom" },
+                        "destination": { "kind": "literal", "value": "telegram" },
+                        "credentials": { "kind": "object", "fields": {} },
+                        "providerId": { "kind": "literal", "value": "lifecycle:run_success:action:0:provider:0:channel:0" },
+                        "domain": { "kind": "literal", "value": "informational" },
+                        "message": { "kind": "template", "parts": [{ "kind": "text", "text": "Workflow completed." }] }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "reusableDefinitions": [
+    {
+      "kind": "step",
+      "invocationId": "discount",
+      "nodeId": "discount",
+      "alias": "calculate-discount",
+      "definitionDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "source": "calculate-discount.woml",
+      "scriptArtifactId": "artifact_calculate_discount",
+      "props": [
+        { "name": "price", "bindingName": "price", "secret": false, "expression": { "kind": "context", "path": "steps.order.price" } },
+        { "name": "percentage", "bindingName": "percentage", "secret": false, "expression": { "kind": "literal", "value": "20" } }
+      ],
+      "lifecycle": {
+        "onSuccess": ["discount:on-success:0"],
+        "onError": ["discount:on-error:0"],
+        "onComplete": ["discount:on-complete:0"]
+      }
+    },
+    {
+      "kind": "notification-provider",
+      "providerId": "lifecycle:run_success:action:0:provider:0:channel:0",
+      "alias": "telegram",
+      "definitionDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "source": "telegram.woml",
+      "scriptArtifactId": "artifact_telegram",
+      "props": [
+        { "name": "bot-token", "bindingName": "botToken", "secret": true, "expression": { "kind": "secret", "name": "TELEGRAM_BOT_TOKEN" } },
+        { "name": "chat-id", "bindingName": "chatId", "secret": false, "expression": { "kind": "literal", "value": "finance-team" } }
+      ]
+    }
+  ]
+}

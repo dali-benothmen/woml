@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v11",
+  "title": "WOML Run Event v11",
+  "description": "Append-only runtime-policy vocabulary separating durable run admission from first execution while preserving Event v10 lifecycle and control events.",
+  "x-status": "runtime-policies-rp0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v10",
+  "x-invariants": [
+    "run_admitted is first and binds trigger payload, definition, policy, and queue before dispatch.",
+    "run_execution_started occurs exactly once and is the rolling-window rate fact.",
+    "Resuming a durable wait never appends another run_execution_started event.",
+    "run_timeout_reached precedes one failed business outcome with WOML_WORKFLOW_TIMED_OUT.",
+    "Scheduler heartbeats and leases are Store v12 coordination records, not run events."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 11 },
+    "eventId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_admitted", "run_execution_started", "run_timeout_reached",
+        "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled",
+        "branch_selected", "parallel_group_started", "parallel_group_completed", "approval_requested",
+        "notification_delivery_requested", "notification_delivery_attempt_started", "notification_delivery_succeeded", "notification_delivery_failed",
+        "notification_decision_accepted", "notification_message_update_requested", "notification_message_update_attempt_started", "notification_message_updated", "notification_message_update_failed",
+        "approval_resolved", "operation_started", "operation_succeeded", "operation_failed",
+        "run_cancellation_requested", "lifecycle_hook_requested", "lifecycle_action_attempt_started", "lifecycle_action_succeeded", "lifecycle_action_failed", "lifecycle_hook_completed", "run_outcome_decided", "run_finalized"
+      ]
+    },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "run_admitted" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/admitted" } } } },
+    { "if": { "properties": { "type": { "const": "run_execution_started" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/executionStarted" } } } },
+    { "if": { "properties": { "type": { "const": "run_timeout_reached" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/timeoutReached" } } } },
+    { "if": { "properties": { "type": { "const": "run_cancellation_requested" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/cancellationRequested" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_hook_requested" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/hookRequested" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_action_attempt_started" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/actionStarted" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_action_succeeded" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/actionSucceeded" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_action_failed" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/actionFailed" } } } },
+    { "if": { "properties": { "type": { "const": "lifecycle_hook_completed" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/hookCompleted" } } } },
+    { "if": { "properties": { "type": { "const": "run_outcome_decided" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/outcomeDecided" } } } },
+    { "if": { "properties": { "type": { "const": "run_finalized" } } }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v10#/$defs/finalized" } } } }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "admitted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definitionHash", "policyHash", "trigger", "payload", "queue", "admittedAt", "occurrenceSequence"],
+      "properties": {
+        "definitionHash": { "$ref": "#/$defs/sha256" },
+        "policyHash": { "$ref": "#/$defs/sha256" },
+        "trigger": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "handler"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "handler": { "type": "string", "pattern": "^trigger\\.[a-z][a-z0-9-]*$", "maxLength": 128 }
+          }
+        },
+        "payload": {},
+        "queue": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "discipline"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "discipline": { "const": "work_conserving_fifo" }
+          }
+        },
+        "admittedAt": { "type": "string", "format": "date-time" },
+        "occurrenceSequence": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "executionStarted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startedAt"],
+      "properties": {
+        "startedAt": { "type": "string", "format": "date-time" },
+        "timeoutAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "timeoutReached": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deadlineAt", "code"],
+      "properties": {
+        "deadlineAt": { "type": "string", "format": "date-time" },
+        "code": { "const": "WOML_WORKFLOW_TIMED_OUT" }
+      }
+    }
+  }
+}

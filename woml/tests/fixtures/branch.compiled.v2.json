@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 2,
+  "workflowId": "review-content",
+  "metadata": {
+    "name": "Review Content",
+    "version": "0.1"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": {
+        "kind": "object",
+        "fields": {}
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["checkContent"],
+    "nodes": [
+      {
+        "id": "checkContent",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          needsReview: true\n        };\n      "
+            }
+          }
+        }
+      },
+      {
+        "id": "__woml_branch__decision__select",
+        "handler": "engine.branch-select",
+        "inputs": {
+          "kind": "object",
+          "fields": {}
+        },
+        "metadata": {
+          "name": "Choose review route",
+          "description": "Send uncertain content to review"
+        }
+      },
+      {
+        "id": "reviewContent",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n            return {\n              status: \"reviewed\",\n              accepted: true\n            };\n          "
+            }
+          }
+        }
+      },
+      {
+        "id": "acceptContent",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n            return {\n              status: \"accepted-automatically\",\n              accepted: true\n            };\n          "
+            }
+          }
+        }
+      },
+      {
+        "id": "decision",
+        "handler": "engine.branch-result",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "decision:when:0": {
+              "kind": "contextReference",
+              "path": ["steps", "reviewContent"]
+            },
+            "decision:otherwise": {
+              "kind": "contextReference",
+              "path": ["steps", "acceptContent"]
+            }
+          }
+        }
+      },
+      {
+        "id": "publishDecision",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return {\n          message: `Final status: ${context.steps.decision.status}`\n        };\n      "
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "checkContent-to-__woml_branch__decision__select",
+        "from": "checkContent",
+        "to": "__woml_branch__decision__select",
+        "condition": {
+          "kind": "always"
+        }
+      },
+      {
+        "id": "decision:when:0",
+        "from": "__woml_branch__decision__select",
+        "to": "reviewContent",
+        "condition": {
+          "kind": "boolean",
+          "value": {
+            "kind": "contextReference",
+            "path": ["steps", "checkContent", "needsReview"]
+          }
+        },
+        "branchId": "decision"
+      },
+      {
+        "id": "decision:otherwise",
+        "from": "__woml_branch__decision__select",
+        "to": "acceptContent",
+        "condition": {
+          "kind": "always"
+        },
+        "branchId": "decision"
+      },
+      {
+        "id": "reviewContent-to-decision",
+        "from": "reviewContent",
+        "to": "decision",
+        "condition": {
+          "kind": "always"
+        }
+      },
+      {
+        "id": "acceptContent-to-decision",
+        "from": "acceptContent",
+        "to": "decision",
+        "condition": {
+          "kind": "always"
+        }
+      },
+      {
+        "id": "decision-to-publishDecision",
+        "from": "decision",
+        "to": "publishDecision",
+        "condition": {
+          "kind": "always"
+        }
+      }
+    ]
+  }
+}

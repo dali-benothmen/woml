@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "profile": "woml.definition-package/v2",
+  "rootHash": "sha256:3d715e5baf1fc58e050d4bec9a884129c77e5bbe7fa4341cef4416204761c9fc",
+  "workflowModelDigest": "sha256:8e99fa17d692a4a3571131e93e14dbf8bc8d36debb2cedcd9818e4ca545013c3",
+  "modules": [
+    {
+      "name": "spreadsheet",
+      "bundle": {
+        "path": "modules/spreadsheet.mjs",
+        "digest": "sha256:8a474bbae11ac5793e2bcaaede1d78e0a691592f98c165c6ffa2a93b2319dcb1"
+      },
+      "sourceMap": {
+        "path": "modules/spreadsheet.mjs.map",
+        "digest": "sha256:8ad1e63c024bce96ac458f62543d93cec5523889c706c52e79f309a9a70a3bed"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "workflow.compiled.v9.json",
+      "digest": "sha256:8e99fa17d692a4a3571131e93e14dbf8bc8d36debb2cedcd9818e4ca545013c3"
+    },
+    {
+      "path": "modules/spreadsheet.mjs",
+      "digest": "sha256:8a474bbae11ac5793e2bcaaede1d78e0a691592f98c165c6ffa2a93b2319dcb1"
+    },
+    {
+      "path": "modules/spreadsheet.mjs.map",
+      "digest": "sha256:8ad1e63c024bce96ac458f62543d93cec5523889c706c52e79f309a9a70a3bed"
+    },
+    {
+      "path": "types/services.generated.d.ts",
+      "digest": "sha256:9c58852687907d8544476125e84330d4e0526ea2739c311c19f2f1c41ac182f2"
+    }
+  ],
+  "bundler": {
+    "name": "bun",
+    "version": "1.3.14",
+    "target": "bun",
+    "format": "esm",
+    "sourceMap": "external"
+  }
+}

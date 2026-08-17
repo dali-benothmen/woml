@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/communication-trigger-payload/v1",
+  "title": "WOML Communication Trigger Payload v1",
+  "description": "Bounded provider-normalized payload exposed as context.payload for built-in communication triggers.",
+  "x-status": "additional-communication-providers-acp0-frozen",
+  "x-maxUtf8TextBytes": 40000,
+  "x-forbiddenFields": ["token", "secret", "signature", "authorization", "raw", "envelope", "headers", "profile"],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "event", "text", "senderId", "conversationId", "messageId", "occurredAt"],
+  "properties": {
+    "provider": { "enum": ["slack", "telegram", "discord", "whatsapp"] },
+    "event": { "enum": ["app-mention", "direct-message", "message"] },
+    "text": { "type": "string", "maxLength": 40000 },
+    "senderId": { "$ref": "#/$defs/id" },
+    "senderName": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "conversationId": { "$ref": "#/$defs/id" },
+    "conversationType": { "enum": ["direct", "group", "channel"] },
+    "messageId": { "$ref": "#/$defs/id" },
+    "replyToMessageId": { "$ref": "#/$defs/id" },
+    "threadId": { "$ref": "#/$defs/id" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "providerData": { "$ref": "#/$defs/providerData" },
+    "type": { "enum": ["app-mention", "direct-message"] },
+    "userId": { "$ref": "#/$defs/id" },
+    "channelId": { "$ref": "#/$defs/id" },
+    "messageTs": { "$ref": "#/$defs/id" },
+    "threadTs": { "$ref": "#/$defs/id" },
+    "teamId": { "$ref": "#/$defs/id" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "provider": { "const": "slack" } }, "required": ["provider"] },
+      "then": {
+        "required": ["type", "userId", "channelId", "messageTs", "threadTs", "teamId"],
+        "properties": { "event": { "enum": ["app-mention", "direct-message"] } }
+      }
+    },
+    {
+      "if": { "properties": { "provider": { "const": "telegram" } }, "required": ["provider"] },
+      "then": { "properties": { "event": { "const": "message" } }, "not": { "anyOf": [{ "required": ["type"] }, { "required": ["teamId"] }] } }
+    },
+    {
+      "if": { "properties": { "provider": { "const": "discord" } }, "required": ["provider"] },
+      "then": { "properties": { "event": { "enum": ["app-mention", "direct-message"] } }, "not": { "required": ["type"] } }
+    },
+    {
+      "if": { "properties": { "provider": { "const": "whatsapp" } }, "required": ["provider"] },
+      "then": { "properties": { "event": { "const": "message" } }, "not": { "required": ["type"] } }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "safeScalar": { "type": ["string", "number", "boolean", "null"] },
+    "providerData": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": { "pattern": "^(?!(?:token|secret|signature|authorization|raw|envelope|headers|profile)$)[A-Za-z][A-Za-z0-9]*$" },
+      "additionalProperties": { "$ref": "#/$defs/safeScalar" }
+    }
+  }
+}

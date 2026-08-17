@@ -1,0 +1,17 @@
+<woml>
+  <workflow
+    id="calculate-risk"
+    name="Calculate customer risk"
+    version="1.0.0"
+  >
+    <steps>
+      <step id="calculate">
+        <script>
+          return {
+            score: context.payload.customerId === 'customer-42' ? 90 : 20
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

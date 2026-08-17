@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/runtime-policy/v1",
+  "title": "WOML Runtime Policy v1",
+  "description": "Language-neutral workflow-run concurrency, deadline, rolling-window rate, and durable admission-lane policy.",
+  "x-status": "runtime-policies-rp0-frozen",
+  "x-invariants": [
+    "Concurrency is scoped by state location plus workflow ID and is unrelated to parallel child concurrency.",
+    "Rate capacity is consumed only by the first execution start.",
+    "Timeout begins at first execution start and excludes policy-queue delay.",
+    "Named queues provide work-conserving FIFO ordering and do not create shared concurrency pools."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 2,
+  "required": ["profileVersion"],
+  "properties": {
+    "profileVersion": { "const": 1 },
+    "concurrency": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 31536000000 },
+    "rateLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "windowMs", "algorithm"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "windowMs": { "type": "integer", "minimum": 1, "maximum": 31536000000 },
+        "algorithm": { "const": "rolling_window" }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "discipline"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "discipline": { "const": "work_conserving_fifo" }
+      }
+    }
+  }
+}

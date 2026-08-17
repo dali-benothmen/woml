@@ -1,0 +1,39 @@
+{
+  "triggerHost": [
+    { "protocol": "woml.communication-trigger-host", "protocolVersion": 1, "messageType": "ready", "hostInstanceId": "host-synthetic-1", "providers": ["telegram", "discord", "whatsapp"] },
+    { "protocol": "woml.communication-trigger-host", "protocolVersion": 1, "messageType": "occurrence", "receiptId": "receipt-telegram-1", "provider": "telegram", "accountId": "bot-synthetic-1", "externalEventId": "update-42", "workflowId": "support-agent", "definitionHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "triggerId": "agentMessage", "triggerHandler": "trigger.telegram", "payload": { "provider": "telegram", "event": "message", "text": "hello", "senderId": "1001", "conversationId": "-1001001", "messageId": "42", "occurredAt": "2026-08-16T10:00:01.000Z" }, "receivedAt": "2026-08-16T10:00:01.050Z" },
+    { "protocol": "woml.communication-trigger-host", "protocolVersion": 1, "messageType": "admission-result", "receiptId": "receipt-telegram-1", "outcome": "accepted", "runId": "run_synthetic_1", "duplicate": false }
+  ],
+  "notifications": [
+    { "protocol": "woml.communication-notification-adapter", "protocolVersion": 1, "messageType": "deliver", "invocationId": "notify-telegram-1", "runId": "run_synthetic_1", "deliveryId": "approval:provider:0:destination:0", "provider": "telegram", "destination": "-1001001", "credentials": { "botToken": { "kind": "secretReference", "name": "TELEGRAM_BOT_TOKEN" } }, "content": { "kind": "text", "text": "Approve this synthetic request?" }, "idempotencyKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "mode": "approval", "decisionCapability": "ncap_synthetic_only_00000000000000000000000000000000" },
+    { "protocol": "woml.communication-notification-adapter", "protocolVersion": 1, "messageType": "completed", "invocationId": "notify-telegram-1", "durationMs": 12, "outcome": { "kind": "delivery_success", "providerMessage": { "provider": "telegram", "accountId": "bot-synthetic-1", "conversationId": "-1001001", "messageId": "43" } } }
+  ],
+  "messaging": [
+    { "protocol": "woml.communication-messaging", "protocolVersion": 1, "messageType": "request", "invocationId": "message-discord-1", "runId": "run_synthetic_1", "stepId": "reply", "provider": "discord", "operation": "send", "destination": "200000000000000002", "credentials": { "botToken": { "kind": "secretReference", "name": "DISCORD_BOT_TOKEN" } }, "message": { "kind": "text", "text": "Synthetic reply" }, "idempotencyKey": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+    { "protocol": "woml.communication-messaging", "protocolVersion": 1, "messageType": "result", "invocationId": "message-discord-1", "outcome": "sent", "acceptedAt": "2026-08-16T10:00:04.000Z", "providerMessage": { "provider": "discord", "conversationId": "200000000000000002", "messageId": "300000000000000004" } }
+  ],
+  "modelFragments": [
+    {
+      "contractVersion": 1, "targetModelVersion": 15, "targetDefinitionPackageVersion": 10,
+      "trigger": { "id": "agentMessage", "handler": "trigger.telegram", "events": ["message"], "botToken": { "kind": "secretReference", "name": "TELEGRAM_BOT_TOKEN" } },
+      "notification": { "provider": "telegram", "destinations": ["-1001001"], "credentials": { "botToken": { "kind": "secretReference", "name": "TELEGRAM_BOT_TOKEN" } }, "message": "Synthetic lifecycle message" },
+      "messagingCapability": { "service": "telegram", "operation": "send", "protocolVersion": 1 }
+    },
+    {
+      "contractVersion": 1, "targetModelVersion": 15, "targetDefinitionPackageVersion": 10,
+      "trigger": { "id": "agentMention", "handler": "trigger.discord", "events": ["app-mention", "direct-message"], "channels": ["200000000000000002"], "botToken": { "kind": "secretReference", "name": "DISCORD_BOT_TOKEN" } },
+      "notification": { "provider": "discord", "destinations": ["200000000000000002"], "credentials": { "botToken": { "kind": "secretReference", "name": "DISCORD_BOT_TOKEN" } }, "message": "Synthetic lifecycle message" },
+      "messagingCapability": { "service": "discord", "operation": "send", "protocolVersion": 1 }
+    },
+    {
+      "contractVersion": 1, "targetModelVersion": 15, "targetDefinitionPackageVersion": 10,
+      "trigger": { "id": "customerMessage", "handler": "trigger.whatsapp", "events": ["message"], "phoneNumberId": "123456789012345", "verifyToken": { "kind": "secretReference", "name": "WHATSAPP_VERIFY_TOKEN" }, "appSecret": { "kind": "secretReference", "name": "WHATSAPP_APP_SECRET" } },
+      "notification": { "provider": "whatsapp", "destinations": ["15550000001"], "credentials": { "accessToken": { "kind": "secretReference", "name": "WHATSAPP_ACCESS_TOKEN" }, "phoneNumberId": "123456789012345" }, "templateName": "woml_approval_v1", "language": "en_US" },
+      "messagingCapability": { "service": "whatsapp", "operation": "send", "protocolVersion": 1 }
+    }
+  ],
+  "events": [
+    { "schemaVersion": 14, "type": "communication_delivery_requested", "runId": "run_synthetic_1", "sequence": 8, "occurredAt": "2026-08-16T10:00:05.000Z", "data": { "kind": "delivery_requested", "deliveryId": "approval:provider:0:destination:0", "provider": "telegram", "destinationFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "idempotencyKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
+    { "schemaVersion": 14, "type": "communication_delivery_succeeded", "runId": "run_synthetic_1", "sequence": 9, "occurredAt": "2026-08-16T10:00:05.100Z", "data": { "kind": "delivery_succeeded", "deliveryId": "approval:provider:0:destination:0", "providerMessage": { "provider": "telegram", "accountId": "bot-synthetic-1", "conversationId": "-1001001", "messageId": "43" } } }
+  ]
+}

@@ -1,0 +1,11 @@
+╭─ WOML WORKFLOW ──────────────────────────────────────────────────────╮
+│ Order Processing                                              v1.4.0 │
+│ Validates an order, calculates its total, and selects delivery.      │
+╰──────────────────────────────────────────────────────────────────────╯
+
+TRIGGER
+
+  ● Manual
+    Press Enter to start a run
+
+  ● Ready · Press Ctrl+C to stop

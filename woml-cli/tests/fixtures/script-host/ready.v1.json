@@ -1,0 +1,6 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 1,
+  "messageType": "ready",
+  "hostInstanceId": "host_01"
+}

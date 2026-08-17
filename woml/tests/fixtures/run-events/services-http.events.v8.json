@@ -1,0 +1,26 @@
+[
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_001", "runId": "run-services-a", "sequence": 1, "occurredAt": "2026-08-09T08:00:00.000Z", "type": "run_started",
+    "data": { "workflowId": "services-bindings-contract", "definitionHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "triggerId": "start", "triggerHandler": "trigger.manual", "triggerOccurrenceId": "occurrence-services-a", "trigger": {} }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_002", "runId": "run-services-a", "sequence": 2, "occurredAt": "2026-08-09T08:00:00.001Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-a", "handler": "runtime.script", "idempotencyKey": "sha256:cbf92359119ce80741a6b5035e09c83d4b3520e868e67a67f6e89ee23be63f42" }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_003", "runId": "run-services-a", "sequence": 3, "occurredAt": "2026-08-09T08:00:00.002Z", "type": "operation_started",
+    "data": { "nodeId": "loadCustomer", "attemptNumber": 1, "invocationId": "invocation-a", "callId": "call-http-a", "operationKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "capability": "http", "operation": "request", "executionMode": "managed", "metadata": { "method": "GET", "origin": "https://api.example.test" } }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_004", "runId": "run-services-a", "sequence": 4, "occurredAt": "2026-08-09T08:00:00.020Z", "type": "operation_succeeded",
+    "data": { "nodeId": "loadCustomer", "attemptNumber": 1, "invocationId": "invocation-a", "callId": "call-http-a", "operationKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "capability": "http", "operation": "request", "executionMode": "managed", "metadata": { "status": 200 }, "durationMs": 18.4, "resultBytes": 142, "resultDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_005", "runId": "run-services-a", "sequence": 5, "occurredAt": "2026-08-09T08:00:00.021Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "loadCustomer", "attempt": 1, "invocationId": "invocation-a", "output": { "id": "customer-42", "name": "Dali" } }
+  },
+  {
+    "eventSchemaVersion": 8, "eventId": "event_services_006", "runId": "run-services-a", "sequence": 6, "occurredAt": "2026-08-09T08:00:00.022Z", "type": "run_succeeded",
+    "data": { "terminalNodeId": "loadCustomer", "result": { "id": "customer-42", "name": "Dali" } }
+  }
+]

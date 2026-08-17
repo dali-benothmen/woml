@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "WOML_TRIGGER_SCHEMA_INVALID",
+    "message": "Webhook payload does not match the declared schema.",
+    "issues": [
+      {
+        "path": "/orderId",
+        "message": "Required property is missing."
+      }
+    ]
+  }
+}

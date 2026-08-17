@@ -1,0 +1,62 @@
+[
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_001", "runId": "run_parallel_01", "sequence": 1,
+    "occurredAt": "2026-08-06T14:00:00.000Z", "type": "run_started",
+    "data": { "workflowId": "field-report", "definitionHash": "sha256:d58dfcefdcd6c40db659042c41e17ca6c8d652033f90f120734d5cd95819b45c", "trigger": {} }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_002", "runId": "run_parallel_01", "sequence": 2,
+    "occurredAt": "2026-08-06T14:00:00.001Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadField", "attempt": 1, "invocationId": "inv_field_01", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_003", "runId": "run_parallel_01", "sequence": 3,
+    "occurredAt": "2026-08-06T14:00:00.002Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "loadField", "attempt": 1, "invocationId": "inv_field_01", "output": { "fieldId": "field-42" } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_004", "runId": "run_parallel_01", "sequence": 4,
+    "occurredAt": "2026-08-06T14:00:00.003Z", "type": "parallel_group_started",
+    "data": { "parallelId": "fieldData" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_005", "runId": "run_parallel_01", "sequence": 5,
+    "occurredAt": "2026-08-06T14:00:00.004Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadWeather", "attempt": 1, "invocationId": "inv_weather_01", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_006", "runId": "run_parallel_01", "sequence": 6,
+    "occurredAt": "2026-08-06T14:00:00.005Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadSoil", "attempt": 1, "invocationId": "inv_soil_01", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_007", "runId": "run_parallel_01", "sequence": 7,
+    "occurredAt": "2026-08-06T14:00:00.085Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "loadSoil", "attempt": 1, "invocationId": "inv_soil_01", "output": { "fieldId": "field-42", "moisture": 41 } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_008", "runId": "run_parallel_01", "sequence": 8,
+    "occurredAt": "2026-08-06T14:00:00.086Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "loadWeather", "attempt": 1, "invocationId": "inv_weather_01", "output": { "fieldId": "field-42", "temperature": 22 } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_009", "runId": "run_parallel_01", "sequence": 9,
+    "occurredAt": "2026-08-06T14:00:00.087Z", "type": "parallel_group_completed",
+    "data": { "parallelId": "fieldData", "outcome": "succeeded", "failedNodeIds": [], "cancelledNodeIds": [] }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_010", "runId": "run_parallel_01", "sequence": 10,
+    "occurredAt": "2026-08-06T14:00:00.088Z", "type": "step_attempt_started",
+    "data": { "nodeId": "buildReport", "attempt": 1, "invocationId": "inv_report_01", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_011", "runId": "run_parallel_01", "sequence": 11,
+    "occurredAt": "2026-08-06T14:00:00.089Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "buildReport", "attempt": 1, "invocationId": "inv_report_01", "output": { "summary": "Weather 22°C, soil 41%" } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_parallel_012", "runId": "run_parallel_01", "sequence": 12,
+    "occurredAt": "2026-08-06T14:00:00.090Z", "type": "run_succeeded",
+    "data": { "terminalNodeId": "buildReport", "result": { "summary": "Weather 22°C, soil 41%" } }
+  }
+]

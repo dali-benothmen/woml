@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v8",
+  "title": "WOML Compiled Workflow Model v8",
+  "description": "Language-neutral DAG contract adding explicit Script Bindings v1 and per-script symbolic secret dependencies.",
+  "x-status": "services-capabilities-contract-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v7",
+  "x-invariants": [
+    "Every runtime.script node carries the same Script Bindings v1 declaration.",
+    "requiredSecrets contains sorted, unique symbolic names only and never resolved values.",
+    "All trigger definitions retain their frozen Model v7 shapes.",
+    "The model remains a directed acyclic graph and all v1-v7 control-flow semantics remain unchanged."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 8 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": { "type": "array", "minItems": 1, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" } },
+    "graph": { "$ref": "#/$defs/workflowGraph" }
+  },
+  "$defs": {
+    "workflowGraph": {
+      "type": "object", "additionalProperties": false, "required": ["entryNodeIds", "nodes", "edges"],
+      "properties": {
+        "entryNodeIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" } },
+        "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/workflowNode" } },
+        "edges": { "type": "array", "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/workflowEdge" } }
+      }
+    },
+    "workflowNode": {
+      "oneOf": [
+        { "$ref": "#/$defs/scriptNode" },
+        { "$ref": "#/$defs/nonScriptNode" }
+      ]
+    },
+    "scriptNode": {
+      "type": "object", "additionalProperties": false, "required": ["id", "handler", "inputs", "scriptRuntime"],
+      "properties": {
+        "id": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+        "handler": { "const": "runtime.script" },
+        "inputs": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/valueExpression" },
+        "retryPolicy": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v6#/$defs/retryPolicy" },
+        "scriptRuntime": { "$ref": "#/$defs/scriptRuntime" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "nonScriptNode": {
+      "allOf": [
+        { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v6#/$defs/workflowNode" },
+        { "properties": { "handler": { "not": { "const": "runtime.script" } } } }
+      ]
+    },
+    "scriptRuntime": {
+      "type": "object", "additionalProperties": false, "required": ["bindingVersion", "bindings", "requiredSecrets"],
+      "properties": {
+        "bindingVersion": { "const": 1 },
+        "bindings": { "const": ["context", "attempt", "services", "secrets"] },
+        "requiredSecrets": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } }
+      }
+    }
+  }
+}

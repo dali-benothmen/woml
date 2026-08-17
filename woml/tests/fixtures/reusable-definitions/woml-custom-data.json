@@ -1,0 +1,23 @@
+{
+  "version": 1.1,
+  "tags": [
+    {
+      "name": "telegram",
+      "description": "Reusable WOML notification provider from tests/fixtures/reusable-definitions/telegram.woml",
+      "attributes": [
+        {
+          "name": "message",
+          "description": "Required for informational lifecycle notifications."
+        },
+        {
+          "name": "bot-token",
+          "description": "Required secret prop; available as props.botToken."
+        },
+        {
+          "name": "chat-id",
+          "description": "Required prop; available as props.chatId."
+        }
+      ]
+    }
+  ]
+}

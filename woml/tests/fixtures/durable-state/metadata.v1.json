@@ -1,0 +1,21 @@
+[
+  {
+    "profile": "woml.state-operation-metadata/v1",
+    "operation": "set",
+    "keyDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "inputDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "resultDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "version": 2,
+    "valueBytes": 18,
+    "outcome": "succeeded",
+    "durationMs": 1.25
+  },
+  {
+    "profile": "woml.state-operation-metadata/v1",
+    "operation": "increment",
+    "keyDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "inputDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "outcome": "conflict",
+    "durationMs": 0.5
+  }
+]

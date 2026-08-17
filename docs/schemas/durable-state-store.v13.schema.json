@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/durable-state-store/v13",
+  "title": "WOML Durable State Store v13 Logical Records",
+  "description": "Frozen logical Store v13 contract. State entries are authoritative application data; mutation results reattach retries atomically.",
+  "x-status": "durable-user-state-ds0-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/entry" },
+    { "$ref": "#/$defs/mutation" },
+    { "$ref": "#/$defs/quota" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "version": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "scopeDigest", "keyDigest", "keyText", "valueJson", "valueBytes", "version", "updatedAt"],
+      "properties": {
+        "profile": { "const": "woml.state-store.entry/v13" },
+        "scopeDigest": { "$ref": "#/$defs/sha256" }, "keyDigest": { "$ref": "#/$defs/sha256" },
+        "keyText": { "type": "string", "minLength": 1, "maxLength": 256 }, "valueJson": { "type": "string", "minLength": 1 },
+        "valueBytes": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "mutation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "operationKey", "inputDigest", "resultJson", "committedAt"],
+      "properties": {
+        "profile": { "const": "woml.state-store.mutation/v13" },
+        "operationKey": { "$ref": "#/$defs/sha256" }, "inputDigest": { "$ref": "#/$defs/sha256" },
+        "resultJson": { "type": "string", "minLength": 1, "maxLength": 1048576 },
+        "committedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "quota": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "scopeDigest", "liveKeys", "valueBytes"],
+      "properties": {
+        "profile": { "const": "woml.state-store.quota/v13" }, "scopeDigest": { "$ref": "#/$defs/sha256" },
+        "liveKeys": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "valueBytes": { "type": "integer", "minimum": 0, "maximum": 67108864 }
+      }
+    }
+  }
+}

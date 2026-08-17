@@ -1,0 +1,57 @@
+{
+  "storeDecision": {
+    "storeVersion": 14,
+    "migrationRequired": false,
+    "reason": "Definition Package v9 uses the existing immutable definition record, Event v13 uses the existing append-only event record, and reusable inspection state is a rebuildable projection."
+  },
+  "scriptBinding": {
+    "profile": "woml.reusable-script-binding/v3",
+    "invocationId": "discount",
+    "definition": {
+      "alias": "calculate-discount",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "source": "calculate-discount.woml"
+    },
+    "props": { "price": 120, "percentage": 20 },
+    "context": { "payload": {}, "steps": { "order": { "price": 120, "percentage": 20 } } },
+    "attempt": { "number": 1, "max": 3 },
+    "services": ["pricing"]
+  },
+  "inspection": {
+    "profile": "woml.run-inspection/v5",
+    "runId": "run_reusable_1",
+    "workflowId": "reusable-definitions",
+    "status": "running",
+    "businessOutcome": "undecided",
+    "lifecycleStatus": "idle",
+    "hooks": [],
+    "warnings": [],
+    "cancellation": { "requested": false },
+    "policy": { "queue": "workflow:reusable-definitions" },
+    "forks": {
+      "counts": { "opened": 0, "active": 0, "waiting": 0, "succeeded": 0, "failed": 0, "cancelled": 0 },
+      "items": []
+    },
+    "reusableDefinitions": {
+      "counts": { "pending": 1, "running": 0, "succeeded": 1, "failed": 0, "cancelled": 0, "completedWithWarnings": 0 },
+      "items": [
+        {
+          "invocationId": "discount",
+          "alias": "calculate-discount",
+          "definitionDigestPrefix": "111111111111",
+          "kind": "step",
+          "status": "succeeded",
+          "lifecycleStatus": "completed"
+        },
+        {
+          "invocationId": "review:notify:0",
+          "alias": "telegram",
+          "definitionDigestPrefix": "222222222222",
+          "kind": "notification-provider",
+          "status": "pending",
+          "lifecycleStatus": "idle"
+        }
+      ]
+    }
+  }
+}

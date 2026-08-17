@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/event-publication/v1",
+  "title": "WOML Event Publication v1",
+  "description": "Language-neutral contract for publishing one named application event and reporting its deterministic per-subscriber durable admission results.",
+  "x-status": "production-trigger-contract-frozen",
+  "x-invariants": [
+    "One publication fans out to every exact-name subscriber in workflow and trigger registration order.",
+    "Every subscriber is validated and admitted independently through Trigger Ingress v1.",
+    "Accepted deliveries are durable before they appear in a published response.",
+    "Retrying one eventId and payload returns duplicate deliveries instead of new runs.",
+    "Resolved control credentials and raw Authorization headers never enter this contract."
+  ],
+  "x-limits": {
+    "payloadBytes": 1048576,
+    "subscribersPerEventName": 1000,
+    "schemaIssuesPerSubscriber": 100
+  },
+  "x-trigger-source-identity": "event:v1:sha256:<hex SHA-256 of UTF-8(eventId + NUL + workflowId + NUL + triggerId)>",
+  "oneOf": [
+    { "$ref": "#/$defs/publish" },
+    { "$ref": "#/$defs/published" },
+    { "$ref": "#/$defs/rejected" }
+  ],
+  "$defs": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "eventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "eventName": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$"
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "message"],
+      "properties": {
+        "path": { "type": "string", "maxLength": 2048 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "acceptedDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflowId", "triggerId", "status", "occurrenceId", "runId",
+        "duplicate"
+      ],
+      "properties": {
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "const": "accepted" },
+        "occurrenceId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "duplicate": { "type": "boolean" }
+      }
+    },
+    "rejectedDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflowId", "triggerId", "status", "code", "message", "retryable"
+      ],
+      "properties": {
+        "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "triggerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "status": { "const": "rejected" },
+        "code": {
+          "enum": [
+            "WOML_TRIGGER_SCHEMA_INVALID",
+            "WOML_TRIGGER_IDEMPOTENCY_CONFLICT",
+            "WOML_TRIGGER_DEFINITION_MISMATCH",
+            "WOML_TRIGGER_UNAVAILABLE",
+            "WOML_TRIGGER_HISTORY_INVALID"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retryable": { "type": "boolean" },
+        "issues": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/issue" }
+        }
+      }
+    },
+    "delivery": {
+      "oneOf": [
+        { "$ref": "#/$defs/acceptedDelivery" },
+        { "$ref": "#/$defs/rejectedDelivery" }
+      ]
+    },
+    "publish": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract", "contractVersion", "messageType", "requestId", "eventId",
+        "eventName", "payload", "receivedAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.event-publication" },
+        "contractVersion": { "const": 1 },
+        "messageType": { "const": "publish" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "eventId": { "$ref": "#/$defs/eventId" },
+        "eventName": { "$ref": "#/$defs/eventName" },
+        "payload": { "type": "object" },
+        "receivedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "published": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract", "contractVersion", "messageType", "requestId", "eventId",
+        "eventName", "status", "deliveries", "completedAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.event-publication" },
+        "contractVersion": { "const": 1 },
+        "messageType": { "const": "published" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "eventId": { "$ref": "#/$defs/eventId" },
+        "eventName": { "$ref": "#/$defs/eventName" },
+        "status": { "enum": ["accepted", "partial", "rejected"] },
+        "deliveries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/delivery" }
+        },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "accepted" } } },
+          "then": {
+            "properties": {
+              "deliveries": { "items": { "$ref": "#/$defs/acceptedDelivery" } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } } },
+          "then": {
+            "properties": {
+              "deliveries": {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/acceptedDelivery" }, "minContains": 1 },
+                  { "contains": { "$ref": "#/$defs/rejectedDelivery" }, "minContains": 1 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "rejected" } } },
+          "then": {
+            "properties": {
+              "deliveries": { "items": { "$ref": "#/$defs/rejectedDelivery" } }
+            }
+          }
+        }
+      ]
+    },
+    "rejected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract", "contractVersion", "messageType", "requestId", "failure",
+        "rejectedAt"
+      ],
+      "properties": {
+        "contract": { "const": "woml.event-publication" },
+        "contractVersion": { "const": 1 },
+        "messageType": { "const": "rejected" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "retryable"],
+          "properties": {
+            "code": {
+              "enum": [
+                "WOML_EVENT_ID_INVALID",
+                "WOML_EVENT_NAME_INVALID",
+                "WOML_EVENT_PAYLOAD_INVALID",
+                "WOML_EVENT_PAYLOAD_TOO_LARGE",
+                "WOML_EVENT_UNAUTHORIZED",
+                "WOML_EVENT_NOT_FOUND",
+                "WOML_EVENT_SUBSCRIBER_LIMIT",
+                "WOML_EVENT_UNAVAILABLE"
+              ]
+            },
+            "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "retryable": { "type": "boolean" }
+          }
+        },
+        "rejectedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/script-host-protocol/v3",
+  "title": "WOML Script Host Protocol v3",
+  "description": "Asynchronous Content-Length-framed Rust/Bun protocol adding immutable attempt metadata and a stable effect key.",
+  "x-status": "retry-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/script-host-protocol/v2",
+  "x-multiplexing": "Multiple execute and cancel messages may be in flight; terminal completed responses may arrive out of order and correlate only by invocationId.",
+  "oneOf": [
+    { "$ref": "#/$defs/readyMessage" },
+    { "$ref": "#/$defs/executeMessage" },
+    { "$ref": "#/$defs/cancelMessage" },
+    { "$ref": "#/$defs/successMessage" },
+    { "$ref": "#/$defs/failureMessage" }
+  ],
+  "$defs": {
+    "nonEmptyId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "envelope": {
+      "type": "object",
+      "properties": {
+        "protocol": { "const": "woml.script-host" },
+        "protocolVersion": { "const": 3 }
+      }
+    },
+    "readyMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "hostInstanceId"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 3 },
+        "messageType": { "const": "ready" }, "hostInstanceId": { "$ref": "#/$defs/nonEmptyId" }
+      }
+    },
+    "executeMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "runId", "nodeId", "attempt", "handler", "timeoutMs", "source", "context"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 3 },
+        "messageType": { "const": "execute" }, "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "runId": { "$ref": "#/$defs/nonEmptyId" }, "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "$ref": "#/$defs/attempt" }, "handler": { "const": "runtime.script" },
+        "timeoutMs": { "type": "integer", "minimum": 1 }, "source": { "type": "string" },
+        "context": { "$ref": "#/$defs/context" }
+      }
+    },
+    "attempt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["number", "maxAttempts", "idempotencyKey"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "idempotencyKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "cancelMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "reason"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 3 },
+        "messageType": { "const": "cancel" }, "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "reason": { "const": "parallel_fail_fast" }
+      }
+    },
+    "successMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "durationMs"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 3 },
+        "messageType": { "const": "completed" }, "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "outcome": { "$ref": "#/$defs/successOutcome" }, "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "failureMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "durationMs"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" }, "protocolVersion": { "const": 3 },
+        "messageType": { "const": "completed" }, "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "outcome": { "$ref": "#/$defs/failureOutcome" }, "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "context": {
+      "type": "object", "additionalProperties": false, "required": ["trigger", "steps"],
+      "properties": { "trigger": { "type": "object" }, "steps": { "type": "object", "additionalProperties": true } }
+    },
+    "successOutcome": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "value"],
+      "properties": { "kind": { "const": "success" }, "value": {} }
+    },
+    "failureOutcome": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "error"],
+      "properties": {
+        "kind": { "const": "failure" },
+        "error": { "$ref": "https://cronflow.dev/schemas/attempt-failure/v2#/$defs/hostReportedFailure" }
+      }
+    }
+  }
+}

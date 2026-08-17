@@ -1,0 +1,11 @@
+<woml>
+  <workflow id="policy-demo" name="Runtime Policy Demo" version="1.0.0">
+    <config concurrency="4" timeout="10m" rate-limit="100/1m" queue="orders" />
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <step id="processOrder"><script>return { ok: true };</script></step>
+    </steps>
+  </workflow>
+</woml>

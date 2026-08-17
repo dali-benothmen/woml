@@ -1,0 +1,31 @@
+<woml>
+  <imports>
+    <module name="spreadsheet" from="./modules/spreadsheet.ts" />
+  </imports>
+
+  <workflow id="module-demo" name="Local module demo" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="loadRows">
+        <script>
+          return services.spreadsheet.read([
+            ['Alice', 'active'],
+            ['', ''],
+            ['Bob', 'active']
+          ]);
+        </script>
+      </step>
+
+      <step id="cleanRows">
+        <script>
+          return await services.spreadsheet.removeEmptyRows(
+            context.steps.loadRows.rows
+          );
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

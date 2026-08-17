@@ -1,0 +1,5 @@
+{
+  "contract": "woml.native-fetch-observation", "contractVersion": 1, "observationType": "started",
+  "invocationId": "invocation-fetch-a", "requestId": "fetch-a", "method": "POST", "origin": "https://api.example.test",
+  "path": "/messages/%E2%9C%93", "requestBodyBytes": 31, "startedAt": "2026-08-09T08:00:00.000Z"
+}

@@ -1,0 +1,12 @@
+{
+  "instagramEnabledTrue": {
+    "selectedArm": "instagramOutcome:when:0",
+    "mergedResult": { "status": "published" },
+    "downstreamResult": { "instagram": { "status": "published" }, "facebook": { "status": "published" } }
+  },
+  "instagramEnabledFalse": {
+    "selectedArm": "instagramOutcome:otherwise",
+    "mergedResult": { "status": "skipped" },
+    "downstreamResult": { "instagram": { "status": "skipped" }, "facebook": { "status": "published" } }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "contract": "woml.workflow-call",
+  "contractVersion": 1,
+  "kind": "failed",
+  "workflowId": "calculate-risk",
+  "childRunId": "run_child_risk_001",
+  "code": "WOML_WORKFLOW_CALL_IDEMPOTENCY_CONFLICT",
+  "message": "The stable call identity was reused with a different payload.",
+  "retryable": false,
+  "ambiguous": false
+}

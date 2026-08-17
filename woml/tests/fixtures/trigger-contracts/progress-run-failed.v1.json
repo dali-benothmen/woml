@@ -1,0 +1,10 @@
+{
+  "contract": "woml.trigger-progress",
+  "contractVersion": 1,
+  "type": "run_terminal",
+  "workflowId": "webhook-trigger-contract",
+  "runId": "run_webhook_002",
+  "status": "failed",
+  "failureCode": "WOML_SCRIPT_THROWN",
+  "occurredAt": "2026-08-08T12:00:00.100Z"
+}

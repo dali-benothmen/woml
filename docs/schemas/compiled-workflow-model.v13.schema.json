@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v13",
+  "title": "WOML Compiled Workflow Model v13",
+  "description": "Language-neutral DAG contract for durable fork ownership, selected joins, deterministic context visibility, control-only choices, and workflow settlement.",
+  "x-status": "fork-branch-fj8-published",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v12",
+  "x-invariants": [
+    "Every branch belongs to exactly one fork and every branch entry is reachable only after its fork opens.",
+    "joinedBranchIds is a canonical document-order subset of the fork's direct branch IDs.",
+    "Context visibility is compiled per executable node and is independent of completion timing.",
+    "The settlement descriptor preserves one main-route public result while owning every opened branch terminal.",
+    "The graph is acyclic and historical Model v1-v12 definitions remain immutable."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy"],
+  "properties": {
+    "schemaVersion": { "const": 13 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "#/$defs/workflowGraph" },
+    "moduleRuntime": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime" },
+    "lifecycle": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/lifecycle" },
+    "runtimePolicy": { "$ref": "https://woml.dev/schemas/runtime-policy/v1" }
+  },
+  "$defs": {
+    "publicId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 },
+    "internalId": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges", "forks", "choices", "contextVisibility", "settlement"],
+      "properties": {
+        "entryNodeIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/internalId" } },
+        "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowNode" } },
+        "edges": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v4#/$defs/workflowEdge" },
+              { "$ref": "#/$defs/controlChoiceBooleanEdge" }
+            ]
+          }
+        },
+        "forks": { "type": "array", "items": { "$ref": "#/$defs/fork" } },
+        "choices": { "type": "array", "items": { "$ref": "#/$defs/controlChoice" } },
+        "contextVisibility": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/contextVisibility" } },
+        "settlement": { "$ref": "#/$defs/settlement" }
+      }
+    },
+    "fork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forkId", "openNodeId", "joinNodeId", "branches", "joinedBranchIds"],
+      "properties": {
+        "forkId": { "$ref": "#/$defs/publicId" },
+        "openNodeId": { "$ref": "#/$defs/internalId" },
+        "joinNodeId": { "$ref": "#/$defs/internalId" },
+        "branches": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/forkBranch" } },
+        "joinedBranchIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/publicId" } }
+      }
+    },
+    "forkBranch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branchId", "entryNodeId", "terminalNodeId"],
+      "properties": {
+        "branchId": { "$ref": "#/$defs/publicId" },
+        "entryNodeId": { "$ref": "#/$defs/internalId" },
+        "terminalNodeId": { "$ref": "#/$defs/internalId" }
+      }
+    },
+    "controlChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["choiceId", "selectorNodeId", "joinNodeId", "armIds"],
+      "properties": {
+        "choiceId": { "$ref": "#/$defs/internalId" },
+        "selectorNodeId": { "$ref": "#/$defs/internalId" },
+        "joinNodeId": { "$ref": "#/$defs/internalId" },
+        "armIds": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/internalId" } }
+      }
+    },
+    "controlChoiceBooleanEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^__woml_choice__[a-z0-9_]+:when:(0|[1-9][0-9]*)$" },
+        "from": { "type": "string", "pattern": "^__woml_choice__[a-z0-9_]+__select$" },
+        "to": { "$ref": "#/$defs/internalId" },
+        "condition": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v2#/$defs/booleanCondition" }
+      }
+    },
+    "contextVisibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "stepIds"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/internalId" },
+        "stepIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/publicId" } }
+      }
+    },
+    "settlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "mainResultNodeId", "ownedBranchTerminalNodeIds"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/internalId" },
+        "mainResultNodeId": { "$ref": "#/$defs/internalId" },
+        "ownedBranchTerminalNodeIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/internalId" } }
+      }
+    }
+  }
+}

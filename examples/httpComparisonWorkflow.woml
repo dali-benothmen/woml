@@ -1,0 +1,28 @@
+<woml>
+<workflow version="1.0.0" id="http-comparison" name="Native Fetch and Managed HTTP">
+  <triggers>
+    <manual id="start" />
+  </triggers>
+
+  <steps>
+    <step id="compareClients" name="Compare both HTTP options">
+      <script>
+        const url = "https://jsonplaceholder.typicode.com/todos/1";
+
+        const [nativeResponse, managedResponse] = await Promise.all([
+          fetch(url),
+          services.http.request({ url })
+        ]);
+
+        return {
+          nativeFetch: {
+            status: nativeResponse.status,
+            data: await nativeResponse.json()
+          },
+          managedHttp: managedResponse
+        };
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>

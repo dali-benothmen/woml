@@ -1,0 +1,45 @@
+[
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_001", "runId": "run_wait_01", "sequence": 1,
+    "occurredAt": "2026-08-06T14:10:00.000Z", "type": "run_started",
+    "data": { "workflowId": "field-report", "definitionHash": "sha256:d58dfcefdcd6c40db659042c41e17ca6c8d652033f90f120734d5cd95819b45c", "trigger": {} }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_002", "runId": "run_wait_01", "sequence": 2,
+    "occurredAt": "2026-08-06T14:10:00.001Z", "type": "parallel_group_started", "data": { "parallelId": "fieldData" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_003", "runId": "run_wait_01", "sequence": 3,
+    "occurredAt": "2026-08-06T14:10:00.002Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadWeather", "attempt": 1, "invocationId": "inv_wait_weather", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_004", "runId": "run_wait_01", "sequence": 4,
+    "occurredAt": "2026-08-06T14:10:00.003Z", "type": "step_attempt_started",
+    "data": { "nodeId": "loadSoil", "attempt": 1, "invocationId": "inv_wait_soil", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_005", "runId": "run_wait_01", "sequence": 5,
+    "occurredAt": "2026-08-06T14:10:00.004Z", "type": "step_attempt_failed",
+    "data": { "nodeId": "loadWeather", "attempt": 1, "invocationId": "inv_wait_weather", "failure": { "kind": "script_threw", "code": "WOML_SCRIPT_THROWN", "message": "Weather service failed." } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_006", "runId": "run_wait_01", "sequence": 6,
+    "occurredAt": "2026-08-06T14:10:00.005Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "loadSoil", "attempt": 1, "invocationId": "inv_wait_soil", "output": { "moisture": 41 } }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_007", "runId": "run_wait_01", "sequence": 7,
+    "occurredAt": "2026-08-06T14:10:00.006Z", "type": "parallel_group_completed",
+    "data": { "parallelId": "fieldData", "outcome": "failed", "failedNodeIds": ["loadWeather"], "cancelledNodeIds": [] }
+  },
+  {
+    "eventSchemaVersion": 3, "eventId": "evt_wait_008", "runId": "run_wait_01", "sequence": 8,
+    "occurredAt": "2026-08-06T14:10:00.007Z", "type": "run_failed",
+    "data": {
+      "failureScope": "parallel", "parallelId": "fieldData", "policy": "wait-all", "primaryNodeId": "loadWeather",
+      "failedNodeIds": ["loadWeather"], "cancelledNodeIds": [],
+      "failure": { "kind": "parallel_child_failed", "code": "WOML_PARALLEL_CHILD_FAILED", "message": "One parallel child failed." }
+    }
+  }
+]

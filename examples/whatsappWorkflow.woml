@@ -1,0 +1,35 @@
+<woml>
+  <workflow
+    id="whatsapp-reply-demo"
+    name="WhatsApp Reply Demo"
+    description="Receives a WhatsApp message and replies with an approved template."
+    version="1.0.0"
+  >
+    <triggers>
+      <whatsapp
+        id="customerMessage"
+        events="message"
+        phone-number-id="123456789012345"
+        verify-token="{{secrets.WHATSAPP_VERIFY_TOKEN}}"
+        app-secret="{{secrets.WHATSAPP_APP_SECRET}}"
+      />
+    </triggers>
+
+    <steps>
+      <step id="reply" name="Reply to customer" description="Sends the reviewed reply template to the same conversation.">
+        <script>
+          return services.whatsapp.send({
+            accessToken: secrets.WHATSAPP_ACCESS_TOKEN,
+            phoneNumberId: '123456789012345',
+            conversationId: context.payload.conversationId,
+            template: {
+              name: 'woml_reply_v1',
+              language: 'en_US',
+              parameters: [context.payload.text ?? 'Hello from WOML']
+            }
+          }, { name: 'reply-to-customer' });
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

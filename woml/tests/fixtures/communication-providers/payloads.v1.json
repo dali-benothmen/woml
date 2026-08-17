@@ -1,0 +1,15 @@
+[
+  {
+    "provider": "slack", "event": "app-mention", "text": "hello", "senderId": "U123", "conversationId": "C123", "messageId": "1786000000.000100", "threadId": "1786000000.000100", "occurredAt": "2026-08-16T10:00:00.000Z",
+    "type": "app-mention", "userId": "U123", "channelId": "C123", "messageTs": "1786000000.000100", "threadTs": "1786000000.000100", "teamId": "T123"
+  },
+  {
+    "provider": "telegram", "event": "message", "text": "hello", "senderId": "1001", "senderName": "Synthetic User", "conversationId": "-1001001", "conversationType": "group", "messageId": "42", "occurredAt": "2026-08-16T10:00:01.000Z", "providerData": { "botUsername": "synthetic_bot" }
+  },
+  {
+    "provider": "discord", "event": "direct-message", "text": "hello", "senderId": "100000000000000001", "conversationId": "200000000000000002", "conversationType": "direct", "messageId": "300000000000000003", "occurredAt": "2026-08-16T10:00:02.000Z"
+  },
+  {
+    "provider": "whatsapp", "event": "message", "text": "hello", "senderId": "15550000001", "conversationId": "15550000001", "conversationType": "direct", "messageId": "wamid.synthetic-message-1", "occurredAt": "2026-08-16T10:00:03.000Z"
+  }
+]

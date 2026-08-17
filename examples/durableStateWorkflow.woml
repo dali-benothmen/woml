@@ -1,0 +1,22 @@
+<woml>
+  <workflow id="durable-state-demo" name="Durable State Demo" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="rememberVisit" name="Remember this visit">
+        <script>
+          const counter = await services.state.increment("visits", 1, {
+            name: "count-visit"
+          });
+
+          return {
+            message: `This workflow has run ${counter.value} time(s).`,
+            version: counter.version
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

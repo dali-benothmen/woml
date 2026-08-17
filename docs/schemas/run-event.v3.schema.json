@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v3",
+  "title": "WOML Run Event v3",
+  "description": "Append-only workflow events for sequential, branch, and bounded parallel execution.",
+  "x-status": "parallel-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v2",
+  "x-currentEventTypes": [
+    "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed",
+    "branch_selected", "parallel_group_started", "parallel_group_completed", "run_succeeded", "run_failed"
+  ],
+  "x-invariants": [
+    "Events are immutable, append-only, contiguous by run sequence, and never mix schema versions within one run.",
+    "parallel_group_started is the durable fork point from which every child context snapshot is reconstructed.",
+    "Child attempts start only after their group-started event and no more than the compiled concurrency cap are active.",
+    "A successful group has every child succeeded; wait-all failure has every child terminal; fail-fast failure has every started child terminal.",
+    "Failed and cancelled node lists use compiled document order, never completion order.",
+    "Unstarted fail-fast children appear in neither failedNodeIds nor cancelledNodeIds.",
+    "Only step_attempt_succeeded publishes context.steps output; parallel group events are control state only."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 3 },
+    "eventId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "runId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed",
+        "branch_selected", "parallel_group_started", "parallel_group_completed", "run_succeeded", "run_failed"
+      ]
+    },
+    "data": {}
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "run_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptSucceededData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_attempt_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/stepAttemptFailedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "branch_selected" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v2#/$defs/branchSelectedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "parallel_group_started" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/parallelGroupStartedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "parallel_group_completed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/parallelGroupCompletedData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "run_succeeded" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runSucceededData" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "run_failed" } }, "required": ["type"] },
+      "then": { "properties": { "data": { "$ref": "#/$defs/runFailedData" } } }
+    }
+  ],
+  "$defs": {
+    "publicStructuralId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 },
+    "idList": {
+      "type": "array", "uniqueItems": true,
+      "items": { "$ref": "#/$defs/publicStructuralId" }
+    },
+    "stepAttemptFailedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nodeId", "attempt", "invocationId", "failure"],
+      "properties": {
+        "nodeId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "failure": { "$ref": "https://cronflow.dev/schemas/attempt-failure/v2#/$defs/attemptFailure" }
+      }
+    },
+    "parallelGroupStartedData": {
+      "type": "object", "additionalProperties": false, "required": ["parallelId"],
+      "properties": { "parallelId": { "$ref": "#/$defs/publicStructuralId" } }
+    },
+    "parallelGroupCompletedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["parallelId", "outcome", "failedNodeIds", "cancelledNodeIds"],
+      "properties": {
+        "parallelId": { "$ref": "#/$defs/publicStructuralId" },
+        "outcome": { "enum": ["succeeded", "failed"] },
+        "failedNodeIds": { "$ref": "#/$defs/idList" },
+        "cancelledNodeIds": { "$ref": "#/$defs/idList" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "outcome": { "const": "succeeded" } }, "required": ["outcome"] },
+          "then": {
+            "properties": {
+              "failedNodeIds": { "maxItems": 0 },
+              "cancelledNodeIds": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "outcome": { "const": "failed" } }, "required": ["outcome"] },
+          "then": {
+            "anyOf": [
+              { "properties": { "failedNodeIds": { "minItems": 1 } } },
+              { "properties": { "cancelledNodeIds": { "minItems": 1 } } }
+            ]
+          }
+        }
+      ]
+    },
+    "runFailedData": {
+      "oneOf": [
+        { "$ref": "#/$defs/attemptRunFailedData" },
+        { "$ref": "https://cronflow.dev/schemas/run-event/v2#/$defs/branchRunFailedData" },
+        { "$ref": "#/$defs/parallelRunFailedData" }
+      ]
+    },
+    "attemptRunFailedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["failureScope", "nodeId", "attempt", "invocationId", "failure"],
+      "properties": {
+        "failureScope": { "const": "attempt" },
+        "nodeId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "invocationId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "failure": { "$ref": "https://cronflow.dev/schemas/attempt-failure/v2#/$defs/attemptFailure" }
+      }
+    },
+    "parallelRunFailedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["failureScope", "parallelId", "policy", "primaryNodeId", "failedNodeIds", "cancelledNodeIds", "failure"],
+      "properties": {
+        "failureScope": { "const": "parallel" },
+        "parallelId": { "$ref": "#/$defs/publicStructuralId" },
+        "policy": { "enum": ["fail-fast", "wait-all"] },
+        "primaryNodeId": { "$ref": "#/$defs/publicStructuralId" },
+        "failedNodeIds": { "$ref": "#/$defs/idList" },
+        "cancelledNodeIds": { "$ref": "#/$defs/idList" },
+        "failure": { "$ref": "#/$defs/parallelFailure" }
+      }
+    },
+    "parallelFailure": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "code", "message"],
+      "properties": {
+        "kind": { "const": "parallel_child_failed" },
+        "code": { "const": "WOML_PARALLEL_CHILD_FAILED" },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

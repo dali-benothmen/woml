@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 7,
+  "workflowId": "webhook-trigger-contract",
+  "triggers": [
+    {
+      "id": "manualStart",
+      "handler": "trigger.manual",
+      "config": { "kind": "object", "fields": {} }
+    },
+    {
+      "id": "newOrder",
+      "handler": "trigger.webhook",
+      "config": {
+        "kind": "object",
+        "fields": {
+          "path": { "kind": "literal", "value": "/webhooks/orders" },
+          "method": { "kind": "literal", "value": "POST" },
+          "authentication": {
+            "kind": "object",
+            "fields": {
+              "kind": { "kind": "literal", "value": "bearer" },
+              "secret": { "kind": "secretReference", "name": "ORDER_WEBHOOK_TOKEN" }
+            }
+          },
+          "schema": {
+            "kind": "literal",
+            "value": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "required": ["orderId"],
+              "properties": {
+                "orderId": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["capture"],
+    "nodes": [
+      {
+        "id": "capture",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "\n        return context.trigger;\n      "
+            }
+          }
+        }
+      }
+    ],
+    "edges": []
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/woml-definition-package.v4.schema.json",
+  "title": "WOML Call-Only Executable Definition Package v4",
+  "description": "Immutable local-module compilation package carrying Compiled Workflow Model v10.",
+  "x-status": "workflow-calls-wc0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile", "executable", "runtimeReady", "workflow", "modules", "sources", "artifacts", "compiler", "permissions", "rootHash"],
+  "properties": {
+    "schemaVersion": { "const": 4 },
+    "profile": { "const": "woml.definition-package/v4" },
+    "executable": { "const": true },
+    "runtimeReady": { "const": false },
+    "workflow": { "$ref": "#/$defs/workflow" },
+    "modules": { "$ref": "#/$defs/modules" },
+    "sources": { "$ref": "#/$defs/sources" },
+    "artifacts": { "$ref": "#/$defs/artifacts" },
+    "compiler": { "$ref": "#/$defs/compiler" },
+    "permissions": { "$ref": "https://woml.dev/schemas/woml-definition-package.v1.schema.json#/$defs/permissions" },
+    "rootHash": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "portablePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$" },
+    "artifactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest"],
+      "properties": {
+        "path": { "$ref": "#/$defs/portablePath" },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "modelDigest", "model"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+        "source": { "$ref": "#/$defs/portablePath" },
+        "modelDigest": { "$ref": "#/$defs/sha256" },
+        "model": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v10" }
+      }
+    },
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "entrypoint", "exports", "bundle", "sourceMap"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 128 },
+        "entrypoint": { "$ref": "#/$defs/portablePath" },
+        "exports": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$" } },
+        "bundle": { "$ref": "#/$defs/artifactReference" },
+        "sourceMap": { "$ref": "#/$defs/artifactReference" }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/module" }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 513,
+      "items": { "$ref": "https://woml.dev/schemas/woml-definition-package.v1.schema.json#/$defs/source" }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "mediaType", "digest", "content"],
+      "properties": {
+        "path": { "$ref": "#/$defs/portablePath" },
+        "kind": { "enum": ["workflow-model", "module-bundle", "source-map", "type-declarations"] },
+        "mediaType": { "enum": ["application/json", "text/javascript", "application/source-map+json", "text/typescript"] },
+        "digest": { "$ref": "#/$defs/sha256" },
+        "content": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 194,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "resolverProfile", "bundler"],
+      "properties": {
+        "name": { "const": "woml" },
+        "version": { "const": "0.1.0" },
+        "resolverProfile": { "const": "woml.module-resolver/v1" },
+        "bundler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "target", "format", "sourceMap"],
+          "properties": {
+            "name": { "const": "bun" },
+            "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+" },
+            "target": { "const": "bun" },
+            "format": { "const": "esm" },
+            "sourceMap": { "const": "external" }
+          }
+        }
+      }
+    }
+  }
+}

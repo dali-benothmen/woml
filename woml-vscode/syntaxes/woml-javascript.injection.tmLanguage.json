@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "WOML JavaScript Globals",
+  "scopeName": "woml.javascript.injection",
+  "injectionSelector": "L:text.html.woml source.js -comment -string, L:text.html.woml meta.template.expression.js -comment",
+  "patterns": [
+    {
+      "name": "support.variable.woml",
+      "match": "(?<![.$\\w])\\b(context|services|secrets|props|lifecycle|attempt)\\b"
+    }
+  ]
+}

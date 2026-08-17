@@ -1,0 +1,150 @@
+[
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_001",
+    "runId": "run_retry_success",
+    "sequence": 1,
+    "occurredAt": "2026-08-07T12:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "retry-demo",
+      "definitionHash": "sha256:27606cefeebc5b6d45c965969b621a2f74ae2ebebe2b94edec80d97bfeb8378c",
+      "trigger": {}
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_002",
+    "runId": "run_retry_success",
+    "sequence": 2,
+    "occurredAt": "2026-08-07T12:00:00.001Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 1,
+      "invocationId": "inv_retry_greet_01",
+      "handler": "runtime.script",
+      "idempotencyKey": "sha256:35278a8c79c5843d1fc3015aac65ea3ee7579559463214234e16624b5bbf609c"
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_003",
+    "runId": "run_retry_success",
+    "sequence": 3,
+    "occurredAt": "2026-08-07T12:00:00.002Z",
+    "type": "step_attempt_failed",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 1,
+      "invocationId": "inv_retry_greet_01",
+      "failure": {
+        "kind": "script_threw",
+        "code": "WOML_SCRIPT_THROWN",
+        "message": "Temporary greeting failure"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_004",
+    "runId": "run_retry_success",
+    "sequence": 4,
+    "occurredAt": "2026-08-07T12:00:00.002Z",
+    "type": "step_retry_scheduled",
+    "data": {
+      "nodeId": "greet",
+      "failedAttempt": 1,
+      "nextAttempt": 2,
+      "scheduledAt": "2026-08-07T12:00:01.002Z"
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_005",
+    "runId": "run_retry_success",
+    "sequence": 5,
+    "occurredAt": "2026-08-07T12:00:01.002Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 2,
+      "invocationId": "inv_retry_greet_02",
+      "handler": "runtime.script",
+      "idempotencyKey": "sha256:35278a8c79c5843d1fc3015aac65ea3ee7579559463214234e16624b5bbf609c"
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_006",
+    "runId": "run_retry_success",
+    "sequence": 6,
+    "occurredAt": "2026-08-07T12:00:01.003Z",
+    "type": "step_attempt_failed",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 2,
+      "invocationId": "inv_retry_greet_02",
+      "failure": {
+        "kind": "script_threw",
+        "code": "WOML_SCRIPT_THROWN",
+        "message": "Temporary greeting failure"
+      }
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_007",
+    "runId": "run_retry_success",
+    "sequence": 7,
+    "occurredAt": "2026-08-07T12:00:01.003Z",
+    "type": "step_retry_scheduled",
+    "data": {
+      "nodeId": "greet",
+      "failedAttempt": 2,
+      "nextAttempt": 3,
+      "scheduledAt": "2026-08-07T12:00:03.003Z"
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_008",
+    "runId": "run_retry_success",
+    "sequence": 8,
+    "occurredAt": "2026-08-07T12:00:03.003Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 3,
+      "invocationId": "inv_retry_greet_03",
+      "handler": "runtime.script",
+      "idempotencyKey": "sha256:35278a8c79c5843d1fc3015aac65ea3ee7579559463214234e16624b5bbf609c"
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_009",
+    "runId": "run_retry_success",
+    "sequence": 9,
+    "occurredAt": "2026-08-07T12:00:03.004Z",
+    "type": "step_attempt_succeeded",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 3,
+      "invocationId": "inv_retry_greet_03",
+      "output": { "message": "Hello World" }
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_success_010",
+    "runId": "run_retry_success",
+    "sequence": 10,
+    "occurredAt": "2026-08-07T12:00:03.005Z",
+    "type": "run_succeeded",
+    "data": {
+      "terminalNodeId": "greet",
+      "result": { "message": "Hello World" }
+    }
+  }
+]

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 7,
+  "workflowId": "slack-trigger-contract",
+  "triggers": [
+    {
+      "id": "agentMessage",
+      "handler": "trigger.slack",
+      "config": {
+        "kind": "object",
+        "fields": {
+          "events": {
+            "kind": "array",
+            "items": [
+              { "kind": "literal", "value": "app-mention" },
+              { "kind": "literal", "value": "direct-message" }
+            ]
+          },
+          "channels": {
+            "kind": "array",
+            "items": [
+              { "kind": "literal", "value": "woml-testing" },
+              { "kind": "literal", "value": "agent-support" }
+            ]
+          },
+          "botToken": { "kind": "secretReference", "name": "SLACK_BOT_TOKEN" },
+          "appToken": { "kind": "secretReference", "name": "SLACK_APP_TOKEN" }
+        }
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["capture"],
+    "nodes": [
+      {
+        "id": "capture",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": { "kind": "literal", "value": "\n        return context.trigger;\n      " }
+          }
+        }
+      }
+    ],
+    "edges": []
+  }
+}

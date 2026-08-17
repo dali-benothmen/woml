@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/native-fetch-observation/v1",
+  "title": "WOML Native Fetch Observation v1",
+  "description": "Redacted observation messages around Bun's unchanged native Fetch implementation.",
+  "x-status": "services-capabilities-contract-frozen",
+  "x-redaction": "No URL query, credentials, headers, request body, or response body may cross this boundary.",
+  "oneOf": [
+    { "$ref": "#/$defs/started" },
+    { "$ref": "#/$defs/completed" },
+    { "$ref": "#/$defs/failed" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "method": { "type": "string", "pattern": "^[A-Z]+$", "maxLength": 32 },
+    "origin": { "type": "string", "pattern": "^https?://(?![^/?#]*@)[^/?#]+$", "maxLength": 2048 },
+    "path": { "type": "string", "pattern": "^/[^?#]*$", "maxLength": 2048 },
+    "started": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "observationType", "invocationId", "requestId", "method", "origin", "path", "startedAt"],
+      "properties": {
+        "contract": { "const": "woml.native-fetch-observation" }, "contractVersion": { "const": 1 }, "observationType": { "const": "started" },
+        "invocationId": { "$ref": "#/$defs/id" }, "requestId": { "$ref": "#/$defs/id" }, "method": { "$ref": "#/$defs/method" },
+        "origin": { "$ref": "#/$defs/origin" }, "path": { "$ref": "#/$defs/path" }, "requestBodyBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "startedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "completed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "observationType", "invocationId", "requestId", "status", "durationMs", "completedAt"],
+      "properties": {
+        "contract": { "const": "woml.native-fetch-observation" }, "contractVersion": { "const": 1 }, "observationType": { "const": "completed" },
+        "invocationId": { "$ref": "#/$defs/id" }, "requestId": { "$ref": "#/$defs/id" }, "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "responseBodyBytes": { "type": ["integer", "null"], "minimum": 0 }, "durationMs": { "type": "number", "minimum": 0 }, "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "failed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "observationType", "invocationId", "requestId", "durationMs", "failedAt", "error"],
+      "properties": {
+        "contract": { "const": "woml.native-fetch-observation" }, "contractVersion": { "const": 1 }, "observationType": { "const": "failed" },
+        "invocationId": { "$ref": "#/$defs/id" }, "requestId": { "$ref": "#/$defs/id" }, "durationMs": { "type": "number", "minimum": 0 }, "failedAt": { "type": "string", "format": "date-time" },
+        "error": { "type": "object", "additionalProperties": false, "required": ["kind", "code", "message"], "properties": {
+          "kind": { "enum": ["tracking_failed", "fetch_rejected", "timed_out", "cancelled", "worker_crashed", "host_crashed"] },
+          "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "message": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        } }
+      }
+    }
+  }
+}

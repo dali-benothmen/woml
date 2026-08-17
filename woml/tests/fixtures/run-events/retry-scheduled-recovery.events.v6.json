@@ -1,0 +1,58 @@
+[
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_scheduled_001",
+    "runId": "run_retry_scheduled",
+    "sequence": 1,
+    "occurredAt": "2026-08-07T14:00:00.000Z",
+    "type": "run_started",
+    "data": {
+      "workflowId": "retry-demo",
+      "definitionHash": "sha256:27606cefeebc5b6d45c965969b621a2f74ae2ebebe2b94edec80d97bfeb8378c",
+      "trigger": {}
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_scheduled_002",
+    "runId": "run_retry_scheduled",
+    "sequence": 2,
+    "occurredAt": "2026-08-07T14:00:00.001Z",
+    "type": "step_attempt_started",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 1,
+      "invocationId": "inv_retry_scheduled_01",
+      "handler": "runtime.script",
+      "idempotencyKey": "sha256:0c8a85cb25fdcf3a219705bfe7c4baa174d29cbaf9304f23183a95ef29d6022c"
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_scheduled_003",
+    "runId": "run_retry_scheduled",
+    "sequence": 3,
+    "occurredAt": "2026-08-07T14:00:00.002Z",
+    "type": "step_attempt_failed",
+    "data": {
+      "nodeId": "greet",
+      "attempt": 1,
+      "invocationId": "inv_retry_scheduled_01",
+      "failure": { "kind": "script_threw", "code": "WOML_SCRIPT_THROWN", "message": "Temporary greeting failure" }
+    }
+  },
+  {
+    "eventSchemaVersion": 6,
+    "eventId": "evt_retry_scheduled_004",
+    "runId": "run_retry_scheduled",
+    "sequence": 4,
+    "occurredAt": "2026-08-07T14:00:00.002Z",
+    "type": "step_retry_scheduled",
+    "data": {
+      "nodeId": "greet",
+      "failedAttempt": 1,
+      "nextAttempt": 2,
+      "scheduledAt": "2026-08-07T14:00:01.002Z"
+    }
+  }
+]

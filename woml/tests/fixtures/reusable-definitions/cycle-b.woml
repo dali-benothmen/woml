@@ -1,0 +1,4 @@
+<woml>
+  <imports><module name="cycle-a" from="./cycle-a.woml" /></imports>
+  <step><script>return true;</script></step>
+</woml>

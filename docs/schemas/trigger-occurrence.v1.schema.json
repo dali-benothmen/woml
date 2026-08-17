@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/trigger-occurrence/v1",
+  "title": "WOML Trigger Occurrence v1",
+  "description": "Immutable durable binding from one accepted trigger occurrence to one workflow run.",
+  "x-status": "production-trigger-contract-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "occurrenceSchemaVersion", "occurrenceId", "workflowId", "triggerId",
+    "triggerHandler", "definitionHash", "sourceIdentityHash", "payloadHash",
+    "receivedAt", "runId"
+  ],
+  "properties": {
+    "occurrenceSchemaVersion": { "const": 1 },
+    "occurrenceId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "triggerId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "triggerHandler": { "$ref": "https://cronflow.dev/schemas/run-event/v7#/$defs/triggerHandler" },
+    "definitionHash": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/definitionHash" },
+    "sourceIdentityHash": { "$ref": "#/$defs/hash" },
+    "payloadHash": { "$ref": "#/$defs/hash" },
+    "receivedAt": { "type": "string", "format": "date-time" },
+    "runId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

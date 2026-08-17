@@ -1,0 +1,8 @@
+{
+  "contract": "woml.approval-http",
+  "version": 1,
+  "error": {
+    "code": "WOML_APPROVAL_REQUEST_INVALID",
+    "message": "Decision must be approved or rejected."
+  }
+}

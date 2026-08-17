@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/reusable-script-binding/v3",
+  "title": "WOML Reusable Script Binding v3",
+  "description": "Invocation-local bindings for a reusable step or reusable lifecycle action.",
+  "x-status": "switch-custom-definitions-scp0-frozen",
+  "x-sensitiveFields": ["props"],
+  "x-forbiddenFields": ["secrets", "secretStore", "engineControl"],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "invocationId", "definition", "props", "services"],
+  "properties": {
+    "profile": { "const": "woml.reusable-script-binding/v3" },
+    "invocationId": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "definition": {
+      "type": "object", "additionalProperties": false, "required": ["alias", "digest", "source"],
+      "properties": {
+        "alias": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "source": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "props": { "type": "object", "maxProperties": 128, "additionalProperties": true },
+    "context": { "type": "object", "additionalProperties": true },
+    "attempt": { "type": "object", "additionalProperties": true },
+    "lifecycle": {
+      "type": "object", "additionalProperties": false, "required": ["outcome"],
+      "properties": {
+        "outcome": { "enum": ["succeeded", "failed"] },
+        "result": true,
+        "error": { "type": "object", "additionalProperties": false, "required": ["code", "message"], "properties": { "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }, "message": { "type": "string", "maxLength": 1024 } } }
+      }
+    },
+    "services": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" } }
+  },
+  "oneOf": [
+    { "required": ["context", "attempt"], "not": { "required": ["lifecycle"] } },
+    { "required": ["lifecycle"], "not": { "required": ["attempt"] } }
+  ]
+}

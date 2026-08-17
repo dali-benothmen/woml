@@ -1,0 +1,13 @@
+<woml>
+  <imports>
+    <module name="scale-value" from="./scale-value.woml" />
+  </imports>
+  <workflow id="reusable-terminal-failure" name="Reusable terminal failure" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <scale-value id="failingScale" value="5" factor="2" fail-once="true" />
+    </steps>
+  </workflow>
+</woml>

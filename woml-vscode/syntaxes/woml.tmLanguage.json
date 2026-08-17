@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "WOML",
+  "scopeName": "text.html.woml",
+  "patterns": [
+    {
+      "include": "#woml-tag"
+    },
+    {
+      "include": "text.html.basic"
+    }
+  ],
+  "repository": {
+    "woml-tag": {
+      "name": "meta.tag.woml",
+      "begin": "(<)(/?)(?!(?i:script)(?=[\\s/>]))([A-Za-z][A-Za-z0-9_.:-]*)(?=\\s|/?>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.html"
+        },
+        "2": {
+          "name": "punctuation.definition.tag.begin.html"
+        },
+        "3": {
+          "name": "entity.name.tag.html"
+        }
+      },
+      "end": "(/?>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.end.html"
+        }
+      },
+      "patterns": [
+        {
+          "include": "text.html.basic#attribute"
+        }
+      ]
+    }
+  }
+}

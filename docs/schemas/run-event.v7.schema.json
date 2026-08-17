@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v7",
+  "title": "WOML Run Event v7",
+  "description": "Append-only workflow events binding every Model v7 run to its durable trigger occurrence.",
+  "x-status": "production-trigger-contract-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v6",
+  "x-currentEventTypes": [
+    "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled",
+    "branch_selected", "parallel_group_started", "parallel_group_completed",
+    "approval_requested", "notification_delivery_requested", "notification_delivery_attempt_started",
+    "notification_delivery_succeeded", "notification_delivery_failed", "notification_decision_accepted",
+    "notification_message_update_requested", "notification_message_update_attempt_started",
+    "notification_message_updated", "notification_message_update_failed", "approval_resolved",
+    "run_succeeded", "run_failed"
+  ],
+  "x-invariants": [
+    "One run never mixes event schema versions.",
+    "run_started is first and binds workflow definition, trigger ID, trigger handler, and durable occurrence ID.",
+    "The direct trigger object remains the complete context.trigger projection.",
+    "One accepted trigger occurrence binds to exactly one run.",
+    "All v1-v6 branch, parallel, approval, notification, retry, and failure invariants remain unchanged."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 7 },
+    "eventId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "runId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed", "step_retry_scheduled",
+        "branch_selected", "parallel_group_started", "parallel_group_completed",
+        "approval_requested", "notification_delivery_requested", "notification_delivery_attempt_started",
+        "notification_delivery_succeeded", "notification_delivery_failed", "notification_decision_accepted",
+        "notification_message_update_requested", "notification_message_update_attempt_started",
+        "notification_message_updated", "notification_message_update_failed", "approval_resolved",
+        "run_succeeded", "run_failed"
+      ]
+    },
+    "data": {}
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "run_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/runStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v6#/$defs/stepAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v6#/$defs/stepAttemptSucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v6#/$defs/stepAttemptFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_retry_scheduled" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v6#/$defs/stepRetryScheduledData" } } } },
+    { "if": { "properties": { "type": { "const": "branch_selected" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v2#/$defs/branchSelectedData" } } } },
+    { "if": { "properties": { "type": { "const": "parallel_group_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "parallel_group_completed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupCompletedData" } } } },
+    { "if": { "properties": { "type": { "const": "approval_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v4#/$defs/approvalRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliveryRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliveryAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliverySucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/deliveryFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_decision_accepted" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/notificationDecisionAcceptedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdateRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdateAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_updated" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdatedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v5#/$defs/messageUpdateFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "approval_resolved" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v4#/$defs/approvalResolvedData" } } } },
+    { "if": { "properties": { "type": { "const": "run_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runSucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "run_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v6#/$defs/runFailedData" } } } }
+  ],
+  "$defs": {
+    "triggerHandler": {
+      "enum": [
+        "trigger.manual",
+        "trigger.webhook",
+        "trigger.slack",
+        "trigger.schedule",
+        "trigger.interval",
+        "trigger.event"
+      ]
+    },
+    "runStartedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflowId",
+        "definitionHash",
+        "triggerId",
+        "triggerHandler",
+        "triggerOccurrenceId",
+        "trigger"
+      ],
+      "properties": {
+        "workflowId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "definitionHash": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/definitionHash" },
+        "triggerId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "triggerHandler": { "$ref": "#/$defs/triggerHandler" },
+        "triggerOccurrenceId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+        "trigger": { "type": "object" }
+      }
+    }
+  }
+}

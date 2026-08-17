@@ -1,0 +1,34 @@
+<woml>
+  <workflow id="conversation-memory" name="Conversation Memory" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="rememberConversation" name="Remember conversation progress">
+        <script>
+          const conversationId = context.payload.conversationId ?? "demo-conversation";
+          const message = context.payload.message ?? "Hello again";
+          const key = `conversation:${conversationId}`;
+          const previous = await services.state.get(key);
+          const next = {
+            turns: previous.found ? previous.value.turns + 1 : 1,
+            lastMessage: message
+          };
+
+          const saved = await services.state.set(key, next, {
+            name: "remember-conversation",
+            ifVersion: previous.found ? previous.version : 0
+          });
+
+          return {
+            conversationId,
+            turns: next.turns,
+            lastMessage: next.lastMessage,
+            version: saved.version
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v2",
+  "title": "Cronflow Compiled Workflow Model v2",
+  "description": "Language-neutral DAG contract for sequential and mutually exclusive branch execution. Version 2 preserves model v1 definitions and freezes strict boolean branch conditions, selector identities, and merged branch-result nodes.",
+  "x-status": "branch-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v1",
+  "x-frozenProfile": {
+    "name": "woml-cli-branch",
+    "sourceFixture": "woml/tests/fixtures/branch.woml",
+    "compiledFixture": "woml/tests/fixtures/branch.compiled.v2.json",
+    "constraint": "The exact selector, arm-edge, route, join, result-expression, and downstream shapes exercised by the fixture are frozen for B1-B6. Parallel, approval, retry, capability, and durable-control shapes remain unavailable."
+  },
+  "x-invariants": [
+    "The graph is directed and acyclic, every node is reachable, and the CLI profile has exactly one terminal node.",
+    "Node IDs and edge IDs are unique within the workflow.",
+    "User-authored step and structural IDs match [a-z][A-Za-z0-9]* and share one namespace.",
+    "Compiler-generated selector IDs use __woml_branch__<branchId>__select and cannot collide with user-authored IDs.",
+    "A branch selector has handler engine.branch-select and an empty object input.",
+    "Every selector has one or more ordered boolean branch edges followed by exactly one always fallback edge.",
+    "Selector branch-edge IDs are the durable arm IDs <branchId>:when:<zeroBasedIndex> and <branchId>:otherwise.",
+    "Every selector branch edge carries the same public branchId. Ordinary sequencing and join edges carry no branchId.",
+    "A boolean edge accepts exactly one contextReference expression and rejects non-boolean runtime values rather than coercing them.",
+    "A branch result node has id equal to branchId, handler engine.branch-result, and object inputs keyed by every durable arm ID.",
+    "Each result input is exactly one contextReference expression that is guaranteed on its selected route.",
+    "Only the selected route becomes active; inactive routes do not attempt nodes or publish context outputs.",
+    "A branch result node becomes ready after the selected route resolves; inactive incoming routes do not block the join.",
+    "The core depends only on this compiled model and never on WOML, XML, {{}} syntax, or source-language ASTs.",
+    "Resolved secret values never appear in the compiled definition.",
+    "A definition hash is SHA-256 over the RFC 8785 JSON Canonicalization Scheme encoding of the complete compiled model, formatted as sha256:<lowercase hexadecimal>."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": {
+      "const": 2,
+      "description": "Internal compiled-model schema version. It is unrelated to the workflow's public metadata.version."
+    },
+    "workflowId": {
+      "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+    },
+    "metadata": {
+      "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata"
+    },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/compiledTrigger"
+      }
+    },
+    "graph": {
+      "$ref": "#/$defs/workflowGraph"
+    }
+  },
+  "$defs": {
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges"],
+      "properties": {
+        "entryNodeIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/workflowNode"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workflowEdge"
+          }
+        }
+      }
+    },
+    "workflowNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "handler", "inputs"],
+      "properties": {
+        "id": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "handler": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/handlerId"
+        },
+        "inputs": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/valueExpression"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retryPolicy": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/retryPolicy"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Language-neutral descriptive metadata only."
+        }
+      }
+    },
+    "workflowEdge": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ordinaryAlwaysEdge"
+        },
+        {
+          "$ref": "#/$defs/branchBooleanEdge"
+        },
+        {
+          "$ref": "#/$defs/branchOtherwiseEdge"
+        }
+      ]
+    },
+    "ordinaryAlwaysEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition"],
+      "properties": {
+        "id": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "from": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "to": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "condition": {
+          "$ref": "#/$defs/alwaysCondition"
+        }
+      }
+    },
+    "branchBooleanEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition", "branchId"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/branchWhenArmId"
+        },
+        "from": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "to": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "condition": {
+          "$ref": "#/$defs/booleanCondition"
+        },
+        "branchId": {
+          "$ref": "#/$defs/publicStructuralId"
+        }
+      }
+    },
+    "branchOtherwiseEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "condition", "branchId"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/branchOtherwiseArmId"
+        },
+        "from": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "to": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+        },
+        "condition": {
+          "$ref": "#/$defs/alwaysCondition"
+        },
+        "branchId": {
+          "$ref": "#/$defs/publicStructuralId"
+        }
+      }
+    },
+    "alwaysCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "const": "always"
+        }
+      }
+    },
+    "booleanCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {
+          "const": "boolean"
+        },
+        "value": {
+          "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/contextReferenceExpression"
+        }
+      }
+    },
+    "publicStructuralId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "branchWhenArmId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*:when:(0|[1-9][0-9]*)$",
+      "maxLength": 256
+    },
+    "branchOtherwiseArmId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*:otherwise$",
+      "maxLength": 256
+    }
+  }
+}

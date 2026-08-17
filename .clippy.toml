@@ -1,32 +1,5 @@
-# Clippy configuration for Rust linting
-# Performance
-unsafe_code = "forbid"
-missing_docs = "warn"
-missing_debug_implementations = "warn"
-missing_copy_implementations = "warn"
-trivial_casts = "warn"
-trivial_numeric_casts = "warn"
-unused_extern_crates = "warn"
-unused_import_braces = "warn"
-unused_qualifications = "warn"
-unused_results = "warn"
-unused_lifetimes = "warn"
-
-# Style
-non_ascii_literal = "warn"
-similar_names = "warn"
-too_many_arguments = "warn"
-too_many_lines = "warn"
-use_self = "warn"
-use_debug = "warn"
-useless_attribute = "warn"
-useless_conversion = "warn"
-useless_format = "warn"
-useless_let_if_seq = "warn"
-useless_transmute = "warn"
-verbose_file_reads = "warn"
-
-# Complexity
-cognitive_complexity_threshold = "warn"
-cyclomatic_complexity_threshold = "warn"
-too_many_lines_threshold = "warn" 
+# Clippy configuration values only. Lint levels belong in crate attributes or
+# the Cargo command line; the N6 release gate uses `-D warnings` explicitly.
+cognitive-complexity-threshold = 30
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 100

@@ -1,0 +1,7 @@
+{
+  "command": "woml run hello.woml",
+  "trigger": {},
+  "stdout": "{\"message\":\"Hello World\"}\n",
+  "stderr": "",
+  "exitCode": 0
+}

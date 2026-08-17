@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/compiled-workflow-model/v10",
+  "title": "WOML Compiled Workflow Model v10",
+  "description": "Language-neutral DAG contract allowing an activated call-only workflow to declare zero source triggers.",
+  "x-status": "workflow-calls-wc0-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/compiled-workflow-model/v9",
+  "x-invariants": [
+    "An empty triggers array means call-only activation; it does not manufacture a manual or event trigger.",
+    "Workflow-call payload becomes the complete child context.trigger through engine-owned ingress metadata.",
+    "Module Runtime v1 remains optional and unchanged.",
+    "The graph remains a DAG with exactly the existing Script Bindings v1 and control-flow shapes.",
+    "Models v1-v9 remain immutable and executable under their original contracts."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph"],
+  "properties": {
+    "schemaVersion": { "const": 10 },
+    "workflowId": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId" },
+    "metadata": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata" },
+    "triggers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v7#/$defs/compiledTrigger" }
+    },
+    "graph": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v8#/$defs/workflowGraph" },
+    "moduleRuntime": { "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime" }
+  }
+}

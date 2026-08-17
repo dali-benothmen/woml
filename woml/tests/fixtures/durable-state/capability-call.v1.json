@@ -1,0 +1,22 @@
+{
+  "contract": "woml.capability-call",
+  "contractVersion": 1,
+  "messageType": "request",
+  "invocationId": "inv_state_example",
+  "callId": "call_state_example",
+  "runId": "run_state_example",
+  "nodeId": "rememberConversation",
+  "attemptNumber": 2,
+  "capability": "state",
+  "operation": "set",
+  "inputContractVersion": 1,
+  "resultContractVersion": 1,
+  "identity": {
+    "mode": "named",
+    "stepIdempotencyKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "operationName": "state.set.remember-conversation",
+    "operationKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "limits": { "inputBytes": 1048576, "resultBytes": 4194304, "timeoutMs": 30000 },
+  "input": { "contract": "woml.state", "contractVersion": 1, "kind": "request", "operation": "set", "input": { "key": "conversation:slack:C123", "value": { "messageCount": 2 }, "ifVersion": 1 } }
+}

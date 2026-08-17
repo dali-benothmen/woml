@@ -1,0 +1,10 @@
+<woml>
+  <workflow id="invalid-lifecycle-order">
+    <lifecycle>
+      <on-success><script>return;</script></on-success>
+      <on-start><script>return;</script></on-start>
+    </lifecycle>
+    <triggers><manual id="start" /></triggers>
+    <steps><step id="finish"><script>return true;</script></step></steps>
+  </workflow>
+</woml>

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 7,
+  "workflowId": "schedule-trigger-contract",
+  "triggers": [
+    {
+      "id": "dailyReport",
+      "handler": "trigger.schedule",
+      "config": {
+        "kind": "object",
+        "fields": {
+          "cron": { "kind": "literal", "value": "0 9 * * *" },
+          "timezone": { "kind": "literal", "value": "Europe/Berlin" },
+          "onMissed": { "kind": "literal", "value": "skip" }
+        }
+      }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["capture"],
+    "nodes": [
+      {
+        "id": "capture",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": { "kind": "literal", "value": "\n        return context.trigger;\n      " }
+          }
+        }
+      }
+    ],
+    "edges": []
+  }
+}

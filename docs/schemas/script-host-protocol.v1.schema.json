@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/script-host-protocol/v1",
+  "title": "WOML Script Host Protocol v1",
+  "description": "Versioned messages exchanged between the Rust core and the long-lived Bun script host.",
+  "x-status": "frozen-for-rust-hello-slice",
+  "x-transport": "Content-Length-framed UTF-8 JSON over child stdin/stdout",
+  "x-multiplexing": "Multiple execute messages may be in flight and completed responses may arrive out of order; invocationId is the sole correlation key.",
+  "oneOf": [
+    { "$ref": "#/$defs/readyMessage" },
+    { "$ref": "#/$defs/executeMessage" },
+    { "$ref": "#/$defs/successMessage" },
+    { "$ref": "#/$defs/failureMessage" }
+  ],
+  "$defs": {
+    "nonEmptyId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "readyMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "hostInstanceId"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "ready" },
+        "hostInstanceId": { "$ref": "#/$defs/nonEmptyId" }
+      }
+    },
+    "executeMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "protocolVersion",
+        "messageType",
+        "invocationId",
+        "runId",
+        "nodeId",
+        "attempt",
+        "handler",
+        "timeoutMs",
+        "source",
+        "context"
+      ],
+      "properties": {
+        "protocol": { "const": "woml.script-host" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "execute" },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "runId": { "$ref": "#/$defs/nonEmptyId" },
+        "nodeId": { "$ref": "#/$defs/nonEmptyId" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "handler": { "const": "runtime.script" },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "source": { "type": "string" },
+        "context": { "$ref": "#/$defs/context" }
+      }
+    },
+    "successMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "durationMs"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "completed" },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "outcome": { "$ref": "#/$defs/successOutcome" },
+        "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "failureMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "outcome", "durationMs"],
+      "properties": {
+        "protocol": { "const": "woml.script-host" },
+        "protocolVersion": { "const": 1 },
+        "messageType": { "const": "completed" },
+        "invocationId": { "$ref": "#/$defs/nonEmptyId" },
+        "outcome": { "$ref": "#/$defs/failureOutcome" },
+        "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger", "steps"],
+      "properties": {
+        "trigger": { "type": "object" },
+        "steps": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "successOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "success" },
+        "value": {}
+      }
+    },
+    "failureOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "error"],
+      "properties": {
+        "kind": { "const": "failure" },
+        "error": {
+          "$ref": "https://cronflow.dev/schemas/attempt-failure/v1#/$defs/hostReportedFailure"
+        }
+      }
+    }
+  }
+}

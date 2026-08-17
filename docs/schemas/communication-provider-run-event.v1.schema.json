@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/communication-provider-run-event/v1",
+  "title": "WOML Communication Provider Durable Fact Profile v1",
+  "description": "Provider-neutral logical facts used to review how communication work maps onto WOML's existing durable notification, decision, and capability events. These names are a conformance profile, not a second persisted event vocabulary.",
+  "x-status": "additional-communication-providers-acp0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "type", "runId", "sequence", "occurredAt", "data"],
+  "properties": {
+    "schemaVersion": { "const": 14 }, "type": { "enum": ["communication_delivery_requested", "communication_delivery_succeeded", "communication_delivery_failed", "communication_interaction_received", "communication_message_sent"] },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 320 }, "sequence": { "type": "integer", "minimum": 1 }, "occurredAt": { "type": "string", "format": "date-time" },
+    "data": { "oneOf": [{ "$ref": "#/$defs/requested" }, { "$ref": "#/$defs/succeeded" }, { "$ref": "#/$defs/failed" }, { "$ref": "#/$defs/interaction" }, { "$ref": "#/$defs/messageSent" }] }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "communication_delivery_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/requested" } } } },
+    { "if": { "properties": { "type": { "const": "communication_delivery_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/succeeded" } } } },
+    { "if": { "properties": { "type": { "const": "communication_delivery_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/failed" } } } },
+    { "if": { "properties": { "type": { "const": "communication_interaction_received" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/interaction" } } } },
+    { "if": { "properties": { "type": { "const": "communication_message_sent" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/messageSent" } } } }
+  ],
+  "$defs": {
+    "provider": { "enum": ["slack", "telegram", "discord", "whatsapp"] }, "id": { "type": "string", "minLength": 1, "maxLength": 320 }, "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "identity": { "type": "object", "additionalProperties": false, "required": ["provider", "accountId", "conversationId", "messageId"], "properties": { "provider": { "$ref": "#/$defs/provider" }, "accountId": { "$ref": "#/$defs/id" }, "conversationId": { "$ref": "#/$defs/id" }, "messageId": { "$ref": "#/$defs/id" }, "threadId": { "$ref": "#/$defs/id" } } },
+    "requested": { "type": "object", "additionalProperties": false, "required": ["kind", "deliveryId", "provider", "destinationFingerprint", "idempotencyKey"], "properties": { "kind": { "const": "delivery_requested" }, "deliveryId": { "$ref": "#/$defs/id" }, "provider": { "$ref": "#/$defs/provider" }, "destinationFingerprint": { "$ref": "#/$defs/sha256" }, "idempotencyKey": { "$ref": "#/$defs/sha256" } } },
+    "succeeded": { "type": "object", "additionalProperties": false, "required": ["kind", "deliveryId", "providerMessage"], "properties": { "kind": { "const": "delivery_succeeded" }, "deliveryId": { "$ref": "#/$defs/id" }, "providerMessage": { "$ref": "#/$defs/identity" } } },
+    "failed": { "type": "object", "additionalProperties": false, "required": ["kind", "deliveryId", "provider", "errorKind", "errorCode", "retryable", "ambiguous"], "properties": { "kind": { "const": "delivery_failed" }, "deliveryId": { "$ref": "#/$defs/id" }, "provider": { "$ref": "#/$defs/provider" }, "errorKind": { "type": "string", "minLength": 1, "maxLength": 128 }, "errorCode": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }, "retryable": { "type": "boolean" }, "ambiguous": { "type": "boolean" } } },
+    "interaction": { "type": "object", "additionalProperties": false, "required": ["kind", "deliveryId", "provider", "decision", "actorFingerprint", "externalInteractionId"], "properties": { "kind": { "const": "interaction_received" }, "deliveryId": { "$ref": "#/$defs/id" }, "provider": { "$ref": "#/$defs/provider" }, "decision": { "enum": ["approved", "rejected"] }, "actorFingerprint": { "$ref": "#/$defs/sha256" }, "externalInteractionId": { "$ref": "#/$defs/id" } } },
+    "messageSent": { "type": "object", "additionalProperties": false, "required": ["kind", "stepId", "callId", "providerMessage"], "properties": { "kind": { "const": "message_sent" }, "stepId": { "$ref": "#/$defs/id" }, "callId": { "$ref": "#/$defs/id" }, "providerMessage": { "$ref": "#/$defs/identity" } } }
+  }
+}

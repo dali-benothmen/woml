@@ -1,0 +1,9 @@
+{
+  "contract": "woml.workflow-call",
+  "contractVersion": 1,
+  "kind": "succeeded",
+  "workflowId": "notify-audit",
+  "definitionHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "childRunId": "run_child_audit_001",
+  "result": null
+}

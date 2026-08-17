@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/durable-state/v1",
+  "title": "WOML Durable User State v1",
+  "description": "JSON-only request and result contract for services.state. UTF-8 byte limits are additionally enforced by both Bun and Rust.",
+  "x-status": "durable-user-state-ds0-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "key": { "type": "string", "minLength": 1, "maxLength": 256, "x-maxUtf8Bytes": 256 },
+    "version": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "ifVersion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "safeInteger": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+    "base": {
+      "type": "object",
+      "required": ["contract", "contractVersion", "kind", "operation"],
+      "properties": {
+        "contract": { "const": "woml.state" },
+        "contractVersion": { "const": 1 },
+        "kind": { "enum": ["request", "result"] },
+        "operation": { "enum": ["get", "has", "set", "delete", "increment", "set_if_absent"] }
+      }
+    },
+    "request": {
+      "oneOf": [
+        { "$ref": "#/$defs/readRequest" },
+        { "$ref": "#/$defs/setRequest" },
+        { "$ref": "#/$defs/deleteRequest" },
+        { "$ref": "#/$defs/incrementRequest" },
+        { "$ref": "#/$defs/setIfAbsentRequest" }
+      ]
+    },
+    "readRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contract", "contractVersion", "kind", "operation", "input"],
+          "properties": {
+            "contract": { "const": "woml.state" }, "contractVersion": { "const": 1 },
+            "kind": { "const": "request" }, "operation": { "enum": ["get", "has"] },
+            "input": {
+              "type": "object", "additionalProperties": false, "required": ["key"],
+              "properties": { "key": { "$ref": "#/$defs/key" } }
+            }
+          }
+        }
+      ]
+    },
+    "setRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["contract", "contractVersion", "kind", "operation", "input"],
+          "properties": {
+            "contract": { "const": "woml.state" }, "contractVersion": { "const": 1 },
+            "kind": { "const": "request" }, "operation": { "const": "set" },
+            "input": {
+              "type": "object", "additionalProperties": false, "required": ["key", "value"],
+              "properties": { "key": { "$ref": "#/$defs/key" }, "value": {}, "ifVersion": { "$ref": "#/$defs/ifVersion" } }
+            }
+          }
+        }
+      ]
+    },
+    "deleteRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["contract", "contractVersion", "kind", "operation", "input"],
+          "properties": {
+            "contract": { "const": "woml.state" }, "contractVersion": { "const": 1 },
+            "kind": { "const": "request" }, "operation": { "const": "delete" },
+            "input": { "type": "object", "additionalProperties": false, "required": ["key"], "properties": { "key": { "$ref": "#/$defs/key" }, "ifVersion": { "$ref": "#/$defs/ifVersion" } } }
+          }
+        }
+      ]
+    },
+    "incrementRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["contract", "contractVersion", "kind", "operation", "input"],
+          "properties": {
+            "contract": { "const": "woml.state" }, "contractVersion": { "const": 1 },
+            "kind": { "const": "request" }, "operation": { "const": "increment" },
+            "input": { "type": "object", "additionalProperties": false, "required": ["key", "amount"], "properties": { "key": { "$ref": "#/$defs/key" }, "amount": { "$ref": "#/$defs/safeInteger" }, "ifVersion": { "$ref": "#/$defs/ifVersion" } } }
+          }
+        }
+      ]
+    },
+    "setIfAbsentRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["contract", "contractVersion", "kind", "operation", "input"],
+          "properties": {
+            "contract": { "const": "woml.state" }, "contractVersion": { "const": 1 },
+            "kind": { "const": "request" }, "operation": { "const": "set_if_absent" },
+            "input": { "type": "object", "additionalProperties": false, "required": ["key", "value"], "properties": { "key": { "$ref": "#/$defs/key" }, "value": {} } }
+          }
+        }
+      ]
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "operation", "data"],
+      "properties": {
+        "contract": { "const": "woml.state" }, "contractVersion": { "const": 1 },
+        "kind": { "const": "result" },
+        "operation": { "enum": ["get", "has", "set", "delete", "increment", "set_if_absent"] },
+        "data": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["found"], "properties": { "found": { "const": false } } },
+            { "type": "object", "additionalProperties": false, "required": ["found", "value", "version", "updatedAt"], "properties": { "found": { "const": true }, "value": {}, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } },
+            { "type": "object", "additionalProperties": false, "required": ["present"], "properties": { "present": { "const": false } } },
+            { "type": "object", "additionalProperties": false, "required": ["present", "version"], "properties": { "present": { "const": true }, "version": { "$ref": "#/$defs/version" } } },
+            { "type": "object", "additionalProperties": false, "required": ["stored", "version", "updatedAt"], "properties": { "stored": { "const": true }, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } },
+            { "type": "object", "additionalProperties": false, "required": ["deleted"], "properties": { "deleted": { "type": "boolean" } } },
+            { "type": "object", "additionalProperties": false, "required": ["value", "version", "updatedAt"], "properties": { "value": { "$ref": "#/$defs/safeInteger" }, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } },
+            { "type": "object", "additionalProperties": false, "required": ["stored", "value", "version", "updatedAt"], "properties": { "stored": { "type": "boolean" }, "value": {}, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } }
+          ]
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "operation": { "const": "get" } } }, "then": { "properties": { "data": { "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["found"], "properties": { "found": { "const": false } } },
+          { "type": "object", "additionalProperties": false, "required": ["found", "value", "version", "updatedAt"], "properties": { "found": { "const": true }, "value": {}, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } }
+        ] } } } },
+        { "if": { "properties": { "operation": { "const": "has" } } }, "then": { "properties": { "data": { "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["present"], "properties": { "present": { "const": false } } },
+          { "type": "object", "additionalProperties": false, "required": ["present", "version"], "properties": { "present": { "const": true }, "version": { "$ref": "#/$defs/version" } } }
+        ] } } } },
+        { "if": { "properties": { "operation": { "const": "set" } } }, "then": { "properties": { "data": { "type": "object", "additionalProperties": false, "required": ["stored", "version", "updatedAt"], "properties": { "stored": { "const": true }, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } } } } },
+        { "if": { "properties": { "operation": { "const": "delete" } } }, "then": { "properties": { "data": { "type": "object", "additionalProperties": false, "required": ["deleted"], "properties": { "deleted": { "type": "boolean" } } } } } },
+        { "if": { "properties": { "operation": { "const": "increment" } } }, "then": { "properties": { "data": { "type": "object", "additionalProperties": false, "required": ["value", "version", "updatedAt"], "properties": { "value": { "$ref": "#/$defs/safeInteger" }, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } } } } },
+        { "if": { "properties": { "operation": { "const": "set_if_absent" } } }, "then": { "properties": { "data": { "type": "object", "additionalProperties": false, "required": ["stored", "value", "version", "updatedAt"], "properties": { "stored": { "type": "boolean" }, "value": {}, "version": { "$ref": "#/$defs/version" }, "updatedAt": { "type": "string", "format": "date-time" } } } } } }
+      ]
+    }
+  }
+}

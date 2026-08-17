@@ -1,0 +1,11 @@
+{
+  "contract": "woml.approval-http",
+  "version": 1,
+  "status": "accepted",
+  "runId": "run_approval_ok",
+  "approvalId": "editorApproval",
+  "requestId": "aprreq_editor_ok",
+  "decision": "approved",
+  "source": "human",
+  "decidedAt": "2026-08-07T10:05:00.000Z"
+}

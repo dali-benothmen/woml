@@ -1,0 +1,53 @@
+{
+  "v4": {
+    "schemaVersion": 4,
+    "profile": "woml.definition-package/v4",
+    "runtimeReady": false,
+    "rootHash": "sha256:1a2c236906da4e410c555057feb8e1fd3cbf8a4b43d8eda6d028bf8ecd9e817d",
+    "workflow": {
+      "id": "calculate-risk-module",
+      "modelDigest": "sha256:51d1f030881b57718295d6ca6e1406c3cc3a632674004a69d5c371d00ba44f0f",
+      "schemaVersion": 10
+    },
+    "modules": [
+      {
+        "name": "risk",
+        "exports": ["score"],
+        "bundle": "sha256:66ac6716bd142c8498fa6165e421c3bd1094dc166ec709f5cc1b7ef8a76f1757",
+        "sourceMap": "sha256:ae367721dbfd76d29d7a0d8793e129e2ff0b94f3f3f20295e152bca75cc61165"
+      }
+    ],
+    "artifacts": [
+      { "path": "workflow.compiled.v10.json", "kind": "workflow-model", "digest": "sha256:51d1f030881b57718295d6ca6e1406c3cc3a632674004a69d5c371d00ba44f0f" },
+      { "path": "modules/risk.mjs", "kind": "module-bundle", "digest": "sha256:66ac6716bd142c8498fa6165e421c3bd1094dc166ec709f5cc1b7ef8a76f1757" },
+      { "path": "modules/risk.mjs.map", "kind": "source-map", "digest": "sha256:ae367721dbfd76d29d7a0d8793e129e2ff0b94f3f3f20295e152bca75cc61165" },
+      { "path": "types/services.generated.d.ts", "kind": "type-declarations", "digest": "sha256:207272ee9eec11e0551439ff20f168a0ec3df5813609c31187572634f9a90a5c" }
+    ]
+  },
+  "v5": {
+    "schemaVersion": 5,
+    "profile": "woml.definition-package/v5",
+    "runtimeReady": true,
+    "compilationRootHash": "sha256:1a2c236906da4e410c555057feb8e1fd3cbf8a4b43d8eda6d028bf8ecd9e817d",
+    "rootHash": "sha256:389e7ddd9bb65a26b023f7ce698be314a9258cdaaa339e364403a5e5dce06a77",
+    "workflow": {
+      "id": "calculate-risk-module",
+      "modelDigest": "sha256:51d1f030881b57718295d6ca6e1406c3cc3a632674004a69d5c371d00ba44f0f",
+      "schemaVersion": 10
+    },
+    "modules": [
+      {
+        "name": "risk",
+        "exports": ["score"],
+        "bundle": "sha256:66ac6716bd142c8498fa6165e421c3bd1094dc166ec709f5cc1b7ef8a76f1757",
+        "sourceMap": "sha256:ae367721dbfd76d29d7a0d8793e129e2ff0b94f3f3f20295e152bca75cc61165"
+      }
+    ],
+    "artifacts": [
+      { "path": "workflow.compiled.v10.json", "kind": "workflow-model", "digest": "sha256:51d1f030881b57718295d6ca6e1406c3cc3a632674004a69d5c371d00ba44f0f" },
+      { "path": "modules/risk.mjs", "kind": "module-bundle", "digest": "sha256:66ac6716bd142c8498fa6165e421c3bd1094dc166ec709f5cc1b7ef8a76f1757" },
+      { "path": "modules/risk.mjs.map", "kind": "source-map", "digest": "sha256:ae367721dbfd76d29d7a0d8793e129e2ff0b94f3f3f20295e152bca75cc61165" },
+      { "path": "types/services.generated.d.ts", "kind": "type-declarations", "digest": "sha256:207272ee9eec11e0551439ff20f168a0ec3df5813609c31187572634f9a90a5c" }
+    ]
+  }
+}

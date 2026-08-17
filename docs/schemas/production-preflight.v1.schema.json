@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/production-preflight/v1",
+  "title": "WOML Production Preflight v1",
+  "x-status": "production-runtime-pro0-frozen",
+  "type": "object", "additionalProperties": false,
+  "required": ["profile", "status", "configuration", "environment", "secretProvider", "workflows"],
+  "properties": {
+    "profile": { "const": "woml.production-preflight/v1" }, "status": { "const": "passed" },
+    "secretProvider": { "enum": ["os-keychain", "environment"] },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "schemaVersion", "configPath", "deploymentName", "statePath", "public", "admin", "logging", "workers", "shutdownTimeoutMs", "observability", "sources"],
+      "properties": {
+        "profile": { "const": "woml.runtime-configuration/v1" }, "schemaVersion": { "const": 1 }, "configPath": { "$ref": "#/$defs/path" },
+        "deploymentName": { "$ref": "#/$defs/id" }, "statePath": { "$ref": "#/$defs/path" },
+        "public": { "$ref": "#/$defs/listener" }, "admin": { "$ref": "#/$defs/listener" },
+        "logging": { "type": "object", "additionalProperties": false, "required": ["format", "level", "directory"], "properties": { "format": { "enum": ["text", "json"] }, "level": { "enum": ["error", "warn", "info", "debug"] }, "directory": { "$ref": "#/$defs/path" } } },
+        "workers": { "type": "integer", "minimum": 1, "maximum": 256 }, "shutdownTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000 },
+        "observability": { "type": "object", "additionalProperties": false, "required": ["health", "metrics"], "properties": { "health": { "type": "boolean" }, "metrics": { "type": "boolean" } } },
+        "retention": { "$ref": "https://woml.dev/schemas/runtime-configuration/v1#/properties/retention" },
+        "backup": { "type": "object", "additionalProperties": false, "required": ["directory"], "properties": { "directory": { "$ref": "#/$defs/path" } } },
+        "sources": {
+          "type": "object", "additionalProperties": false,
+          "required": ["deploymentName", "statePath", "public.host", "public.port", "admin.host", "admin.port", "logging.format", "logging.level", "logging.directory", "workers", "shutdownTimeoutMs"],
+          "properties": {
+            "deploymentName": { "$ref": "#/$defs/source" }, "statePath": { "$ref": "#/$defs/source" },
+            "public.host": { "$ref": "#/$defs/source" }, "public.port": { "$ref": "#/$defs/source" },
+            "admin.host": { "$ref": "#/$defs/source" }, "admin.port": { "$ref": "#/$defs/source" },
+            "logging.format": { "$ref": "#/$defs/source" }, "logging.level": { "$ref": "#/$defs/source" },
+            "logging.directory": { "$ref": "#/$defs/source" }, "workers": { "$ref": "#/$defs/source" },
+            "shutdownTimeoutMs": { "$ref": "#/$defs/source" }
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false, "required": ["profile", "state", "logging", "ports"],
+      "properties": {
+        "profile": { "const": "woml.runtime-preflight/v1" },
+        "state": { "type": "object", "additionalProperties": false, "required": ["path", "existing", "writableAncestor", "availableBytes"], "properties": { "path": { "$ref": "#/$defs/path" }, "existing": { "type": "boolean" }, "writableAncestor": { "$ref": "#/$defs/path" }, "availableBytes": { "type": "integer", "minimum": 67108864 } } },
+        "logging": { "$ref": "#/$defs/writable-directory" }, "backup": { "$ref": "#/$defs/writable-directory" },
+        "ports": { "type": "object", "additionalProperties": false, "required": ["public", "admin", "distinct"], "properties": { "public": { "type": "string", "minLength": 3, "maxLength": 260 }, "admin": { "type": "string", "minLength": 3, "maxLength": 260 }, "distinct": { "const": true } } }
+      }
+    },
+    "workflows": {
+      "type": "array", "minItems": 1, "maxItems": 10000,
+      "items": { "type": "object", "additionalProperties": false, "required": ["workflowId", "sourcePath", "definitionHash", "triggerCount", "moduleCount", "requiredSecrets"], "properties": { "workflowId": { "$ref": "#/$defs/id" }, "sourcePath": { "$ref": "#/$defs/path" }, "definitionHash": { "$ref": "#/$defs/digest" }, "triggerCount": { "type": "integer", "minimum": 0 }, "moduleCount": { "type": "integer", "minimum": 0 }, "requiredSecrets": { "type": "array", "uniqueItems": true, "maxItems": 1024, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 } } } }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 }, "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, "source": { "enum": ["cli", "environment", "config", "default"] },
+    "listener": { "type": "object", "additionalProperties": false, "required": ["host", "port"], "properties": { "host": { "type": "string", "minLength": 1, "maxLength": 253 }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 } } },
+    "writable-directory": { "type": "object", "additionalProperties": false, "required": ["directory", "writableAncestor"], "properties": { "directory": { "$ref": "#/$defs/path" }, "writableAncestor": { "$ref": "#/$defs/path" } } }
+  }
+}

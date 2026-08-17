@@ -1,0 +1,12 @@
+<woml>
+  <imports>
+    <module name="text" from="./policy-module.ts" />
+  </imports>
+  <workflow id="policy-module-demo">
+    <config concurrency="2" />
+    <triggers><manual id="start" /></triggers>
+    <steps>
+      <step id="normalize"><script>return { value: services.text.normalize(' HELLO ') };</script></step>
+    </steps>
+  </workflow>
+</woml>

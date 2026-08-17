@@ -1,0 +1,72 @@
+<woml>
+  <workflow
+    id="switch-demo"
+    name="Switch routing demo"
+    description="Routes an order to one exact provider and publishes a stable result"
+    version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="loadOrder">
+        <script>
+          return {
+            orderId: "order-42",
+            provider: "slack"
+          };
+        </script>
+      </step>
+
+      <switch id="delivery" value="{{context.steps.loadOrder.provider}}">
+        <case value="slack">
+          <step id="sendSlack">
+            <script>
+              return {
+                orderId: context.steps.loadOrder.orderId,
+                provider: "slack",
+                delivered: true
+              };
+            </script>
+          </step>
+          <result value="{{context.steps.sendSlack}}" />
+        </case>
+
+        <case value="email">
+          <step id="sendEmail">
+            <script>
+              return {
+                orderId: context.steps.loadOrder.orderId,
+                provider: "email",
+                delivered: true
+              };
+            </script>
+          </step>
+          <result value="{{context.steps.sendEmail}}" />
+        </case>
+
+        <default>
+          <step id="unsupportedProvider">
+            <script>
+              return {
+                orderId: context.steps.loadOrder.orderId,
+                provider: context.steps.loadOrder.provider,
+                delivered: false
+              };
+            </script>
+          </step>
+          <result value="{{context.steps.unsupportedProvider}}" />
+        </default>
+      </switch>
+
+      <step id="summary">
+        <script>
+          return {
+            message: `Order ${context.steps.delivery.orderId} delivered with ${context.steps.delivery.provider}`,
+            delivered: context.steps.delivery.delivered
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

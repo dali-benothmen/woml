@@ -1,0 +1,11 @@
+{
+  "contract": "woml.workflow-call",
+  "contractVersion": 1,
+  "kind": "failed",
+  "workflowId": "calculate-risk",
+  "childRunId": "run_child_risk_001",
+  "code": "WOML_WORKFLOW_CALL_FAILED",
+  "message": "The called workflow failed.",
+  "retryable": false,
+  "ambiguous": false
+}

@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a user problem or product improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow-automation problem is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired author experience
+      description: Show the WOML or CLI experience you would expect, if useful.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround
+      description: How are you solving the problem now?
+  - type: textarea
+    id: reliability
+    attributes:
+      label: Durability and automation considerations
+      description: Note expected retry, recovery, idempotency, security, or observability behavior.

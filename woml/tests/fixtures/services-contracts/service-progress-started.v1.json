@@ -1,0 +1,5 @@
+{
+  "contract": "woml.service-progress", "contractVersion": 1, "status": "started", "runId": "run-services-a", "nodeId": "loadCustomer",
+  "invocationId": "invocation-a", "callId": "call-http-a", "capability": "http", "operation": "request", "executionMode": "managed",
+  "occurredAt": "2026-08-09T08:00:00.000Z", "metadata": { "method": "GET", "origin": "https://api.example.test" }
+}

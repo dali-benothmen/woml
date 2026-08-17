@@ -1,0 +1,5 @@
+{
+  "protocol": "woml.slack-trigger",
+  "protocolVersion": 1,
+  "messageType": "ready"
+}

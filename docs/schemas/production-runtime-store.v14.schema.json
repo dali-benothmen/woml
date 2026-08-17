@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/production-runtime-store/v14",
+  "title": "WOML Production Runtime Store v14 Logical Records",
+  "x-status": "production-runtime-pro0-frozen",
+  "x-authoritative": false,
+  "description": "Leases and maintenance metadata are coordination state; definitions and immutable run events remain workflow truth.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "runtimeOwner", "maintenance", "lastBackup"],
+  "properties": {
+    "schemaVersion": { "const": 14 },
+    "runtimeOwner": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["deploymentId", "activationId", "runtimeInstanceId", "heartbeatAt", "leaseExpiresAt"],
+      "properties": {
+        "deploymentId": { "$ref": "#/$defs/id" }, "activationId": { "$ref": "#/$defs/digest" }, "runtimeInstanceId": { "$ref": "#/$defs/id" },
+        "heartbeatAt": { "type": "string", "format": "date-time" }, "leaseExpiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "maintenance": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["leaseId", "operation", "ownerId", "expiresAt"],
+      "properties": {
+        "leaseId": { "$ref": "#/$defs/id" }, "operation": { "enum": ["backup", "restore", "retention", "checkpoint", "vacuum"] },
+        "ownerId": { "$ref": "#/$defs/id" }, "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "lastBackup": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["backupId", "completedAt", "verified"],
+      "properties": { "backupId": { "$ref": "#/$defs/id" }, "completedAt": { "type": "string", "format": "date-time" }, "verified": { "const": true } }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

@@ -1,0 +1,16 @@
+<woml>
+  <imports>
+    <module name="risk" from="./risk-helper.ts" />
+  </imports>
+  <workflow id="calculate-risk-module" name="Calculate risk with a module" version="1.0.0">
+    <steps>
+      <step id="calculate">
+        <script>
+          return {
+            score: services.risk.score(context.payload.customerId)
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

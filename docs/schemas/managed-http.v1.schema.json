@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/managed-http/v1",
+  "title": "WOML Managed HTTP v1",
+  "description": "Input and result contract for services.http.request executed by Rust.",
+  "x-status": "managed-http-v1-sc9-storage-activated",
+  "x-defaults": { "method": "GET", "responseType": "json", "timeoutMs": 30000, "acceptedStatus": { "minimum": 200, "maximum": 299 }, "redirect": "follow", "maximumRedirects": 10 },
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "headers": {
+      "type": "object", "maxProperties": 128,
+      "propertyNames": { "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", "maxLength": 128 },
+      "additionalProperties": { "type": "string", "maxLength": 16384 }
+    },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "method", "url", "headers", "responseType", "timeoutMs", "acceptedStatus", "redirect", "maximumRedirects"],
+      "properties": {
+        "contract": { "const": "woml.managed-http" }, "contractVersion": { "const": 1 }, "kind": { "const": "request" },
+        "method": { "type": "string", "pattern": "^[A-Z]+$", "maxLength": 32 }, "url": { "type": "string", "format": "uri", "pattern": "^https?://", "maxLength": 8192 },
+        "headers": { "$ref": "#/$defs/headers" }, "query": { "type": "object", "maxProperties": 128, "additionalProperties": { "type": ["string", "number", "boolean", "null", "array"], "items": { "type": ["string", "number", "boolean", "null"] } } },
+        "json": {}, "text": { "type": "string" }, "bytesBase64": { "type": "string", "contentEncoding": "base64" },
+        "responseType": { "enum": ["json", "text", "bytes", "storage"] }, "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "acceptedStatus": { "type": "object", "additionalProperties": false, "required": ["minimum", "maximum"], "properties": { "minimum": { "type": "integer", "minimum": 100, "maximum": 599 }, "maximum": { "type": "integer", "minimum": 100, "maximum": 599 } } },
+        "redirect": { "enum": ["follow", "manual", "error"] }, "maximumRedirects": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "idempotency": { "type": "object", "additionalProperties": false, "required": ["header", "value"], "properties": { "header": { "type": "string", "minLength": 1, "maxLength": 128 }, "value": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+        "storage": { "type": "object", "additionalProperties": false, "required": ["key"], "properties": { "key": { "type": "string", "minLength": 1, "maxLength": 512 }, "contentType": { "type": "string", "minLength": 1, "maxLength": 256 }, "overwrite": { "type": "boolean" }, "ifVersion": { "type": "string", "pattern": "^v1:[0-9a-f]{64}$" } }, "not": { "required": ["overwrite", "ifVersion"] } }
+      },
+      "allOf": [
+        { "not": { "required": ["json", "text"] } },
+        { "not": { "required": ["json", "bytesBase64"] } },
+        { "not": { "required": ["text", "bytesBase64"] } },
+        { "if": { "properties": { "responseType": { "const": "storage" } }, "required": ["responseType"] }, "then": { "required": ["storage"] }, "else": { "not": { "required": ["storage"] } } }
+      ]
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "status", "ok", "headers", "data", "url", "redirected"],
+      "properties": {
+        "contract": { "const": "woml.managed-http" }, "contractVersion": { "const": 1 }, "kind": { "const": "result" },
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 }, "ok": { "type": "boolean" }, "headers": { "$ref": "#/$defs/headers" },
+        "data": {}, "url": { "type": "string", "format": "uri", "pattern": "^https?://", "maxLength": 8192 }, "redirected": { "type": "boolean" }
+      }
+    }
+  }
+}

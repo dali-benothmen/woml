@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/approval-http/v1",
+  "title": "WOML Approval HTTP Contract v1",
+  "description": "JSON request and response bodies for the HTTP-only Human Approval decision interface.",
+  "x-status": "approval-http-v1-frozen",
+  "oneOf": [
+    { "$ref": "#/$defs/decisionRequest" },
+    { "$ref": "#/$defs/decisionSuccess" },
+    { "$ref": "#/$defs/errorResponse" }
+  ],
+  "$defs": {
+    "publicStructuralId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^aprreq_[A-Za-z0-9_-]+$",
+      "minLength": 10,
+      "maxLength": 256
+    },
+    "decisionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision"],
+      "properties": {
+        "decision": { "enum": ["approved", "rejected"] }
+      }
+    },
+    "decisionSuccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "status", "runId", "approvalId", "requestId", "decision", "source", "decidedAt"],
+      "properties": {
+        "contract": { "const": "woml.approval-http" },
+        "version": { "const": 1 },
+        "status": { "enum": ["accepted", "already_resolved"] },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "approvalId": { "$ref": "#/$defs/publicStructuralId" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "decision": { "enum": ["approved", "rejected"] },
+        "source": { "const": "human" },
+        "decidedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "error"],
+      "properties": {
+        "contract": { "const": "woml.approval-http" },
+        "version": { "const": 1 },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "WOML_APPROVAL_REQUEST_INVALID",
+                "WOML_APPROVAL_TOKEN_INVALID",
+                "WOML_APPROVAL_TOKEN_EXPIRED",
+                "WOML_APPROVAL_EXPIRED",
+                "WOML_APPROVAL_DECISION_CONFLICT",
+                "WOML_APPROVAL_INTERNAL"
+              ]
+            },
+            "message": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

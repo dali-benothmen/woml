@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 8,
+  "workflowId": "services-bindings-contract",
+  "metadata": { "name": "Services bindings contract", "version": "1.0.0" },
+  "triggers": [
+    { "id": "start", "handler": "trigger.manual", "config": { "kind": "object", "fields": {} } }
+  ],
+  "graph": {
+    "entryNodeIds": ["loadCustomer"],
+    "nodes": [
+      {
+        "id": "loadCustomer",
+        "handler": "runtime.script",
+        "metadata": { "name": "Load customer" },
+        "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n        const response = await services.http.request({\n          method: \"GET\",\n          url: \"https://api.example.test/customers/42\",\n          headers: {\n            authorization: `Bearer ${secrets.CUSTOMER_API_TOKEN}`\n          }\n        });\n        return response.data;\n      " } } },
+        "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": ["CUSTOMER_API_TOKEN"] }
+      },
+      {
+        "id": "enrichCustomer",
+        "handler": "runtime.script",
+        "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n        const response = await fetch(\"https://api.example.test/enrichment/42\");\n        return {\n          customer: context.steps.loadCustomer,\n          enrichment: await response.json()\n        };\n      " } } },
+        "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] }
+      },
+      {
+        "id": "finish",
+        "handler": "runtime.script",
+        "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n        return { message: `Hello ${context.steps.enrichCustomer.customer.name}` };\n      " } } },
+        "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] }
+      }
+    ],
+    "edges": [
+      { "id": "loadCustomer-to-enrichCustomer", "from": "loadCustomer", "to": "enrichCustomer", "condition": { "kind": "always" } },
+      { "id": "enrichCustomer-to-finish", "from": "enrichCustomer", "to": "finish", "condition": { "kind": "always" } }
+    ]
+  }
+}

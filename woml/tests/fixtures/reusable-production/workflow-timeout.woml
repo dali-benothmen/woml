@@ -1,0 +1,14 @@
+<woml>
+  <imports>
+    <module name="wait-value" from="./wait-value.woml" />
+  </imports>
+  <workflow id="reusable-workflow-timeout" name="Reusable workflow timeout" version="1.0.0">
+    <config timeout="100ms" />
+    <triggers>
+      <manual id="start" />
+    </triggers>
+    <steps>
+      <wait-value id="slowOperation" delay-ms="5000" />
+    </steps>
+  </workflow>
+</woml>

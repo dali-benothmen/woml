@@ -1,0 +1,24 @@
+<woml>
+  <workflow
+    id="runtime-policy-concurrency-demo"
+    name="Runtime Policy Concurrency Demo"
+    description="Runs with a durable two-run concurrency limit and FIFO queue"
+    version="1.0.0"
+  >
+    <config concurrency="2" queue="examples" />
+
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="greet">
+        <script>
+          return {
+            message: `Hello ${context.payload.name ?? 'World'}`
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

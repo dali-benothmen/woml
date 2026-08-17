@@ -1,0 +1,16 @@
+{
+  "protocol": "woml.script-host",
+  "protocolVersion": 2,
+  "messageType": "execute",
+  "invocationId": "inv_load_weather_01",
+  "runId": "run_parallel_01",
+  "nodeId": "loadWeather",
+  "attempt": 1,
+  "handler": "runtime.script",
+  "timeoutMs": 5000,
+  "source": "return { temperature: 22 };",
+  "context": {
+    "trigger": {},
+    "steps": { "loadField": { "fieldId": "field-42" } }
+  }
+}

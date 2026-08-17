@@ -1,0 +1,63 @@
+[
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "ready", "hostInstanceId": "host-services-1"
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "execute", "invocationId": "invocation-a", "runId": "run-services-a", "nodeId": "loadCustomer",
+    "attempt": { "number": 1, "maxAttempts": 1, "idempotencyKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    "handler": "runtime.script", "timeoutMs": 30000,
+    "source": "const greeting = \"Héllo 🌍\\r\\nsecond line\";\nreturn { greeting };",
+    "context": { "trigger": { "note": "Héllo 🌍\r\nsecond line" }, "steps": {} },
+    "bindings": { "bindingVersion": 1, "servicesVersion": 1, "secrets": {} }
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "capability_call", "invocationId": "invocation-a", "callId": "call-http-a",
+    "call": {
+      "contract": "woml.capability-call", "contractVersion": 1, "messageType": "request", "invocationId": "invocation-a", "callId": "call-http-a", "runId": "run-services-a", "nodeId": "loadCustomer", "attemptNumber": 1,
+      "capability": "http", "operation": "request", "inputContractVersion": 1, "resultContractVersion": 1,
+      "identity": { "mode": "automatic", "stepIdempotencyKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "operationName": "http.request", "operationKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+      "limits": { "inputBytes": 1048576, "resultBytes": 4194304, "timeoutMs": 30000 },
+      "input": { "contract": "woml.managed-http", "contractVersion": 1, "kind": "request", "method": "GET", "url": "https://api.example.test/customers/42", "headers": {}, "responseType": "json", "timeoutMs": 30000, "acceptedStatus": { "minimum": 200, "maximum": 299 }, "redirect": "follow", "maximumRedirects": 10 }
+    }
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "capability_call", "invocationId": "invocation-a", "callId": "call-http-b",
+    "call": {
+      "contract": "woml.capability-call", "contractVersion": 1, "messageType": "request", "invocationId": "invocation-a", "callId": "call-http-b", "runId": "run-services-a", "nodeId": "loadCustomer", "attemptNumber": 1,
+      "capability": "http", "operation": "request", "inputContractVersion": 1, "resultContractVersion": 1,
+      "identity": { "mode": "automatic", "stepIdempotencyKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "operationName": "http.request.second-read", "operationKey": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" },
+      "limits": { "inputBytes": 1048576, "resultBytes": 4194304, "timeoutMs": 30000 },
+      "input": { "contract": "woml.managed-http", "contractVersion": 1, "kind": "request", "method": "GET", "url": "https://api.example.test/orders", "headers": {}, "responseType": "json", "timeoutMs": 30000, "acceptedStatus": { "minimum": 200, "maximum": 299 }, "redirect": "follow", "maximumRedirects": 10 }
+    }
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "capability_result", "invocationId": "invocation-a", "callId": "call-http-b",
+    "result": { "contract": "woml.capability-call", "contractVersion": 1, "messageType": "result", "invocationId": "invocation-a", "callId": "call-http-b", "outcome": "succeeded", "resultContractVersion": 1, "resultBytes": 18, "durationMs": 8.5, "result": { "orders": [] } }
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "capability_result", "invocationId": "invocation-a", "callId": "call-http-a",
+    "result": { "contract": "woml.capability-call", "contractVersion": 1, "messageType": "result", "invocationId": "invocation-a", "callId": "call-http-a", "outcome": "succeeded", "resultContractVersion": 1, "resultBytes": 22, "durationMs": 10.1, "result": { "name": "Dali" } }
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "fetch_observation", "invocationId": "invocation-a", "requestId": "fetch-a",
+    "observation": { "contract": "woml.native-fetch-observation", "contractVersion": 1, "observationType": "started", "invocationId": "invocation-a", "requestId": "fetch-a", "method": "GET", "origin": "https://api.example.test", "path": "/health", "startedAt": "2026-08-09T08:00:00.000Z" }
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "fetch_observation_ack", "invocationId": "invocation-a", "requestId": "fetch-a", "accepted": true
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "completed", "invocationId": "invocation-a", "outcome": { "kind": "success", "value": { "message": "Héllo 🌍" } }, "durationMs": 21.4
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "completed", "invocationId": "invocation-service-failed",
+    "outcome": { "kind": "failure", "error": {
+      "kind": "service_failed", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.",
+      "capability": "http", "operation": "request", "callId": "call-http-timeout", "retryable": true, "ambiguous": false,
+      "cause": { "kind": "timed_out", "code": "WOML_HTTP_TIMED_OUT", "message": "The managed HTTP request exceeded its deadline.", "retryable": true, "ambiguous": false }
+    } },
+    "durationMs": 30001
+  },
+  {
+    "protocol": "woml.script-host", "protocolVersion": 4, "messageType": "cancel", "invocationId": "invocation-b", "reason": "run_cancelled"
+  }
+]

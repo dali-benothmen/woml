@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/storage/v1",
+  "title": "WOML Storage v1",
+  "description": "Request, result, and portable object-reference contract for services.storage.",
+  "x-status": "storage-contract-frozen-sc9",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/result" },
+    { "$ref": "#/$defs/objectReference" }
+  ],
+  "$defs": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "contentType": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v1:[0-9a-f]{64}$"
+    },
+    "checksum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "objectReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "key", "version", "checksum", "size", "contentType"],
+      "properties": {
+        "contract": { "const": "woml.storage-object" },
+        "contractVersion": { "const": 1 },
+        "key": { "$ref": "#/$defs/key" },
+        "version": { "$ref": "#/$defs/version" },
+        "checksum": { "$ref": "#/$defs/checksum" },
+        "size": { "type": "integer", "minimum": 0, "maximum": 67108864 },
+        "contentType": { "$ref": "#/$defs/contentType" }
+      }
+    },
+    "putInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "value": {},
+        "text": { "type": "string" },
+        "bytesBase64": { "type": "string", "contentEncoding": "base64" },
+        "contentType": { "$ref": "#/$defs/contentType" },
+        "overwrite": { "type": "boolean" },
+        "ifVersion": { "$ref": "#/$defs/version" }
+      },
+      "oneOf": [
+        { "required": ["value"] },
+        { "required": ["text"] },
+        { "required": ["bytesBase64"] }
+      ],
+      "not": { "required": ["overwrite", "ifVersion"] }
+    },
+    "getInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "responseType"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "responseType": { "enum": ["json", "text", "bytes"] },
+        "ifVersion": { "$ref": "#/$defs/version" }
+      }
+    },
+    "headInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "properties": { "key": { "$ref": "#/$defs/key" } }
+    },
+    "listInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prefix": { "type": "string", "maxLength": 512 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "cursor": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "deleteInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "ifVersion": { "$ref": "#/$defs/version" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "operation", "input"],
+      "properties": {
+        "contract": { "const": "woml.storage" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "request" },
+        "operation": { "enum": ["put", "get", "head", "list", "delete"] },
+        "input": {}
+      },
+      "allOf": [
+        { "if": { "properties": { "operation": { "const": "put" } } }, "then": { "properties": { "input": { "$ref": "#/$defs/putInput" } } } },
+        { "if": { "properties": { "operation": { "const": "get" } } }, "then": { "properties": { "input": { "$ref": "#/$defs/getInput" } } } },
+        { "if": { "properties": { "operation": { "const": "head" } } }, "then": { "properties": { "input": { "$ref": "#/$defs/headInput" } } } },
+        { "if": { "properties": { "operation": { "const": "list" } } }, "then": { "properties": { "input": { "$ref": "#/$defs/listInput" } } } },
+        { "if": { "properties": { "operation": { "const": "delete" } } }, "then": { "properties": { "input": { "$ref": "#/$defs/deleteInput" } } } }
+      ]
+    },
+    "getData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object", "data"],
+      "properties": {
+        "object": { "$ref": "#/$defs/objectReference" },
+        "data": {}
+      }
+    },
+    "listData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objects", "nextCursor"],
+      "properties": {
+        "objects": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/objectReference" } },
+        "nextCursor": { "type": ["string", "null"], "maxLength": 1024 }
+      }
+    },
+    "deleteData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deleted", "object"],
+      "properties": {
+        "deleted": { "type": "boolean" },
+        "object": { "oneOf": [{ "$ref": "#/$defs/objectReference" }, { "type": "null" }] }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractVersion", "kind", "operation", "data"],
+      "properties": {
+        "contract": { "const": "woml.storage" },
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "result" },
+        "operation": { "enum": ["put", "get", "head", "list", "delete"] },
+        "data": {}
+      },
+      "allOf": [
+        { "if": { "properties": { "operation": { "const": "put" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/objectReference" } } } },
+        { "if": { "properties": { "operation": { "const": "get" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/getData" } } } },
+        { "if": { "properties": { "operation": { "const": "head" } } }, "then": { "properties": { "data": { "oneOf": [{ "$ref": "#/$defs/objectReference" }, { "type": "null" }] } } } },
+        { "if": { "properties": { "operation": { "const": "list" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/listData" } } } },
+        { "if": { "properties": { "operation": { "const": "delete" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/deleteData" } } } }
+      ]
+    }
+  }
+}

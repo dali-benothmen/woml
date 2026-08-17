@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cronflow.dev/schemas/run-event/v5",
+  "title": "WOML Run Event v5",
+  "description": "Append-only workflow events adding durable approval-notification delivery, decision audit, and message-update work.",
+  "x-status": "notification-profile-frozen",
+  "x-previousVersion": "https://cronflow.dev/schemas/run-event/v4",
+  "x-currentEventTypes": [
+    "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed",
+    "branch_selected", "parallel_group_started", "parallel_group_completed",
+    "approval_requested", "notification_delivery_requested",
+    "notification_delivery_attempt_started", "notification_delivery_succeeded",
+    "notification_delivery_failed", "notification_decision_accepted",
+    "notification_message_update_requested", "notification_message_update_attempt_started",
+    "notification_message_updated", "notification_message_update_failed",
+    "approval_resolved", "run_succeeded", "run_failed"
+  ],
+  "x-invariants": [
+    "approval_requested and notification_delivery_requested are durable before a provider send begins.",
+    "A delivery ID identifies one logical provider message across all attempts.",
+    "notification_decision_accepted and approval_resolved commit atomically for the winning provider decision.",
+    "Message update failures never reverse approval_resolved.",
+    "Resolved provider secrets, decision capabilities, tokens, URLs, and provider payloads never appear in events."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventSchemaVersion", "eventId", "runId", "sequence", "occurredAt", "type", "data"],
+  "properties": {
+    "eventSchemaVersion": { "const": 5 },
+    "eventId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "runId": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/nonEmptyId" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_started", "step_attempt_started", "step_attempt_succeeded", "step_attempt_failed",
+        "branch_selected", "parallel_group_started", "parallel_group_completed",
+        "approval_requested", "notification_delivery_requested",
+        "notification_delivery_attempt_started", "notification_delivery_succeeded",
+        "notification_delivery_failed", "notification_decision_accepted",
+        "notification_message_update_requested", "notification_message_update_attempt_started",
+        "notification_message_updated", "notification_message_update_failed",
+        "approval_resolved", "run_succeeded", "run_failed"
+      ]
+    },
+    "data": {}
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "run_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/stepAttemptSucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "step_attempt_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/stepAttemptFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "branch_selected" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v2#/$defs/branchSelectedData" } } } },
+    { "if": { "properties": { "type": { "const": "parallel_group_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "parallel_group_completed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v3#/$defs/parallelGroupCompletedData" } } } },
+    { "if": { "properties": { "type": { "const": "approval_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v4#/$defs/approvalRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/deliveryRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/deliveryAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/deliverySucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_delivery_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/deliveryFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_decision_accepted" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/notificationDecisionAcceptedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_requested" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/messageUpdateRequestedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_attempt_started" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/messageUpdateAttemptStartedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_updated" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/messageUpdatedData" } } } },
+    { "if": { "properties": { "type": { "const": "notification_message_update_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/messageUpdateFailedData" } } } },
+    { "if": { "properties": { "type": { "const": "approval_resolved" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v4#/$defs/approvalResolvedData" } } } },
+    { "if": { "properties": { "type": { "const": "run_succeeded" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "https://cronflow.dev/schemas/run-event/v1#/$defs/runSucceededData" } } } },
+    { "if": { "properties": { "type": { "const": "run_failed" } }, "required": ["type"] }, "then": { "properties": { "data": { "$ref": "#/$defs/runFailedData" } } } }
+  ],
+  "$defs": {
+    "structuralId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "maxLength": 256 },
+    "requestId": { "type": "string", "pattern": "^aprreq_[A-Za-z0-9_-]+$", "minLength": 10, "maxLength": 256 },
+    "deliveryId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*:notify:(0|[1-9][0-9]*):channel:(0|[1-9][0-9]*)$", "maxLength": 320 },
+    "attemptId": { "type": "string", "pattern": "^nattempt_[A-Za-z0-9_-]+$", "minLength": 12, "maxLength": 256 },
+    "updateId": { "type": "string", "pattern": "^nupdate_[A-Za-z0-9_-]+$", "minLength": 11, "maxLength": 256 },
+    "commonDeliveryIdentity": {
+      "type": "object",
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }
+      }
+    },
+    "deliveryRequestedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "provider", "destination"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "provider": { "const": "slack" },
+        "destination": { "type": "string", "pattern": "^(#[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{8,31})$" }
+      }
+    },
+    "deliveryAttemptStartedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "attempt", "attemptId", "idempotencyKey"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "attemptId": { "$ref": "#/$defs/attemptId" }, "idempotencyKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "providerMessage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workspaceId", "channelId", "messageId"],
+      "properties": {
+        "workspaceId": { "type": "string", "pattern": "^T[A-Z0-9]{8,31}$" },
+        "channelId": { "type": "string", "pattern": "^[CGD][A-Z0-9]{8,31}$" },
+        "messageId": { "type": "string", "pattern": "^[0-9]{10,}\\.[0-9]{6}$" }
+      }
+    },
+    "deliverySucceededData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "attempt", "attemptId", "providerMessage"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "attemptId": { "$ref": "#/$defs/attemptId" }, "providerMessage": { "$ref": "#/$defs/providerMessage" }
+      }
+    },
+    "safeFailure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "code", "message", "retryable"],
+      "properties": {
+        "kind": { "enum": ["secret_not_found", "provider_auth_failed", "destination_invalid", "rate_limited", "provider_unavailable", "delivery_ambiguous", "host_crashed", "size_limit_exceeded", "update_failed"] },
+        "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "retryable": { "type": "boolean" },
+        "retryAfterMs": { "type": "integer", "minimum": 0, "maximum": 86400000 }
+      }
+    },
+    "deliveryFailedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "attempt", "attemptId", "final", "failure"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "attemptId": { "$ref": "#/$defs/attemptId" }, "final": { "type": "boolean" }, "failure": { "$ref": "#/$defs/safeFailure" }
+      }
+    },
+    "notificationDecisionAcceptedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "provider", "providerActorId", "decision"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "provider": { "const": "slack" },
+        "providerActorId": { "type": "string", "pattern": "^U[A-Z0-9]{8,31}$" },
+        "decision": { "enum": ["approved", "rejected"] }
+      }
+    },
+    "messageUpdateRequestedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "updateId", "resolution"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "updateId": { "$ref": "#/$defs/updateId" },
+        "resolution": { "enum": ["approved", "rejected", "timeout_failed"] }
+      }
+    },
+    "messageUpdateAttemptStartedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "updateId", "attempt", "attemptId"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "updateId": { "$ref": "#/$defs/updateId" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 3 }, "attemptId": { "$ref": "#/$defs/attemptId" }
+      }
+    },
+    "messageUpdatedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "updateId", "attempt", "attemptId"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "updateId": { "$ref": "#/$defs/updateId" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 3 }, "attemptId": { "$ref": "#/$defs/attemptId" }
+      }
+    },
+    "messageUpdateFailedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requestId", "deliveryId", "updateId", "attempt", "attemptId", "final", "failure"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "deliveryId": { "$ref": "#/$defs/deliveryId" }, "updateId": { "$ref": "#/$defs/updateId" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 3 }, "attemptId": { "$ref": "#/$defs/attemptId" },
+        "final": { "type": "boolean" }, "failure": { "$ref": "#/$defs/safeFailure" }
+      }
+    },
+    "runFailedData": {
+      "oneOf": [
+        { "$ref": "https://cronflow.dev/schemas/run-event/v4#/$defs/runFailedData" },
+        { "$ref": "#/$defs/notificationRunFailedData" }
+      ]
+    },
+    "notificationRunFailedData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["failureScope", "approvalId", "requestId", "failedDeliveryIds", "failure"],
+      "properties": {
+        "failureScope": { "const": "notification" },
+        "approvalId": { "$ref": "#/$defs/structuralId" }, "requestId": { "$ref": "#/$defs/requestId" },
+        "failedDeliveryIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/deliveryId" } },
+        "failure": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "code", "message"],
+          "properties": {
+            "kind": { "const": "all_deliveries_failed" }, "code": { "const": "WOML_NOTIFICATION_DELIVERY_FAILED" },
+            "message": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          }
+        }
+      }
+    }
+  }
+}

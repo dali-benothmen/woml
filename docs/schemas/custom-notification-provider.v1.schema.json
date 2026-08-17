@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/custom-notification-provider/v1",
+  "title": "WOML Custom Notification Provider Protocol v1",
+  "description": "Asynchronous multiplexed Rust/Bun protocol for a user-authored notification provider.",
+  "x-status": "switch-custom-definitions-scp0-frozen",
+  "x-framing": "Content-Length counts UTF-8 bytes; multiple execute requests may be in flight and responses may complete out of order by invocationId.",
+  "x-sizeLimits": "Mechanism frozen; request and result byte limits remain configurable TBD values.",
+  "x-sensitiveFields": ["props", "notification.message", "notification.actions"],
+  "x-forbiddenPersistentFields": ["props", "notification", "approvalUrl", "rejectUrl", "secretValue", "responseBody"],
+  "oneOf": [
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/execute" },
+    { "$ref": "#/$defs/cancel" },
+    { "$ref": "#/$defs/completed" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 320 },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "baseProperties": {
+      "protocol": { "const": "woml.custom-notification-provider" },
+      "protocolVersion": { "const": 1 }
+    },
+    "ready": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "hostInstanceId"],
+      "properties": {
+        "protocol": { "const": "woml.custom-notification-provider" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "ready" }, "hostInstanceId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "action": {
+      "type": "object", "additionalProperties": false, "required": ["url"],
+      "properties": { "url": { "type": "string", "format": "uri", "maxLength": 2048 } }
+    },
+    "notification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "message", "deliveryId", "idempotencyKey"],
+      "properties": {
+        "kind": { "enum": ["approval", "informational"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "deliveryId": { "$ref": "#/$defs/id" },
+        "idempotencyKey": { "$ref": "#/$defs/sha256" },
+        "actions": {
+          "type": "object", "additionalProperties": false, "required": ["approve", "reject"],
+          "properties": { "approve": { "$ref": "#/$defs/action" }, "reject": { "$ref": "#/$defs/action" } }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "approval" } } }, "then": { "required": ["actions"] } },
+        { "if": { "properties": { "kind": { "const": "informational" } } }, "then": { "not": { "required": ["actions"] } } }
+      ]
+    },
+    "execute": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "definitionDigest", "scriptArtifactId", "props", "notification", "attempt", "limits"],
+      "properties": {
+        "protocol": { "const": "woml.custom-notification-provider" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "execute" }, "invocationId": { "$ref": "#/$defs/id" },
+        "definitionDigest": { "$ref": "#/$defs/sha256" }, "scriptArtifactId": { "$ref": "#/$defs/id" },
+        "props": { "type": "object", "maxProperties": 128, "additionalProperties": true },
+        "notification": { "$ref": "#/$defs/notification" },
+        "attempt": { "type": "object", "additionalProperties": false, "required": ["number", "max"], "properties": { "number": { "type": "integer", "minimum": 1 }, "max": { "type": "integer", "minimum": 1 } } },
+        "limits": { "type": "object", "additionalProperties": false, "required": ["timeoutMs", "maxResultBytes"], "properties": { "timeoutMs": { "type": "integer", "minimum": 1 }, "maxResultBytes": { "type": "integer", "minimum": 1 } } }
+      }
+    },
+    "cancel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId"],
+      "properties": {
+        "protocol": { "const": "woml.custom-notification-provider" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "cancel" }, "invocationId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "receipt": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "messageId": { "type": "string", "minLength": 1, "maxLength": 512 } }
+    },
+    "failure": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "code", "message", "retryable"],
+      "properties": {
+        "kind": { "enum": ["script_threw", "timed_out", "cancelled", "non_json", "worker_crashed", "host_crashed", "context_too_large", "result_too_large", "delivery_ambiguous", "service_failed", "request_invalid"] },
+        "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1024 }, "retryable": { "type": "boolean" }
+      }
+    },
+    "completed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "protocolVersion", "messageType", "invocationId", "durationMs", "outcome"],
+      "properties": {
+        "protocol": { "const": "woml.custom-notification-provider" }, "protocolVersion": { "const": 1 },
+        "messageType": { "const": "completed" }, "invocationId": { "$ref": "#/$defs/id" },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "outcome": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["kind", "receipt"], "properties": { "kind": { "const": "succeeded" }, "receipt": { "$ref": "#/$defs/receipt" } } },
+            { "type": "object", "additionalProperties": false, "required": ["kind", "error"], "properties": { "kind": { "const": "failed" }, "error": { "$ref": "#/$defs/failure" } } }
+          ]
+        }
+      }
+    }
+  }
+}

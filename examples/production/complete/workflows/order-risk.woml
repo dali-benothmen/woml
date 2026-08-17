@@ -1,0 +1,20 @@
+<woml>
+  <imports>
+    <module name="orderTools" from="../modules/order-tools.ts" />
+  </imports>
+  <workflow id="production-order-risk" name="Order risk" version="1.0.0">
+    <config concurrency="8" timeout="30s" queue="risk" />
+    <steps>
+      <step id="score" name="Calculate risk">
+        <script>
+          return {
+            score: services.orderTools.riskScore(
+              context.payload.amount,
+              context.payload.priorOrders
+            )
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

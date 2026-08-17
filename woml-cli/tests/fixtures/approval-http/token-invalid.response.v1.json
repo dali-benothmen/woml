@@ -1,0 +1,8 @@
+{
+  "contract": "woml.approval-http",
+  "version": 1,
+  "error": {
+    "code": "WOML_APPROVAL_TOKEN_INVALID",
+    "message": "The approval capability is invalid."
+  }
+}

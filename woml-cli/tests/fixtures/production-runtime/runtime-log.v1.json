@@ -1,0 +1,9 @@
+{
+  "profile": "woml.runtime-log-record/v1",
+  "timestamp": "2026-08-12T09:00:02.000Z",
+  "level": "info",
+  "code": "WOML_RUNTIME_READY",
+  "message": "Runtime is ready.",
+  "runtimeInstanceId": "runtime_observability",
+  "deploymentId": "deployment_observability"
+}

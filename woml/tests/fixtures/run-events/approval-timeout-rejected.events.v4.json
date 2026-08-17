@@ -1,0 +1,52 @@
+[
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_001", "runId": "run_approval_timeout_no", "sequence": 1,
+    "occurredAt": "2026-08-07T12:00:00.000Z", "type": "run_started",
+    "data": { "workflowId": "publish-article", "definitionHash": "sha256:c85377270773c4abb178ba2811109843be53df66c91fedea04bb37d586901aa9", "trigger": {} }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_002", "runId": "run_approval_timeout_no", "sequence": 2,
+    "occurredAt": "2026-08-07T12:00:00.001Z", "type": "step_attempt_started",
+    "data": { "nodeId": "prepareArticle", "attempt": 1, "invocationId": "inv_prepare_timeout_no", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_003", "runId": "run_approval_timeout_no", "sequence": 3,
+    "occurredAt": "2026-08-07T12:00:00.002Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "prepareArticle", "attempt": 1, "invocationId": "inv_prepare_timeout_no", "output": { "title": "WOML reaches human review", "ready": true } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_004", "runId": "run_approval_timeout_no", "sequence": 4,
+    "occurredAt": "2026-08-07T12:00:00.003Z", "type": "approval_requested",
+    "data": { "approvalId": "editorApproval", "requestId": "aprreq_editor_timeout_no", "expiresAt": "2026-08-08T12:00:00.003Z", "onTimeout": "reject" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_005", "runId": "run_approval_timeout_no", "sequence": 5,
+    "occurredAt": "2026-08-08T12:00:00.003Z", "type": "approval_resolved",
+    "data": { "approvalId": "editorApproval", "requestId": "aprreq_editor_timeout_no", "resolution": { "kind": "decision", "decision": "rejected", "source": "timeout" } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_006", "runId": "run_approval_timeout_no", "sequence": 6,
+    "occurredAt": "2026-08-08T12:00:00.004Z", "type": "step_attempt_started",
+    "data": { "nodeId": "recordRejection", "attempt": 1, "invocationId": "inv_reject_timeout_no", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_007", "runId": "run_approval_timeout_no", "sequence": 7,
+    "occurredAt": "2026-08-08T12:00:00.005Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "recordRejection", "attempt": 1, "invocationId": "inv_reject_timeout_no", "output": { "published": false, "reason": "Human review rejected publication" } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_008", "runId": "run_approval_timeout_no", "sequence": 8,
+    "occurredAt": "2026-08-08T12:00:00.006Z", "type": "step_attempt_started",
+    "data": { "nodeId": "finalStatus", "attempt": 1, "invocationId": "inv_final_timeout_no", "handler": "runtime.script" }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_009", "runId": "run_approval_timeout_no", "sequence": 9,
+    "occurredAt": "2026-08-08T12:00:00.007Z", "type": "step_attempt_succeeded",
+    "data": { "nodeId": "finalStatus", "attempt": 1, "invocationId": "inv_final_timeout_no", "output": { "decision": "rejected", "source": "timeout", "published": false } }
+  },
+  {
+    "eventSchemaVersion": 4, "eventId": "evt_approval_timeout_no_010", "runId": "run_approval_timeout_no", "sequence": 10,
+    "occurredAt": "2026-08-08T12:00:00.008Z", "type": "run_succeeded",
+    "data": { "terminalNodeId": "finalStatus", "result": { "decision": "rejected", "source": "timeout", "published": false } }
+  }
+]

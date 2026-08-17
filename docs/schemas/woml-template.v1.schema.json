@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/woml-template/v1",
+  "title": "WOML Template v1 Compiled Expression",
+  "x-status": "lifecycle-engine-controls-lec0-frozen",
+  "x-sourceRules": { "maximumCharacters": 4096, "maximumPlaceholders": 32, "roots": ["context", "lifecycle"], "scalarResultsOnly": true, "secretsForbidden": true },
+  "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v11#/$defs/template"
+}

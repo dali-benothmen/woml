@@ -1,0 +1,23 @@
+{
+  "protocol": "woml.notification-provider-host",
+  "protocolVersion": 1,
+  "messageType": "deliver",
+  "invocationId": "notify-unicode-01",
+  "runId": "run_notification_unicode",
+  "approvalId": "releaseApproval",
+  "requestId": "aprreq_release_unicode",
+  "deliveryId": "releaseApproval:notify:0:channel:0",
+  "provider": "slack",
+  "destination": "#approvals",
+  "idempotencyKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "credentials": {
+    "botToken": { "kind": "secretReference", "name": "SLACK_BOT_TOKEN" },
+    "appToken": { "kind": "secretReference", "name": "SLACK_APP_TOKEN" }
+  },
+  "decisionCapability": "capability_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefg",
+  "message": {
+    "workflowId": "release-article",
+    "approvalName": "Release café 🚜",
+    "approvalDescription": "First line\r\nSecond line"
+  }
+}

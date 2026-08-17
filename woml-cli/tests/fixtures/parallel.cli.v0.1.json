@@ -1,0 +1,7 @@
+{
+  "command": "woml run parallel.woml",
+  "trigger": {},
+  "stdout": "{\"summary\":\"Weather 22°C, soil 41%\"}\n",
+  "stderr": "",
+  "exitCode": 0
+}

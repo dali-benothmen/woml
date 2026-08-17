@@ -1,0 +1,19 @@
+<woml>
+<workflow id="schedule-trigger-contract">
+  <triggers>
+    <schedule
+      id="dailyReport"
+      cron="0 9 * * *"
+      timezone="Europe/Berlin"
+      on-missed="skip"
+    />
+  </triggers>
+  <steps>
+    <step id="capture">
+      <script>
+        return context.payload;
+      </script>
+    </step>
+  </steps>
+</workflow>
+</woml>
