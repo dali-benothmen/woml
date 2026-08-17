@@ -52,7 +52,7 @@ describe('WOML cross-platform native release', () => {
   test('freezes package, binary, Rust target, and local-development names', () => {
     expect(womlNativeTargets).toHaveLength(8);
     for (const target of womlNativeTargets) {
-      expect(nativePackageName(target)).toBe(`@woml/cli-${target}`);
+      expect(nativePackageName(target)).toBe(`@woml-org/cli-${target}`);
       expect(nativePackageBinaryName(target)).toBe(`woml-core.${target}.node`);
       expect(womlNativeTargetSpecs[target].target).toBe(target);
       expect(womlNativeTargetSpecs[target].rustTarget).toMatch(
@@ -75,7 +75,7 @@ describe('WOML cross-platform native release', () => {
     const manifest = JSON.parse(
       await readFile(resolve(output, 'package.json'), 'utf8'),
     ) as Record<string, unknown>;
-    expect(manifest.name).toBe('@woml/cli-linux-x64-musl');
+    expect(manifest.name).toBe('@woml-org/cli-linux-x64-musl');
     expect(manifest.version).toBe('1.0.0');
     expect(manifest.main).toBe('./woml-core.linux-x64-musl.node');
     expect(manifest.os).toEqual(['linux']);

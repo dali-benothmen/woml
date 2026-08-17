@@ -48,14 +48,14 @@ It is not an independently published product.
 
 The native Rust artifacts remain implementation packages:
 
-- `@woml/cli-darwin-x64`
-- `@woml/cli-darwin-arm64`
-- `@woml/cli-win32-x64-msvc`
-- `@woml/cli-win32-arm64-msvc`
-- `@woml/cli-linux-x64-gnu`
-- `@woml/cli-linux-x64-musl`
-- `@woml/cli-linux-arm64-gnu`
-- `@woml/cli-linux-arm64-musl`
+- `@woml-org/cli-darwin-x64`
+- `@woml-org/cli-darwin-arm64`
+- `@woml-org/cli-win32-x64-msvc`
+- `@woml-org/cli-win32-arm64-msvc`
+- `@woml-org/cli-linux-x64-gnu`
+- `@woml-org/cli-linux-x64-musl`
+- `@woml-org/cli-linux-arm64-gnu`
+- `@woml-org/cli-linux-arm64-musl`
 
 They are exact-version optional dependencies of `woml`; users never choose or
 install one manually.
@@ -148,7 +148,7 @@ The work produces these durable artifacts:
 | `.github/workflows/ci.yml` | Pull-request and branch quality gates |
 | `.github/workflows/release.yml` | Explicit release-candidate and protected publication pipeline |
 | `woml@1.0.0` package | The one public package users install |
-| eight `@woml/cli-*` packages | Platform-native Rust engine artifacts |
+| eight `@woml-org/cli-*` packages | Platform-native Rust engine artifacts |
 
 The release-readiness audit remains until the release is verified. After all
 items are closed, it is either converted into a concise v1.0.0 release record
@@ -519,7 +519,7 @@ not be executed automatically while earlier phases are being implemented.
 
 Changes:
 
-1. Recheck that `woml` and the required `@woml/cli-*` names are available or
+1. Recheck that `woml` and the required `@woml-org/cli-*` names are available or
    owned by the correct npm account.
 2. Create/confirm the `@woml` scope and package permissions.
 3. Configure npm trusted publishing for the exact GitHub repository and
