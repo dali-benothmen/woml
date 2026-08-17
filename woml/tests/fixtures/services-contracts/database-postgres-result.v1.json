@@ -6,7 +6,7 @@
   "data": {
     "results": [
       { "rowsAffected": 1, "lastInsertId": null },
-      { "rows": [{ "id": 42, "name": "Dali", "active": true }], "rowCount": 1 }
+      { "rows": [{ "id": 42, "name": "Alex", "active": true }], "rowCount": 1 }
     ]
   }
 }

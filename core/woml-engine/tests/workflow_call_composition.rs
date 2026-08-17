@@ -108,7 +108,7 @@ fn respond(mut stream: TcpStream) {
   let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
   let mut request = [0_u8; 16_384];
   let _ = stream.read(&mut request);
-  let body = br#"{"customer":"Dali"}"#;
+  let body = br#"{"customer":"Alex"}"#;
   let response = format!(
     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
     body.len()
@@ -259,13 +259,13 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
       const emitted = await services.events.emit("order.created", {{ orderId: "wc6-order" }});
       const review = await services.workflows.call('review-content', {{}});
       const field = await services.workflows.call('field-report', {{}});
-      const retry = await services.workflows.call('retry-demo', {{ name: 'Dali' }});
+      const retry = await services.workflows.call('retry-demo', {{ name: 'Alex' }});
       return {{
         branchMessage: review.message,
         summary: field.summary,
         greeting: retry.message,
-        nativeFetch: nativeResponse.status === 200 && nativeData.customer === "Dali",
-        managedHttp: managedResponse.status === 200 && managedResponse.data.customer === "Dali",
+        nativeFetch: nativeResponse.status === 200 && nativeData.customer === "Alex",
+        managedHttp: managedResponse.status === 200 && managedResponse.data.customer === "Alex",
         database: databaseWrite.rowsAffected >= 1 && databaseRead.rows[0].id === "record-42",
         storage: stored.data.id === "record-42",
         cache: cached.stored && cachedValue.hit,
@@ -318,7 +318,7 @@ async fn nested_cross_process_calls_compose_with_branch_and_parallel_targets() {
     Some(json!({
       "branchMessage": "Final status: reviewed",
       "summary": "Weather 22°C, soil 41%",
-      "greeting": "Hello Dali",
+      "greeting": "Hello Alex",
       "nativeFetch": true,
       "managedHttp": true,
       "database": true,

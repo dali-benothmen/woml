@@ -39,6 +39,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install locked dependencies
         working-directory: woml-cli
         run: bun install --frozen-lockfile
@@ -69,6 +70,12 @@ jobs:
         run: |
           bun test tests/release-identity.test.ts tests/native-platform-release.test.ts --max-concurrency=1
           bun run test:release-automation
+      - name: Run the final source and dependency security review
+        run: |
+          bun run test:final-review
+          bun audit --cwd woml-cli
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file core/Cargo.lock
       - name: Failure diagnostics
         if: failure()
         run: |

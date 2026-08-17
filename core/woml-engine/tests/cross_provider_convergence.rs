@@ -104,7 +104,7 @@ fn waiting_store(path: &Path, run_id: &str) -> (String, String) {
         SlackProviderMessageIdentity {
           workspace_id: "T12345678".to_string(),
           channel_id: "C12345678".to_string(),
-          message_id: "1786175281.000001".to_string(),
+          message_id: "1723024800.000001".to_string(),
         },
       )),
       now,

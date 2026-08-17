@@ -2,6 +2,14 @@
   "name": "@woml/compiler",
   "version": "1.0.0",
   "private": true,
+  "description": "The private WOML parser and compiler bundled into the public CLI",
+  "author": "Mohamed Ali Ben Othmen",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dali-benothmen/woml.git",
+    "directory": "woml"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -15,7 +23,7 @@
   },
   "dependencies": {
     "acorn": "8.15.0",
-    "ajv": "8.17.1",
+    "ajv": "8.20.0",
     "fast-xml-parser": "5.10.1"
   },
   "devDependencies": {

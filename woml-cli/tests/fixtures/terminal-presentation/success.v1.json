@@ -37,7 +37,7 @@
       "attempts": 1,
       "result": {
         "orderId": "order-42",
-        "customer": "Dali",
+        "customer": "Alex",
         "items": 3
       }
     },

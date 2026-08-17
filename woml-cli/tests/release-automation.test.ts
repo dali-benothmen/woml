@@ -143,6 +143,10 @@ describe('WOML release automation', () => {
     expect(source).not.toContain('NPM_TOKEN');
     expect(source).not.toContain('NODE_AUTH_TOKEN');
     expect(source).toContain('npm publish "${archive}" --access public --provenance');
+    expect(source).toContain('bun run test:final-review');
+    expect(source).toContain('bun audit --cwd woml-cli');
+    expect(source).toContain('cargo-audit --version 0.22.2 --locked');
+    expect(source).toContain('cargo audit --file core/Cargo.lock');
   });
 
   test('publishes only the immutable family that the collection job verified', async () => {

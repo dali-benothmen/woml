@@ -6,7 +6,7 @@ RUN  run_8f21c4   14 Aug 2026 · 08:…
           > Result
             {
               "orderId": "order-42",
-              "customer": "Dali",
+              "customer": "Alex",
               "items": 3
             }
 

@@ -281,7 +281,7 @@ fn a_run_without_an_in_flight_attempt_remains_safely_resumable() {
       Utc::now(),
       "hello",
       HELLO_HASH,
-      Map::from_iter([("name".to_string(), json!("Dali"))]),
+      Map::from_iter([("name".to_string(), json!("Alex"))]),
     )
     .unwrap();
 

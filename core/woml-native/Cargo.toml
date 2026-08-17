@@ -4,6 +4,7 @@ version = "1.0.0"
 edition = "2021"
 description = "WOML-only N-API adapter for the Rust workflow engine"
 license = "Apache-2.0"
+repository = "https://github.com/dali-benothmen/woml"
 
 [lib]
 name = "woml_core"

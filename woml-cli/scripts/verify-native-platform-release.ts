@@ -62,6 +62,9 @@ for (const marker of [
   'actions/download-artifact@v6',
   'retention-days',
   'LICENSE',
+  'NOTICE.md',
+  'bun audit --cwd woml-cli',
+  'cargo audit --file core/Cargo.lock',
 ]) {
   if (
     !workflow.includes(marker) &&

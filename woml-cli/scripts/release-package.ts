@@ -29,6 +29,11 @@ const expectedFiles = [...packedPackageFiles].sort();
 interface MainManifest {
   readonly name?: string;
   readonly version?: string;
+  readonly author?: string;
+  readonly license?: string;
+  readonly repository?: Readonly<Record<string, string>>;
+  readonly homepage?: string;
+  readonly bugs?: Readonly<Record<string, string>>;
   readonly bin?: Readonly<Record<string, string>>;
   readonly files?: readonly string[];
   readonly dependencies?: Readonly<Record<string, string>>;
@@ -71,9 +76,25 @@ export async function verifyMainPackage(root: string): Promise<void> {
   if (
     manifest.name !== 'woml' ||
     manifest.version !== '1.0.0' ||
+    manifest.author !== 'Mohamed Ali Ben Othmen' ||
+    manifest.license !== 'Apache-2.0' ||
     manifest.bin?.woml !== './dist/cli.js'
   ) {
     throw new Error('The staged package does not have the frozen woml@1.0.0 identity.');
+  }
+  const publicMetadata = JSON.stringify({
+    repository: manifest.repository,
+    homepage: manifest.homepage,
+    bugs: manifest.bugs,
+  });
+  for (const expected of [
+    'github.com/dali-benothmen/woml.git',
+    'github.com/dali-benothmen/woml#readme',
+    'github.com/dali-benothmen/woml/issues',
+  ]) {
+    if (!publicMetadata.includes(expected)) {
+      throw new Error(`The staged package is missing reviewed metadata: ${expected}.`);
+    }
   }
   if (!sameValues(manifest.files ?? [], publicPackageFiles)) {
     throw new Error('The staged package does not use the explicit public file allowlist.');

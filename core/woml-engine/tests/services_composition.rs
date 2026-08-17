@@ -100,7 +100,7 @@ fn respond(mut stream: TcpStream) {
   let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
   let mut request = [0_u8; 16_384];
   let _ = stream.read(&mut request);
-  let body = br#"{"customer":"Dali","source":"sc14-local"}"#;
+  let body = br#"{"customer":"Alex","source":"sc14-local"}"#;
   let response = format!(
     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
     body.len()
@@ -197,8 +197,8 @@ async fn native_fetch_and_all_non_event_services_compose_in_one_script_attempt()
       ]);
 
       return {{
-        nativeHttp: nativeResponse.status === 200 && nativeData.customer === "Dali",
-        managedHttp: managedResponse.status === 200 && managedResponse.data.customer === "Dali",
+        nativeHttp: nativeResponse.status === 200 && nativeData.customer === "Alex",
+        managedHttp: managedResponse.status === 200 && managedResponse.data.customer === "Alex",
         database: databaseWrite.rowsAffected === 1 && databaseRead.rows[0].id === "record-42",
         storage: stored.data.id === "record-42",
         cache: cached.stored && cacheRead.hit
