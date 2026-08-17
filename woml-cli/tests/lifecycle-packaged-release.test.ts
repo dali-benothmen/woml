@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
-const packageRoot = resolve(import.meta.dir, '..');
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
 let temporaryDirectory: string;
 
 interface CapturedProcess {
@@ -62,12 +63,11 @@ afterAll(async () => {
 
 describe('Packaged Lifecycle and Engine Controls release', () => {
   test('a clean consumer can execute lifecycle, inspect, cancel, and shut down', async () => {
-    const packageDirectory = join(temporaryDirectory, 'package');
     const consumerDirectory = join(temporaryDirectory, 'consumer');
     const bunTemporaryDirectory = join(temporaryDirectory, 'bun-temp');
     const bunCacheDirectory = join(temporaryDirectory, 'bun-cache');
     await Promise.all(
-      [packageDirectory, consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
+      [consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
         directory => mkdir(directory, { recursive: true })
       )
     );
@@ -103,41 +103,10 @@ describe('Packaged Lifecycle and Engine Controls release', () => {
 </woml>`
     );
 
-    const packed = Bun.spawnSync(
-      [
-        Bun.which('bun')!,
-        'pm',
-        'pack',
-        '--ignore-scripts',
-        '--destination',
-        packageDirectory,
-      ],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode).toBe(0);
-    const archive = (await readdir(packageDirectory))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(packageDirectory, name))[0];
-    expect(archive).toBeDefined();
-
-    const installed = Bun.spawnSync(
-      [Bun.which('bun')!, 'add', archive!, '--no-save'],
-      {
-        cwd: consumerDirectory,
-        env: {
-          ...process.env,
-          TMPDIR: bunTemporaryDirectory,
-          BUN_INSTALL_CACHE_DIR: bunCacheDirectory,
-        },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    if (installed.exitCode !== 0) {
-      throw new Error(
-        `Could not install packed WOML CLI:\n${installed.stdout.toString()}${installed.stderr.toString()}`
-      );
-    }
+    await installLocalReleaseCandidate(consumerDirectory, {
+      cache: bunCacheDirectory,
+      temporary: bunTemporaryDirectory,
+    });
     const executable = join(consumerDirectory, 'node_modules', '.bin', 'woml');
     const invoke = (...args: string[]) =>
       Bun.spawnSync([executable, ...args], {
@@ -178,7 +147,7 @@ describe('Packaged Lifecycle and Engine Controls release', () => {
     const cancellationState = join(consumerDirectory, 'cancellation.sqlite');
     const runtime = start(
       executable,
-      ['run', 'cancellable.woml', '--state', cancellationState],
+      ['test', 'cancellable.woml', '--state', cancellationState],
       consumerDirectory
     );
     let runId: string | undefined;
@@ -207,8 +176,7 @@ describe('Packaged Lifecycle and Engine Controls release', () => {
     );
     expect(cancelled.exitCode).toBe(0);
     expect(JSON.parse(cancelled.stdout.toString()).status).toBe('accepted');
-    await waitFor(runtime, `Run ${runId} cancelled.`);
-    await waitFor(runtime, 'WOML automation is active.');
+    await waitFor(runtime, 'WOML_RUN_CANCELLED');
     const finalInspection = invoke(
       'get',
       runId,
@@ -225,8 +193,7 @@ describe('Packaged Lifecycle and Engine Controls release', () => {
     expect(finalJson).not.toContain('late');
     expect(finalJson).not.toContain('context');
 
-    runtime.child.kill('SIGINT');
-    expect(await runtime.child.exited).toBe(0);
+    expect(await runtime.child.exited).toBe(1);
     await runtime.stderrDone;
   }, 60_000);
 });

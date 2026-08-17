@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { chmod, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -33,13 +33,28 @@ afterAll(async () => {
 
 describe('Packaged services composition', () => {
   test('runs database, storage, cache, and internal events through one active runtime', async () => {
+    const statePath = join(temporaryDirectory, '.woml', 'state.sqlite');
+    const probe = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
+    const port = probe.port!;
+    probe.stop(true);
+    const publisherPath = join(temporaryDirectory, 'publisher-webhook.woml');
+    await writeFile(
+      publisherPath,
+      (await readFile(join(exampleDirectory, 'publisher.woml'), 'utf8')).replace(
+        '<manual id="start" />',
+        '<webhook id="start" path="/publish-order" method="POST" auth="none" />'
+      )
+    );
     const child = Bun.spawn(
       [
         cliPath,
         'run',
-        exampleDirectory,
+        publisherPath,
+        join(exampleDirectory, 'subscriber.woml'),
         '--state',
-        join(temporaryDirectory, '.woml', 'state.sqlite'),
+        statePath,
+        '--port',
+        String(port),
       ],
       { cwd: temporaryDirectory, stdout: 'pipe', stderr: 'pipe' }
     );
@@ -78,11 +93,15 @@ describe('Packaged services composition', () => {
 
     try {
       await waitFor('WOML automation is active.');
-      await waitFor('Order order-42 is ready for Dali');
-      expect(stderr).toContain(
-        'Accepted trigger.event "orderPrepared" for workflow "services-order-subscriber"'
-      );
-      expect(stderr).toContain('"eventName":"order.prepared"');
+      const publisher = await fetch(`http://127.0.0.1:${port}/publish-order`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(publisher.status).toBe(202);
+      await waitFor('Order order-42 is ready for Alex');
+      expect(stderr).toContain('services-order-subscriber');
+      expect(stderr).toContain('"eventName": "order.prepared"');
       expect(stdout).toBe('');
       expect(
         await Bun.file(

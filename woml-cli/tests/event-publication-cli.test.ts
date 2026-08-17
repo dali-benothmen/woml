@@ -99,10 +99,11 @@ describe('Event publication product journey', () => {
       };
 
       await waitFor('WOML automation is active. Press Ctrl+C to stop.');
+      expect(stderr).toContain('Event  order.created');
       expect(stderr).toContain(
-        `Event order.created: POST http://127.0.0.1:${port}/_woml/events/order.created`
+        `POST   http://127.0.0.1:${port}/_woml/events/order.created`
       );
-      expect(stderr).toContain('Try event order.created:\ncurl --request POST');
+      expect(stderr).toContain('curl --request POST');
       expect(stderr).toContain("--header 'Event-ID: <event-id>'");
       expect(stderr).not.toContain(controlToken);
 
@@ -132,11 +133,11 @@ describe('Event publication product journey', () => {
         'send-confirmation',
         'update-inventory',
       ]);
-      for (const delivery of first.body.deliveries) {
-        await waitFor(`Run ${delivery.runId} succeeded.`);
-      }
       await waitFor('Confirmation sent for order-42');
       await waitFor('Inventory updated for order-42');
+      for (const delivery of first.body.deliveries) {
+        expect(stderr).toContain(`RUN  ${delivery.runId}`);
+      }
 
       const duplicate = await publish('order-cli-1', 'order-42');
       expect(duplicate.body.deliveries.every((delivery: any) => delivery.duplicate)).toBe(

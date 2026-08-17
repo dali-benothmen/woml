@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
-const packageRoot = resolve(import.meta.dir, '..');
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
 let temporaryDirectory: string;
 
 beforeAll(async () => {
@@ -18,12 +19,11 @@ afterAll(async () => {
 
 describe('Packaged Runtime Policies release', () => {
   test('a clean consumer can check, execute, list, and inspect a policy workflow', async () => {
-    const packageDirectory = join(temporaryDirectory, 'package');
     const consumerDirectory = join(temporaryDirectory, 'consumer');
     const bunTemporaryDirectory = join(temporaryDirectory, 'bun-temp');
     const bunCacheDirectory = join(temporaryDirectory, 'bun-cache');
     await Promise.all(
-      [packageDirectory, consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
+      [consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
         directory => mkdir(directory, { recursive: true })
       )
     );
@@ -44,38 +44,10 @@ describe('Packaged Runtime Policies release', () => {
 </woml>`
     );
 
-    const packed = Bun.spawnSync(
-      [
-        Bun.which('bun')!,
-        'pm',
-        'pack',
-        '--ignore-scripts',
-        '--destination',
-        packageDirectory,
-      ],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode).toBe(0);
-    const archive = (await readdir(packageDirectory))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(packageDirectory, name))[0];
-    expect(archive).toBeDefined();
-
-    const installed = Bun.spawnSync([Bun.which('bun')!, 'add', archive!, '--no-save'], {
-      cwd: consumerDirectory,
-      env: {
-        ...process.env,
-        TMPDIR: bunTemporaryDirectory,
-        BUN_INSTALL_CACHE_DIR: bunCacheDirectory,
-      },
-      stdout: 'pipe',
-      stderr: 'pipe',
+    await installLocalReleaseCandidate(consumerDirectory, {
+      cache: bunCacheDirectory,
+      temporary: bunTemporaryDirectory,
     });
-    if (installed.exitCode !== 0) {
-      throw new Error(
-        `Could not install packed WOML CLI:\n${installed.stdout.toString()}${installed.stderr.toString()}`
-      );
-    }
 
     const executable = join(consumerDirectory, 'node_modules', '.bin', 'woml');
     const invoke = (...args: string[]) =>

@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
 
 const packageRoot = resolve(import.meta.dir, '..');
 let temporaryDirectory: string;
@@ -44,32 +46,15 @@ afterAll(async () => {
 
 describe('communication-provider clean package', () => {
   test('the installed CLI contains and executes its provider host', async () => {
-    const archives = join(temporaryDirectory, 'archives');
     const consumer = join(temporaryDirectory, 'consumer');
     const cache = join(temporaryDirectory, 'bun-cache');
-    await Promise.all([archives, consumer, cache].map(path => mkdir(path, { recursive: true })));
-
-    const packed = Bun.spawnSync(
-      [Bun.which('bun')!, 'pm', 'pack', '--ignore-scripts', '--destination', archives],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
-    const archive = (await readdir(archives))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(archives, name))[0];
-    expect(archive).toBeDefined();
+    await Promise.all([consumer, cache].map(path => mkdir(path, { recursive: true })));
 
     await writeFile(
       join(consumer, 'package.json'),
       JSON.stringify({ name: 'woml-provider-clean-consumer', private: true })
     );
-    const installed = Bun.spawnSync([Bun.which('bun')!, 'add', archive!, '--no-save'], {
-      cwd: consumer,
-      env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    expect(installed.exitCode, installed.stderr.toString()).toBe(0);
+    await installLocalReleaseCandidate(consumer, { cache });
 
     const installedRoot = join(consumer, 'node_modules/woml');
     for (const artifact of [

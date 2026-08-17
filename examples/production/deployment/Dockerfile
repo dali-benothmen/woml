@@ -1,13 +1,13 @@
 FROM oven/bun:1.3.14
 
-ARG WOML_VERSION=0.1.0
-RUN bun add --global "woml-cli@${WOML_VERSION}"
+ARG WOML_VERSION=1.0.0
+RUN bun add --global "woml@${WOML_VERSION}"
 
 RUN addgroup --system woml && adduser --system --ingroup woml --home /app woml
 WORKDIR /app
 COPY --chown=woml:woml complete/workflows ./workflows
 COPY --chown=woml:woml complete/modules ./modules
-COPY --chown=woml:woml complete/woml.runtime.json ./woml.runtime.json
+COPY --chown=woml:woml deployment/woml.docker.runtime.json ./woml.runtime.json
 RUN mkdir -p /app/data /app/logs /app/backups && chown -R woml:woml /app
 
 USER woml

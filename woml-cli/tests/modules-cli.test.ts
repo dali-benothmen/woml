@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 import { runCli, type CliIo } from '../src/cli';
+import type { ManualLineInput } from '../src/manual-input';
+import { inspectRunWithRust, listRunsWithRust } from '../src/rust-executor';
 
 const workflowPath = resolve(
   import.meta.dir,
@@ -46,6 +48,36 @@ function nativeDependencies() {
       throw new Error('fixtures have no secrets.');
     },
   };
+}
+
+class OneRunManualInput implements ManualLineInput {
+  readonly isTTY = true;
+  #closed = false;
+
+  constructor(private readonly statePath: string) {}
+
+  async run(onLine: (line: string) => void | Promise<void>): Promise<void> {
+    await onLine('');
+    while (!this.#closed) {
+      const run = listRunsWithRust(
+        this.statePath,
+        { limit: 1 },
+        { nativeCorePath }
+      ).runs[0];
+      if (
+        run?.status === 'succeeded' ||
+        run?.status === 'failed' ||
+        run?.status === 'cancelled'
+      ) {
+        return;
+      }
+      await Bun.sleep(10);
+    }
+  }
+
+  close(): void {
+    this.#closed = true;
+  }
 }
 
 async function invoke(args: readonly string[]) {
@@ -124,7 +156,7 @@ describe('Module runtime CLI', () => {
       let stderr = '';
       const exitCode = await runCli(
         [
-          'run',
+          'test',
           verticalWorkflowPath,
           '--state',
           resolve(directory, 'state.sqlite'),
@@ -140,8 +172,7 @@ describe('Module runtime CLI', () => {
         { ...nativeDependencies(), waitForShutdown: async () => {} }
       );
       expect(exitCode).toBe(0);
-      expect(stderr).toContain('WOML automation is active.');
-      expect(stderr).toContain('WOML automation stopped.');
+      expect(stderr).toContain('WOML modules ready: services.spreadsheet.');
       expect(JSON.parse(stdout)).toEqual({
         rows: [
           ['Alice', 'active'],
@@ -369,7 +400,10 @@ export function retry(attempt) {
           nativeDependencies()
         );
         expect(exitCode).toBe(0);
-        expect(JSON.parse(stdout)).toEqual({ answer: 42 });
+        expect(stdout).toBe('');
+        expect(
+          inspectRunWithRust(statePath, row.runId, { nativeCorePath })
+        ).toMatchObject({ status: 'succeeded', result: { answer: 42 } });
         expect(stderr).toContain(
           'stored definition and 1 immutable module artifact'
         );
@@ -436,8 +470,9 @@ describe('Local module authoring DX', () => {
     let stdout = '';
     let stderr = '';
     try {
+      const statePath = resolve(directory, 'state.sqlite');
       const exitCode = await runCli(
-        ['run', womlPath, '--state', resolve(directory, 'state.sqlite')],
+        ['run', womlPath, '--state', statePath],
         {
           stdout: text => {
             stdout += text;
@@ -446,11 +481,24 @@ describe('Local module authoring DX', () => {
             stderr += text;
           },
         },
-        { ...nativeDependencies(), waitForShutdown: async () => {} }
+        {
+          ...nativeDependencies(),
+          createManualInput: () => new OneRunManualInput(statePath),
+          waitForShutdown: () => new Promise<void>(() => {}),
+        }
       );
+      if (exitCode !== 0) throw new Error(stderr);
       expect(exitCode).toBe(0);
       expect(stderr).not.toContain('WOML_EDITOR_TYPES_WRITE_FAILED');
-      expect(JSON.parse(stdout)).toEqual({ answer: 42 });
+      expect(stdout).toBe('');
+      const run = listRunsWithRust(
+        statePath,
+        { limit: 1 },
+        { nativeCorePath }
+      ).runs[0]!;
+      expect(
+        inspectRunWithRust(statePath, run.runId, { nativeCorePath })
+      ).toMatchObject({ status: 'succeeded', result: { answer: 42 } });
       const declarations = await readFile(
         resolve(directory, 'woml-env.d.ts'),
         'utf8'

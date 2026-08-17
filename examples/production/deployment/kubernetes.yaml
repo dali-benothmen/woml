@@ -29,7 +29,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: woml
-          image: example/woml-automation:0.1.0
+          image: example/woml-automation:1.0.0
           imagePullPolicy: IfNotPresent
           env:
             - name: WOML_SECRETS_PROVIDER

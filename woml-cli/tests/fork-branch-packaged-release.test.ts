@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const packageRoot = resolve(import.meta.dir, '..');
-const projectRoot = resolve(packageRoot, '..');
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
+const projectRoot = resolve(import.meta.dir, '../..');
 let temporaryDirectory: string;
 
 beforeAll(async () => {
@@ -19,37 +20,15 @@ afterAll(async () => {
 
 describe('fork and branch clean package', () => {
   test('a clean consumer installs the CLI and runs the social distribution workflow', async () => {
-    const archives = join(temporaryDirectory, 'archives');
     const consumer = join(temporaryDirectory, 'consumer');
     const cache = join(temporaryDirectory, 'bun-cache');
-    await Promise.all(
-      [archives, consumer, cache].map(path => mkdir(path, { recursive: true }))
-    );
-
-    const packed = Bun.spawnSync(
-      [Bun.which('bun')!, 'pm', 'pack', '--ignore-scripts', '--destination', archives],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
-    const archive = (await readdir(archives))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(archives, name))[0];
-    expect(archive).toBeDefined();
+    await Promise.all([consumer, cache].map(path => mkdir(path, { recursive: true })));
 
     await writeFile(
       join(consumer, 'package.json'),
       JSON.stringify({ name: 'woml-fork-clean-consumer', private: true })
     );
-    const installed = Bun.spawnSync([Bun.which('bun')!, 'add', archive!, '--no-save'], {
-      cwd: consumer,
-      env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    expect(
-      installed.exitCode,
-      `${installed.stdout.toString()}${installed.stderr.toString()}`
-    ).toBe(0);
+    await installLocalReleaseCandidate(consumer, { cache });
 
     const workflowPath = join(consumer, 'social-distribution.woml');
     await writeFile(

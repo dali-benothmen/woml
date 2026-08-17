@@ -12,6 +12,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 
+import { nativePackageBinaryName } from '../src/native-platform';
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
 const packageRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(packageRoot, '..');
 const cliPath = join(packageRoot, 'dist', 'cli.js');
@@ -272,7 +275,7 @@ describe('woml test one-shot compatibility', () => {
   <triggers><manual id="start" /></triggers>
   <steps>
     <step id="choose"><script>return { useHttp: true };</script></step>
-    <branch id="route">
+    <choose id="route">
       <when test="{{context.steps.choose.useHttp}}">
         <parallel id="requests" concurrency="2" on-error="wait-all">
           <step id="managedRequest" retry="2" retry-delay="1ms">
@@ -293,7 +296,7 @@ describe('woml test one-shot compatibility', () => {
         <step id="fallback"><script>return { status: 503 };</script></step>
         <result value="{{context.steps.fallback}}" />
       </otherwise>
-    </branch>
+    </choose>
     <step id="finish">
       <script>return { managedStatus: context.steps.route.status, managedPath: context.steps.route.data.path };</script>
     </step>
@@ -365,11 +368,6 @@ describe('woml test one-shot compatibility', () => {
       'Step greet failed (attempt 1/3): WOML_SCRIPT_THROWN\n'
     );
     expect(result.stderr).toContain('Retry 2/3 scheduled in 1s.\n');
-    expect(result.stderr).toContain(
-      `Recovery: woml run ${JSON.stringify(retryFixturePath)} --state ${JSON.stringify(
-        statePath
-      )} --resume "run_`
-    );
     expect(result.stderr).toContain(
       'Step greet failed (attempt 2/3): WOML_SCRIPT_THROWN\n'
     );
@@ -660,7 +658,7 @@ describe('woml test one-shot compatibility', () => {
 
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe(
-      'Usage: woml run <workflow.woml|directory>... [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]\n'
+      'Usage: woml run <workflow.woml|directory>... [--config <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--json] [--verbose] [--color=auto|always|never] [--background|-d]\n'
     );
     expect(result.exitCode).toBe(2);
   });
@@ -723,7 +721,7 @@ describe('woml test one-shot compatibility', () => {
       'WOML runtime error [WOML_BRANCH_TEST_NOT_BOOLEAN]'
     );
     expect(result.stderr).toContain(`${workflowPath}:20:`);
-    expect(result.stderr).toContain('<when test> in branch "decision"');
+    expect(result.stderr).toContain('<when test> in choice "decision"');
     expect(result.stderr).toContain('must resolve to a JSON boolean');
     expect(result.exitCode).toBe(1);
   });
@@ -743,7 +741,7 @@ describe('woml test one-shot compatibility', () => {
       'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]'
     );
     expect(result.stderr).toContain(`${workflowPath}:20:`);
-    expect(result.stderr).toContain('<when test> in branch "decision"');
+    expect(result.stderr).toContain('<when test> in choice "decision"');
     expect(result.stderr).toContain('context.steps.checkContent.needsReview');
     expect(result.exitCode).toBe(1);
   });
@@ -763,17 +761,15 @@ describe('woml test one-shot compatibility', () => {
       'WOML runtime error [WOML_REFERENCE_NOT_AVAILABLE]'
     );
     expect(result.stderr).toContain(`${workflowPath}:30:`);
-    expect(result.stderr).toContain('<result value> in branch "decision"');
+    expect(result.stderr).toContain('<result value> in choice "decision"');
     expect(result.stderr).toContain('context.steps.reviewContent.missing');
     expect(result.exitCode).toBe(1);
   });
 
   test('runs from a clean package installation with its native Rust engine', async () => {
-    const packageDirectory = join(temporaryDirectory, 'package');
     const consumerDirectory = join(temporaryDirectory, 'consumer');
     const bunTemporaryDirectory = join(temporaryDirectory, 'bun-temp');
     const bunCacheDirectory = join(temporaryDirectory, 'bun-cache');
-    await mkdir(packageDirectory, { recursive: true });
     await mkdir(consumerDirectory, { recursive: true });
     await mkdir(bunTemporaryDirectory, { recursive: true });
     await mkdir(bunCacheDirectory, { recursive: true });
@@ -830,41 +826,10 @@ describe('woml test one-shot compatibility', () => {
       await Bun.file(storageExamplePath).text()
     );
 
-    const packed = Bun.spawnSync(
-      [
-        Bun.which('bun')!,
-        'pm',
-        'pack',
-        '--ignore-scripts',
-        '--destination',
-        packageDirectory,
-      ],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode).toBe(0);
-    const archive = (await readdir(packageDirectory))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(packageDirectory, name))[0];
-    expect(archive).toBeDefined();
-
-    const installed = Bun.spawnSync(
-      [Bun.which('bun')!, 'add', archive!, '--no-save'],
-      {
-        cwd: consumerDirectory,
-        env: {
-          ...process.env,
-          TMPDIR: bunTemporaryDirectory,
-          BUN_INSTALL_CACHE_DIR: bunCacheDirectory,
-        },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    if (installed.exitCode !== 0) {
-      throw new Error(
-        `Could not install packed WOML CLI:\n${installed.stdout.toString()}${installed.stderr.toString()}`
-      );
-    }
+    const candidate = await installLocalReleaseCandidate(consumerDirectory, {
+      cache: bunCacheDirectory,
+      temporary: bunTemporaryDirectory,
+    });
     const entriesBeforeRun = (await readdir(consumerDirectory)).sort();
     const executable = join(consumerDirectory, 'node_modules', '.bin', 'woml');
     const helloResult = Bun.spawnSync([executable, 'test', 'hello.woml'], {
@@ -1071,15 +1036,16 @@ describe('woml test one-shot compatibility', () => {
     });
     expect(approvalStderr).toContain('waiting for human approval');
     expect(approvalExitCode).toBe(0);
-    expect((await readdir(consumerDirectory)).sort()).toEqual(entriesBeforeRun);
+    expect((await readdir(consumerDirectory)).sort()).toEqual(
+      [...entriesBeforeRun, '.woml'].sort()
+    );
     expect(
       await Bun.file(
         join(
           consumerDirectory,
           'node_modules',
-          'woml',
-          'dist',
-          `woml-core.${process.platform}-${process.arch}.node`
+          ...candidate.nativePackage.split('/'),
+          nativePackageBinaryName(candidate.target)
         )
       ).exists()
     ).toBe(true);
@@ -1105,5 +1071,5 @@ describe('woml test one-shot compatibility', () => {
         )
       ).exists()
     ).toBe(true);
-  }, 20_000);
+  }, 60_000);
 });

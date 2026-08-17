@@ -54,7 +54,7 @@
     "test:cli:workflows": "bun scripts/run-cli-test-shards.ts --shard workflows",
     "test:cli:providers": "bun scripts/run-cli-test-shards.ts --shard providers",
     "test:cli:operations": "bun scripts/run-cli-test-shards.ts --shard operations",
-    "test:cli:candidate": "bun scripts/run-cli-test-shards.ts --shard candidate",
+    "test:cli:candidate": "bun run build && bun scripts/run-cli-test-shards.ts --shard candidate",
     "test:cli": "bun scripts/run-cli-test-shards.ts",
     "test:portable": "bun test ../woml/tests --max-concurrency=1 && bun run test:cli:contracts",
     "prepublishOnly": "bun scripts/guard-source-publish.ts",

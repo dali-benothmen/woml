@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const packageRoot = resolve(import.meta.dir, '..');
-const projectRoot = resolve(packageRoot, '..');
+import { nativePackageBinaryName } from '../src/native-platform';
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
+const projectRoot = resolve(import.meta.dir, '../..');
 const exampleDirectory = join(projectRoot, 'examples', 'workflowCalls');
 let temporaryDirectory: string;
 
@@ -40,12 +42,23 @@ async function waitFor(process: CapturedProcess, text: string): Promise<void> {
     if (process.child.exitCode !== null) {
       await process.stderrDone;
       throw new Error(
-        `Packed WOML process exited before ${JSON.stringify(text)}:\n${process.stderr()}`
+        `Packed WOML process exited before ${JSON.stringify(text)}:\n${process.stderr()}`,
       );
     }
     if (Date.now() >= deadline) throw new Error(process.stderr());
     await Bun.sleep(10);
   }
+}
+
+async function freePort(): Promise<number> {
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response('reserved'),
+  });
+  const port = server.port!;
+  await server.stop(true);
+  return port;
 }
 
 beforeAll(async () => {
@@ -60,12 +73,11 @@ afterAll(async () => {
 
 describe('Packaged Workflow Calls release journey', () => {
   test('a clean consumer runs a parent and child with the packaged native engine', async () => {
-    const packageDirectory = join(temporaryDirectory, 'package');
     const consumerDirectory = join(temporaryDirectory, 'consumer');
     const bunTemporaryDirectory = join(temporaryDirectory, 'bun-temp');
     const bunCacheDirectory = join(temporaryDirectory, 'bun-cache');
     await Promise.all(
-      [packageDirectory, consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
+      [consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
         directory => mkdir(directory, { recursive: true })
       )
     );
@@ -75,69 +87,65 @@ describe('Packaged Workflow Calls release journey', () => {
     );
     await Bun.write(
       join(consumerDirectory, 'parent.woml'),
-      await Bun.file(join(exampleDirectory, 'request-risk.woml')).text()
+      `<woml>
+  <workflow id="request-risk" name="Request customer risk" version="1.0.0">
+    <triggers>
+      <webhook id="request" path="/risk" method="POST" auth="none" />
+    </triggers>
+    <steps>
+      <step id="requestRisk"><script>
+        const risk = await services.workflows.call('calculate-risk', {
+          customerId: context.payload.customerId
+        });
+        return {
+          message: \`Customer risk score: \${risk.score}\`,
+          score: risk.score
+        };
+      </script></step>
+    </steps>
+  </workflow>
+</woml>`,
     );
     await Bun.write(
       join(consumerDirectory, 'child.woml'),
       await Bun.file(join(exampleDirectory, 'calculate-risk.woml')).text()
     );
 
-    const packed = Bun.spawnSync(
-      [
-        Bun.which('bun')!,
-        'pm',
-        'pack',
-        '--ignore-scripts',
-        '--destination',
-        packageDirectory,
-      ],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode).toBe(0);
-    const archive = (await readdir(packageDirectory))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(packageDirectory, name))[0];
-    expect(archive).toBeDefined();
-
-    const installed = Bun.spawnSync(
-      [Bun.which('bun')!, 'add', archive!, '--no-save'],
-      {
-        cwd: consumerDirectory,
-        env: {
-          ...process.env,
-          TMPDIR: bunTemporaryDirectory,
-          BUN_INSTALL_CACHE_DIR: bunCacheDirectory,
-        },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    if (installed.exitCode !== 0) {
-      throw new Error(
-        `Could not install packed WOML CLI:\n${installed.stdout.toString()}${installed.stderr.toString()}`
-      );
-    }
+    const candidate = await installLocalReleaseCandidate(consumerDirectory, {
+      cache: bunCacheDirectory,
+      temporary: bunTemporaryDirectory,
+    });
 
     const executable = join(consumerDirectory, 'node_modules', '.bin', 'woml');
+    const port = await freePort();
     const runtime = start(
       executable,
       [
         'run',
         'parent.woml',
         'child.woml',
+        '--port',
+        String(port),
         '--state',
         join(temporaryDirectory, 'packaged-state.sqlite'),
       ],
-      consumerDirectory
+      consumerDirectory,
     );
-    await waitFor(runtime, ' result: {"message":"Customer risk score: 90","score":90}');
+    await waitFor(runtime, 'WOML automation is active. Press Ctrl+C to stop.');
+    const response = await fetch(`http://127.0.0.1:${port}/risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ customerId: 'customer-42' }),
+    });
+    expect(response.status).toBe(202);
+    await waitFor(runtime, 'Customer risk score: 90');
     const runtimeLog = runtime.stderr();
     runtime.child.kill('SIGINT');
     expect(await runtime.child.exited).toBe(0);
     await runtime.stderrDone;
-    expect(runtimeLog).toContain('WOML runtime is ready with 1 registered trigger.');
-    expect(runtimeLog).toContain('Workflow call ');
-    expect(runtimeLog).toContain(' started child run_call_');
+    expect(runtimeLog).toContain('WOML automation is active. Press Ctrl+C to stop.');
+    expect(runtimeLog).toContain('Workflow call · calculate-risk completed');
+    expect(runtimeLog).toContain('run_call_');
     expect(runtimeLog).not.toContain('customer-42');
 
     expect(
@@ -145,9 +153,8 @@ describe('Packaged Workflow Calls release journey', () => {
         join(
           consumerDirectory,
           'node_modules',
-          'woml',
-          'dist',
-          `woml-core.${process.platform}-${process.arch}.node`
+          ...candidate.nativePackage.split('/'),
+          nativePackageBinaryName(candidate.target),
         )
       ).exists()
     ).toBe(true);

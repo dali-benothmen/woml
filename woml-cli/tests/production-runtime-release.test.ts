@@ -15,6 +15,8 @@ import {
   readRuntimeDescriptor,
   runtimeDescriptorPath,
 } from '../src/runtime-control';
+import { nativePackageBinaryName } from '../src/native-platform';
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
 
 const packageRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(packageRoot, '..');
@@ -96,48 +98,21 @@ describe('Clean package and server release', () => {
   });
 
   test('a clean consumer installs, activates, serves, observes, backs up, stops, restores, and prunes', async () => {
-    const packageDirectory = join(temporaryDirectory, 'archives');
     const consumerDirectory = join(temporaryDirectory, 'server');
     const cacheDirectory = join(temporaryDirectory, 'bun-cache');
     await Promise.all(
-      [packageDirectory, consumerDirectory, cacheDirectory].map(path =>
+      [consumerDirectory, cacheDirectory].map(path =>
         mkdir(path, { recursive: true })
       )
     );
-    const packed = Bun.spawnSync(
-      [
-        Bun.which('bun')!,
-        'pm',
-        'pack',
-        '--ignore-scripts',
-        '--destination',
-        packageDirectory,
-      ],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
-    const archive = (await readdir(packageDirectory))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(packageDirectory, name))[0];
-    expect(archive).toBeDefined();
 
     await writeFile(
       join(consumerDirectory, 'package.json'),
       JSON.stringify({ name: 'woml-pro9-clean-server', private: true })
     );
-    const installed = Bun.spawnSync(
-      [Bun.which('bun')!, 'add', archive!, '--no-save'],
-      {
-        cwd: consumerDirectory,
-        env: { ...process.env, BUN_INSTALL_CACHE_DIR: cacheDirectory },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    expect(
-      installed.exitCode,
-      `${installed.stdout.toString()}${installed.stderr.toString()}`
-    ).toBe(0);
+    const candidate = await installLocalReleaseCandidate(consumerDirectory, {
+      cache: cacheDirectory,
+    });
 
     const installedPackage = join(
       consumerDirectory,
@@ -146,9 +121,17 @@ describe('Clean package and server release', () => {
     const installedFiles = await filesBelow(installedPackage);
     const relativeFiles = installedFiles.map(path => relative(installedPackage, path));
     expect(relativeFiles).toContain('dist/cli.js');
-    expect(relativeFiles).toContain(
-      `dist/woml-core.${process.platform}-${process.arch}.node`
-    );
+    expect(relativeFiles.some(path => path.endsWith('.node'))).toBe(false);
+    expect(
+      await Bun.file(
+        join(
+          consumerDirectory,
+          'node_modules',
+          ...candidate.nativePackage.split('/'),
+          nativePackageBinaryName(candidate.target),
+        ),
+      ).exists(),
+    ).toBe(true);
     expect(relativeFiles.some(path => path.startsWith('src/'))).toBe(false);
     expect(relativeFiles.some(path => path.startsWith('tests/'))).toBe(false);
     expect(relativeFiles.some(path => path.endsWith('.sqlite'))).toBe(false);

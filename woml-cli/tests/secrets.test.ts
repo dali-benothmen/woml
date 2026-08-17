@@ -171,7 +171,7 @@ describe('woml secrets CLI', () => {
     ).pathname;
 
     expect(
-      await runCli(['run', file], capture.io, {
+      await runCli(['test', file], capture.io, {
         createSecretStore: () => {
           secretStoreCreated = true;
           return new MemorySecretStore();

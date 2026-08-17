@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
-const packageRoot = resolve(import.meta.dir, '..');
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
 let temporaryDirectory: string;
 
 const counterWorkflow = `<woml>
@@ -50,12 +51,11 @@ afterAll(async () => {
 
 describe('Packaged Durable User State release', () => {
   test('a clean consumer installs WOML and remembers state across native process restarts', async () => {
-    const packageDirectory = join(temporaryDirectory, 'package');
     const consumerDirectory = join(temporaryDirectory, 'consumer');
     const bunTemporaryDirectory = join(temporaryDirectory, 'bun-temp');
     const bunCacheDirectory = join(temporaryDirectory, 'bun-cache');
     await Promise.all(
-      [packageDirectory, consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
+      [consumerDirectory, bunTemporaryDirectory, bunCacheDirectory].map(
         directory => mkdir(directory, { recursive: true })
       )
     );
@@ -68,37 +68,10 @@ describe('Packaged Durable User State release', () => {
       Bun.write(join(consumerDirectory, 'conversation.woml'), conversationWorkflow),
     ]);
 
-    const packed = Bun.spawnSync(
-      [
-        Bun.which('bun')!,
-        'pm',
-        'pack',
-        '--ignore-scripts',
-        '--destination',
-        packageDirectory,
-      ],
-      { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' }
-    );
-    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
-    const archive = (await readdir(packageDirectory))
-      .filter(name => name.endsWith('.tgz'))
-      .map(name => join(packageDirectory, name))[0];
-    expect(archive).toBeDefined();
-
-    const installed = Bun.spawnSync([Bun.which('bun')!, 'add', archive!, '--no-save'], {
-      cwd: consumerDirectory,
-      env: {
-        ...process.env,
-        TMPDIR: bunTemporaryDirectory,
-        BUN_INSTALL_CACHE_DIR: bunCacheDirectory,
-      },
-      stdout: 'pipe',
-      stderr: 'pipe',
+    await installLocalReleaseCandidate(consumerDirectory, {
+      cache: bunCacheDirectory,
+      temporary: bunTemporaryDirectory,
     });
-    expect(
-      installed.exitCode,
-      `${installed.stdout.toString()}${installed.stderr.toString()}`
-    ).toBe(0);
 
     const executable = join(consumerDirectory, 'node_modules', '.bin', 'woml');
     const statePath = join(consumerDirectory, 'state.sqlite');

@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
-const packageRoot = resolve(import.meta.dir, '..');
-const projectRoot = resolve(packageRoot, '..');
+import { nativePackageBinaryName } from '../src/native-platform';
+import { installLocalReleaseCandidate } from './helpers/release-candidate';
+
 const scriptPath = Bun.which('script');
 const packagedTest = process.platform === 'win32' || scriptPath === null
   ? test.skip
@@ -48,46 +49,34 @@ describe('clean installed terminal experience', () => {
   packagedTest('packs, installs, waits for Enter, executes through Rust/Bun, and exits cleanly', async () => {
     const root = await mkdtemp(join(tmpdir(), 'woml-terminal-release-'));
     directories.push(root);
-    const archives = join(root, 'archives');
     const consumer = join(root, 'consumer');
     const cache = join(root, 'cache');
-    await Promise.all([archives, consumer, cache].map(path =>
+    await Promise.all([consumer, cache].map(path =>
       mkdir(path, { recursive: true })
     ));
-
-    const packed = Bun.spawnSync([
-      Bun.which('bun')!, 'pm', 'pack', '--ignore-scripts', '--destination', archives,
-    ], { cwd: packageRoot, stdout: 'pipe', stderr: 'pipe' });
-    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
-    const archiveName = (await readdir(archives)).find(name => name.endsWith('.tgz'));
-    expect(archiveName).toBeDefined();
 
     await writeFile(
       join(consumer, 'package.json'),
       JSON.stringify({ name: 'woml-terminal-clean-consumer', private: true })
     );
-    const installed = Bun.spawnSync(
-      [Bun.which('bun')!, 'add', join(archives, archiveName!), '--no-save'],
-      {
-        cwd: consumer,
-        env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    expect(
-      installed.exitCode,
-      `${installed.stdout.toString()}${installed.stderr.toString()}`
-    ).toBe(0);
+    const candidate = await installLocalReleaseCandidate(consumer, { cache });
 
     const executable = join(consumer, 'node_modules/.bin/woml');
     const installedPackage = join(consumer, 'node_modules/woml');
     expect(await Bun.file(join(installedPackage, 'dist/cli.js')).exists()).toBe(true);
-    expect(await Bun.file(join(
-      installedPackage,
-      'dist',
-      `woml-core.${process.platform}-${process.arch}.node`
-    )).exists()).toBe(true);
+    expect(
+      await Bun.file(
+        join(
+          consumer,
+          'node_modules',
+          ...candidate.nativePackage.split('/'),
+          nativePackageBinaryName(candidate.target),
+        ),
+      ).exists(),
+    ).toBe(true);
+    expect(
+      await Bun.file(join(installedPackage, 'dist/woml-core.node')).exists(),
+    ).toBe(false);
     expect(await Bun.file(join(installedPackage, 'src/cli.ts')).exists()).toBe(false);
 
     const version = invoke(executable, consumer, '--version');
@@ -116,7 +105,7 @@ describe('clean installed terminal experience', () => {
     ].join(' ');
     const child = Bun.spawn(
       [scriptPath!, '-qefc', command, '/dev/null'],
-      { cwd: projectRoot, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' }
+      { cwd: consumer, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' }
     );
     let output = '';
     const collect = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
