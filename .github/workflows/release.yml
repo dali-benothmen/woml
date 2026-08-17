@@ -1,9 +1,16 @@
-name: Release WOML
+name: WOML Release Candidate
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_to_npm:
+        description: Publish the verified package family to npm
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: woml-release-${{ github.ref }}
@@ -21,60 +28,93 @@ jobs:
   validate:
     name: Validate release contracts
     runs-on: ubuntu-24.04
+    outputs:
+      release-tag: ${{ steps.contract.outputs.release-tag }}
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install JavaScript dependencies
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install locked dependencies
         working-directory: woml-cli
         run: bun install --frozen-lockfile
-
-      - name: Verify tag and release packaging contract
+      - name: Freeze the source ref and release identity
+        id: contract
+        shell: bash
         run: |
-          bun woml-cli/scripts/native-release.ts verify-tag --tag "${GITHUB_REF_NAME}"
-          bun test woml-cli/tests/native-platform-release.test.ts
-          bun woml-cli/scripts/verify-native-platform-release.ts
-
-      - name: Test and type-check the WOML frontend
+          set -euo pipefail
+          version=$(node -p "require('./woml-cli/package.json').version")
+          expected="v${version}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            bun woml-cli/scripts/native-release.ts verify-tag --tag "${GITHUB_REF_NAME}"
+            release_tag="${GITHUB_REF_NAME}"
+          else
+            release_tag="${expected}"
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_to_npm }}" == "true" && "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo 'Publishing requires manually running this workflow from the exact release tag.' >&2
+            exit 1
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_to_npm }}" == "true" && "${{ vars.WOML_NPM_PUBLISH_ENABLED }}" != "true" ]]; then
+            echo 'Publishing remains disabled until the V1R9 owner setup enables WOML_NPM_PUBLISH_ENABLED.' >&2
+            exit 1
+          fi
+          echo "release-tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+      - name: Verify release source contracts
         working-directory: woml-cli
         run: |
-          bun test ../woml/tests
-          bun run typecheck
+          bun test tests/release-identity.test.ts tests/native-platform-release.test.ts --max-concurrency=1
+          bun run test:release-automation
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          bun --version
+          node --version
+          npm --version
+          git status --short
 
   build-main:
-    name: Build woml
+    name: Build portable woml package
     runs-on: ubuntu-24.04
     needs: validate
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install dependencies
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install locked dependencies
         working-directory: woml-cli
         run: bun install --frozen-lockfile
-
-      - name: Build and verify the platform-neutral npm package
+      - name: Build the platform-neutral package
         working-directory: woml-cli
         run: bun run build:release
-
-      - name: Inspect the package before upload
-        working-directory: release/main
-        run: bun pm pack --dry-run
-
-      - uses: actions/upload-artifact@v4
+      - name: Pack, seal, and verify the main artifact
+        run: |
+          bun woml-cli/scripts/release-artifact.ts pack --root release/main
+          bun woml-cli/scripts/release-artifact.ts seal --root release/main --kind main
+          bun woml-cli/scripts/release-artifact.ts verify --root release/main
+      - uses: actions/upload-artifact@v6
         with:
           name: woml-main
           path: release/main
           if-no-files-found: error
+          retention-days: 14
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          find release -maxdepth 4 -type f -print 2>/dev/null || true
+          git status --short
 
   build-native:
-    name: Build ${{ matrix.package }}
+    name: Build and load-test ${{ matrix.package }}
     needs: validate
     strategy:
       fail-fast: false
@@ -122,23 +162,23 @@ jobs:
             musl: true
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust }}
-
       - name: Install musl linker
         if: matrix.musl
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install --yes musl-tools
-
       - name: Build the isolated WOML native adapter
         shell: bash
         env:
@@ -147,25 +187,21 @@ jobs:
           cargo build -j 1 --release --locked
           --manifest-path core/woml-native/Cargo.toml
           --target ${{ matrix.rust }}
-
-      - name: Create the platform npm package
+      - name: Create the target-specific npm package
         shell: bash
         run: >-
           bun woml-cli/scripts/native-release.ts package-platform
           --target ${{ matrix.package }}
           --artifact dist/target/${{ matrix.rust }}/release/${{ matrix.library }}
           --output release/native
-
-      - name: Load-test native addon
+      - name: Load-test the native exports on the matching runtime
         if: ${{ !matrix.musl }}
         shell: bash
         run: >-
-          bun -e "const addon=require('./release/native/woml-core.${{ matrix.package }}.node');
-          const names=Object.keys(addon);
-          if(names.length!==36||typeof addon.executeWomlWorkflow!=='function')
-          throw new Error('unexpected native export surface')"
-
-      - name: Load-test musl native addon in Alpine
+          bun woml-cli/scripts/release-artifact.ts load-native
+          --root release/native
+          --target ${{ matrix.package }}
+      - name: Load-test musl exports in Alpine
         if: matrix.musl
         shell: bash
         run: >-
@@ -173,83 +209,135 @@ jobs:
           -v "${{ github.workspace }}:/work"
           -w /work
           oven/bun:${{ env.BUN_VERSION }}-alpine
-          bun -e "const addon=require('./release/native/woml-core.${{ matrix.package }}.node');
-          const names=Object.keys(addon);
-          if(names.length!==36||typeof addon.executeWomlWorkflow!=='function')
-          throw new Error('unexpected native export surface')"
-
-      - uses: actions/upload-artifact@v4
+          bun woml-cli/scripts/release-artifact.ts load-native
+          --root release/native
+          --target ${{ matrix.package }}
+      - name: Pack, seal, and verify the native artifact
+        shell: bash
+        run: |
+          bun woml-cli/scripts/release-artifact.ts pack --root release/native
+          bun woml-cli/scripts/release-artifact.ts seal --root release/native --kind native --target ${{ matrix.package }}
+          bun woml-cli/scripts/release-artifact.ts verify --root release/native
+      - uses: actions/upload-artifact@v6
         with:
           name: native-${{ matrix.package }}
           path: release/native
           if-no-files-found: error
+          retention-days: 14
+      - name: Failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          bun --version
+          rustc --version
+          cargo --version
+          find release dist/target -maxdepth 5 -type f -print 2>/dev/null || true
+          git status --short
 
-  publish:
-    name: Publish npm packages
+  collect:
+    name: Verify the complete package family
     runs-on: ubuntu-24.04
     needs: [validate, build-main, build-native]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/download-artifact@v6
+        with:
+          name: woml-main
+          path: release/collected/main
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: native-*
+          path: release/collected/platforms
+          merge-multiple: false
+      - name: Verify versions, platforms, licenses, checksums, and exports
+        run: >-
+          bun woml-cli/scripts/native-release.ts verify-collected
+          --main release/collected/main
+          --platforms release/collected/platforms
+          --tag "${{ needs.validate.outputs.release-tag }}"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: woml-release-family
+          path: release/collected
+          if-no-files-found: error
+          retention-days: 30
+      - name: Failure diagnostics
+        if: failure()
+        run: find release/collected -maxdepth 5 -type f -print 2>/dev/null || true
+
+  publish:
+    name: Publish approved npm release
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_npm == true && github.ref_type == 'tag' && vars.WOML_NPM_PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    needs: [validate, collect]
+    environment: npm-production
     permissions:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-
-      - uses: actions/download-artifact@v4
+          package-manager-cache: false
+      - uses: actions/download-artifact@v6
         with:
-          name: woml-main
-          path: release/main
-
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: native-*
-          path: release/platforms
-
-      - name: Verify the complete collected release
+          name: woml-release-family
+          path: release/collected
+      - name: Reverify the immutable release family
         run: >-
           bun woml-cli/scripts/native-release.ts verify-collected
-          --main release/main
-          --platforms release/platforms
+          --main release/collected/main
+          --platforms release/collected/platforms
           --tag "${GITHUB_REF_NAME}"
-
-      - name: Publish native platform packages
+      - name: Verify trusted-publishing client
         shell: bash
         run: |
           set -euo pipefail
-          for directory in release/platforms/native-*; do
+          npm --version
+          node -e "const { execFileSync } = require('node:child_process'); const [major, minor] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number); if (major < 11 || (major === 11 && minor < 5)) process.exit(1)"
+      - name: Publish native platform packages first
+        shell: bash
+        run: |
+          set -euo pipefail
+          for directory in release/collected/platforms/native-*; do
+            archive=$(find "${directory}" -maxdepth 1 -name '*.tgz' -type f -print -quit)
             name=$(node -p "require('./${directory}/package.json').name")
             version=$(node -p "require('./${directory}/package.json').version")
             if npm view "${name}@${version}" version >/dev/null 2>&1; then
               echo "Skipping ${name}@${version}; it is already published."
             else
-              npm publish "${directory}" --access public --provenance
+              npm publish "${archive}" --access public --provenance
             fi
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish woml
+      - name: Publish woml last
         shell: bash
         run: |
           set -euo pipefail
-          version=$(node -p "require('./release/main/package.json').version")
+          version=$(node -p "require('./release/collected/main/package.json').version")
+          archive=$(find release/collected/main -maxdepth 1 -name '*.tgz' -type f -print -quit)
           if npm view "woml@${version}" version >/dev/null 2>&1; then
             echo "Skipping woml@${version}; it is already published."
           else
-            npm publish release/main --access public --provenance
+            npm publish "${archive}" --access public --provenance
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create GitHub release
+      - name: Create the GitHub release after npm succeeds
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          node --version
+          npm --version
+          find release/collected -maxdepth 5 -type f -print 2>/dev/null || true

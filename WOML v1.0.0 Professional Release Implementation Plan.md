@@ -1,6 +1,6 @@
 # WOML v1.0.0 Professional Release Implementation Plan
 
-Status: V1R0 through V1R5 completed on 2026-08-17. V1R6 through V1R9 are planned. No npm
+Status: V1R0 through V1R6 completed on 2026-08-17. V1R7 through V1R9 are planned. No npm
 package has been published by this plan. Publishing is the final gated phase
 and will be performed only with the product owner present.
 
@@ -411,6 +411,10 @@ Gate:
 - architecture separation remains enforced.
 
 ### V1R6 — Harden CI and cross-platform release automation
+
+Status: completed on 2026-08-17. The automation and local conformance gates
+are implemented. Its first non-publishing eight-platform execution is the V1R7
+release-candidate run; no npm or GitHub release operation was invoked here.
 
 Changes:
 

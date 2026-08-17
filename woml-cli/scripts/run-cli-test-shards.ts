@@ -11,10 +11,14 @@ export const cliTestShardNames = [
   'workflows',
   'providers',
   'operations',
+  'candidate',
 ] as const;
 type ShardName = (typeof cliTestShardNames)[number];
 
 function shardFor(file: string): ShardName {
+  if (file.includes('packaged') || file === 'production-runtime-release.test.ts') {
+    return 'candidate';
+  }
   if (/(?:slack|telegram|discord|whatsapp|notification|provider)/u.test(file)) {
     return 'providers';
   }
@@ -24,7 +28,7 @@ function shardFor(file: string): ShardName {
     return 'operations';
   }
   if (
-    /(?:contract|authoring|foundation|protocol|identity|secret-prompt|native-platform|architecture)/u.test(file)
+    /(?:contract|authoring|foundation|protocol|identity|secret-prompt|native-platform|architecture|release-(?:package|artifact|family|automation|boundary))/u.test(file)
   ) {
     return 'contracts';
   }

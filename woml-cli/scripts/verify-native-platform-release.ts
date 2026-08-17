@@ -18,6 +18,10 @@ const releaseScript = await readFile(
   resolve(root, 'woml-cli/scripts/native-release.ts'),
   'utf8',
 );
+const artifactScript = await readFile(
+  resolve(root, 'woml-cli/scripts/release-artifact.ts'),
+  'utf8',
+);
 const loader = await readFile(
   resolve(root, 'woml-cli/src/rust-executor.ts'),
   'utf8',
@@ -40,15 +44,48 @@ for (const marker of [
   '--locked',
   '-j 1',
   'verify-collected',
-  'NPM_TOKEN',
   '--provenance',
   'id-token: write',
-  'prepare-main',
+  'workflow_dispatch',
+  'publish_to_npm',
+  'npm-production',
+  'WOML_NPM_PUBLISH_ENABLED',
+  "github.ref_type == 'tag'",
+  'release-artifact.ts load-native',
+  'release-artifact.ts seal',
+  'release-artifact.ts verify',
+  'native-load-test.json',
+  'artifact-sha256.json',
+  'actions/upload-artifact@v6',
+  'actions/download-artifact@v6',
+  'retention-days',
   'LICENSE',
 ]) {
-  if (!workflow.includes(marker) && !releaseScript.includes(marker)) {
+  if (
+    !workflow.includes(marker) &&
+    !releaseScript.includes(marker) &&
+    !artifactScript.includes(marker)
+  ) {
     throw new Error(`Native release boundary is missing ${marker}.`);
   }
+}
+
+if (workflow.includes('NPM_TOKEN') || workflow.includes('NODE_AUTH_TOKEN')) {
+  throw new Error(
+    'Release publication must use npm trusted publishing, not a long-lived token.',
+  );
+}
+if (
+  !workflow.includes(
+    "github.event_name == 'workflow_dispatch' && inputs.publish_to_npm == true && github.ref_type == 'tag'",
+  )
+) {
+  throw new Error(
+    'The npm publish job is not restricted to an explicit exact-tag dispatch.',
+  );
+}
+if (!workflow.includes('name: WOML Release Candidate')) {
+  throw new Error('Tag pushes must produce a release candidate, not publish directly.');
 }
 
 if (
@@ -67,5 +104,5 @@ if (
 }
 
 console.log(
-  `WOML native release verified: ${womlNativeTargets.length} target packages, isolated woml-native build, runtime selection, license staging, provenance, and platform-first publication.`,
+  `WOML native release verified: ${womlNativeTargets.length} target packages, matching-runtime load tests, sealed artifacts, trusted/manual publication, and platform-first ordering.`,
 );

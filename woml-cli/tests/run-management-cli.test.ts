@@ -167,7 +167,7 @@ describe('Direct run management', () => {
       'utf8'
     );
     const child = Bun.spawn(
-      [cliPath, 'run', workflowPath, '--state', statePath],
+      [cliPath, 'test', workflowPath, '--state', statePath],
       { cwd: projectRoot, stdout: 'pipe', stderr: 'pipe' }
     );
     let stderr = '';
@@ -212,10 +212,13 @@ describe('Direct run management', () => {
     );
 
     const cancelDeadline = Date.now() + 10_000;
-    while (!stderr.includes(`Run ${runId} cancelled.`)) {
+    while (!stderr.includes('WOML_RUN_CANCELLED')) {
       if (Date.now() >= cancelDeadline) throw new Error(stderr);
       await Bun.sleep(10);
     }
+    expect(await child.exited).toBe(1);
+    await stderrDone;
+    expect(stderr).toContain(runId);
     const inspection = invoke('get', runId, '--state', statePath, '--json');
     expect(inspection.exitCode).toBe(0);
     expect(JSON.parse(inspection.stdout.toString())).toMatchObject({
@@ -223,10 +226,6 @@ describe('Direct run management', () => {
       businessOutcome: 'cancelled',
       cancellation: { requested: true },
     });
-
-    child.kill('SIGINT');
-    expect(await child.exited).toBe(0);
-    await stderrDone;
   }, 30_000);
 
   test('reports unknown runs and removes the old namespace', () => {

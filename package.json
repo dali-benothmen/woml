@@ -18,6 +18,7 @@
     "lint": "bun run --cwd woml-cli test:communication-provider-clippy",
     "pack": "bun run --cwd woml-cli pack:release",
     "test:identity": "bun run --cwd woml-cli test:release-identity",
+    "test:release-automation": "bun run --cwd woml-cli test:release-automation",
     "test:documentation": "bun run --cwd woml-cli test:documentation",
     "test:architecture": "bun run --cwd woml-cli test:architecture-separation",
     "release:check": "bun woml-cli/scripts/release-check.ts",

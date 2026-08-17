@@ -93,6 +93,15 @@ const stages: readonly Stage[] = [
     ],
   },
   {
+    name: 'release automation',
+    commands: [
+      {
+        command: [bun, 'run', 'test:release-automation'],
+        cwd: cliRoot,
+      },
+    ],
+  },
+  {
     name: 'reproducible package',
     commands: [
       { command: [bun, 'test', 'tests/release-package.test.ts'], cwd: cliRoot },

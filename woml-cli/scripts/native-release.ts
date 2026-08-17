@@ -21,10 +21,15 @@ import {
   womlNativeTargetSpecs,
 } from '../src/native-platform';
 import {
+  packedPackageFiles,
   publicJavaScriptFiles,
   publicPackageFiles,
   publicSourceMapFiles,
 } from './release-contract';
+import {
+  nativeLoadReceiptName,
+  verifyReleaseArtifact,
+} from './release-artifact';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const cliRoot = resolve(repositoryRoot, 'woml-cli');
@@ -44,6 +49,10 @@ interface PackageMetadata {
   readonly engines: Readonly<Record<string, string>>;
   readonly files?: readonly string[];
   readonly scripts?: Readonly<Record<string, string>>;
+  readonly main?: string;
+  readonly os?: readonly string[];
+  readonly cpu?: readonly string[];
+  readonly libc?: readonly string[];
 }
 
 async function sourceMetadata(): Promise<PackageMetadata> {
@@ -236,6 +245,24 @@ async function assertFile(path: string): Promise<void> {
   if ((await stat(path)).size === 0) throw new Error(`${path} is empty.`);
 }
 
+function assertArtifactFiles(
+  label: string,
+  actual: readonly { readonly path: string }[],
+  expected: readonly string[],
+): void {
+  const archives = actual.filter(file => file.path.endsWith('.tgz'));
+  const files = actual
+    .filter(file => !file.path.endsWith('.tgz'))
+    .map(file => file.path)
+    .sort();
+  if (
+    archives.length !== 1 ||
+    JSON.stringify(files) !== JSON.stringify([...expected].sort())
+  ) {
+    throw new Error(`${label} has an invalid sealed file inventory.`);
+  }
+}
+
 export async function verifyCollectedRelease(
   mainRoot: string,
   platformsRoot: string,
@@ -257,6 +284,19 @@ export async function verifyCollectedRelease(
   ) {
     throw new Error('The staged woml manifest has an invalid native package set.');
   }
+  const mainArtifact = await verifyReleaseArtifact(mainRoot);
+  if (
+    mainArtifact.kind !== 'main' ||
+    mainArtifact.target !== undefined ||
+    !main.files ||
+    JSON.stringify(main.files) !== JSON.stringify(publicPackageFiles) ||
+    mainArtifact.files.some(file => file.path.endsWith('.node'))
+  ) {
+    throw new Error('The staged woml artifact is not the sealed portable package.');
+  }
+  assertArtifactFiles('The staged woml artifact', mainArtifact.files, [
+    ...packedPackageFiles,
+  ]);
   await Promise.all([
     assertFile(resolve(mainRoot, 'LICENSE')),
     assertFile(resolve(mainRoot, 'dist/cli.js')),
@@ -269,23 +309,38 @@ export async function verifyCollectedRelease(
   for (const directory of directories) {
     const manifest = JSON.parse(
       await readFile(resolve(directory, 'package.json'), 'utf8'),
-    ) as {
-      readonly name?: string;
-      readonly version?: string;
-      readonly main?: string;
-    };
+    ) as PackageMetadata;
     const target = womlNativeTargets.find(
       candidate => nativePackageName(candidate) === manifest.name,
     );
+    const spec = target === undefined ? undefined : womlNativeTargetSpecs[target];
     if (
       target === undefined ||
+      spec === undefined ||
       manifest.version !== metadata.version ||
-      manifest.main !== `./${nativePackageBinaryName(target)}`
+      manifest.main !== `./${nativePackageBinaryName(target)}` ||
+      JSON.stringify(manifest.files) !==
+        JSON.stringify([nativePackageBinaryName(target), 'README.md', 'LICENSE']) ||
+      JSON.stringify(manifest.os) !== JSON.stringify([spec.os]) ||
+      JSON.stringify(manifest.cpu) !== JSON.stringify([spec.cpu]) ||
+      JSON.stringify(manifest.libc) !==
+        JSON.stringify(spec.libc === undefined ? undefined : [spec.libc])
     ) {
       throw new Error(`Invalid native package in ${directory}.`);
     }
     if (seen.has(target)) throw new Error(`Duplicate native package ${target}.`);
     seen.add(target);
+    const artifact = await verifyReleaseArtifact(directory);
+    if (artifact.kind !== 'native' || artifact.target !== target) {
+      throw new Error(`Native artifact seal does not match ${target}.`);
+    }
+    assertArtifactFiles(`Native artifact ${target}`, artifact.files, [
+      nativePackageBinaryName(target),
+      'LICENSE',
+      'README.md',
+      'package.json',
+      nativeLoadReceiptName,
+    ]);
     await Promise.all([
       assertFile(resolve(directory, nativePackageBinaryName(target))),
       assertFile(resolve(directory, 'LICENSE')),

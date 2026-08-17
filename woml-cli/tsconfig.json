@@ -16,6 +16,7 @@
     "tests/**/*.ts",
     "scripts/build-javascript.ts",
     "scripts/guard-source-publish.ts",
+    "scripts/release-artifact.ts",
     "scripts/release-check.ts",
     "scripts/release-contract.ts",
     "scripts/release-package.ts",

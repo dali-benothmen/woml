@@ -40,7 +40,8 @@ bun run test:documentation
 Before proposing a release, run `bun run release:check` from the repository
 root. The checker installs from the frozen lockfile, builds once, runs the
 portable language/CLI/Rust baseline serially, verifies architecture and
-documentation, and proves that two clean package builds are identical.
+documentation, checks the guarded release automation, and proves that two clean
+package builds are identical.
 Use `bun run format:check` from the repository root for a quick formatting
 gate.
 
@@ -55,8 +56,9 @@ usage. Feature-specific release scripts in `woml-cli/package.json` remain the
 source of truth for broader gates.
 
 Cross-platform npm publication is documented in
-[`docs/woml-release.md`](docs/woml-release.md). Do not push a release tag unless
-the CLI, frontend, and native-adapter versions match exactly.
+[`docs/woml-release.md`](docs/woml-release.md). A release tag is intentionally
+non-publishing, but only a release owner should push one after the CLI,
+frontend, and native-adapter versions match exactly.
 
 ## Architecture rules
 

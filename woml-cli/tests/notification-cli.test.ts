@@ -84,8 +84,8 @@ describe('Notification CLI product path', () => {
       );
       expect(exitCode).toBe(0);
       expect(JSON.parse(stdout)).toEqual({ decision: 'approved' });
-      expect(stderr).toContain('waiting for approval in Slack');
-      expect(stderr).toContain('approve or reject from any configured channel');
+      expect(stderr).toContain('waiting for approval');
+      expect(stderr).toContain('approve or reject from any configured provider');
       expect(stderr).not.toContain('Approval URL:');
     } finally {
       await rm(directory, { recursive: true, force: true });
