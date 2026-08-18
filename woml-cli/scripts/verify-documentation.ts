@@ -117,14 +117,14 @@ for (const example of filesUnder(resolve(repositoryRoot, 'examples'), '.woml')) 
 }
 
 const readme = readFileSync(resolve(repositoryRoot, 'README.md'), 'utf8');
-if (!readme.includes('bun add --global woml')) {
+if (!readme.includes('bun add --global woml-cli')) {
   failures.push('README.md: canonical install command is missing');
 }
-if (/npm install (?:--global|-g) woml/u.test(readme)) {
+if (/npm install (?:--global|-g) woml-cli/u.test(readme)) {
   failures.push('README.md: install section must keep one canonical Bun command');
 }
-if (/bun add --global woml-cli/u.test(readme)) {
-  failures.push('README.md: obsolete woml-cli package name is present');
+if (/bun add --global woml[^-\w]/u.test(readme)) {
+  failures.push('README.md: obsolete unscoped woml package name is present');
 }
 
 const requiredFiles = [

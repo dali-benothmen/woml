@@ -48,7 +48,7 @@ describe('WOML v1 release identity', () => {
       private: true,
     });
     expect(runtime).toMatchObject({
-      name: '@woml-org/woml',
+      name: 'woml-cli',
       version: '1.0.1',
       private: false,
       bin: { woml: './dist/cli.js' },
@@ -84,9 +84,9 @@ describe('WOML v1 release identity', () => {
   });
 
   test('keeps public installation and repository metadata on WOML', async () => {
-    for (const path of ['README.md', 'woml-cli/README.md', 'docs/woml-release.md']) {
+    for (const path of ['README.md', 'woml-cli/README.md', 'docs/getting-started.md']) {
       const source = await readFile(resolve(repositoryRoot, path), 'utf8');
-      expect(source).not.toMatch(
+      expect(source).toMatch(
         /(?:bun\s+add|npm\s+(?:install|i)).*\bwoml-cli\b/u,
       );
     }
@@ -95,8 +95,7 @@ describe('WOML v1 release identity', () => {
       resolve(repositoryRoot, '.github/workflows/release.yml'),
       'utf8',
     );
-    expect(releaseWorkflow).toContain('npm view "@woml-org/woml@${version}"');
-    expect(releaseWorkflow).not.toContain('npm view "woml-cli@${version}"');
+    expect(releaseWorkflow).toContain('npm view "woml-cli@${version}"');
 
     for (const path of [
       'package.json',

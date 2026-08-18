@@ -1,10 +1,9 @@
 # Releasing WOML to npm
 
-WOML publishes one platform-neutral `woml` package and one small native
+WOML publishes one platform-neutral `woml-cli` package and one small native
 engine package for each supported operating-system, CPU, and Linux libc pair.
-Users install only `woml`; platform metadata limits its optional native
-dependencies and the WOML loader selects the exact runtime package. On Linux,
-the loader explicitly distinguishes glibc from musl.
+Users install only `woml-cli`; platform metadata limits its optional native
+dependencies and the WOML loader selects the exact runtime package.
 
 ## Published package family
 
@@ -15,15 +14,13 @@ the loader explicitly distinguishes glibc from musl.
 | Windows x64 | `@woml-org/cli-win32-x64-msvc` |
 | Windows ARM64 | `@woml-org/cli-win32-arm64-msvc` |
 | Linux x64 glibc | `@woml-org/cli-linux-x64-gnu` |
-| Linux x64 musl | `@woml-org/cli-linux-x64-musl` |
 | Linux ARM64 glibc | `@woml-org/cli-linux-arm64-gnu` |
-| Linux ARM64 musl | `@woml-org/cli-linux-arm64-musl` |
 
 The native packages contain only one `.node` binary, package metadata, README,
 and Apache-2.0 license. The main package contains the CLI, script hosts,
 communication-provider host, and built-in Slack/Telegram/Discord/WhatsApp
 adapters but no native binary. Its exact-version optional dependencies select
-the platform package. Linux selection distinguishes glibc from musl at runtime.
+the platform package.
 
 Local development remains simple: `bun run build` stages the current machine's
 binary directly under the internal `woml-cli/dist` development directory, and
@@ -42,7 +39,7 @@ hash before the package is accepted.
 ## One-time npm setup
 
 1. Own or create the `@woml-org` npm scope.
-2. Own or create `woml` and every `@woml-org/cli-*` package.
+2. Own or create `woml-cli` and every `@woml-org/cli-*` package.
 3. Configure npm trusted publishing for `.github/workflows/release.yml` in this
    repository for every package in the family.
 4. Create the protected GitHub environment `npm-production` and require an
@@ -72,7 +69,7 @@ bun run build:release
 ```
 
 To create a local tarball for inspection, use `bun run pack`. It writes
-`release/packages/woml-1.0.0.tgz`. Publishing directly from `woml-cli/` is
+`release/packages/woml-cli-1.0.1.tgz`. Publishing directly from `woml-cli/` is
 blocked intentionally; only the verified staging directory may become the
 main npm package.
 
@@ -84,7 +81,7 @@ git push origin v1.0.0
 ```
 
 The tag workflow rejects a tag that differs from the package version. It builds
-and load-tests all eight native targets on matching runtime families, packs and
+and load-tests all six native targets on matching runtime families, packs and
 seals each package, verifies the complete collected family, and uploads a
 30-day release-candidate artifact. **A tag push does not publish anything.**
 
@@ -97,7 +94,7 @@ gh workflow run release.yml --ref v1.0.0 -f publish_to_npm=true
 
 The `npm-production` approval is the final human gate. The job downloads and
 reverifies the already-tested candidate rather than rebuilding it, publishes
-the eight native packages first and `woml` last, then creates the GitHub release
+the six native packages first and `woml-cli` last, then creates the GitHub release
 only after npm succeeds. A rerun safely skips package versions already present
 on npm.
 
@@ -109,7 +106,7 @@ tag normally, is always non-publishing and is safe for release-candidate proof.
 The release builds only `core/woml-native`, which depends locally only on
 `woml-engine`. It never restores the retired combined Rust package. Cargo uses
 the committed workspace lockfile and one build job per runner. macOS, Windows,
-Linux glibc, and Linux musl artifacts are tested on matching runtime families
+and Linux glibc artifacts are tested on matching runtime families
 before publication.
 
 ## CI and artifact retention

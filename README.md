@@ -18,7 +18,7 @@ human-in-the-loop workflows.
 WOML requires Bun 1.3.14 or later:
 
 ```bash
-bun add --global woml
+bun add --global woml-cli
 woml --version
 ```
 
