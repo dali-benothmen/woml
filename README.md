@@ -43,7 +43,7 @@ WOML takes a different bet: your workflow is **a file**. It reads like HTML, so 
 ## Installation
 
 ```bash
-bun add --global woml-cli
+npm i --g woml-cli
 ```
 
 This installs the `woml` command:
