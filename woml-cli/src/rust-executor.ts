@@ -11,7 +11,6 @@ import {
   type RunPresentationV1,
 } from './terminal-presentation';
 import {
-  detectLinuxLibc,
   localNativeBinaryName,
   nativePackageName,
   nativeTargetForRuntime,
@@ -1162,7 +1161,6 @@ function defaultNativeCorePath(): string {
   const target = nativeTargetForRuntime(
     process.platform,
     process.arch,
-    detectLinuxLibc(),
   );
   const packageName = nativePackageName(target);
   try {

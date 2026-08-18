@@ -137,42 +137,26 @@ jobs:
             runner: macos-15-intel
             rust: x86_64-apple-darwin
             library: libwoml_core.dylib
-            musl: false
           - package: darwin-arm64
             runner: macos-15
             rust: aarch64-apple-darwin
             library: libwoml_core.dylib
-            musl: false
           - package: win32-x64-msvc
             runner: windows-2022
             rust: x86_64-pc-windows-msvc
             library: woml_core.dll
-            musl: false
           - package: win32-arm64-msvc
             runner: windows-11-arm
             rust: aarch64-pc-windows-msvc
             library: woml_core.dll
-            musl: false
           - package: linux-x64-gnu
             runner: ubuntu-24.04
             rust: x86_64-unknown-linux-gnu
             library: libwoml_core.so
-            musl: false
-          - package: linux-x64-musl
-            runner: ubuntu-24.04
-            rust: x86_64-unknown-linux-musl
-            library: libwoml_core.so
-            musl: true
           - package: linux-arm64-gnu
             runner: ubuntu-24.04-arm
             rust: aarch64-unknown-linux-gnu
             library: libwoml_core.so
-            musl: false
-          - package: linux-arm64-musl
-            runner: ubuntu-24.04-arm
-            rust: aarch64-unknown-linux-musl
-            library: libwoml_core.so
-            musl: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -190,21 +174,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust }}
-      - name: Install musl linker
-        if: matrix.musl
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes musl-tools
       - name: Build the isolated WOML native adapter
         shell: bash
-        env:
-          RUSTFLAGS: '-C target-feature=-crt-static'
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: >-
-          GCC_LIB_DIR=$(dirname $(gcc -print-file-name=libgcc_s.so)) &&
-          RUSTFLAGS="$RUSTFLAGS -L $GCC_LIB_DIR"
           cargo build -j 1 --release --locked
           --manifest-path core/woml-native/Cargo.toml
           --target ${{ matrix.rust }}
@@ -216,20 +188,8 @@ jobs:
           --artifact dist/target/${{ matrix.rust }}/release/${{ matrix.library }}
           --output release/native
       - name: Load-test the native exports on the matching runtime
-        if: ${{ !matrix.musl }}
         shell: bash
         run: >-
-          bun woml-cli/scripts/release-artifact.ts load-native
-          --root release/native
-          --target ${{ matrix.package }}
-      - name: Load-test musl exports in Alpine
-        if: matrix.musl
-        shell: bash
-        run: >-
-          docker run --rm
-          -v "${{ github.workspace }}:/work"
-          -w /work
-          oven/bun:${{ env.BUN_VERSION }}-alpine
           bun woml-cli/scripts/release-artifact.ts load-native
           --root release/native
           --target ${{ matrix.package }}
@@ -240,21 +200,8 @@ jobs:
           bun woml-cli/scripts/release-artifact.ts seal --root release/native --kind native --target ${{ matrix.package }}
           bun woml-cli/scripts/release-artifact.ts verify --root release/native
       - name: Clean-install and execute the release candidate
-        if: ${{ !matrix.musl }}
         shell: bash
         run: >-
-          bun woml-cli/scripts/smoke-release-candidate.ts
-          --main-root release/main
-          --native-root release/native
-          --target ${{ matrix.package }}
-      - name: Clean-install and execute the musl release candidate
-        if: matrix.musl
-        shell: bash
-        run: >-
-          docker run --rm
-          -v "${{ github.workspace }}:/work"
-          -w /work
-          oven/bun:${{ env.BUN_VERSION }}-alpine
           bun woml-cli/scripts/smoke-release-candidate.ts
           --main-root release/main
           --native-root release/native

@@ -13,7 +13,6 @@ import { tmpdir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 
 import {
-  detectLinuxLibc,
   nativePackageBinaryName,
   nativeTargetForRuntime,
   type WomlNativeTarget,
@@ -101,7 +100,6 @@ export async function loadTestNativePackage(
   const runtimeTarget = nativeTargetForRuntime(
     process.platform,
     process.arch,
-    detectLinuxLibc(),
   );
   if (runtimeTarget !== target) {
     throw new Error(

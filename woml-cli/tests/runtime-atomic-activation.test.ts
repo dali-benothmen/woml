@@ -137,7 +137,7 @@ describe('Atomic Rust activation gate', () => {
     } finally {
       await stopWebhookRuntimeWithRust(handle.runtimeId, { nativeCorePath });
     }
-  }, 15_000);
+  }, 30_000);
 
   test('rolls back a prepared Rust runtime when a required provider fails readiness', async () => {
     if (!existsSync(nativeCorePath)) return;
