@@ -46,6 +46,12 @@ WOML takes a different bet: your workflow is **a file**. It reads like HTML, so 
 npm i --g woml-cli
 ```
 
+Or with Bun:
+
+```bash
+bun add --global woml-cli
+```
+
 This installs the `woml` command:
 
 ```bash
@@ -54,18 +60,113 @@ woml --version
 
 **Requirements:** macOS (x64, arm64), Linux (x64, glibc), or Windows (x64, arm64). No database to set up — the default state store is bundled.
 
-## Quick example
+## Quick example: organize your Downloads folder
+
+Run this once and it sorts every file in a folder into the right place — images, documents, videos, archives — using conditional logic, a real filesystem loop, and zero external services.
 
 ```xml
 <woml>
-  <workflow id="hello" name="Hello WOML">
+  <workflow id="organize" name="Organize a folder by file type">
     <triggers>
       <manual id="start" />
     </triggers>
+
     <steps>
-      <step id="greet">
+      <step id="scan">
         <script>
-          return { message: `Hello ${context.payload.name ?? "World"}` };
+          const { promises: fs } = await import('fs');
+          const path = await import('path');
+          const folder = context.payload.path ?? '.';
+          const entries = await fs.readdir(folder, { withFileTypes: true });
+          return {
+            folder,
+            files: entries
+              .filter(e => e.isFile())
+              .map(e => ({ name: e.name, ext: path.extname(e.name).toLowerCase() })),
+          };
+        </script>
+      </step>
+
+      <for-each id="organize" source="{{context.steps.scan.files}}">
+        <step id="classify">
+          <script>
+            return { ext: context.item.ext };
+          </script>
+        </step>
+
+        <choose>
+          <when test="{{context.steps.classify.ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']}}">
+            <step id="move-image">
+              <script>
+                const { promises: fs } = await import('fs');
+                const path = await import('path');
+                const from = path.join(context.steps.scan.folder, context.item.name);
+                const to = path.join(context.steps.scan.folder, 'Images', context.item.name);
+                await fs.mkdir(path.dirname(to), { recursive: true });
+                await fs.rename(from, to);
+                return { movedTo: 'Images' };
+              </script>
+            </step>
+          </when>
+          <when test="{{context.steps.classify.ext in ['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf']}}">
+            <step id="move-doc">
+              <script>
+                const { promises: fs } = await import('fs');
+                const path = await import('path');
+                const from = path.join(context.steps.scan.folder, context.item.name);
+                const to = path.join(context.steps.scan.folder, 'Docs', context.item.name);
+                await fs.mkdir(path.dirname(to), { recursive: true });
+                await fs.rename(from, to);
+                return { movedTo: 'Docs' };
+              </script>
+            </step>
+          </when>
+          <when test="{{context.steps.classify.ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']}}">
+            <step id="move-video">
+              <script>
+                const { promises: fs } = await import('fs');
+                const path = await import('path');
+                const from = path.join(context.steps.scan.folder, context.item.name);
+                const to = path.join(context.steps.scan.folder, 'Videos', context.item.name);
+                await fs.mkdir(path.dirname(to), { recursive: true });
+                await fs.rename(from, to);
+                return { movedTo: 'Videos' };
+              </script>
+            </step>
+          </when>
+          <when test="{{context.steps.classify.ext in ['.zip', '.tar', '.gz', '.7z', '.rar', '.dmg']}}">
+            <step id="move-archive">
+              <script>
+                const { promises: fs } = await import('fs');
+                const path = await import('path');
+                const from = path.join(context.steps.scan.folder, context.item.name);
+                const to = path.join(context.steps.scan.folder, 'Archives', context.item.name);
+                await fs.mkdir(path.dirname(to), { recursive: true });
+                await fs.rename(from, to);
+                return { movedTo: 'Archives' };
+              </script>
+            </step>
+          </when>
+          <otherwise>
+            <step id="move-misc">
+              <script>
+                const { promises: fs } = await import('fs');
+                const path = await import('path');
+                const from = path.join(context.steps.scan.folder, context.item.name);
+                const to = path.join(context.steps.scan.folder, 'Misc', context.item.name);
+                await fs.mkdir(path.dirname(to), { recursive: true });
+                await fs.rename(from, to);
+                return { movedTo: 'Misc' };
+              </script>
+            </step>
+          </otherwise>
+        </choose>
+      </for-each>
+
+      <step id="summary">
+        <script>
+          const total = context.steps.scan.files.length;
+          return { message: `Organized ${total} file(s) into Images/, Docs/, Videos/, Archives/, Misc/.` };
         </script>
       </step>
     </steps>
@@ -73,13 +174,32 @@ woml --version
 </woml>
 ```
 
-Save it as `first-workflow.woml` and run it:
+Save it as `organize.woml` and run it:
 
 ```bash
-woml run first-workflow.woml
+woml run organize.woml --payload '{"path":"/path/to/Downloads"}'
 ```
 
-Press Enter to start a run — WOML prints each step, its duration, and its result. Press Ctrl+C to stop.
+WOML scans the folder, loops over every file with `<for-each>`, routes each one through a `<choose>` decision by extension, and moves it into the right subfolder with `fs.rename`. Press Ctrl+C to stop the run.
+
+```mermaid
+graph TD
+    A[Manual trigger] --> B[Scan folder for files]
+    B --> C[For each file]
+    C --> D{File extension?}
+    D -->|jpg, png, gif, webp, svg| E[Move to Images/]
+    D -->|pdf, doc, txt, md| F[Move to Docs/]
+    D -->|mp4, mov, avi, mkv| G[Move to Videos/]
+    D -->|zip, tar, gz, dmg| H[Move to Archives/]
+    D -->|anything else| I[Move to Misc/]
+    E --> J[Summary: organized N files]
+    F --> J
+    G --> J
+    H --> J
+    I --> J
+```
+
+This is one WOML file. No setup, no cloud, no API keys. It runs locally, pulls in real npm packages (`fs`, `path`) on demand, and exercises the same primitives that make n8n workflows become spaghetti and Zapier workflows impossible: `<choose>` for conditional routing, `<for-each>` for iteration, and `<script>` for the parts that need real code.
 
 ## Real workflows in WOML
 
