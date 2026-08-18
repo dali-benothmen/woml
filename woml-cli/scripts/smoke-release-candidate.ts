@@ -129,7 +129,7 @@ async function main(): Promise<void> {
     };
     install();
 
-    const packageRoot = join(consumer, 'node_modules', '@woml-org', 'woml');
+    const packageRoot = join(consumer, 'node_modules', 'woml-cli');
     const { version: expectedVersion } = JSON.parse(
       await readFile(join(packageRoot, 'package.json'), 'utf8'),
     ) as { readonly version: string };

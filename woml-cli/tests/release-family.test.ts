@@ -47,7 +47,7 @@ async function createMain(root: string): Promise<void> {
   await write(
     resolve(root, 'package.json'),
     `${JSON.stringify({
-      name: '@woml-org/woml',
+      name: 'woml-cli',
       version: '1.0.1',
       files: publicPackageFiles,
       optionalDependencies: Object.fromEntries(

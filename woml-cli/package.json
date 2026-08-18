@@ -1,5 +1,5 @@
 {
-  "name": "@woml-org/woml",
+  "name": "woml-cli",
   "version": "1.0.1",
   "private": false,
   "description": "WOML workflow automation runtime and command-line interface",

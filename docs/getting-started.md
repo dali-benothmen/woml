@@ -10,7 +10,7 @@ Install [Bun](https://bun.sh/) 1.3.14 or later, then install the one public WOML
 package globally:
 
 ```bash
-bun add --global woml
+bun add --global woml-cli
 woml --version
 ```
 

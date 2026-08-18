@@ -96,7 +96,7 @@ export async function verifySourceReleaseIdentity(
   const nativeVersion = cargoPackageVersion(nativeManifest, 'woml-native');
   const engineVersion = cargoPackageVersion(engineManifest, 'woml-engine');
   if (
-    releaseMetadata.name !== '@woml-org/woml' ||
+    releaseMetadata.name !== 'woml-cli' ||
     releaseMetadata.private !== false ||
     releaseMetadata.bin?.woml !== './dist/cli.js' ||
     frontend.name !== '@woml/compiler' ||
@@ -106,7 +106,7 @@ export async function verifySourceReleaseIdentity(
     extension.name !== 'woml-language'
   ) {
     throw new Error(
-      'Release package identities must be public @woml-org/woml, private @woml/compiler, private woml-repository, and woml-language.',
+      'Release package identities must be public woml-cli, private @woml/compiler, private woml-repository, and woml-language.',
     );
   }
   if (
@@ -133,7 +133,7 @@ export async function verifySourceReleaseIdentity(
     engineVersion !== releaseMetadata.version
   ) {
     throw new Error(
-      `Release versions must match: @woml-org/woml=${releaseMetadata.version}, @woml/compiler=${String(frontend.version)}, woml-repository=${String(root.version)}, woml-language=${String(extension.version)}, woml-native=${String(nativeVersion)}, woml-engine=${String(engineVersion)}.`,
+      `Release versions must match: woml-cli=${releaseMetadata.version}, @woml/compiler=${String(frontend.version)}, woml-repository=${String(root.version)}, woml-language=${String(extension.version)}, woml-native=${String(nativeVersion)}, woml-engine=${String(engineVersion)}.`,
     );
   }
 }
@@ -297,12 +297,12 @@ export async function verifyCollectedRelease(
     readonly optionalDependencies?: Readonly<Record<string, string>>;
   };
   if (
-    main.name !== '@woml-org/woml' ||
+    main.name !== 'woml-cli' ||
     main.version !== metadata.version ||
     JSON.stringify(main.optionalDependencies) !==
       JSON.stringify(optionalNativeDependencies(metadata.version))
   ) {
-    throw new Error('The staged @woml-org/woml manifest has an invalid native package set.');
+    throw new Error('The staged woml-cli manifest has an invalid native package set.');
   }
   const mainArtifact = await verifyReleaseArtifact(mainRoot);
   if (
@@ -312,9 +312,9 @@ export async function verifyCollectedRelease(
     JSON.stringify(main.files) !== JSON.stringify(publicPackageFiles) ||
     mainArtifact.files.some(file => file.path.endsWith('.node'))
   ) {
-    throw new Error('The staged @woml-org/woml artifact is not the sealed portable package.');
+    throw new Error('The staged woml-cli artifact is not the sealed portable package.');
   }
-  assertArtifactFiles('The staged @woml-org/woml artifact', mainArtifact.files, [
+  assertArtifactFiles('The staged woml-cli artifact', mainArtifact.files, [
     ...packedPackageFiles,
   ]);
   await Promise.all([
