@@ -61,8 +61,11 @@ async function filesBelow(root: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
-    if (entry.isDirectory()) files.push(...(await filesBelow(path)));
-    else files.push(path);
+    if (entry.isDirectory()) {
+      if (entry.name !== 'node_modules') {
+        files.push(...(await filesBelow(path)));
+      }
+    } else files.push(path);
   }
   return files;
 }
