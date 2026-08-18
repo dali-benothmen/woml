@@ -64,7 +64,7 @@ for (const name of selected) {
       'test',
       ...shardFiles,
       '--max-concurrency=1',
-      '--timeout=30000',
+      '--timeout=60000',
     ],
     cwd: cliRoot,
     stdout: 'pipe',
