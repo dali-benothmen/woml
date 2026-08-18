@@ -199,7 +199,6 @@ export async function createPlatformPackage(
         files: [binary, 'README.md', 'LICENSE', 'NOTICE.md'],
         os: [spec.os],
         cpu: [spec.cpu],
-        ...(spec.libc === undefined ? {} : { libc: [spec.libc] }),
         engines: metadata.engines,
         publishConfig: metadata.publishConfig,
       },
@@ -346,9 +345,7 @@ export async function verifyCollectedRelease(
       JSON.stringify(manifest.files) !==
         JSON.stringify([nativePackageBinaryName(target), 'README.md', 'LICENSE', 'NOTICE.md']) ||
       JSON.stringify(manifest.os) !== JSON.stringify([spec.os]) ||
-      JSON.stringify(manifest.cpu) !== JSON.stringify([spec.cpu]) ||
-      JSON.stringify(manifest.libc) !==
-        JSON.stringify(spec.libc === undefined ? undefined : [spec.libc])
+      JSON.stringify(manifest.cpu) !== JSON.stringify([spec.cpu])
     ) {
       throw new Error(`Invalid native package in ${directory}.`);
     }
