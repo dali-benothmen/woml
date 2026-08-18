@@ -7,7 +7,7 @@ COPY ${NATIVE_ARCHIVE} /tmp/woml-native.tgz
 RUN bun add --global /tmp/woml.tgz /tmp/woml-native.tgz \
   && rm /tmp/woml.tgz /tmp/woml-native.tgz
 
-RUN addgroup --system woml && adduser --system --ingroup woml --home /app woml
+RUN groupadd --system woml && useradd --system --gid woml --home-dir /app woml
 WORKDIR /app
 COPY --chown=woml:woml woml-cli/tests/fixtures/release-candidate/workflow.woml ./workflow.woml
 COPY --chown=woml:woml woml-cli/tests/fixtures/release-candidate/runtime.json ./runtime.json
