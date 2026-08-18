@@ -134,7 +134,7 @@ async function verifyLegalAndProductMetadata(): Promise<void> {
   ) as Record<string, unknown>;
   if (
     manifest.name !== '@woml-org/woml' ||
-    manifest.version !== '1.0.0' ||
+    manifest.version !== '1.0.1' ||
     manifest.license !== 'Apache-2.0' ||
     manifest.author !== 'Mohamed Ali Ben Othmen'
   ) {
