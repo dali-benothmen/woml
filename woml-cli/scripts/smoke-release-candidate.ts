@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -127,6 +127,9 @@ async function main(): Promise<void> {
     install();
 
     const packageRoot = join(consumer, 'node_modules', '@woml-org', 'woml');
+    const { version: expectedVersion } = JSON.parse(
+      await readFile(join(packageRoot, 'package.json'), 'utf8'),
+    ) as { readonly version: string };
     const nativeRoot = join(
       consumer,
       'node_modules',
@@ -143,8 +146,8 @@ async function main(): Promise<void> {
     const cli = join(packageRoot, 'dist', 'cli.js');
     const command = (...values: string[]): string =>
       run([Bun.which('bun')!, cli, ...values], consumer);
-    if (command('--version').trim() !== 'woml 1.0.0') {
-      throw new Error('The installed CLI did not report version 1.0.0.');
+    if (command('--version').trim() !== `woml ${expectedVersion}`) {
+      throw new Error(`The installed CLI did not report version ${expectedVersion}.`);
     }
     if (!command('--help').includes('woml run')) {
       throw new Error('The installed CLI help is incomplete.');
@@ -163,8 +166,8 @@ async function main(): Promise<void> {
     }
 
     install();
-    if (command('--version').trim() !== 'woml 1.0.0') {
-      throw new Error('The reinstalled CLI did not report version 1.0.0.');
+    if (command('--version').trim() !== `woml ${expectedVersion}`) {
+      throw new Error(`The reinstalled CLI did not report version ${expectedVersion}.`);
     }
     process.stdout.write(`WOML ${args.target} release candidate smoke passed.\n`);
   } finally {
