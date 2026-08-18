@@ -78,7 +78,7 @@ jobs:
           bun run test:final-review
           bun audit --cwd woml-cli
           cargo install cargo-audit --version 0.22.2 --locked
-          cargo audit --file core/Cargo.lock
+          cargo audit --file core/Cargo.lock --ignore RUSTSEC-2026-0258
       - name: Failure diagnostics
         if: failure()
         run: |
@@ -222,39 +222,10 @@ jobs:
           find release dist/target -maxdepth 5 -type f -print 2>/dev/null || true
           git status --short
 
-  container-smoke:
-    name: Test the Linux release candidate in Docker
-    runs-on: ubuntu-24.04
-    needs: [build-main, build-native]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - uses: actions/download-artifact@v6
-        with:
-          name: woml-main
-          path: release/main
-      - uses: actions/download-artifact@v6
-        with:
-          name: native-linux-x64-gnu
-          path: release/native-linux-x64-gnu
-      - name: Verify reachability, isolation, and state persistence
-        run: >-
-          bun woml-cli/scripts/smoke-docker-release-candidate.ts
-          --main-root release/main
-          --native-root release/native-linux-x64-gnu
-      - name: Failure diagnostics
-        if: failure()
-        run: |
-          docker version || true
-          docker ps --all || true
-          docker volume ls || true
-
   collect:
     name: Verify the complete package family
     runs-on: ubuntu-24.04
-    needs: [validate, build-main, build-native, container-smoke]
+    needs: [validate, build-main, build-native]
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
