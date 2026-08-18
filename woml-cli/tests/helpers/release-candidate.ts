@@ -12,7 +12,6 @@ import {
   verifyReleaseArtifact,
 } from '../../scripts/release-artifact';
 import {
-  detectLinuxLibc,
   localNativeBinaryName,
   nativePackageName,
   nativeTargetForRuntime,
@@ -47,7 +46,6 @@ async function prepare(): Promise<LocalReleaseCandidate> {
   const target = nativeTargetForRuntime(
     process.platform,
     process.arch,
-    detectLinuxLibc(),
   );
   const mainRoot = resolve(candidateRoot, 'main');
   const nativeRoot = resolve(candidateRoot, `native-${target}`);

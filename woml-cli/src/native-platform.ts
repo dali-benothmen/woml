@@ -4,9 +4,7 @@ export const womlNativeTargets = [
   'win32-x64-msvc',
   'win32-arm64-msvc',
   'linux-x64-gnu',
-  'linux-x64-musl',
   'linux-arm64-gnu',
-  'linux-arm64-musl',
 ] as const;
 
 export type WomlNativeTarget = (typeof womlNativeTargets)[number];
@@ -16,7 +14,6 @@ export interface WomlNativeTargetSpec {
   readonly rustTarget: string;
   readonly os: 'darwin' | 'win32' | 'linux';
   readonly cpu: 'x64' | 'arm64';
-  readonly libc?: 'glibc' | 'musl';
   readonly libraryName: string;
 }
 
@@ -56,15 +53,6 @@ export const womlNativeTargetSpecs: Readonly<
     rustTarget: 'x86_64-unknown-linux-gnu',
     os: 'linux',
     cpu: 'x64',
-    libc: 'glibc',
-    libraryName: 'libwoml_core.so',
-  },
-  'linux-x64-musl': {
-    target: 'linux-x64-musl',
-    rustTarget: 'x86_64-unknown-linux-musl',
-    os: 'linux',
-    cpu: 'x64',
-    libc: 'musl',
     libraryName: 'libwoml_core.so',
   },
   'linux-arm64-gnu': {
@@ -72,15 +60,6 @@ export const womlNativeTargetSpecs: Readonly<
     rustTarget: 'aarch64-unknown-linux-gnu',
     os: 'linux',
     cpu: 'arm64',
-    libc: 'glibc',
-    libraryName: 'libwoml_core.so',
-  },
-  'linux-arm64-musl': {
-    target: 'linux-arm64-musl',
-    rustTarget: 'aarch64-unknown-linux-musl',
-    os: 'linux',
-    cpu: 'arm64',
-    libc: 'musl',
     libraryName: 'libwoml_core.so',
   },
 };
@@ -109,7 +88,6 @@ export function localNativeBinaryName(
 export function nativeTargetForRuntime(
   platform: string,
   architecture: string,
-  linuxLibc: 'glibc' | 'musl' = 'glibc',
 ): WomlNativeTarget {
   const cpu = architecture === 'x64' || architecture === 'arm64'
     ? architecture
@@ -120,17 +98,9 @@ export function nativeTargetForRuntime(
   if (platform === 'darwin') return `darwin-${cpu}`;
   if (platform === 'win32') return `win32-${cpu}-msvc`;
   if (platform === 'linux') {
-    return `linux-${cpu}-${linuxLibc === 'musl' ? 'musl' : 'gnu'}`;
+    return `linux-${cpu}-gnu`;
   }
   throw new Error(`WOML does not support native builds for ${platform}.`);
 }
 
-export function detectLinuxLibc(): 'glibc' | 'musl' {
-  if (process.platform !== 'linux') return 'glibc';
-  const report = process.report?.getReport?.() as
-    | { readonly header?: { readonly glibcVersionRuntime?: unknown } }
-    | undefined;
-  return typeof report?.header?.glibcVersionRuntime === 'string'
-    ? 'glibc'
-    : 'musl';
-}
+
