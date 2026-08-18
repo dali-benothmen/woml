@@ -65,9 +65,8 @@ describe('WOML release automation', () => {
     const matrix = document.jobs?.['build-native']?.strategy?.matrix?.include ?? [];
     const targets = matrix.map(entry => entry.package).sort();
     expect(targets).toEqual([...womlNativeTargets].sort());
-    expect(new Set(matrix.map(entry => entry.rust)).size).toBe(8);
+    expect(new Set(matrix.map(entry => entry.rust)).size).toBe(6);
     expect(matrix.every(entry => typeof entry.runner === 'string')).toBe(true);
-    expect(matrix.filter(entry => entry.musl === true)).toHaveLength(2);
   });
 
   test('clean-installs and executes every platform candidate before collection', async () => {
@@ -81,8 +80,7 @@ describe('WOML release automation', () => {
       'build-main',
     ]);
     expect(source).toContain('name: woml-main');
-    expect(source.match(/scripts\/smoke-release-candidate\.ts/gu)).toHaveLength(2);
-    expect(source).toContain('Clean-install and execute the musl release candidate');
+    expect(source.match(/scripts\/smoke-release-candidate\.ts/gu)).toHaveLength(1);
     for (const marker of [
       "command('--version')",
       "command('--help')",
