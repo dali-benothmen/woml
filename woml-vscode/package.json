@@ -2,7 +2,7 @@
   "name": "woml-language",
   "displayName": "WOML",
   "description": "markup language that turns workflow automation into a document you can read, run, and trust.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "woml",
   "author": "Mohamed Ali Ben Othmen",
   "license": "Apache-2.0",

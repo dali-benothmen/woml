@@ -75,7 +75,7 @@ export async function verifyMainPackage(root: string): Promise<void> {
   ) as MainManifest;
   if (
     manifest.name !== '@woml-org/woml' ||
-    manifest.version !== '1.0.0' ||
+    manifest.version !== '1.0.1' ||
     manifest.author !== 'Mohamed Ali Ben Othmen' ||
     manifest.license !== 'Apache-2.0' ||
     manifest.bin?.woml !== './dist/cli.js'
