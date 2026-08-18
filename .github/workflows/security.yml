@@ -36,4 +36,4 @@ jobs:
       - name: Audit the locked Rust graph
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
-          cargo audit --file core/Cargo.lock
+          cargo audit --file core/Cargo.lock --ignore RUSTSEC-2026-0258

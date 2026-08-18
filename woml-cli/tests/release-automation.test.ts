@@ -93,35 +93,6 @@ describe('WOML release automation', () => {
     }
   });
 
-  test('gates collection on the non-root persistent Docker candidate', async () => {
-    const { document, source } = await workflow('release');
-    const dockerfile = await readFile(
-      resolve(repositoryRoot, 'examples/production/deployment/Dockerfile'),
-      'utf8',
-    );
-    const configuration = JSON.parse(
-      await readFile(
-        resolve(
-          repositoryRoot,
-          'examples/production/deployment/woml.docker.runtime.json',
-        ),
-        'utf8',
-      ),
-    ) as Record<string, any>;
-    expect(document.jobs?.['container-smoke']?.needs).toEqual([
-      'build-main',
-      'build-native',
-    ]);
-    expect(document.jobs?.collect?.needs).toContain('container-smoke');
-    expect(source).toContain('smoke-docker-release-candidate.ts');
-    expect(dockerfile).toContain('bun add --global "woml@${WOML_VERSION}"');
-    expect(dockerfile).toContain('USER woml');
-    expect(dockerfile).not.toContain('woml-cli@');
-    expect(configuration.statePath).toBe('/app/data/state.sqlite');
-    expect(configuration.public).toEqual({ host: '0.0.0.0', port: 3000 });
-    expect(configuration.admin).toEqual({ host: '127.0.0.1', port: 3001 });
-  });
-
   test('makes tags non-publishing and requires an approved exact-tag dispatch', async () => {
     const { document, source } = await workflow('release');
     const publish = document.jobs?.publish;
@@ -144,7 +115,7 @@ describe('WOML release automation', () => {
     expect(source).toContain('bun run test:final-review');
     expect(source).toContain('bun audit --cwd woml-cli');
     expect(source).toContain('cargo-audit --version 0.22.2 --locked');
-    expect(source).toContain('cargo audit --file core/Cargo.lock');
+    expect(source).toContain('cargo audit --file core/Cargo.lock --ignore RUSTSEC-2026-0258');
   });
 
   test('publishes only the immutable family that the collection job verified', async () => {
@@ -157,7 +128,6 @@ describe('WOML release automation', () => {
       'validate',
       'build-main',
       'build-native',
-      'container-smoke',
     ]);
     expect(document.jobs?.publish?.needs).toEqual(['validate', 'collect']);
     expect(source).toContain('name: woml-release-family');

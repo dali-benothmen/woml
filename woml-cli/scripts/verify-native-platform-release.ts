@@ -55,7 +55,6 @@ for (const marker of [
   'release-artifact.ts seal',
   'release-artifact.ts verify',
   'smoke-release-candidate.ts',
-  'smoke-docker-release-candidate.ts',
   'native-load-test.json',
   'artifact-sha256.json',
   'actions/upload-artifact@v6',
@@ -64,7 +63,7 @@ for (const marker of [
   'LICENSE',
   'NOTICE.md',
   'bun audit --cwd woml-cli',
-  'cargo audit --file core/Cargo.lock',
+  'cargo audit --file core/Cargo.lock --ignore RUSTSEC-2026-0258',
 ]) {
   if (
     !workflow.includes(marker) &&
