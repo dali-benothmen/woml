@@ -1,8 +1,10 @@
 <div align="center">
 
-# WOML — Workflow Orchestration Markup Language
+# WOML: Workflow Orchestration Markup Language
 
-### If you can read HTML, you can automate anything.
+![WOML banner](./woml.png)
+
+### If you can read HTML, you can use WOML to automate anything, literally anything.
 
 <!-- WOML banner image placeholder: ./docs/assets/banner.png -->
 
@@ -17,7 +19,7 @@
 
 WOML is a markup language for building and running workflow automation. A workflow written in WOML is a document you can read top to bottom — its triggers, steps, control flow, approvals, and lifecycle all expressed as clear, HTML-inspired structure instead of tangled code or an unreadable diagram.
 
-When a step needs real logic, JavaScript is always available inside `<script>` — so there is no ceiling on what a workflow can do. WOML handles everything *around* that code: execution order, retries, concurrency, human approvals, external services, and a durable, inspectable history of every run. The result is automation that scales without becoming spaghetti, that your whole team can read, and that you can actually trust in production.
+When a step needs real logic, JavaScript is always available inside `<script>` — so there is no ceiling on what a workflow can do. WOML handles everything _around_ that code: execution order, retries, concurrency, human approvals, external services, and a durable, inspectable history of every run. The result is automation that scales without becoming spaghetti, that your whole team can read, and that you can actually trust in production.
 
 ## Why another automation tool?
 
@@ -246,14 +248,14 @@ Every script gets explicit runtime bindings — `context.payload` (trigger input
 
 ## WOML vs alternatives
 
-| Tool | How you write it | Readable by the whole team | Self-hosted | No ceiling |
-|---|---|---|---|---|
-| **WOML** | Markup + JavaScript | ✅ | ✅ | ✅ |
-| n8n | Visual canvas | ⚠️ Until it becomes spaghetti | ✅ | ❌ |
-| Zapier | Visual canvas | ⚠️ Until it becomes spaghetti | ❌ | ❌ |
-| Temporal | Code (TS/Go/Java) | ❌ | ✅ | ✅ |
-| Step Functions | JSON (ASL) | ❌ | ❌ | ⚠️ |
-| Airflow | Python DAGs | ❌ | ✅ | ✅ |
+| Tool           | How you write it    | Readable by the whole team    | Self-hosted | No ceiling |
+| -------------- | ------------------- | ----------------------------- | ----------- | ---------- |
+| **WOML**       | Markup + JavaScript | ✅                            | ✅          | ✅         |
+| n8n            | Visual canvas       | ⚠️ Until it becomes spaghetti | ✅          | ❌         |
+| Zapier         | Visual canvas       | ⚠️ Until it becomes spaghetti | ❌          | ❌         |
+| Temporal       | Code (TS/Go/Java)   | ❌                            | ✅          | ✅         |
+| Step Functions | JSON (ASL)          | ❌                            | ❌          | ⚠️         |
+| Airflow        | Python DAGs         | ❌                            | ✅          | ✅         |
 
 WOML is the only one that combines all three: readable as markup, free and self-hosted, and unlimited in what it can express.
 
