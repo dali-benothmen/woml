@@ -203,6 +203,8 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: >-
+          GCC_LIB_DIR=$(dirname $(gcc -print-file-name=libgcc_s.so)) &&
+          RUSTFLAGS="$RUSTFLAGS -L $GCC_LIB_DIR"
           cargo build -j 1 --release --locked
           --manifest-path core/woml-native/Cargo.toml
           --target ${{ matrix.rust }}
