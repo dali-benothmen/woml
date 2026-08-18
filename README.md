@@ -9,7 +9,7 @@
 <!-- WOML banner image placeholder: ./docs/assets/banner.png -->
 
 [![npm version](https://img.shields.io/npm/v/woml-cli.svg)](https://www.npmjs.com/package/woml-cli)
-[![CI](https://github.com/dali-benothmen/woml/actions/workflows/ci.yml/badge.svg)](https://github.com/dali-benothmen/woml/actions)
+[![GitHub stars](https://img.shields.io/github/stars/dali-benothmen/woml.svg?style=social)](https://github.com/dali-benothmen/woml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
 
