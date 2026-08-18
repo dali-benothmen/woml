@@ -199,7 +199,9 @@ jobs:
       - name: Build the isolated WOML native adapter
         shell: bash
         env:
-          RUSTFLAGS: ''
+          RUSTFLAGS: '-C target-feature=-crt-static'
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: >-
           cargo build -j 1 --release --locked
           --manifest-path core/woml-native/Cargo.toml
