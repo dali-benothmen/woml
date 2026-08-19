@@ -1,0 +1,53 @@
+# Source
+src/
+tests/
+scripts/
+docs/
+examples/
+.github/
+.woml/
+core/
+
+# Config files
+tsconfig*.json
+.eslintrc*
+.prettierrc*
+.prettierignore
+.editorconfig
+.clippy.toml
+rustfmt.toml
+.bunfig.toml
+.nvmrc
+.gitignore
+.gitmessage
+Cargo.toml
+Cargo.lock
+bun.lockb
+
+# Build artifacts that shouldn't ship
+*.tgz
+*.node
+target/
+dist/
+build/
+
+# Documentation
+*.md
+!README.md
+LICENSE
+NOTICE.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime
+*.db
+*.sqlite
+*.sqlite3
