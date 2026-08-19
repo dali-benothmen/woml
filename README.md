@@ -17,23 +17,23 @@
 
 ---
 
-WOML is a markup language for building and running workflow automation. A workflow written in WOML is a document you can read top to bottom — its triggers, steps, control flow, approvals, and lifecycle all expressed as clear, HTML-inspired structure instead of tangled code or an unreadable diagram.
+WOML is a markup language for building and running workflow automation. A workflow written in WOML is a document you can read top to bottom, its triggers, steps, control flow, approvals, and lifecycle all expressed as clear, HTML-inspired structure instead of tangled code or an unreadable diagram.
 
-When a step needs real logic, JavaScript is always available inside `<script>` — so there is no ceiling on what a workflow can do. WOML handles everything _around_ that code: execution order, retries, concurrency, human approvals, external services, and a durable, inspectable history of every run. The result is automation that scales without becoming spaghetti, that your whole team can read, and that you can actually trust in production.
+When a step needs real logic, JavaScript is always available inside `<script>`, so there is no ceiling on what a workflow can do. WOML handles everything _around_ that code: execution order, retries, concurrency, human approvals, external services, and a durable, inspectable history of every run. The result is automation that scales without becoming spaghetti, that your whole team can read, and that you can actually trust in production.
 
 ## Why another automation tool?
 
 Five nodes in n8n or Zapier feels like magic. Twenty nodes feels like a crime scene.
 
-The canvas turns into spaghetti, a single run takes a lifetime, and the moment the built-in integrations fall short you end up stuffing JavaScript into a tiny textbox in a browser UI — no version control, no code review, no idea what changed last Tuesday.
+The canvas turns into spaghetti, a single run takes a lifetime, and the moment the built-in integrations fall short you end up stuffing JavaScript into a tiny textbox in a browser UI, no version control, no code review, no idea what changed last Tuesday.
 
-WOML takes a different bet: your workflow is **a file**. It reads like HTML, so anyone on the team can follow it. Every step can run real JavaScript with any npm package, so you never hit a wall. It lives in git, so every change is a diff and a review. And the engine underneath is Rust, so it stays fast when your workflows get big — because big workflows are exactly what WOML is built for.
+WOML takes a different bet: your workflow is **a file**. It reads like HTML, so anyone on the team can follow it. Every step can run real JavaScript with any npm package, so you never hit a wall. It lives in git, so every change is a diff and a review. And the engine underneath is Rust, so it stays fast when your workflows get big, because big workflows are exactly what WOML is built for.
 
 ## Why WOML
 
-- **Readable as a document.** A workflow is structure you can read, diff, and review — not a canvas of boxes and wires that turns into spaghetti as it grows.
-- **No ceiling.** Common actions are clean tags; when you need real logic, drop into `<script>` with full JavaScript and any npm package. Automate anything — literally anything.
-- **Triggers for everything.** Manual, webhook, schedule, interval, event, Slack, Telegram, Discord, and WhatsApp — and you can build your own providers for anything else.
+- **Readable as a document.** A workflow is structure you can read, diff, and review, not a canvas of boxes and wires that turns into spaghetti as it grows.
+- **No ceiling.** Common actions are clean tags; when you need real logic, drop into `<script>` with full JavaScript and any npm package. Automate anything, literally anything.
+- **Triggers for everything.** Manual, webhook, schedule, interval, event, Slack, Telegram, Discord, and WhatsApp, and you can build your own providers for anything else.
 - **Built to run in production.** Durable run history, retries, concurrency, lifecycle hooks, and a fold-from-events core mean you can always see what happened, track down errors, and replay it.
 - **Human-in-the-loop.** Pause a workflow for approvals with real notifications and durable waiting.
 - **Modular.** Reusable step definitions, local modules, and workflows that call other workflows.
@@ -52,13 +52,19 @@ Or with Bun:
 bun add --global woml-cli
 ```
 
+Or with pnpm:
+
+```bash
+pnpm add -g sax woml-cli
+```
+
 This installs the `woml` command:
 
 ```bash
 woml --version
 ```
 
-**Requirements:** macOS (x64, arm64), Linux (x64, glibc), or Windows (x64, arm64). No database to set up — the default state store is bundled.
+**Requirements:** macOS (x64, arm64), Linux (x64, glibc), or Windows (x64, arm64). No database to set up, the default state store is bundled.
 
 ## Quick example: organize your Downloads folder
 
