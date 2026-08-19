@@ -1,6 +1,8 @@
 # WOML: Workflow Orchestration Markup Language
 
-If you can read HTML, you can use WOML to automate anything, literally anything.
+WOML is a declarative markup language for building and running production-grade workflow automation. A WOML workflow is a structured, HTML-inspired document that compiles into a typed, durable execution graph. Triggers, steps, control flow, lifecycle hooks, concurrency, and human approvals all live in one readable file with a Rust engine underneath.
+
+When a step needs real logic, JavaScript runs inside `<script>`, so there is no ceiling on what a workflow can do. WOML handles everything around that code — execution order, retries, concurrency, lifecycle, human-in-the-loop, external services, and a durable, inspectable history of every run.
 
 ---
 
@@ -32,11 +34,9 @@ woml --version
 
 ---
 
-## The basic API
+## Document structure
 
-A workflow is one `<woml>` document with a `<workflow>` root, plus `<config>`, `<lifecycle>`, `<triggers>`, and `<steps>` containers. Triggers decide *when* a workflow runs; steps decide *what* it does. Everything inside a `<script>` is plain JavaScript.
-
-### Document skeleton
+A workflow is one `<woml>` document with a `<workflow>` root plus the standard containers: `<config>` for runtime policies, `<lifecycle>` for hooks, `<triggers>` for what starts a run, and `<steps>` for what runs.
 
 ```xml
 <woml>
@@ -52,13 +52,35 @@ A workflow is one `<woml>` document with a `<workflow>` root, plus `<config>`, `
 </woml>
 ```
 
-### Triggers
+Runtime bindings available inside every `<script>`:
 
-One or more of these inside `<triggers>`.
+- `context.payload` — trigger input
+- `context.steps.<id>` — earlier step output
+- `context.run` — durable run metadata
+- `services.http`, `services.database`, `services.slack`, `services.storage`, `services.cache`, `services.event`, `services.messaging` — supervised capabilities (each must be declared by the workflow or its modules)
+- `secrets.<NAME>` — only the secrets proven necessary at compile time
+
+Scripts return JSON-compatible values. The Rust engine records every outcome durably.
+
+---
+
+## Triggers
+
+Triggers decide **when** a workflow runs. Place one or more inside `<triggers>`.
+
+### `<manual>` — run on demand
+
+The simplest trigger. Starts a run when the operator calls `woml run` with a payload.
 
 ```xml
 <manual id="start" />
+```
 
+### `<webhook>` — accept HTTP requests
+
+Registers a static HTTP route that starts a run for every validated payload.
+
+```xml
 <webhook id="hook"
          path="/webhooks/orders"
          method="POST"
@@ -68,25 +90,89 @@ One or more of these inside `<triggers>`.
     { "type": "object", "required": ["orderId"], "properties": { "orderId": { "type": "string" } } }
   </schema>
 </webhook>
+```
 
-<schedule id="daily" cron="0 9 * * MON-FRI" timezone="UTC" />
+- `auth="bearer"` requires a `secret`; `auth="none"` is for deliberately public routes.
+- The inline `<schema>` is JSON Schema Draft 2020-12; invalid payloads return `400 Bad Request` with the `WOML_TRIGGER_SCHEMA_INVALID` code and never start a run.
 
+### `<schedule>` — cron expressions
+
+Starts a run on a WOML Cron v1 schedule. Five numeric fields (`minute hour day-of-month month day-of-week`), wildcards, lists, inclusive ranges, and `/step` are supported. Seconds, names, and Quartz-only tokens are rejected.
+
+```xml
+<schedule id="daily"
+          cron="0 9 * * MON-FRI"
+          timezone="UTC"
+          on-missed="skip" />
+```
+
+`timezone` defaults to UTC. `on-missed` chooses `skip` or `run-once` after a restart.
+
+### `<interval>` — fixed cadence
+
+Starts a run on a fixed interval. The compiler must not translate it into cron if semantics would change.
+
+```xml
 <interval id="heartbeat" every="30s" on-missed="skip" />
+```
 
-<event id="created" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}" />
+### `<event>` — react to internal events
 
+Starts a run when another workflow emits a named event through the durable event bus.
+
+```xml
+<event id="created"
+       name="order.created"
+       secret="{{secrets.EVENT_CONTROL_TOKEN}}">
+  <schema>
+    { "type": "object", "required": ["orderId"], "properties": { "orderId": { "type": "string" } } }
+  </schema>
+</event>
+```
+
+### `<slack>` — Slack Socket Mode
+
+Starts a run for Slack workspace events via a single Socket Mode connection per credential pair.
+
+```xml
 <slack id="msg"
        events="app-mention,direct-message"
        channels="ops,alerts"
        bot-token="{{secrets.SLACK_BOT_TOKEN}}"
        app-token="{{secrets.SLACK_APP_TOKEN}}" />
+```
 
-<telegram id="bot" events="message" bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}" />
+`events` accepts `app-mention` and `direct-message`. `channels` is optional and limits mentions to a comma-separated set.
 
+### `<telegram>` — Telegram long polling
+
+Starts a run for every incoming Telegram message via long polling and durable admission.
+
+```xml
+<telegram id="bot"
+          events="message"
+          bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}" />
+```
+
+Telegram v1 supports the single `message` event.
+
+### `<discord>` — Discord Gateway
+
+Starts a run for Discord activity via a shared resumable Gateway connection.
+
+```xml
 <discord id="bot"
          events="app-mention,direct-message"
          bot-token="{{secrets.DISCORD_BOT_TOKEN}}" />
+```
 
+`channels` is optional and accepts comma-separated numeric channel IDs (17–20 digits). Channel names are rejected because they are mutable display labels.
+
+### `<whatsapp>` — WhatsApp Cloud API
+
+Starts a run for inbound WhatsApp messages via signed Meta Cloud API callbacks.
+
+```xml
 <whatsapp id="bot"
           events="message"
           phone-number-id="123456789012345"
@@ -94,9 +180,13 @@ One or more of these inside `<triggers>`.
           app-secret="{{secrets.WHATSAPP_APP_SECRET}}" />
 ```
 
-### Steps
+`phone-number-id` is Meta's durable Phone Number ID, not the display phone number.
 
-Steps are sequential inside `<steps>`. Each `<step>` returns a value that becomes available at `context.steps.<stepId>`.
+---
+
+## Steps
+
+Steps run sequentially inside `<steps>`. Each `<step>` returns a value that becomes available at `context.steps.<stepId>`.
 
 ```xml
 <step id="greet">
@@ -106,24 +196,196 @@ Steps are sequential inside `<steps>`. Each `<step>` returns a value that become
 </step>
 ```
 
-### Control flow
+---
 
-- **`<choose>`** — mutually exclusive conditional routing. The `id` is required. Each `<when>` and the `<otherwise>` must end with a `<result>` that selects which value to publish at `context.steps.<chooseId>`. The `test` attribute holds exactly one context reference.
-- **`<switch>`** — exact-string routing against one `value` reference. Each `<case>` and the `<default>` must end with a `<result>`.
-- **`<parallel>`** — run direct child steps concurrently, then join. Use `concurrency` to cap simultaneous children and `on-error="fail-fast"` (default) or `wait-all` for the failure policy.
-- **`<fork>`** + **`<branch>`** — concurrent multi-step routes with an explicit `join` mode (`all`, `none`, or a whitespace-separated list of branch IDs).
-- **`<approval>`** — durable human-in-the-loop. Records an approval decision and pauses the run until one of the configured arms resolves.
-- **`<notify>`** — attach a built-in Slack/Telegram/Discord/WhatsApp notification to the step, lifecycle hook, or approval that contains it.
+## Control flow
 
-### Runtime bindings inside `<script>`
+Two compact routing primitives cover most branching needs.
 
-- `context.payload` — trigger input
-- `context.steps.<id>` — earlier step output
-- `context.run` — durable run metadata
-- `services.http`, `services.database`, `services.slack`, `services.storage`, `services.cache`, `services.event`, `services.messaging` — supervised capabilities (each must be declared by the workflow or its modules)
-- `secrets.<NAME>` — only the secrets proven necessary at compile time
+### `<choose>` — mutually exclusive routes
 
-Scripts return JSON-compatible values. The Rust engine records every outcome durably.
+`<choose id="...">` selects the first `<when>` whose `test` reference is true and publishes a merged result at `context.steps.<chooseId>`. The `test` attribute holds exactly one context reference — complex conditions belong in named steps.
+
+```xml
+<step id="needsReview">
+  <script>
+    return { value: context.steps.analysis.risk > 0.3 };
+  </script>
+</step>
+
+<choose id="reviewRoute">
+  <when test="{{context.steps.needsReview.value}}">
+    <step id="humanDecision">
+      <script>return { routed: 'review' };</script>
+    </step>
+    <result value="{{context.steps.humanDecision}}" />
+  </when>
+  <otherwise>
+    <step id="automaticDecision">
+      <script>return { routed: 'auto' };</script>
+    </step>
+    <result value="{{context.steps.automaticDecision}}" />
+  </otherwise>
+</choose>
+```
+
+### `<switch>` — exact-string routing
+
+`<switch id="..." value="...">` compares one context reference against ordered string cases and runs exactly one route.
+
+```xml
+<switch id="route" value="{{context.steps.classify.intent}}">
+  <case value="bug">
+    <step id="sendBugs">
+      <script>return { routedTo: 'bugs' };</script>
+    </step>
+    <result value="{{context.steps.sendBugs}}" />
+  </case>
+  <default>
+    <step id="dropNoise">
+      <script>return { dropped: true };</script>
+    </step>
+    <result value="{{context.steps.dropNoise}}" />
+  </default>
+</switch>
+```
+
+---
+
+## Concurrent steps — `<parallel>`
+
+`<parallel>` runs its direct child steps concurrently and joins after they finish. A one-step parallel is a valid degenerate fork/join.
+
+```xml
+<parallel id="fieldData" concurrency="2" on-error="wait-all">
+  <step id="loadWeather">
+    <script>return loadWeather(context.payload.fieldId);</script>
+  </step>
+  <step id="loadSoil">
+    <script>return loadSoil(context.payload.fieldId);</script>
+  </step>
+</parallel>
+```
+
+- `concurrency` caps simultaneous child steps; defaults to the number of children.
+- `on-error` is `fail-fast` (default) or `wait-all`. `fail-fast` stops scheduling new children; `wait-all` lets every child reach its terminal outcome first.
+- All children see the same context view from immediately before the fork.
+- A child cannot reference a sibling's output.
+
+For multi-step concurrent routes (each branch holds its own sequence of steps), use `<fork>` and `<branch>` instead.
+
+---
+
+## Concurrent routes — `<fork>` and `<branch>`
+
+`<fork>` runs multiple multi-step branches concurrently and joins on a chosen set. Each `<branch>` may contain steps, choices, switches, parallel groups, and approvals. Branches remain sequential internally while overlapping through the multiplexed Bun host.
+
+```xml
+<fork id="distribution" join="all">
+  <branch id="tiktok">
+    <step id="formatTikTok">
+      <script>return { caption: `${context.steps.campaign.title} #automation` };</script>
+    </step>
+    <step id="publishTikTok">
+      <script>return { platform: 'tiktok', caption: context.steps.formatTikTok.caption };</script>
+    </step>
+  </branch>
+  <branch id="instagram">
+    <step id="formatInstagram">
+      <script>return { caption: `${context.steps.campaign.title}\n${context.steps.campaign.url}` };</script>
+    </step>
+    <step id="publishInstagram">
+      <script>return { platform: 'instagram', caption: context.steps.formatInstagram.caption };</script>
+    </step>
+  </branch>
+</fork>
+```
+
+- `join="all"` (or omitted) waits for every branch.
+- `join="none"` waits for none.
+- A whitespace-separated branch-ID list waits only for those branches.
+- A branch can read context available before the fork and outputs created earlier in that same branch; it cannot read sibling-branch outputs.
+- Nested forks inside a fork-owned branch are rejected.
+- A workflow whose only terminal structure is a fork is rejected.
+
+---
+
+## Human approvals — `<approval>`
+
+`<approval>` is a first-class durable control-flow item. It records that a run is waiting for a decision, optionally fires notifications, suspends the run, and selects exactly one continuation after the decision arrives.
+
+```xml
+<approval id="contentApproval"
+          name="Content approval"
+          description="Ask a moderator to approve or reject"
+          timeout="24h"
+          on-timeout="reject">
+  <notify>
+    <slack channels="moderators"
+           bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+           app-token="{{secrets.SLACK_APP_TOKEN}}" />
+  </notify>
+
+  <step id="hold" />
+  <when-approved>
+    <step id="publish">
+      <script>return { published: true };</script>
+    </step>
+    <result value="{{context.steps.publish}}" />
+  </when-approved>
+  <when-rejected>
+    <step id="archive">
+      <script>return { archived: true };</script>
+    </step>
+    <result value="{{context.steps.archive}}" />
+  </when-rejected>
+</approval>
+```
+
+- `timeout` caps how long the approval waits; `on-timeout` chooses `approve`, `reject`, or another arm.
+- Optional `<notify>` fires built-in Slack/Telegram/Discord/WhatsApp notifications when the approval is armed.
+- Exactly one `<when-approved>` or `<when-rejected>` is selected after the decision arrives.
+
+---
+
+## Notifications — `<notify>`
+
+`<notify>` is a container for built-in Slack, Telegram, Discord, or WhatsApp deliveries. It is not a standalone step — it is attached to the parent that arms the notification.
+
+### Inside lifecycle hooks
+
+Fire a notification when the run finishes successfully or fails.
+
+```xml
+<lifecycle>
+  <on-success>
+    <notify>
+      <slack channels="ops"
+             bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+             app-token="{{secrets.SLACK_APP_TOKEN}}" />
+    </notify>
+    <script>
+      console.log('Run completed successfully');
+    </script>
+  </on-success>
+  <on-error>
+    <notify>
+      <slack channels="oncall"
+             bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+             app-token="{{secrets.SLACK_APP_TOKEN}}" />
+    </notify>
+    <script>
+      console.error('Run failed');
+    </script>
+  </on-error>
+</lifecycle>
+```
+
+### Inside an approval
+
+Fire a notification when the approval is armed so the right moderator sees the decision request (see the `<approval>` example above).
+
+A `<notify>` contains one or more built-in provider tags — `<slack>`, `<telegram>`, `<discord>`, or `<whatsapp>` — and must not contain anything else.
 
 ---
 
@@ -150,46 +412,6 @@ Run once, sorts every file into the right subfolder. Zero external services, zer
             files: entries
               .filter(e => e.isFile())
               .map(e => ({ name: e.name, ext: path.extname(e.name).toLowerCase() })),
-          };
-        </script>
-      </step>
-
-      <step id="imageCount">
-        <script>
-          return {
-            value: context.steps.scan.files.filter(f =>
-              ['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(f.ext)
-            ).length
-          };
-        </script>
-      </step>
-
-      <step id="docCount">
-        <script>
-          return {
-            value: context.steps.scan.files.filter(f =>
-              ['.pdf','.doc','.docx','.txt','.md','.rtf'].includes(f.ext)
-            ).length
-          };
-        </script>
-      </step>
-
-      <step id="videoCount">
-        <script>
-          return {
-            value: context.steps.scan.files.filter(f =>
-              ['.mp4','.mov','.avi','.mkv','.webm'].includes(f.ext)
-            ).length
-          };
-        </script>
-      </step>
-
-      <step id="archiveCount">
-        <script>
-          return {
-            value: context.steps.scan.files.filter(f =>
-              ['.zip','.tar','.gz','.7z','.rar'].includes(f.ext)
-            ).length
           };
         </script>
       </step>
@@ -255,9 +477,8 @@ Run once, sorts every file into the right subfolder. Zero external services, zer
 
       <step id="summary">
         <script>
-          const { imageCount, docCount, videoCount, archiveCount } = context.steps;
           return {
-            message: `Organized ${context.steps.scan.files.length} file(s): ${imageCount.value} Images, ${docCount.value} Docs, ${videoCount.value} Videos, ${archiveCount.value} Archives.`
+            message: `Organized ${context.steps.scan.files.length} file(s) into Images/, Docs/, Videos/, Archives/.`
           };
         </script>
       </step>
@@ -402,9 +623,7 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
       </step>
 
       <step id="isFlagged">
-        <script>
-          return { value: context.steps.risk.flagged };
-        </script>
+        <script>return { value: context.steps.risk.flagged };</script>
       </step>
 
       <choose id="alertRoute">
