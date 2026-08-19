@@ -66,146 +66,103 @@ woml --version
 
 **Requirements:** macOS (x64, arm64), Linux (x64, glibc), or Windows (x64, arm64). No database to set up, the default state store is bundled.
 
-## Quick example: organize your Downloads folder
+## Quick example: DNS lookup
 
-Run this once and it sorts every file in a folder into the right place — images, documents, videos, archives — using conditional logic, a real filesystem loop, and zero external services.
+Save this as `dns.woml`, run it, and you get an instant DNS report for `github.com` — single host, load-balanced, or no record at all. Zero setup, no API key, no dependencies.
 
 ```xml
 <woml>
-  <workflow id="organize" name="Organize a folder by file type">
+  <workflow id="dns-lookup" name="DNS lookup" version="1.0.0">
     <triggers>
       <manual id="start" />
     </triggers>
 
     <steps>
-      <step id="scan">
+      <step id="resolve">
         <script>
-          const { promises: fs } = await import('fs');
-          const path = await import('path');
-          const folder = context.payload.path ?? '.';
-          const entries = await fs.readdir(folder, { withFileTypes: true });
-          return {
-            folder,
-            files: entries
-              .filter(e => e.isFile())
-              .map(e => ({ name: e.name, ext: path.extname(e.name).toLowerCase() })),
-          };
+          const domain = 'github.com';
+          const response = await services.http.request({
+            method: 'GET',
+            url: `https://dns.google/resolve?name=${domain}&type=A`,
+            timeoutMs: 5000
+          });
+          const records = response.body.Answer ?? [];
+          const ips = records.map(r => r.data).filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
+          return { domain, ips };
         </script>
       </step>
 
-      <for-each id="organize" source="{{context.steps.scan.files}}">
-        <step id="classify">
-          <script>
-            return { ext: context.item.ext };
-          </script>
-        </step>
-
-        <choose>
-          <when test="{{context.steps.classify.ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']}}">
-            <step id="move-image">
-              <script>
-                const { promises: fs } = await import('fs');
-                const path = await import('path');
-                const from = path.join(context.steps.scan.folder, context.item.name);
-                const to = path.join(context.steps.scan.folder, 'Images', context.item.name);
-                await fs.mkdir(path.dirname(to), { recursive: true });
-                await fs.rename(from, to);
-                return { movedTo: 'Images' };
-              </script>
-            </step>
-          </when>
-          <when test="{{context.steps.classify.ext in ['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf']}}">
-            <step id="move-doc">
-              <script>
-                const { promises: fs } = await import('fs');
-                const path = await import('path');
-                const from = path.join(context.steps.scan.folder, context.item.name);
-                const to = path.join(context.steps.scan.folder, 'Docs', context.item.name);
-                await fs.mkdir(path.dirname(to), { recursive: true });
-                await fs.rename(from, to);
-                return { movedTo: 'Docs' };
-              </script>
-            </step>
-          </when>
-          <when test="{{context.steps.classify.ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']}}">
-            <step id="move-video">
-              <script>
-                const { promises: fs } = await import('fs');
-                const path = await import('path');
-                const from = path.join(context.steps.scan.folder, context.item.name);
-                const to = path.join(context.steps.scan.folder, 'Videos', context.item.name);
-                await fs.mkdir(path.dirname(to), { recursive: true });
-                await fs.rename(from, to);
-                return { movedTo: 'Videos' };
-              </script>
-            </step>
-          </when>
-          <when test="{{context.steps.classify.ext in ['.zip', '.tar', '.gz', '.7z', '.rar', '.dmg']}}">
-            <step id="move-archive">
-              <script>
-                const { promises: fs } = await import('fs');
-                const path = await import('path');
-                const from = path.join(context.steps.scan.folder, context.item.name);
-                const to = path.join(context.steps.scan.folder, 'Archives', context.item.name);
-                await fs.mkdir(path.dirname(to), { recursive: true });
-                await fs.rename(from, to);
-                return { movedTo: 'Archives' };
-              </script>
-            </step>
-          </when>
-          <otherwise>
-            <step id="move-misc">
-              <script>
-                const { promises: fs } = await import('fs');
-                const path = await import('path');
-                const from = path.join(context.steps.scan.folder, context.item.name);
-                const to = path.join(context.steps.scan.folder, 'Misc', context.item.name);
-                await fs.mkdir(path.dirname(to), { recursive: true });
-                await fs.rename(from, to);
-                return { movedTo: 'Misc' };
-              </script>
-            </step>
-          </otherwise>
-        </choose>
-      </for-each>
-
-      <step id="summary">
+      <step id="status">
         <script>
-          const total = context.steps.scan.files.length;
-          return { message: `Organized ${total} file(s) into Images/, Docs/, Videos/, Archives/, Misc/.` };
+          const ips = context.steps.resolve.ips;
+          let value;
+          if (ips.length === 0) value = 'none';
+          else if (ips.length === 1) value = 'single';
+          else value = 'multi';
+          return { value };
         </script>
       </step>
+
+      <choose id="report">
+        <when test="{{context.steps.status.value === 'single'}}">
+          <step id="reportSingle">
+            <script>
+              const { domain, ips } = context.steps.resolve;
+              return { report: `${domain} → ${ips[0]} (single host)` };
+            </script>
+          </step>
+          <result value="{{context.steps.reportSingle}}" />
+        </when>
+        <when test="{{context.steps.status.value === 'multi'}}">
+          <step id="reportMulti">
+            <script>
+              const { domain, ips } = context.steps.resolve;
+              return { report: `${domain} → ${ips.length} IPs (${ips.join(', ')}) — load balanced` };
+            </script>
+          </step>
+          <result value="{{context.steps.reportMulti}}" />
+        </when>
+        <otherwise>
+          <step id="reportNone">
+            <script>
+              const { domain } = context.steps.resolve;
+              return { report: `${domain} → no A record found` };
+            </script>
+          </step>
+          <result value="{{context.steps.reportNone}}" />
+        </otherwise>
+      </choose>
     </steps>
   </workflow>
 </woml>
 ```
 
-Save it as `organize.woml` and run it:
+Run it:
 
 ```bash
-woml run organize.woml --payload '{"path":"/path/to/Downloads"}'
+woml run dns.woml
 ```
 
-WOML scans the folder, loops over every file with `<for-each>`, routes each one through a `<choose>` decision by extension, and moves it into the right subfolder with `fs.rename`. Press Ctrl+C to stop the run.
+WOML hits Google's free DNS-over-HTTPS endpoint, parses the answer records, and routes through a `<choose>` to produce one of three friendly reports: single host, load balanced, or no record. Three steps, one branching point, no API key.
 
 ```mermaid
 graph TD
-    A[Manual trigger] --> B[Scan folder for files]
-    B --> C[For each file]
-    C --> D{File extension?}
-    D -->|jpg, png, gif, webp, svg| E[Move to Images/]
-    D -->|pdf, doc, txt, md| F[Move to Docs/]
-    D -->|mp4, mov, avi, mkv| G[Move to Videos/]
-    D -->|zip, tar, gz, dmg| H[Move to Archives/]
-    D -->|anything else| I[Move to Misc/]
-    E --> J[Summary: organized N files]
-    F --> J
-    G --> J
-    H --> J
-    I --> J
+    A[Manual trigger] --> B[Resolve DNS via Google]
+    B --> C{How many IPs?}
+    C -->|1| D[Single host report]
+    C -->|2+| E[Load-balanced report]
+    C -->|0| F[No record report]
 ```
 
-This is one WOML file. No setup, no cloud, no API keys. It runs locally, pulls in real npm packages (`fs`, `path`) on demand, and exercises the same primitives that make n8n workflows become spaghetti and Zapier workflows impossible: `<choose>` for conditional routing, `<for-each>` for iteration, and `<script>` for the parts that need real code.
+This Quick example exercises the primitives that make WOML a real workflow language:
+
+- **`<manual>`** — runs on demand.
+- **`<step>`** — sequential logic, with `<script>` for the parts that need real code (HTTP calls, parsing).
+- **`<choose>`** — branches on the result. Each `<when>` and `<otherwise>` ends with a `<result>` so the merged output is available at `context.steps.report`.
+- **`services.http.request`** — supervised HTTP capability; the runtime owns retries, timeouts, and tracing.
+- **`context.steps.<id>`** — every step's return value is available to later steps by its `id`.
+
+To look up a different domain, change the `domain` constant in the `resolve` step. To look up other record types (MX, TXT, AAAA), change the `type=A` query parameter.
 
 ## Real workflows in WOML
 
