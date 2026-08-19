@@ -1,6 +1,6 @@
 FROM oven/bun:1.3.14
 
-ARG WOML_VERSION=1.0.3
+ARG WOML_VERSION=1.0.4
 RUN bun add --global "woml-cli@${WOML_VERSION}"
 
 RUN addgroup --system woml && adduser --system --ingroup woml --home /app woml

@@ -1,6 +1,6 @@
 [package]
 name = "woml-engine"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 description = "Durable event-sourced workflow execution engine for WOML"
 license = "Apache-2.0"
