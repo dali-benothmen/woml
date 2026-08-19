@@ -55,7 +55,7 @@ bun add --global woml-cli
 Or with pnpm:
 
 ```bash
-pnpm add -g sax woml-cli
+pnpm add -g woml-cli
 ```
 
 This installs the `woml` command:
