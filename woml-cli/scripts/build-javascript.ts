@@ -38,7 +38,7 @@ const result = await Bun.build({
   target: 'bun',
   format: 'esm',
   sourcemap: 'external',
-  minify: false,
+  minify: true,
   naming: '[name].[ext]',
 });
 
