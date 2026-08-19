@@ -75,12 +75,12 @@ export async function verifyMainPackage(root: string): Promise<void> {
   ) as MainManifest;
   if (
     manifest.name !== 'woml-cli' ||
-    manifest.version !== '1.0.3' ||
+    manifest.version !== '1.0.4' ||
     manifest.author !== 'Mohamed Ali Ben Othmen' ||
     manifest.license !== 'Apache-2.0' ||
     manifest.bin?.woml !== './dist/cli.js'
   ) {
-    throw new Error('The staged package does not have the frozen woml-cli@1.0.3 identity.');
+    throw new Error('The staged package does not have the frozen woml-cli@1.0.4 identity.');
   }
   const publicMetadata = JSON.stringify({
     repository: manifest.repository,
@@ -233,9 +233,25 @@ async function snapshot(root: string): Promise<string> {
   return hash.digest('hex');
 }
 
+async function verifyPackagedReadmeMatchesSource(output: string): Promise<void> {
+  const stagedReadmePath = resolve(output, 'README.md');
+  const sourceReadmePath = resolve(repositoryRoot, 'README.md');
+  const [staged, source] = await Promise.all([
+    readFile(stagedReadmePath, 'utf8'),
+    readFile(sourceReadmePath, 'utf8'),
+  ]);
+  if (staged !== source) {
+    throw new Error(
+      `The staged README at ${stagedReadmePath} does not match the canonical source at ${sourceReadmePath}. ` +
+        `The release bundler must copy from the repository root so the published tarball ships the canonical README.`,
+    );
+  }
+}
+
 async function prepareAndVerify(output: string): Promise<void> {
   await prepareMainPackage(output);
   await verifyMainPackage(output);
+  await verifyPackagedReadmeMatchesSource(output);
   await inspectNpmPack(output);
   await smokeCli(output);
   process.stdout.write(`[package] staged and verified ${expectedFiles.length} files in ${output}\n`);
@@ -289,7 +305,7 @@ async function pack(output: string, destination: string): Promise<void> {
     throw new Error(`npm pack failed: ${result.stderr.toString().trim()}`);
   }
   await chmod(resolve(output, 'dist/cli.js'), 0o755);
-  process.stdout.write(`[package] wrote woml-cli@1.0.3 to ${destination}\n`);
+  process.stdout.write(`[package] wrote woml-cli@1.0.4 to ${destination}\n`);
 }
 
 async function main(): Promise<void> {

@@ -1,6 +1,6 @@
 {
   "name": "woml-cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": false,
   "description": "WOML workflow automation runtime and command-line interface",
   "author": "Mohamed Ali Ben Othmen",

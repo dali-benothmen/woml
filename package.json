@@ -1,6 +1,6 @@
 {
   "name": "woml-repository",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "WOML workflow automation monorepo",
   "author": "Mohamed Ali Ben Othmen",
