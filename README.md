@@ -66,72 +66,97 @@ woml --version
 
 **Requirements:** macOS (x64, arm64), Linux (x64, glibc), or Windows (x64, arm64). No database to set up, the default state store is bundled.
 
-## Quick example: DNS lookup
+## Quick example: organize your Downloads folder
 
-Save this as `dns.woml`, run it, and you get an instant DNS report for `github.com` — single host, load-balanced, or no record at all. Zero setup, no API key, no dependencies.
+Save this as `organize.woml`, point it at your Downloads folder, and every file moves into the right subfolder — Images, Docs, Videos, Archives — in parallel. No setup, no cloud, no API keys.
 
 ```xml
 <woml>
-  <workflow id="dns-lookup" name="DNS lookup" version="1.0.0">
-    <triggers>
-      <manual id="start" />
-    </triggers>
+  <workflow id="organize" name="Organize a folder by file type" version="1.0.0">
+    <triggers><manual id="start" /></triggers>
 
     <steps>
-      <step id="resolve">
+      <step id="scan">
         <script>
-          const domain = 'github.com';
-          const response = await services.http.request({
-            method: 'GET',
-            url: `https://dns.google/resolve?name=${domain}&type=A`,
-            timeoutMs: 5000
-          });
-          const records = response.body.Answer ?? [];
-          const ips = records.map(r => r.data).filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
-          return { domain, ips };
+          const { promises: fs } = await import('fs');
+          const path = await import('path');
+          const folder = context.payload.path ?? '.';
+          const entries = await fs.readdir(folder, { withFileTypes: true });
+          return {
+            folder,
+            files: entries
+              .filter(e => e.isFile())
+              .map(e => ({ name: e.name, ext: path.extname(e.name).toLowerCase() })),
+          };
         </script>
       </step>
 
-      <step id="status">
+      <parallel id="moveAll" concurrency="4">
+        <step id="moveImages">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Images', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+        <step id="moveDocs">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.pdf','.doc','.docx','.txt','.md','.rtf'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Docs', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+        <step id="moveVideos">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.mp4','.mov','.avi','.mkv','.webm'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Videos', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+        <step id="moveArchives">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.zip','.tar','.gz','.7z','.rar'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Archives', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+      </parallel>
+
+      <step id="summary">
         <script>
-          const ips = context.steps.resolve.ips;
-          let value;
-          if (ips.length === 0) value = 'none';
-          else if (ips.length === 1) value = 'single';
-          else value = 'multi';
-          return { value };
+          return {
+            message: `Organized ${context.steps.scan.files.length} file(s) into Images/, Docs/, Videos/, Archives/.`
+          };
         </script>
       </step>
-
-      <choose id="report">
-        <when test="{{context.steps.status.value === 'single'}}">
-          <step id="reportSingle">
-            <script>
-              const { domain, ips } = context.steps.resolve;
-              return { report: `${domain} → ${ips[0]} (single host)` };
-            </script>
-          </step>
-          <result value="{{context.steps.reportSingle}}" />
-        </when>
-        <when test="{{context.steps.status.value === 'multi'}}">
-          <step id="reportMulti">
-            <script>
-              const { domain, ips } = context.steps.resolve;
-              return { report: `${domain} → ${ips.length} IPs (${ips.join(', ')}) — load balanced` };
-            </script>
-          </step>
-          <result value="{{context.steps.reportMulti}}" />
-        </when>
-        <otherwise>
-          <step id="reportNone">
-            <script>
-              const { domain } = context.steps.resolve;
-              return { report: `${domain} → no A record found` };
-            </script>
-          </step>
-          <result value="{{context.steps.reportNone}}" />
-        </otherwise>
-      </choose>
     </steps>
   </workflow>
 </woml>
@@ -140,29 +165,34 @@ Save this as `dns.woml`, run it, and you get an instant DNS report for `github.c
 Run it:
 
 ```bash
-woml run dns.woml
+woml run organize.woml --payload '{"path":"/path/to/Downloads"}'
 ```
 
-WOML hits Google's free DNS-over-HTTPS endpoint, parses the answer records, and routes through a `<choose>` to produce one of three friendly reports: single host, load balanced, or no record. Three steps, one branching point, no API key.
+WOML scans the folder, then moves every file into the right subfolder in parallel — images, documents, videos, and archives all happen at the same time. The engine handles the concurrency, the retries, and the durable history of every move.
 
 ```mermaid
 graph TD
-    A[Manual trigger] --> B[Resolve DNS via Google]
-    B --> C{How many IPs?}
-    C -->|1| D[Single host report]
-    C -->|2+| E[Load-balanced report]
-    C -->|0| F[No record report]
+    A[Manual trigger] --> B[Scan folder]
+    B --> C[Parallel move]
+    C --> D[Images/]
+    C --> E[Docs/]
+    C --> F[Videos/]
+    C --> G[Archives/]
+    D --> H[Summary]
+    E --> H
+    F --> H
+    G --> H
 ```
 
 This Quick example exercises the primitives that make WOML a real workflow language:
 
 - **`<manual>`** — runs on demand.
-- **`<step>`** — sequential logic, with `<script>` for the parts that need real code (HTTP calls, parsing).
-- **`<choose>`** — branches on the result. Each `<when>` and `<otherwise>` ends with a `<result>` so the merged output is available at `context.steps.report`.
-- **`services.http.request`** — supervised HTTP capability; the runtime owns retries, timeouts, and tracing.
+- **`<step>`** — sequential logic, with `<script>` for the parts that need real code (filesystem, filtering, renaming).
+- **`<parallel>`** — runs multiple steps concurrently and joins when all finish.
 - **`context.steps.<id>`** — every step's return value is available to later steps by its `id`.
+- **`context.payload`** — trigger input, passed via `--payload`.
 
-To look up a different domain, change the `domain` constant in the `resolve` step. To look up other record types (MX, TXT, AAAA), change the `type=A` query parameter.
+To sort a different folder, change the `path` in the payload. To add more file types, add another step inside `<parallel>` with its own filter and destination.
 
 ## Real workflows in WOML
 
