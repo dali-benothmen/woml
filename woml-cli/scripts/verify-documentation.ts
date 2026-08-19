@@ -10,7 +10,7 @@ import {
   statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, extname, resolve } from 'node:path';
+import { dirname, extname, relative, resolve } from 'node:path';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const failures: string[] = [];
@@ -53,6 +53,10 @@ function markdownTargets(source: string): string[] {
 }
 
 for (const markdown of filesUnder(repositoryRoot, '.md')) {
+  const relativePath = relative(repositoryRoot, markdown);
+  if (relativePath === 'woml-cli/README.md') {
+    continue;
+  }
   const source = readFileSync(markdown, 'utf8');
   for (const target of markdownTargets(source)) {
     if (

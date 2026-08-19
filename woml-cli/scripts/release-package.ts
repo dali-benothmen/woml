@@ -243,7 +243,7 @@ async function verifyPackagedReadmeMatchesSource(output: string): Promise<void> 
   if (staged !== source) {
     throw new Error(
       `The staged README at ${stagedReadmePath} does not match the canonical source at ${sourceReadmePath}. ` +
-        `The release bundler must copy from the repository root so the published tarball ships the canonical README.`,
+        `Update woml-cli/README.md from the canonical repository root README, or accept the divergence by adjusting this verifier.`,
     );
   }
 }
