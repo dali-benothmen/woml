@@ -3,7 +3,7 @@
   "displayName": "WOML",
   "description": "markup language that turns workflow automation into a document you can read, run, and trust.",
   "version": "1.0.4",
-  "publisher": "woml",
+  "publisher": "WOML",
   "author": "Mohamed Ali Ben Othmen",
   "license": "Apache-2.0",
   "icon": "images/icon.png",
