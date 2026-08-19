@@ -46,6 +46,12 @@ WOML takes a different bet: your workflow is **a file**. It reads like HTML, so 
 npm i -g woml-cli
 ```
 
+Or with Bun:
+
+```bash
+bun add --global woml-cli
+```
+
 This installs the `woml` command:
 
 ```bash

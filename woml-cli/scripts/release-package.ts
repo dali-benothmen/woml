@@ -75,12 +75,12 @@ export async function verifyMainPackage(root: string): Promise<void> {
   ) as MainManifest;
   if (
     manifest.name !== 'woml-cli' ||
-    manifest.version !== '1.0.2' ||
+    manifest.version !== '1.0.3' ||
     manifest.author !== 'Mohamed Ali Ben Othmen' ||
     manifest.license !== 'Apache-2.0' ||
     manifest.bin?.woml !== './dist/cli.js'
   ) {
-    throw new Error('The staged package does not have the frozen woml-cli@1.0.2 identity.');
+    throw new Error('The staged package does not have the frozen woml-cli@1.0.3 identity.');
   }
   const publicMetadata = JSON.stringify({
     repository: manifest.repository,
@@ -289,7 +289,7 @@ async function pack(output: string, destination: string): Promise<void> {
     throw new Error(`npm pack failed: ${result.stderr.toString().trim()}`);
   }
   await chmod(resolve(output, 'dist/cli.js'), 0o755);
-  process.stdout.write(`[package] wrote woml-cli@1.0.2 to ${destination}\n`);
+  process.stdout.write(`[package] wrote woml-cli@1.0.3 to ${destination}\n`);
 }
 
 async function main(): Promise<void> {
