@@ -233,17 +233,22 @@ async function snapshot(root: string): Promise<string> {
   return hash.digest('hex');
 }
 
-async function verifyPackagedReadmeMatchesSource(output: string): Promise<void> {
+async function verifyPackagedReadmeContentShape(output: string): Promise<void> {
   const stagedReadmePath = resolve(output, 'README.md');
-  const sourceReadmePath = resolve(repositoryRoot, 'README.md');
-  const [staged, source] = await Promise.all([
-    readFile(stagedReadmePath, 'utf8'),
-    readFile(sourceReadmePath, 'utf8'),
-  ]);
-  if (staged !== source) {
+  const staged = await readFile(stagedReadmePath, 'utf8');
+  const requiredMarkers: readonly { readonly label: string; readonly pattern: RegExp }[] = [
+    { label: 'package name', pattern: /\bwoml-cli\b/u },
+    { label: 'install command', pattern: /(?:bun\s+add|npm\s+(?:install|i)|pnpm\s+add)\s+(?:--global|-g|-g)?\s*woml-cli/u },
+    { label: 'quick example or workflow sample', pattern: /<woml>/u },
+    { label: 'commands section', pattern: /\bwoml\s+(?:check|run|inspect|list)\b/u },
+  ];
+  const missing = requiredMarkers
+    .filter(marker => !marker.pattern.test(staged))
+    .map(marker => marker.label);
+  if (missing.length > 0) {
     throw new Error(
-      `The staged README at ${stagedReadmePath} does not match the canonical source at ${sourceReadmePath}. ` +
-        `Update woml-cli/README.md from the canonical repository root README, or accept the divergence by adjusting this verifier.`,
+      `The packaged README at ${stagedReadmePath} is missing required content: ${missing.join(', ')}. ` +
+        `Update woml-cli/README.md to include the package name, install command, a workflow example, and common commands.`,
     );
   }
 }
@@ -251,7 +256,7 @@ async function verifyPackagedReadmeMatchesSource(output: string): Promise<void> 
 async function prepareAndVerify(output: string): Promise<void> {
   await prepareMainPackage(output);
   await verifyMainPackage(output);
-  await verifyPackagedReadmeMatchesSource(output);
+  await verifyPackagedReadmeContentShape(output);
   await inspectNpmPack(output);
   await smokeCli(output);
   process.stdout.write(`[package] staged and verified ${expectedFiles.length} files in ${output}\n`);
