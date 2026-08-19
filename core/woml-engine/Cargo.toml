@@ -12,7 +12,7 @@ name = "woml_engine"
 [dependencies]
 actix-web = "4.11"
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.8"
+chrono-tz = "0.10"
 futures-util = "0.3"
 fs2 = "0.4"
 base64 = "0.22"
