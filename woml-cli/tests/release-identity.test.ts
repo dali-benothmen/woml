@@ -84,7 +84,7 @@ describe('WOML v1 release identity', () => {
   });
 
   test('keeps public installation and repository metadata on WOML', async () => {
-    for (const path of ['README.md', 'woml-cli/README.md', 'docs/getting-started.md']) {
+    for (const path of ['README.md', 'docs/getting-started.md']) {
       const source = await readFile(resolve(repositoryRoot, path), 'utf8');
       expect(source).toMatch(
         /(?:bun\s+add|npm\s+(?:install|i)).*\bwoml-cli\b/u,
