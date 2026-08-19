@@ -1,0 +1,17 @@
+[install]
+# Use hardlinks for faster installs
+hardlink = true
+
+# Peer dependencies
+peer = false
+
+# Cache downloaded packages
+cache = true
+
+[run]
+# Silence Bun's default output
+silent = false
+
+[test]
+# Cover coverage
+coverage = false
