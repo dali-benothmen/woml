@@ -1,10 +1,6 @@
-# WOML
+# WOML: Workflow Orchestration Markup Language
 
-**Workflow Orchestration Markup Language.** Markup for automation that scales with you.
-
-WOML is a markup language for building and running workflow automation. A workflow written in WOML is a document you can read top to bottom — triggers, steps, control flow, approvals, and lifecycle all expressed as clear, HTML-inspired structure instead of tangled code or an unreadable diagram.
-
-When a step needs real logic, JavaScript is always available inside `<script>`, so there is no ceiling on what a workflow can do. WOML handles everything around that code: execution order, retries, concurrency, human approvals, external services, and a durable, inspectable history of every run.
+If you can read HTML, you can use WOML to automate anything, literally anything.
 
 ---
 
@@ -38,27 +34,69 @@ woml --version
 
 ## The basic API
 
-WOML has a small set of tags that compose into anything. If you know HTML, you can read a WOML workflow on sight.
+A workflow is one `<woml>` document with a `<workflow>` root, plus `<config>`, `<lifecycle>`, `<triggers>`, and `<steps>` containers. Triggers decide *when* a workflow runs; steps decide *what* it does. Everything inside a `<script>` is plain JavaScript.
+
+### Document skeleton
+
+```xml
+<woml>
+  <workflow id="..." name="..." version="1.0.0">
+    <config concurrency="4" timeout="10m" />
+    <lifecycle>
+      <on-success><script>...</script></on-success>
+      <on-error><script>...</script></on-error>
+    </lifecycle>
+    <triggers>...</triggers>
+    <steps>...</steps>
+  </workflow>
+</woml>
+```
 
 ### Triggers
 
-What starts the workflow.
+One or more of these inside `<triggers>`.
 
 ```xml
-<manual id="start" />                            <!-- run on demand -->
-<webhook id="hook" path="/orders" method="POST" secret="{{secrets.TOKEN}}" />
+<manual id="start" />
+
+<webhook id="hook"
+         path="/webhooks/orders"
+         method="POST"
+         auth="bearer"
+         secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
+  <schema>
+    { "type": "object", "required": ["orderId"], "properties": { "orderId": { "type": "string" } } }
+  </schema>
+</webhook>
+
 <schedule id="daily" cron="0 9 * * MON-FRI" timezone="UTC" />
-<interval id="every-30s" seconds="30" />
-<event id="created" name="order.created" secret="{{secrets.EVENT_TOKEN}}" />
-<slack id="msg" events="app-mention" channels="ops" bot-token="{{secrets.SLACK_BOT}}" app-token="{{secrets.SLACK_APP}}" />
-<telegram id="bot" events="message" commands="/run" bot-token="{{secrets.TELEGRAM_BOT}}" />
-<discord id="bot" events="message" commands="/run" bot-token="{{secrets.DISCORD_BOT}}" />
-<whatsapp id="bot" events="message" phone="+15555550100" token="{{secrets.WA_TOKEN}}" />
+
+<interval id="heartbeat" every="30s" on-missed="skip" />
+
+<event id="created" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}" />
+
+<slack id="msg"
+       events="app-mention,direct-message"
+       channels="ops,alerts"
+       bot-token="{{secrets.SLACK_BOT_TOKEN}}"
+       app-token="{{secrets.SLACK_APP_TOKEN}}" />
+
+<telegram id="bot" events="message" bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}" />
+
+<discord id="bot"
+         events="app-mention,direct-message"
+         bot-token="{{secrets.DISCORD_BOT_TOKEN}}" />
+
+<whatsapp id="bot"
+          events="message"
+          phone-number-id="123456789012345"
+          verify-token="{{secrets.WHATSAPP_VERIFY_TOKEN}}"
+          app-secret="{{secrets.WHATSAPP_APP_SECRET}}" />
 ```
 
 ### Steps
 
-What runs.
+Steps are sequential inside `<steps>`. Each `<step>` returns a value that becomes available at `context.steps.<stepId>`.
 
 ```xml
 <step id="greet">
@@ -70,49 +108,19 @@ What runs.
 
 ### Control flow
 
-```xml
-<choose>
-  <when test="context.steps.score.value > 80">
-    <step id="escalate"><script>...</script></step>
-  </when>
-  <otherwise>
-    <step id="log"><script>...</script></step>
-  </otherwise>
-</choose>
-
-<switch id="route">
-  <case test="context.payload.tier === 'gold'">...</case>
-  <case test="context.payload.tier === 'silver'">...</case>
-  <default>...</default>
-</switch>
-
-<if test="context.payload.priority === 'high'">
-  <step id="fast-track"><script>...</script></step>
-</if>
-
-<for-each id="loop" source="{{context.steps.list.items}}">
-  <step id="process"><script>...</script></step>
-</for-each>
-
-<fork>
-  <step id="branch-a"><script>...</script></step>
-  <step id="branch-b"><script>...</script></step>
-  <join mode="all" />
-</fork>
-```
-
-### Composition
-
-```xml
-<workflow-call id="send" workflow="notify-customer" input="{{context.payload}}" />
-```
+- **`<choose>`** — mutually exclusive conditional routing. The `id` is required. Each `<when>` and the `<otherwise>` must end with a `<result>` that selects which value to publish at `context.steps.<chooseId>`. The `test` attribute holds exactly one context reference.
+- **`<switch>`** — exact-string routing against one `value` reference. Each `<case>` and the `<default>` must end with a `<result>`.
+- **`<parallel>`** — run direct child steps concurrently, then join. Use `concurrency` to cap simultaneous children and `on-error="fail-fast"` (default) or `wait-all` for the failure policy.
+- **`<fork>`** + **`<branch>`** — concurrent multi-step routes with an explicit `join` mode (`all`, `none`, or a whitespace-separated list of branch IDs).
+- **`<approval>`** — durable human-in-the-loop. Records an approval decision and pauses the run until one of the configured arms resolves.
+- **`<notify>`** — attach a built-in Slack/Telegram/Discord/WhatsApp notification to the step, lifecycle hook, or approval that contains it.
 
 ### Runtime bindings inside `<script>`
 
 - `context.payload` — trigger input
 - `context.steps.<id>` — earlier step output
-- `context.item` — current `<for-each>` item
-- `services.http`, `services.database`, `services.slack`, `services.storage`, `services.cache`, `services.event` — supervised capabilities
+- `context.run` — durable run metadata
+- `services.http`, `services.database`, `services.slack`, `services.storage`, `services.cache`, `services.event`, `services.messaging` — supervised capabilities (each must be declared by the workflow or its modules)
 - `secrets.<NAME>` — only the secrets proven necessary at compile time
 
 Scripts return JSON-compatible values. The Rust engine records every outcome durably.
@@ -127,7 +135,7 @@ Run once, sorts every file into the right subfolder. Zero external services, zer
 
 ```xml
 <woml>
-  <workflow id="organize" name="Organize a folder by file type">
+  <workflow id="organize" name="Organize a folder by file type" version="1.0.0">
     <triggers><manual id="start" /></triggers>
 
     <steps>
@@ -146,40 +154,111 @@ Run once, sorts every file into the right subfolder. Zero external services, zer
         </script>
       </step>
 
-      <for-each id="organize" source="{{context.steps.scan.files}}">
-        <choose>
-          <when test="context.item.ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']">
-            <step id="move-image">
-              <script>
-                const { promises: fs } = await import('fs');
-                const path = await import('path');
-                const from = path.join(context.steps.scan.folder, context.item.name);
-                const to   = path.join(context.steps.scan.folder, 'Images', context.item.name);
-                await fs.mkdir(path.dirname(to), { recursive: true });
-                await fs.rename(from, to);
-                return { movedTo: 'Images' };
-              </script>
-            </step>
-          </when>
-          <when test="context.item.ext in ['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf']">
-            <step id="move-doc"><script>...</script></step>
-          </when>
-          <when test="context.item.ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']">
-            <step id="move-video"><script>...</script></step>
-          </when>
-          <when test="context.item.ext in ['.zip', '.tar', '.gz', '.7z', '.rar']">
-            <step id="move-archive"><script>...</script></step>
-          </when>
-          <otherwise>
-            <step id="move-misc"><script>...</script></step>
-          </otherwise>
-        </choose>
-      </for-each>
+      <step id="imageCount">
+        <script>
+          return {
+            value: context.steps.scan.files.filter(f =>
+              ['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(f.ext)
+            ).length
+          };
+        </script>
+      </step>
+
+      <step id="docCount">
+        <script>
+          return {
+            value: context.steps.scan.files.filter(f =>
+              ['.pdf','.doc','.docx','.txt','.md','.rtf'].includes(f.ext)
+            ).length
+          };
+        </script>
+      </step>
+
+      <step id="videoCount">
+        <script>
+          return {
+            value: context.steps.scan.files.filter(f =>
+              ['.mp4','.mov','.avi','.mkv','.webm'].includes(f.ext)
+            ).length
+          };
+        </script>
+      </step>
+
+      <step id="archiveCount">
+        <script>
+          return {
+            value: context.steps.scan.files.filter(f =>
+              ['.zip','.tar','.gz','.7z','.rar'].includes(f.ext)
+            ).length
+          };
+        </script>
+      </step>
+
+      <parallel id="moveAll" concurrency="4">
+        <step id="moveImages">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Images', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+        <step id="moveDocs">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.pdf','.doc','.docx','.txt','.md','.rtf'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Docs', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+        <step id="moveVideos">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.mp4','.mov','.avi','.mkv','.webm'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Videos', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+        <step id="moveArchives">
+          <script>
+            const { promises: fs } = await import('fs');
+            const path = await import('path');
+            const { folder, files } = context.steps.scan;
+            for (const f of files.filter(f => ['.zip','.tar','.gz','.7z','.rar'].includes(f.ext))) {
+              const from = path.join(folder, f.name);
+              const to = path.join(folder, 'Archives', f.name);
+              await fs.mkdir(path.dirname(to), { recursive: true });
+              await fs.rename(from, to);
+            }
+            return { ok: true };
+          </script>
+        </step>
+      </parallel>
 
       <step id="summary">
         <script>
-          const total = context.steps.scan.files.length;
-          return { message: `Organized ${total} file(s) into Images/, Docs/, Videos/, Archives/, Misc/.` };
+          const { imageCount, docCount, videoCount, archiveCount } = context.steps;
+          return {
+            message: `Organized ${context.steps.scan.files.length} file(s): ${imageCount.value} Images, ${docCount.value} Docs, ${videoCount.value} Videos, ${archiveCount.value} Archives.`
+          };
         </script>
       </step>
     </steps>
@@ -199,9 +278,11 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
 
 ```xml
 <woml>
-  <workflow id="slack-router">
+  <workflow id="slack-router" version="1.0.0">
     <triggers>
-      <slack id="incoming" events="message" channels="inbox"
+      <slack id="incoming"
+             events="app-mention,direct-message"
+             channels="inbox"
              bot-token="{{secrets.SLACK_BOT_TOKEN}}"
              app-token="{{secrets.SLACK_APP_TOKEN}}" />
     </triggers>
@@ -230,9 +311,9 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
         </script>
       </step>
 
-      <switch id="route">
-        <case test="context.steps.classify.intent === 'bug'">
-          <step id="send-bugs">
+      <switch id="route" value="{{context.steps.classify.intent}}">
+        <case value="bug">
+          <step id="sendBugs">
             <script>
               await services.slack.send({
                 channel: '#bugs',
@@ -241,20 +322,22 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
               return { routedTo: 'bugs' };
             </script>
           </step>
+          <result value="{{context.steps.sendBugs}}" />
         </case>
-        <case test="context.steps.classify.intent === 'feature'">
-          <step id="send-features">
+        <case value="feature">
+          <step id="sendFeatures">
             <script>
               await services.slack.send({
                 channel: '#feature-requests',
-                text: `� ${context.payload.text}`
+                text: `💡 ${context.payload.text}`
               });
               return { routedTo: 'feature-requests' };
             </script>
           </step>
+          <result value="{{context.steps.sendFeatures}}" />
         </case>
-        <case test="context.steps.classify.intent === 'question'">
-          <step id="send-questions">
+        <case value="question">
+          <step id="sendQuestions">
             <script>
               await services.slack.send({
                 channel: '#questions',
@@ -263,9 +346,13 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
               return { routedTo: 'questions' };
             </script>
           </step>
+          <result value="{{context.steps.sendQuestions}}" />
         </case>
         <default>
-          <step id="drop-noise"><script>return { dropped: true };</script></step>
+          <step id="dropNoise">
+            <script>return { dropped: true };</script>
+          </step>
+          <result value="{{context.steps.dropNoise}}" />
         </default>
       </switch>
     </steps>
@@ -279,9 +366,12 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
 
 ```xml
 <woml>
-  <workflow id="order-guard">
+  <workflow id="order-guard" version="1.0.0">
     <triggers>
-      <webhook id="order" path="/webhooks/orders" method="POST"
+      <webhook id="order"
+               path="/webhooks/orders"
+               method="POST"
+               auth="bearer"
                secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
         <schema>
           {
@@ -305,12 +395,20 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
             url: `https://internal.api/customers/${context.payload.customerId}`,
             timeoutMs: 5000
           });
-          return { flagged: context.payload.total > 10000 || customer.body.disputes > 0 };
+          return {
+            flagged: context.payload.total > 10000 || customer.body.disputes > 0
+          };
         </script>
       </step>
 
-      <choose>
-        <when test="context.steps.risk.flagged">
+      <step id="isFlagged">
+        <script>
+          return { value: context.steps.risk.flagged };
+        </script>
+      </step>
+
+      <choose id="alertRoute">
+        <when test="{{context.steps.isFlagged.value}}">
           <step id="alert">
             <script>
               await services.slack.send({
@@ -320,7 +418,14 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
               return { alerted: true };
             </script>
           </step>
+          <result value="{{context.steps.alert}}" />
         </when>
+        <otherwise>
+          <step id="logOk">
+            <script>return { logged: true };</script>
+          </step>
+          <result value="{{context.steps.logOk}}" />
+        </otherwise>
       </choose>
     </steps>
   </workflow>
@@ -333,7 +438,7 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
 
 ```xml
 <woml>
-  <workflow id="daily-report">
+  <workflow id="daily-report" version="1.0.0">
     <triggers>
       <schedule id="weekdays" cron="0 9 * * MON-FRI" timezone="UTC" />
     </triggers>
@@ -366,32 +471,24 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
 
 ---
 
-### Telegram — answer `/sales` from your team chat
+### Telegram — answer mentions in your team chat
 
 ```xml
 <woml>
-  <workflow id="telegram-sales">
+  <workflow id="telegram-echo" version="1.0.0">
     <triggers>
-      <telegram id="ask" events="message" commands="/sales"
+      <telegram id="incoming"
+                events="message"
                 bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}" />
     </triggers>
 
     <steps>
-      <step id="lookup">
+      <step id="reply">
         <script>
-          const rows = await services.database.query({
-            sql: "SELECT COUNT(*) AS today FROM orders WHERE created_at >= date('now')",
-            parameters: []
-          });
-          return { today: rows[0].today };
-        </script>
-      </step>
-
-      <step id="notify">
-        <script>
-          await services.slack.send({
-            channel: '#sales',
-            text: `Today's numbers were requested on Telegram: ${context.steps.lookup.today} orders so far.`
+          await services.messaging.send({
+            channel: 'telegram',
+            conversationId: context.payload.conversationId,
+            text: `You said: ${context.payload.text}`
           });
           return { ok: true };
         </script>
@@ -407,9 +504,11 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
 
 ```xml
 <woml>
-  <workflow id="order-confirmation">
+  <workflow id="order-confirmation" version="1.0.0">
     <triggers>
-      <event id="created" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
+      <event id="created"
+             name="order.created"
+             secret="{{secrets.EVENT_CONTROL_TOKEN}}">
         <schema>
           {
             "type": "object",
