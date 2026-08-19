@@ -19,12 +19,11 @@ import {
   packedPackageFiles,
   publicJavaScriptFiles,
   publicPackageFiles,
-  publicSourceMapFiles,
 } from './release-contract';
 
 const repositoryRoot = resolve(import.meta.dir, '../..');
 const cliRoot = resolve(repositoryRoot, 'woml-cli');
-const expectedFiles = [...packedPackageFiles].sort();
+const expectedFiles: readonly string[] = [...packedPackageFiles].sort();
 
 interface MainManifest {
   readonly name?: string;
@@ -130,15 +129,6 @@ export async function verifyMainPackage(root: string): Promise<void> {
   }
 
   for (const path of publicPackageFiles) await assertNonempty(resolve(root, path));
-  for (const path of publicSourceMapFiles) {
-    const map = JSON.parse(await readFile(resolve(root, path), 'utf8')) as {
-      readonly version?: number;
-      readonly sources?: readonly string[];
-    };
-    if (map.version !== 3 || (map.sources?.length ?? 0) === 0) {
-      throw new Error(`The source map ${path} is invalid.`);
-    }
-  }
 
   const cli = await readFile(resolve(root, 'dist/cli.js'), 'utf8');
   if (!cli.startsWith('#!/usr/bin/env bun')) {

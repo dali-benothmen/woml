@@ -18,7 +18,6 @@ export const publicSlackFiles = [
 
 export const publicPackageFiles = [
   ...publicJavaScriptFiles,
-  ...publicSourceMapFiles,
   ...publicSlackFiles,
   'README.md',
   'LICENSE',

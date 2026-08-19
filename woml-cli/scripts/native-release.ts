@@ -24,7 +24,6 @@ import {
   packedPackageFiles,
   publicJavaScriptFiles,
   publicPackageFiles,
-  publicSourceMapFiles,
 } from './release-contract';
 import {
   nativeLoadReceiptName,
@@ -215,7 +214,7 @@ export async function prepareMainPackage(output: string): Promise<void> {
   const sourceDist = resolve(cliRoot, 'dist');
   const outputDist = resolve(output, 'dist');
   await mkdir(outputDist, { recursive: true });
-  for (const path of [...publicJavaScriptFiles, ...publicSourceMapFiles]) {
+  for (const path of publicJavaScriptFiles) {
     const name = basename(path);
     await copyFile(resolve(sourceDist, name), resolve(outputDist, name));
     if (path.endsWith('.js')) await chmod(resolve(outputDist, name), 0o755);
