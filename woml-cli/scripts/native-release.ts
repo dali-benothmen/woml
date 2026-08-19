@@ -224,7 +224,7 @@ export async function prepareMainPackage(output: string): Promise<void> {
     recursive: true,
   });
   await Promise.all([
-    copyFile(resolve(cliRoot, 'README.md'), resolve(output, 'README.md')),
+    copyFile(resolve(repositoryRoot, 'README.md'), resolve(output, 'README.md')),
     copyFile(resolve(repositoryRoot, 'LICENSE'), resolve(output, 'LICENSE')),
     copyFile(resolve(repositoryRoot, 'NOTICE.md'), resolve(output, 'NOTICE.md')),
   ]);
