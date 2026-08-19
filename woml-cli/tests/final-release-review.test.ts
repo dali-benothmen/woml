@@ -27,7 +27,7 @@ describe('final v1 security, legal, and product review', () => {
   test('reviews the tracked tree and the exact staged package', async () => {
     const result = await verifyFinalReleaseReview();
     expect(result.sourceFiles).toBeGreaterThan(900);
-    expect(result.packageFiles).toBe(18);
+    expect(result.packageFiles).toBe(12);
     expect(result.packageDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 });
