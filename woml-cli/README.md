@@ -1,686 +1,136 @@
 # WOML: Workflow Orchestration Markup Language
 
-WOML is a declarative markup language for building and running production-grade workflow automation. A WOML workflow is a structured, HTML-inspired document that compiles into a typed, durable execution graph. Triggers, steps, control flow, lifecycle hooks, concurrency, and human approvals all live in one readable file with a Rust engine underneath.
+WOML is an HTML-inspired language for building and running workflow automation. It keeps triggers, steps, control flow, approvals, lifecycle hooks, and runtime policies in one readable file—then gives every step real JavaScript when markup alone is not enough.
 
-When a step needs real logic, JavaScript runs inside `<script>`, so there is no ceiling on what a workflow can do. WOML handles everything around that code — execution order, retries, concurrency, lifecycle, human-in-the-loop, external services, and a durable, inspectable history of every run.
-
----
+The `woml-cli` package provides the `woml` command, the Bun script runtime, and the native Rust engine selected for your operating system.
 
 ## Install
 
-```bash
-npm install -g woml-cli
-```
-
-Or with Bun:
+WOML requires [Bun](https://bun.sh/) 1.3.14 or later. Install it globally with your preferred package manager:
 
 ```bash
-bun add -g woml-cli
+npm install --global woml-cli
 ```
-
-Or with pnpm:
 
 ```bash
-pnpm add -g woml-cli
+bun add --global woml-cli
 ```
 
-Verify:
+```bash
+pnpm add --global woml-cli
+```
+
+Verify the installation:
 
 ```bash
 woml --version
 ```
 
-**Requirements:** macOS (x64, arm64), Linux (x64, glibc), or Windows (x64, arm64). No database to set up — the default state store is bundled.
+Native engines are installed automatically for supported macOS, Linux, and Windows systems. You do not need to install `@woml-org/*` packages directly or configure an external database.
 
----
+## Quick Start: Route an Order
 
-## Document structure
-
-A workflow is one `<woml>` document with a `<workflow>` root plus the standard containers: `<config>` for runtime policies, `<lifecycle>` for hooks, `<triggers>` for what starts a run, and `<steps>` for what runs.
+Save this as `order-router.woml`:
 
 ```xml
 <woml>
-  <workflow id="..." name="..." version="1.0.0">
-    <config concurrency="4" timeout="10m" />
-    <lifecycle>
-      <on-success><script>...</script></on-success>
-      <on-error><script>...</script></on-error>
-    </lifecycle>
-    <triggers>...</triggers>
-    <steps>...</steps>
-  </workflow>
-</woml>
-```
-
-Runtime bindings available inside every `<script>`:
-
-- `context.payload` — trigger input
-- `context.steps.<id>` — earlier step output
-- `context.run` — durable run metadata
-- `services.http`, `services.database`, `services.slack`, `services.storage`, `services.cache`, `services.event`, `services.messaging` — supervised capabilities (each must be declared by the workflow or its modules)
-- `secrets.<NAME>` — only the secrets proven necessary at compile time
-
-Scripts return JSON-compatible values. The Rust engine records every outcome durably.
-
----
-
-## Triggers
-
-Triggers decide **when** a workflow runs. Place one or more inside `<triggers>`.
-
-### `<manual>` — run on demand
-
-The simplest trigger. Starts a run when the operator calls `woml run` with a payload.
-
-```xml
-<manual id="start" />
-```
-
-### `<webhook>` — accept HTTP requests
-
-Registers a static HTTP route that starts a run for every validated payload.
-
-```xml
-<webhook id="hook"
-         path="/webhooks/orders"
-         method="POST"
-         auth="bearer"
-         secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
-  <schema>
-    { "type": "object", "required": ["orderId"], "properties": { "orderId": { "type": "string" } } }
-  </schema>
-</webhook>
-```
-
-- `auth="bearer"` requires a `secret`; `auth="none"` is for deliberately public routes.
-- The inline `<schema>` is JSON Schema Draft 2020-12; invalid payloads return `400 Bad Request` with the `WOML_TRIGGER_SCHEMA_INVALID` code and never start a run.
-
-### `<schedule>` — cron expressions
-
-Starts a run on a WOML Cron v1 schedule. Five numeric fields (`minute hour day-of-month month day-of-week`), wildcards, lists, inclusive ranges, and `/step` are supported. Seconds, names, and Quartz-only tokens are rejected.
-
-```xml
-<schedule id="daily"
-          cron="0 9 * * MON-FRI"
-          timezone="UTC"
-          on-missed="skip" />
-```
-
-`timezone` defaults to UTC. `on-missed` chooses `skip` or `run-once` after a restart.
-
-### `<interval>` — fixed cadence
-
-Starts a run on a fixed interval. The compiler must not translate it into cron if semantics would change.
-
-```xml
-<interval id="heartbeat" every="30s" on-missed="skip" />
-```
-
-### `<event>` — react to internal events
-
-Starts a run when another workflow emits a named event through the durable event bus.
-
-```xml
-<event id="created"
-       name="order.created"
-       secret="{{secrets.EVENT_CONTROL_TOKEN}}">
-  <schema>
-    { "type": "object", "required": ["orderId"], "properties": { "orderId": { "type": "string" } } }
-  </schema>
-</event>
-```
-
-### `<slack>` — Slack Socket Mode
-
-Starts a run for Slack workspace events via a single Socket Mode connection per credential pair.
-
-```xml
-<slack id="msg"
-       events="app-mention,direct-message"
-       channels="ops,alerts"
-       bot-token="{{secrets.SLACK_BOT_TOKEN}}"
-       app-token="{{secrets.SLACK_APP_TOKEN}}" />
-```
-
-`events` accepts `app-mention` and `direct-message`. `channels` is optional and limits mentions to a comma-separated set.
-
-### `<telegram>` — Telegram long polling
-
-Starts a run for every incoming Telegram message via long polling and durable admission.
-
-```xml
-<telegram id="bot"
-          events="message"
-          bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}" />
-```
-
-Telegram v1 supports the single `message` event.
-
-### `<discord>` — Discord Gateway
-
-Starts a run for Discord activity via a shared resumable Gateway connection.
-
-```xml
-<discord id="bot"
-         events="app-mention,direct-message"
-         bot-token="{{secrets.DISCORD_BOT_TOKEN}}" />
-```
-
-`channels` is optional and accepts comma-separated numeric channel IDs (17–20 digits). Channel names are rejected because they are mutable display labels.
-
-### `<whatsapp>` — WhatsApp Cloud API
-
-Starts a run for inbound WhatsApp messages via signed Meta Cloud API callbacks.
-
-```xml
-<whatsapp id="bot"
-          events="message"
-          phone-number-id="123456789012345"
-          verify-token="{{secrets.WHATSAPP_VERIFY_TOKEN}}"
-          app-secret="{{secrets.WHATSAPP_APP_SECRET}}" />
-```
-
-`phone-number-id` is Meta's durable Phone Number ID, not the display phone number.
-
----
-
-## Steps
-
-Steps run sequentially inside `<steps>`. Each `<step>` returns a value that becomes available at `context.steps.<stepId>`.
-
-```xml
-<step id="greet">
-  <script>
-    return { message: `Hello, ${context.payload.name}!` };
-  </script>
-</step>
-```
-
----
-
-## Control flow
-
-Two compact routing primitives cover most branching needs.
-
-### `<choose>` — mutually exclusive routes
-
-`<choose id="...">` selects the first `<when>` whose `test` reference is true and publishes a merged result at `context.steps.<chooseId>`. The `test` attribute holds exactly one context reference — complex conditions belong in named steps.
-
-```xml
-<step id="needsReview">
-  <script>
-    return { value: context.steps.analysis.risk > 0.3 };
-  </script>
-</step>
-
-<choose id="reviewRoute">
-  <when test="{{context.steps.needsReview.value}}">
-    <step id="humanDecision">
-      <script>return { routed: 'review' };</script>
-    </step>
-    <result value="{{context.steps.humanDecision}}" />
-  </when>
-  <otherwise>
-    <step id="automaticDecision">
-      <script>return { routed: 'auto' };</script>
-    </step>
-    <result value="{{context.steps.automaticDecision}}" />
-  </otherwise>
-</choose>
-```
-
-### `<switch>` — exact-string routing
-
-`<switch id="..." value="...">` compares one context reference against ordered string cases and runs exactly one route.
-
-```xml
-<switch id="route" value="{{context.steps.classify.intent}}">
-  <case value="bug">
-    <step id="sendBugs">
-      <script>return { routedTo: 'bugs' };</script>
-    </step>
-    <result value="{{context.steps.sendBugs}}" />
-  </case>
-  <default>
-    <step id="dropNoise">
-      <script>return { dropped: true };</script>
-    </step>
-    <result value="{{context.steps.dropNoise}}" />
-  </default>
-</switch>
-```
-
----
-
-## Concurrent steps — `<parallel>`
-
-`<parallel>` runs its direct child steps concurrently and joins after they finish. A one-step parallel is a valid degenerate fork/join.
-
-```xml
-<parallel id="fieldData" concurrency="2" on-error="wait-all">
-  <step id="loadWeather">
-    <script>return loadWeather(context.payload.fieldId);</script>
-  </step>
-  <step id="loadSoil">
-    <script>return loadSoil(context.payload.fieldId);</script>
-  </step>
-</parallel>
-```
-
-- `concurrency` caps simultaneous child steps; defaults to the number of children.
-- `on-error` is `fail-fast` (default) or `wait-all`. `fail-fast` stops scheduling new children; `wait-all` lets every child reach its terminal outcome first.
-- All children see the same context view from immediately before the fork.
-- A child cannot reference a sibling's output.
-
-For multi-step concurrent routes (each branch holds its own sequence of steps), use `<fork>` and `<branch>` instead.
-
----
-
-## Concurrent routes — `<fork>` and `<branch>`
-
-`<fork>` runs multiple multi-step branches concurrently and joins on a chosen set. Each `<branch>` may contain steps, choices, switches, parallel groups, and approvals. Branches remain sequential internally while overlapping through the multiplexed Bun host.
-
-```xml
-<fork id="distribution" join="all">
-  <branch id="tiktok">
-    <step id="formatTikTok">
-      <script>return { caption: `${context.steps.campaign.title} #automation` };</script>
-    </step>
-    <step id="publishTikTok">
-      <script>return { platform: 'tiktok', caption: context.steps.formatTikTok.caption };</script>
-    </step>
-  </branch>
-  <branch id="instagram">
-    <step id="formatInstagram">
-      <script>return { caption: `${context.steps.campaign.title}\n${context.steps.campaign.url}` };</script>
-    </step>
-    <step id="publishInstagram">
-      <script>return { platform: 'instagram', caption: context.steps.formatInstagram.caption };</script>
-    </step>
-  </branch>
-</fork>
-```
-
-- `join="all"` (or omitted) waits for every branch.
-- `join="none"` waits for none.
-- A whitespace-separated branch-ID list waits only for those branches.
-- A branch can read context available before the fork and outputs created earlier in that same branch; it cannot read sibling-branch outputs.
-- Nested forks inside a fork-owned branch are rejected.
-- A workflow whose only terminal structure is a fork is rejected.
-
----
-
-## Human approvals — `<approval>`
-
-`<approval>` is a first-class durable control-flow item. It records that a run is waiting for a decision, optionally fires notifications, suspends the run, and selects exactly one continuation after the decision arrives.
-
-```xml
-<approval id="contentApproval"
-          name="Content approval"
-          description="Ask a moderator to approve or reject"
-          timeout="24h"
-          on-timeout="reject">
-  <notify>
-    <slack channels="moderators"
-           bot-token="{{secrets.SLACK_BOT_TOKEN}}"
-           app-token="{{secrets.SLACK_APP_TOKEN}}" />
-  </notify>
-
-  <step id="hold" />
-  <when-approved>
-    <step id="publish">
-      <script>return { published: true };</script>
-    </step>
-    <result value="{{context.steps.publish}}" />
-  </when-approved>
-  <when-rejected>
-    <step id="archive">
-      <script>return { archived: true };</script>
-    </step>
-    <result value="{{context.steps.archive}}" />
-  </when-rejected>
-</approval>
-```
-
-- `timeout` caps how long the approval waits; `on-timeout` chooses `approve`, `reject`, or another arm.
-- Optional `<notify>` fires built-in Slack/Telegram/Discord/WhatsApp notifications when the approval is armed.
-- Exactly one `<when-approved>` or `<when-rejected>` is selected after the decision arrives.
-
----
-
-## Notifications — `<notify>`
-
-`<notify>` is a container for built-in Slack, Telegram, Discord, or WhatsApp deliveries. It is not a standalone step — it is attached to the parent that arms the notification.
-
-### Inside lifecycle hooks
-
-Fire a notification when the run finishes successfully or fails.
-
-```xml
-<lifecycle>
-  <on-success>
-    <notify>
-      <slack channels="ops"
-             bot-token="{{secrets.SLACK_BOT_TOKEN}}"
-             app-token="{{secrets.SLACK_APP_TOKEN}}" />
-    </notify>
-    <script>
-      console.log('Run completed successfully');
-    </script>
-  </on-success>
-  <on-error>
-    <notify>
-      <slack channels="oncall"
-             bot-token="{{secrets.SLACK_BOT_TOKEN}}"
-             app-token="{{secrets.SLACK_APP_TOKEN}}" />
-    </notify>
-    <script>
-      console.error('Run failed');
-    </script>
-  </on-error>
-</lifecycle>
-```
-
-### Inside an approval
-
-Fire a notification when the approval is armed so the right moderator sees the decision request (see the `<approval>` example above).
-
-A `<notify>` contains one or more built-in provider tags — `<slack>`, `<telegram>`, `<discord>`, or `<whatsapp>` — and must not contain anything else.
-
----
-
-## Real examples
-
-### Local automation — organize a folder by file type
-
-Run once, sorts every file into the right subfolder. Zero external services, zero API keys.
-
-```xml
-<woml>
-  <workflow id="organize" name="Organize a folder by file type" version="1.0.0">
-    <triggers><manual id="start" /></triggers>
-
-    <steps>
-      <step id="scan">
-        <script>
-          const { promises: fs } = await import('fs');
-          const path = await import('path');
-          const folder = context.payload.path ?? '.';
-          const entries = await fs.readdir(folder, { withFileTypes: true });
-          return {
-            folder,
-            files: entries
-              .filter(e => e.isFile())
-              .map(e => ({ name: e.name, ext: path.extname(e.name).toLowerCase() })),
-          };
-        </script>
-      </step>
-
-      <parallel id="moveAll" concurrency="4">
-        <step id="moveImages">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Images', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-        <step id="moveDocs">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.pdf','.doc','.docx','.txt','.md','.rtf'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Docs', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-        <step id="moveVideos">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.mp4','.mov','.avi','.mkv','.webm'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Videos', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-        <step id="moveArchives">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.zip','.tar','.gz','.7z','.rar'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Archives', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-      </parallel>
-
-      <step id="summary">
-        <script>
-          return {
-            message: `Organized ${context.steps.scan.files.length} file(s) into Images/, Docs/, Videos/, Archives/.`
-          };
-        </script>
-      </step>
-    </steps>
-  </workflow>
-</woml>
-```
-
-```bash
-woml run organize.woml --payload '{"path":"/path/to/Downloads"}'
-```
-
----
-
-### AI-powered — classify Slack messages and route them to the right channel
-
-Send every incoming Slack message to an LLM, classify intent, and forward to a dedicated channel.
-
-```xml
-<woml>
-  <workflow id="slack-router" version="1.0.0">
+  <workflow
+    id="order-router"
+    name="Order Router"
+    description="Check inventory and risk concurrently, then route the order."
+    version="1.0.0"
+  >
     <triggers>
-      <slack id="incoming"
-             events="app-mention,direct-message"
-             channels="inbox"
-             bot-token="{{secrets.SLACK_BOT_TOKEN}}"
-             app-token="{{secrets.SLACK_APP_TOKEN}}" />
-    </triggers>
-
-    <steps>
-      <step id="classify">
-        <script>
-          const response = await services.http.request({
-            method: 'POST',
-            url: 'https://api.openai.com/v1/chat/completions',
-            headers: { authorization: `Bearer ${secrets.OPENAI_API_KEY}` },
-            body: {
-              model: 'gpt-4o-mini',
-              messages: [
-                {
-                  role: 'system',
-                  content: 'Classify the message into one of: bug, feature, question, noise. Reply with JSON { "intent": "...", "confidence": 0..1 }.'
-                },
-                { role: 'user', content: context.payload.text }
-              ],
-              response_format: { type: 'json_object' }
-            },
-            timeoutMs: 10000
-          });
-          return JSON.parse(response.body.choices[0].message.content);
-        </script>
-      </step>
-
-      <switch id="route" value="{{context.steps.classify.intent}}">
-        <case value="bug">
-          <step id="sendBugs">
-            <script>
-              await services.slack.send({
-                channel: '#bugs',
-                text: `🐛 ${context.payload.text}\n> confidence ${context.steps.classify.confidence}`
-              });
-              return { routedTo: 'bugs' };
-            </script>
-          </step>
-          <result value="{{context.steps.sendBugs}}" />
-        </case>
-        <case value="feature">
-          <step id="sendFeatures">
-            <script>
-              await services.slack.send({
-                channel: '#feature-requests',
-                text: `💡 ${context.payload.text}`
-              });
-              return { routedTo: 'feature-requests' };
-            </script>
-          </step>
-          <result value="{{context.steps.sendFeatures}}" />
-        </case>
-        <case value="question">
-          <step id="sendQuestions">
-            <script>
-              await services.slack.send({
-                channel: '#questions',
-                text: `❓ ${context.payload.text}`
-              });
-              return { routedTo: 'questions' };
-            </script>
-          </step>
-          <result value="{{context.steps.sendQuestions}}" />
-        </case>
-        <default>
-          <step id="dropNoise">
-            <script>return { dropped: true };</script>
-          </step>
-          <result value="{{context.steps.dropNoise}}" />
-        </default>
-      </switch>
-    </steps>
-  </workflow>
-</woml>
-```
-
----
-
-### Webhook — flag risky orders, alert Slack
-
-```xml
-<woml>
-  <workflow id="order-guard" version="1.0.0">
-    <triggers>
-      <webhook id="order"
-               path="/webhooks/orders"
-               method="POST"
-               auth="bearer"
-               secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
+      <webhook
+        id="newOrder"
+        path="/webhooks/orders"
+        method="POST"
+        auth="none"
+      >
         <schema>
           {
             "type": "object",
-            "required": ["orderId", "total", "customerId"],
+            "required": ["orderId", "inStock", "riskScore"],
             "properties": {
-              "orderId":    { "type": "string" },
-              "total":      { "type": "number" },
-              "customerId": { "type": "string" }
-            }
+              "orderId": { "type": "string" },
+              "inStock": { "type": "boolean" },
+              "riskScore": { "type": "number" }
+            },
+            "additionalProperties": false
           }
         </schema>
       </webhook>
     </triggers>
 
     <steps>
-      <step id="risk">
+      <parallel
+        id="orderChecks"
+        name="Run order checks"
+        description="Check inventory and risk at the same time."
+        concurrency="2"
+        on-error="wait-all"
+      >
+        <step id="inventoryCheck" name="Check inventory">
+          <script>
+            return { available: context.payload.inStock };
+          </script>
+        </step>
+
+        <step id="riskCheck" name="Check risk">
+          <script>
+            return {
+              approved: context.payload.riskScore < 70,
+              score: context.payload.riskScore
+            };
+          </script>
+        </step>
+      </parallel>
+
+      <step
+        id="canFulfill"
+        name="Make decision"
+        description="Combine both check results."
+      >
         <script>
-          const customer = await services.http.request({
-            method: 'GET',
-            url: `https://internal.api/customers/${context.payload.customerId}`,
-            timeoutMs: 5000
-          });
           return {
-            flagged: context.payload.total > 10000 || customer.body.disputes > 0
+            value:
+              context.steps.inventoryCheck.available &&
+              context.steps.riskCheck.approved
           };
         </script>
       </step>
 
-      <step id="isFlagged">
-        <script>return { value: context.steps.risk.flagged };</script>
-      </step>
-
-      <choose id="alertRoute">
-        <when test="{{context.steps.isFlagged.value}}">
-          <step id="alert">
+      <choose id="orderRoute" name="Route order">
+        <when test="{{context.steps.canFulfill.value}}">
+          <step id="acceptOrder" name="Accept order">
             <script>
-              await services.slack.send({
-                channel: '#fraud',
-                text: `High-risk order ${context.payload.orderId} ($${context.payload.total}) needs review.`
-              });
-              return { alerted: true };
+              return {
+                orderId: context.payload.orderId,
+                status: "accepted",
+                message: `Order ${context.payload.orderId} is ready for fulfillment.`
+              };
             </script>
           </step>
-          <result value="{{context.steps.alert}}" />
+          <result value="{{context.steps.acceptOrder}}" />
         </when>
+
         <otherwise>
-          <step id="logOk">
-            <script>return { logged: true };</script>
+          <step id="reviewOrder" name="Request review">
+            <script>
+              return {
+                orderId: context.payload.orderId,
+                status: "review",
+                message: `Order ${context.payload.orderId} needs review.`
+              };
+            </script>
           </step>
-          <result value="{{context.steps.logOk}}" />
+          <result value="{{context.steps.reviewOrder}}" />
         </otherwise>
       </choose>
-    </steps>
-  </workflow>
-</woml>
-```
 
----
-
-### Schedule — daily sales report at 9am weekdays
-
-```xml
-<woml>
-  <workflow id="daily-report" version="1.0.0">
-    <triggers>
-      <schedule id="weekdays" cron="0 9 * * MON-FRI" timezone="UTC" />
-    </triggers>
-
-    <steps>
-      <step id="totals">
+      <step id="response" name="Build response">
         <script>
-          const rows = await services.database.query({
-            sql: "SELECT COUNT(*) AS orders, COALESCE(SUM(total), 0) AS revenue FROM orders WHERE created_at >= date('now', '-1 day')",
-            parameters: []
-          });
-          return rows[0];
-        </script>
-      </step>
-
-      <step id="publish">
-        <script>
-          const { orders, revenue } = context.steps.totals;
-          await services.slack.send({
-            channel: '#sales',
-            text: `Daily report — ${orders} orders, $${revenue.toFixed(2)} revenue.`
-          });
-          return { sent: true };
+          return context.steps.orderRoute;
         </script>
       </step>
     </steps>
@@ -688,99 +138,195 @@ Send every incoming Slack message to an LLM, classify intent, and forward to a d
 </woml>
 ```
 
----
-
-### Telegram — answer mentions in your team chat
-
-```xml
-<woml>
-  <workflow id="telegram-echo" version="1.0.0">
-    <triggers>
-      <telegram id="incoming"
-                events="message"
-                bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}" />
-    </triggers>
-
-    <steps>
-      <step id="reply">
-        <script>
-          await services.messaging.send({
-            channel: 'telegram',
-            conversationId: context.payload.conversationId,
-            text: `You said: ${context.payload.text}`
-          });
-          return { ok: true };
-        </script>
-      </step>
-    </steps>
-  </workflow>
-</woml>
-```
-
----
-
-### Event — send a confirmation email when another workflow emits `order.created`
-
-```xml
-<woml>
-  <workflow id="order-confirmation" version="1.0.0">
-    <triggers>
-      <event id="created"
-             name="order.created"
-             secret="{{secrets.EVENT_CONTROL_TOKEN}}">
-        <schema>
-          {
-            "type": "object",
-            "required": ["orderId", "email"],
-            "properties": {
-              "orderId": { "type": "string" },
-              "email":   { "type": "string" }
-            }
-          }
-        </schema>
-      </event>
-    </triggers>
-
-    <steps>
-      <step id="confirm">
-        <script>
-          await services.http.request({
-            method: 'POST',
-            url: 'https://api.emailprovider.com/v1/send',
-            headers: { authorization: `Bearer ${secrets.EMAIL_API_KEY}` },
-            body: {
-              to: context.payload.email,
-              template: 'order-confirmation',
-              data: { orderId: context.payload.orderId }
-            },
-            timeoutMs: 5000
-          });
-          return { sentTo: context.payload.email };
-        </script>
-      </step>
-    </steps>
-  </workflow>
-</woml>
-```
-
----
-
-## Common commands
+Check and activate it:
 
 ```bash
-woml check workflows/                    # Validate workflows without running them
-woml run workflows/                      # Run in the foreground (Ctrl+C to stop)
-woml run workflows/ --background         # Run in the background, survives Ctrl+C
-woml inspect                             # Show the current state of all runs
-woml list                                # List known workflows and recent runs
-woml get run_...                         # Print the full event history of a run
-woml cancel run_...                      # Cancel a running or pending run
-woml backup backups/latest               # Snapshot the durable state store to a file
-woml prune --before 30d --dry-run        # Preview which old runs would be purged
+woml check order-router.woml
+woml run order-router.woml
 ```
 
----
+WOML prints the active webhook URL and a generated `curl` command. Trigger the workflow from another terminal:
+
+```bash
+curl --request POST http://127.0.0.1:3000/webhooks/orders \
+  --header 'content-type: application/json' \
+  --data '{"orderId":"order-42","inStock":true,"riskScore":18}'
+```
+
+The request becomes `context.payload`. The two checks run concurrently, `<choose>` selects one route, and every step result is recorded under `context.steps.<id>`.
+
+Use `auth="none"` only for local development. Configure authenticated webhooks before exposing an endpoint outside a trusted environment.
+
+## The Workflow at a Glance
+
+```mermaid
+flowchart TD
+    trigger[POST /webhooks/orders] --> parallel{Run concurrently}
+    parallel --> inventory[Check inventory]
+    parallel --> risk[Check risk]
+    inventory --> decision[Make decision]
+    risk --> decision
+    decision --> route{Route order}
+    route -->|Accepted| accept[Accept order]
+    route -->|Needs review| review[Request review]
+    accept --> response[Build response]
+    review --> response
+```
+
+## Why WOML?
+
+- **Readable as a document** — the workflow structure is visible without tracing API calls or navigating a canvas.
+- **JavaScript when you need it** — use familiar logic inside `<script>` while WOML supervises the workflow around it.
+- **Durable by default** — runs, attempts, waits, decisions, lifecycle events, and outcomes are recorded by the Rust engine.
+- **Git-native** — `.woml` files produce meaningful diffs and fit normal review and deployment workflows.
+- **Self-hosted** — run locally, on a server, in Docker, or through your own infrastructure.
+
+## Key Features
+
+- Manual, webhook, schedule, interval, internal-event, Slack, Telegram, Discord, and WhatsApp triggers.
+- Sequential steps, retries, parallel groups, choices, switches, and multi-step forks with explicit joins.
+- Durable human approvals with Slack, Telegram, Discord, WhatsApp, or custom notification providers.
+- Workflow and step lifecycle hooks with scripts and notifications.
+- Managed HTTP, SQLite/PostgreSQL, storage, cache, state, events, workflow-call, and communication capabilities.
+- Native `fetch()` plus Rust-supervised `services.*` operations.
+- Local JavaScript/TypeScript modules, reusable WOML steps, and reusable notification providers.
+- Runtime concurrency, rate-limit, queue, and timeout policies.
+- Foreground and background operation, colored inspection, durable logs, cancellation, backup, restore, and retention.
+
+## Basic WOML API
+
+### Document tags
+
+| Tag | Description |
+| --- | --- |
+| `<woml>` | Root of every WOML document. It contains imports, a workflow, or reusable definitions. |
+| `<imports>` | Declares reusable project dependencies before the workflow. |
+| `<module name="..." from="..." />` | Imports a local JavaScript or TypeScript module as `services.<name>`. |
+| `<workflow>` | Defines one executable workflow and its identity, name, description, and version. |
+| `<config>` | Declares workflow concurrency, rate limit, queue, and timeout policies. |
+| `<lifecycle>` | Contains scripts or notifications that observe workflow and step lifecycle events. |
+| `<triggers>` | Contains the trigger definitions that can create workflow runs. |
+| `<steps>` | Contains the workflow's ordered business flow. |
+
+### Trigger tags
+
+| Tag | Description |
+| --- | --- |
+| `<manual>` | Keeps the workflow active and creates a run whenever the operator presses Enter. |
+| `<webhook>` | Creates a run from a validated HTTP request at a static route. |
+| `<schedule>` | Creates runs from a five-field cron schedule and optional timezone. |
+| `<interval>` | Creates runs repeatedly using a fixed duration such as `30s` or `5m`. |
+| `<event>` | Subscribes to a durable named event emitted internally or through authenticated HTTP. |
+| `<slack>` | Receives supported Slack Socket Mode events. |
+| `<telegram>` | Receives human text messages through Telegram long polling. |
+| `<discord>` | Receives supported Discord mentions and direct messages. |
+| `<whatsapp>` | Receives signed WhatsApp Cloud API message callbacks. |
+
+### Steps and control-flow tags
+
+| Tag | Description |
+| --- | --- |
+| `<step>` | Defines one named executable operation; its return value becomes `context.steps.<id>`. |
+| `<script>` | Runs JavaScript with the current `context`, `services`, `secrets`, and `attempt` bindings. |
+| `<parallel>` | Runs its direct child steps concurrently and waits for them to finish. |
+| `<choose>` | Selects the first true `<when>` route or its final `<otherwise>` route. |
+| `<when>` / `<otherwise>` | Define the conditional routes inside `<choose>`. |
+| `<result>` | Publishes one stable result from a selected choice, switch, or approval route. |
+| `<switch>` | Selects one exact-string `<case>` or its `<default>` route. |
+| `<fork>` | Starts several independent, concurrent multi-step branches and joins the selected branches. |
+| `<branch>` | Defines one sequential route inside a `<fork>` and may contain several flow items. |
+| `<approval>` | Pauses durably until a human approves, rejects, or the configured timeout settles. |
+| `<notify>` | Sends approval or lifecycle notifications through configured providers. |
+| `<when-approved>` / `<when-rejected>` | Define the two continuations of an approval decision. |
+
+### Lifecycle tags
+
+| Tag | Description |
+| --- | --- |
+| `<on-start>` | Runs when a workflow run begins. |
+| `<on-step-start>` | Runs before matching steps begin; its optional `steps` attribute filters step IDs. |
+| `<on-step-success>` | Runs after matching steps succeed. |
+| `<on-step-failure>` | Runs after matching steps fail. |
+| `<on-step-complete>` | Runs after matching steps reach any terminal outcome. |
+| `<on-success>` | Runs after the workflow succeeds. |
+| `<on-error>` | Runs after the workflow fails. |
+| `<on-cancel>` | Runs after the workflow is cancelled. |
+| `<on-complete>` | Runs last after any workflow outcome. |
+
+## Context
+
+`context` is the read-only data available to an ordinary workflow script. It is derived from durable run events rather than treated as an authoritative mutable object.
+
+| Reference | Description |
+| --- | --- |
+| `context.payload` | The validated input supplied by the trigger or calling workflow. Manual runs currently receive `{}`. |
+| `context.steps.<id>` | The JSON-compatible result returned by a completed step or result-producing control item. |
+
+Return only data that later steps genuinely need. Step results become durable workflow context, while local variables and mutations to `context` do not persist.
+
+```javascript
+const order = context.payload;
+const total = context.steps.calculateTotal.total;
+
+return {
+  orderId: order.orderId,
+  total
+};
+```
+
+## Services
+
+`services` contains WOML's supervised capabilities and aliases imported through `<module>`. Managed operations cross the Bun-to-Rust boundary for durable outcomes, cancellation, limits, and recovery.
+
+| Service | Description |
+| --- | --- |
+| `services.http.request()` | Makes a managed HTTP request with status policy, timeout, limits, cancellation, and durable operation history. |
+| `services.db()` | Opens a managed SQLite or PostgreSQL handle for queries, writes, and transactions. |
+| `services.storage` | Stores and retrieves larger checksummed objects outside workflow context. |
+| `services.cache` | Keeps reusable, expiring optimization data that may be safely discarded. |
+| `services.state` | Stores small, versioned workflow-owned values that must survive future runs and restarts. |
+| `services.events.emit()` | Publishes a durable named event to every matching active workflow. |
+| `services.workflows.call()` | Starts one workflow and waits for its final JSON result. |
+| `services.workflows.start()` | Starts one workflow in the background and immediately returns its durable run ID. |
+| `services.telegram.send()` | Sends a supervised Telegram message or reply. |
+| `services.discord.send()` | Sends a supervised Discord message or reply. |
+| `services.whatsapp.send()` | Sends an approved WhatsApp Cloud API template message. |
+| `services.<module>` | Exposes named exports from an imported local JavaScript or TypeScript module. |
+
+For standard Web API compatibility and streaming, scripts may also use Bun's native `fetch()`. Prefer `services.http.request()` when the request needs WOML-managed limits, cancellation, operation identity, and durable supervision.
+
+## Common Commands
+
+```bash
+woml check workflows/                    # Parse, validate, and compile
+woml run workflows/                      # Activate workflows in the foreground
+woml run workflows/ --background         # Activate them in the background
+woml inspect                             # Open the colored runtime inspector
+woml list                                # List workflows and recent runs
+woml get run_...                         # Inspect one run and its history
+woml cancel run_...                      # Cancel a pending or running workflow
+woml workflow-id --logs                  # Follow logs for a workflow
+woml secrets set API_TOKEN               # Store a secret securely
+woml backup backups/latest               # Back up the durable state store
+woml prune --before 30d --dry-run        # Preview retention cleanup
+```
+
+Read the complete [CLI reference](https://github.com/dali-benothmen/woml/blob/master/docs/cli-reference.md) for every command and option.
+
+## Documentation
+
+- [Getting started](https://github.com/dali-benothmen/woml/blob/master/docs/getting-started.md)
+- [Language reference](https://github.com/dali-benothmen/woml/blob/master/docs/language-reference.md)
+- [CLI reference](https://github.com/dali-benothmen/woml/blob/master/docs/cli-reference.md)
+- [Services and capabilities](https://github.com/dali-benothmen/woml/blob/master/docs/woml-services.md)
+- [Modules](https://github.com/dali-benothmen/woml/blob/master/docs/woml-modules.md)
+- [Communication providers](https://github.com/dali-benothmen/woml/blob/master/docs/woml-communication-providers.md)
+- [Production deployment](https://github.com/dali-benothmen/woml/blob/master/docs/woml-production-deployment.md)
+
+## Support and Security
+
+Use [GitHub Discussions](https://github.com/dali-benothmen/woml/discussions) for questions and [GitHub Issues](https://github.com/dali-benothmen/woml/issues) for reproducible bugs. Report vulnerabilities privately according to the [security policy](https://github.com/dali-benothmen/woml/blob/master/SECURITY.md).
 
 ## License
 
-Apache-2.0.
+WOML is released under the [Apache License 2.0](https://github.com/dali-benothmen/woml/blob/master/LICENSE).
