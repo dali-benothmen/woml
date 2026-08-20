@@ -124,8 +124,8 @@ const readme = readFileSync(resolve(repositoryRoot, 'README.md'), 'utf8');
 if (!readme.includes('bun add --global woml-cli')) {
   failures.push('README.md: canonical install command is missing');
 }
-if (/npm install (?:--global|-g) woml-cli/u.test(readme)) {
-  failures.push('README.md: install section must keep one canonical Bun command');
+if (!readme.includes('npm install --global woml-cli')) {
+  failures.push('README.md: npm install command is missing');
 }
 if (/bun add --global woml[^-\w]/u.test(readme)) {
   failures.push('README.md: obsolete unscoped woml package name is present');

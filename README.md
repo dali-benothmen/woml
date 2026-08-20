@@ -2,11 +2,9 @@
 
 # WOML: Workflow Orchestration Markup Language
 
-![WOML banner](./woml.png)
+<img src="./assets/woml.png" alt="WOML — Workflow Orchestration Markup Language" width="760">
 
 ### If you can read HTML, you can use WOML to automate anything, literally anything.
-
-<!-- WOML banner image placeholder: ./docs/assets/banner.png -->
 
 [![npm version](https://img.shields.io/npm/v/woml-cli.svg)](https://www.npmjs.com/package/woml-cli)
 [![GitHub stars](https://img.shields.io/github/stars/dali-benothmen/woml.svg?style=social)](https://github.com/dali-benothmen/woml)
@@ -15,339 +13,182 @@
 
 </div>
 
----
+## What is WOML?
 
-WOML is a markup language for building and running workflow automation. A workflow written in WOML is a document you can read top to bottom, its triggers, steps, control flow, approvals, and lifecycle all expressed as clear, HTML-inspired structure instead of tangled code or an unreadable diagram.
+WOML is an HTML-inspired language for building and running workflow automation. Triggers, steps, control flow, approvals, lifecycle hooks, and runtime policies live together in a document that can be read from top to bottom, reviewed in a pull request, and kept in Git.
 
-When a step needs real logic, JavaScript is always available inside `<script>`, so there is no ceiling on what a workflow can do. WOML handles everything _around_ that code: execution order, retries, concurrency, human approvals, external services, and a durable, inspectable history of every run. The result is automation that scales without becoming spaghetti, that your whole team can read, and that you can actually trust in production.
+When a step needs logic, write JavaScript directly inside `<script>`. WOML handles everything around that code: execution order, durable history, retries, concurrency, external capabilities, human approval, recovery, and production operation.
 
-## Why another automation tool?
+## Why WOML?
 
-Five nodes in n8n or Zapier feels like magic. Twenty nodes feels like a crime scene.
+Visual workflow builders are excellent for getting started, but large automations can become difficult to review, reuse, and maintain. Traditional code-first engines are powerful, but their workflow structure is often hidden inside framework APIs.
 
-The canvas turns into spaghetti, a single run takes a lifetime, and the moment the built-in integrations fall short you end up stuffing JavaScript into a tiny textbox in a browser UI, no version control, no code review, no idea what changed last Tuesday.
+WOML makes the workflow itself the source code:
 
-WOML takes a different bet: your workflow is **a file**. It reads like HTML, so anyone on the team can follow it. Every step can run real JavaScript with any npm package, so you never hit a wall. It lives in git, so every change is a diff and a review. And the engine underneath is Rust, so it stays fast when your workflows get big, because big workflows are exactly what WOML is built for.
-
-## Why WOML
-
-- **Readable as a document.** A workflow is structure you can read, diff, and review, not a canvas of boxes and wires that turns into spaghetti as it grows.
-- **No ceiling.** Common actions are clean tags; when you need real logic, drop into `<script>` with full JavaScript and any npm package. Automate anything, literally anything.
-- **Triggers for everything.** Manual, webhook, schedule, interval, event, Slack, Telegram, Discord, and WhatsApp, and you can build your own providers for anything else.
-- **Built to run in production.** Durable run history, retries, concurrency, lifecycle hooks, and a fold-from-events core mean you can always see what happened, track down errors, and replay it.
-- **Human-in-the-loop.** Pause a workflow for approvals with real notifications and durable waiting.
-- **Modular.** Reusable step definitions, local modules, and workflows that call other workflows.
-- **Fast core.** The execution engine is written in Rust for speed and reliability under load.
-- **Free and runs anywhere.** Open source, self-hosted, runs on macOS, Linux, and Windows.
+- **Readable** — semantic markup makes the automation's structure immediately visible.
+- **Programmable** — JavaScript handles the logic that does not belong in configuration.
+- **Version controlled** — workflows are ordinary files with meaningful diffs and code review.
+- **Durable** — the runtime records what happened instead of relying on one mutable in-memory object.
+- **Self-hosted** — run WOML on your own machine, server, container, or infrastructure.
 
 ## Installation
 
+WOML requires [Bun](https://bun.sh/) 1.3.14 or later. Install the global CLI with npm:
+
 ```bash
-npm i -g woml-cli
+npm install --global woml-cli
 ```
 
-Or with Bun:
+Or install it with Bun or pnpm:
 
 ```bash
 bun add --global woml-cli
+pnpm add --global woml-cli
 ```
 
-Or with pnpm:
-
-```bash
-pnpm add -g woml-cli
-```
-
-This installs the `woml` command:
+All three commands install the same `woml` executable:
 
 ```bash
 woml --version
 ```
 
-**Requirements:** macOS (x64, arm64), Linux (x64, glibc), or Windows (x64, arm64). No database to set up, the default state store is bundled.
+Native engines are selected automatically for supported macOS, Linux, and Windows systems. You do not need to install the platform packages or configure a database manually.
 
-## Quick example: organize your Downloads folder
+## Quick Start: Build an Order Router
 
-Save this as `organize.woml`, point it at your Downloads folder, and every file moves into the right subfolder — Images, Docs, Videos, Archives — in parallel. No setup, no cloud, no API keys.
-
-```xml
-<woml>
-  <workflow id="organize" name="Organize a folder by file type" version="1.0.0">
-    <triggers><manual id="start" /></triggers>
-
-    <steps>
-      <step id="scan">
-        <script>
-          const { promises: fs } = await import('fs');
-          const path = await import('path');
-          const folder = context.payload.path ?? '.';
-          const entries = await fs.readdir(folder, { withFileTypes: true });
-          return {
-            folder,
-            files: entries
-              .filter(e => e.isFile())
-              .map(e => ({ name: e.name, ext: path.extname(e.name).toLowerCase() })),
-          };
-        </script>
-      </step>
-
-      <parallel id="moveAll" concurrency="4">
-        <step id="moveImages">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Images', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-        <step id="moveDocs">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.pdf','.doc','.docx','.txt','.md','.rtf'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Docs', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-        <step id="moveVideos">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.mp4','.mov','.avi','.mkv','.webm'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Videos', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-        <step id="moveArchives">
-          <script>
-            const { promises: fs } = await import('fs');
-            const path = await import('path');
-            const { folder, files } = context.steps.scan;
-            for (const f of files.filter(f => ['.zip','.tar','.gz','.7z','.rar'].includes(f.ext))) {
-              const from = path.join(folder, f.name);
-              const to = path.join(folder, 'Archives', f.name);
-              await fs.mkdir(path.dirname(to), { recursive: true });
-              await fs.rename(from, to);
-            }
-            return { ok: true };
-          </script>
-        </step>
-      </parallel>
-
-      <step id="summary">
-        <script>
-          return {
-            message: `Organized ${context.steps.scan.files.length} file(s) into Images/, Docs/, Videos/, Archives/.`
-          };
-        </script>
-      </step>
-    </steps>
-  </workflow>
-</woml>
-```
-
-Run it:
-
-```bash
-woml run organize.woml --payload '{"path":"/path/to/Downloads"}'
-```
-
-WOML scans the folder, then moves every file into the right subfolder in parallel — images, documents, videos, and archives all happen at the same time. The engine handles the concurrency, the retries, and the durable history of every move.
-
-```mermaid
-graph TD
-    A[Manual trigger] --> B[Scan folder]
-    B --> C[Parallel move]
-    C --> D[Images/]
-    C --> E[Docs/]
-    C --> F[Videos/]
-    C --> G[Archives/]
-    D --> H[Summary]
-    E --> H
-    F --> H
-    G --> H
-```
-
-This Quick example exercises the primitives that make WOML a real workflow language:
-
-- **`<manual>`** — runs on demand.
-- **`<step>`** — sequential logic, with `<script>` for the parts that need real code (filesystem, filtering, renaming).
-- **`<parallel>`** — runs multiple steps concurrently and joins when all finish.
-- **`context.steps.<id>`** — every step's return value is available to later steps by its `id`.
-- **`context.payload`** — trigger input, passed via `--payload`.
-
-To sort a different folder, change the `path` in the payload. To add more file types, add another step inside `<parallel>` with its own filter and destination.
-
-## Real workflows in WOML
-
-Four triggers, four real automations. Each is a complete, runnable workflow.
-
-**Webhook — flag risky orders and alert Slack:**
+Create a file named `order-router.woml`:
 
 ```xml
 <woml>
-  <workflow id="order-guard">
+  <workflow
+    id="order-router"
+    name="Order Router"
+    description="Check inventory and risk concurrently, then route the order."
+    version="1.0.0"
+  >
     <triggers>
-      <webhook id="order" path="/webhooks/orders" method="POST"
-               secret="{{secrets.ORDER_WEBHOOK_TOKEN}}">
+      <webhook
+        id="newOrder"
+        path="/webhooks/orders"
+        method="POST"
+        auth="none"
+      >
         <schema>
           {
             "type": "object",
-            "required": ["orderId", "total", "customerId"],
+            "required": ["orderId", "amount", "inStock", "riskScore"],
             "properties": {
               "orderId": { "type": "string" },
-              "total": { "type": "number" },
-              "customerId": { "type": "string" }
-            }
+              "amount": { "type": "number" },
+              "inStock": { "type": "boolean" },
+              "riskScore": { "type": "number" }
+            },
+            "additionalProperties": false
           }
         </schema>
       </webhook>
     </triggers>
+
     <steps>
-      <step id="risk">
+      <step
+        id="prepareOrder"
+        name="Prepare order"
+        description="Normalize the order received by the webhook."
+      >
         <script>
-          const customer = await services.http.request({
-            method: 'GET',
-            url: `https://internal.api/customers/${context.payload.customerId}`,
-            timeoutMs: 5000
-          });
-          return { flagged: context.payload.total > 10000 || customer.body.disputes > 0 };
+          return {
+            orderId: context.payload.orderId,
+            amount: context.payload.amount
+          };
         </script>
       </step>
-    </steps>
-    <choose>
-      <when test="context.steps.risk.flagged">
-        <step id="alert">
+
+      <parallel
+        id="orderChecks"
+        name="Run order checks"
+        description="Check inventory and risk at the same time."
+        concurrency="2"
+        on-error="wait-all"
+      >
+        <step
+          id="inventoryCheck"
+          name="Check inventory"
+          description="Confirm that the requested item is available."
+        >
           <script>
-            await services.slack.send({
-              channel: '#fraud',
-              text: `High-risk order ${context.payload.orderId} ($${context.payload.total}) needs review.`
-            });
-            return { alerted: true };
+            return { available: context.payload.inStock };
           </script>
         </step>
-      </when>
-    </choose>
-  </workflow>
-</woml>
-```
 
-**Schedule — a daily sales report, every weekday at 9am:**
+        <step
+          id="riskCheck"
+          name="Check risk"
+          description="Accept orders with a risk score below seventy."
+        >
+          <script>
+            return {
+              approved: context.payload.riskScore < 70,
+              score: context.payload.riskScore
+            };
+          </script>
+        </step>
+      </parallel>
 
-```xml
-<woml>
-  <workflow id="daily-report">
-    <triggers>
-      <schedule id="weekdays" cron="0 9 * * MON-FRI" timezone="UTC" />
-    </triggers>
-    <steps>
-      <step id="totals">
+      <step
+        id="canFulfill"
+        name="Make decision"
+        description="Combine the inventory and risk results."
+      >
         <script>
-          const rows = await services.database.query({
-            sql: "SELECT COUNT(*) AS orders, COALESCE(SUM(total), 0) AS revenue FROM orders WHERE created_at >= date('now', '-1 day')",
-            parameters: []
-          });
-          return rows[0];
+          return {
+            value:
+              context.steps.inventoryCheck.available &&
+              context.steps.riskCheck.approved
+          };
         </script>
       </step>
-      <step id="publish">
-        <script>
-          const { orders, revenue } = context.steps.totals;
-          await services.slack.send({
-            channel: '#sales',
-            text: `Daily report — ${orders} orders, $${revenue.toFixed(2)} revenue.`
-          });
-          return { sent: true };
-        </script>
-      </step>
-    </steps>
-  </workflow>
-</woml>
-```
 
-**Telegram — answer `/sales` from your team chat:**
+      <choose
+        id="orderRoute"
+        name="Route order"
+        description="Accept the order or send it for review."
+      >
+        <when test="{{context.steps.canFulfill.value}}">
+          <step id="acceptOrder" name="Accept order">
+            <script>
+              return {
+                status: "accepted",
+                message: `Order ${context.steps.prepareOrder.orderId} is ready for fulfillment.`
+              };
+            </script>
+          </step>
+          <result value="{{context.steps.acceptOrder}}" />
+        </when>
 
-```xml
-<woml>
-  <workflow id="telegram-sales">
-    <triggers>
-      <telegram id="ask" events="message" commands="/sales"
-                bot-token="{{secrets.TELEGRAM_BOT_TOKEN}}" />
-    </triggers>
-    <steps>
-      <step id="lookup">
-        <script>
-          const rows = await services.database.query({
-            sql: "SELECT COUNT(*) AS today FROM orders WHERE created_at >= date('now')",
-            parameters: []
-          });
-          return { today: rows[0].today };
-        </script>
-      </step>
-      <step id="notify">
-        <script>
-          await services.slack.send({
-            channel: '#sales',
-            text: `Today's numbers were requested on Telegram: ${context.steps.lookup.today} orders so far.`
-          });
-          return { ok: true };
-        </script>
-      </step>
-    </steps>
-  </workflow>
-</woml>
-```
+        <otherwise>
+          <step id="reviewOrder" name="Request review">
+            <script>
+              return {
+                status: "review",
+                message: `Order ${context.steps.prepareOrder.orderId} needs review.`
+              };
+            </script>
+          </step>
+          <result value="{{context.steps.reviewOrder}}" />
+        </otherwise>
+      </choose>
 
-**Event — send a confirmation email whenever another workflow emits `order.created`:**
-
-```xml
-<woml>
-  <workflow id="order-confirmation">
-    <triggers>
-      <event id="created" name="order.created" secret="{{secrets.EVENT_CONTROL_TOKEN}}">
-        <schema>
-          {
-            "type": "object",
-            "required": ["orderId", "email"],
-            "properties": {
-              "orderId": { "type": "string" },
-              "email": { "type": "string" }
-            }
-          }
-        </schema>
-      </event>
-    </triggers>
-    <steps>
-      <step id="confirm">
+      <step
+        id="response"
+        name="Build response"
+        description="Publish one predictable result for the caller."
+      >
         <script>
-          await services.http.request({
-            method: 'POST',
-            url: 'https://api.emailprovider.com/v1/send',
-            headers: { authorization: `Bearer ${secrets.EMAIL_API_KEY}` },
-            body: {
-              to: context.payload.email,
-              template: 'order-confirmation',
-              data: { orderId: context.payload.orderId }
-            },
-            timeoutMs: 5000
-          });
-          return { sentTo: context.payload.email };
+          return {
+            orderId: context.steps.prepareOrder.orderId,
+            amount: context.steps.prepareOrder.amount,
+            ...context.steps.orderRoute
+          };
         </script>
       </step>
     </steps>
@@ -355,64 +196,174 @@ Four triggers, four real automations. Each is a complete, runnable workflow.
 </woml>
 ```
 
-Every script gets explicit runtime bindings — `context.payload` (trigger input), `context.steps.<id>` (earlier step output), `services.*` (supervised capabilities like HTTP, database, Slack, storage, cache), and `secrets.*` (only the secrets proven necessary at compile time). Scripts return JSON-compatible values; the Rust engine records every outcome durably.
-
-**→ [Browse all examples](./examples/)**
-
-## WOML vs alternatives
-
-| Tool           | How you write it    | Readable by the whole team    | Self-hosted | No ceiling |
-| -------------- | ------------------- | ----------------------------- | ----------- | ---------- |
-| **WOML**       | Markup + JavaScript | ✅                            | ✅          | ✅         |
-| n8n            | Visual canvas       | ⚠️ Until it becomes spaghetti | ✅          | ❌         |
-| Zapier         | Visual canvas       | ⚠️ Until it becomes spaghetti | ❌          | ❌         |
-| Temporal       | Code (TS/Go/Java)   | ❌                            | ✅          | ✅         |
-| Step Functions | JSON (ASL)          | ❌                            | ❌          | ⚠️         |
-| Airflow        | Python DAGs         | ❌                            | ✅          | ✅         |
-
-WOML is the only one that combines all three: readable as markup, free and self-hosted, and unlimited in what it can express.
-
-## What WOML includes
-
-- Manual, webhook, schedule, interval, event, Slack, Telegram, Discord, and WhatsApp triggers.
-- Sequential steps, retries, parallel groups, choices, switches, and forked multi-step branches.
-- Durable approvals with provider notifications and shared decisions.
-- Workflow and step lifecycle hooks.
-- Built-in HTTP, SQL database, storage, cache, event, durable-state, messaging, and workflow call/start services.
-- Local JavaScript/TypeScript modules, reusable WOML steps, and custom notification providers.
-- Runtime concurrency, rate-limit, queue, and timeout policies.
-- Foreground and background operation, run inspection, log following, backup, recovery, and retention.
-- A VS Code extension with HTML-style markup and embedded JavaScript syntax.
-
-## Common commands
+Check it without starting the automation:
 
 ```bash
-woml check workflows/                    # Validate workflows without running them
-woml run workflows/                      # Run in the foreground (Ctrl+C to stop)
-woml run workflows/ --background         # Run in the background, survives Ctrl+C
-woml inspect                             # Show the current state of all runs
-woml list                                # List known workflows and recent runs
-woml get run_...                         # Print the full event history of a run
-woml cancel run_...                      # Cancel a running or pending run
-woml backup backups/latest               # Snapshot the durable state store to a file
-woml prune --before 30d --dry-run        # Preview which old runs would be purged
+woml check order-router.woml
 ```
 
-See the [CLI reference](docs/cli-reference.md) for every command and option.
+Then run it:
 
-## Documentation
+```bash
+woml run order-router.woml
+```
 
-Full documentation — language reference, all tags, triggers, control flow, services, modules, and production deployment — lives in the docs.
+WOML keeps the automation active and prints its webhook URL together with a generated `curl` command. Trigger it from another terminal:
 
-**→ [Read the full documentation](./docs/README.md)**
+```bash
+curl --request POST http://127.0.0.1:3000/webhooks/orders \
+  --header 'content-type: application/json' \
+  --data '{"orderId":"order-42","amount":240,"inStock":true,"riskScore":18}'
+```
 
-## Support and security
+Use `auth="none"` only for local development. Configure authenticated webhooks before exposing an endpoint outside a trusted environment.
 
-Use [GitHub Discussions](https://github.com/dali-benothmen/woml/discussions) for questions and [GitHub Issues](https://github.com/dali-benothmen/woml/issues) for reproducible bugs. Please report vulnerabilities privately according to the [security policy](SECURITY.md).
+## How the Workflow Runs
+
+```mermaid
+flowchart TD
+    trigger[POST /webhooks/orders] --> prepare[Prepare order]
+    prepare --> parallel{Run concurrently}
+    parallel --> inventory[Check inventory]
+    parallel --> risk[Check risk]
+    inventory --> decision[Make decision]
+    risk --> decision
+    decision --> route{Route order}
+    route -->|Accepted| accept[Accept order]
+    route -->|Needs review| review[Request review]
+    accept --> response[Build response]
+    review --> response
+```
+
+## See the Result
+
+WOML presents each run as an organized, colored terminal report. You will see output like this:
+
+```text
+RUN  run_8f21c4                                                Order Router
+
+  ✓  Prepare order                                              3 ms
+     Normalize the order received by the webhook.
+     → { orderId: "order-42", amount: 240 }
+
+  ✓  Check inventory                                            2 ms
+     → { available: true }
+
+  ✓  Check risk                                                 2 ms
+     → { approved: true, score: 18 }
+
+  ✓  Make decision                                              1 ms
+     → { value: true }
+
+  ✓  Accept order                                               1 ms
+     → { status: "accepted", message: "Order order-42 is ready for fulfillment." }
+
+  ✓  Build response                                             1 ms
+     → { orderId: "order-42", amount: 240, status: "accepted" }
+
+Completed in 10 ms · 6 succeeded
+```
+
+The exact run ID and timings will differ. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop the active automation.
+
+## What You Just Built
+
+- **`<webhook>`** validated an HTTP request and created a durable workflow run.
+- **`context.payload`** exposed the validated trigger input to every script.
+- **`<parallel>`** ran two independent checks concurrently and waited for both.
+- **`context.steps.<id>`** made completed step results available downstream.
+- **`<choose>`** selected one route and published a stable merged result.
+- **The terminal experience** showed each step, result, duration, and final outcome.
+
+## More “Aha” Examples
+
+Every example below is checked against the current WOML compiler.
+
+| Build                                                           | What it demonstrates                                                  | Run                                               |
+| --------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
+| [Durable run counter](./examples/durableStateWorkflow.woml)     | State that survives future runs and process restarts                  | `woml run examples/durableStateWorkflow.woml`     |
+| [Social distribution](./examples/forkDistributionWorkflow.woml) | Several independent multi-step branches with an explicit join         | `woml run examples/forkDistributionWorkflow.woml` |
+| [Telegram approval](./examples/telegramApprovalWorkflow.woml)   | Human approval, interactive notification buttons, and durable waiting | `woml run examples/telegramApprovalWorkflow.woml` |
+| [Workflow composition](./examples/workflowCallManual/)          | One workflow calling another and using its returned result            | `woml run examples/workflowCallManual`            |
+| [Local TypeScript module](./examples/moduleWorkflow.woml)       | Reusable project code exposed through `services.*`                    | `woml run examples/moduleWorkflow.woml`           |
+
+Provider examples require their documented credentials. Browse the [complete example catalog](./examples/) for webhooks, schedules, intervals, internal events, databases, storage, cache, lifecycle, retries, communication providers, and production deployment.
+
+## Key Features
+
+- **Readable workflow files** — author automation with semantic, HTML-inspired markup.
+- **Embedded JavaScript** — use `context.payload`, `context.steps`, `attempt`, `services`, and explicitly referenced `secrets` inside scripts.
+- **Production triggers** — manual, webhook, schedule, interval, internal event, Slack, Telegram, Discord, and WhatsApp.
+- **Structured control flow** — sequential steps, parallel groups, choices, switches, and concurrent multi-step forks with explicit joins.
+- **Retries and idempotency** — declare retry behavior with the `retry` attribute while preserving durable attempt and operation identities.
+- **Human-in-the-loop** — pause durably for approval and continue through approved or rejected routes.
+- **Managed capabilities** — use supervised HTTP, SQLite/PostgreSQL, storage, cache, state, events, workflow calls, and communication services.
+- **Reusable building blocks** — import local JavaScript or TypeScript modules and define reusable WOML steps or notification providers.
+- **Lifecycle and runtime policy** — observe workflow and step events while controlling concurrency, rate limits, queues, and timeouts.
+- **Production operations** — run in the foreground or background, inspect activity, follow logs, cancel runs, back up state, and prune old history.
+- **Cross-platform runtime** — install one CLI that selects the appropriate native Rust engine automatically.
+
+## WOML vs Alternatives
+
+Most workflow tools optimize for either visual simplicity or engineering power. WOML is designed to keep both: readable workflow structure for the whole team and real JavaScript whenever the automation needs it.
+
+| Tool                                                                                                                   | How you build workflows | Readable by the whole team                   | Self-hosted |             Logic without a ceiling             |
+| ---------------------------------------------------------------------------------------------------------------------- | ----------------------- | -------------------------------------------- | :---------: | :---------------------------------------------: |
+| **WOML**                                                                                                               | **Markup + JavaScript** | ✅ **Clear, document-like structure**        |     ✅      | ✅ **Inline JavaScript, modules, and services** |
+| [n8n](https://docs.n8n.io/)                                                                                            | Visual canvas           | ⚠️ Easy at first; harder as the canvas grows |     ✅      |            ⚠️ Code and custom nodes             |
+| [Zapier](https://help.zapier.com/hc/en-us/articles/16722578092429-Use-the-editor-to-build-and-view-your-Zap-workflows) | Visual canvas           | ⚠️ Friendly for smaller automations          |     ❌      |       ⚠️ Platform actions and code steps        |
+| [Temporal](https://docs.temporal.io/)                                                                                  | Code with language SDKs | ❌ Primarily readable by engineers           |     ✅      |          ✅ Full programming languages          |
+| [AWS Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-amazon-states-language.html)        | JSON/YAML with ASL      | ❌ Requires ASL and AWS knowledge            |     ❌      | ⚠️ Extended through AWS services and functions  |
+| [Apache Airflow](https://airflow.apache.org/docs/apache-airflow/stable/tutorial/fundamentals.html)                     | Python DAGs             | ❌ Primarily readable by Python/data teams   |     ✅      |             ✅ Python and operators             |
+
+> **WOML's difference:** it combines document-like readability, self-hosted ownership, and full JavaScript flexibility in the same workflow file.
+
+## Common Commands
+
+```bash
+woml check workflows/                    # Parse, validate, and compile
+woml run workflows/                      # Activate workflows in the foreground
+woml run workflows/ --background         # Activate them in the background
+woml inspect                             # Open the colored runtime inspector
+woml list                                # List workflows and recent runs
+woml get run_...                         # Inspect one run and its event history
+woml cancel run_...                      # Cancel a pending or running workflow
+woml workflow-id --logs                  # Follow logs for a workflow
+woml secrets set API_TOKEN               # Store a secret without printing it
+woml backup backups/latest               # Back up the durable state store
+woml prune --before 30d --dry-run        # Preview retention cleanup
+```
+
+See the [CLI reference](./docs/cli-reference.md) for all commands, flags, exit behavior, and machine-readable output.
+
+## VS Code Experience
+
+The [WOML extension](./woml-vscode/) gives `.woml` files HTML-style markup highlighting, embedded JavaScript syntax, highlighted runtime bindings such as `context` and `services`, reference-expression highlighting, snippets, and a dedicated file icon.
+
+<div align="center">
+  <img src="./assets/vscode.png" alt="WOML workflow open in Visual Studio Code" width="1100">
+</div>
+
+The extension follows your existing VS Code theme instead of requiring a separate WOML color theme.
+
+## Documentation and Examples
+
+- [Getting started](./docs/getting-started.md)
+- [Language reference](./docs/language-reference.md)
+- [CLI reference](./docs/cli-reference.md)
+- [Services and capabilities](./docs/woml-services.md)
+- [Modules](./docs/woml-modules.md)
+- [Communication providers](./docs/woml-communication-providers.md)
+- [Production deployment](./docs/woml-production-deployment.md)
+- [Complete example catalog](./examples/)
+
+## Support and Security
+
+Use [GitHub Discussions](https://github.com/dali-benothmen/woml/discussions) for questions and [GitHub Issues](https://github.com/dali-benothmen/woml/issues) for reproducible bugs. Follow the [support guide](./SUPPORT.md) when sharing diagnostics, and report vulnerabilities privately according to the [security policy](./SECURITY.md).
 
 ## Contributing
 
-Contributions are welcome — bug reports, feature ideas, docs, or a custom provider. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
+Contributions are welcome, including bug reports, documentation improvements, tested examples, provider work, compiler changes, and runtime improvements. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
