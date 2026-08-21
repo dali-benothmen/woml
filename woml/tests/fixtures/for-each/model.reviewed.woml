@@ -1,0 +1,31 @@
+<woml>
+  <workflow id="for-each-contract" name="For-each contract" version="1.0.0">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="load">
+        <script>return { items: context.payload.items ?? [] };</script>
+      </step>
+
+      <for-each
+        id="organize"
+        name="Organize items"
+        description="Normalize every item in input order."
+        items="{{context.steps.load.items}}"
+        concurrency="2"
+      >
+        <step id="normalize">
+          <script>return { value: context.item, index: context.iteration.index };</script>
+        </step>
+
+        <result value="{{context.steps.normalize}}" />
+      </for-each>
+
+      <step id="summary">
+        <script>return { processed: context.steps.organize.succeeded };</script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -15,6 +15,7 @@ import {
   type CompiledControlChoiceV1,
   type CompiledContextVisibilityV1,
   type CompiledForkV1,
+  type CompiledForEachV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowDefinitionV10,
@@ -23,9 +24,11 @@ import {
   type CompiledWorkflowDefinitionV13,
   type CompiledWorkflowDefinitionV14,
   type CompiledWorkflowDefinitionV15,
+  type CompiledWorkflowDefinitionV16,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowGraphV13,
+  type CompiledWorkflowGraphV16,
   type CompiledWorkflowMetadata,
   type CompiledWorkflowNode,
   type ContextReferenceExpression,
@@ -417,6 +420,7 @@ interface LoweredV13FlowFragment extends LoweredFlowFragment {
 interface V13LoweringState {
   readonly forks: CompiledForkV1[];
   readonly choices: CompiledControlChoiceV1[];
+  readonly forEach: CompiledForEachV1[];
   readonly contextVisibility: CompiledContextVisibilityV1[];
   readonly ownedBranchTerminalNodeIds: string[];
 }
@@ -5996,6 +6000,73 @@ function lowerForkV13(
   };
 }
 
+function lowerForEachV16(
+  loop: ValidatedForEach,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const openNodeId = `__woml_for_each__${loop.id}__open`;
+  const bodyState: V13LoweringState = {
+    forks: [],
+    choices: [],
+    forEach: [],
+    contextVisibility: [],
+    ownedBranchTerminalNodeIds: [],
+  };
+  const body = lowerFlowItemsV13(
+    loop.items,
+    new Set(),
+    `${path}_for_each_${loop.id}`,
+    bodyState
+  );
+  if (
+    bodyState.forks.length > 0 ||
+    bodyState.forEach.length > 0 ||
+    bodyState.ownedBranchTerminalNodeIds.length > 0
+  ) {
+    throw new Error('Model v16 for-each body contains a forbidden nested owner.');
+  }
+  state.forEach.push({
+    forEachId: loop.id,
+    openNodeId,
+    resultNodeId: loop.id,
+    ...(loop.metadata === undefined ? {} : { metadata: loop.metadata }),
+    items: referenceExpression(loop.itemsReference),
+    concurrency: loop.concurrency,
+    outerStepIds: [...visibleBefore],
+    body: {
+      entryNodeIds: [body.entryId],
+      nodes: body.nodes,
+      edges: body.edges,
+      choices: bodyState.choices,
+      contextVisibility: bodyState.contextVisibility,
+      terminalNodeId: body.exitId,
+    },
+    ...(loop.result === undefined
+      ? {}
+      : { result: referenceExpression(loop.result) }),
+  });
+
+  const resultNode: CompiledWorkflowNode = {
+    id: loop.id,
+    handler: 'engine.for-each-result',
+    inputs: { kind: 'object', fields: {} },
+    ...(loop.metadata === undefined ? {} : { metadata: loop.metadata }),
+  };
+  return {
+    entryId: openNodeId,
+    exitId: loop.id,
+    nodes: [
+      v13EmptyEngineNode(openNodeId, 'engine.for-each-open'),
+      resultNode,
+    ],
+    edges: [alwaysEdge(openNodeId, loop.id)],
+    visibleAfter: new Set([...visibleBefore, loop.id]),
+    lastResultNodeId: loop.id,
+  };
+}
+
 function lowerFlowItemV13(
   item: ValidatedFlowItem,
   visibleBefore: ReadonlySet<string>,
@@ -6013,9 +6084,8 @@ function lowerFlowItemV13(
     return lowerSwitchV14(item, visibleBefore, path, state);
   if (item.kind === 'approval')
     return lowerApprovalV13(item, visibleBefore, path, state);
-  if (item.kind === 'forEach') {
-    throw new Error('Model v16 for-each lowering is implemented in FE2.');
-  }
+  if (item.kind === 'forEach')
+    return lowerForEachV16(item, visibleBefore, path, state);
   return lowerForkV13(item, visibleBefore, path, state);
 }
 
@@ -6062,10 +6132,12 @@ function lowerFlowItemsV13(
 function lowerWorkflowV13(items: readonly ValidatedFlowItem[]): {
   readonly fragment: LoweredV13FlowFragment;
   readonly graph: CompiledWorkflowGraphV13;
+  readonly forEach: readonly CompiledForEachV1[];
 } {
   const state: V13LoweringState = {
     forks: [],
     choices: [],
+    forEach: [],
     contextVisibility: [],
     ownedBranchTerminalNodeIds: [],
   };
@@ -6092,6 +6164,7 @@ function lowerWorkflowV13(items: readonly ValidatedFlowItem[]): {
   ];
   return {
     fragment,
+    forEach: state.forEach,
     graph: {
       entryNodeIds: [fragment.entryId],
       nodes: [
@@ -7176,15 +7249,6 @@ function compileValidatedWoml(
     lifecycle,
     runtimePolicy,
   } = validateDocument(document);
-  if (flow.firstForEach !== undefined) {
-    failCompile(
-      document,
-      'WOML_FOR_EACH_EXECUTION_UNAVAILABLE',
-      '<for-each> authoring is valid, but Model v16 lowering and execution are not available until FE2 and FE3.',
-      flow.firstForEach.openTagSpan,
-      'FE1 freezes and validates the language surface without routing loops through an older execution model.'
-    );
-  }
   const scriptAnalyses = collectScriptAnalyses(flow.items);
   const lifecycleScripts =
     lifecycle?.hooks.flatMap(hook =>
@@ -7254,8 +7318,12 @@ function compileValidatedWoml(
     usesTelegramMessaging ||
     usesDiscordMessaging ||
     usesWhatsAppMessaging;
+  const usesModelV16 = flow.firstForEach !== undefined;
   const usesModelV14 =
-    usesModelV15 || forceModelV14 || flow.firstSwitch !== undefined;
+    usesModelV16 ||
+    usesModelV15 ||
+    forceModelV14 ||
+    flow.firstSwitch !== undefined;
   const usesStructuredGraph =
     usesModelV14 ||
     flow.firstFork !== undefined ||
@@ -7335,15 +7403,19 @@ function compileValidatedWoml(
       item =>
         item.kind === 'step' ||
         item.kind === 'branch' ||
-        item.kind === 'approval'
+        item.kind === 'approval' ||
+        item.kind === 'forEach'
     )
   ) {
     const source =
-      flow.firstFork ?? flow.firstControlChoice ?? flow.firstSwitch!;
+      flow.firstFork ??
+      flow.firstControlChoice ??
+      flow.firstSwitch ??
+      flow.firstForEach!;
     failCompile(
       document,
       'WOML_WORKFLOW_RESULT_REQUIRED',
-      `This Model v${usesModelV15 ? '15' : usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
+      `This Model v${usesModelV16 ? '16' : usesModelV15 ? '15' : usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
       source.openTagSpan,
       'Add a main-route <step>, result-producing <choose id="..."> or <switch id="...">, or <approval> before the terminal control structure.'
     );
@@ -7411,13 +7483,31 @@ function compileValidatedWoml(
           nodes,
           edges: lowered.edges,
         } satisfies CompiledWorkflowGraph)
-      : ({
-          ...loweredV13.graph,
-          nodes: withScriptRuntimeBindings(
-            loweredV13.graph.nodes,
-            scriptAnalyses
-          ),
-        } satisfies CompiledWorkflowGraphV13);
+      : usesModelV16
+        ? ({
+            ...loweredV13.graph,
+            nodes: withScriptRuntimeBindings(
+              loweredV13.graph.nodes,
+              scriptAnalyses
+            ),
+            forEach: loweredV13.forEach.map(loop => ({
+              ...loop,
+              body: {
+                ...loop.body,
+                nodes: withScriptRuntimeBindings(
+                  loop.body.nodes,
+                  scriptAnalyses
+                ),
+              },
+            })),
+          } satisfies CompiledWorkflowGraphV16)
+        : ({
+            ...loweredV13.graph,
+            nodes: withScriptRuntimeBindings(
+              loweredV13.graph.nodes,
+              scriptAnalyses
+            ),
+          } satisfies CompiledWorkflowGraphV13);
   const communication = usesModelV15
     ? {
         profileVersion: 1 as const,
@@ -7561,7 +7651,18 @@ function compileValidatedWoml(
       : { runtimePolicy: runtimePolicy.value }),
   };
   const compiled: CompiledWorkflowDefinition = usesStructuredGraph
-    ? usesModelV15
+    ? usesModelV16
+      ? ({
+          schemaVersion: 16,
+          ...definition,
+          graph: baseGraph as CompiledWorkflowGraphV16,
+          runtimePolicy: runtimePolicy?.value ?? {
+            profileVersion: 1,
+            concurrency: 1,
+          },
+          ...(communication === undefined ? {} : { communication }),
+        } satisfies CompiledWorkflowDefinitionV16)
+      : usesModelV15
       ? ({
           schemaVersion: 15,
           ...definition,
@@ -7872,6 +7973,11 @@ export function compileWomlWithModules(
     options.forcedCommunicationServices ??
       (options.forceModelV15 === true ? ['telegram'] : [])
   );
+  if (compiled.schemaVersion === 16) {
+    throw new Error(
+      'Model v16 local-module composition is implemented in FE4; FE2 lowers module-free for-each workflows only.'
+    );
+  }
   if (
     compiled.schemaVersion !== 9 &&
     compiled.schemaVersion !== 10 &&

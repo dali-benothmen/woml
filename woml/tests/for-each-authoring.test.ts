@@ -187,18 +187,11 @@ describe('WOML for-each authoring', () => {
     );
   });
 
-  test('does not route valid authoring through an older executable model', () => {
+  test('routes valid authoring only through the frozen Model v16 contract', () => {
     const document = parseWoml(validLoop(), { file: 'for-each-test.woml' });
     expect(() => validateWoml(document)).not.toThrow();
-    try {
-      compileWoml(document);
-    } catch (error) {
-      expect(error).toBeInstanceOf(WomlCompileError);
-      expect((error as WomlCompileError).diagnostic.code).toBe(
-        'WOML_FOR_EACH_EXECUTION_UNAVAILABLE'
-      );
-      return;
-    }
-    throw new Error('Expected FE1 compilation to fail closed before FE2.');
+    const compiled = compileWoml(document);
+    expect(compiled.schemaVersion).toBe(16);
+    expect(compiled.graph).toHaveProperty('forEach');
   });
 });

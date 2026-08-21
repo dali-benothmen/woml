@@ -41,19 +41,19 @@ describe('woml check for-each authoring', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('WOML check passed');
-    expect(result.stdout).toContain('Model v16 lowering');
+    expect(result.stdout).toContain('Compiled Model v16');
   });
 
-  test('returns the source-validation profile for JSON output', async () => {
+  test('returns the Model v16 validation profile for JSON output', async () => {
     const result = await check(valid, '--json');
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
-      profile: 'woml.source-validation/v1',
+      profile: 'woml.model-validation/v1',
       valid: true,
       workflowId: 'for-each-check',
       feature: 'for-each',
       executable: false,
-      pendingModelVersion: 16,
+      modelVersion: 16,
     });
   });
 

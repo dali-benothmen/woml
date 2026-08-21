@@ -1633,6 +1633,12 @@ async function compileWorkflowSources(
       );
     }
     const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
+    if (frontendWorkflow.schemaVersion === 16) {
+      throw new CliInputError(
+        'WOML_FOR_EACH_EXECUTION_UNAVAILABLE',
+        '<for-each> compiled successfully to Model v16, but Rust loop execution begins in FE3.'
+      );
+    }
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
@@ -1917,8 +1923,8 @@ async function runSingleCheckCommand(
           return 0;
         }
         io.stdout(`WOML check passed for workflow source "${filePath}".\n`);
-        io.stdout(
-          'Execution: <for-each> authoring is valid; Model v16 lowering and Rust execution begin in FE2 and FE3.\n'
+      io.stdout(
+          'Execution: imported <for-each> authoring is valid; reusable-definition Model v16 composition begins in FE4.\n'
         );
         return 0;
       }
@@ -1978,7 +1984,13 @@ async function runSingleCheckCommand(
       return 0;
     }
     if (hasForEach) {
-      validateWoml(document);
+      const compiled = compileWoml(document);
+      if (compiled.schemaVersion !== 16) {
+        throw new CliInputError(
+          'WOML_FOR_EACH_MODEL_INVALID',
+          '<for-each> did not lower to the frozen compiled Model v16 contract.'
+        );
+      }
       const workflowElement = document.root.children.find(
         (child): child is WomlSourceElement =>
           child.kind === 'element' && child.name === 'workflow'
@@ -1987,12 +1999,12 @@ async function runSingleCheckCommand(
         io.stdout(
           `${JSON.stringify(
             {
-              profile: 'woml.source-validation/v1',
+              profile: 'woml.model-validation/v1',
               valid: true,
               workflowId: workflowElement?.attributes.id?.value,
               feature: 'for-each',
               executable: false,
-              pendingModelVersion: 16,
+              modelVersion: compiled.schemaVersion,
             },
             null,
             2
@@ -2004,7 +2016,7 @@ async function runSingleCheckCommand(
         `WOML check passed for workflow "${workflowElement?.attributes.id?.value ?? filePath}".\n`
       );
       io.stdout(
-        'Execution: <for-each> authoring is valid; Model v16 lowering and Rust execution begin in FE2 and FE3.\n'
+        'Compiled Model v16 passed frontend validation. Rust loop execution begins in FE3.\n'
       );
       return 0;
     }
