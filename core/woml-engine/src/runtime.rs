@@ -19,15 +19,17 @@ use crate::engine::{
 };
 use crate::event::{
   ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
-  ChoiceSelectedData, FinalLifecycleStatus, ForkBranchOutcome, ForkBranchSettledData,
-  ForkJoinOutcome, ForkJoinSettledData, ForkOpenedData, LifecycleActionFailedData,
-  LifecycleActionIdentityData, LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
-  LifecycleHookCompletionStatus, LifecycleHookRequestedData, LifecycleSubject,
-  LifecycleSubjectKind, OperationExecutionMode, OperationFailedData, OperationStartedData,
-  OperationSucceededData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
-  ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
-  RunFailedDataV3, RunFinalizedData, RunOutcomeDecidedData, RunSucceededData,
-  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
+  ChoiceSelectedData, FinalLifecycleStatus, ForEachIterationFailedData,
+  ForEachIterationFailureKind, ForEachIterationIdentityData, ForEachIterationScope,
+  ForEachIterationSucceededData, ForEachOpenedData, ForEachSettledData, ForkBranchOutcome,
+  ForkBranchSettledData, ForkJoinOutcome, ForkJoinSettledData, ForkOpenedData,
+  LifecycleActionFailedData, LifecycleActionIdentityData, LifecycleFailure, LifecycleFailureKind,
+  LifecycleHookCompletedData, LifecycleHookCompletionStatus, LifecycleHookRequestedData,
+  LifecycleSubject, LifecycleSubjectKind, OperationExecutionMode, OperationFailedData,
+  OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
+  ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData,
+  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFinalizedData, RunOutcomeDecidedData,
+  RunSucceededData, StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
 };
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{
@@ -3724,6 +3726,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
   ) {
     return Ok(());
   }
@@ -4415,6 +4418,40 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
             fork_id: fork.fork_id.clone(),
           }),
         )?;
+      }
+      "engine.for-each-open" => {
+        let descriptor = engine
+          .workflow()
+          .graph
+          .for_each
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .find(|descriptor| descriptor.open_node_id == *node_id)
+          .cloned()
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled(format!(
+              "for-each open node {node_id:?} has no Model v16 descriptor"
+            ))
+          })?;
+        if host.is_none() {
+          *host = Some(
+            ScriptHostClient::spawn_with_authority(
+              options.script_host.clone(),
+              options.capability_authority.clone(),
+            )
+            .await?,
+          );
+        }
+        execute_sequential_for_each(
+          engine,
+          run_id,
+          &descriptor,
+          options,
+          host.as_ref().expect("for-each script host was initialized"),
+        )
+        .await?;
+        execution_order.push(descriptor.for_each_id);
       }
       "engine.parallel-start" => {
         let parallel_id = node_id
@@ -6199,6 +6236,346 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
   Ok(completion_order)
 }
 
+fn for_each_digest(value: &Value) -> Result<String, RuntimeExecutionError> {
+  let bytes = serde_json_canonicalizer::to_vec(value)
+    .map_err(|error| RuntimeExecutionError::Stalled(error.to_string()))?;
+  Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+fn for_each_effect_key(
+  run_id: &str,
+  definition_hash: &str,
+  for_each_id: &str,
+  index: u32,
+  node_id: &str,
+) -> String {
+  let identity = serde_json::json!({
+    "contract": "woml.for-each-effect",
+    "version": 1,
+    "runId": run_id,
+    "definitionHash": definition_hash,
+    "forEachId": for_each_id,
+    "index": index,
+    "nodeId": node_id,
+  });
+  let bytes = serde_json_canonicalizer::to_vec(&identity)
+    .expect("a static for-each effect identity is canonical JSON");
+  format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn for_each_body_order(
+  descriptor: &crate::model::CompiledForEach,
+) -> Result<Vec<String>, RuntimeExecutionError> {
+  let mut order = Vec::with_capacity(descriptor.body.nodes.len());
+  let mut current = descriptor
+    .body
+    .entry_node_ids
+    .first()
+    .cloned()
+    .ok_or_else(|| RuntimeExecutionError::Stalled("for-each body has no entry node".to_string()))?;
+  loop {
+    if order.contains(&current) {
+      return Err(RuntimeExecutionError::Stalled(
+        "for-each body contains a cycle".to_string(),
+      ));
+    }
+    order.push(current.clone());
+    if current == descriptor.body.terminal_node_id {
+      break;
+    }
+    current = descriptor
+      .body
+      .edges
+      .iter()
+      .find(|edge| edge.from == current)
+      .map(|edge| edge.to.clone())
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "for-each body node {current:?} has no sequential continuation"
+        ))
+      })?;
+  }
+  if order.len() != descriptor.body.nodes.len() {
+    return Err(RuntimeExecutionError::Stalled(
+      "for-each body is not one sequential executable route".to_string(),
+    ));
+  }
+  Ok(order)
+}
+
+fn resolve_for_each_result(
+  expression: &ValueExpression,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+) -> Result<Value, RuntimeExecutionError> {
+  let ValueExpression::ContextReference { path } = expression else {
+    return Err(RuntimeExecutionError::Stalled(
+      "for-each result is not a context reference".to_string(),
+    ));
+  };
+  if matches!(path.first().map(String::as_str), Some("trigger" | "steps")) {
+    return resolve_context_reference(expression, context).map_err(|_| {
+      RuntimeExecutionError::Stalled(format!(
+        "for-each result reference context.{} is unavailable",
+        path.join(".")
+      ))
+    });
+  }
+  let (mut value, remaining): (Value, &[String]) = match path.first().map(String::as_str) {
+    Some("item") => (item.clone(), &path[1..]),
+    Some("iteration") => (
+      serde_json::json!({ "index": index, "total": total }),
+      &path[1..],
+    ),
+    _ => {
+      return Err(RuntimeExecutionError::Stalled(
+        "for-each result has an unsupported context root".to_string(),
+      ));
+    }
+  };
+  for segment in remaining {
+    value = value
+      .as_object()
+      .and_then(|object| object.get(segment))
+      .cloned()
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "for-each result reference context.{} is unavailable",
+          path.join(".")
+        ))
+      })?;
+  }
+  Ok(value)
+}
+
+fn for_each_failure_kind(kind: AttemptFailureKind) -> ForEachIterationFailureKind {
+  match kind {
+    AttemptFailureKind::ScriptThrew => ForEachIterationFailureKind::ScriptThrew,
+    AttemptFailureKind::ScriptTimedOut => ForEachIterationFailureKind::TimedOut,
+    AttemptFailureKind::InvalidScriptResult => ForEachIterationFailureKind::NonJson,
+    AttemptFailureKind::ContextTooLarge => ForEachIterationFailureKind::ContextTooLarge,
+    AttemptFailureKind::ResultTooLarge => ForEachIterationFailureKind::ResultTooLarge,
+    AttemptFailureKind::WorkerCrashed => ForEachIterationFailureKind::WorkerCrashed,
+    AttemptFailureKind::HostCrashed => ForEachIterationFailureKind::HostCrashed,
+    AttemptFailureKind::InvocationCancelled => ForEachIterationFailureKind::Cancelled,
+    AttemptFailureKind::Interrupted => ForEachIterationFailureKind::Interrupted,
+    AttemptFailureKind::ServiceFailed => ForEachIterationFailureKind::CapabilityFailed,
+  }
+}
+
+async fn execute_sequential_for_each<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  descriptor: &crate::model::CompiledForEach,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<(), RuntimeExecutionError> {
+  if descriptor.concurrency != 1 {
+    return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+      "for-each {:?} requires concurrency=1 in the sequential runtime",
+      descriptor.for_each_id
+    )));
+  }
+  let root_context = engine.projection(run_id)?.context;
+  let items = resolve_context_reference(&descriptor.items, &root_context).map_err(|_| {
+    RuntimeExecutionError::InvalidConfiguration(format!(
+      "for-each {:?} items reference is unavailable",
+      descriptor.for_each_id
+    ))
+  })?;
+  let Value::Array(items) = items else {
+    return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+      "for-each {:?} items must resolve to an array",
+      descriptor.for_each_id
+    )));
+  };
+  if items.len() > 10_000 {
+    return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+      "for-each {:?} exceeds the 10000-item limit",
+      descriptor.for_each_id
+    )));
+  }
+  let total = items.len() as u32;
+  let items_digest = for_each_digest(&Value::Array(items.clone()))?;
+  engine.append_payload(
+    run_id,
+    RunEventPayload::ForEachOpened(ForEachOpenedData {
+      for_each_id: descriptor.for_each_id.clone(),
+      total,
+      items_digest,
+      concurrency: 1,
+    }),
+  )?;
+
+  let body_order = for_each_body_order(descriptor)?;
+  let mut aggregate_results = Vec::with_capacity(items.len());
+  for (index, item) in items.iter().enumerate() {
+    let index = index as u32;
+    let scope = ForEachIterationScope {
+      for_each_id: descriptor.for_each_id.clone(),
+      index,
+    };
+    engine.append_scoped_payload(
+      run_id,
+      scope.clone(),
+      RunEventPayload::ForEachIterationStarted(ForEachIterationIdentityData {
+        for_each_id: descriptor.for_each_id.clone(),
+      }),
+    )?;
+
+    let mut context = root_context.clone();
+    context
+      .steps
+      .retain(|step_id, _| descriptor.outer_step_ids.contains(step_id));
+    for node_id in &body_order {
+      let node = descriptor
+        .body
+        .nodes
+        .iter()
+        .find(|node| &node.id == node_id)
+        .ok_or_else(|| {
+          RuntimeExecutionError::Stalled("for-each body node disappeared".to_string())
+        })?;
+      let source = node.script_source().ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "for-each body node {node_id:?} has no script source"
+        ))
+      })?;
+      let visible_local = descriptor
+        .body
+        .context_visibility
+        .iter()
+        .find(|visibility| visibility.node_id == *node_id)
+        .map(|visibility| visibility.step_ids.as_slice())
+        .unwrap_or_default();
+      let mut invocation_context = context.clone();
+      invocation_context.steps.retain(|step_id, _| {
+        descriptor.outer_step_ids.contains(step_id) || visible_local.contains(step_id)
+      });
+      let secrets = node
+        .script_runtime
+        .as_ref()
+        .map(|runtime| {
+          runtime
+            .required_secrets
+            .iter()
+            .map(|name| {
+              options
+                .resolved_secrets
+                .get(name)
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .map(|value| (name.clone(), value))
+                .ok_or_else(|| {
+                  RuntimeExecutionError::InvalidConfiguration(format!(
+                    "for-each script node {node_id:?} requires unresolved secret {name:?}"
+                  ))
+                })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+      let invocation_id = generated_id("inv");
+      let idempotency_key = for_each_effect_key(
+        run_id,
+        engine.definition_hash(),
+        &descriptor.for_each_id,
+        index,
+        node_id,
+      );
+      let request = ExecuteMessage::runtime_script_with_iteration(
+        &invocation_id,
+        run_id,
+        node_id,
+        ScriptAttempt::new(1, 1, &idempotency_key).map_err(RuntimeExecutionError::Stalled)?,
+        options.script_timeout_ms,
+        source,
+        &invocation_context,
+        item,
+        index,
+        total,
+        &secrets,
+      )
+      .map_err(RuntimeExecutionError::Stalled)?;
+      let output = match host.execute(&request).await {
+        Ok(completed) => match completed.outcome {
+          HostOutcome::Success { value } => value,
+          HostOutcome::Failure { error } => {
+            let failure = error.into_attempt_failure();
+            engine.append_scoped_payload(
+              run_id,
+              scope,
+              RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
+                for_each_id: descriptor.for_each_id.clone(),
+                failed_node_id: node_id.clone(),
+                failure_kind: for_each_failure_kind(failure.kind),
+              }),
+            )?;
+            return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+              "for-each {:?} iteration {index} failed: {}",
+              descriptor.for_each_id, failure.message
+            )));
+          }
+        },
+        Err(error) => {
+          engine.append_scoped_payload(
+            run_id,
+            scope,
+            RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
+              for_each_id: descriptor.for_each_id.clone(),
+              failed_node_id: node_id.clone(),
+              failure_kind: ForEachIterationFailureKind::HostCrashed,
+            }),
+          )?;
+          return Err(RuntimeExecutionError::Host(error));
+        }
+      };
+      context.steps.insert(node_id.clone(), output);
+    }
+
+    let result = descriptor
+      .result
+      .as_ref()
+      .map(|expression| resolve_for_each_result(expression, &context, item, index, total))
+      .transpose()?;
+    let result_digest = result.as_ref().map(for_each_digest).transpose()?;
+    if let Some(value) = &result {
+      aggregate_results.push(value.clone());
+    }
+    engine.append_scoped_payload(
+      run_id,
+      scope,
+      RunEventPayload::ForEachIterationSucceeded(ForEachIterationSucceededData {
+        for_each_id: descriptor.for_each_id.clone(),
+        result,
+        result_digest,
+      }),
+    )?;
+  }
+
+  let mut public_output = Map::new();
+  public_output.insert("total".to_string(), Value::from(total));
+  public_output.insert("succeeded".to_string(), Value::from(total));
+  if descriptor.result.is_some() && !aggregate_results.is_empty() {
+    public_output.insert("results".to_string(), Value::Array(aggregate_results));
+  }
+  engine.append_payload(
+    run_id,
+    RunEventPayload::ForEachSucceeded(ForEachSettledData {
+      for_each_id: descriptor.for_each_id.clone(),
+      total,
+      succeeded: total,
+      failed: 0,
+      skipped: 0,
+      aggregate_digest: for_each_digest(&Value::Object(public_output))?,
+    }),
+  )?;
+  Ok(())
+}
+
 async fn execute_script_node<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
@@ -7152,7 +7529,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V11
     | crate::RUN_EVENT_SCHEMA_VERSION_V12
     | crate::RUN_EVENT_SCHEMA_VERSION_V13
-    | crate::RUN_EVENT_SCHEMA_VERSION_V14 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V14
+    | crate::RUN_EVENT_SCHEMA_VERSION_V15 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -7173,6 +7551,12 @@ trait RuntimeDagEngine {
   fn append_payload(
     &mut self,
     run_id: &str,
+    payload: RunEventPayload,
+  ) -> Result<(), RuntimeExecutionError>;
+  fn append_scoped_payload(
+    &mut self,
+    run_id: &str,
+    iteration: ForEachIterationScope,
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError>;
   fn settle_workflow_timeout(
@@ -7338,6 +7722,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
           run_id: run_id.to_string(),
           sequence: self.events(run_id).len() as u64 + 1,
           occurred_at: chrono::Utc::now(),
+          iteration: None,
           payload,
         })?;
       }
@@ -7360,6 +7745,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
         | crate::RUN_EVENT_SCHEMA_VERSION_V14
+        | crate::RUN_EVENT_SCHEMA_VERSION_V15
     ) {
       crate::durable::expand_model_v11_payload(self.workflow(), run_id, payload)?
     } else {
@@ -7374,9 +7760,28 @@ impl RuntimeDagEngine for InMemoryDagEngine {
         run_id: run_id.to_string(),
         sequence,
         occurred_at,
+        iteration: None,
         payload,
       })?;
     }
+    Ok(())
+  }
+
+  fn append_scoped_payload(
+    &mut self,
+    run_id: &str,
+    iteration: ForEachIterationScope,
+    payload: RunEventPayload,
+  ) -> Result<(), RuntimeExecutionError> {
+    self.append_event(RunEvent {
+      event_schema_version: self.event_schema_version(),
+      event_id: generated_id("evt"),
+      run_id: run_id.to_string(),
+      sequence: self.events(run_id).len() as u64 + 1,
+      occurred_at: chrono::Utc::now(),
+      iteration: Some(iteration),
+      payload,
+    })?;
     Ok(())
   }
 
@@ -7445,6 +7850,22 @@ impl RuntimeDagEngine for DurableDagEngine {
     payload: RunEventPayload,
   ) -> Result<(), RuntimeExecutionError> {
     self.append_payload(generated_id("evt"), run_id, chrono::Utc::now(), payload)?;
+    Ok(())
+  }
+
+  fn append_scoped_payload(
+    &mut self,
+    run_id: &str,
+    iteration: ForEachIterationScope,
+    payload: RunEventPayload,
+  ) -> Result<(), RuntimeExecutionError> {
+    self.append_scoped_payload(
+      generated_id("evt"),
+      run_id,
+      chrono::Utc::now(),
+      iteration,
+      payload,
+    )?;
     Ok(())
   }
 

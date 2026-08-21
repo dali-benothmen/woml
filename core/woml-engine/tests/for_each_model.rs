@@ -82,15 +82,13 @@ fn model_v15_cannot_smuggle_a_for_each_descriptor() {
 }
 
 #[test]
-fn fe2_does_not_make_model_v16_executable() {
+fn concurrent_model_v16_remains_staged_until_bounded_scheduling() {
   let model = CompiledWorkflowDefinition::from_json(REVIEWED_MODEL).unwrap();
   let error = model
     .validate_for_durable_execution()
-    .expect_err("loop runtime handlers are intentionally implemented in FE3");
-  assert!(error.issues.iter().any(|issue| {
-    matches!(
-      issue.code,
-      ModelIssueCode::UnknownHandler | ModelIssueCode::UnsupportedForkExecution
-    )
-  }));
+    .expect_err("the reviewed fixture requests concurrency=2, which begins in FE5");
+  assert!(error
+    .issues
+    .iter()
+    .any(|issue| issue.code == ModelIssueCode::UnsupportedForEachExecution));
 }

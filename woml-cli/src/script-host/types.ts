@@ -4,12 +4,17 @@ export interface JsonObject {
   readonly [key: string]: JsonValue;
 }
 
-export interface ScriptContext extends JsonObject {
+export interface ScriptContext {
   readonly trigger: JsonObject;
   readonly steps: Readonly<Record<string, JsonValue>>;
+  readonly item?: JsonValue;
+  readonly iteration?: {
+    readonly index: number;
+    readonly total: number;
+  };
 }
 
-export type ScriptHostProtocolVersion = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export type ScriptHostProtocolVersion = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
 export interface ScriptAttempt extends JsonObject {
   readonly number: number;
@@ -145,6 +150,10 @@ export type ExecuteMessageV8 = ExecuteMessageBase & {
   readonly reusableLifecycle?: ReusableLifecycleBindingV1;
 };
 
+export type ExecuteMessageV9 = Omit<ExecuteMessageV8, 'protocolVersion'> & {
+  readonly protocolVersion: 9;
+};
+
 export type ExecuteMessage =
   | LegacyExecuteMessage
   | ExecuteMessageV3
@@ -152,7 +161,8 @@ export type ExecuteMessage =
   | ExecuteMessageV5
   | ExecuteMessageV6
   | ExecuteMessageV7
-  | ExecuteMessageV8;
+  | ExecuteMessageV8
+  | ExecuteMessageV9;
 
 export interface RegisterModuleMessageV5 {
   readonly protocol: 'woml.script-host';
@@ -164,7 +174,7 @@ export interface RegisterModuleMessageV5 {
 
 export interface RegisterModuleMessageV6 {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 6 | 7 | 8;
+  readonly protocolVersion: 6 | 7 | 8 | 9;
   readonly messageType: 'register_module';
   readonly bundleDigest: string;
   readonly bundle: string;
@@ -185,7 +195,7 @@ type ModuleRegisteredMessageBase = {
 export type ModuleRegisteredMessage = ModuleRegisteredMessageBase &
   (
     | { readonly protocolVersion: 5 }
-    | { readonly protocolVersion: 6 | 7 | 8; readonly sourceMapDigest: string }
+    | { readonly protocolVersion: 6 | 7 | 8 | 9; readonly sourceMapDigest: string }
   ) &
   (
     | { readonly accepted: true }
@@ -200,7 +210,7 @@ export type ModuleRegisteredMessage = ModuleRegisteredMessageBase &
 
 export interface CancelMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  readonly protocolVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   readonly messageType: 'cancel';
   readonly invocationId: string;
   readonly reason:

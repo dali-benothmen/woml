@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::event::{
@@ -206,6 +207,32 @@ pub struct ForkProjection {
   pub blocking_branch_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForEachStatus {
+  Open,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForEachIterationStatus {
+  Started,
+  Succeeded { result: Option<Value> },
+  Failed { failed_node_id: String },
+  Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForEachProjection {
+  pub for_each_id: String,
+  pub total: u32,
+  pub items_digest: String,
+  pub concurrency: u32,
+  pub status: ForEachStatus,
+  pub iterations: BTreeMap<u32, ForEachIterationStatus>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalRequestStatus {
   Waiting,
@@ -344,6 +371,7 @@ pub struct RunProjection {
   pub choice_selections: BTreeMap<String, String>,
   pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
   pub forks: BTreeMap<String, ForkProjection>,
+  pub for_each: BTreeMap<String, ForEachProjection>,
   pub approval_requests: BTreeMap<String, ApprovalRequestProjection>,
   pub notification_deliveries: BTreeMap<String, NotificationDeliveryProjection>,
   pub notification_updates: BTreeMap<String, NotificationMessageUpdateProjection>,
@@ -863,6 +891,200 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           ForkJoinOutcome::Cancelled => ForkJoinStatus::Cancelled,
         };
         fork.blocking_branch_id = data.blocking_branch_id.clone();
+      }
+      RunEventPayload::ForEachOpened(data) => {
+        require_running(&projection)?;
+        if projection.for_each.contains_key(&data.for_each_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each {:?} was opened more than once.",
+            data.for_each_id
+          )));
+        }
+        projection.for_each.insert(
+          data.for_each_id.clone(),
+          ForEachProjection {
+            for_each_id: data.for_each_id.clone(),
+            total: data.total,
+            items_digest: data.items_digest.clone(),
+            concurrency: data.concurrency,
+            status: ForEachStatus::Open,
+            iterations: BTreeMap::new(),
+          },
+        );
+      }
+      RunEventPayload::ForEachIterationStarted(data) => {
+        require_running(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} started before its loop opened.",
+              data.for_each_id, scope.index
+            ))
+          })?;
+        if loop_state.status != ForEachStatus::Open
+          || scope.index >= loop_state.total
+          || loop_state.iterations.contains_key(&scope.index)
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each iteration {:?}:{} cannot start in its current state.",
+            data.for_each_id, scope.index
+          )));
+        }
+        loop_state
+          .iterations
+          .insert(scope.index, ForEachIterationStatus::Started);
+      }
+      RunEventPayload::ForEachIterationSucceeded(data) => {
+        require_running(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        if let (Some(result), Some(expected_digest)) = (&data.result, &data.result_digest) {
+          if projection_digest(result)? != *expected_digest {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} result digest does not match its value.",
+              data.for_each_id, scope.index
+            )));
+          }
+        }
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each iteration succeeded before opening.".to_string())
+          })?;
+        match loop_state.iterations.get_mut(&scope.index) {
+          Some(status @ ForEachIterationStatus::Started) => {
+            *status = ForEachIterationStatus::Succeeded {
+              result: data.result.clone(),
+            };
+          }
+          _ => {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} succeeded without one active start.",
+              data.for_each_id, scope.index
+            )));
+          }
+        }
+      }
+      RunEventPayload::ForEachIterationFailed(data) => {
+        require_running_or_cancelling(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each iteration failed before opening.".to_string())
+          })?;
+        match loop_state.iterations.get_mut(&scope.index) {
+          Some(status @ ForEachIterationStatus::Started) => {
+            *status = ForEachIterationStatus::Failed {
+              failed_node_id: data.failed_node_id.clone(),
+            };
+          }
+          _ => {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} failed without one active start.",
+              data.for_each_id, scope.index
+            )));
+          }
+        }
+      }
+      RunEventPayload::ForEachIterationSkipped(data) => {
+        require_running_or_cancelling(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each iteration skipped before opening.".to_string())
+          })?;
+        if loop_state.status != ForEachStatus::Open
+          || scope.index >= loop_state.total
+          || loop_state.iterations.contains_key(&scope.index)
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each iteration {:?}:{} cannot be skipped in its current state.",
+            data.for_each_id, scope.index
+          )));
+        }
+        loop_state
+          .iterations
+          .insert(scope.index, ForEachIterationStatus::Skipped);
+      }
+      RunEventPayload::ForEachSucceeded(data)
+      | RunEventPayload::ForEachFailed(data)
+      | RunEventPayload::ForEachCancelled(data) => {
+        require_running_or_cancelling(&projection)?;
+        let is_success = matches!(&event.payload, RunEventPayload::ForEachSucceeded(_));
+        let is_cancelled = matches!(&event.payload, RunEventPayload::ForEachCancelled(_));
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each settled before opening.".to_string())
+          })?;
+        let succeeded = loop_state
+          .iterations
+          .values()
+          .filter(|status| matches!(status, ForEachIterationStatus::Succeeded { .. }))
+          .count() as u32;
+        let failed = loop_state
+          .iterations
+          .values()
+          .filter(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
+          .count() as u32;
+        let skipped = loop_state
+          .iterations
+          .values()
+          .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
+          .count() as u32;
+        if loop_state.status != ForEachStatus::Open
+          || data.total != loop_state.total
+          || (data.succeeded, data.failed, data.skipped) != (succeeded, failed, skipped)
+          || succeeded + failed + skipped != loop_state.total
+          || (is_success && (failed != 0 || skipped != 0))
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each {:?} settlement does not match its folded iterations.",
+            data.for_each_id
+          )));
+        }
+        loop_state.status = if is_success {
+          ForEachStatus::Succeeded
+        } else if is_cancelled {
+          ForEachStatus::Cancelled
+        } else {
+          ForEachStatus::Failed
+        };
+        if is_success {
+          let ordered_results = (0..loop_state.total)
+            .filter_map(|index| match loop_state.iterations.get(&index) {
+              Some(ForEachIterationStatus::Succeeded {
+                result: Some(result),
+              }) => Some(result.clone()),
+              _ => None,
+            })
+            .collect::<Vec<_>>();
+          let mut output = Map::new();
+          output.insert("total".to_string(), Value::from(loop_state.total));
+          output.insert("succeeded".to_string(), Value::from(succeeded));
+          if !ordered_results.is_empty() {
+            output.insert("results".to_string(), Value::Array(ordered_results));
+          }
+          let output = Value::Object(output);
+          if projection_digest(&output)? != data.aggregate_digest {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each {:?} aggregate digest does not match its public output.",
+              data.for_each_id
+            )));
+          }
+          projection
+            .context
+            .steps
+            .insert(data.for_each_id.clone(), output);
+        }
       }
       RunEventPayload::ParallelGroupStarted(data) => {
         require_running(&projection)?;
@@ -1956,6 +2178,13 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
     projection.last_sequence = event.sequence;
   }
   Ok(projection)
+}
+
+fn projection_digest(value: &Value) -> Result<String, FoldError> {
+  let bytes = serde_json_canonicalizer::to_vec(value).map_err(|error| {
+    FoldError::InvalidHistory(format!("A durable JSON value is not canonical: {error}"))
+  })?;
+  Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 fn require_failed_attempt(

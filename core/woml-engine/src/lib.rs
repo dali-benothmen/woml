@@ -260,7 +260,7 @@ pub const RUN_EVENT_SCHEMA_VERSION_V12: u32 = 12;
 pub const RUN_EVENT_SCHEMA_VERSION_V13: u32 = 13;
 pub const RUN_EVENT_SCHEMA_VERSION_V14: u32 = 14;
 pub const RUN_EVENT_SCHEMA_VERSION_V15: u32 = 15;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V14;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V15;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
   if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V16 {

@@ -564,6 +564,7 @@ pub enum ModelIssueCode {
   InvalidReusableDefinition,
   UnsupportedReusableExecution,
   InvalidForEach,
+  UnsupportedForEachExecution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -4170,6 +4171,11 @@ impl CompiledWorkflowDefinition {
           | "engine.choice-join",
           ValueExpression::Object { fields },
         ) if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 => fields.is_empty(),
+        ("engine.for-each-open" | "engine.for-each-result", ValueExpression::Object { fields })
+          if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V16 =>
+        {
+          fields.is_empty()
+        }
         ("engine.choice-result", ValueExpression::Object { fields })
           if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V14 =>
         {
@@ -4227,6 +4233,34 @@ impl CompiledWorkflowDefinition {
             node.id
           ),
         ));
+      }
+    }
+
+    if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V16 {
+      for descriptor in self.graph.for_each.as_deref().unwrap_or_default() {
+        let sequential_scripts = descriptor.concurrency == 1
+          && descriptor.body.entry_node_ids.len() == 1
+          && descriptor.body.choices.is_empty()
+          && descriptor.body.edges.len() + 1 == descriptor.body.nodes.len()
+          && descriptor.body.nodes.iter().all(|node| {
+            node.handler == "runtime.script"
+              && node.retry_policy.is_none()
+              && node.timeout_ms.is_none()
+          })
+          && descriptor
+            .body
+            .edges
+            .iter()
+            .all(|edge| matches!(edge.condition, EdgeCondition::Always));
+        if !sequential_scripts {
+          issues.push(issue(
+            ModelIssueCode::UnsupportedForEachExecution,
+            format!(
+              "For-each {:?} requires concurrency=1 and a sequential script-only body until FE4/FE5.",
+              descriptor.for_each_id
+            ),
+          ));
+        }
       }
     }
 

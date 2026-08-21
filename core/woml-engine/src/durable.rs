@@ -3904,6 +3904,17 @@ impl DurableEventStore {
     occurred_at: DateTime<Utc>,
     payload: RunEventPayload,
   ) -> Result<(RunEvent, RunProjection), DurableStoreError> {
+    self.append_payload_scoped(run_id, event_id, occurred_at, None, payload)
+  }
+
+  pub fn append_payload_scoped(
+    &mut self,
+    run_id: impl Into<String>,
+    event_id: impl Into<String>,
+    occurred_at: DateTime<Utc>,
+    iteration: Option<crate::event::ForEachIterationScope>,
+    payload: RunEventPayload,
+  ) -> Result<(RunEvent, RunProjection), DurableStoreError> {
     let run_id = run_id.into();
     let event_id = event_id.into();
     let transaction = self
@@ -4020,11 +4031,17 @@ impl DurableEventStore {
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
         | crate::RUN_EVENT_SCHEMA_VERSION_V14
+        | crate::RUN_EVENT_SCHEMA_VERSION_V15
     ) {
       expand_model_v11_payload(&workflow, &run_id, payload)?
     } else {
       vec![payload]
     };
+    if iteration.is_some() && payloads.len() != 1 {
+      return Err(DurableStoreError::Contract(
+        "A scoped iteration payload cannot expand into multiple events.".to_string(),
+      ));
+    }
     let mut first_event = None;
     for (index, payload) in payloads.into_iter().enumerate() {
       validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
@@ -4046,7 +4063,7 @@ impl DurableEventStore {
           )));
         }
       }
-      let event = append_to_history(
+      let event = append_to_history_scoped(
         &transaction,
         &mut events,
         &run_id,
@@ -4057,6 +4074,7 @@ impl DurableEventStore {
         },
         occurred_at,
         event_schema_version,
+        iteration.clone(),
         payload,
       )?;
       first_event.get_or_insert(event);
@@ -4101,6 +4119,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
           | crate::RUN_EVENT_SCHEMA_VERSION_V13
           | crate::RUN_EVENT_SCHEMA_VERSION_V14
+          | crate::RUN_EVENT_SCHEMA_VERSION_V15
       ) {
         expand_model_v11_payload(&workflow, run_id, payload)?
       } else {
@@ -5330,6 +5349,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
     ) {
       return Ok(result(
         RunCancellationStatus::Rejected,
@@ -5425,6 +5445,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
     ) {
       return Err(DurableStoreError::Contract(
         "Business-outcome authority requires compiled Model v11+.".to_string(),
@@ -5731,6 +5752,7 @@ impl DurableEventStore {
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
     ) {
       return Err(DurableStoreError::Contract(
         "Run finalization authority requires compiled Model v11+.".to_string(),
@@ -7180,6 +7202,7 @@ impl DurableEventStore {
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
         | crate::RUN_EVENT_SCHEMA_VERSION_V14
+        | crate::RUN_EVENT_SCHEMA_VERSION_V15
     ) {
       let ambiguous_actions = projection
         .lifecycle_hooks
@@ -7563,6 +7586,7 @@ impl DurableEventStore {
             | crate::RUN_EVENT_SCHEMA_VERSION_V12
             | crate::RUN_EVENT_SCHEMA_VERSION_V13
             | crate::RUN_EVENT_SCHEMA_VERSION_V14
+            | crate::RUN_EVENT_SCHEMA_VERSION_V15
         ) {
           expand_model_v11_payload(&workflow, run_id, payload)?
         } else {
@@ -7615,6 +7639,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
           | crate::RUN_EVENT_SCHEMA_VERSION_V13
           | crate::RUN_EVENT_SCHEMA_VERSION_V14
+          | crate::RUN_EVENT_SCHEMA_VERSION_V15
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -7831,6 +7856,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V12
           | crate::RUN_EVENT_SCHEMA_VERSION_V13
           | crate::RUN_EVENT_SCHEMA_VERSION_V14
+          | crate::RUN_EVENT_SCHEMA_VERSION_V15
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -9265,6 +9291,7 @@ fn validate_trigger_occurrence_history(
           | RUN_EVENT_SCHEMA_VERSION_V12
           | RUN_EVENT_SCHEMA_VERSION_V13
           | RUN_EVENT_SCHEMA_VERSION_V14
+          | crate::RUN_EVENT_SCHEMA_VERSION_V15
       ) && admission.definition_hash == occurrence.definition_hash
         && admission.trigger.id == occurrence.trigger_id
         && admission.trigger.handler == occurrence.trigger_handler
@@ -9786,6 +9813,28 @@ fn append_to_history(
   event_schema_version: u32,
   payload: RunEventPayload,
 ) -> Result<RunEvent, DurableStoreError> {
+  append_to_history_scoped(
+    transaction,
+    events,
+    run_id,
+    event_id,
+    occurred_at,
+    event_schema_version,
+    None,
+    payload,
+  )
+}
+
+fn append_to_history_scoped(
+  transaction: &Transaction<'_>,
+  events: &mut Vec<RunEvent>,
+  run_id: &str,
+  event_id: String,
+  occurred_at: DateTime<Utc>,
+  event_schema_version: u32,
+  iteration: Option<crate::event::ForEachIterationScope>,
+  payload: RunEventPayload,
+) -> Result<RunEvent, DurableStoreError> {
   let payloads = if matches!(
     event_schema_version,
     crate::RUN_EVENT_SCHEMA_VERSION_V10
@@ -9793,6 +9842,7 @@ fn append_to_history(
       | crate::RUN_EVENT_SCHEMA_VERSION_V12
       | crate::RUN_EVENT_SCHEMA_VERSION_V13
       | crate::RUN_EVENT_SCHEMA_VERSION_V14
+      | crate::RUN_EVENT_SCHEMA_VERSION_V15
   ) && matches!(
     payload,
     RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -9814,6 +9864,7 @@ fn append_to_history(
       },
       occurred_at,
       event_schema_version,
+      iteration.clone(),
       payload,
     )?;
     first.get_or_insert(event);
@@ -9828,6 +9879,7 @@ fn append_single_to_history(
   event_id: String,
   occurred_at: DateTime<Utc>,
   event_schema_version: u32,
+  iteration: Option<crate::event::ForEachIterationScope>,
   payload: RunEventPayload,
 ) -> Result<RunEvent, DurableStoreError> {
   let sequence = events.len() as u64 + 1;
@@ -9837,6 +9889,7 @@ fn append_single_to_history(
     run_id: run_id.to_string(),
     sequence,
     occurred_at,
+    iteration,
     payload,
   };
   let mut candidate = events.clone();
@@ -9910,7 +9963,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V11
     | crate::RUN_EVENT_SCHEMA_VERSION_V12
     | crate::RUN_EVENT_SCHEMA_VERSION_V13
-    | crate::RUN_EVENT_SCHEMA_VERSION_V14 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V14
+    | crate::RUN_EVENT_SCHEMA_VERSION_V15 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -10066,6 +10120,7 @@ impl DurableDagEngine {
         | crate::RUN_EVENT_SCHEMA_VERSION_V12
         | crate::RUN_EVENT_SCHEMA_VERSION_V13
         | crate::RUN_EVENT_SCHEMA_VERSION_V14
+        | crate::RUN_EVENT_SCHEMA_VERSION_V15
     ) && matches!(
       &payload,
       RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -10116,6 +10171,23 @@ impl DurableDagEngine {
     let (_, projection) = self
       .store
       .append_payload(run_id, event_id, occurred_at, payload)?;
+    Ok(projection)
+  }
+
+  pub fn append_scoped_payload(
+    &mut self,
+    event_id: impl Into<String>,
+    run_id: &str,
+    occurred_at: DateTime<Utc>,
+    iteration: crate::event::ForEachIterationScope,
+    payload: RunEventPayload,
+  ) -> Result<RunProjection, DurableEngineError> {
+    validate_payload_against_definition(&self.workflow, &self.definition_hash, &payload)
+      .map_err(DurableEngineError::Contract)?;
+    let (_, projection) =
+      self
+        .store
+        .append_payload_scoped(run_id, event_id, occurred_at, Some(iteration), payload)?;
     Ok(projection)
   }
 

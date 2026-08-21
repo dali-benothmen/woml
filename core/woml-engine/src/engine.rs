@@ -95,6 +95,7 @@ impl InMemoryDagEngine {
       run_id: run_id.into(),
       sequence: 1,
       occurred_at,
+      iteration: None,
       payload: RunEventPayload::RunStarted(RunStartedData {
         workflow_id: self.workflow.workflow_id.clone(),
         definition_hash: self.definition_hash.clone(),
@@ -400,6 +401,19 @@ pub(crate) fn node_is_complete(
   node: &crate::model::CompiledWorkflowNode,
   projection: &RunProjection,
 ) -> bool {
+  if node.handler == "engine.for-each-open" {
+    return workflow
+      .graph
+      .for_each
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|descriptor| descriptor.open_node_id == node.id)
+      .is_some_and(|descriptor| projection.for_each.contains_key(&descriptor.for_each_id));
+  }
+  if node.handler == "engine.for-each-result" {
+    return projection.context.steps.contains_key(&node.id);
+  }
   if node.handler == "engine.choice-select" {
     return workflow
       .graph
@@ -769,6 +783,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || data.definition_hash != definition_hash
         || workflow.runtime_policy_hash().as_deref() != Some(data.policy_hash.as_str())
         || workflow.runtime_policy_queue_name().as_deref() != Some(data.queue.name.as_str())
@@ -799,6 +814,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -824,6 +840,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -1265,6 +1282,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Lifecycle and run-control events require compiled Model v11+.".to_string());
       }
@@ -1277,6 +1295,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Lifecycle hook events require compiled Model v11+.".to_string());
       }
@@ -1313,6 +1332,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || !action_exists
       {
         return Err("Lifecycle action event references an unknown Model v11+ action.".to_string());
@@ -1333,6 +1353,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || !action_exists
       {
         return Err(
@@ -1348,6 +1369,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || workflow.lifecycle.is_none()
         || !crate::event::is_definition_hash(&data.hook_invocation_id)
       {
@@ -1519,6 +1541,22 @@ pub(crate) fn validate_payload_against_definition(
         }
       }
     }
+    RunEventPayload::ForEachOpened(data) => validate_for_each_id(workflow, &data.for_each_id)?,
+    RunEventPayload::ForEachIterationStarted(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachIterationSucceeded(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachIterationFailed(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachIterationSkipped(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachSucceeded(data)
+    | RunEventPayload::ForEachFailed(data)
+    | RunEventPayload::ForEachCancelled(data) => validate_for_each_id(workflow, &data.for_each_id)?,
   }
 
   Ok(())
@@ -2032,11 +2070,39 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::ReusableLifecycleActionSucceeded(_)
       | RunEventPayload::ReusableLifecycleActionFailed(_)
       | RunEventPayload::ReusableLifecycleCompleted(_)
+      | RunEventPayload::ForEachOpened(_)
+      | RunEventPayload::ForEachIterationStarted(_)
+      | RunEventPayload::ForEachIterationSucceeded(_)
+      | RunEventPayload::ForEachIterationFailed(_)
+      | RunEventPayload::ForEachIterationSkipped(_)
+      | RunEventPayload::ForEachSucceeded(_)
+      | RunEventPayload::ForEachFailed(_)
+      | RunEventPayload::ForEachCancelled(_)
       | RunEventPayload::RunFinalized(_)
       | RunEventPayload::RunFailed(_) => {}
     }
   }
   Ok(())
+}
+
+fn validate_for_each_id(
+  workflow: &CompiledWorkflowDefinition,
+  for_each_id: &str,
+) -> Result<(), String> {
+  if workflow
+    .graph
+    .for_each
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .any(|descriptor| descriptor.for_each_id == for_each_id)
+  {
+    Ok(())
+  } else {
+    Err(format!(
+      "For-each event references unknown loop {for_each_id:?}."
+    ))
+  }
 }
 
 fn validate_reusable_lifecycle_binding(
@@ -2047,7 +2113,9 @@ fn validate_reusable_lifecycle_binding(
 ) -> Result<(), String> {
   if !matches!(
     workflow.schema_version,
-    crate::COMPILED_MODEL_SCHEMA_VERSION_V14 | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+    crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
   ) {
     return Err("Reusable lifecycle events require compiled Model v14 or later.".to_string());
   }

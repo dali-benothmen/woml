@@ -29,11 +29,18 @@ export interface RustRunEvent {
     | 9
     | 10
     | 11
-    | 12;
+    | 12
+    | 13
+    | 14
+    | 15;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
   readonly occurredAt: string;
+  readonly iteration?: {
+    readonly forEachId: string;
+    readonly index: number;
+  };
   readonly type: string;
   readonly data: unknown;
 }

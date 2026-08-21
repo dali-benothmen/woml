@@ -1,6 +1,6 @@
 # WOML `<for-each>` Implementation Plan
 
-- Status: FE0 through FE2 completed; FE3 is next
+- Status: FE0 through FE3 completed; FE4 is next
 - Target language surface: WOML after v1.0
 - Target compiled model: Model v16
 - Target run events: Event v15
@@ -551,6 +551,22 @@ engine and Bun Worker host.
 
 **Result:** a simple loop of sequential script steps executes durably and later
 workflow steps can consume its summary/result.
+
+Completed in FE3:
+
+- Script Host Protocol v9 carries paired, deeply read-only `context.item` and
+  `context.iteration` bindings;
+- Rust opens and executes `concurrency="1"` script-only body DAGs in stable
+  input order through the real Bun Worker host;
+- Event v15 records loop opening, index-scoped iteration progress, and
+  successful settlement, and SQLite reopen reproduces the same projection;
+- ordered `<result>` values become `context.steps.<forEachId>.results` for
+  downstream steps; and
+- an empty array settles immediately without creating an iteration.
+
+Control flow, reusable definitions, services, retries, lifecycle composition,
+bounded concurrency, and complete failed/cancelled recovery remain assigned to
+FE4 through FE6.
 
 ### FE4 — Compose control flow, modules, services, retries, and lifecycle
 

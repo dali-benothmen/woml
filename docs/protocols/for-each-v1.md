@@ -7,9 +7,9 @@ Script-host protocol: v9
 
 This document freezes the interfaces that the TypeScript frontend, Rust core,
 Bun script host, durable event fold, terminal UI, and later definition-package
-work use to implement `<for-each>`. FE2 implements deterministic frontend
-lowering and independent Rust structural validation; durable execution begins
-in FE3.
+work use to implement `<for-each>`. FE3 implements the first durable sequential
+execution profile; later phases add body composition, bounded concurrency, and
+complete recovery.
 
 ## Authoring contract
 
@@ -141,16 +141,16 @@ chooses concurrency, or aggregates loop results.
 | Nested loop/fork/approval | Rejected in v1 |
 | Event store bump | None unless FE5 proves non-event state is required |
 
-## Deferred after FE2
+## Deferred after FE3
 
-- Rust Model v16 execution;
 - definition-package advancement;
-- Bun Worker v9 runtime bindings;
-- persistence, folding, inspection, and terminal progress;
+- control-flow, reusable-definition, service, retry, and lifecycle composition;
+- bounded concurrent iteration scheduling;
+- complete failed/cancelled recovery, inspection, and terminal progress;
 - nested loops, approval or fork bodies, streaming iterables, dynamic
   concurrency, unordered aggregates, and continue-on-error authoring.
 
-FE2 lowers module-free loop workflows into Model v16 and Rust independently
-validates the resulting root boundary and body DAG. `woml check` reports that
-contract successfully. `woml run` still fails explicitly with
-`WOML_FOR_EACH_EXECUTION_UNAVAILABLE` until FE3 supplies the durable executor.
+FE3 executes module-free, script-only loops with `concurrency="1"` through the
+durable Rust runtime and Bun Worker Protocol v9. `woml check` reports this
+sequential profile as executable; unsupported body composition and concurrent
+iteration counts fail explicitly until their assigned phases.

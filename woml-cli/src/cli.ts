@@ -1344,7 +1344,8 @@ function promoteForLifecycleAuthority(
     workflow.schemaVersion === 12 ||
     workflow.schemaVersion === 13 ||
     workflow.schemaVersion === 14 ||
-    workflow.schemaVersion === 15
+    workflow.schemaVersion === 15 ||
+    workflow.schemaVersion === 16
   ) {
     return workflow;
   }
@@ -1633,12 +1634,6 @@ async function compileWorkflowSources(
       );
     }
     const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
-    if (frontendWorkflow.schemaVersion === 16) {
-      throw new CliInputError(
-        'WOML_FOR_EACH_EXECUTION_UNAVAILABLE',
-        '<for-each> compiled successfully to Model v16, but Rust loop execution begins in FE3.'
-      );
-    }
     const workflow = promoteForLifecycleAuthority(frontendWorkflow);
     const definitionHash = compiledDefinitionHash(workflow);
     compiled.push({
@@ -2003,7 +1998,7 @@ async function runSingleCheckCommand(
               valid: true,
               workflowId: workflowElement?.attributes.id?.value,
               feature: 'for-each',
-              executable: false,
+              executable: true,
               modelVersion: compiled.schemaVersion,
             },
             null,
@@ -2016,7 +2011,7 @@ async function runSingleCheckCommand(
         `WOML check passed for workflow "${workflowElement?.attributes.id?.value ?? filePath}".\n`
       );
       io.stdout(
-        'Compiled Model v16 passed frontend validation. Rust loop execution begins in FE3.\n'
+        'Compiled Model v16 passed frontend validation and supports sequential Rust execution.\n'
       );
       return 0;
     }
@@ -2553,6 +2548,16 @@ function workflowSecretReferences(
       references.push({ kind: 'secretReference', name });
     }
   }
+  if (workflow.schemaVersion === 16) {
+    for (const descriptor of workflow.graph.forEach) {
+      for (const node of descriptor.body.nodes) {
+        collectSecretReferences(node.inputs, references);
+        for (const name of node.scriptRuntime?.requiredSecrets ?? []) {
+          references.push({ kind: 'secretReference', name });
+        }
+      }
+    }
+  }
   for (const definition of
     workflow.schemaVersion === 14 || workflow.schemaVersion === 15
       ? (workflow.reusableDefinitions ?? [])
@@ -2954,7 +2959,8 @@ async function executeOneShot(
     workflow.schemaVersion !== 12 &&
     workflow.schemaVersion !== 13 &&
     workflow.schemaVersion !== 14 &&
-    workflow.schemaVersion !== 15
+    workflow.schemaVersion !== 15 &&
+    workflow.schemaVersion !== 16
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -2983,7 +2989,8 @@ async function executeOneShot(
     workflow.schemaVersion === 12 ||
     workflow.schemaVersion === 13 ||
     workflow.schemaVersion === 14 ||
-    workflow.schemaVersion === 15
+    workflow.schemaVersion === 15 ||
+    workflow.schemaVersion === 16
   ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);

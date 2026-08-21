@@ -7,9 +7,9 @@ use crate::{
   capability::{validate_safe_metadata, CapabilityFailure},
   RUN_EVENT_SCHEMA_VERSION_V1, RUN_EVENT_SCHEMA_VERSION_V10, RUN_EVENT_SCHEMA_VERSION_V11,
   RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V13, RUN_EVENT_SCHEMA_VERSION_V14,
-  RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
-  RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
-  RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
+  RUN_EVENT_SCHEMA_VERSION_V15, RUN_EVENT_SCHEMA_VERSION_V2, RUN_EVENT_SCHEMA_VERSION_V3,
+  RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6,
+  RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +20,8 @@ pub struct RunEvent {
   pub run_id: String,
   pub sequence: u64,
   pub occurred_at: DateTime<Utc>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub iteration: Option<ForEachIterationScope>,
   #[serde(flatten)]
   pub payload: RunEventPayload,
 }
@@ -67,6 +69,14 @@ pub enum RunEventPayload {
   ReusableLifecycleActionSucceeded(ReusableLifecycleActionSucceededData),
   ReusableLifecycleActionFailed(ReusableLifecycleActionFailedData),
   ReusableLifecycleCompleted(ReusableLifecycleCompletedData),
+  ForEachOpened(ForEachOpenedData),
+  ForEachIterationStarted(ForEachIterationIdentityData),
+  ForEachIterationSucceeded(ForEachIterationSucceededData),
+  ForEachIterationFailed(ForEachIterationFailedData),
+  ForEachIterationSkipped(ForEachIterationSkippedData),
+  ForEachSucceeded(ForEachSettledData),
+  ForEachFailed(ForEachSettledData),
+  ForEachCancelled(ForEachSettledData),
   RunOutcomeDecided(RunOutcomeDecidedData),
   RunFinalized(RunFinalizedData),
   RunSucceeded(RunSucceededData),
@@ -488,6 +498,86 @@ pub struct ForkJoinSettledData {
   pub outcome: ForkJoinOutcome,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub blocking_branch_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForEachIterationScope {
+  pub for_each_id: String,
+  pub index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForEachOpenedData {
+  pub for_each_id: String,
+  pub total: u32,
+  pub items_digest: String,
+  pub concurrency: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForEachIterationIdentityData {
+  pub for_each_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForEachIterationSucceededData {
+  pub for_each_id: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub result: Option<Value>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub result_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForEachIterationFailureKind {
+  ScriptThrew,
+  TimedOut,
+  NonJson,
+  WorkerCrashed,
+  HostCrashed,
+  ResultTooLarge,
+  ContextTooLarge,
+  Interrupted,
+  CapabilityFailed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForEachIterationFailedData {
+  pub for_each_id: String,
+  pub failed_node_id: String,
+  pub failure_kind: ForEachIterationFailureKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForEachSkipReason {
+  Failure,
+  Cancellation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForEachIterationSkippedData {
+  pub for_each_id: String,
+  pub reason: ForEachSkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForEachSettledData {
+  pub for_each_id: String,
+  pub total: u32,
+  pub succeeded: u32,
+  pub failed: u32,
+  pub skipped: u32,
+  pub aggregate_digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1254,6 +1344,27 @@ fn validate_identity(
   Ok(())
 }
 
+fn validate_for_each_iteration_event(
+  event: &RunEvent,
+  for_each_id: &str,
+) -> Result<(), EventValidationError> {
+  let scope = event.iteration.as_ref().ok_or_else(|| {
+    EventValidationError::Invalid(
+      "Iteration Event v15 records require an explicit iteration scope.".to_string(),
+    )
+  })?;
+  if event.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V15
+    || !valid_public_structural_id(for_each_id)
+    || scope.for_each_id != for_each_id
+    || scope.index >= 10_000
+  {
+    return Err(EventValidationError::Invalid(
+      "Iteration Event v15 identity does not match its payload.".to_string(),
+    ));
+  }
+  Ok(())
+}
+
 fn validate_notification_identity(
   approval_id: &str,
   request_id: &str,
@@ -1372,6 +1483,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V12
         | RUN_EVENT_SCHEMA_VERSION_V13
         | RUN_EVENT_SCHEMA_VERSION_V14
+        | RUN_EVENT_SCHEMA_VERSION_V15
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -1380,6 +1492,32 @@ impl RunEvent {
     if !valid_id(&self.event_id) || !valid_id(&self.run_id) || self.sequence == 0 {
       return Err(EventValidationError::Invalid(
         "Run events require valid eventId, runId, and sequence >= 1.".to_string(),
+      ));
+    }
+    let loop_event = matches!(
+      self.payload,
+      RunEventPayload::ForEachOpened(_)
+        | RunEventPayload::ForEachIterationStarted(_)
+        | RunEventPayload::ForEachIterationSucceeded(_)
+        | RunEventPayload::ForEachIterationFailed(_)
+        | RunEventPayload::ForEachIterationSkipped(_)
+        | RunEventPayload::ForEachSucceeded(_)
+        | RunEventPayload::ForEachFailed(_)
+        | RunEventPayload::ForEachCancelled(_)
+    );
+    if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V15 && !loop_event {
+      if self.iteration.is_some() {
+        return Err(EventValidationError::Invalid(
+          "Only loop-owned Event v15 records may carry iteration scope.".to_string(),
+        ));
+      }
+      let mut inherited = self.clone();
+      inherited.event_schema_version = RUN_EVENT_SCHEMA_VERSION_V14;
+      return inherited.validate();
+    }
+    if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V15 && self.iteration.is_some() {
+      return Err(EventValidationError::Invalid(
+        "Iteration scope is available only in Event v15.".to_string(),
       ));
     }
     if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V14 {
@@ -2128,6 +2266,61 @@ impl RunEvent {
         {
           return Err(EventValidationError::Invalid(
             "reusable_lifecycle_completed has an invalid Event v13 outcome.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ForEachOpened(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V15
+          || self.iteration.is_some()
+          || !valid_public_structural_id(&data.for_each_id)
+          || data.total > 10_000
+          || !(1..=64).contains(&data.concurrency)
+          || !valid_sha256(&data.items_digest)
+        {
+          return Err(EventValidationError::Invalid(
+            "for_each_opened has an invalid Event v15 identity or bounded input.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ForEachIterationStarted(data) => {
+        validate_for_each_iteration_event(self, &data.for_each_id)?;
+      }
+      RunEventPayload::ForEachIterationSucceeded(data) => {
+        validate_for_each_iteration_event(self, &data.for_each_id)?;
+        if data.result.is_some() != data.result_digest.is_some()
+          || data
+            .result_digest
+            .as_deref()
+            .is_some_and(|digest| !valid_sha256(digest))
+        {
+          return Err(EventValidationError::Invalid(
+            "for_each_iteration_succeeded requires a result and digest pair.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ForEachIterationFailed(data) => {
+        validate_for_each_iteration_event(self, &data.for_each_id)?;
+        if !valid_id(&data.failed_node_id) {
+          return Err(EventValidationError::Invalid(
+            "for_each_iteration_failed requires a valid failedNodeId.".to_string(),
+          ));
+        }
+      }
+      RunEventPayload::ForEachIterationSkipped(data) => {
+        validate_for_each_iteration_event(self, &data.for_each_id)?;
+      }
+      RunEventPayload::ForEachSucceeded(data)
+      | RunEventPayload::ForEachFailed(data)
+      | RunEventPayload::ForEachCancelled(data) => {
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V15
+          || self.iteration.is_some()
+          || !valid_public_structural_id(&data.for_each_id)
+          || data.total > 10_000
+          || data.succeeded + data.failed + data.skipped != data.total
+          || !valid_sha256(&data.aggregate_digest)
+        {
+          return Err(EventValidationError::Invalid(
+            "for_each settlement does not match the bounded Event v15 contract.".to_string(),
           ));
         }
       }

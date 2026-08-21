@@ -47,6 +47,7 @@ fn event(sequence: u64, run_id: &str, payload: RunEventPayload) -> RunEvent {
     run_id: run_id.to_string(),
     sequence,
     occurred_at: at(sequence as i64),
+    iteration: None,
     payload,
   }
 }

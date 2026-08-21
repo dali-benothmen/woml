@@ -1,0 +1,62 @@
+<woml>
+  <workflow
+    id="for-each-demo"
+    name="Personalize a customer list"
+    description="Processes every customer in order and builds one final summary."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="loadCustomers" name="Load customers">
+        <script>
+          return {
+            customers: [
+              { name: "Dali", plan: "pro" },
+              { name: "Ada", plan: "starter" },
+              { name: "Linus", plan: "pro" }
+            ]
+          };
+        </script>
+      </step>
+
+      <for-each
+        id="personalize"
+        name="Personalize customers"
+        description="Creates one greeting for each customer."
+        items="{{context.steps.loadCustomers.customers}}"
+      >
+        <step id="buildGreeting" name="Build greeting">
+          <script>
+            return {
+              position: context.iteration.index + 1,
+              message: `Hello ${context.item.name}! Your plan is ${context.item.plan}.`
+            };
+          </script>
+        </step>
+
+        <step id="decorateGreeting" name="Decorate greeting">
+          <script>
+            return {
+              ...context.steps.buildGreeting,
+              featured: context.item.plan === "pro"
+            };
+          </script>
+        </step>
+
+        <result value="{{context.steps.decorateGreeting}}" />
+      </for-each>
+
+      <step id="summary" name="Build summary">
+        <script>
+          return {
+            processed: context.steps.personalize.succeeded,
+            greetings: context.steps.personalize.results
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
