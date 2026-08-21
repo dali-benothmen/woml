@@ -1,0 +1,55 @@
+[
+  {
+    "protocol": "woml.script-host",
+    "protocolVersion": 9,
+    "messageType": "execute",
+    "invocationId": "invocation-root",
+    "runId": "run-1",
+    "nodeId": "load",
+    "attempt": {
+      "number": 1,
+      "maxAttempts": 1,
+      "idempotencyKey": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "mode": "step",
+    "handler": "runtime.script",
+    "timeoutMs": 30000,
+    "source": "return { items: [] };",
+    "context": { "trigger": {}, "steps": {} },
+    "bindings": {
+      "bindingVersion": 1,
+      "servicesVersion": 1,
+      "secrets": {}
+    },
+    "modules": []
+  },
+  {
+    "protocol": "woml.script-host",
+    "protocolVersion": 9,
+    "messageType": "execute",
+    "invocationId": "invocation-loop-1",
+    "runId": "run-1",
+    "nodeId": "normalize",
+    "attempt": {
+      "number": 1,
+      "maxAttempts": 1,
+      "idempotencyKey": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "mode": "step",
+    "handler": "runtime.script",
+    "timeoutMs": 30000,
+    "source": "return { value: context.item, index: context.iteration.index };",
+    "context": {
+      "trigger": {},
+      "steps": { "load": { "items": ["first", "second"] } },
+      "item": "second",
+      "iteration": { "index": 1, "total": 2 }
+    },
+    "bindings": {
+      "bindingVersion": 1,
+      "servicesVersion": 1,
+      "secrets": {}
+    },
+    "modules": []
+  }
+]

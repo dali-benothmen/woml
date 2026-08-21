@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/compiled-workflow-model/v16",
+  "title": "WOML For-Each Compiled Workflow Model v16",
+  "description": "Model v15 capabilities plus durable runtime-sized for-each body templates and iteration-local visibility.",
+  "x-status": "for-each-fe0-frozen",
+  "x-previousVersion": "https://woml.dev/schemas/compiled-workflow-model/v15",
+  "x-invariants": [
+    "The root workflow remains a DAG; a for-each descriptor owns one immutable body DAG template instantiated only by Rust.",
+    "Input array order defines stable zero-based iteration identity and aggregate result order.",
+    "Only the for-each public ID becomes visible after settlement; body step outputs remain iteration-local.",
+    "The frontend is the only WOML compiler and Rust never parses the items attribute or WOML markup.",
+    "Models v1 through v15 retain their frozen behavior."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "workflowId",
+    "triggers",
+    "graph",
+    "runtimePolicy"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 16 },
+    "workflowId": {
+      "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/nonEmptyId"
+    },
+    "metadata": {
+      "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v1#/$defs/workflowMetadata"
+    },
+    "triggers": {
+      "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/properties/triggers"
+    },
+    "graph": { "$ref": "#/$defs/workflowGraph" },
+    "moduleRuntime": {
+      "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v9#/$defs/moduleRuntime"
+    },
+    "lifecycle": {
+      "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowLifecycle"
+    },
+    "runtimePolicy": { "$ref": "https://woml.dev/schemas/runtime-policy/v1" },
+    "reusableDefinitions": {
+      "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/properties/reusableDefinitions"
+    },
+    "communication": {
+      "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/communicationRequirements"
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "publicId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "itemsReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "const": "contextReference" },
+        "path": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "prefixItems": [{ "const": "trigger" }],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+              }
+            },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 64,
+              "prefixItems": [
+                { "const": "steps" },
+                { "$ref": "#/$defs/publicId" }
+              ],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "iterationResultReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "const": "contextReference" },
+        "path": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "prefixItems": [{ "const": "trigger" }],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+              }
+            },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 64,
+              "prefixItems": [
+                { "const": "steps" },
+                { "$ref": "#/$defs/publicId" }
+              ],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+              }
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "prefixItems": [{ "const": "item" }],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+              }
+            },
+            {
+              "type": "array",
+              "prefixItems": [
+                { "const": "iteration" },
+                { "enum": ["index", "total"] }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          ]
+        }
+      }
+    },
+    "bodyGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entryNodeIds",
+        "nodes",
+        "edges",
+        "choices",
+        "contextVisibility",
+        "terminalNodeId"
+      ],
+      "properties": {
+        "entryNodeIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "nodes": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/nodes"
+        },
+        "edges": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/edges"
+        },
+        "choices": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/choices"
+        },
+        "contextVisibility": {
+          "type": "array",
+          "items": {
+            "$ref": "https://cronflow.dev/schemas/compiled-workflow-model/v13#/$defs/contextVisibility"
+          }
+        },
+        "terminalNodeId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "forEach": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "forEachId",
+        "openNodeId",
+        "resultNodeId",
+        "items",
+        "concurrency",
+        "outerStepIds",
+        "body"
+      ],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/publicId" },
+        "openNodeId": { "$ref": "#/$defs/id" },
+        "resultNodeId": { "$ref": "#/$defs/publicId" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "description": { "type": "string", "minLength": 1 }
+          }
+        },
+        "items": { "$ref": "#/$defs/itemsReference" },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "outerStepIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/publicId" }
+        },
+        "body": { "$ref": "#/$defs/bodyGraph" },
+        "result": { "$ref": "#/$defs/iterationResultReference" }
+      }
+    },
+    "workflowGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entryNodeIds",
+        "nodes",
+        "edges",
+        "forks",
+        "choices",
+        "forEach",
+        "contextVisibility",
+        "settlement"
+      ],
+      "properties": {
+        "entryNodeIds": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/entryNodeIds"
+        },
+        "nodes": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/nodes"
+        },
+        "edges": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/edges"
+        },
+        "forks": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/forks"
+        },
+        "choices": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/choices"
+        },
+        "forEach": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/forEach" }
+        },
+        "contextVisibility": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/contextVisibility"
+        },
+        "settlement": {
+          "$ref": "https://woml.dev/schemas/compiled-workflow-model/v15#/$defs/workflowGraph/properties/settlement"
+        }
+      }
+    }
+  }
+}

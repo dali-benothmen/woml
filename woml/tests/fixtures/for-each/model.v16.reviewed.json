@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 16,
+  "workflowId": "for-each-contract",
+  "metadata": {
+    "name": "For-each contract",
+    "version": "1.0.0"
+  },
+  "triggers": [
+    {
+      "id": "start",
+      "handler": "trigger.manual",
+      "config": { "kind": "object", "fields": {} }
+    }
+  ],
+  "graph": {
+    "entryNodeIds": ["load"],
+    "nodes": [
+      {
+        "id": "load",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "return { items: context.payload.items ?? [] };"
+            }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      },
+      {
+        "id": "__woml_for_each__organize__open",
+        "handler": "engine.for-each-open",
+        "inputs": { "kind": "object", "fields": {} }
+      },
+      {
+        "id": "organize",
+        "handler": "engine.for-each-result",
+        "inputs": { "kind": "object", "fields": {} },
+        "metadata": {
+          "name": "Organize items",
+          "description": "Normalize every item in input order."
+        }
+      },
+      {
+        "id": "summary",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "return { processed: context.steps.organize.succeeded };"
+            }
+          }
+        },
+        "scriptRuntime": {
+          "bindingVersion": 1,
+          "bindings": ["context", "attempt", "services", "secrets"],
+          "requiredSecrets": []
+        }
+      },
+      {
+        "id": "__woml_workflow__settlement",
+        "handler": "engine.workflow-settlement",
+        "inputs": { "kind": "object", "fields": {} }
+      }
+    ],
+    "edges": [
+      {
+        "id": "load-to-__woml_for_each__organize__open",
+        "from": "load",
+        "to": "__woml_for_each__organize__open",
+        "condition": { "kind": "always" }
+      },
+      {
+        "id": "__woml_for_each__organize__open-to-organize",
+        "from": "__woml_for_each__organize__open",
+        "to": "organize",
+        "condition": { "kind": "always" }
+      },
+      {
+        "id": "organize-to-summary",
+        "from": "organize",
+        "to": "summary",
+        "condition": { "kind": "always" }
+      },
+      {
+        "id": "__woml_workflow__:main:settlement",
+        "from": "summary",
+        "to": "__woml_workflow__settlement",
+        "condition": { "kind": "always" }
+      }
+    ],
+    "forks": [],
+    "choices": [],
+    "forEach": [
+      {
+        "forEachId": "organize",
+        "openNodeId": "__woml_for_each__organize__open",
+        "resultNodeId": "organize",
+        "metadata": {
+          "name": "Organize items",
+          "description": "Normalize every item in input order."
+        },
+        "items": {
+          "kind": "contextReference",
+          "path": ["steps", "load", "items"]
+        },
+        "concurrency": 2,
+        "outerStepIds": ["load"],
+        "body": {
+          "entryNodeIds": ["normalize"],
+          "nodes": [
+            {
+              "id": "normalize",
+              "handler": "runtime.script",
+              "inputs": {
+                "kind": "object",
+                "fields": {
+                  "source": {
+                    "kind": "literal",
+                    "value": "return { value: context.item, index: context.iteration.index };"
+                  }
+                }
+              },
+              "scriptRuntime": {
+                "bindingVersion": 1,
+                "bindings": ["context", "attempt", "services", "secrets"],
+                "requiredSecrets": []
+              }
+            }
+          ],
+          "edges": [],
+          "choices": [],
+          "contextVisibility": [
+            { "nodeId": "normalize", "stepIds": [] }
+          ],
+          "terminalNodeId": "normalize"
+        },
+        "result": {
+          "kind": "contextReference",
+          "path": ["steps", "normalize"]
+        }
+      }
+    ],
+    "contextVisibility": [
+      { "nodeId": "load", "stepIds": [] },
+      { "nodeId": "summary", "stepIds": ["load", "organize"] }
+    ],
+    "settlement": {
+      "nodeId": "__woml_workflow__settlement",
+      "mainResultNodeId": "summary",
+      "ownedBranchTerminalNodeIds": []
+    }
+  },
+  "runtimePolicy": { "profileVersion": 1, "concurrency": 1 }
+}

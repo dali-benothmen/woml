@@ -1,0 +1,32 @@
+{
+  "versions": {
+    "model": 16,
+    "event": 15,
+    "scriptHost": 9
+  },
+  "limits": {
+    "defaultConcurrency": 1,
+    "maximumConcurrency": 64,
+    "maximumItems": 10000
+  },
+  "execution": {
+    "identity": ["runId", "forEachId", "index"],
+    "resultOrder": "input-order",
+    "failurePolicy": "fail-fast-then-settle-owned-work",
+    "recoveryAuthority": "event-fold",
+    "interruptedAttempts": "fail-closed",
+    "emptyInput": "succeed-immediately"
+  },
+  "visibility": {
+    "bodyOutputs": "iteration-local",
+    "outerOutput": "for-each-id-only"
+  },
+  "unsupported": [
+    "nested-for-each",
+    "fork-in-for-each",
+    "approval-in-for-each",
+    "streaming-iterables",
+    "dynamic-concurrency",
+    "continue-on-error"
+  ]
+}

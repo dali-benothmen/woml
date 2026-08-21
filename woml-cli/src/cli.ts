@@ -32,6 +32,7 @@ import {
   isWomlElement,
   parseWoml,
   resolveWomlReusableDefinitionGraph,
+  validateWoml,
   validateResolvedReusableWorkflow,
   WOML_WHATSAPP_CALLBACK_PATH,
   WomlDiagnosticError,
@@ -1880,6 +1881,12 @@ async function runSingleCheckCommand(
       sourcePath: filePath,
       projectRoot,
     });
+    const declaresForEach = (element: WomlSourceElement): boolean =>
+      element.name === 'for-each' ||
+      element.children.some(
+        child => child.kind === 'element' && declaresForEach(child)
+      );
+    const hasForEach = declaresForEach(document.root);
     if (
       reusableGraph.root.kind !== 'workflow' ||
       reusableGraph.definitions.length > 0
@@ -1891,6 +1898,30 @@ async function runSingleCheckCommand(
         generateWomlReusableCustomData(reusableGraph),
         io
       );
+      if (hasForEach && reusableGraph.root.kind === 'workflow') {
+        if (options[0] === '--json') {
+          io.stdout(
+            `${JSON.stringify(
+              {
+                profile: 'woml.source-validation/v1',
+                valid: true,
+                workflowId: reusableGraph.root.definition.attributes.id?.value,
+                feature: 'for-each',
+                executable: false,
+                pendingModelVersion: 16,
+              },
+              null,
+              2
+            )}\n`
+          );
+          return 0;
+        }
+        io.stdout(`WOML check passed for workflow source "${filePath}".\n`);
+        io.stdout(
+          'Execution: <for-each> authoring is valid; Model v16 lowering and Rust execution begin in FE2 and FE3.\n'
+        );
+        return 0;
+      }
       const reusablePackage =
         reusableGraph.root.kind === 'workflow' &&
         reusableGraph.definitions.length > 0
@@ -1943,6 +1974,37 @@ async function runSingleCheckCommand(
               : reusableGraph.root.kind === 'workflow'
                 ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
                 : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
+      );
+      return 0;
+    }
+    if (hasForEach) {
+      validateWoml(document);
+      const workflowElement = document.root.children.find(
+        (child): child is WomlSourceElement =>
+          child.kind === 'element' && child.name === 'workflow'
+      );
+      if (options[0] === '--json') {
+        io.stdout(
+          `${JSON.stringify(
+            {
+              profile: 'woml.source-validation/v1',
+              valid: true,
+              workflowId: workflowElement?.attributes.id?.value,
+              feature: 'for-each',
+              executable: false,
+              pendingModelVersion: 16,
+            },
+            null,
+            2
+          )}\n`
+        );
+        return 0;
+      }
+      io.stdout(
+        `WOML check passed for workflow "${workflowElement?.attributes.id?.value ?? filePath}".\n`
+      );
+      io.stdout(
+        'Execution: <for-each> authoring is valid; Model v16 lowering and Rust execution begin in FE2 and FE3.\n'
       );
       return 0;
     }

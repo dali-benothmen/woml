@@ -1,0 +1,80 @@
+[
+  {
+    "eventSchemaVersion": 15,
+    "eventId": "event-1",
+    "runId": "run-1",
+    "sequence": 1,
+    "occurredAt": "2026-08-21T10:00:00.000Z",
+    "type": "for_each_opened",
+    "data": {
+      "forEachId": "organize",
+      "total": 2,
+      "itemsDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "concurrency": 2
+    }
+  },
+  {
+    "eventSchemaVersion": 15,
+    "eventId": "event-2",
+    "runId": "run-1",
+    "sequence": 2,
+    "occurredAt": "2026-08-21T10:00:00.010Z",
+    "type": "for_each_iteration_started",
+    "iteration": { "forEachId": "organize", "index": 1 },
+    "data": { "forEachId": "organize" }
+  },
+  {
+    "eventSchemaVersion": 15,
+    "eventId": "event-3",
+    "runId": "run-1",
+    "sequence": 3,
+    "occurredAt": "2026-08-21T10:00:00.011Z",
+    "type": "for_each_iteration_started",
+    "iteration": { "forEachId": "organize", "index": 0 },
+    "data": { "forEachId": "organize" }
+  },
+  {
+    "eventSchemaVersion": 15,
+    "eventId": "event-4",
+    "runId": "run-1",
+    "sequence": 4,
+    "occurredAt": "2026-08-21T10:00:00.020Z",
+    "type": "for_each_iteration_succeeded",
+    "iteration": { "forEachId": "organize", "index": 1 },
+    "data": {
+      "forEachId": "organize",
+      "result": { "value": "second", "index": 1 },
+      "resultDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  },
+  {
+    "eventSchemaVersion": 15,
+    "eventId": "event-5",
+    "runId": "run-1",
+    "sequence": 5,
+    "occurredAt": "2026-08-21T10:00:00.030Z",
+    "type": "for_each_iteration_succeeded",
+    "iteration": { "forEachId": "organize", "index": 0 },
+    "data": {
+      "forEachId": "organize",
+      "result": { "value": "first", "index": 0 },
+      "resultDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  {
+    "eventSchemaVersion": 15,
+    "eventId": "event-6",
+    "runId": "run-1",
+    "sequence": 6,
+    "occurredAt": "2026-08-21T10:00:00.040Z",
+    "type": "for_each_succeeded",
+    "data": {
+      "forEachId": "organize",
+      "total": 2,
+      "succeeded": 2,
+      "failed": 0,
+      "skipped": 0,
+      "aggregateDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  }
+]

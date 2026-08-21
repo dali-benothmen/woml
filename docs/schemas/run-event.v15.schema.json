@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-event/v15",
+  "title": "WOML For-Each Run Event v15",
+  "description": "Event v14 plus durable, index-addressed for-each progress and settlement events.",
+  "x-status": "for-each-fe0-frozen",
+  "x-previousVersion": "https://woml.dev/schemas/run-event/v14",
+  "x-invariants": [
+    "A run uses one event schema version for its entire history.",
+    "Input order creates stable zero-based iteration indexes; item values are never copied into loop-control events.",
+    "Loop-body step, operation, retry, and lifecycle events carry an explicit iteration scope.",
+    "A loop reaches exactly one terminal event after all admitted and skipped iterations settle.",
+    "Credentials, secrets, raw context, and unbounded item previews never enter loop-control events."
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventSchemaVersion",
+    "eventId",
+    "runId",
+    "sequence",
+    "occurredAt",
+    "type",
+    "data"
+  ],
+  "properties": {
+    "eventSchemaVersion": { "const": 15 },
+    "eventId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "run_admitted",
+        "run_execution_started",
+        "run_timeout_reached",
+        "step_attempt_started",
+        "step_attempt_succeeded",
+        "step_attempt_failed",
+        "step_retry_scheduled",
+        "branch_selected",
+        "choice_selected",
+        "parallel_group_started",
+        "parallel_group_completed",
+        "approval_requested",
+        "notification_delivery_requested",
+        "notification_delivery_attempt_started",
+        "notification_delivery_succeeded",
+        "notification_delivery_failed",
+        "notification_decision_accepted",
+        "notification_message_update_requested",
+        "notification_message_update_attempt_started",
+        "notification_message_updated",
+        "notification_message_update_failed",
+        "approval_resolved",
+        "operation_started",
+        "operation_succeeded",
+        "operation_failed",
+        "fork_opened",
+        "fork_branch_settled",
+        "fork_join_settled",
+        "run_cancellation_requested",
+        "lifecycle_hook_requested",
+        "lifecycle_action_attempt_started",
+        "lifecycle_action_succeeded",
+        "lifecycle_action_failed",
+        "lifecycle_hook_completed",
+        "reusable_lifecycle_requested",
+        "reusable_lifecycle_action_started",
+        "reusable_lifecycle_action_succeeded",
+        "reusable_lifecycle_action_failed",
+        "reusable_lifecycle_completed",
+        "for_each_opened",
+        "for_each_iteration_started",
+        "for_each_iteration_succeeded",
+        "for_each_iteration_failed",
+        "for_each_iteration_skipped",
+        "for_each_succeeded",
+        "for_each_failed",
+        "for_each_cancelled",
+        "run_outcome_decided",
+        "run_finalized"
+      ]
+    },
+    "iteration": { "$ref": "#/$defs/iterationScope" },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "type": { "const": "notification_delivery_succeeded" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": { "$ref": "#/$defs/notificationDeliverySucceeded" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "reusable_lifecycle_requested",
+              "reusable_lifecycle_action_started",
+              "reusable_lifecycle_action_succeeded",
+              "reusable_lifecycle_action_failed",
+              "reusable_lifecycle_completed"
+            ]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": { "data": { "$ref": "#/$defs/reusableLifecycle" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "for_each_opened" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": { "data": { "$ref": "#/$defs/forEachOpened" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "for_each_iteration_started",
+              "for_each_iteration_succeeded",
+              "for_each_iteration_failed",
+              "for_each_iteration_skipped"
+            ]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": { "required": ["iteration"] }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "for_each_iteration_started" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": { "$ref": "#/$defs/iterationStarted" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "for_each_iteration_succeeded" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": { "$ref": "#/$defs/iterationSucceeded" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "for_each_iteration_failed" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": { "$ref": "#/$defs/iterationFailed" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "for_each_iteration_skipped" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "data": { "$ref": "#/$defs/iterationSkipped" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": ["for_each_succeeded", "for_each_failed", "for_each_cancelled"]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": { "data": { "$ref": "#/$defs/forEachSettled" } }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "forEachId": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$",
+      "maxLength": 256
+    },
+    "notificationAttemptId": {
+      "type": "string",
+      "pattern": "^nattempt_[A-Za-z0-9_-]+$"
+    },
+    "slackMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspaceId", "channelId", "messageId"],
+      "properties": {
+        "workspaceId": { "type": "string", "pattern": "^T[A-Z0-9]{8,31}$" },
+        "channelId": { "type": "string", "pattern": "^[CGD][A-Z0-9]{8,31}$" },
+        "messageId": { "type": "string", "pattern": "^[0-9]{10,}\\.[0-9]{6}$" }
+      }
+    },
+    "communicationMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "accountId", "conversationId", "messageId"],
+      "properties": {
+        "provider": { "enum": ["telegram", "discord", "whatsapp"] },
+        "accountId": { "$ref": "#/$defs/id" },
+        "conversationId": { "$ref": "#/$defs/id" },
+        "messageId": { "$ref": "#/$defs/id" },
+        "threadId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "providerMessage": {
+      "oneOf": [
+        { "$ref": "#/$defs/slackMessage" },
+        { "$ref": "#/$defs/communicationMessage" }
+      ]
+    },
+    "notificationDeliverySucceeded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approvalId",
+        "requestId",
+        "deliveryId",
+        "attempt",
+        "attemptId",
+        "providerMessage"
+      ],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/id" },
+        "requestId": { "$ref": "#/$defs/id" },
+        "deliveryId": { "$ref": "#/$defs/id" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "attemptId": { "$ref": "#/$defs/notificationAttemptId" },
+        "providerMessage": { "$ref": "#/$defs/providerMessage" }
+      }
+    },
+    "reusableLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocationId", "definitionDigest", "hook"],
+      "properties": {
+        "invocationId": { "$ref": "#/$defs/id" },
+        "definitionDigest": { "$ref": "#/$defs/digest" },
+        "hook": { "enum": ["on-success", "on-error", "on-complete"] },
+        "actionId": { "$ref": "#/$defs/id" },
+        "outcome": {
+          "enum": ["succeeded", "failed", "completed_with_warnings"]
+        },
+        "warningCode": {
+          "type": "string",
+          "pattern": "^WOML_[A-Z0-9_]+$"
+        }
+      }
+    },
+    "iterationScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forEachId", "index"],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/forEachId" },
+        "index": { "type": "integer", "minimum": 0, "maximum": 9999 }
+      }
+    },
+    "forEachOpened": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forEachId", "total", "itemsDigest", "concurrency"],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/forEachId" },
+        "total": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "itemsDigest": { "$ref": "#/$defs/digest" },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
+    "iterationStarted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forEachId"],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/forEachId" }
+      }
+    },
+    "iterationSucceeded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forEachId"],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/forEachId" },
+        "result": true,
+        "resultDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "iterationFailed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forEachId", "failedNodeId", "failureKind"],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/forEachId" },
+        "failedNodeId": { "$ref": "#/$defs/id" },
+        "failureKind": {
+          "enum": [
+            "script_threw",
+            "timed_out",
+            "non_json",
+            "worker_crashed",
+            "host_crashed",
+            "result_too_large",
+            "context_too_large",
+            "interrupted",
+            "capability_failed",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    "iterationSkipped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forEachId", "reason"],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/forEachId" },
+        "reason": { "enum": ["failure", "cancellation"] }
+      }
+    },
+    "forEachSettled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "forEachId",
+        "total",
+        "succeeded",
+        "failed",
+        "skipped",
+        "aggregateDigest"
+      ],
+      "properties": {
+        "forEachId": { "$ref": "#/$defs/forEachId" },
+        "total": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "succeeded": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "failed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "skipped": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "aggregateDigest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}
