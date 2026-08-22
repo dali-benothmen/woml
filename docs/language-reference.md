@@ -39,8 +39,9 @@ WOML v1.0 executes:
 
 - manual, webhook, schedule, interval, event, Slack, Telegram, Discord, and
   WhatsApp triggers;
-- sequential steps, retries, parallel groups, conditional choices, exact-string
-  switches, forked multi-step branches, and human approvals;
+- sequential steps, retries, parallel groups, durable bounded item iteration,
+  conditional choices, exact-string switches, forked multi-step branches, and
+  human approvals;
 - workflow and step lifecycle hooks;
 - concurrency, rate-limit, timeout, and queue runtime policies;
 - local JavaScript/TypeScript modules, reusable WOML steps, and reusable
@@ -988,8 +989,8 @@ Within any sequential steps container, document order creates dependency edges:
 first -> second
 ```
 
-`<steps>` has no attributes. It may contain `<step>`, `<parallel>`, `<choose>`,
-and `<approval>` elements.
+`<steps>` has no attributes. It may contain `<step>`, `<parallel>`,
+`<for-each>`, `<choose>`, `<switch>`, `<fork>`, and `<approval>` elements.
 
 Empty and control-only behavior is explicit:
 
@@ -1770,6 +1771,72 @@ reference against ordered string cases and executes exactly one route:
   `choice_selected` event. Recovery reuses that event and never evaluates the
   selector again.
 
+### 14.7 Durable bounded iteration with `<for-each>`
+
+Use `<for-each>` when every element in a runtime array needs its own durable
+execution identity, retry history, cancellation boundary, and observable
+progress:
+
+```xml
+<for-each
+  id="personalize"
+  name="Personalize customers"
+  description="Build one greeting per customer."
+  items="{{context.steps.loadCustomers.customers}}"
+  concurrency="4"
+>
+  <step id="buildGreeting">
+    <script>
+      return {
+        position: context.iteration.index + 1,
+        message: `Hello ${context.item.name}`
+      };
+    </script>
+  </step>
+
+  <result value="{{context.steps.buildGreeting}}" />
+</for-each>
+```
+
+Attributes:
+
+- `id` is required and becomes the only loop-owned output visible after the
+  loop.
+- `items` is required and contains exactly one available `context.payload` or
+  `context.steps` reference. The runtime value must be a JSON array.
+- `name` and `description` are optional presentation metadata.
+- `concurrency` is optional, defaults to `1`, and accepts integers from 1
+  through 64.
+
+Each iteration receives `context.item` and
+`context.iteration = { index, total }`. Nested body step results remain local
+to that index, so concurrent iterations cannot read or overwrite one another.
+An optional final `<result>` selects one iteration-local JSON value. After
+successful settlement the loop publishes:
+
+```json
+{
+  "total": 3,
+  "succeeded": 3,
+  "results": ["first", "second", "third"]
+}
+```
+
+Results always follow input order even when work completes out of order. An
+empty array succeeds immediately with `total: 0` and `succeeded: 0`. Inputs
+above 10,000 items fail before iteration admission. One item failure stops new
+admission, settles active and pending owned work, and fails the loop. Recovery
+folds durable per-index events, never replays a completed effect, and fails an
+ambiguous started effect closed.
+
+The body supports steps, parallel groups, choices, switches, and reusable
+custom steps. Nested `<for-each>`, `<fork>`, and `<approval>` are intentionally
+postponed. Use an ordinary JavaScript loop for small pure transformations that
+do not need per-item durability or operations visibility.
+
+The executable example is
+[`examples/forEachWorkflow.woml`](../examples/forEachWorkflow.woml).
+
 ## 15. Attribute Values and Context References
 
 Every attribute has a declared type. WOML does not treat every resolved value as
@@ -2030,7 +2097,7 @@ Webhook input-schema failures use the transport response contract in Section
 The following syntax is intentionally not part of WOML v1.0:
 
 - arbitrary DAG-edge attributes such as `after`, `from`, or `depends-on`;
-- structural loops, for-each, batching, race, or first-success groups;
+- nested structural loops, batching, race, or first-success groups;
 - declarative HTTP/database/storage tags inside `<step>`;
 - npm/package imports or dynamic module installation;
 - external schema-file references;

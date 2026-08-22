@@ -73,6 +73,7 @@ jobs:
         run: |
           bun test tests/release-identity.test.ts tests/native-platform-release.test.ts --max-concurrency=1
           bun run test:release-automation
+          bun run test:for-each-contracts
       - name: Run the final source and dependency security review
         run: |
           bun run test:final-review

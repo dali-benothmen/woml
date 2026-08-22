@@ -14,7 +14,7 @@
         <script>
           return {
             customers: [
-              { name: "Dali", plan: "pro" },
+              { name: "Grace", plan: "pro" },
               { name: "Ada", plan: "starter" },
               { name: "Linus", plan: "pro" }
             ]
@@ -27,6 +27,7 @@
         name="Personalize customers"
         description="Creates one greeting for each customer."
         items="{{context.steps.loadCustomers.customers}}"
+        concurrency="2"
       >
         <step id="buildGreeting" name="Build greeting">
           <script>

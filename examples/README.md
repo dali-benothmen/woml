@@ -17,6 +17,7 @@ commands work in your own project with copied files.
 | Conditional value routing | [`switchWorkflow.woml`](switchWorkflow.woml) | `woml run examples/switchWorkflow.woml` |
 | Concurrent multi-step routes and joins | [`forkDistributionWorkflow.woml`](forkDistributionWorkflow.woml) | `woml run examples/forkDistributionWorkflow.woml` |
 | Durable retry attempts | [`retryWorkflow.woml`](retryWorkflow.woml) | `woml run examples/retryWorkflow.woml` |
+| Durable per-item processing | [`forEachWorkflow.woml`](forEachWorkflow.woml) | `woml run examples/forEachWorkflow.woml` |
 | Workflow/step lifecycle hooks | [`lifecycleWorkflow.woml`](lifecycleWorkflow.woml) | `woml run examples/lifecycleWorkflow.woml` |
 
 Use `woml test <file>` instead when you intentionally want one manual run that

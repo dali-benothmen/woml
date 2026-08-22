@@ -1,0 +1,8 @@
+{
+  "profile": "woml.for-each-performance-budgets/v1",
+  "smallMaximumMs": 5000,
+  "largeMaximumMs": 30000,
+  "concurrentMaximumMs": 15000,
+  "largeItemCount": 24,
+  "concurrentItemCount": 16
+}

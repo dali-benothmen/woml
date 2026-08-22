@@ -42,10 +42,11 @@ Read only the references needed for the request:
 - Declarative references use exact syntax such as `{{context.steps.validate.approved}}`. They are not JavaScript expressions.
 - Complex conditions belong in a named script step that returns a boolean; `<when test>` consumes that boolean reference.
 - A result-producing `<choose>` or `<switch>` publishes one predictable value at `context.steps.<controlId>` through an explicit `<result>` in every arm.
+- `<for-each>` iterates an exact array reference durably. Inside its body, use `context.item` and `context.iteration`; publish one ordered per-item value with a final `<result>`.
 - Retry is a `<step>` attribute, never a `<retry>` tag.
 - Local JS/TS modules use named exports and appear as `services.<moduleName>`. Pass `context`, `attempt`, and secret values from the calling script because modules receive only `services` automatically.
 - Prefer `services.http.request()` for managed HTTP behavior; native `fetch()` remains available when Fetch compatibility or streaming matters.
-- Do not generate `<for-each>` yet; it is intentionally absent until its public release contract is complete.
+- Use `<for-each>` when every item needs durable attempts, bounded concurrency, recovery, or inspection. Use an ordinary JavaScript loop for small, pure in-step transformations.
 - Do not invent elements, attributes, service methods, context fields, or provider configuration. Validate unfamiliar surfaces against the project's current WOML documentation.
 
 ## Output expectations

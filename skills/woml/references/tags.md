@@ -1,6 +1,6 @@
 # WOML Tag Reference
 
-This is the complete released authoring vocabulary. It deliberately excludes `<for-each>` until that feature is released. Do not invent aliases for element or attribute names.
+This is the complete released authoring vocabulary. Do not invent aliases for element or attribute names.
 
 ## Document profiles
 
@@ -93,7 +93,7 @@ Contains one or more trigger tags. Omit the entire container for a call-only wor
 
 ### `<steps>`
 
-Contains one or more flow items in source order: `<step>`, `<parallel>`, `<choose>`, `<switch>`, `<fork>`, or `<approval>`. Ordinary adjacent items form sequential dependencies.
+Contains one or more flow items in source order: `<step>`, `<parallel>`, `<for-each>`, `<choose>`, `<switch>`, `<fork>`, or `<approval>`. Ordinary adjacent items form sequential dependencies.
 
 ## Trigger tags
 
@@ -188,6 +188,33 @@ A fundamental step contains exactly one `<script>`. Script has no attributes and
 ```
 
 Requires `id` and one or more direct `<step>` children. Optional `name`, `description`, `concurrency`, and `on-error="fail-fast|wait-all"`. Children share the pre-fork context and cannot reference siblings. The parallel ID does not create an output; each child does.
+
+### `<for-each>`
+
+```xml
+<for-each id="processItems" items="{{context.steps.load.items}}" concurrency="4">
+  <step id="transformItem"><script>
+    return { value: context.item, index: context.iteration.index };
+  </script></step>
+  <result value="{{context.steps.transformItem}}" />
+</for-each>
+```
+
+| Attribute | Required | Meaning |
+| --- | :---: | --- |
+| `id` | Yes | Stable loop identity and aggregate output key. |
+| `items` | Yes | One exact `context.payload` or visible `context.steps` reference resolving to an array. |
+| `name`, `description` | No | Terminal and inspection metadata. |
+| `concurrency` | No | Active iterations from 1 through 64; defaults to 1. |
+
+The body contains one or more supported flow items and an optional final
+`<result>`. Each iteration receives `context.item` and
+`context.iteration = { index, total }`; body step outputs are local to that
+iteration. A final result publishes ordered aggregate output at
+`context.steps.<forEachId>` as `{ total, succeeded, results }`. Empty arrays
+succeed immediately. One failed item stops new admissions, settles owned work,
+and fails the loop. Nested `<for-each>`, `<fork>`, and `<approval>` are not
+supported in the first loop profile.
 
 ### `<choose>`, `<when>`, `<otherwise>`, and `<result>`
 

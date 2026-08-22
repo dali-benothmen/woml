@@ -203,9 +203,10 @@ delivery identity, approval authority, retries, and settlement.
 | `<step>` | A flow container or reusable root | Defines one executable operation or reusable step body. |
 | `<script>` | Step, lifecycle hook, or provider | Runs raw asynchronous JavaScript. |
 | `<parallel>` | Flow container | Runs direct child steps concurrently and joins them. |
+| `<for-each>` | Flow container | Runs one durable body instance per array item with bounded concurrency. |
 | `<choose>` | Flow container | Routes on strict boolean conditions. |
 | `<when>` / `<otherwise>` | `<choose>` | Define ordered conditional routes. |
-| `<result>` | Choice, switch, or relevant route arm | Publishes a stable route result. |
+| `<result>` | Choice, switch, for-each, or relevant route arm | Publishes a stable route result. |
 | `<switch>` | Flow container | Routes an exact string to one case. |
 | `<case>` / `<default>` | `<switch>` | Define exact-string routes. |
 | `<fork>` | Flow container | Starts concurrent multi-step branches. |
@@ -794,6 +795,87 @@ Content-Type: application/json
 
 Valid decisions are exactly `approved` and `rejected`. There is no npm API or
 `woml.resume()` function.
+
+### 9.6 `<for-each>`
+
+Use `<for-each>` when each item needs durable execution, retry, recovery,
+cancellation, and operations visibility:
+
+```xml
+<for-each
+  id="processOrders"
+  name="Process orders"
+  description="Validate every imported order."
+  items="{{context.steps.loadOrders.orders}}"
+  concurrency="4"
+>
+  <step id="processOrder" retry="3">
+    <script>
+      return {
+        orderId: context.item.id,
+        index: context.iteration.index
+      };
+    </script>
+  </step>
+  <result value="{{context.steps.processOrder}}" />
+</for-each>
+```
+
+| Attribute | Required | Meaning |
+| --- | :---: | --- |
+| `id` | Yes | Stable loop identity and aggregate output key. |
+| `items` | Yes | One exact available `context.payload` or `context.steps` reference. The runtime value must be an array. |
+| `name`, `description` | No | Human-facing terminal and inspection metadata. |
+| `concurrency` | No | Maximum active iterations, 1–64; defaults to 1. |
+
+Runtime bindings inside the body:
+
+| Binding | Meaning |
+| --- | --- |
+| `context.item` | Current JSON item. |
+| `context.iteration.index` | Stable zero-based input index. |
+| `context.iteration.total` | Total number of input items. |
+| `context.steps.<bodyId>` | Completed output for the current iteration only. |
+
+An optional final `<result>` chooses one iteration-local result. Successful
+results are aggregated in input order, regardless of completion order:
+
+```json
+{
+  "total": 3,
+  "succeeded": 3,
+  "results": [
+    { "orderId": "a", "index": 0 },
+    { "orderId": "b", "index": 1 },
+    { "orderId": "c", "index": 2 }
+  ]
+}
+```
+
+The aggregate is available at `context.steps.processOrders`. Without a final
+`<result>`, the loop still publishes `total` and `succeeded` but omits
+`results`. Empty arrays succeed immediately. The maximum input is 10,000
+items.
+
+The Rust engine owns scheduling and uses `(runId, forEachId, index)` as durable
+iteration identity. It may finish items out of order but never changes result
+order. One failed item stops new admissions, settles active/pending owned work,
+and fails the loop. Completed effects are not replayed after recovery; an
+ambiguous started effect fails closed.
+
+Supported body composition includes steps, reusable custom steps, parallel
+groups, choices, and switches. Nested `<for-each>`, `<fork>`, and `<approval>`
+are rejected in the first loop profile. Use a JavaScript loop inside one
+`<script>` for small pure transformations that do not need per-item durability.
+
+Operations surfaces:
+
+- foreground output and background logs show concise completed/active counts;
+- `woml inspect` shows current loop progress;
+- `woml get <runId>` reports safe durable counts and a failed index/step;
+- JSON presentation contains at most 100 per-index status summaries and never
+  includes input item values; and
+- Prometheus exposes active, pending, and completed iteration metrics.
 
 ## 10. Notifications
 
@@ -2253,7 +2335,7 @@ explicit stop.
 The following are not silently supported:
 
 - arbitrary `after`, `from`, `to`, or `depends-on` DAG edges;
-- structural loops, durable for-each, batching, race, or first-success groups;
+- nested for-each loops, batching, race, or first-success groups;
 - declarative `<http>`, `<db>`, `<storage>`, or other capability tags in steps;
 - per-step timeout attributes;
 - `parallel on-error="continue"`;
@@ -2283,6 +2365,7 @@ not create durable per-item nodes, retries, or inspection.
 | --- | --- |
 | One readable unit of work | `<step>` + `<script>` |
 | Several independent single steps at once | `<parallel>` |
+| The same durable work for every array item | `<for-each>` |
 | Several independent multi-step lanes | `<fork>` + `<branch>` |
 | Strict boolean routing | `<choose>` |
 | Exact string routing | `<switch>` |

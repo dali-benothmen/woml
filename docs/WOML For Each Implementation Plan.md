@@ -1,6 +1,6 @@
 # WOML `<for-each>` Implementation Plan
 
-- Status: FE0 through FE7 completed; FE8 is next
+- Status: FE0 through FE8 completed; base `<for-each>` is release-ready
 - Target language surface: WOML after v1.0
 - Target compiled model: Model v16
 - Target run events: Event v15
@@ -692,6 +692,30 @@ packaged-release checks, and cross-platform CI coverage.
 
 **Result:** `<for-each>` is a documented, packaged, cross-platform product
 feature ready for ordinary WOML authors.
+
+Completed in FE8:
+
+- generated-workflow property coverage proves deterministic Model v16 lowering,
+  collision-free loop identities, bounded concurrency values, and precise
+  rejection of malformed or visibility-escaping item references;
+- Rust stress and recovery coverage proves unique dynamic iteration identity,
+  input-ordered aggregation under concurrent completion, SQLite reopen,
+  fail-closed recovery, cancellation, timeout, and retry continuity;
+- presentation hardening rejects raw item data, inconsistent counts, invalid
+  item identities, and unbounded detail while redacting credentials from human
+  and machine diagnostics;
+- the language reference, complete API guide, npm README, repository README,
+  example catalog, AI-agent skill, and VS Code extension now teach the released
+  `<for-each>` contract and its iteration-only context bindings;
+- `examples/forEachWorkflow.woml` is the copy-paste manual workflow and the
+  editor ships a `woml-for-each` snippet for the same supported shape;
+- a clean-consumer test installs the local npm package family, validates the
+  documented example, and executes its ordered result through the Rust engine;
+- the release-candidate smoke now compiles and executes a concurrent loop on
+  every supported Linux, macOS, and Windows native target before artifacts can
+  be collected; and
+- versioned small, large, and concurrent CLI benchmarks enforce generous
+  regression budgets without turning release CI into an endurance test.
 
 ## 9. Phase acceptance gates
 

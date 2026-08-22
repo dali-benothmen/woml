@@ -315,8 +315,8 @@ WOML is a strong fit for:
 - Untrusted tenants must run arbitrary JavaScript in one shared hostile
   multi-tenant sandbox.
 - The deployment requires a managed multi-region control plane today.
-- The workflow depends on structural loops, durable for-each, race, batching,
-  or first-success primitives that WOML v1 intentionally does not expose.
+- The workflow depends on nested loops, streaming iteration, race, batching,
+  or first-success primitives that WOML does not currently expose.
 - The team wants a broad marketplace of prebuilt third-party integrations more
   than it wants local modules and explicit HTTP/API code.
 
@@ -347,7 +347,7 @@ WOML makes several important boundaries explicit:
 WOML v1 deliberately does not include:
 
 - arbitrary graph-edge attributes such as `after` or `depends-on`;
-- structural loops, durable for-each, batching, race, or first-success groups;
+- nested for-each loops, streaming iteration, batching, race, or first-success groups;
 - declarative database or HTTP operation tags inside `<step>`;
 - npm package imports or runtime module installation;
 - external schema-file references;

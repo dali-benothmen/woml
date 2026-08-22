@@ -111,6 +111,22 @@ async function main(): Promise<void> {
   </workflow>
 </woml>\n`,
     );
+    await writeFile(
+      join(consumer, 'for-each.woml'),
+      `<woml>
+  <workflow id="release-candidate-for-each" name="Release candidate for each" version="1.0.0">
+    <triggers><manual id="start" /></triggers>
+    <steps>
+      <step id="load"><script>return { names: ["Grace", "Ada", "Linus"] };</script></step>
+      <for-each id="greetings" items="{{context.steps.load.names}}" concurrency="2">
+        <step id="greet"><script>return { index: context.iteration.index, message: \`Hello \${context.item}\` };</script></step>
+        <result value="{{context.steps.greet}}" />
+      </for-each>
+      <step id="summary"><script>return context.steps.greetings;</script></step>
+    </steps>
+  </workflow>
+</woml>\n`,
+    );
 
     const installEnvironment = {
       ...process.env,
@@ -158,6 +174,9 @@ async function main(): Promise<void> {
     if (!command('check', 'hello.woml').includes('WOML check passed')) {
       throw new Error('The installed compiler did not validate hello.woml.');
     }
+    if (!command('check', 'for-each.woml').includes('WOML check passed')) {
+      throw new Error('The installed compiler did not validate for-each.woml.');
+    }
     const result = command(
       'test',
       'hello.woml',
@@ -166,6 +185,26 @@ async function main(): Promise<void> {
     );
     if (result !== '{"message":"Hello World"}\n') {
       throw new Error(`The installed runtime returned an unexpected result: ${result}`);
+    }
+    const forEachResult = command(
+      'test',
+      'for-each.woml',
+      '--state',
+      join(directory, 'for-each-state.sqlite'),
+    );
+    const expectedForEach = {
+      total: 3,
+      succeeded: 3,
+      results: [
+        { index: 0, message: 'Hello Grace' },
+        { index: 1, message: 'Hello Ada' },
+        { index: 2, message: 'Hello Linus' },
+      ],
+    };
+    if (JSON.stringify(JSON.parse(forEachResult)) !== JSON.stringify(expectedForEach)) {
+      throw new Error(
+        `The installed runtime returned an unexpected for-each result: ${forEachResult}`,
+      );
     }
 
     install();

@@ -21,6 +21,24 @@ Use ordinary steps when each result feeds the next:
 
 Use `<parallel>` for independent single-step work and a normal downstream step to combine results. Never make parallel siblings depend on each other.
 
+## Process every item durably
+
+Use `<for-each>` when every item needs its own durable identity, retry history,
+bounded concurrency, recovery, or operational progress:
+
+```xml
+<for-each id="processOrders" items="{{context.steps.loadOrders.orders}}" concurrency="4">
+  <step id="processOrder"><script>
+    return { orderId: context.item.id, index: context.iteration.index };
+  </script></step>
+  <result value="{{context.steps.processOrder}}" />
+</for-each>
+```
+
+Results remain in input order even when iterations finish out of order. Use an
+ordinary JavaScript loop inside one `<script>` for pure, small transformations
+that do not need separate durable execution.
+
 ## Decide, then expose one stable result
 
 Use a boolean-producing step followed by `<choose id="...">`. End every arm with `<result>` and make downstream work consume `context.steps.<choiceId>`.
@@ -121,6 +139,7 @@ Never use cache as authoritative business state.
 - IDs match the correct kebab-case or lower-camel grammar and are unique.
 - Every reference points backward to a guaranteed available output.
 - Conditional/switch routes expose a merged result when downstream work needs one.
+- Loop bodies use only iteration-local outputs and publish a final `<result>` when downstream work needs the ordered aggregate.
 - Scripts return JSON-compatible, intentionally small values.
 - Credentials are symbolic secret references.
 - Effectful retries have stable operation names or provider idempotency.

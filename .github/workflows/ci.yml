@@ -72,6 +72,11 @@ jobs:
       - name: Test runtime operations
         working-directory: woml-cli
         run: bun run test:cli:operations
+      - name: Test for-each presentation and clean package
+        working-directory: woml-cli
+        run: >-
+          bun test tests/for-each-presentation-hardening.test.ts
+          tests/for-each-packaged-release.test.ts --max-concurrency=1
       - name: Failure diagnostics
         if: failure()
         run: |
@@ -115,6 +120,9 @@ jobs:
           --test trigger_occurrence
           --test retry_runtime
           --test runtime_policy_store
+          --test for_each_model
+          --test for_each_runtime
+          --test for_each_recovery
           --test backup_restore
           -- --test-threads=1
       - name: Failure diagnostics

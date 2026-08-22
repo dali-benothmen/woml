@@ -34,6 +34,20 @@ context.steps.<stepOrResultId>
 
 The current script sees only outputs allowed by the compiled DAG. Do not read a later step, a parallel sibling, an unselected choice route, or an unjoined fork branch.
 
+Inside a `<for-each>` body, scripts additionally receive:
+
+```js
+context.item
+context.iteration.index
+context.iteration.total
+```
+
+`context.item` is the current JSON value. The iteration index is stable,
+zero-based, and follows input order; `total` is the captured array length.
+Body step outputs in `context.steps` belong only to the current iteration. These
+bindings are unavailable outside `<for-each>`, and later workflow steps consume
+only the loop aggregate at `context.steps.<forEachId>`.
+
 ## Step output
 
 A successful script return must be JSON-compatible:

@@ -4,7 +4,7 @@ Give an AI coding agent the product knowledge it needs to create valid, readable
 
 The skill teaches agents how to:
 
-- choose triggers, steps, and control flow;
+- choose triggers, steps, durable item iteration, and control flow;
 - write embedded JavaScript with `context`, `attempt`, `services`, and `secrets`;
 - use retries, approvals, lifecycle hooks, modules, and workflow calls correctly;
 - select from every released WOML tag, built-in service, provider surface, and CLI command;

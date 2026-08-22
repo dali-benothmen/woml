@@ -379,6 +379,57 @@ async fn bounded_iterations_complete_out_of_order_and_aggregate_in_input_order()
 }
 
 #[tokio::test]
+async fn many_concurrent_iterations_keep_unique_dynamic_identity_and_input_order() {
+  let Some(host) = host_options() else { return };
+  let database = TemporaryDatabase::new();
+  let mut model = concurrent_model();
+  model.graph.for_each.as_mut().unwrap()[0].concurrency = 8;
+  model.validate_for_durable_execution().unwrap();
+  let items = (0..16)
+    .map(|index| json!({ "value": index, "delay": (index * 7) % 4 }))
+    .collect::<Vec<_>>();
+  let mut trigger = Map::new();
+  trigger.insert("items".to_string(), Value::Array(items));
+
+  let result = execute_workflow_durable(
+    model,
+    "sha256:3737373737373737373737373737373737373737373737373737373737373737".to_string(),
+    trigger,
+    RuntimeExecutionOptions::new(host, 5_000),
+    database.path().to_path_buf(),
+  )
+  .await
+  .unwrap();
+
+  let results = result.context.steps["organize"]["results"]
+    .as_array()
+    .unwrap();
+  assert_eq!(results.len(), 16);
+  assert!(results
+    .iter()
+    .enumerate()
+    .all(|(index, value)| { value["value"] == json!(index) && value["index"] == json!(index) }));
+
+  let identities = result
+    .events
+    .iter()
+    .filter_map(|event| {
+      matches!(event.payload, RunEventPayload::ForEachIterationStarted(_)).then(|| {
+        let iteration = event.iteration.as_ref().unwrap();
+        (iteration.for_each_id.clone(), iteration.index)
+      })
+    })
+    .collect::<std::collections::BTreeSet<_>>();
+  assert_eq!(identities.len(), 16);
+  assert!(identities
+    .iter()
+    .enumerate()
+    .all(|(index, (for_each_id, item_index))| {
+      for_each_id == "organize" && *item_index as usize == index
+    }));
+}
+
+#[tokio::test]
 async fn inner_parallel_children_use_their_own_concurrency_limit() {
   let Some(host) = host_options() else { return };
   let database = TemporaryDatabase::new();

@@ -30,8 +30,9 @@ WOML (Workflow Orchestration Markup Language) is a markup language for building 
   trigger payload, previous step results, and run information.
 - **Durable execution** — runs are supervised by the Rust core and represented
   through versioned events instead of an authoritative mutable context object.
-- **Workflow control flow** — compose sequential steps, parallel work,
-  conditional choices, switches, and forked branches with explicit joins.
+- **Workflow control flow** — compose sequential steps, durable item loops,
+  parallel work, conditional choices, switches, and forked branches with
+  explicit joins.
 - **Retries and idempotency** — declare retry behavior with the `retry`
   attribute while WOML preserves durable attempt history and safe execution
   boundaries.
@@ -146,6 +147,7 @@ Provider and workflow snippets are available:
 | --------------- | -------------------------------------------------------- |
 | `woml-workflow` | A complete workflow with a manual trigger and first step |
 | `woml-step`     | A named script step with an optional description         |
+| `woml-for-each` | A durable bounded item loop with ordered results          |
 | `woml-telegram-trigger` | A Telegram message trigger |
 | `woml-telegram-send` | A supervised Telegram reply |
 | `woml-telegram-notify` | A Telegram notification destination |

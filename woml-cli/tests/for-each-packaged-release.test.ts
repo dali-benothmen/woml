@@ -9,7 +9,7 @@ const projectRoot = resolve(import.meta.dir, '../..');
 let temporaryDirectory: string;
 
 beforeAll(async () => {
-  temporaryDirectory = await mkdtemp(join(tmpdir(), 'woml-fork-package-'));
+  temporaryDirectory = await mkdtemp(join(tmpdir(), 'woml-for-each-package-'));
 });
 
 afterAll(async () => {
@@ -18,38 +18,50 @@ afterAll(async () => {
   }
 });
 
-describe('fork and branch clean package', () => {
-  test('a clean consumer installs the CLI and runs the social distribution workflow', async () => {
+describe('for-each clean package', () => {
+  test('a clean consumer validates and executes the documented example', async () => {
     const consumer = join(temporaryDirectory, 'consumer');
     const cache = join(temporaryDirectory, 'bun-cache');
     await Promise.all([consumer, cache].map(path => mkdir(path, { recursive: true })));
-
     await writeFile(
       join(consumer, 'package.json'),
-      JSON.stringify({ name: 'woml-fork-clean-consumer', private: true })
+      JSON.stringify({ name: 'woml-for-each-clean-consumer', private: true }),
     );
     await installLocalReleaseCandidate(consumer, { cache });
 
-    const workflowPath = join(consumer, 'social-distribution.woml');
+    const workflowPath = join(consumer, 'for-each.woml');
     await writeFile(
       workflowPath,
-      await readFile(resolve(projectRoot, 'examples/forkDistributionWorkflow.woml'), 'utf8')
+      await readFile(resolve(projectRoot, 'examples/forEachWorkflow.woml'), 'utf8'),
     );
+    const cli = join(consumer, 'node_modules/woml-cli/dist/cli.js');
+    const check = Bun.spawnSync([process.execPath, cli, 'check', workflowPath], {
+      cwd: consumer,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(check.exitCode, check.stderr.toString()).toBe(0);
+    expect(check.stdout.toString()).toContain('WOML check passed');
+
     const executed = Bun.spawnSync(
       [
         process.execPath,
-        join(consumer, 'node_modules/woml-cli/dist/cli.js'),
+        cli,
         'test',
         workflowPath,
         '--state',
-        join(consumer, 'state.sqlite'),
+        join(consumer, 'workflow-history.sqlite'),
       ],
-      { cwd: consumer, stdout: 'pipe', stderr: 'pipe' }
+      { cwd: consumer, stdout: 'pipe', stderr: 'pipe' },
     );
     expect(executed.exitCode, executed.stderr.toString()).toBe(0);
     expect(JSON.parse(executed.stdout.toString())).toEqual({
-      campaign: 'WOML launch',
-      published: ['tiktok', 'instagram', 'facebook', 'pinterest'],
+      processed: 3,
+      greetings: [
+        { position: 1, message: 'Hello Grace! Your plan is pro.', featured: true },
+        { position: 2, message: 'Hello Ada! Your plan is starter.', featured: false },
+        { position: 3, message: 'Hello Linus! Your plan is pro.', featured: true },
+      ],
     });
   }, 30_000);
 });
