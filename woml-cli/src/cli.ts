@@ -1992,7 +1992,7 @@ async function runSingleCheckCommand(
         `WOML check passed for workflow "${workflowElement?.attributes.id?.value ?? filePath}".\n`
       );
       io.stdout(
-        'Compiled Model v16 passed frontend validation and supports sequential Rust execution.\n'
+        'Compiled Model v16 passed frontend validation and supports bounded concurrent Rust execution.\n'
       );
       return 0;
     }

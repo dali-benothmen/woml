@@ -28,7 +28,7 @@ const valid = `<woml>
     <triggers><manual id="start" /></triggers>
     <steps>
       <step id="load"><script>return { items: [1, 2] };</script></step>
-      <for-each id="processItems" items="{{context.steps.load.items}}">
+      <for-each id="processItems" items="{{context.steps.load.items}}" concurrency="2">
         <step id="processItem"><script>return context.item;</script></step>
       </for-each>
     </steps>
@@ -36,13 +36,13 @@ const valid = `<woml>
 </woml>`;
 
 describe('woml check for-each authoring', () => {
-  test('accepts valid source and reports sequential Rust execution', async () => {
+  test('accepts valid source and reports bounded concurrent Rust execution', async () => {
     const result = await check(valid);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('WOML check passed');
     expect(result.stdout).toContain('Compiled Model v16');
-    expect(result.stdout).toContain('sequential Rust execution');
+    expect(result.stdout).toContain('bounded concurrent Rust execution');
   });
 
   test('returns the Model v16 validation profile for JSON output', async () => {

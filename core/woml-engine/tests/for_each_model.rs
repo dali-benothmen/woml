@@ -82,13 +82,7 @@ fn model_v15_cannot_smuggle_a_for_each_descriptor() {
 }
 
 #[test]
-fn concurrent_model_v16_remains_staged_until_bounded_scheduling() {
+fn concurrent_model_v16_is_executable_with_bounded_scheduling() {
   let model = CompiledWorkflowDefinition::from_json(REVIEWED_MODEL).unwrap();
-  let error = model
-    .validate_for_durable_execution()
-    .expect_err("the reviewed fixture requests concurrency=2, which begins in FE5");
-  assert!(error
-    .issues
-    .iter()
-    .any(|issue| issue.code == ModelIssueCode::UnsupportedForEachExecution));
+  model.validate_for_durable_execution().unwrap();
 }

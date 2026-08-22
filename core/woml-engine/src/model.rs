@@ -4348,8 +4348,7 @@ impl CompiledWorkflowDefinition {
 
     if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V16 {
       for descriptor in self.graph.for_each.as_deref().unwrap_or_default() {
-        let fe4_body = descriptor.concurrency == 1
-          && descriptor.body.entry_node_ids.len() == 1
+        let fe5_body = descriptor.body.entry_node_ids.len() == 1
           && descriptor.body.nodes.iter().all(|node| {
             matches!(
               node.handler.as_str(),
@@ -4361,11 +4360,11 @@ impl CompiledWorkflowDefinition {
                 | "engine.parallel-join"
             ) && node.timeout_ms.is_none()
           });
-        if !fe4_body {
+        if !fe5_body {
           issues.push(issue(
             ModelIssueCode::UnsupportedForEachExecution,
             format!(
-              "For-each {:?} requires concurrency=1 and an FE4-compatible body until bounded iteration scheduling arrives in FE5.",
+              "For-each {:?} contains a body that is not executable by the FE5 bounded iteration runtime.",
               descriptor.for_each_id
             ),
           ));

@@ -744,7 +744,7 @@ describe('For-each composition', () => {
           { key: 'c', value: 3, enabled: false }
         ] };
       </script></step>
-      <for-each id="processItems" items="{{context.steps.load.items}}" concurrency="1">
+      <for-each id="processItems" items="{{context.steps.load.items}}" concurrency="2">
         <choose id="routed">
           <when test="{{context.item.enabled}}">
             <normalize-item

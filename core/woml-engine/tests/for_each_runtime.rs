@@ -32,6 +32,147 @@ fn sequential_model() -> CompiledWorkflowDefinition {
   model
 }
 
+fn concurrent_model() -> CompiledWorkflowDefinition {
+  let mut value: Value = serde_json::from_str(REVIEWED_MODEL).unwrap();
+  value["graph"]["forEach"][0]["concurrency"] = json!(2);
+  value["graph"]["forEach"][0]["body"]["nodes"][0]["inputs"]["fields"]["source"]["value"] = json!(
+    r#"
+      await new Promise(resolve => setTimeout(resolve, context.item.delay));
+      return { value: context.item.value, index: context.iteration.index };
+    "#
+  );
+  let model: CompiledWorkflowDefinition = serde_json::from_value(value).unwrap();
+  model.validate_for_durable_execution().unwrap();
+  model
+}
+
+fn inner_parallel_model() -> CompiledWorkflowDefinition {
+  let mut value: Value = serde_json::from_str(REVIEWED_MODEL).unwrap();
+  value["graph"]["forEach"][0]["concurrency"] = json!(1);
+  let runtime = value["graph"]["forEach"][0]["body"]["nodes"][0]["scriptRuntime"].clone();
+  value["graph"]["forEach"][0]["body"] = json!({
+    "entryNodeIds": ["__woml_parallel__inspect__start"],
+    "nodes": [
+      {
+        "id": "__woml_parallel__inspect__start",
+        "handler": "engine.parallel-start",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "concurrency": { "kind": "literal", "value": 2 },
+            "onError": { "kind": "literal", "value": "wait-all" }
+          }
+        }
+      },
+      {
+        "id": "slowChild",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "await new Promise(resolve => setTimeout(resolve, 800)); return { child: 'slow' };"
+            }
+          }
+        },
+        "scriptRuntime": runtime
+      },
+      {
+        "id": "fastChild",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "await new Promise(resolve => setTimeout(resolve, 5)); return { child: 'fast' };"
+            }
+          }
+        },
+        "scriptRuntime": runtime
+      },
+      {
+        "id": "thirdChild",
+        "handler": "runtime.script",
+        "inputs": {
+          "kind": "object",
+          "fields": {
+            "source": {
+              "kind": "literal",
+              "value": "await new Promise(resolve => setTimeout(resolve, 5)); return { child: 'third' };"
+            }
+          }
+        },
+        "scriptRuntime": runtime
+      },
+      {
+        "id": "inspect",
+        "handler": "engine.parallel-join",
+        "inputs": { "kind": "object", "fields": {} }
+      }
+    ],
+    "edges": [
+      {
+        "id": "inspect:child:0",
+        "from": "__woml_parallel__inspect__start",
+        "to": "slowChild",
+        "condition": { "kind": "always" },
+        "parallelId": "inspect"
+      },
+      {
+        "id": "inspect:child:1",
+        "from": "__woml_parallel__inspect__start",
+        "to": "fastChild",
+        "condition": { "kind": "always" },
+        "parallelId": "inspect"
+      },
+      {
+        "id": "inspect:join:0",
+        "from": "slowChild",
+        "to": "inspect",
+        "condition": { "kind": "always" },
+        "parallelId": "inspect"
+      },
+      {
+        "id": "inspect:child:2",
+        "from": "__woml_parallel__inspect__start",
+        "to": "thirdChild",
+        "condition": { "kind": "always" },
+        "parallelId": "inspect"
+      },
+      {
+        "id": "inspect:join:1",
+        "from": "fastChild",
+        "to": "inspect",
+        "condition": { "kind": "always" },
+        "parallelId": "inspect"
+      },
+      {
+        "id": "inspect:join:2",
+        "from": "thirdChild",
+        "to": "inspect",
+        "condition": { "kind": "always" },
+        "parallelId": "inspect"
+      }
+    ],
+    "choices": [],
+    "contextVisibility": [
+      { "nodeId": "slowChild", "stepIds": [] },
+      { "nodeId": "fastChild", "stepIds": [] },
+      { "nodeId": "thirdChild", "stepIds": [] }
+    ],
+    "terminalNodeId": "inspect"
+  });
+  value["graph"]["forEach"][0]["result"] = json!({
+    "kind": "contextReference",
+    "path": ["steps", "slowChild"]
+  });
+  let model: CompiledWorkflowDefinition = serde_json::from_value(value).unwrap();
+  model.validate_for_durable_execution().unwrap();
+  model
+}
+
 #[tokio::test]
 async fn sequential_iterations_publish_ordered_results_for_later_steps() {
   let Some(host) = host_options() else { return };
@@ -112,6 +253,144 @@ async fn an_empty_items_array_settles_without_an_iteration() {
     .events
     .iter()
     .any(|event| matches!(event.payload, RunEventPayload::ForEachIterationStarted(_))));
+}
+
+#[tokio::test]
+async fn bounded_iterations_complete_out_of_order_and_aggregate_in_input_order() {
+  let Some(host) = host_options() else { return };
+  let database = TemporaryDatabase::new();
+  let model = concurrent_model();
+  let mut trigger = Map::new();
+  trigger.insert(
+    "items".to_string(),
+    json!([
+      { "value": "slow-first", "delay": 800 },
+      { "value": "fast-second", "delay": 5 },
+      { "value": "third", "delay": 5 }
+    ]),
+  );
+
+  let result = execute_workflow_durable(
+    model,
+    "sha256:3636363636363636363636363636363636363636363636363636363636363636".to_string(),
+    trigger,
+    RuntimeExecutionOptions::new(host, 3_000),
+    database.path().to_path_buf(),
+  )
+  .await
+  .unwrap();
+
+  assert_eq!(
+    result.context.steps["organize"]["results"],
+    json!([
+      { "value": "slow-first", "index": 0 },
+      { "value": "fast-second", "index": 1 },
+      { "value": "third", "index": 2 }
+    ])
+  );
+
+  let completion_order = result
+    .events
+    .iter()
+    .filter_map(|event| {
+      matches!(event.payload, RunEventPayload::ForEachIterationSucceeded(_))
+        .then(|| event.iteration.as_ref().unwrap().index)
+    })
+    .collect::<Vec<_>>();
+  assert!(
+    completion_order.iter().position(|index| *index == 1)
+      < completion_order.iter().position(|index| *index == 0),
+    "the faster second item should settle before the slower first item: {completion_order:?}"
+  );
+  let mut completed_indexes = completion_order.clone();
+  completed_indexes.sort_unstable();
+  assert_eq!(completed_indexes, vec![0, 1, 2]);
+
+  let mut active = 0_i32;
+  let mut peak = 0_i32;
+  for event in &result.events {
+    match event.payload {
+      RunEventPayload::ForEachIterationStarted(_) => {
+        active += 1;
+        peak = peak.max(active);
+      }
+      RunEventPayload::ForEachIterationSucceeded(_)
+      | RunEventPayload::ForEachIterationFailed(_) => active -= 1,
+      _ => {}
+    }
+  }
+  assert_eq!(peak, 2);
+  assert_eq!(active, 0);
+}
+
+#[tokio::test]
+async fn inner_parallel_children_use_their_own_concurrency_limit() {
+  let Some(host) = host_options() else { return };
+  let database = TemporaryDatabase::new();
+  let model = inner_parallel_model();
+  let mut trigger = Map::new();
+  trigger.insert("items".to_string(), json!(["only-item"]));
+
+  let result = execute_workflow_durable(
+    model,
+    "sha256:4646464646464646464646464646464646464646464646464646464646464646".to_string(),
+    trigger,
+    RuntimeExecutionOptions::new(host, 3_000),
+    database.path().to_path_buf(),
+  )
+  .await
+  .unwrap();
+
+  let child_completion_order = result
+    .events
+    .iter()
+    .filter_map(|event| match &event.payload {
+      RunEventPayload::StepAttemptSucceeded(data)
+        if data.node_id == "slowChild"
+          || data.node_id == "fastChild"
+          || data.node_id == "thirdChild" =>
+      {
+        Some(data.node_id.as_str())
+      }
+      _ => None,
+    })
+    .collect::<Vec<_>>();
+  assert!(
+    child_completion_order
+      .iter()
+      .position(|node_id| *node_id == "fastChild")
+      < child_completion_order
+        .iter()
+        .position(|node_id| *node_id == "slowChild")
+  );
+  let mut active_children = 0_i32;
+  let mut peak_children = 0_i32;
+  for event in &result.events {
+    match &event.payload {
+      RunEventPayload::StepAttemptStarted(data)
+        if data.node_id == "slowChild"
+          || data.node_id == "fastChild"
+          || data.node_id == "thirdChild" =>
+      {
+        active_children += 1;
+        peak_children = peak_children.max(active_children);
+      }
+      RunEventPayload::StepAttemptSucceeded(data)
+        if data.node_id == "slowChild"
+          || data.node_id == "fastChild"
+          || data.node_id == "thirdChild" =>
+      {
+        active_children -= 1;
+      }
+      _ => {}
+    }
+  }
+  assert_eq!(peak_children, 2);
+  assert_eq!(active_children, 0);
+  assert_eq!(
+    result.context.steps["organize"]["results"],
+    json!([{ "child": "slow" }])
+  );
 }
 
 struct TemporaryDatabase(PathBuf);

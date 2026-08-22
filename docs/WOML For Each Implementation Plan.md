@@ -1,6 +1,6 @@
 # WOML `<for-each>` Implementation Plan
 
-- Status: FE0 through FE4 completed; FE5 is next
+- Status: FE0 through FE5 completed; FE6 is next
 - Target language surface: WOML after v1.0
 - Target compiled model: Model v16
 - Target run events: Event v15
@@ -602,6 +602,27 @@ with inner parallel limits, workflow deadlines, rate limits, and cancellation.
 
 **Result:** large independent batches execute concurrently while producing
 deterministic output.
+
+Completed in FE5:
+
+- Rust admits item indexes in ascending input order and keeps at most the
+  authored `concurrency` number of iteration bodies active;
+- the multiplexed Bun host executes independent iteration scripts concurrently,
+  while the Rust engine remains the single serialized event and projection
+  authority;
+- iterations may finish out of order, but result slots are aggregated by their
+  stable input index before downstream steps receive the loop output;
+- direct children of an inner `<parallel>` use that group's own concurrency
+  limit without changing the outer loop's active-iteration limit;
+- workflow concurrency, queue, and rate-limit policies continue to govern run
+  admission, while workflow deadlines and cancellation stop new item admission
+  and signal active Bun invocations; and
+- focused Rust tests and the real native CLI composition test cover bounded
+  scheduling, inner parallel execution, modules, services, retries, lifecycle
+  hooks, control flow, and deterministic aggregation.
+
+Complete skipped-index recording, terminal failed/cancelled loop settlement,
+and restart recovery remain assigned to FE6.
 
 ### FE6 — Complete events, failure settlement, and recovery
 
