@@ -1506,13 +1506,41 @@ impl RunEvent {
         | RunEventPayload::ForEachCancelled(_)
     );
     if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V15 && !loop_event {
-      if self.iteration.is_some() {
-        return Err(EventValidationError::Invalid(
-          "Only loop-owned Event v15 records may carry iteration scope.".to_string(),
-        ));
+      if let Some(scope) = &self.iteration {
+        let scoped_work = matches!(
+          self.payload,
+          RunEventPayload::StepAttemptStarted(_)
+            | RunEventPayload::StepAttemptSucceeded(_)
+            | RunEventPayload::StepAttemptFailed(_)
+            | RunEventPayload::StepRetryScheduled(_)
+            | RunEventPayload::BranchSelected(_)
+            | RunEventPayload::ChoiceSelected(_)
+            | RunEventPayload::ParallelGroupStarted(_)
+            | RunEventPayload::ParallelGroupCompleted(_)
+            | RunEventPayload::OperationStarted(_)
+            | RunEventPayload::OperationSucceeded(_)
+            | RunEventPayload::OperationFailed(_)
+            | RunEventPayload::LifecycleHookRequested(_)
+            | RunEventPayload::LifecycleActionAttemptStarted(_)
+            | RunEventPayload::LifecycleActionSucceeded(_)
+            | RunEventPayload::LifecycleActionFailed(_)
+            | RunEventPayload::LifecycleHookCompleted(_)
+            | RunEventPayload::ReusableLifecycleRequested(_)
+            | RunEventPayload::ReusableLifecycleActionStarted(_)
+            | RunEventPayload::ReusableLifecycleActionSucceeded(_)
+            | RunEventPayload::ReusableLifecycleActionFailed(_)
+            | RunEventPayload::ReusableLifecycleCompleted(_)
+        );
+        if !scoped_work || !valid_public_structural_id(&scope.for_each_id) || scope.index >= 10_000
+        {
+          return Err(EventValidationError::Invalid(
+            "Event v15 iteration scope is invalid for this loop-owned payload.".to_string(),
+          ));
+        }
       }
       let mut inherited = self.clone();
       inherited.event_schema_version = RUN_EVENT_SCHEMA_VERSION_V14;
+      inherited.iteration = None;
       return inherited.validate();
     }
     if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V15 && self.iteration.is_some() {

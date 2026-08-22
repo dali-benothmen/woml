@@ -33,6 +33,7 @@ import type {
   CompiledWorkflowDefinitionV13,
   CompiledWorkflowDefinitionV14,
   CompiledWorkflowDefinitionV15,
+  CompiledWorkflowDefinitionV16,
   CompiledWorkflowDefinitionV9,
 } from './model';
 import type { WomlReusableDefinitionGraph } from './reusable-definitions';
@@ -65,6 +66,8 @@ export const WOML_REUSABLE_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v9' as const;
 export const WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE =
   'woml.definition-package/v10' as const;
+export const WOML_FOR_EACH_DEFINITION_PACKAGE_PROFILE =
+  'woml.definition-package/v11' as const;
 
 export interface WomlModuleResolverOptions {
   /** Absolute or working-directory-relative path of the importing WOML file. */
@@ -373,6 +376,21 @@ export interface WomlDefinitionPackageV10
     readonly source: string;
     readonly modelDigest: string;
     readonly model: CompiledWorkflowDefinitionV15;
+  };
+}
+
+export interface WomlDefinitionPackageV11
+  extends Omit<
+    WomlDefinitionPackageV9,
+    'schemaVersion' | 'profile' | 'workflow'
+  > {
+  readonly schemaVersion: 11;
+  readonly profile: typeof WOML_FOR_EACH_DEFINITION_PACKAGE_PROFILE;
+  readonly workflow: {
+    readonly id: string;
+    readonly source: string;
+    readonly modelDigest: string;
+    readonly model: CompiledWorkflowDefinitionV16;
   };
 }
 
@@ -1153,6 +1171,7 @@ export async function buildWomlExecutableDefinitionPackage(
   | WomlDefinitionPackageV8
   | WomlDefinitionPackageV9
   | WomlDefinitionPackageV10
+  | WomlDefinitionPackageV11
 > {
   const resolved = buildWomlDefinitionPackage(document, options);
   if (resolved.modules.length === 0) {
@@ -1331,6 +1350,16 @@ export async function buildWomlExecutableDefinitionPackage(
     },
     permissions: resolved.permissions,
   };
+  if (model.schemaVersion === 16) {
+    const unsigned = {
+      schemaVersion: 11 as const,
+      profile: WOML_FOR_EACH_DEFINITION_PACKAGE_PROFILE,
+      ...common,
+      workflow: { ...common.workflow, model },
+      definitions: [] as const,
+    };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   if (model.schemaVersion === 15) {
     const unsigned = {
       schemaVersion: 10 as const,
@@ -1405,7 +1434,11 @@ export async function buildWomlReusableDefinitionPackage(
   document: WomlSourceDocument,
   graph: WomlReusableDefinitionGraph,
   options: WomlModuleResolverOptions = {}
-): Promise<WomlDefinitionPackageV9 | WomlDefinitionPackageV10> {
+): Promise<
+  | WomlDefinitionPackageV9
+  | WomlDefinitionPackageV10
+  | WomlDefinitionPackageV11
+> {
   if (graph.root.kind !== 'workflow') {
     throw compileDiagnostic(
       document.file,
@@ -1611,7 +1644,15 @@ export async function buildWomlReusableDefinitionPackage(
         provider.provider === 'discord' ||
         provider.provider === 'whatsapp'
     );
-  const unsigned = model.schemaVersion === 15
+  const unsigned = model.schemaVersion === 16
+    ? {
+        schemaVersion: 11 as const,
+        profile: WOML_FOR_EACH_DEFINITION_PACKAGE_PROFILE,
+        runtimeReady: true,
+        ...common,
+        workflow: { ...common.workflow, model },
+      }
+    : model.schemaVersion === 15
     ? {
         schemaVersion: 10 as const,
         profile: WOML_COMMUNICATION_DEFINITION_PACKAGE_PROFILE,
@@ -1642,11 +1683,17 @@ export async function buildWomlRuntimeDefinitionPackage(
   | WomlDefinitionPackageV5
   | WomlDefinitionPackageV9
   | WomlDefinitionPackageV10
+  | WomlDefinitionPackageV11
 > {
   const compiled = await buildWomlExecutableDefinitionPackage(
     document,
     options
   );
+  if (compiled.schemaVersion === 11) {
+    const { rootHash: _compilationRootHash, ...rest } = compiled;
+    const unsigned = { ...rest, runtimeReady: true as const };
+    return { ...unsigned, rootHash: sha256(canonicalJson(unsigned)) };
+  }
   if (compiled.schemaVersion === 10) {
     const unavailable = compiled.workflow.model.communication.providers.find(
       provider =>
@@ -1741,6 +1788,7 @@ export function canonicalizeWomlDefinitionPackage(
     | WomlDefinitionPackageV8
     | WomlDefinitionPackageV9
     | WomlDefinitionPackageV10
+    | WomlDefinitionPackageV11
 ): string {
   return canonicalJson(definitionPackage);
 }

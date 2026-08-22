@@ -50,6 +50,7 @@ import {
   type WomlDefinitionPackageV7,
   type WomlDefinitionPackageV9,
   type WomlDefinitionPackageV10,
+  type WomlDefinitionPackageV11,
 } from '@woml/compiler';
 import {
   compiledDefinitionHash,
@@ -1426,6 +1427,7 @@ function runtimeModulesFromPackage(
     | WomlDefinitionPackageV7
     | WomlDefinitionPackageV9
     | WomlDefinitionPackageV10
+    | WomlDefinitionPackageV11
 ): readonly RustRuntimeModuleArtifact[] {
   const modules = definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
@@ -1450,7 +1452,8 @@ function runtimeModulesFromPackage(
   });
   if (
     definitionPackage.schemaVersion !== 9 &&
-    definitionPackage.schemaVersion !== 10
+    definitionPackage.schemaVersion !== 10 &&
+    definitionPackage.schemaVersion !== 11
   ) return modules;
   const seen = new Set<string>();
   const reusableArtifacts = (definitionPackage.workflow.model.reusableDefinitions ?? [])
@@ -1899,30 +1902,6 @@ async function runSingleCheckCommand(
         generateWomlReusableCustomData(reusableGraph),
         io
       );
-      if (hasForEach && reusableGraph.root.kind === 'workflow') {
-        if (options[0] === '--json') {
-          io.stdout(
-            `${JSON.stringify(
-              {
-                profile: 'woml.source-validation/v1',
-                valid: true,
-                workflowId: reusableGraph.root.definition.attributes.id?.value,
-                feature: 'for-each',
-                executable: false,
-                pendingModelVersion: 16,
-              },
-              null,
-              2
-            )}\n`
-          );
-          return 0;
-        }
-        io.stdout(`WOML check passed for workflow source "${filePath}".\n`);
-      io.stdout(
-          'Execution: imported <for-each> authoring is valid; reusable-definition Model v16 composition begins in FE4.\n'
-        );
-        return 0;
-      }
       const reusablePackage =
         reusableGraph.root.kind === 'workflow' &&
         reusableGraph.definitions.length > 0
@@ -1963,7 +1942,9 @@ async function runSingleCheckCommand(
         );
       }
       io.stdout(
-        reusablePackage?.schemaVersion === 10 &&
+        reusablePackage?.schemaVersion === 11
+          ? `Compiled Model v16 package: ${reusablePackage.rootHash}\nExecution: <for-each>, modules, and reusable steps are runnable together.\n`
+          : reusablePackage?.schemaVersion === 10 &&
           reusablePackage.workflow.model.communication.providers.some(
             provider => provider.provider === 'discord'
           )
@@ -2559,7 +2540,9 @@ function workflowSecretReferences(
     }
   }
   for (const definition of
-    workflow.schemaVersion === 14 || workflow.schemaVersion === 15
+    workflow.schemaVersion === 14 ||
+    workflow.schemaVersion === 15 ||
+    workflow.schemaVersion === 16
       ? (workflow.reusableDefinitions ?? [])
       : []) {
     for (const prop of definition.props) {

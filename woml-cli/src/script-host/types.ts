@@ -299,7 +299,7 @@ export type CapabilityCallResult =
 
 export interface CapabilityCallMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6 | 7 | 8;
+  readonly protocolVersion: 4 | 5 | 6 | 7 | 8 | 9;
   readonly messageType: 'capability_call';
   readonly invocationId: string;
   readonly callId: string;
@@ -308,7 +308,7 @@ export interface CapabilityCallMessage {
 
 export interface CapabilityResultMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6 | 7 | 8;
+  readonly protocolVersion: 4 | 5 | 6 | 7 | 8 | 9;
   readonly messageType: 'capability_result';
   readonly invocationId: string;
   readonly callId: string;
@@ -357,7 +357,7 @@ export type NativeFetchObservation =
 
 export interface FetchObservationMessage {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6 | 7 | 8;
+  readonly protocolVersion: 4 | 5 | 6 | 7 | 8 | 9;
   readonly messageType: 'fetch_observation';
   readonly invocationId: string;
   readonly requestId: string;
@@ -366,7 +366,7 @@ export interface FetchObservationMessage {
 
 export type FetchObservationAckMessage = {
   readonly protocol: 'woml.script-host';
-  readonly protocolVersion: 4 | 5 | 6 | 7 | 8;
+  readonly protocolVersion: 4 | 5 | 6 | 7 | 8 | 9;
   readonly messageType: 'fetch_observation_ack';
   readonly invocationId: string;
   readonly requestId: string;

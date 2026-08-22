@@ -648,7 +648,7 @@ fn valid_portable_path(value: &str) -> bool {
     && !value.split('/').any(|part| part == ".." || part.is_empty())
 }
 
-fn valid_reusable_context_path(path: &str) -> bool {
+fn valid_reusable_context_path(path: &str, allow_iteration: bool) -> bool {
   let identifiers_valid = |segments: &[&str]| {
     segments.iter().all(|segment| {
       let mut chars = segment.chars();
@@ -660,6 +660,8 @@ fn valid_reusable_context_path(path: &str) -> bool {
   match segments.as_slice() {
     ["payload", rest @ ..] => identifiers_valid(rest),
     ["steps", step, rest @ ..] => valid_public_structural_id(step) && identifiers_valid(rest),
+    ["item", rest @ ..] => allow_iteration && identifiers_valid(rest),
+    ["iteration", "index" | "total"] => allow_iteration,
     _ => false,
   }
 }
@@ -667,6 +669,7 @@ fn valid_reusable_context_path(path: &str) -> bool {
 fn reusable_prop_secrets(
   props: &[CompiledReusableBoundProp],
   subject: &str,
+  allow_iteration: bool,
   issues: &mut Vec<ModelIssue>,
 ) -> Vec<String> {
   let mut names = HashSet::new();
@@ -682,7 +685,7 @@ fn reusable_prop_secrets(
     let expression_valid = match &prop.expression {
       CompiledReusablePropExpression::Literal { value } => !prop.secret && value.len() <= 65_536,
       CompiledReusablePropExpression::Context { path } => {
-        !prop.secret && path.len() <= 1024 && valid_reusable_context_path(path)
+        !prop.secret && path.len() <= 1024 && valid_reusable_context_path(path, allow_iteration)
       }
       CompiledReusablePropExpression::Secret { name } => {
         if prop.secret && valid_secret_name(name) && name.len() <= 128 {
@@ -748,6 +751,14 @@ fn inspect_reusable_contract(
     .graph
     .nodes
     .iter()
+    .chain(
+      workflow
+        .graph
+        .for_each
+        .iter()
+        .flatten()
+        .flat_map(|loop_| loop_.body.nodes.iter()),
+    )
     .map(|node| (node.id.as_str(), node))
     .collect::<HashMap<_, _>>();
   let mut identities = HashSet::new();
@@ -766,7 +777,12 @@ fn inspect_reusable_contract(
         lifecycle,
       } => {
         let identity = format!("step:{invocation_id}");
-        let secrets = reusable_prop_secrets(props, &identity, issues);
+        let secrets = reusable_prop_secrets(
+          props,
+          &identity,
+          workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V16,
+          issues,
+        );
         let runtime_valid = nodes.get(node_id.as_str()).is_some_and(|node| {
           node.handler == "runtime.script"
             && node.script_runtime.as_ref().is_some_and(|runtime| {
@@ -804,7 +820,12 @@ fn inspect_reusable_contract(
         lifecycle,
       } => {
         let identity = format!("provider:{provider_id}");
-        reusable_prop_secrets(props, &identity, issues);
+        reusable_prop_secrets(
+          props,
+          &identity,
+          workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V16,
+          issues,
+        );
         if !identities.insert(identity)
           || !provider_ids.insert(provider_id.clone())
           || !valid_id(provider_id)
@@ -1727,6 +1748,14 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
     .graph
     .nodes
     .iter()
+    .chain(
+      workflow
+        .graph
+        .for_each
+        .iter()
+        .flatten()
+        .flat_map(|descriptor| descriptor.body.nodes.iter()),
+    )
     .filter(|node| node.handler == "runtime.script")
     .map(|node| node.id.as_str())
     .collect::<HashSet<_>>();
@@ -2758,6 +2787,8 @@ fn inspect_for_each_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
       let handler_allowed = matches!(
         node.handler.as_str(),
         "runtime.script"
+          | "engine.branch-select"
+          | "engine.branch-result"
           | "engine.choice-select"
           | "engine.choice-join"
           | "engine.choice-result"
@@ -2769,8 +2800,10 @@ fn inspect_for_each_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
           && matches!(fields.get("source"), Some(ValueExpression::Literal { value }) if value.is_string()))
           && node.timeout_ms.is_none()
           && node.script_runtime.as_ref().is_some_and(|runtime| {
-            runtime.binding_version == 1
-              && runtime.bindings == ["context", "attempt", "services", "secrets"]
+            ((runtime.binding_version == 1
+              && runtime.bindings == ["context", "attempt", "services", "secrets"])
+              || (runtime.binding_version == 3
+                && runtime.bindings == ["props", "context", "attempt", "services"]))
               && runtime.required_secrets.len() <= 64
               && runtime
                 .required_secrets
@@ -2824,12 +2857,16 @@ fn inspect_for_each_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
         }
         EdgeCondition::Truthy { .. } | EdgeCondition::Equals { .. } => false,
       };
+      let branch_edge_valid = edge.branch_id.as_ref().is_none_or(|branch_id| {
+        edge.from == format!("__woml_branch__{branch_id}__select")
+          && edge.id.starts_with(&format!("{branch_id}:"))
+      });
       valid &= valid_id(&edge.id)
         && edge_ids.insert(edge.id.as_str())
         && node_ids.contains(edge.from.as_str())
         && node_ids.contains(edge.to.as_str())
         && edge.approval_id.is_none()
-        && edge.branch_id.is_none()
+        && branch_edge_valid
         && condition_valid;
       if node_ids.contains(edge.from.as_str()) && node_ids.contains(edge.to.as_str()) {
         outgoing.entry(edge.from.as_str()).or_default().push(edge);
@@ -2905,6 +2942,70 @@ fn inspect_for_each_contract(workflow: &CompiledWorkflowDefinition, issues: &mut
         node.handler.as_str(),
         "engine.choice-select" | "engine.choice-join" | "engine.choice-result"
       ) || described_choice_nodes.contains(node.id.as_str())
+    });
+
+    let mut described_branch_nodes = HashSet::new();
+    for selector in descriptor
+      .body
+      .nodes
+      .iter()
+      .filter(|node| node.handler == "engine.branch-select")
+    {
+      let branch_id = selector
+        .id
+        .strip_prefix("__woml_branch__")
+        .and_then(|value| value.strip_suffix("__select"));
+      let Some(branch_id) = branch_id else {
+        valid = false;
+        continue;
+      };
+      let selections = outgoing
+        .get(selector.id.as_str())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+      let result = nodes.get(branch_id);
+      let joins = incoming
+        .get(branch_id)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+      let result_fields = result.and_then(|node| match &node.inputs {
+        ValueExpression::Object { fields } => Some(fields),
+        _ => None,
+      });
+      let selection_valid = selections.len() >= 2
+        && selections.iter().enumerate().all(|(index, edge)| {
+          edge.branch_id.as_deref() == Some(branch_id)
+            && edge.id.starts_with(&format!("{branch_id}:"))
+            && if index + 1 == selections.len() {
+              matches!(edge.condition, EdgeCondition::Always)
+            } else {
+              matches!(edge.condition, EdgeCondition::Boolean { .. })
+            }
+        });
+      let result_valid = result.is_some_and(|node| node.handler == "engine.branch-result")
+        && joins.len() == selections.len()
+        && joins.iter().all(|edge| {
+          edge.to == branch_id
+            && edge.branch_id.is_none()
+            && matches!(edge.condition, EdgeCondition::Always)
+        })
+        && result_fields.is_some_and(|fields| {
+          fields.len() == selections.len()
+            && selections.iter().all(|selection| {
+              fields.get(&selection.id).is_some_and(|expression| {
+                valid_for_each_result_reference(expression, &outer_step_ids, &body_node_ids)
+              })
+            })
+        });
+      valid &= selection_valid && result_valid;
+      described_branch_nodes.insert(selector.id.as_str());
+      described_branch_nodes.insert(branch_id);
+    }
+    valid &= descriptor.body.nodes.iter().all(|node| {
+      !matches!(
+        node.handler.as_str(),
+        "engine.branch-select" | "engine.branch-result"
+      ) || described_branch_nodes.contains(node.id.as_str())
     });
 
     let script_nodes: Vec<_> = descriptor
@@ -3377,6 +3478,15 @@ impl CompiledWorkflowDefinition {
     if !event.is_step()
       || self
         .node(step_id)
+        .or_else(|| {
+          self
+            .graph
+            .for_each
+            .iter()
+            .flatten()
+            .flat_map(|descriptor| descriptor.body.nodes.iter())
+            .find(|node| node.id == step_id)
+        })
         .is_none_or(|node| node.handler != "runtime.script")
       || hook
         .step_ids
@@ -4238,25 +4348,24 @@ impl CompiledWorkflowDefinition {
 
     if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V16 {
       for descriptor in self.graph.for_each.as_deref().unwrap_or_default() {
-        let sequential_scripts = descriptor.concurrency == 1
+        let fe4_body = descriptor.concurrency == 1
           && descriptor.body.entry_node_ids.len() == 1
-          && descriptor.body.choices.is_empty()
-          && descriptor.body.edges.len() + 1 == descriptor.body.nodes.len()
           && descriptor.body.nodes.iter().all(|node| {
-            node.handler == "runtime.script"
-              && node.retry_policy.is_none()
-              && node.timeout_ms.is_none()
-          })
-          && descriptor
-            .body
-            .edges
-            .iter()
-            .all(|edge| matches!(edge.condition, EdgeCondition::Always));
-        if !sequential_scripts {
+            matches!(
+              node.handler.as_str(),
+              "runtime.script"
+                | "engine.choice-select"
+                | "engine.choice-join"
+                | "engine.choice-result"
+                | "engine.parallel-start"
+                | "engine.parallel-join"
+            ) && node.timeout_ms.is_none()
+          });
+        if !fe4_body {
           issues.push(issue(
             ModelIssueCode::UnsupportedForEachExecution,
             format!(
-              "For-each {:?} requires concurrency=1 and a sequential script-only body until FE4/FE5.",
+              "For-each {:?} requires concurrency=1 and an FE4-compatible body until bounded iteration scheduling arrives in FE5.",
               descriptor.for_each_id
             ),
           ));

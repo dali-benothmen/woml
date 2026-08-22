@@ -558,6 +558,107 @@ impl NativeFetchObservation {
 
 /// Rust's durable authority for managed capability operations. It records a
 /// start before dispatch and a terminal event before exposing the result.
+fn iteration_attempt_identity(
+  projection: &crate::RunProjection,
+  run_id: &str,
+  definition_hash: &str,
+  node_id: &str,
+  attempt_number: u32,
+  invocation_id: &str,
+) -> Option<(crate::event::ForEachIterationScope, String)> {
+  projection.for_each.values().find_map(|loop_| {
+    loop_.executions.iter().find_map(|(index, execution)| {
+      let attempt = execution.attempts.iter().find_map(|attempt| {
+        (attempt.identity.node_id == node_id
+          && attempt.identity.attempt == attempt_number
+          && attempt.identity.invocation_id == invocation_id
+          && attempt.status == crate::projection::AttemptStatus::Started)
+          .then(|| {
+            attempt.idempotency_key.clone().map(|key| {
+              (
+                crate::event::ForEachIterationScope {
+                  for_each_id: loop_.for_each_id.clone(),
+                  index: *index,
+                },
+                key,
+              )
+            })
+          })
+          .flatten()
+      });
+      attempt.or_else(|| {
+        let lifecycle = execution.lifecycle_hooks.values().find_map(|hook| {
+          hook.actions.get(node_id).and_then(|action| {
+            (action.attempt == attempt_number
+              && action.status == crate::projection::LifecycleActionStatus::Started)
+              .then(|| {
+                (
+                  crate::event::ForEachIterationScope {
+                    for_each_id: loop_.for_each_id.clone(),
+                    index: *index,
+                  },
+                  crate::runtime::for_each_effect_key(
+                    run_id,
+                    definition_hash,
+                    &loop_.for_each_id,
+                    *index,
+                    node_id,
+                  ),
+                )
+              })
+          })
+        });
+        lifecycle.or_else(|| {
+          execution
+            .reusable_lifecycle_hooks
+            .values()
+            .any(|hook| hook.active_action_id.as_deref() == Some(node_id))
+            .then(|| {
+              (
+                crate::event::ForEachIterationScope {
+                  for_each_id: loop_.for_each_id.clone(),
+                  index: *index,
+                },
+                crate::runtime::for_each_effect_key(
+                  run_id,
+                  definition_hash,
+                  &loop_.for_each_id,
+                  *index,
+                  node_id,
+                ),
+              )
+            })
+        })
+      })
+    })
+  })
+}
+
+fn operation_with_iteration_scope(
+  projection: &crate::RunProjection,
+  identity: &crate::projection::OperationIdentity,
+) -> Option<(
+  Option<crate::event::ForEachIterationScope>,
+  crate::projection::OperationProjection,
+)> {
+  if let Some(operation) = projection.operations.get(identity) {
+    return Some((None, operation.clone()));
+  }
+  projection.for_each.values().find_map(|loop_| {
+    loop_.executions.iter().find_map(|(index, execution)| {
+      execution.operations.get(identity).map(|operation| {
+        (
+          Some(crate::event::ForEachIterationScope {
+            for_each_id: loop_.for_each_id.clone(),
+            index: *index,
+          }),
+          operation.clone(),
+        )
+      })
+    })
+  })
+}
+
 pub struct DurableCapabilityAuthority {
   registry: Arc<CapabilityRegistry>,
   store: Arc<AsyncMutex<DurableEventStore>>,
@@ -581,7 +682,7 @@ impl DurableCapabilityAuthority {
     request: CapabilityCallRequest,
     cancellation: CapabilityCancellationToken,
   ) -> Result<CapabilityCallResult, DurableCapabilityAuthorityError> {
-    let workflow_scope = {
+    let (workflow_scope, iteration_scope) = {
       let store = self.store.lock().await;
       let projection = store.projection(&request.run_id)?;
       let binding = store.run_binding(&request.run_id)?;
@@ -604,11 +705,22 @@ impl DurableCapabilityAuthority {
             })
         })
       });
-      if attempt
+      let root_key = attempt
         .and_then(|attempt| attempt.idempotency_key.as_deref())
         .map(str::to_string)
-        .or(lifecycle_key)
-        .as_deref()
+        .or(lifecycle_key);
+      let iteration = iteration_attempt_identity(
+        &projection,
+        &request.run_id,
+        &binding.definition_hash,
+        &request.node_id,
+        request.attempt_number,
+        &request.invocation_id,
+      );
+      let (iteration_scope, iteration_key) = iteration
+        .map(|(scope, key)| (Some(scope), Some(key)))
+        .unwrap_or((None, None));
+      if root_key.or(iteration_key).as_deref()
         != Some(request.identity.step_idempotency_key.as_str())
       {
         return Err(
@@ -618,7 +730,7 @@ impl DurableCapabilityAuthority {
           .into(),
         );
       }
-      binding.workflow_id
+      (binding.workflow_id, iteration_scope)
     };
     let metadata = match self.registry.safe_metadata(&request) {
       Ok(metadata) => metadata,
@@ -633,22 +745,33 @@ impl DurableCapabilityAuthority {
     };
     {
       let mut store = self.store.lock().await;
-      store.append_payload(
-        request.run_id.clone(),
-        generated_event_id(),
-        Utc::now(),
-        RunEventPayload::OperationStarted(OperationStartedData {
-          node_id: request.node_id.clone(),
-          attempt_number: request.attempt_number,
-          invocation_id: request.invocation_id.clone(),
-          call_id: request.call_id.clone(),
-          operation_key: request.identity.operation_key.clone(),
-          capability: request.capability.clone(),
-          operation: request.operation.clone(),
-          execution_mode: OperationExecutionMode::Managed,
-          metadata: metadata.clone(),
-        }),
-      )?;
+      let payload = RunEventPayload::OperationStarted(OperationStartedData {
+        node_id: request.node_id.clone(),
+        attempt_number: request.attempt_number,
+        invocation_id: request.invocation_id.clone(),
+        call_id: request.call_id.clone(),
+        operation_key: request.identity.operation_key.clone(),
+        capability: request.capability.clone(),
+        operation: request.operation.clone(),
+        execution_mode: OperationExecutionMode::Managed,
+        metadata: metadata.clone(),
+      });
+      if let Some(scope) = iteration_scope.clone() {
+        store.append_payload_scoped(
+          request.run_id.clone(),
+          generated_event_id(),
+          Utc::now(),
+          Some(scope),
+          payload,
+        )?;
+      } else {
+        store.append_payload(
+          request.run_id.clone(),
+          generated_event_id(),
+          Utc::now(),
+          payload,
+        )?;
+      }
     }
 
     let result = self
@@ -719,12 +842,22 @@ impl DurableCapabilityAuthority {
     };
     {
       let mut store = self.store.lock().await;
-      store.append_payload(
-        request.run_id.clone(),
-        generated_event_id(),
-        Utc::now(),
-        payload,
-      )?;
+      if let Some(scope) = iteration_scope {
+        store.append_payload_scoped(
+          request.run_id.clone(),
+          generated_event_id(),
+          Utc::now(),
+          Some(scope),
+          payload,
+        )?;
+      } else {
+        store.append_payload(
+          request.run_id.clone(),
+          generated_event_id(),
+          Utc::now(),
+          payload,
+        )?;
+      }
     }
     Ok(result)
   }
@@ -772,7 +905,7 @@ impl DurableCapabilityAuthority {
         request_body_bytes,
         ..
       } => {
-        {
+        let iteration_scope = {
           let store = self.store.lock().await;
           let projection = store.projection(&identity.run_id)?;
           let binding = store.run_binding(&identity.run_id)?;
@@ -795,13 +928,22 @@ impl DurableCapabilityAuthority {
                 })
             })
           });
-          if attempt
+          let root_key = attempt
             .and_then(|attempt| attempt.idempotency_key.as_deref())
             .map(str::to_string)
-            .or(lifecycle_key)
-            .as_deref()
-            != Some(identity.step_idempotency_key.as_str())
-          {
+            .or(lifecycle_key);
+          let iteration = iteration_attempt_identity(
+            &projection,
+            &identity.run_id,
+            &binding.definition_hash,
+            &identity.node_id,
+            identity.attempt_number,
+            &identity.invocation_id,
+          );
+          let (iteration_scope, iteration_key) = iteration
+            .map(|(scope, key)| (Some(scope), Some(key)))
+            .unwrap_or((None, None));
+          if root_key.or(iteration_key).as_deref() != Some(identity.step_idempotency_key.as_str()) {
             return Err(
               DurableStoreError::Contract(
                 "Native Fetch identity does not match its active durable attempt.".to_string(),
@@ -809,7 +951,8 @@ impl DurableCapabilityAuthority {
               .into(),
             );
           }
-        }
+          iteration_scope
+        };
         let mut metadata = Map::new();
         metadata.insert("method".to_string(), Value::String(method));
         metadata.insert("origin".to_string(), Value::String(origin));
@@ -822,22 +965,34 @@ impl DurableCapabilityAuthority {
           &identity.step_idempotency_key,
           &format!("native-fetch.{request_id}"),
         );
-        self.store.lock().await.append_payload(
-          identity.run_id.clone(),
-          generated_event_id(),
-          Utc::now(),
-          RunEventPayload::OperationStarted(OperationStartedData {
-            node_id: identity.node_id.clone(),
-            attempt_number: identity.attempt_number,
-            invocation_id: identity.invocation_id.clone(),
-            call_id: request_id,
-            operation_key,
-            capability: "http".to_string(),
-            operation: "fetch".to_string(),
-            execution_mode: OperationExecutionMode::Observed,
-            metadata,
-          }),
-        )?;
+        let payload = RunEventPayload::OperationStarted(OperationStartedData {
+          node_id: identity.node_id.clone(),
+          attempt_number: identity.attempt_number,
+          invocation_id: identity.invocation_id.clone(),
+          call_id: request_id,
+          operation_key,
+          capability: "http".to_string(),
+          operation: "fetch".to_string(),
+          execution_mode: OperationExecutionMode::Observed,
+          metadata,
+        });
+        let mut store = self.store.lock().await;
+        if let Some(scope) = iteration_scope {
+          store.append_payload_scoped(
+            identity.run_id.clone(),
+            generated_event_id(),
+            Utc::now(),
+            Some(scope),
+            payload,
+          )?;
+        } else {
+          store.append_payload(
+            identity.run_id.clone(),
+            generated_event_id(),
+            Utc::now(),
+            payload,
+          )?;
+        }
       }
       NativeFetchObservation::Completed {
         request_id,
@@ -846,46 +1001,55 @@ impl DurableCapabilityAuthority {
         duration_ms,
         ..
       } => {
-        let operation = {
+        let (iteration_scope, operation) = {
           let store = self.store.lock().await;
-          store
-            .projection(&identity.run_id)?
-            .operations
-            .get(&crate::projection::OperationIdentity {
+          operation_with_iteration_scope(
+            &store.projection(&identity.run_id)?,
+            &crate::projection::OperationIdentity {
               invocation_id: identity.invocation_id.clone(),
               call_id: request_id.clone(),
-            })
-            .cloned()
-            .ok_or_else(|| {
-              DurableStoreError::Contract(
-                "Native Fetch completion has no durable start.".to_string(),
-              )
-            })?
+            },
+          )
+          .ok_or_else(|| {
+            DurableStoreError::Contract("Native Fetch completion has no durable start.".to_string())
+          })?
         };
         let mut metadata = Map::new();
         metadata.insert("status".to_string(), Value::from(status));
         if let Some(bytes) = response_body_bytes.as_u64() {
           metadata.insert("responseBodyBytes".to_string(), Value::from(bytes));
         }
-        self.store.lock().await.append_payload(
-          identity.run_id.clone(),
-          generated_event_id(),
-          Utc::now(),
-          RunEventPayload::OperationSucceeded(OperationSucceededData {
-            node_id: operation.node_id,
-            attempt_number: operation.attempt_number,
-            invocation_id: operation.identity.invocation_id,
-            call_id: operation.identity.call_id,
-            operation_key: operation.operation_key,
-            capability: operation.capability,
-            operation: operation.operation,
-            execution_mode: operation.execution_mode,
-            metadata,
-            duration_ms,
-            result_bytes: 0,
-            result_digest: format!("sha256:{}", hex::encode(Sha256::digest([]))),
-          }),
-        )?;
+        let payload = RunEventPayload::OperationSucceeded(OperationSucceededData {
+          node_id: operation.node_id,
+          attempt_number: operation.attempt_number,
+          invocation_id: operation.identity.invocation_id,
+          call_id: operation.identity.call_id,
+          operation_key: operation.operation_key,
+          capability: operation.capability,
+          operation: operation.operation,
+          execution_mode: operation.execution_mode,
+          metadata,
+          duration_ms,
+          result_bytes: 0,
+          result_digest: format!("sha256:{}", hex::encode(Sha256::digest([]))),
+        });
+        let mut store = self.store.lock().await;
+        if let Some(scope) = iteration_scope {
+          store.append_payload_scoped(
+            identity.run_id.clone(),
+            generated_event_id(),
+            Utc::now(),
+            Some(scope),
+            payload,
+          )?;
+        } else {
+          store.append_payload(
+            identity.run_id.clone(),
+            generated_event_id(),
+            Utc::now(),
+            payload,
+          )?;
+        }
       }
       NativeFetchObservation::Failed {
         request_id,
@@ -893,19 +1057,18 @@ impl DurableCapabilityAuthority {
         error,
         ..
       } => {
-        let operation = {
+        let (iteration_scope, operation) = {
           let store = self.store.lock().await;
-          store
-            .projection(&identity.run_id)?
-            .operations
-            .get(&crate::projection::OperationIdentity {
+          operation_with_iteration_scope(
+            &store.projection(&identity.run_id)?,
+            &crate::projection::OperationIdentity {
               invocation_id: identity.invocation_id.clone(),
               call_id: request_id.clone(),
-            })
-            .cloned()
-            .ok_or_else(|| {
-              DurableStoreError::Contract("Native Fetch failure has no durable start.".to_string())
-            })?
+            },
+          )
+          .ok_or_else(|| {
+            DurableStoreError::Contract("Native Fetch failure has no durable start.".to_string())
+          })?
         };
         let kind = match error.kind {
           NativeFetchFailureKind::TimedOut => CapabilityFailureKind::TimedOut,
@@ -916,31 +1079,43 @@ impl DurableCapabilityAuthority {
             CapabilityFailureKind::TransportFailed
           }
         };
-        self.store.lock().await.append_payload(
-          identity.run_id.clone(),
-          generated_event_id(),
-          Utc::now(),
-          RunEventPayload::OperationFailed(OperationFailedData {
-            node_id: operation.node_id,
-            attempt_number: operation.attempt_number,
-            invocation_id: operation.identity.invocation_id,
-            call_id: operation.identity.call_id,
-            operation_key: operation.operation_key,
-            capability: operation.capability,
-            operation: operation.operation,
-            execution_mode: operation.execution_mode,
-            metadata: Map::new(),
-            duration_ms,
-            failure: CapabilityFailure {
-              kind,
-              code: error.code,
-              message: error.message,
-              retryable: false,
-              ambiguous: true,
-              details: None,
-            },
-          }),
-        )?;
+        let payload = RunEventPayload::OperationFailed(OperationFailedData {
+          node_id: operation.node_id,
+          attempt_number: operation.attempt_number,
+          invocation_id: operation.identity.invocation_id,
+          call_id: operation.identity.call_id,
+          operation_key: operation.operation_key,
+          capability: operation.capability,
+          operation: operation.operation,
+          execution_mode: operation.execution_mode,
+          metadata: Map::new(),
+          duration_ms,
+          failure: CapabilityFailure {
+            kind,
+            code: error.code,
+            message: error.message,
+            retryable: false,
+            ambiguous: true,
+            details: None,
+          },
+        });
+        let mut store = self.store.lock().await;
+        if let Some(scope) = iteration_scope {
+          store.append_payload_scoped(
+            identity.run_id.clone(),
+            generated_event_id(),
+            Utc::now(),
+            Some(scope),
+            payload,
+          )?;
+        } else {
+          store.append_payload(
+            identity.run_id.clone(),
+            generated_event_id(),
+            Utc::now(),
+            payload,
+          )?;
+        }
       }
     }
     Ok(())
@@ -954,8 +1129,8 @@ impl DurableCapabilityAuthority {
     failure.validate().map_err(DurableStoreError::Contract)?;
     let operations = {
       let store = self.store.lock().await;
-      store
-        .projection(&identity.run_id)?
+      let projection = store.projection(&identity.run_id)?;
+      let mut operations = projection
         .operations
         .values()
         .filter(|operation| {
@@ -964,27 +1139,65 @@ impl DurableCapabilityAuthority {
             && operation.status == crate::projection::OperationStatus::Started
         })
         .cloned()
-        .collect::<Vec<_>>()
+        .map(|operation| (None, operation))
+        .collect::<Vec<_>>();
+      for loop_ in projection.for_each.values() {
+        for (index, execution) in &loop_.executions {
+          operations.extend(
+            execution
+              .operations
+              .values()
+              .filter(|operation| {
+                operation.identity.invocation_id == identity.invocation_id
+                  && operation.execution_mode == OperationExecutionMode::Observed
+                  && operation.status == crate::projection::OperationStatus::Started
+              })
+              .cloned()
+              .map(|operation| {
+                (
+                  Some(crate::event::ForEachIterationScope {
+                    for_each_id: loop_.for_each_id.clone(),
+                    index: *index,
+                  }),
+                  operation,
+                )
+              }),
+          );
+        }
+      }
+      operations
     };
-    for operation in operations {
-      self.store.lock().await.append_payload(
-        identity.run_id.clone(),
-        generated_event_id(),
-        Utc::now(),
-        RunEventPayload::OperationFailed(OperationFailedData {
-          node_id: operation.node_id,
-          attempt_number: operation.attempt_number,
-          invocation_id: operation.identity.invocation_id,
-          call_id: operation.identity.call_id,
-          operation_key: operation.operation_key,
-          capability: operation.capability,
-          operation: operation.operation,
-          execution_mode: operation.execution_mode,
-          metadata: operation.metadata,
-          duration_ms: 0.0,
-          failure: failure.clone(),
-        }),
-      )?;
+    for (iteration_scope, operation) in operations {
+      let payload = RunEventPayload::OperationFailed(OperationFailedData {
+        node_id: operation.node_id,
+        attempt_number: operation.attempt_number,
+        invocation_id: operation.identity.invocation_id,
+        call_id: operation.identity.call_id,
+        operation_key: operation.operation_key,
+        capability: operation.capability,
+        operation: operation.operation,
+        execution_mode: operation.execution_mode,
+        metadata: operation.metadata,
+        duration_ms: 0.0,
+        failure: failure.clone(),
+      });
+      let mut store = self.store.lock().await;
+      if let Some(scope) = iteration_scope {
+        store.append_payload_scoped(
+          identity.run_id.clone(),
+          generated_event_id(),
+          Utc::now(),
+          Some(scope),
+          payload,
+        )?;
+      } else {
+        store.append_payload(
+          identity.run_id.clone(),
+          generated_event_id(),
+          Utc::now(),
+          payload,
+        )?;
+      }
     }
     Ok(())
   }

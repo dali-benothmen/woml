@@ -7742,19 +7742,28 @@ function compileValidatedWoml(
 export function compilePreparedReusableWorkflow(
   prepared: PreparedReusableWorkflow,
   moduleRuntime?: CompiledModuleRuntimeV1
-): CompiledWorkflowDefinitionV14 | CompiledWorkflowDefinitionV15 {
+):
+  | CompiledWorkflowDefinitionV14
+  | CompiledWorkflowDefinitionV15
+  | CompiledWorkflowDefinitionV16 {
   const compiled = compileValidatedWoml(
     prepared.document,
     moduleRuntime,
     true
   );
-  if (compiled.schemaVersion !== 14 && compiled.schemaVersion !== 15) {
-    throw new Error('reusable-step lowering did not produce Model v14 or v15');
+  if (
+    compiled.schemaVersion !== 14 &&
+    compiled.schemaVersion !== 15 &&
+    compiled.schemaVersion !== 16
+  ) {
+    throw new Error(
+      'reusable-step lowering did not produce Model v14, v15, or v16'
+    );
   }
   const invocationsByNode = new Map(
     prepared.invocations.map(invocation => [invocation.nodeId, invocation])
   );
-  const nodes = compiled.graph.nodes.map(node => {
+  const patchReusableNode = (node: CompiledWorkflowNode): CompiledWorkflowNode => {
     const invocation = invocationsByNode.get(node.id);
     if (invocation === undefined) return node;
     const requiredSecrets = invocation.props
@@ -7779,17 +7788,37 @@ export function compilePreparedReusableWorkflow(
         },
       },
     };
-  });
+  };
+  const nodes = compiled.graph.nodes.map(patchReusableNode);
+  const compiledForEach =
+    compiled.schemaVersion === 16 ? compiled.graph.forEach : undefined;
+  const forEach = compiledForEach?.map(loop => ({
+    ...loop,
+    body: {
+      ...loop.body,
+      nodes: loop.body.nodes.map(patchReusableNode),
+    },
+  }));
   const visibility = new Map(
     (compiled.graph.contextVisibility ?? []).map(item => [item.nodeId, item.stepIds])
   );
+  for (const loop of compiledForEach ?? []) {
+    for (const item of loop.body.contextVisibility) {
+      visibility.set(item.nodeId, [...loop.outerStepIds, ...item.stepIds]);
+    }
+  }
   const providerById = new Map(
     prepared.providerInvocations.map(invocation => [invocation.providerId, invocation])
   );
   const deliveryById = new Map(
     prepared.providerDeliveries.map(delivery => [delivery.providerId, delivery])
   );
-  const nodeById = new Map(compiled.graph.nodes.map(node => [node.id, node]));
+  const nodeById = new Map([
+    ...compiled.graph.nodes.map(node => [node.id, node] as const),
+    ...(compiledForEach ?? []).flatMap(loop =>
+      loop.body.nodes.map(node => [node.id, node] as const)
+    ),
+  ]);
   const visibilityMemo = new Map<string, ReadonlySet<string>>();
   const visibleBeforeNode = (nodeId: string): ReadonlySet<string> => {
     const explicit = visibility.get(nodeId);
@@ -7930,15 +7959,23 @@ export function compilePreparedReusableWorkflow(
           })),
         })),
       };
-  return {
+  const patched = {
     ...compiled,
-    graph: { ...compiled.graph, nodes: patchedNodes },
+    graph: {
+      ...compiled.graph,
+      nodes: patchedNodes,
+      ...(forEach === undefined ? {} : { forEach }),
+    },
     ...(patchedLifecycle === undefined ? {} : { lifecycle: patchedLifecycle }),
     reusableDefinitions: [
       ...prepared.invocations,
       ...prepared.providerInvocations,
     ],
   };
+  return patched as
+    | CompiledWorkflowDefinitionV14
+    | CompiledWorkflowDefinitionV15
+    | CompiledWorkflowDefinitionV16;
 }
 
 export function compileWoml(
@@ -7965,7 +8002,8 @@ export function compileWomlWithModules(
   | CompiledWorkflowDefinitionV12
   | CompiledWorkflowDefinitionV13
   | CompiledWorkflowDefinitionV14
-  | CompiledWorkflowDefinitionV15 {
+  | CompiledWorkflowDefinitionV15
+  | CompiledWorkflowDefinitionV16 {
   const compiled = compileValidatedWoml(
     document,
     moduleRuntime,
@@ -7973,11 +8011,6 @@ export function compileWomlWithModules(
     options.forcedCommunicationServices ??
       (options.forceModelV15 === true ? ['telegram'] : [])
   );
-  if (compiled.schemaVersion === 16) {
-    throw new Error(
-      'Model v16 local-module composition is implemented in FE4; FE2 lowers module-free for-each workflows only.'
-    );
-  }
   if (
     compiled.schemaVersion !== 9 &&
     compiled.schemaVersion !== 10 &&
@@ -7985,10 +8018,11 @@ export function compileWomlWithModules(
     compiled.schemaVersion !== 12 &&
     compiled.schemaVersion !== 13 &&
     compiled.schemaVersion !== 14 &&
-    compiled.schemaVersion !== 15
+    compiled.schemaVersion !== 15 &&
+    compiled.schemaVersion !== 16
   ) {
     throw new Error(
-      'module compilation did not produce Model v9, v10, v11, v12, v13, v14, or v15'
+      'module compilation did not produce Model v9, v10, v11, v12, v13, v14, v15, or v16'
     );
   }
   return compiled;

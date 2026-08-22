@@ -18,6 +18,7 @@ pub const RUNTIME_POLICY_QUEUE_CEILING: i64 = 10_000;
 use crate::engine::{
   ready_node_ids_for_projection, ready_node_ids_for_projection_at, step_effect_idempotency_key,
   validate_event_history_against_definition, validate_payload_against_definition,
+  validate_scoped_payload_against_definition,
 };
 use crate::event::{
   is_definition_hash, ApprovalDecision, ApprovalDecisionSource, ApprovalFailure,
@@ -4024,7 +4025,9 @@ impl DurableEventStore {
     let mut events = load_events(&transaction, &run_id)?;
     let workflow = definition_for_run(&transaction, &run_id)?;
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
-    let payloads = if matches!(
+    let payloads = if iteration.is_some() {
+      vec![payload]
+    } else if matches!(
       event_schema_version,
       crate::RUN_EVENT_SCHEMA_VERSION_V10
         | crate::RUN_EVENT_SCHEMA_VERSION_V11
@@ -4037,30 +4040,39 @@ impl DurableEventStore {
     } else {
       vec![payload]
     };
-    if iteration.is_some() && payloads.len() != 1 {
-      return Err(DurableStoreError::Contract(
-        "A scoped iteration payload cannot expand into multiple events.".to_string(),
-      ));
-    }
     let mut first_event = None;
     for (index, payload) in payloads.into_iter().enumerate() {
-      validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
+      if let Some(scope) = iteration.as_ref() {
+        validate_scoped_payload_against_definition(
+          &workflow,
+          &binding.definition_hash,
+          &run_id,
+          scope,
+          &payload,
+        )
         .map_err(DurableStoreError::Contract)?;
-      if let RunEventPayload::BranchSelected(data) = &payload {
-        let projection = fold_events(&events)?;
-        if projection.branch_selections.contains_key(&data.branch_id) {
-          return Err(DurableStoreError::Contract(format!(
-            "Branch {:?} already has an immutable selection.",
-            data.branch_id
-          )));
-        }
-        let selector_id = format!("__woml_branch__{}__select", data.branch_id);
-        let ready = ready_node_ids_for_projection(&workflow, &binding.definition_hash, &projection)
+      } else {
+        validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
           .map_err(DurableStoreError::Contract)?;
-        if !ready.iter().any(|node_id| node_id == &selector_id) {
-          return Err(DurableStoreError::Contract(format!(
-            "Branch selector {selector_id:?} is not ready for selection."
-          )));
+      }
+      if iteration.is_none() {
+        if let RunEventPayload::BranchSelected(data) = &payload {
+          let projection = fold_events(&events)?;
+          if projection.branch_selections.contains_key(&data.branch_id) {
+            return Err(DurableStoreError::Contract(format!(
+              "Branch {:?} already has an immutable selection.",
+              data.branch_id
+            )));
+          }
+          let selector_id = format!("__woml_branch__{}__select", data.branch_id);
+          let ready =
+            ready_node_ids_for_projection(&workflow, &binding.definition_hash, &projection)
+              .map_err(DurableStoreError::Contract)?;
+          if !ready.iter().any(|node_id| node_id == &selector_id) {
+            return Err(DurableStoreError::Contract(format!(
+              "Branch selector {selector_id:?} is not ready for selection."
+            )));
+          }
         }
       }
       let event = append_to_history_scoped(
@@ -9825,6 +9837,7 @@ fn append_to_history(
   )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_to_history_scoped(
   transaction: &Transaction<'_>,
   events: &mut Vec<RunEvent>,
@@ -10182,8 +10195,14 @@ impl DurableDagEngine {
     iteration: crate::event::ForEachIterationScope,
     payload: RunEventPayload,
   ) -> Result<RunProjection, DurableEngineError> {
-    validate_payload_against_definition(&self.workflow, &self.definition_hash, &payload)
-      .map_err(DurableEngineError::Contract)?;
+    validate_scoped_payload_against_definition(
+      &self.workflow,
+      &self.definition_hash,
+      run_id,
+      &iteration,
+      &payload,
+    )
+    .map_err(DurableEngineError::Contract)?;
     let (_, projection) =
       self
         .store

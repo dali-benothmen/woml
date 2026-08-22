@@ -1,6 +1,6 @@
 # WOML `<for-each>` Implementation Plan
 
-- Status: FE0 through FE3 completed; FE4 is next
+- Status: FE0 through FE4 completed; FE5 is next
 - Target language surface: WOML after v1.0
 - Target compiled model: Model v16
 - Target run events: Event v15
@@ -564,9 +564,8 @@ Completed in FE3:
   downstream steps; and
 - an empty array settles immediately without creating an iteration.
 
-Control flow, reusable definitions, services, retries, lifecycle composition,
-bounded concurrency, and complete failed/cancelled recovery remain assigned to
-FE4 through FE6.
+Bounded concurrency and complete failed/cancelled recovery remain assigned to
+FE5 and FE6.
 
 ### FE4 — Compose control flow, modules, services, retries, and lifecycle
 
@@ -577,6 +576,23 @@ maps.
 
 **Result:** the reviewed organization workflow and realistic service-backed
 loops work without losing per-item identity or existing durability guarantees.
+
+Completed in FE4:
+
+- each iteration executes its compiled local DAG with `<choose>`, `<switch>`,
+  and `<parallel>` selection/join semantics; bounded concurrent scheduling is
+  still owned by FE5;
+- expanded reusable WOML steps and imported JavaScript/TypeScript modules run
+  with iteration-aware props, module bindings, source artifacts, and Model v16
+  Definition Package v11;
+- every nested attempt, retry schedule, stable idempotency key, managed service
+  call, and observed native Fetch call carries the loop ID and input index;
+- generic step lifecycle hooks and reusable-step lifecycle hooks receive
+  `context.item` and `context.iteration` and persist their outcomes inside the
+  iteration scope; and
+- the end-to-end acceptance workflow proves conditionals, a switch, parallel
+  boundaries, retry, modules, Fetch, cache service calls, lifecycle hooks, and
+  ordered aggregation through the real Rust engine and Bun Worker host.
 
 ### FE5 — Add bounded concurrent iteration scheduling
 

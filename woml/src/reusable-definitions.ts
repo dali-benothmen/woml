@@ -72,7 +72,7 @@ const relativeWomlPattern =
   /^(?:\.\/|\.\.\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.woml$/;
 const exactSecretReference = /^\{\{secrets\.([A-Z][A-Z0-9_]*)\}\}$/;
 const exactContextReference =
-  /^\{\{context\.(?:payload(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\.[a-z][A-Za-z0-9]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\}\}$/;
+  /^\{\{context\.(?:payload(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\.[a-z][A-Za-z0-9]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|item(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|iteration\.(?:index|total))\}\}$/;
 const reservedBindingNames = new Set(['__proto__', 'prototype', 'constructor']);
 const reservedCustomTags = new Set([
   'woml',

@@ -473,6 +473,50 @@ impl<'a> ExecuteMessage<'a> {
   }
 
   #[allow(clippy::too_many_arguments)]
+  pub fn lifecycle_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    action_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    lifecycle: &'a LifecycleBindingV1,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+  ) -> Result<Self, String> {
+    if total == 0 || total > 10_000 || index >= total {
+      return Err("Script iteration bindings require index < total <= 10000.".to_string());
+    }
+    Ok(Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id: action_id,
+      attempt,
+      mode: ScriptExecutionMode::Lifecycle,
+      handler: "runtime.lifecycle-script",
+      timeout_ms,
+      source,
+      context: ScriptExecutionContext::iteration(context, item, index, total),
+      lifecycle: Some(lifecycle),
+      reusable: None,
+      reusable_lifecycle: None,
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    })
+  }
+
+  #[allow(clippy::too_many_arguments)]
   pub fn runtime_script_with_iteration(
     invocation_id: &'a str,
     run_id: &'a str,
@@ -485,6 +529,103 @@ impl<'a> ExecuteMessage<'a> {
     index: u32,
     total: u32,
     secrets: &'a BTreeMap<String, String>,
+  ) -> Result<Self, String> {
+    Self::runtime_script_with_iteration_modules(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      item,
+      index,
+      total,
+      secrets,
+      &[],
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn runtime_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+  ) -> Result<Self, String> {
+    Self::script_with_iteration_modules_and_reusable(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      item,
+      index,
+      total,
+      secrets,
+      modules,
+      None,
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn reusable_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: &'a ReusableScriptBindingV3,
+  ) -> Result<Self, String> {
+    Self::script_with_iteration_modules_and_reusable(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      item,
+      index,
+      total,
+      secrets,
+      modules,
+      Some(reusable),
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  fn script_with_iteration_modules_and_reusable(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: Option<&'a ReusableScriptBindingV3>,
   ) -> Result<Self, String> {
     if total == 0 || total > 10_000 || index >= total {
       return Err("Script iteration bindings require index < total <= 10000.".to_string());
@@ -503,14 +644,14 @@ impl<'a> ExecuteMessage<'a> {
       source,
       context: ScriptExecutionContext::iteration(context, item, index, total),
       lifecycle: None,
-      reusable: None,
+      reusable,
       reusable_lifecycle: None,
       bindings: ScriptBindings {
         binding_version: 1,
         services_version: 1,
         secrets,
       },
-      modules: &[],
+      modules,
     })
   }
 
@@ -589,6 +730,51 @@ impl<'a> ExecuteMessage<'a> {
       },
       modules,
     }
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn reusable_lifecycle_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    action_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: &'a ReusableScriptBindingV3,
+    reusable_lifecycle: &'a ReusableLifecycleBindingV1,
+  ) -> Result<Self, String> {
+    if total == 0 || total > 10_000 || index >= total {
+      return Err("Script iteration bindings require index < total <= 10000.".to_string());
+    }
+    Ok(Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id: action_id,
+      attempt,
+      mode: ScriptExecutionMode::Lifecycle,
+      handler: "runtime.lifecycle-script",
+      timeout_ms,
+      source,
+      context: ScriptExecutionContext::iteration(context, item, index, total),
+      lifecycle: None,
+      reusable: Some(reusable),
+      reusable_lifecycle: Some(reusable_lifecycle),
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    })
   }
 }
 

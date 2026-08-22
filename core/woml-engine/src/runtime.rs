@@ -30,6 +30,7 @@ use crate::event::{
   ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData,
   RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFinalizedData, RunOutcomeDecidedData,
   RunSucceededData, StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
+  StepRetryScheduledData,
 };
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{
@@ -2246,6 +2247,15 @@ fn resolved_reusable_props(
   context: &WorkflowContext,
   secrets: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, Value>, RuntimeExecutionError> {
+  resolved_reusable_props_with_iteration(descriptor, context, secrets, None)
+}
+
+fn resolved_reusable_props_with_iteration(
+  descriptor: &CompiledReusableInvocation,
+  context: &WorkflowContext,
+  secrets: &BTreeMap<String, String>,
+  iteration: Option<(&Value, u32, u32)>,
+) -> Result<BTreeMap<String, Value>, RuntimeExecutionError> {
   let props = match descriptor {
     CompiledReusableInvocation::Step { props, .. }
     | CompiledReusableInvocation::NotificationProvider { props, .. } => props,
@@ -2258,6 +2268,30 @@ fn resolved_reusable_props(
           Value::String(value.clone())
         }
         crate::model::CompiledReusablePropExpression::Context { path } => {
+          if let Some((item, index, total)) = iteration {
+            if path == "item" || path.starts_with("item.") {
+              let mut value = item;
+              for segment in path.split('.').skip(1) {
+                value = value.get(segment).ok_or_else(|| {
+                  RuntimeExecutionError::InvalidConfiguration(format!(
+                    "Reusable prop {:?} is unavailable on context.item.",
+                    prop.name
+                  ))
+                })?;
+              }
+              return Ok((prop.binding_name.clone(), value.clone()));
+            }
+            if path == "iteration.index" || path == "iteration.total" {
+              return Ok((
+                prop.binding_name.clone(),
+                Value::from(if path.ends_with("index") {
+                  index
+                } else {
+                  total
+                }),
+              ));
+            }
+          }
           let path = path
             .split('.')
             .map(|segment| {
@@ -2292,6 +2326,46 @@ fn resolved_reusable_props(
       Ok((prop.binding_name.clone(), value))
     })
     .collect()
+}
+
+fn reusable_step_binding_for_iteration(
+  workflow: &CompiledWorkflowDefinition,
+  node_id: &str,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+  secrets: &BTreeMap<String, String>,
+) -> Result<Option<ReusableScriptBindingV3>, RuntimeExecutionError> {
+  let Some(descriptor) = reusable_step_descriptor(workflow, node_id) else {
+    return Ok(None);
+  };
+  let CompiledReusableInvocation::Step {
+    invocation_id,
+    alias,
+    definition_digest,
+    source,
+    ..
+  } = descriptor
+  else {
+    unreachable!()
+  };
+  Ok(Some(ReusableScriptBindingV3 {
+    profile: "woml.reusable-script-binding/v3".to_string(),
+    invocation_id: invocation_id.clone(),
+    definition: ReusableDefinitionBindingV3 {
+      kind: ReusableDefinitionKind::Step,
+      alias: alias.clone(),
+      digest: definition_digest.clone(),
+      source: source.clone(),
+    },
+    props: resolved_reusable_props_with_iteration(
+      descriptor,
+      context,
+      secrets,
+      Some((item, index, total)),
+    )?,
+  }))
 }
 
 fn reusable_step_binding(
@@ -2369,6 +2443,60 @@ fn reusable_definition_binding(
       source: source.clone(),
     },
     props: resolved_reusable_props(descriptor, context, secrets)?,
+  })
+}
+
+fn reusable_definition_binding_for_iteration(
+  descriptor: &CompiledReusableInvocation,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+  secrets: &BTreeMap<String, String>,
+) -> Result<ReusableScriptBindingV3, RuntimeExecutionError> {
+  let (invocation_id, kind, alias, definition_digest, source) = match descriptor {
+    CompiledReusableInvocation::Step {
+      invocation_id,
+      alias,
+      definition_digest,
+      source,
+      ..
+    } => (
+      invocation_id,
+      ReusableDefinitionKind::Step,
+      alias,
+      definition_digest,
+      source,
+    ),
+    CompiledReusableInvocation::NotificationProvider {
+      provider_id,
+      alias,
+      definition_digest,
+      source,
+      ..
+    } => (
+      provider_id,
+      ReusableDefinitionKind::NotificationProvider,
+      alias,
+      definition_digest,
+      source,
+    ),
+  };
+  Ok(ReusableScriptBindingV3 {
+    profile: "woml.reusable-script-binding/v3".to_string(),
+    invocation_id: invocation_id.clone(),
+    definition: ReusableDefinitionBindingV3 {
+      kind,
+      alias: alias.clone(),
+      digest: definition_digest.clone(),
+      source: source.clone(),
+    },
+    props: resolved_reusable_props_with_iteration(
+      descriptor,
+      context,
+      secrets,
+      Some((item, index, total)),
+    )?,
   })
 }
 
@@ -6242,7 +6370,7 @@ fn for_each_digest(value: &Value) -> Result<String, RuntimeExecutionError> {
   Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
-fn for_each_effect_key(
+pub(crate) fn for_each_effect_key(
   run_id: &str,
   definition_hash: &str,
   for_each_id: &str,
@@ -6263,47 +6391,7 @@ fn for_each_effect_key(
   format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-fn for_each_body_order(
-  descriptor: &crate::model::CompiledForEach,
-) -> Result<Vec<String>, RuntimeExecutionError> {
-  let mut order = Vec::with_capacity(descriptor.body.nodes.len());
-  let mut current = descriptor
-    .body
-    .entry_node_ids
-    .first()
-    .cloned()
-    .ok_or_else(|| RuntimeExecutionError::Stalled("for-each body has no entry node".to_string()))?;
-  loop {
-    if order.contains(&current) {
-      return Err(RuntimeExecutionError::Stalled(
-        "for-each body contains a cycle".to_string(),
-      ));
-    }
-    order.push(current.clone());
-    if current == descriptor.body.terminal_node_id {
-      break;
-    }
-    current = descriptor
-      .body
-      .edges
-      .iter()
-      .find(|edge| edge.from == current)
-      .map(|edge| edge.to.clone())
-      .ok_or_else(|| {
-        RuntimeExecutionError::Stalled(format!(
-          "for-each body node {current:?} has no sequential continuation"
-        ))
-      })?;
-  }
-  if order.len() != descriptor.body.nodes.len() {
-    return Err(RuntimeExecutionError::Stalled(
-      "for-each body is not one sequential executable route".to_string(),
-    ));
-  }
-  Ok(order)
-}
-
-fn resolve_for_each_result(
+fn resolve_for_each_reference(
   expression: &ValueExpression,
   context: &WorkflowContext,
   item: &Value,
@@ -6348,6 +6436,869 @@ fn resolve_for_each_result(
       })?;
   }
   Ok(value)
+}
+
+fn for_each_selected_choice(
+  descriptor: &crate::model::CompiledForEach,
+  selector_id: &str,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+) -> Result<(String, String), RuntimeExecutionError> {
+  let choice = descriptor
+    .body
+    .choices
+    .iter()
+    .find(|choice| choice.selector_node_id == selector_id)
+    .ok_or_else(|| {
+      RuntimeExecutionError::Stalled(format!(
+        "for-each choice selector {selector_id:?} has no descriptor"
+      ))
+    })?;
+  if let Some(selector) = &choice.string_selector {
+    let selected = resolve_for_each_reference(selector, context, item, index, total)?;
+    let Value::String(selected) = selected else {
+      return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+        "for-each switch {:?} must resolve to a string",
+        choice.choice_id
+      )));
+    };
+    let arm_id = choice
+      .string_cases
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|case| case.value == selected)
+      .map(|case| case.arm_id.clone())
+      .or_else(|| choice.default_arm_id.clone())
+      .ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(format!(
+          "for-each switch {:?} has no matching case or default",
+          choice.choice_id
+        ))
+      })?;
+    return Ok((choice.choice_id.clone(), arm_id));
+  }
+  for edge in descriptor
+    .body
+    .edges
+    .iter()
+    .filter(|edge| edge.from == selector_id && choice.arm_ids.contains(&edge.id))
+  {
+    match &edge.condition {
+      crate::model::EdgeCondition::Boolean { value } => {
+        match resolve_for_each_reference(value, context, item, index, total)? {
+          Value::Bool(true) => return Ok((choice.choice_id.clone(), edge.id.clone())),
+          Value::Bool(false) => {}
+          _ => {
+            return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+              "for-each choice {:?} condition must resolve to a boolean",
+              choice.choice_id
+            )))
+          }
+        }
+      }
+      crate::model::EdgeCondition::Always => {
+        return Ok((choice.choice_id.clone(), edge.id.clone()))
+      }
+      _ => {
+        return Err(RuntimeExecutionError::Stalled(format!(
+          "for-each choice {:?} contains an unsupported condition",
+          choice.choice_id
+        )))
+      }
+    }
+  }
+  Err(RuntimeExecutionError::InvalidConfiguration(format!(
+    "for-each choice {:?} has no selectable route",
+    choice.choice_id
+  )))
+}
+
+fn for_each_selected_branch(
+  descriptor: &crate::model::CompiledForEach,
+  selector_node_id: &str,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+) -> Result<(String, String), RuntimeExecutionError> {
+  let branch_id = selector_node_id
+    .strip_prefix("__woml_branch__")
+    .and_then(|value| value.strip_suffix("__select"))
+    .ok_or_else(|| {
+      RuntimeExecutionError::InvalidConfiguration(format!(
+        "for-each conditional selector {selector_node_id:?} has no canonical identity"
+      ))
+    })?;
+  for edge in descriptor
+    .body
+    .edges
+    .iter()
+    .filter(|edge| edge.from == selector_node_id)
+  {
+    match &edge.condition {
+      crate::model::EdgeCondition::Boolean { value } => {
+        let selected = resolve_for_each_reference(value, context, item, index, total)?;
+        match selected {
+          Value::Bool(true) => return Ok((branch_id.to_string(), edge.id.clone())),
+          Value::Bool(false) => {}
+          _ => {
+            return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+              "for-each condition for branch {branch_id:?} must resolve to a boolean"
+            )))
+          }
+        }
+      }
+      crate::model::EdgeCondition::Always => return Ok((branch_id.to_string(), edge.id.clone())),
+      _ => {
+        return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+          "for-each branch {branch_id:?} uses an unsupported condition"
+        )))
+      }
+    }
+  }
+  Err(RuntimeExecutionError::InvalidConfiguration(format!(
+    "for-each branch {branch_id:?} has no selectable route"
+  )))
+}
+
+fn for_each_edge_is_active(
+  descriptor: &crate::model::CompiledForEach,
+  edge: &crate::model::CompiledWorkflowEdge,
+  selections: &BTreeMap<String, String>,
+) -> bool {
+  if let Some(branch_id) = edge.branch_id.as_deref() {
+    return selections
+      .get(branch_id)
+      .is_some_and(|selected| selected == &edge.id);
+  }
+  if let Some(result_node) = descriptor
+    .body
+    .nodes
+    .iter()
+    .find(|node| node.id == edge.to && node.handler == "engine.branch-result")
+  {
+    if let Some(selected_arm) = selections.get(&result_node.id) {
+      if let ValueExpression::Object { fields } = &result_node.inputs {
+        if let Some(ValueExpression::ContextReference { path }) = fields.get(selected_arm) {
+          if let [root, selected_node, ..] = path.as_slice() {
+            if root == "steps" {
+              return edge.from == *selected_node;
+            }
+          }
+        }
+      }
+    }
+  }
+  for choice in &descriptor.body.choices {
+    if choice.arm_ids.contains(&edge.id) {
+      return selections
+        .get(&choice.choice_id)
+        .is_some_and(|selected| selected == &edge.id);
+    }
+    if let Some(selected) = selections.get(&choice.choice_id) {
+      if edge.id == format!("{selected}:join") {
+        return true;
+      }
+      if edge.to == choice.join_node_id && edge.id.ends_with(":join") {
+        return false;
+      }
+    } else if edge.to == choice.join_node_id && edge.id.ends_with(":join") {
+      return false;
+    }
+  }
+  true
+}
+
+fn for_each_ready_nodes(
+  descriptor: &crate::model::CompiledForEach,
+  completed: &HashSet<String>,
+  selections: &BTreeMap<String, String>,
+) -> Vec<String> {
+  descriptor
+    .body
+    .nodes
+    .iter()
+    .filter(|node| !completed.contains(&node.id))
+    .filter(|node| {
+      let incoming = descriptor
+        .body
+        .edges
+        .iter()
+        .filter(|edge| edge.to == node.id)
+        .filter(|edge| for_each_edge_is_active(descriptor, edge, selections))
+        .collect::<Vec<_>>();
+      if incoming.is_empty() {
+        descriptor.body.entry_node_ids.contains(&node.id)
+      } else {
+        incoming.iter().all(|edge| completed.contains(&edge.from))
+      }
+    })
+    .map(|node| node.id.clone())
+    .collect()
+}
+
+fn for_each_module_bindings(options: &RuntimeExecutionOptions) -> Vec<RuntimeModuleBinding> {
+  options
+    .runtime_modules
+    .iter()
+    .filter(|module| !module.name.starts_with("__woml_"))
+    .map(|module| RuntimeModuleBinding {
+      name: module.name.clone(),
+      bundle_digest: module.bundle_digest.clone(),
+      exports: module.exports.clone(),
+    })
+    .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drive_for_each_step_lifecycle<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  descriptor: &crate::model::CompiledForEach,
+  node_id: &str,
+  event: LifecycleEventName,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+  attempts: u32,
+  failure: Option<&AttemptFailure>,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<(), RuntimeExecutionError> {
+  let Some(hook) = engine
+    .workflow()
+    .lifecycle_hook_for_step_event(event, node_id)
+    .cloned()
+  else {
+    return Ok(());
+  };
+  let scope = ForEachIterationScope {
+    for_each_id: descriptor.for_each_id.clone(),
+    index,
+  };
+  let subject_id = format!("{}[{index}].{node_id}", descriptor.for_each_id);
+  let hook_invocation_id = crate::derive_lifecycle_hook_invocation_id(
+    run_id,
+    &hook.hook_id,
+    LifecycleSubjectKind::Step,
+    &subject_id,
+  );
+  engine.append_scoped_payload(
+    run_id,
+    scope.clone(),
+    RunEventPayload::LifecycleHookRequested(LifecycleHookRequestedData {
+      hook_invocation_id: hook_invocation_id.clone(),
+      hook_id: hook.hook_id.clone(),
+      event,
+      subject: LifecycleSubject {
+        kind: LifecycleSubjectKind::Step,
+        id: subject_id,
+      },
+    }),
+  )?;
+  let binding = LifecycleBindingV1 {
+    event,
+    workflow: LifecycleWorkflowBindingV1 {
+      id: engine.workflow().workflow_id.clone(),
+      outcome: None,
+    },
+    step: Some(LifecycleStepBindingV1 {
+      id: node_id.to_string(),
+      outcome: match event {
+        LifecycleEventName::StepSuccess => Some(crate::event::BusinessOutcome::Succeeded),
+        LifecycleEventName::StepFailure => Some(crate::event::BusinessOutcome::Failed),
+        _ => None,
+      },
+      attempts,
+    }),
+    failure: failure.map(|failure| LifecycleFailureBindingV1 {
+      code: failure.code.clone(),
+      message: failure.message.clone(),
+    }),
+  };
+  let modules = for_each_module_bindings(options);
+  let mut failed_actions = 0_u32;
+  for action in &hook.actions {
+    engine.append_scoped_payload(
+      run_id,
+      scope.clone(),
+      RunEventPayload::LifecycleActionAttemptStarted(LifecycleActionIdentityData {
+        hook_invocation_id: hook_invocation_id.clone(),
+        action_id: action.action_id.clone(),
+        attempt: 1,
+      }),
+    )?;
+    let execution = if action.handler == "runtime.lifecycle-script" {
+      let source = lifecycle_action_source(action).ok_or_else(|| {
+        RuntimeExecutionError::InvalidConfiguration(format!(
+          "for-each lifecycle action {:?} has no script source",
+          action.action_id
+        ))
+      })?;
+      let secrets = resolved_lifecycle_secrets(action, options)?;
+      let idempotency_key = for_each_effect_key(
+        run_id,
+        engine.definition_hash(),
+        &descriptor.for_each_id,
+        index,
+        &action.action_id,
+      );
+      let invocation_id = generated_id("lcinv");
+      let request = ExecuteMessage::lifecycle_script_with_iteration_modules(
+        &invocation_id,
+        run_id,
+        &action.action_id,
+        ScriptAttempt::new(1, 1, &idempotency_key).map_err(RuntimeExecutionError::Stalled)?,
+        options.script_timeout_ms,
+        source,
+        context,
+        item,
+        index,
+        total,
+        &binding,
+        &secrets,
+        &modules,
+      )
+      .map_err(RuntimeExecutionError::Stalled)?;
+      host.execute(&request).await
+    } else {
+      Err(ScriptHostClientError::Protocol(format!(
+        "iteration-scoped lifecycle action {:?} uses unsupported handler {:?}",
+        action.action_id, action.handler
+      )))
+    };
+    let payload = match execution {
+      Ok(completed) if matches!(completed.outcome, HostOutcome::Success { .. }) => {
+        RunEventPayload::LifecycleActionSucceeded(LifecycleActionIdentityData {
+          hook_invocation_id: hook_invocation_id.clone(),
+          action_id: action.action_id.clone(),
+          attempt: 1,
+        })
+      }
+      Ok(completed) => {
+        failed_actions += 1;
+        let HostOutcome::Failure { error } = completed.outcome else {
+          unreachable!()
+        };
+        RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
+          hook_invocation_id: hook_invocation_id.clone(),
+          action_id: action.action_id.clone(),
+          attempt: 1,
+          failure: lifecycle_failure_from_attempt(error.into_attempt_failure()),
+        })
+      }
+      Err(error) => {
+        failed_actions += 1;
+        RunEventPayload::LifecycleActionFailed(LifecycleActionFailedData {
+          hook_invocation_id: hook_invocation_id.clone(),
+          action_id: action.action_id.clone(),
+          attempt: 1,
+          failure: LifecycleFailure {
+            kind: LifecycleFailureKind::HostCrashed,
+            code: "WOML_FOR_EACH_LIFECYCLE_FAILED".to_string(),
+            message: error.to_string(),
+          },
+        })
+      }
+    };
+    engine.append_scoped_payload(run_id, scope.clone(), payload)?;
+  }
+  engine.append_scoped_payload(
+    run_id,
+    scope,
+    RunEventPayload::LifecycleHookCompleted(LifecycleHookCompletedData {
+      hook_invocation_id,
+      status: if failed_actions == 0 {
+        LifecycleHookCompletionStatus::Completed
+      } else {
+        LifecycleHookCompletionStatus::CompletedWithWarnings
+      },
+      failed_actions,
+    }),
+  )?;
+  Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drive_for_each_reusable_lifecycle<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  loop_descriptor: &crate::model::CompiledForEach,
+  node_id: &str,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+  outcome: ReusableInvocationOutcome,
+  result: Option<Value>,
+  error: Option<ReusableLifecycleErrorV1>,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<(), RuntimeExecutionError> {
+  let Some(descriptor) = reusable_step_descriptor(engine.workflow(), node_id).cloned() else {
+    return Ok(());
+  };
+  let CompiledReusableInvocation::Step {
+    invocation_id,
+    definition_digest,
+    lifecycle,
+    ..
+  } = &descriptor
+  else {
+    return Ok(());
+  };
+  let Some(lifecycle) = lifecycle else {
+    return Ok(());
+  };
+  let hooks = match outcome {
+    ReusableInvocationOutcome::Succeeded => vec![
+      (
+        ProtocolReusableLifecycleHook::OnSuccess,
+        crate::ReusableLifecycleHook::OnSuccess,
+        lifecycle.on_success.clone().unwrap_or_default(),
+      ),
+      (
+        ProtocolReusableLifecycleHook::OnComplete,
+        crate::ReusableLifecycleHook::OnComplete,
+        lifecycle.on_complete.clone().unwrap_or_default(),
+      ),
+    ],
+    ReusableInvocationOutcome::Failed => vec![
+      (
+        ProtocolReusableLifecycleHook::OnError,
+        crate::ReusableLifecycleHook::OnError,
+        lifecycle.on_error.clone().unwrap_or_default(),
+      ),
+      (
+        ProtocolReusableLifecycleHook::OnComplete,
+        crate::ReusableLifecycleHook::OnComplete,
+        lifecycle.on_complete.clone().unwrap_or_default(),
+      ),
+    ],
+    ReusableInvocationOutcome::Cancelled => vec![(
+      ProtocolReusableLifecycleHook::OnComplete,
+      crate::ReusableLifecycleHook::OnComplete,
+      lifecycle.on_complete.clone().unwrap_or_default(),
+    )],
+  };
+  let scope = ForEachIterationScope {
+    for_each_id: loop_descriptor.for_each_id.clone(),
+    index,
+  };
+  let secrets = resolved_reusable_descriptor_secrets(&descriptor, options)?;
+  let reusable =
+    reusable_definition_binding_for_iteration(&descriptor, context, item, index, total, &secrets)?;
+  let modules = for_each_module_bindings(options);
+  for (protocol_hook, event_hook, actions) in hooks {
+    if actions.is_empty() {
+      continue;
+    }
+    engine.append_scoped_payload(
+      run_id,
+      scope.clone(),
+      RunEventPayload::ReusableLifecycleRequested(crate::ReusableLifecycleRequestedData {
+        invocation_id: invocation_id.clone(),
+        definition_digest: definition_digest.clone(),
+        hook: event_hook,
+      }),
+    )?;
+    let binding = ReusableLifecycleBindingV1 {
+      hook: protocol_hook,
+      outcome,
+      result: result.clone(),
+      error: error.clone(),
+    };
+    let mut warnings = 0_u32;
+    for action_id in actions {
+      let artifact_name = reusable_lifecycle_artifact_name(&action_id);
+      let source = options
+        .runtime_modules
+        .iter()
+        .find(|artifact| artifact.name == artifact_name)
+        .map(|artifact| artifact.bundle.clone())
+        .ok_or_else(|| {
+          RuntimeExecutionError::InvalidConfiguration(format!(
+            "reusable lifecycle artifact for {action_id:?} is unavailable"
+          ))
+        })?;
+      engine.append_scoped_payload(
+        run_id,
+        scope.clone(),
+        RunEventPayload::ReusableLifecycleActionStarted(
+          crate::ReusableLifecycleActionStartedData {
+            invocation_id: invocation_id.clone(),
+            definition_digest: definition_digest.clone(),
+            hook: event_hook,
+            action_id: action_id.clone(),
+          },
+        ),
+      )?;
+      let host_invocation_id = generated_id("rlcinv");
+      let idempotency_key = for_each_effect_key(
+        run_id,
+        engine.definition_hash(),
+        &loop_descriptor.for_each_id,
+        index,
+        &action_id,
+      );
+      let request = ExecuteMessage::reusable_lifecycle_script_with_iteration_modules(
+        &host_invocation_id,
+        run_id,
+        &action_id,
+        ScriptAttempt::new(1, 1, &idempotency_key).map_err(RuntimeExecutionError::Stalled)?,
+        options.script_timeout_ms,
+        &source,
+        context,
+        item,
+        index,
+        total,
+        &secrets,
+        &modules,
+        &reusable,
+        &binding,
+      )
+      .map_err(RuntimeExecutionError::Stalled)?;
+      let succeeded = host
+        .execute(&request)
+        .await
+        .is_ok_and(|completed| matches!(completed.outcome, HostOutcome::Success { .. }));
+      let payload = if succeeded {
+        RunEventPayload::ReusableLifecycleActionSucceeded(
+          crate::ReusableLifecycleActionSucceededData {
+            invocation_id: invocation_id.clone(),
+            definition_digest: definition_digest.clone(),
+            hook: event_hook,
+            action_id,
+            outcome: crate::ReusableLifecycleOutcome::Succeeded,
+          },
+        )
+      } else {
+        warnings += 1;
+        RunEventPayload::ReusableLifecycleActionFailed(crate::ReusableLifecycleActionFailedData {
+          invocation_id: invocation_id.clone(),
+          definition_digest: definition_digest.clone(),
+          hook: event_hook,
+          action_id,
+          outcome: crate::ReusableLifecycleOutcome::Failed,
+          warning_code: "WOML_REUSABLE_LIFECYCLE_ACTION_FAILED".to_string(),
+        })
+      };
+      engine.append_scoped_payload(run_id, scope.clone(), payload)?;
+    }
+    engine.append_scoped_payload(
+      run_id,
+      scope.clone(),
+      RunEventPayload::ReusableLifecycleCompleted(crate::ReusableLifecycleCompletedData {
+        invocation_id: invocation_id.clone(),
+        definition_digest: definition_digest.clone(),
+        hook: event_hook,
+        outcome: if warnings == 0 {
+          crate::ReusableLifecycleOutcome::Succeeded
+        } else {
+          crate::ReusableLifecycleOutcome::CompletedWithWarnings
+        },
+      }),
+    )?;
+  }
+  Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_for_each_script<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  descriptor: &crate::model::CompiledForEach,
+  node: &crate::model::CompiledWorkflowNode,
+  context: &WorkflowContext,
+  item: &Value,
+  index: u32,
+  total: u32,
+  options: &RuntimeExecutionOptions,
+  host: &ScriptHostClient,
+) -> Result<Value, AttemptFailure> {
+  let workflow = engine.workflow().clone();
+  let definition_hash = engine.definition_hash().to_string();
+  let source = node.script_source().ok_or_else(|| AttemptFailure {
+    kind: AttemptFailureKind::InvalidScriptResult,
+    code: "WOML_FOR_EACH_NODE_INVALID".to_string(),
+    message: format!("For-each body node {:?} has no script source.", node.id),
+    details: None,
+    ..AttemptFailure::legacy_defaults()
+  })?;
+  let secrets = node
+    .script_runtime
+    .as_ref()
+    .map(|runtime| {
+      runtime
+        .required_secrets
+        .iter()
+        .map(|name| {
+          options
+            .resolved_secrets
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .map(|value| (name.clone(), value))
+            .ok_or_else(|| AttemptFailure {
+              kind: AttemptFailureKind::ScriptThrew,
+              code: "WOML_SECRET_NOT_FOUND".to_string(),
+              message: format!("Required secret {name:?} is unavailable."),
+              details: None,
+              ..AttemptFailure::legacy_defaults()
+            })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()
+    })
+    .transpose()?
+    .unwrap_or_default();
+  let modules = for_each_module_bindings(options);
+  let max_attempts = node
+    .retry_policy
+    .as_ref()
+    .map_or(1, |policy| policy.max_attempts);
+  let idempotency_key = for_each_effect_key(
+    run_id,
+    &definition_hash,
+    &descriptor.for_each_id,
+    index,
+    &node.id,
+  );
+  for attempt_number in 1..=max_attempts {
+    let invocation_id = generated_id("inv");
+    let attempt =
+      ScriptAttempt::new(attempt_number, max_attempts, &idempotency_key).map_err(|message| {
+        AttemptFailure {
+          kind: AttemptFailureKind::InvalidScriptResult,
+          code: "WOML_FOR_EACH_ATTEMPT_INVALID".to_string(),
+          message,
+          details: None,
+          ..AttemptFailure::legacy_defaults()
+        }
+      })?;
+    let reusable = reusable_step_binding_for_iteration(
+      &workflow, &node.id, context, item, index, total, &secrets,
+    )
+    .map_err(|error| AttemptFailure {
+      kind: AttemptFailureKind::ScriptThrew,
+      code: "WOML_REUSABLE_BINDING_INVALID".to_string(),
+      message: error.to_string(),
+      details: None,
+      ..AttemptFailure::legacy_defaults()
+    })?;
+    let scope = ForEachIterationScope {
+      for_each_id: descriptor.for_each_id.clone(),
+      index,
+    };
+    engine
+      .append_scoped_payload(
+        run_id,
+        scope.clone(),
+        RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+          node_id: node.id.clone(),
+          attempt: attempt_number,
+          invocation_id: invocation_id.clone(),
+          handler: node.handler.clone(),
+          idempotency_key: Some(idempotency_key.clone()),
+        }),
+      )
+      .map_err(|error| AttemptFailure {
+        kind: AttemptFailureKind::Interrupted,
+        code: "WOML_FOR_EACH_EVENT_FAILED".to_string(),
+        message: error.to_string(),
+        details: None,
+        ..AttemptFailure::legacy_defaults()
+      })?;
+    let request = match reusable.as_ref() {
+      Some(reusable) => ExecuteMessage::reusable_script_with_iteration_modules(
+        &invocation_id,
+        run_id,
+        &node.id,
+        attempt,
+        options.script_timeout_ms,
+        source,
+        context,
+        item,
+        index,
+        total,
+        &secrets,
+        &modules,
+        reusable,
+      ),
+      None => ExecuteMessage::runtime_script_with_iteration_modules(
+        &invocation_id,
+        run_id,
+        &node.id,
+        attempt,
+        options.script_timeout_ms,
+        source,
+        context,
+        item,
+        index,
+        total,
+        &secrets,
+        &modules,
+      ),
+    }
+    .map_err(|message| AttemptFailure {
+      kind: AttemptFailureKind::InvalidScriptResult,
+      code: "WOML_FOR_EACH_CONTEXT_INVALID".to_string(),
+      message,
+      details: None,
+      ..AttemptFailure::legacy_defaults()
+    })?;
+    if let Some(limit) = options.max_context_bytes {
+      let actual = serde_json::to_vec(&request.context)
+        .map_err(|error| AttemptFailure {
+          kind: AttemptFailureKind::InvalidScriptResult,
+          code: "WOML_FOR_EACH_CONTEXT_INVALID".to_string(),
+          message: error.to_string(),
+          details: None,
+          ..AttemptFailure::legacy_defaults()
+        })?
+        .len();
+      if actual > limit {
+        let failure = AttemptFailure {
+          kind: AttemptFailureKind::ContextTooLarge,
+          code: AttemptFailureKind::ContextTooLarge.code().to_string(),
+          message: "Invocation context exceeds the configured byte limit.".to_string(),
+          details: Some(crate::FailureSizeDetails {
+            actual_bytes: Some(actual as u64),
+            limit_bytes: Some(limit as u64),
+          }),
+          ..AttemptFailure::legacy_defaults()
+        };
+        engine
+          .append_scoped_payload(
+            run_id,
+            scope,
+            RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+              node_id: node.id.clone(),
+              attempt: attempt_number,
+              invocation_id,
+              failure: failure.clone(),
+            }),
+          )
+          .map_err(|error| AttemptFailure {
+            kind: AttemptFailureKind::Interrupted,
+            code: "WOML_FOR_EACH_EVENT_FAILED".to_string(),
+            message: error.to_string(),
+            details: None,
+            ..AttemptFailure::legacy_defaults()
+          })?;
+        return Err(failure);
+      }
+    }
+    match host.execute(&request).await {
+      Ok(completed) => match completed.outcome {
+        HostOutcome::Success { value } => {
+          engine
+            .append_scoped_payload(
+              run_id,
+              scope,
+              RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+                node_id: node.id.clone(),
+                attempt: attempt_number,
+                invocation_id,
+                output: value.clone(),
+              }),
+            )
+            .map_err(|error| AttemptFailure {
+              kind: AttemptFailureKind::Interrupted,
+              code: "WOML_FOR_EACH_EVENT_FAILED".to_string(),
+              message: error.to_string(),
+              details: None,
+              ..AttemptFailure::legacy_defaults()
+            })?;
+          return Ok(value);
+        }
+        HostOutcome::Failure { error } => {
+          let failure = error.into_attempt_failure();
+          engine
+            .append_scoped_payload(
+              run_id,
+              scope.clone(),
+              RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+                node_id: node.id.clone(),
+                attempt: attempt_number,
+                invocation_id,
+                failure: failure.clone(),
+              }),
+            )
+            .map_err(|error| AttemptFailure {
+              kind: AttemptFailureKind::Interrupted,
+              code: "WOML_FOR_EACH_EVENT_FAILED".to_string(),
+              message: error.to_string(),
+              details: None,
+              ..AttemptFailure::legacy_defaults()
+            })?;
+          if failure.kind == AttemptFailureKind::ScriptThrew && attempt_number < max_attempts {
+            let delay = node
+              .retry_policy
+              .as_ref()
+              .and_then(|policy| policy.delay_before_attempt(attempt_number + 1))
+              .unwrap_or(0);
+            engine
+              .append_scoped_payload(
+                run_id,
+                scope,
+                RunEventPayload::StepRetryScheduled(StepRetryScheduledData {
+                  node_id: node.id.clone(),
+                  failed_attempt: attempt_number,
+                  next_attempt: attempt_number + 1,
+                  scheduled_at: options.clock.now()
+                    + chrono::Duration::milliseconds(i64::try_from(delay).unwrap_or(i64::MAX)),
+                }),
+              )
+              .map_err(|error| AttemptFailure {
+                kind: AttemptFailureKind::Interrupted,
+                code: "WOML_FOR_EACH_EVENT_FAILED".to_string(),
+                message: error.to_string(),
+                details: None,
+                ..AttemptFailure::legacy_defaults()
+              })?;
+            if delay > 0 {
+              tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            continue;
+          }
+          return Err(failure);
+        }
+      },
+      Err(error) => {
+        let failure = AttemptFailure {
+          kind: AttemptFailureKind::HostCrashed,
+          code: AttemptFailureKind::HostCrashed.code().to_string(),
+          message: error.to_string(),
+          details: None,
+          ..AttemptFailure::legacy_defaults()
+        };
+        engine
+          .append_scoped_payload(
+            run_id,
+            scope,
+            RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+              node_id: node.id.clone(),
+              attempt: attempt_number,
+              invocation_id,
+              failure: failure.clone(),
+            }),
+          )
+          .map_err(|error| AttemptFailure {
+            kind: AttemptFailureKind::Interrupted,
+            code: "WOML_FOR_EACH_EVENT_FAILED".to_string(),
+            message: error.to_string(),
+            details: None,
+            ..AttemptFailure::legacy_defaults()
+          })?;
+        return Err(failure);
+      }
+    }
+  }
+  unreachable!("a for-each script attempt always returns an outcome")
 }
 
 fn for_each_failure_kind(kind: AttemptFailureKind) -> ForEachIterationFailureKind {
@@ -6409,7 +7360,6 @@ async fn execute_sequential_for_each<E: RuntimeDagEngine>(
     }),
   )?;
 
-  let body_order = for_each_body_order(descriptor)?;
   let mut aggregate_results = Vec::with_capacity(items.len());
   for (index, item) in items.iter().enumerate() {
     let index = index as u32;
@@ -6429,117 +7379,329 @@ async fn execute_sequential_for_each<E: RuntimeDagEngine>(
     context
       .steps
       .retain(|step_id, _| descriptor.outer_step_ids.contains(step_id));
-    for node_id in &body_order {
-      let node = descriptor
-        .body
-        .nodes
-        .iter()
-        .find(|node| &node.id == node_id)
-        .ok_or_else(|| {
-          RuntimeExecutionError::Stalled("for-each body node disappeared".to_string())
-        })?;
-      let source = node.script_source().ok_or_else(|| {
-        RuntimeExecutionError::Stalled(format!(
-          "for-each body node {node_id:?} has no script source"
-        ))
-      })?;
-      let visible_local = descriptor
-        .body
-        .context_visibility
-        .iter()
-        .find(|visibility| visibility.node_id == *node_id)
-        .map(|visibility| visibility.step_ids.as_slice())
-        .unwrap_or_default();
-      let mut invocation_context = context.clone();
-      invocation_context.steps.retain(|step_id, _| {
-        descriptor.outer_step_ids.contains(step_id) || visible_local.contains(step_id)
-      });
-      let secrets = node
-        .script_runtime
-        .as_ref()
-        .map(|runtime| {
-          runtime
-            .required_secrets
-            .iter()
-            .map(|name| {
-              options
-                .resolved_secrets
-                .get(name)
-                .filter(|value| !value.is_empty())
-                .cloned()
-                .map(|value| (name.clone(), value))
-                .ok_or_else(|| {
-                  RuntimeExecutionError::InvalidConfiguration(format!(
-                    "for-each script node {node_id:?} requires unresolved secret {name:?}"
-                  ))
-                })
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-      let invocation_id = generated_id("inv");
-      let idempotency_key = for_each_effect_key(
-        run_id,
-        engine.definition_hash(),
-        &descriptor.for_each_id,
-        index,
-        node_id,
-      );
-      let request = ExecuteMessage::runtime_script_with_iteration(
-        &invocation_id,
-        run_id,
-        node_id,
-        ScriptAttempt::new(1, 1, &idempotency_key).map_err(RuntimeExecutionError::Stalled)?,
-        options.script_timeout_ms,
-        source,
-        &invocation_context,
-        item,
-        index,
-        total,
-        &secrets,
-      )
-      .map_err(RuntimeExecutionError::Stalled)?;
-      let output = match host.execute(&request).await {
-        Ok(completed) => match completed.outcome {
-          HostOutcome::Success { value } => value,
-          HostOutcome::Failure { error } => {
-            let failure = error.into_attempt_failure();
+    let mut completed = HashSet::new();
+    let mut selections = BTreeMap::new();
+    while !completed.contains(&descriptor.body.terminal_node_id) {
+      let ready = for_each_ready_nodes(descriptor, &completed, &selections);
+      if ready.is_empty() {
+        return Err(RuntimeExecutionError::Stalled(format!(
+          "for-each {:?} iteration {index} local DAG stalled",
+          descriptor.for_each_id
+        )));
+      }
+      for node_id in ready {
+        let node = descriptor
+          .body
+          .nodes
+          .iter()
+          .find(|node| node.id == node_id)
+          .ok_or_else(|| {
+            RuntimeExecutionError::Stalled("for-each body node disappeared".to_string())
+          })?;
+        match node.handler.as_str() {
+          "runtime.script" => {
+            let visible_local = descriptor
+              .body
+              .context_visibility
+              .iter()
+              .find(|visibility| visibility.node_id == node_id)
+              .map(|visibility| visibility.step_ids.as_slice())
+              .unwrap_or_default();
+            let mut invocation_context = context.clone();
+            invocation_context.steps.retain(|step_id, _| {
+              descriptor.outer_step_ids.contains(step_id) || visible_local.contains(step_id)
+            });
+            drive_for_each_step_lifecycle(
+              engine,
+              run_id,
+              descriptor,
+              &node_id,
+              LifecycleEventName::StepStart,
+              &invocation_context,
+              item,
+              index,
+              total,
+              0,
+              None,
+              options,
+              host,
+            )
+            .await?;
+            match execute_for_each_script(
+              engine,
+              run_id,
+              descriptor,
+              node,
+              &invocation_context,
+              item,
+              index,
+              total,
+              options,
+              host,
+            )
+            .await
+            {
+              Ok(output) => {
+                context.steps.insert(node_id.clone(), output.clone());
+                let attempts = engine
+                  .projection(run_id)?
+                  .for_each
+                  .get(&descriptor.for_each_id)
+                  .and_then(|loop_| loop_.executions.get(&index))
+                  .map_or(1, |execution| {
+                    execution
+                      .attempts
+                      .iter()
+                      .filter(|attempt| attempt.identity.node_id == node_id)
+                      .count() as u32
+                  });
+                drive_for_each_reusable_lifecycle(
+                  engine,
+                  run_id,
+                  descriptor,
+                  &node_id,
+                  &context,
+                  item,
+                  index,
+                  total,
+                  ReusableInvocationOutcome::Succeeded,
+                  Some(output),
+                  None,
+                  options,
+                  host,
+                )
+                .await?;
+                drive_for_each_step_lifecycle(
+                  engine,
+                  run_id,
+                  descriptor,
+                  &node_id,
+                  LifecycleEventName::StepSuccess,
+                  &context,
+                  item,
+                  index,
+                  total,
+                  attempts,
+                  None,
+                  options,
+                  host,
+                )
+                .await?;
+                drive_for_each_step_lifecycle(
+                  engine,
+                  run_id,
+                  descriptor,
+                  &node_id,
+                  LifecycleEventName::StepComplete,
+                  &context,
+                  item,
+                  index,
+                  total,
+                  attempts,
+                  None,
+                  options,
+                  host,
+                )
+                .await?;
+              }
+              Err(failure) => {
+                let attempts = engine
+                  .projection(run_id)?
+                  .for_each
+                  .get(&descriptor.for_each_id)
+                  .and_then(|loop_| loop_.executions.get(&index))
+                  .map_or(1, |execution| {
+                    execution
+                      .attempts
+                      .iter()
+                      .filter(|attempt| attempt.identity.node_id == node_id)
+                      .count() as u32
+                  });
+                drive_for_each_reusable_lifecycle(
+                  engine,
+                  run_id,
+                  descriptor,
+                  &node_id,
+                  &context,
+                  item,
+                  index,
+                  total,
+                  ReusableInvocationOutcome::Failed,
+                  None,
+                  Some(ReusableLifecycleErrorV1 {
+                    code: failure.code.clone(),
+                    message: failure.message.clone(),
+                  }),
+                  options,
+                  host,
+                )
+                .await?;
+                drive_for_each_step_lifecycle(
+                  engine,
+                  run_id,
+                  descriptor,
+                  &node_id,
+                  LifecycleEventName::StepFailure,
+                  &context,
+                  item,
+                  index,
+                  total,
+                  attempts,
+                  Some(&failure),
+                  options,
+                  host,
+                )
+                .await?;
+                drive_for_each_step_lifecycle(
+                  engine,
+                  run_id,
+                  descriptor,
+                  &node_id,
+                  LifecycleEventName::StepComplete,
+                  &context,
+                  item,
+                  index,
+                  total,
+                  attempts,
+                  Some(&failure),
+                  options,
+                  host,
+                )
+                .await?;
+                engine.append_scoped_payload(
+                  run_id,
+                  scope.clone(),
+                  RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
+                    for_each_id: descriptor.for_each_id.clone(),
+                    failed_node_id: node_id.clone(),
+                    failure_kind: for_each_failure_kind(failure.kind),
+                  }),
+                )?;
+                return Err(RuntimeExecutionError::InvalidConfiguration(format!(
+                  "for-each {:?} iteration {index} node {node_id:?} failed [{}]: {}",
+                  descriptor.for_each_id, failure.code, failure.message
+                )));
+              }
+            }
+          }
+          "engine.choice-select" => {
+            let (choice_id, arm_id) =
+              for_each_selected_choice(descriptor, &node_id, &context, item, index, total)?;
             engine.append_scoped_payload(
               run_id,
-              scope,
-              RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
-                for_each_id: descriptor.for_each_id.clone(),
-                failed_node_id: node_id.clone(),
-                failure_kind: for_each_failure_kind(failure.kind),
+              scope.clone(),
+              RunEventPayload::ChoiceSelected(ChoiceSelectedData {
+                choice_id: choice_id.clone(),
+                arm_id: arm_id.clone(),
               }),
             )?;
-            return Err(RuntimeExecutionError::InvalidConfiguration(format!(
-              "for-each {:?} iteration {index} failed: {}",
-              descriptor.for_each_id, failure.message
-            )));
+            selections.insert(choice_id, arm_id);
           }
-        },
-        Err(error) => {
-          engine.append_scoped_payload(
-            run_id,
-            scope,
-            RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
-              for_each_id: descriptor.for_each_id.clone(),
-              failed_node_id: node_id.clone(),
-              failure_kind: ForEachIterationFailureKind::HostCrashed,
-            }),
-          )?;
-          return Err(RuntimeExecutionError::Host(error));
+          "engine.branch-select" => {
+            let (branch_id, arm_id) =
+              for_each_selected_branch(descriptor, &node_id, &context, item, index, total)?;
+            engine.append_scoped_payload(
+              run_id,
+              scope.clone(),
+              RunEventPayload::BranchSelected(BranchSelectedData {
+                branch_id: branch_id.clone(),
+                arm_id: arm_id.clone(),
+              }),
+            )?;
+            selections.insert(branch_id, arm_id);
+          }
+          "engine.branch-result" => {
+            let arm_id = selections.get(&node_id).ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "for-each conditional branch {node_id:?} has no durable selection"
+              ))
+            })?;
+            let ValueExpression::Object { fields } = &node.inputs else {
+              return Err(RuntimeExecutionError::Stalled(format!(
+                "for-each conditional result {node_id:?} has invalid inputs"
+              )));
+            };
+            let expression = fields.get(arm_id).ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "for-each conditional result {node_id:?} has no selected-arm value"
+              ))
+            })?;
+            let output = resolve_for_each_reference(expression, &context, item, index, total)?;
+            context.steps.insert(node_id.clone(), output);
+          }
+          "engine.choice-result" => {
+            let choice = descriptor
+              .body
+              .choices
+              .iter()
+              .find(|choice| choice.result_node_id.as_deref() == Some(node_id.as_str()))
+              .ok_or_else(|| {
+                RuntimeExecutionError::Stalled(format!(
+                  "for-each result node {node_id:?} has no choice descriptor"
+                ))
+              })?;
+            let arm_id = selections.get(&choice.choice_id).ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "for-each choice {:?} has no durable selection",
+                choice.choice_id
+              ))
+            })?;
+            let ValueExpression::Object { fields } = &node.inputs else {
+              return Err(RuntimeExecutionError::Stalled(format!(
+                "for-each choice result {node_id:?} has invalid inputs"
+              )));
+            };
+            let expression = fields.get(arm_id).ok_or_else(|| {
+              RuntimeExecutionError::Stalled(format!(
+                "for-each choice result {node_id:?} has no selected arm value"
+              ))
+            })?;
+            let output = resolve_for_each_reference(expression, &context, item, index, total)?;
+            context.steps.insert(node_id.clone(), output);
+          }
+          "engine.choice-join" => {}
+          "engine.parallel-start" => {
+            let parallel_id = node_id
+              .strip_prefix("__woml_parallel__")
+              .and_then(|id| id.strip_suffix("__start"))
+              .ok_or_else(|| {
+                RuntimeExecutionError::Stalled(format!(
+                  "for-each parallel start node {node_id:?} has no canonical group identity"
+                ))
+              })?
+              .to_string();
+            engine.append_scoped_payload(
+              run_id,
+              scope.clone(),
+              RunEventPayload::ParallelGroupStarted(ParallelGroupStartedData { parallel_id }),
+            )?;
+          }
+          "engine.parallel-join" => {
+            engine.append_scoped_payload(
+              run_id,
+              scope.clone(),
+              RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+                parallel_id: node_id.clone(),
+                outcome: ParallelGroupOutcome::Succeeded,
+                failed_node_ids: Vec::new(),
+                cancelled_node_ids: Vec::new(),
+              }),
+            )?;
+          }
+          handler => {
+            return Err(RuntimeExecutionError::Stalled(format!(
+              "for-each body node {node_id:?} uses unsupported handler {handler:?}"
+            )))
+          }
         }
-      };
-      context.steps.insert(node_id.clone(), output);
+        completed.insert(node_id);
+      }
     }
 
     let result = descriptor
       .result
       .as_ref()
-      .map(|expression| resolve_for_each_result(expression, &context, item, index, total))
+      .map(|expression| resolve_for_each_reference(expression, &context, item, index, total))
       .transpose()?;
     let result_digest = result.as_ref().map(for_each_digest).transpose()?;
     if let Some(value) = &result {

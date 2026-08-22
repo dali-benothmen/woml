@@ -608,7 +608,8 @@ export class ScriptHost {
               request.protocolVersion !== 5 &&
               request.protocolVersion !== 6 &&
               request.protocolVersion !== 7 &&
-              request.protocolVersion !== 8) ||
+              request.protocolVersion !== 8 &&
+              request.protocolVersion !== 9) ||
             observation.invocationId !== request.invocationId
           ) {
             finish({
@@ -658,7 +659,8 @@ export class ScriptHost {
             request.protocolVersion !== 5 &&
             request.protocolVersion !== 6 &&
             request.protocolVersion !== 7 &&
-            request.protocolVersion !== 8) ||
+            request.protocolVersion !== 8 &&
+            request.protocolVersion !== 9) ||
           call.invocationId !== request.invocationId ||
           call.runId !== request.runId ||
           call.nodeId !== request.nodeId ||
