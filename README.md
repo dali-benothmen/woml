@@ -346,6 +346,24 @@ The [WOML extension](./woml-vscode/) gives `.woml` files HTML-style markup highl
 
 The extension follows your existing VS Code theme instead of requiring a separate WOML color theme.
 
+## Let AI Build Your Workflows
+
+Describe the automation you want in plain language and let your coding agent turn it into readable, validated WOML. The **WOML Skill** teaches AI agents the language structure, runtime bindings, control-flow patterns, services, secrets, and validation workflow they need to create real `.woml` files without inventing syntax.
+
+```text
+Use the WOML workflow skill to build an order-processing automation that starts
+from a webhook, checks inventory and risk concurrently, and routes the result.
+```
+
+Install it once in your project or personal agent skills directory, then ask for workflows naturally or invoke `$woml` explicitly.
+
+```bash
+mkdir -p .agents/skills
+cp -R skills/woml .agents/skills/woml
+```
+
+**[View the WOML Skill and installation guide →](./skills/woml/)**
+
 ## Documentation and Examples
 
 - [Getting started](./docs/getting-started.md)
