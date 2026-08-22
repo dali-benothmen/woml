@@ -1593,8 +1593,11 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           .executions
           .iter()
           .flat_map(|(index, execution)| {
-            execution.attempts.iter().filter_map(move |attempt| {
-              (attempt.status == AttemptStatus::Started).then(|| {
+            execution
+              .attempts
+              .iter()
+              .filter(|attempt| attempt.status == AttemptStatus::Started)
+              .map(move |attempt| {
                 format!(
                   "{}:{}:{}:{}",
                   index,
@@ -1603,7 +1606,6 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
                   attempt.identity.invocation_id
                 )
               })
-            })
           })
           .collect::<Vec<_>>();
         let active_operation_count = loop_state

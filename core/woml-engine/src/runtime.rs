@@ -1080,8 +1080,7 @@ async fn acquire_policy_execution_lease(
     let lease_now = chrono::Utc::now();
     let policy_now = options.clock.now();
     let mut store = DurableEventStore::open(database_path.to_path_buf())?;
-    let rate_eligible_at;
-    match store.try_claim_policy_run_at(
+    let rate_eligible_at = match store.try_claim_policy_run_at(
       run_id,
       &owner_id,
       lease_now,
@@ -1146,14 +1145,14 @@ async fn acquire_policy_execution_lease(
           });
           reported_wait = true;
         }
-        rate_eligible_at = eligible_at;
+        eligible_at
       }
       Err(DurableStoreError::SchedulerRecoveryRequired(_)) => {
         store.recover_policy_run_after_lease_loss(run_id, lease_now)?;
         return Ok(PolicyClaimAcquisition::Recovered);
       }
       Err(error) => return Err(error.into()),
-    }
+    };
     if let Some(eligible_at) = rate_eligible_at {
       wait_for_policy_rate_eligibility(database_path, eligible_at, policy_now).await;
     } else {
