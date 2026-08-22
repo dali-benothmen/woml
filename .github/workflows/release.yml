@@ -168,7 +168,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: woml-main
           path: release/main
@@ -232,11 +232,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: woml-main
           path: release/collected/main
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: release/collected/platforms
@@ -276,7 +276,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: woml-release-family
           path: release/collected
