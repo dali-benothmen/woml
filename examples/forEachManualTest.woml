@@ -1,0 +1,95 @@
+<woml>
+  <workflow
+    id="for-each-manual-test"
+    name="Process customer orders"
+    description="Processes five orders concurrently and preserves their original order in the final result."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step
+        id="loadOrders"
+        name="Load orders"
+        description="Creates the five orders used by this manual test."
+      >
+        <script>
+          return {
+            orders: [
+              { id: "order-101", customer: "Grace", subtotal: 120, priority: true },
+              { id: "order-102", customer: "Ada", subtotal: 75, priority: false },
+              { id: "order-103", customer: "Linus", subtotal: 210, priority: true },
+              { id: "order-104", customer: "Maya", subtotal: 48, priority: false },
+              { id: "order-105", customer: "Noah", subtotal: 96, priority: false }
+            ]
+          };
+        </script>
+      </step>
+
+      <for-each
+        id="processOrders"
+        name="Process every order"
+        description="Calculates totals and prepares a confirmation for every customer."
+        items="{{context.steps.loadOrders.orders}}"
+        concurrency="2"
+      >
+        <step
+          id="calculateTotal"
+          name="Calculate order total"
+          description="Adds twenty percent tax to the current order."
+        >
+          <script>
+            const tax = context.item.subtotal * 0.20;
+
+            return {
+              orderId: context.item.id,
+              customer: context.item.customer,
+              position: context.iteration.index + 1,
+              totalOrders: context.iteration.total,
+              total: context.item.subtotal + tax,
+              priority: context.item.priority
+            };
+          </script>
+        </step>
+
+        <step
+          id="buildConfirmation"
+          name="Build confirmation"
+          description="Creates the final result for the current order."
+        >
+          <script>
+            const order = context.steps.calculateTotal;
+
+            return {
+              orderId: order.orderId,
+              customer: order.customer,
+              total: order.total,
+              delivery: order.priority ? "express" : "standard",
+              message: `Processed ${order.position} of ${order.totalOrders}: ${order.orderId}`
+            };
+          </script>
+        </step>
+
+        <result value="{{context.steps.buildConfirmation}}" />
+      </for-each>
+
+      <step
+        id="summary"
+        name="Build final summary"
+        description="Returns the ordered results after every order has completed."
+      >
+        <script>
+          const orders = context.steps.processOrders.results;
+
+          return {
+            processed: context.steps.processOrders.succeeded,
+            revenue: orders.reduce((total, order) => total + order.total, 0),
+            orders
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
