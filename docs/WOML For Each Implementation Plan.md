@@ -1,6 +1,6 @@
 # WOML `<for-each>` Implementation Plan
 
-- Status: FE0 through FE5 completed; FE6 is next
+- Status: FE0 through FE6 completed; FE7 is next
 - Target language surface: WOML after v1.0
 - Target compiled model: Model v16
 - Target run events: Event v15
@@ -633,6 +633,25 @@ projection rebuild tests.
 
 **Result:** crashes, restarts, failures, cancellation, backup, and retention do
 not replay completed effects or leave runs permanently unsettled.
+
+Completed in FE6:
+
+- Event v15 now folds loop-owned attempts, retry schedules, managed operations,
+  lifecycle actions, inner parallel groups, per-index outcomes, skipped indexes,
+  and exactly one terminal loop settlement as authoritative durable history;
+- recovery resumes indexes whose completed effects are already durable without
+  replaying them, waits for an existing retry schedule, and starts only its
+  recorded next attempt;
+- a started loop-owned effect with no terminal event fails closed as
+  interrupted, while never-started indexes are recorded as skipped before the
+  loop and run settle;
+- ordinary failures, operator cancellation, and total workflow timeout close
+  active iterations and inner work before deciding the workflow outcome;
+- the runtime-policy scheduler detects ambiguous loop-owned work after lease
+  loss and routes it through the same run-scoped recovery authority; and
+- focused SQLite tests prove reopen, projection rebuild, online backup and
+  restore, retention, cancellation, timeout, retry-backoff, partial-progress,
+  and fail-closed recovery behavior.
 
 ### FE7 — Add terminal presentation and operations
 

@@ -23,16 +23,16 @@ use crate::event::{
   ApprovalFailure, ApprovalRequestedData, ApprovalTimeoutPolicy, BranchSelectedData,
   ChoiceSelectedData, FinalLifecycleStatus, ForEachIterationFailedData,
   ForEachIterationFailureKind, ForEachIterationIdentityData, ForEachIterationScope,
-  ForEachIterationSucceededData, ForEachOpenedData, ForEachSettledData, ForkBranchOutcome,
-  ForkBranchSettledData, ForkJoinOutcome, ForkJoinSettledData, ForkOpenedData,
-  LifecycleActionFailedData, LifecycleActionIdentityData, LifecycleFailure, LifecycleFailureKind,
-  LifecycleHookCompletedData, LifecycleHookCompletionStatus, LifecycleHookRequestedData,
-  LifecycleSubject, LifecycleSubjectKind, OperationExecutionMode, OperationFailedData,
-  OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
-  ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData,
-  RunFailedDataV1, RunFailedDataV2, RunFailedDataV3, RunFinalizedData, RunOutcomeDecidedData,
-  RunSucceededData, StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData,
-  StepRetryScheduledData,
+  ForEachIterationSkippedData, ForEachIterationSucceededData, ForEachOpenedData,
+  ForEachSettledData, ForEachSkipReason, ForkBranchOutcome, ForkBranchSettledData, ForkJoinOutcome,
+  ForkJoinSettledData, ForkOpenedData, LifecycleActionFailedData, LifecycleActionIdentityData,
+  LifecycleFailure, LifecycleFailureKind, LifecycleHookCompletedData,
+  LifecycleHookCompletionStatus, LifecycleHookRequestedData, LifecycleSubject,
+  LifecycleSubjectKind, OperationExecutionMode, OperationFailedData, OperationStartedData,
+  OperationSucceededData, ParallelFailure, ParallelFailurePolicy, ParallelGroupCompletedData,
+  ParallelGroupOutcome, ParallelGroupStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
+  RunFailedDataV3, RunFinalizedData, RunOutcomeDecidedData, RunSucceededData,
+  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData, StepRetryScheduledData,
 };
 use crate::interval::{IntervalProgress, IntervalProgressReporter};
 use crate::model::{
@@ -40,8 +40,9 @@ use crate::model::{
   ParallelGroupDefinition, TemplatePart, ValueExpression,
 };
 use crate::projection::{
-  ApprovalRequestStatus, AttemptStatus, LifecycleActionStatus, LifecycleHookProjection,
-  LifecycleHookStatus, ParallelGroupStatus, ReusableLifecycleStatus,
+  ApprovalRequestStatus, AttemptStatus, ForEachIterationStatus, ForEachStatus,
+  LifecycleActionStatus, LifecycleHookProjection, LifecycleHookStatus, ParallelGroupStatus,
+  ReusableLifecycleStatus,
 };
 use crate::protocol::{
   ExecuteMessage, HostOutcome, LifecycleBindingV1, LifecycleFailureBindingV1,
@@ -6372,6 +6373,255 @@ fn for_each_digest(value: &Value) -> Result<String, RuntimeExecutionError> {
   Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForEachTerminalDisposition {
+  Failed,
+  Cancelled,
+}
+
+fn for_each_latest_iteration_failure(
+  projection: &RunProjection,
+  for_each_id: &str,
+  index: u32,
+) -> Option<(String, AttemptFailure)> {
+  let execution = projection
+    .for_each
+    .get(for_each_id)?
+    .executions
+    .get(&index)?;
+  execution
+    .attempts
+    .iter()
+    .rev()
+    .filter_map(|attempt| match &attempt.status {
+      AttemptStatus::Failed { failure } => {
+        Some((attempt.identity.node_id.clone(), failure.clone()))
+      }
+      _ => None,
+    })
+    .min_by_key(|(_, failure)| matches!(failure.kind, AttemptFailureKind::InvocationCancelled))
+}
+
+fn for_each_settlement_digest(
+  total: u32,
+  succeeded: u32,
+  failed: u32,
+  skipped: u32,
+) -> Result<String, RuntimeExecutionError> {
+  for_each_digest(&serde_json::json!({
+    "total": total,
+    "succeeded": succeeded,
+    "failed": failed,
+    "skipped": skipped,
+  }))
+}
+
+fn settle_open_for_each<E: RuntimeDagEngine>(
+  engine: &mut E,
+  run_id: &str,
+  descriptor: &crate::model::CompiledForEach,
+  disposition: ForEachTerminalDisposition,
+) -> Result<(), RuntimeExecutionError> {
+  let projection = engine.projection(run_id)?;
+  let Some(loop_state) = projection.for_each.get(&descriptor.for_each_id) else {
+    return Ok(());
+  };
+  if loop_state.status != ForEachStatus::Open {
+    return Ok(());
+  }
+
+  let active_indexes = loop_state
+    .iterations
+    .iter()
+    .filter_map(|(index, status)| {
+      matches!(status, ForEachIterationStatus::Started).then_some(*index)
+    })
+    .collect::<Vec<_>>();
+  for index in active_indexes {
+    let current = engine.projection(run_id)?;
+    let execution = current
+      .for_each
+      .get(&descriptor.for_each_id)
+      .and_then(|state| state.executions.get(&index))
+      .cloned()
+      .ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!(
+          "for-each {:?} active iteration {index} has no execution projection",
+          descriptor.for_each_id
+        ))
+      })?;
+    let scope = ForEachIterationScope {
+      for_each_id: descriptor.for_each_id.clone(),
+      index,
+    };
+    for operation in execution
+      .operations
+      .values()
+      .filter(|operation| operation.status == OperationStatus::Started)
+    {
+      engine.append_scoped_payload(
+        run_id,
+        scope.clone(),
+        RunEventPayload::OperationFailed(OperationFailedData {
+          node_id: operation.node_id.clone(),
+          attempt_number: operation.attempt_number,
+          invocation_id: operation.identity.invocation_id.clone(),
+          call_id: operation.identity.call_id.clone(),
+          operation_key: operation.operation_key.clone(),
+          capability: operation.capability.clone(),
+          operation: operation.operation.clone(),
+          execution_mode: operation.execution_mode,
+          metadata: operation.metadata.clone(),
+          duration_ms: 0.0,
+          failure: CapabilityFailure {
+            kind: CapabilityFailureKind::Ambiguous,
+            code: "WOML_CAPABILITY_CANCELLATION_AMBIGUOUS".to_string(),
+            message: "Loop settlement found an operation without a durable terminal event; its external outcome is ambiguous and it will not be replayed.".to_string(),
+            retryable: false,
+            ambiguous: true,
+            details: None,
+          },
+        }),
+      )?;
+    }
+    for attempt in execution
+      .attempts
+      .iter()
+      .filter(|attempt| attempt.status == AttemptStatus::Started)
+    {
+      let kind = match disposition {
+        ForEachTerminalDisposition::Failed => AttemptFailureKind::Interrupted,
+        ForEachTerminalDisposition::Cancelled => AttemptFailureKind::InvocationCancelled,
+      };
+      engine.append_scoped_payload(
+        run_id,
+        scope.clone(),
+        RunEventPayload::StepAttemptFailed(StepAttemptFailedData {
+          node_id: attempt.identity.node_id.clone(),
+          attempt: attempt.identity.attempt,
+          invocation_id: attempt.identity.invocation_id.clone(),
+          failure: AttemptFailure {
+            kind,
+            code: kind.code().to_string(),
+            message: "The loop settled before this invocation produced a durable terminal outcome."
+              .to_string(),
+            details: None,
+            ..AttemptFailure::legacy_defaults()
+          },
+        }),
+      )?;
+    }
+    for group in execution
+      .parallel_groups
+      .values()
+      .filter(|group| group.status == ParallelGroupStatus::Started)
+    {
+      let start_id = format!("__woml_parallel__{}__start", group.parallel_id);
+      let cancelled_node_ids = descriptor
+        .body
+        .edges
+        .iter()
+        .filter(|edge| {
+          edge.from == start_id && edge.parallel_id.as_deref() == Some(group.parallel_id.as_str())
+        })
+        .map(|edge| edge.to.clone())
+        .collect::<Vec<_>>();
+      engine.append_scoped_payload(
+        run_id,
+        scope.clone(),
+        RunEventPayload::ParallelGroupCompleted(ParallelGroupCompletedData {
+          parallel_id: group.parallel_id.clone(),
+          outcome: ParallelGroupOutcome::Failed,
+          failed_node_ids: Vec::new(),
+          cancelled_node_ids,
+        }),
+      )?;
+    }
+    let current = engine.projection(run_id)?;
+    let (failed_node_id, failure_kind) =
+      for_each_latest_iteration_failure(&current, &descriptor.for_each_id, index)
+        .map(|(node_id, failure)| (node_id, for_each_failure_kind(failure.kind)))
+        .unwrap_or_else(|| {
+          (
+            descriptor.body.terminal_node_id.clone(),
+            match disposition {
+              ForEachTerminalDisposition::Failed => ForEachIterationFailureKind::Interrupted,
+              ForEachTerminalDisposition::Cancelled => ForEachIterationFailureKind::Cancelled,
+            },
+          )
+        });
+    engine.append_scoped_payload(
+      run_id,
+      scope,
+      RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
+        for_each_id: descriptor.for_each_id.clone(),
+        failed_node_id,
+        failure_kind,
+      }),
+    )?;
+  }
+
+  let projection = engine.projection(run_id)?;
+  let loop_state = projection
+    .for_each
+    .get(&descriptor.for_each_id)
+    .ok_or_else(|| RuntimeExecutionError::Stalled("for-each disappeared".to_string()))?;
+  let skip_reason = match disposition {
+    ForEachTerminalDisposition::Failed => ForEachSkipReason::Failure,
+    ForEachTerminalDisposition::Cancelled => ForEachSkipReason::Cancellation,
+  };
+  let pending_indexes = (0..loop_state.total)
+    .filter(|index| !loop_state.iterations.contains_key(index))
+    .collect::<Vec<_>>();
+  for index in pending_indexes {
+    engine.append_scoped_payload(
+      run_id,
+      ForEachIterationScope {
+        for_each_id: descriptor.for_each_id.clone(),
+        index,
+      },
+      RunEventPayload::ForEachIterationSkipped(ForEachIterationSkippedData {
+        for_each_id: descriptor.for_each_id.clone(),
+        reason: skip_reason,
+      }),
+    )?;
+  }
+
+  let projection = engine.projection(run_id)?;
+  let loop_state = projection
+    .for_each
+    .get(&descriptor.for_each_id)
+    .ok_or_else(|| RuntimeExecutionError::Stalled("for-each disappeared".to_string()))?;
+  let succeeded = loop_state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Succeeded { .. }))
+    .count() as u32;
+  let failed = loop_state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
+    .count() as u32;
+  let skipped = loop_state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
+    .count() as u32;
+  let settled = ForEachSettledData {
+    for_each_id: descriptor.for_each_id.clone(),
+    total: loop_state.total,
+    succeeded,
+    failed,
+    skipped,
+    aggregate_digest: for_each_settlement_digest(loop_state.total, succeeded, failed, skipped)?,
+  };
+  let payload = match disposition {
+    ForEachTerminalDisposition::Failed => RunEventPayload::ForEachFailed(settled),
+    ForEachTerminalDisposition::Cancelled => RunEventPayload::ForEachCancelled(settled),
+  };
+  engine.append_payload(run_id, payload)
+}
+
 /// Serializes durable event/projection access while allowing iteration futures
 /// to wait on the multiplexed Bun host concurrently. The compiled definition is
 /// immutable and is shared without taking the engine lock.
@@ -7109,7 +7359,78 @@ async fn execute_for_each_script<E: RuntimeDagEngine>(
     index,
     &node.id,
   );
-  for attempt_number in 1..=max_attempts {
+  let execution = engine
+    .projection(run_id)
+    .map_err(|error| AttemptFailure {
+      kind: AttemptFailureKind::Interrupted,
+      code: "WOML_FOR_EACH_RECOVERY_INVALID".to_string(),
+      message: error.to_string(),
+      details: None,
+      ..AttemptFailure::legacy_defaults()
+    })?
+    .for_each
+    .get(&descriptor.for_each_id)
+    .and_then(|loop_state| loop_state.executions.get(&index))
+    .cloned()
+    .ok_or_else(|| AttemptFailure {
+      kind: AttemptFailureKind::Interrupted,
+      code: "WOML_FOR_EACH_RECOVERY_INVALID".to_string(),
+      message: "The active iteration has no durable execution projection.".to_string(),
+      details: None,
+      ..AttemptFailure::legacy_defaults()
+    })?;
+  let latest_attempt = execution
+    .attempts
+    .iter()
+    .rev()
+    .find(|attempt| attempt.identity.node_id == node.id);
+  let start_attempt = match latest_attempt {
+    None => 1,
+    Some(attempt) => match &attempt.status {
+      AttemptStatus::Succeeded { output } => return Ok(output.clone()),
+      AttemptStatus::Started => {
+        return Err(AttemptFailure {
+          kind: AttemptFailureKind::Interrupted,
+          code: AttemptFailureKind::Interrupted.code().to_string(),
+          message: "Recovery found an active iteration attempt without a durable outcome."
+            .to_string(),
+          details: None,
+          ..AttemptFailure::legacy_defaults()
+        });
+      }
+      AttemptStatus::Failed { failure } => {
+        let Some(retry) = execution.pending_retries.get(&node.id) else {
+          return Err(failure.clone());
+        };
+        while retry.scheduled_at > options.clock.now() {
+          let wait = (retry.scheduled_at - options.clock.now())
+            .to_std()
+            .unwrap_or(CANCELLATION_POLL_INTERVAL)
+            .min(CANCELLATION_POLL_INTERVAL);
+          tokio::time::sleep(wait).await;
+          let projection = engine.projection(run_id).map_err(|error| AttemptFailure {
+            kind: AttemptFailureKind::Interrupted,
+            code: "WOML_FOR_EACH_RECOVERY_INVALID".to_string(),
+            message: error.to_string(),
+            details: None,
+            ..AttemptFailure::legacy_defaults()
+          })?;
+          if projection.status == RunStatus::Cancelling || projection.timeout_reached_at.is_some() {
+            return Err(AttemptFailure {
+              kind: AttemptFailureKind::InvocationCancelled,
+              code: AttemptFailureKind::InvocationCancelled.code().to_string(),
+              message: "The pending iteration retry was cancelled with its workflow run."
+                .to_string(),
+              details: None,
+              ..AttemptFailure::legacy_defaults()
+            });
+          }
+        }
+        retry.next_attempt
+      }
+    },
+  };
+  for attempt_number in start_attempt..=max_attempts {
     let invocation_id = generated_id("inv");
     let attempt =
       ScriptAttempt::new(attempt_number, max_attempts, &idempotency_key).map_err(|message| {
@@ -7386,7 +7707,8 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
   options: &RuntimeExecutionOptions,
   host: &ScriptHostClient,
 ) -> Result<(), RuntimeExecutionError> {
-  let root_context = engine.projection(run_id)?.context;
+  let root_projection = engine.projection(run_id)?;
+  let root_context = root_projection.context.clone();
   let items = resolve_context_reference(&descriptor.items, &root_context).map_err(|_| {
     RuntimeExecutionError::InvalidConfiguration(format!(
       "for-each {:?} items reference is unavailable",
@@ -7410,38 +7732,95 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
   let concurrency = descriptor.concurrency as usize;
   let items_digest = for_each_digest(&Value::Array(items.clone()))?;
   let mut shared_engine = SharedForEachEngine::new(engine);
-  shared_engine.append_payload(
-    run_id,
-    RunEventPayload::ForEachOpened(ForEachOpenedData {
-      for_each_id: descriptor.for_each_id.clone(),
-      total,
-      items_digest,
-      concurrency: descriptor.concurrency,
-    }),
-  )?;
+  match root_projection.for_each.get(&descriptor.for_each_id) {
+    None => shared_engine.append_payload(
+      run_id,
+      RunEventPayload::ForEachOpened(ForEachOpenedData {
+        for_each_id: descriptor.for_each_id.clone(),
+        total,
+        items_digest: items_digest.clone(),
+        concurrency: descriptor.concurrency,
+      }),
+    )?,
+    Some(loop_state)
+      if loop_state.total == total
+        && loop_state.items_digest == items_digest
+        && loop_state.concurrency == descriptor.concurrency =>
+    {
+      if loop_state.status == ForEachStatus::Succeeded {
+        return Ok(());
+      }
+      if loop_state.status != ForEachStatus::Open {
+        return Err(RuntimeExecutionError::Stalled(format!(
+          "for-each {:?} is already terminal",
+          descriptor.for_each_id
+        )));
+      }
+    }
+    Some(_) => {
+      return Err(RuntimeExecutionError::Stalled(format!(
+        "for-each {:?} recovery input does not match its captured count, digest, or concurrency",
+        descriptor.for_each_id
+      )));
+    }
+  }
 
   let active_invocations = Arc::new(tokio::sync::Mutex::new(HashSet::new()));
   let mut aggregate_results = vec![None; items.len()];
-  let mut next_index = 0_usize;
-  let mut stop_admission = false;
+  let loop_projection = shared_engine.projection(run_id)?;
+  let loop_state = loop_projection
+    .for_each
+    .get(&descriptor.for_each_id)
+    .ok_or_else(|| RuntimeExecutionError::Stalled("for-each disappeared".to_string()))?;
+  let mut resumed_indexes = loop_state
+    .iterations
+    .iter()
+    .filter_map(|(index, status)| match status {
+      ForEachIterationStatus::Started => Some(*index),
+      ForEachIterationStatus::Succeeded { result } => {
+        aggregate_results[*index as usize] = result.clone();
+        None
+      }
+      ForEachIterationStatus::Failed { .. } | ForEachIterationStatus::Skipped => None,
+    })
+    .collect::<VecDeque<_>>();
+  let mut pending_indexes = (0..total)
+    .filter(|index| !loop_state.iterations.contains_key(index))
+    .collect::<VecDeque<_>>();
+  let mut stop_admission = loop_state
+    .iterations
+    .values()
+    .any(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
+    || matches!(
+      root_projection.status,
+      RunStatus::Cancelling | RunStatus::Finalizing
+    )
+    || root_projection.timeout_reached_at.is_some();
   let mut first_error = None;
   let mut active = FuturesUnordered::new();
 
   loop {
-    while !stop_admission && next_index < items.len() && active.len() < concurrency {
-      let index = next_index as u32;
-      next_index += 1;
-      let scope = ForEachIterationScope {
-        for_each_id: descriptor.for_each_id.clone(),
-        index,
+    while !stop_admission && active.len() < concurrency {
+      let (index, resumed) = if let Some(index) = resumed_indexes.pop_front() {
+        (index, true)
+      } else if let Some(index) = pending_indexes.pop_front() {
+        (index, false)
+      } else {
+        break;
       };
-      shared_engine.append_scoped_payload(
-        run_id,
-        scope,
-        RunEventPayload::ForEachIterationStarted(ForEachIterationIdentityData {
+      if !resumed {
+        let scope = ForEachIterationScope {
           for_each_id: descriptor.for_each_id.clone(),
-        }),
-      )?;
+          index,
+        };
+        shared_engine.append_scoped_payload(
+          run_id,
+          scope,
+          RunEventPayload::ForEachIterationStarted(ForEachIterationIdentityData {
+            for_each_id: descriptor.for_each_id.clone(),
+          }),
+        )?;
+      }
 
       let mut iteration_engine = shared_engine.clone();
       let iteration_descriptor = descriptor.clone();
@@ -7477,6 +7856,38 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
         match result {
           Ok(result) => aggregate_results[index as usize] = result,
           Err(error) => {
+            let projection = shared_engine.projection(run_id)?;
+            let iteration_is_open = projection
+              .for_each
+              .get(&descriptor.for_each_id)
+              .and_then(|state| state.iterations.get(&index))
+              .is_some_and(|status| matches!(status, ForEachIterationStatus::Started));
+            if iteration_is_open {
+              let (failed_node_id, failure_kind) = for_each_latest_iteration_failure(
+                &projection,
+                &descriptor.for_each_id,
+                index,
+              )
+              .map(|(node_id, failure)| (node_id, for_each_failure_kind(failure.kind)))
+              .unwrap_or_else(|| {
+                (
+                  descriptor.body.terminal_node_id.clone(),
+                  ForEachIterationFailureKind::Interrupted,
+                )
+              });
+              shared_engine.append_scoped_payload(
+                run_id,
+                ForEachIterationScope {
+                  for_each_id: descriptor.for_each_id.clone(),
+                  index,
+                },
+                RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
+                  for_each_id: descriptor.for_each_id.clone(),
+                  failed_node_id,
+                  failure_kind,
+                }),
+              )?;
+            }
             if first_error.is_none() {
               first_error = Some(error);
               stop_admission = true;
@@ -7503,13 +7914,60 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
 
   let projection = shared_engine.projection(run_id)?;
   if projection.status == RunStatus::Cancelling {
+    settle_open_for_each(
+      &mut shared_engine,
+      run_id,
+      descriptor,
+      ForEachTerminalDisposition::Cancelled,
+    )?;
     return Err(cancelled_run_error(&shared_engine, run_id)?);
   }
   if projection.timeout_reached_at.is_some() {
     return Err(resumed_failure(&shared_engine, run_id, projection)?);
   }
-  if let Some(error) = first_error {
-    return Err(error);
+  if first_error.is_some() || stop_admission {
+    let projection = shared_engine.projection(run_id)?;
+    let primary_failure = projection
+      .for_each
+      .get(&descriptor.for_each_id)
+      .and_then(|loop_state| {
+        loop_state
+          .iterations
+          .keys()
+          .filter_map(|index| {
+            for_each_latest_iteration_failure(&projection, &descriptor.for_each_id, *index)
+          })
+          .find(|(_, failure)| failure.kind != AttemptFailureKind::InvocationCancelled)
+      })
+      .map(|(_, failure)| failure)
+      .unwrap_or_else(|| AttemptFailure {
+        kind: AttemptFailureKind::Interrupted,
+        code: "WOML_FOR_EACH_INTERRUPTED".to_string(),
+        message: format!(
+          "For-each {:?} could not complete one of its iterations.",
+          descriptor.for_each_id
+        ),
+        details: None,
+        ..AttemptFailure::legacy_defaults()
+      });
+    settle_open_for_each(
+      &mut shared_engine,
+      run_id,
+      descriptor,
+      ForEachTerminalDisposition::Failed,
+    )?;
+    if shared_engine.projection(run_id)?.business_outcome.is_none() {
+      shared_engine.decide_run_failed(
+        run_id,
+        lifecycle_failure_from_attempt(primary_failure),
+        options.clock.now(),
+      )?;
+    }
+    return Err(resumed_failure(
+      &shared_engine,
+      run_id,
+      shared_engine.projection(run_id)?,
+    )?);
   }
 
   let mut public_output = Map::new();
@@ -7780,18 +8238,6 @@ async fn execute_for_each_iteration_script<E: RuntimeDagEngine>(
         host,
       )
       .await?;
-      engine.append_scoped_payload(
-        run_id,
-        ForEachIterationScope {
-          for_each_id: descriptor.for_each_id.clone(),
-          index,
-        },
-        RunEventPayload::ForEachIterationFailed(ForEachIterationFailedData {
-          for_each_id: descriptor.for_each_id.clone(),
-          failed_node_id: node_id.to_string(),
-          failure_kind: for_each_failure_kind(failure.kind),
-        }),
-      )?;
       Err(RuntimeExecutionError::InvalidConfiguration(format!(
         "for-each {:?} iteration {index} node {node_id:?} failed [{}]: {}",
         descriptor.for_each_id, failure.code, failure.message
@@ -7818,12 +8264,50 @@ async fn execute_for_each_iteration<E: RuntimeDagEngine + Clone>(
     index,
   };
 
-  let mut context = root_context.clone();
-  context
-    .steps
-    .retain(|step_id, _| descriptor.outer_step_ids.contains(step_id));
-  let mut completed = HashSet::new();
-  let mut selections = BTreeMap::new();
+  let projection = engine.projection(run_id)?;
+  let execution = projection
+    .for_each
+    .get(&descriptor.for_each_id)
+    .and_then(|loop_state| loop_state.executions.get(&index))
+    .cloned()
+    .ok_or_else(|| {
+      RuntimeExecutionError::Stalled(format!(
+        "for-each {:?} iteration {index} has no durable execution projection",
+        descriptor.for_each_id
+      ))
+    })?;
+  let mut context = execution.context.clone();
+  if context.steps.is_empty() {
+    context = root_context.clone();
+  }
+  context.steps.retain(|step_id, _| {
+    descriptor.outer_step_ids.contains(step_id)
+      || descriptor.body.nodes.iter().any(|node| node.id == *step_id)
+  });
+  let mut completed = execution
+    .attempts
+    .iter()
+    .filter_map(|attempt| {
+      matches!(attempt.status, AttemptStatus::Succeeded { .. })
+        .then_some(attempt.identity.node_id.clone())
+    })
+    .collect::<HashSet<_>>();
+  let mut selections = execution.choice_selections.clone();
+  selections.extend(execution.branch_selections.clone());
+  for choice in &descriptor.body.choices {
+    if selections.contains_key(&choice.choice_id) {
+      completed.insert(choice.selector_node_id.clone());
+    }
+  }
+  for branch_id in execution.branch_selections.keys() {
+    completed.insert(format!("__woml_branch__{branch_id}__select"));
+  }
+  for (parallel_id, group) in &execution.parallel_groups {
+    completed.insert(format!("__woml_parallel__{parallel_id}__start"));
+    if !matches!(group.status, ParallelGroupStatus::Started) {
+      completed.insert(parallel_id.clone());
+    }
+  }
   while !completed.contains(&descriptor.body.terminal_node_id) {
     let ready = for_each_ready_nodes(descriptor, &completed, &selections);
     if ready.is_empty() {
@@ -8710,6 +9194,32 @@ fn settle_cancelling_run<E: RuntimeDagEngine>(
     settle_open_fork_cancellation(engine, run_id, &fork)?;
   }
 
+  let opened_loops = engine
+    .workflow()
+    .graph
+    .for_each
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .filter(|descriptor| {
+      engine.projection(run_id).ok().is_some_and(|projection| {
+        projection
+          .for_each
+          .get(&descriptor.for_each_id)
+          .is_some_and(|state| state.status == ForEachStatus::Open)
+      })
+    })
+    .cloned()
+    .collect::<Vec<_>>();
+  for descriptor in opened_loops {
+    settle_open_for_each(
+      engine,
+      run_id,
+      &descriptor,
+      ForEachTerminalDisposition::Cancelled,
+    )?;
+  }
+
   let projection = engine.projection(run_id)?;
   let cancellation_request_id = projection.cancellation_request_id.ok_or_else(|| {
     RuntimeExecutionError::Stalled("cancelling run has no durable request identity".to_string())
@@ -9059,6 +9569,17 @@ trait RuntimeDagEngine {
       }),
     )
   }
+  fn decide_run_failed(
+    &mut self,
+    run_id: &str,
+    failure: LifecycleFailure,
+    _occurred_at: chrono::DateTime<chrono::Utc>,
+  ) -> Result<(), RuntimeExecutionError> {
+    self.append_payload(
+      run_id,
+      RunEventPayload::RunOutcomeDecided(RunOutcomeDecidedData::Failed { failure }),
+    )
+  }
   fn record_step_attempt_failure(
     &mut self,
     run_id: &str,
@@ -9211,6 +9732,15 @@ impl<E: RuntimeDagEngine> RuntimeDagEngine for SharedForEachEngine<'_, E> {
     self.with_engine(|engine| {
       engine.decide_run_cancelled(run_id, cancellation_request_id, occurred_at)
     })
+  }
+
+  fn decide_run_failed(
+    &mut self,
+    run_id: &str,
+    failure: LifecycleFailure,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+  ) -> Result<(), RuntimeExecutionError> {
+    self.with_engine(|engine| engine.decide_run_failed(run_id, failure, occurred_at))
   }
 
   fn record_step_attempt_failure(
@@ -9464,6 +9994,21 @@ impl RuntimeDagEngine for DurableDagEngine {
       RunOutcomeDecidedData::Cancelled {
         cancellation_request_id,
       },
+      occurred_at,
+    )?;
+    Ok(())
+  }
+
+  fn decide_run_failed(
+    &mut self,
+    run_id: &str,
+    failure: LifecycleFailure,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+  ) -> Result<(), RuntimeExecutionError> {
+    DurableDagEngine::decide_run_outcome(
+      self,
+      run_id,
+      RunOutcomeDecidedData::Failed { failure },
       occurred_at,
     )?;
     Ok(())

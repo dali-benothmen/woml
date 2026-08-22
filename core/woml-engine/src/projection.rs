@@ -1517,6 +1517,9 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
             *status = ForEachIterationStatus::Failed {
               failed_node_id: data.failed_node_id.clone(),
             };
+            if let Some(execution) = loop_state.executions.get_mut(&scope.index) {
+              execution.pending_retries.clear();
+            }
           }
           _ => {
             return Err(FoldError::InvalidHistory(format!(
@@ -1575,15 +1578,84 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           .values()
           .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
           .count() as u32;
+        let pending_retry_count = loop_state
+          .executions
+          .values()
+          .map(|execution| execution.pending_retries.len())
+          .sum::<usize>();
+        let active_attempt_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| &execution.attempts)
+          .filter(|attempt| attempt.status == AttemptStatus::Started)
+          .count();
+        let active_attempts = loop_state
+          .executions
+          .iter()
+          .flat_map(|(index, execution)| {
+            execution.attempts.iter().filter_map(move |attempt| {
+              (attempt.status == AttemptStatus::Started).then(|| {
+                format!(
+                  "{}:{}:{}:{}",
+                  index,
+                  attempt.identity.node_id,
+                  attempt.identity.attempt,
+                  attempt.identity.invocation_id
+                )
+              })
+            })
+          })
+          .collect::<Vec<_>>();
+        let active_operation_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.operations.values())
+          .filter(|operation| operation.status == OperationStatus::Started)
+          .count();
+        let active_lifecycle_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.lifecycle_hooks.values())
+          .filter(|hook| {
+            matches!(
+              hook.status,
+              LifecycleHookStatus::Requested | LifecycleHookStatus::Running
+            )
+          })
+          .count();
+        let active_reusable_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.reusable_lifecycle_hooks.values())
+          .filter(|hook| {
+            matches!(
+              hook.status,
+              ReusableLifecycleStatus::Requested | ReusableLifecycleStatus::Running
+            )
+          })
+          .count();
+        let active_parallel_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.parallel_groups.values())
+          .filter(|group| group.status == ParallelGroupStatus::Started)
+          .count();
+        let owns_active_work = pending_retry_count != 0
+          || active_attempt_count != 0
+          || active_operation_count != 0
+          || active_lifecycle_count != 0
+          || active_reusable_count != 0
+          || active_parallel_count != 0;
         if loop_state.status != ForEachStatus::Open
           || data.total != loop_state.total
           || (data.succeeded, data.failed, data.skipped) != (succeeded, failed, skipped)
           || succeeded + failed + skipped != loop_state.total
           || (is_success && (failed != 0 || skipped != 0))
+          || owns_active_work
         {
           return Err(FoldError::InvalidHistory(format!(
-            "For-each {:?} settlement does not match its folded iterations.",
-            data.for_each_id
+            "For-each {:?} settlement does not match its folded iterations: event=({},{},{}), folded=({succeeded},{failed},{skipped}), total={}, activeWork={owns_active_work} (retries={pending_retry_count}, attempts={active_attempt_count} {active_attempts:?}, operations={active_operation_count}, lifecycle={active_lifecycle_count}, reusable={active_reusable_count}, parallel={active_parallel_count}).",
+            data.for_each_id, data.succeeded, data.failed, data.skipped, loop_state.total
           )));
         }
         loop_state.status = if is_success {

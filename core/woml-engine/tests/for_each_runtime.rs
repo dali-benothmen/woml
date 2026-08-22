@@ -46,6 +46,33 @@ fn concurrent_model() -> CompiledWorkflowDefinition {
   model
 }
 
+fn failing_concurrent_model() -> CompiledWorkflowDefinition {
+  let mut value: Value = serde_json::from_str(REVIEWED_MODEL).unwrap();
+  value["graph"]["forEach"][0]["concurrency"] = json!(2);
+  value["graph"]["forEach"][0]["body"]["nodes"][0]["inputs"]["fields"]["source"]["value"] = json!(
+    r#"
+        if (context.item.fail) {
+          throw new Error('item failed');
+        }
+        await new Promise(resolve => setTimeout(resolve, context.item.delay));
+        return { value: context.item.value, index: context.iteration.index };
+      "#
+  );
+  let model: CompiledWorkflowDefinition = serde_json::from_value(value).unwrap();
+  model.validate_for_durable_execution().unwrap();
+  model
+}
+
+fn timeout_concurrent_model() -> CompiledWorkflowDefinition {
+  let mut workflow = concurrent_model();
+  // Leave enough startup headroom when the full test binary launches several
+  // Bun hosts concurrently; the test specifically targets an already-open
+  // loop rather than a deadline reached before its first iteration.
+  workflow.runtime_policy.as_mut().unwrap().timeout_ms = Some(3_000);
+  workflow.validate_for_durable_execution().unwrap();
+  workflow
+}
+
 fn inner_parallel_model() -> CompiledWorkflowDefinition {
   let mut value: Value = serde_json::from_str(REVIEWED_MODEL).unwrap();
   value["graph"]["forEach"][0]["concurrency"] = json!(1);
@@ -390,6 +417,114 @@ async fn inner_parallel_children_use_their_own_concurrency_limit() {
   assert_eq!(
     result.context.steps["organize"]["results"],
     json!([{ "child": "slow" }])
+  );
+}
+
+#[tokio::test]
+async fn failure_settles_active_and_pending_iterations_before_the_run_fails() {
+  let Some(host) = host_options() else { return };
+  let database = TemporaryDatabase::new();
+  let model = failing_concurrent_model();
+  let mut trigger = Map::new();
+  trigger.insert(
+    "items".to_string(),
+    json!([
+      { "value": "fails", "fail": true, "delay": 0 },
+      { "value": "active", "fail": false, "delay": 800 },
+      { "value": "pending-1", "fail": false, "delay": 5 },
+      { "value": "pending-2", "fail": false, "delay": 5 }
+    ]),
+  );
+
+  let error = execute_workflow_durable(
+    model,
+    "sha256:5656565656565656565656565656565656565656565656565656565656565656".to_string(),
+    trigger,
+    RuntimeExecutionOptions::new(host, 3_000),
+    database.path().to_path_buf(),
+  )
+  .await
+  .unwrap_err();
+  let woml_engine::RuntimeExecutionError::RunFailed(details) = error else {
+    panic!("expected a durable run failure");
+  };
+  let events = details.events;
+  assert_eq!(
+    events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::ForEachIterationFailed(_)))
+      .count(),
+    2
+  );
+  assert_eq!(
+    events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::ForEachIterationSkipped(_)))
+      .count(),
+    2
+  );
+  assert_eq!(
+    events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::ForEachFailed(_)))
+      .count(),
+    1
+  );
+  let run_id = events[0].run_id.clone();
+  let reopened = DurableEventStore::open(database.path())
+    .unwrap()
+    .projection(&run_id)
+    .unwrap();
+  assert_eq!(reopened.status, woml_engine::RunStatus::Failed);
+}
+
+#[tokio::test]
+async fn workflow_timeout_settles_the_open_loop_before_deciding_the_run_outcome() {
+  let Some(host) = host_options() else { return };
+  let database = TemporaryDatabase::new();
+  let model = timeout_concurrent_model();
+  let mut trigger = Map::new();
+  trigger.insert(
+    "items".to_string(),
+    json!([
+      { "value": "active-1", "delay": 10_000 },
+      { "value": "active-2", "delay": 10_000 },
+      { "value": "pending", "delay": 5 }
+    ]),
+  );
+
+  let error = execute_workflow_durable(
+    model,
+    "sha256:5757575757575757575757575757575757575757575757575757575757575757".to_string(),
+    trigger,
+    RuntimeExecutionOptions::new(host, 12_000),
+    database.path().to_path_buf(),
+  )
+  .await
+  .unwrap_err();
+  let details = match error {
+    woml_engine::RuntimeExecutionError::RunFailed(details) => details,
+    other => panic!("expected a timeout run failure, received {other:?}"),
+  };
+  assert_eq!(details.code, "WOML_WORKFLOW_TIMED_OUT");
+  let loop_settled = details
+    .events
+    .iter()
+    .position(|event| matches!(event.payload, RunEventPayload::ForEachFailed(_)))
+    .unwrap();
+  let outcome_decided = details
+    .events
+    .iter()
+    .position(|event| matches!(event.payload, RunEventPayload::RunOutcomeDecided(_)))
+    .unwrap();
+  assert!(loop_settled < outcome_decided);
+  assert_eq!(
+    details
+      .events
+      .iter()
+      .filter(|event| matches!(event.payload, RunEventPayload::ForEachIterationSkipped(_)))
+      .count(),
+    1
   );
 }
 

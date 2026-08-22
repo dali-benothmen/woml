@@ -409,7 +409,15 @@ pub(crate) fn node_is_complete(
       .unwrap_or_default()
       .iter()
       .find(|descriptor| descriptor.open_node_id == node.id)
-      .is_some_and(|descriptor| projection.for_each.contains_key(&descriptor.for_each_id));
+      .and_then(|descriptor| projection.for_each.get(&descriptor.for_each_id))
+      .is_some_and(|loop_state| {
+        matches!(
+          loop_state.status,
+          crate::projection::ForEachStatus::Succeeded
+            | crate::projection::ForEachStatus::Failed
+            | crate::projection::ForEachStatus::Cancelled
+        )
+      });
   }
   if node.handler == "engine.for-each-result" {
     return projection.context.steps.contains_key(&node.id);
