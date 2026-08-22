@@ -1,5 +1,6 @@
 import type {
   LifecyclePresentationV1,
+  ForEachPresentationV1,
   PresentationFailureV1,
   RunPresentationListV1,
   RunPresentationV1,
@@ -19,7 +20,7 @@ const STEP_STATUSES = new Set([
   'cancelled', 'timed_out', 'skipped',
 ]);
 const STEP_KINDS = new Set([
-  'step', 'script', 'custom_step', 'switch', 'choose', 'parallel', 'fork',
+  'step', 'script', 'custom_step', 'for_each', 'switch', 'choose', 'parallel', 'fork',
   'branch', 'approval', 'workflow_call', 'workflow_start',
 ]);
 const TRIGGER_TYPES = new Set([
@@ -163,19 +164,60 @@ function workflow(value: unknown, path: string): WorkflowPresentationV1 {
   };
 }
 
+function forEach(value: unknown, path: string): ForEachPresentationV1 {
+  const item = record(value, path);
+  exact(item, [
+    'total', 'succeeded', 'failed', 'skipped', 'active', 'pending',
+    'concurrency', 'iterations',
+  ], ['iterationsTruncated'], path);
+  const total = integer(item.total, `${path}.total`, 0, 10000);
+  const succeeded = integer(item.succeeded, `${path}.succeeded`, 0, total);
+  const failed = integer(item.failed, `${path}.failed`, 0, total);
+  const skipped = integer(item.skipped, `${path}.skipped`, 0, total);
+  const active = integer(item.active, `${path}.active`, 0, total);
+  const pending = integer(item.pending, `${path}.pending`, 0, total);
+  if (succeeded + failed + skipped + active + pending !== total) invalid(path);
+  if (!Array.isArray(item.iterations) || item.iterations.length > 100) invalid(`${path}.iterations`);
+  const iterations = item.iterations.map((entry, index) => {
+    const iterationPath = `${path}.iterations[${index}]`;
+    const iteration = record(entry, iterationPath);
+    exact(iteration, ['index', 'itemNumber', 'status'], ['failedNodeId', 'failure'], iterationPath);
+    const iterationIndex = integer(iteration.index, `${iterationPath}.index`, 0, Math.max(0, total - 1));
+    if (iteration.itemNumber !== iterationIndex + 1) invalid(`${iterationPath}.itemNumber`);
+    return {
+      index: iterationIndex,
+      itemNumber: Number(iteration.itemNumber),
+      status: enumeration(iteration.status, STEP_STATUSES, `${iterationPath}.status`) as ForEachPresentationV1['iterations'][number]['status'],
+      ...(iteration.failedNodeId === undefined ? {} : { failedNodeId: text(iteration.failedNodeId, `${iterationPath}.failedNodeId`, 256) }),
+      ...(iteration.failure === undefined ? {} : { failure: failure(iteration.failure, `${iterationPath}.failure`) }),
+    };
+  });
+  if (item.iterationsTruncated !== undefined && typeof item.iterationsTruncated !== 'boolean') {
+    invalid(`${path}.iterationsTruncated`);
+  }
+  return {
+    total, succeeded, failed, skipped, active, pending,
+    concurrency: integer(item.concurrency, `${path}.concurrency`, 1, 64),
+    iterations,
+    ...(item.iterationsTruncated === undefined ? {} : { iterationsTruncated: item.iterationsTruncated as boolean }),
+  };
+}
+
 function step(value: unknown, path: string): StepPresentationV1 {
   const item = record(value, path);
   exact(item, ['id', 'kind', 'status', 'depth', 'attempts'], [
     'name', 'description', 'startedAt', 'completedAt', 'durationMs', 'detail',
-    'result', 'resultTruncated', 'failure',
+    'result', 'resultTruncated', 'failure', 'forEach',
   ], path);
   if (item.result !== undefined) jsonValue(item.result, `${path}.result`);
   if (item.resultTruncated !== undefined && typeof item.resultTruncated !== 'boolean') invalid(`${path}.resultTruncated`);
+  const kind = enumeration(item.kind, STEP_KINDS, `${path}.kind`) as StepPresentationV1['kind'];
+  if ((kind === 'for_each') !== (item.forEach !== undefined)) invalid(`${path}.forEach`);
   return {
     id: text(item.id, `${path}.id`, 256),
     ...(item.name === undefined ? {} : { name: optionalText(item.name, `${path}.name`) }),
     ...(item.description === undefined ? {} : { description: optionalText(item.description, `${path}.description`, 8192) }),
-    kind: enumeration(item.kind, STEP_KINDS, `${path}.kind`) as StepPresentationV1['kind'],
+    kind,
     status: enumeration(item.status, STEP_STATUSES, `${path}.status`) as StepPresentationV1['status'],
     depth: integer(item.depth, `${path}.depth`, 0, 64),
     ...(item.startedAt === undefined ? {} : { startedAt: optionalDateTime(item.startedAt, `${path}.startedAt`) }),
@@ -186,6 +228,7 @@ function step(value: unknown, path: string): StepPresentationV1 {
     ...(item.result === undefined ? {} : { result: item.result as StepPresentationV1['result'] }),
     ...(item.resultTruncated === undefined ? {} : { resultTruncated: item.resultTruncated as boolean }),
     ...(item.failure === undefined ? {} : { failure: failure(item.failure, `${path}.failure`) }),
+    ...(item.forEach === undefined ? {} : { forEach: forEach(item.forEach, `${path}.forEach`) }),
   };
 }
 

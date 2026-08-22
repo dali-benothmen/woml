@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::event::{
@@ -206,6 +207,46 @@ pub struct ForkProjection {
   pub blocking_branch_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForEachStatus {
+  Open,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForEachIterationStatus {
+  Started,
+  Succeeded { result: Option<Value> },
+  Failed { failed_node_id: String },
+  Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForEachProjection {
+  pub for_each_id: String,
+  pub total: u32,
+  pub items_digest: String,
+  pub concurrency: u32,
+  pub status: ForEachStatus,
+  pub iterations: BTreeMap<u32, ForEachIterationStatus>,
+  pub executions: BTreeMap<u32, ForEachIterationExecutionProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ForEachIterationExecutionProjection {
+  pub context: WorkflowContext,
+  pub attempts: Vec<AttemptProjection>,
+  pub operations: BTreeMap<OperationIdentity, OperationProjection>,
+  pub pending_retries: BTreeMap<String, RetryScheduleProjection>,
+  pub branch_selections: BTreeMap<String, String>,
+  pub choice_selections: BTreeMap<String, String>,
+  pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
+  pub lifecycle_hooks: BTreeMap<String, LifecycleHookProjection>,
+  pub reusable_lifecycle_hooks: BTreeMap<String, ReusableLifecycleProjection>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalRequestStatus {
   Waiting,
@@ -344,6 +385,7 @@ pub struct RunProjection {
   pub choice_selections: BTreeMap<String, String>,
   pub parallel_groups: BTreeMap<String, ParallelGroupProjection>,
   pub forks: BTreeMap<String, ForkProjection>,
+  pub for_each: BTreeMap<String, ForEachProjection>,
   pub approval_requests: BTreeMap<String, ApprovalRequestProjection>,
   pub notification_deliveries: BTreeMap<String, NotificationDeliveryProjection>,
   pub notification_updates: BTreeMap<String, NotificationMessageUpdateProjection>,
@@ -476,6 +518,506 @@ fn started_attempt(data: &StepAttemptStartedData) -> AttemptProjection {
   }
 }
 
+fn apply_iteration_scoped_event(
+  projection: &mut RunProjection,
+  event: &RunEvent,
+  previous_event: Option<&RunEvent>,
+) -> Result<(), FoldError> {
+  require_running_or_cancelling(projection)?;
+  let scope = event.iteration.as_ref().ok_or_else(|| {
+    FoldError::InvalidHistory("Loop-owned work is missing iteration scope.".to_string())
+  })?;
+  let loop_state = projection
+    .for_each
+    .get_mut(&scope.for_each_id)
+    .ok_or_else(|| {
+      FoldError::InvalidHistory(format!(
+        "Loop-owned work references unopened for-each {:?}.",
+        scope.for_each_id
+      ))
+    })?;
+  if loop_state.status != ForEachStatus::Open
+    || !matches!(
+      loop_state.iterations.get(&scope.index),
+      Some(ForEachIterationStatus::Started)
+    )
+  {
+    return Err(FoldError::InvalidHistory(format!(
+      "Loop-owned work requires active iteration {:?}:{}.",
+      scope.for_each_id, scope.index
+    )));
+  }
+  let execution = loop_state.executions.get_mut(&scope.index).ok_or_else(|| {
+    FoldError::InvalidHistory("Active iteration has no execution projection.".to_string())
+  })?;
+  match &event.payload {
+    RunEventPayload::StepAttemptStarted(data) => {
+      if execution
+        .attempts
+        .iter()
+        .any(|attempt| attempt.identity.invocation_id == data.invocation_id)
+        || execution
+          .attempts
+          .iter()
+          .rev()
+          .find(|attempt| attempt.identity.node_id == data.node_id)
+          .is_some_and(|attempt| attempt.status == AttemptStatus::Started)
+      {
+        return Err(FoldError::InvalidHistory(format!(
+          "Iteration attempt {:?} is not unique and inactive.",
+          data.invocation_id
+        )));
+      }
+      let previous = execution
+        .attempts
+        .iter()
+        .rev()
+        .find(|attempt| attempt.identity.node_id == data.node_id);
+      let expected = previous.map_or(1, |attempt| attempt.identity.attempt + 1);
+      if data.attempt != expected {
+        return Err(FoldError::InvalidHistory(format!(
+          "Iteration node {:?} expected attempt {expected}.",
+          data.node_id
+        )));
+      }
+      if let Some(previous) = previous {
+        let retry = execution
+          .pending_retries
+          .get(&data.node_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("Iteration retry has no durable schedule.".to_string())
+          })?;
+        if !matches!(previous.status, AttemptStatus::Failed { .. })
+          || retry.next_attempt != data.attempt
+          || event.occurred_at < retry.scheduled_at
+        {
+          return Err(FoldError::InvalidHistory(
+            "Iteration retry does not match its failed attempt and schedule.".to_string(),
+          ));
+        }
+        execution.pending_retries.remove(&data.node_id);
+      }
+      execution.attempts.push(started_attempt(data));
+    }
+    RunEventPayload::StepAttemptSucceeded(data) => {
+      if execution.operations.values().any(|operation| {
+        operation.identity.invocation_id == data.invocation_id
+          && operation.status == OperationStatus::Started
+      }) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration attempt cannot succeed with an active operation.".to_string(),
+        ));
+      }
+      let attempt = execution
+        .attempts
+        .iter_mut()
+        .find(|attempt| {
+          attempt.identity.node_id == data.node_id
+            && attempt.identity.attempt == data.attempt
+            && attempt.identity.invocation_id == data.invocation_id
+        })
+        .ok_or_else(|| {
+          FoldError::InvalidHistory("Iteration success has no matching attempt.".to_string())
+        })?;
+      if attempt.status != AttemptStatus::Started
+        || execution.context.steps.contains_key(&data.node_id)
+      {
+        return Err(FoldError::InvalidHistory(
+          "Iteration attempt already has a terminal outcome.".to_string(),
+        ));
+      }
+      attempt.status = AttemptStatus::Succeeded {
+        output: data.output.clone(),
+      };
+      execution
+        .context
+        .steps
+        .insert(data.node_id.clone(), data.output.clone());
+    }
+    RunEventPayload::StepAttemptFailed(data) => {
+      if execution.operations.values().any(|operation| {
+        operation.identity.invocation_id == data.invocation_id
+          && operation.status == OperationStatus::Started
+      }) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration attempt cannot fail with an active operation.".to_string(),
+        ));
+      }
+      let attempt = execution
+        .attempts
+        .iter_mut()
+        .find(|attempt| {
+          attempt.identity.node_id == data.node_id
+            && attempt.identity.attempt == data.attempt
+            && attempt.identity.invocation_id == data.invocation_id
+        })
+        .ok_or_else(|| {
+          FoldError::InvalidHistory("Iteration failure has no matching attempt.".to_string())
+        })?;
+      if attempt.status != AttemptStatus::Started {
+        return Err(FoldError::InvalidHistory(
+          "Iteration attempt already has a terminal outcome.".to_string(),
+        ));
+      }
+      attempt.status = AttemptStatus::Failed {
+        failure: data.failure.clone(),
+      };
+    }
+    RunEventPayload::StepRetryScheduled(data) => {
+      let adjacent = previous_event.is_some_and(|previous| {
+        previous.iteration.as_ref() == Some(scope)
+          && matches!(&previous.payload, RunEventPayload::StepAttemptFailed(failed)
+            if failed.node_id == data.node_id && failed.attempt == data.failed_attempt)
+      });
+      let latest = execution
+        .attempts
+        .iter()
+        .rev()
+        .find(|attempt| attempt.identity.node_id == data.node_id);
+      if !adjacent
+        || !matches!(latest, Some(attempt) if attempt.identity.attempt == data.failed_attempt
+          && matches!(attempt.status, AttemptStatus::Failed { .. }))
+        || data.next_attempt != data.failed_attempt + 1
+        || execution.pending_retries.contains_key(&data.node_id)
+      {
+        return Err(FoldError::InvalidHistory(
+          "Iteration retry schedule does not follow its failed attempt.".to_string(),
+        ));
+      }
+      execution.pending_retries.insert(
+        data.node_id.clone(),
+        RetryScheduleProjection {
+          node_id: data.node_id.clone(),
+          failed_attempt: data.failed_attempt,
+          next_attempt: data.next_attempt,
+          scheduled_at: data.scheduled_at,
+        },
+      );
+    }
+    RunEventPayload::ChoiceSelected(data) => {
+      if execution
+        .choice_selections
+        .insert(data.choice_id.clone(), data.arm_id.clone())
+        .is_some()
+      {
+        return Err(FoldError::InvalidHistory(
+          "Iteration choice was selected more than once.".to_string(),
+        ));
+      }
+    }
+    RunEventPayload::BranchSelected(data) => {
+      if execution
+        .branch_selections
+        .insert(data.branch_id.clone(), data.arm_id.clone())
+        .is_some()
+      {
+        return Err(FoldError::InvalidHistory(
+          "Iteration conditional branch was selected more than once.".to_string(),
+        ));
+      }
+    }
+    RunEventPayload::ParallelGroupStarted(data) => {
+      if execution.parallel_groups.contains_key(&data.parallel_id) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration parallel group started more than once.".to_string(),
+        ));
+      }
+      execution.parallel_groups.insert(
+        data.parallel_id.clone(),
+        ParallelGroupProjection {
+          parallel_id: data.parallel_id.clone(),
+          fork_context: execution.context.clone(),
+          status: ParallelGroupStatus::Started,
+        },
+      );
+    }
+    RunEventPayload::ParallelGroupCompleted(data) => {
+      let group = execution
+        .parallel_groups
+        .get_mut(&data.parallel_id)
+        .ok_or_else(|| {
+          FoldError::InvalidHistory("Iteration parallel completion has no start.".to_string())
+        })?;
+      if group.status != ParallelGroupStatus::Started {
+        return Err(FoldError::InvalidHistory(
+          "Iteration parallel group completed more than once.".to_string(),
+        ));
+      }
+      group.status = ParallelGroupStatus::Completed {
+        outcome: data.outcome,
+        failed_node_ids: data.failed_node_ids.clone(),
+        cancelled_node_ids: data.cancelled_node_ids.clone(),
+      };
+    }
+    RunEventPayload::OperationStarted(data) => {
+      let active = execution.attempts.iter().any(|attempt| {
+        attempt.identity.node_id == data.node_id
+          && attempt.identity.attempt == data.attempt_number
+          && attempt.identity.invocation_id == data.invocation_id
+          && attempt.status == AttemptStatus::Started
+      });
+      let key = OperationIdentity {
+        invocation_id: data.invocation_id.clone(),
+        call_id: data.call_id.clone(),
+      };
+      if !active || execution.operations.contains_key(&key) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration operation requires one matching active attempt.".to_string(),
+        ));
+      }
+      execution.operations.insert(
+        key.clone(),
+        OperationProjection {
+          identity: key,
+          node_id: data.node_id.clone(),
+          attempt_number: data.attempt_number,
+          operation_key: data.operation_key.clone(),
+          capability: data.capability.clone(),
+          operation: data.operation.clone(),
+          execution_mode: data.execution_mode,
+          metadata: data.metadata.clone(),
+          status: OperationStatus::Started,
+        },
+      );
+    }
+    RunEventPayload::OperationSucceeded(data) => {
+      let key = OperationIdentity {
+        invocation_id: data.invocation_id.clone(),
+        call_id: data.call_id.clone(),
+      };
+      let operation = execution.operations.get_mut(&key).ok_or_else(|| {
+        FoldError::InvalidHistory("Iteration operation success has no start.".to_string())
+      })?;
+      if operation.status != OperationStatus::Started {
+        return Err(FoldError::InvalidHistory(
+          "Iteration operation already settled.".to_string(),
+        ));
+      }
+      operation.status = OperationStatus::Succeeded {
+        duration_ms: data.duration_ms,
+        result_bytes: data.result_bytes,
+        result_digest: data.result_digest.clone(),
+      };
+    }
+    RunEventPayload::OperationFailed(data) => {
+      let key = OperationIdentity {
+        invocation_id: data.invocation_id.clone(),
+        call_id: data.call_id.clone(),
+      };
+      let operation = execution.operations.get_mut(&key).ok_or_else(|| {
+        FoldError::InvalidHistory("Iteration operation failure has no start.".to_string())
+      })?;
+      if operation.status != OperationStatus::Started {
+        return Err(FoldError::InvalidHistory(
+          "Iteration operation already settled.".to_string(),
+        ));
+      }
+      operation.status = OperationStatus::Failed {
+        duration_ms: data.duration_ms,
+        failure: data.failure.clone(),
+      };
+    }
+    RunEventPayload::LifecycleHookRequested(data) => {
+      if execution
+        .lifecycle_hooks
+        .contains_key(&data.hook_invocation_id)
+      {
+        return Err(FoldError::InvalidHistory(
+          "Iteration lifecycle hook was requested more than once.".to_string(),
+        ));
+      }
+      execution.lifecycle_hooks.insert(
+        data.hook_invocation_id.clone(),
+        LifecycleHookProjection {
+          hook_invocation_id: data.hook_invocation_id.clone(),
+          hook_id: data.hook_id.clone(),
+          event: data.event,
+          subject: data.subject.clone(),
+          status: LifecycleHookStatus::Requested,
+          actions: BTreeMap::new(),
+          failed_actions: 0,
+        },
+      );
+    }
+    RunEventPayload::LifecycleActionAttemptStarted(data) => {
+      let hook = execution
+        .lifecycle_hooks
+        .get_mut(&data.hook_invocation_id)
+        .ok_or_else(|| {
+          FoldError::InvalidHistory(
+            "Iteration lifecycle action started before its hook.".to_string(),
+          )
+        })?;
+      if hook.actions.contains_key(&data.action_id)
+        || hook
+          .actions
+          .values()
+          .any(|action| action.status == LifecycleActionStatus::Started)
+      {
+        return Err(FoldError::InvalidHistory(
+          "Iteration lifecycle action identity is duplicated.".to_string(),
+        ));
+      }
+      hook.actions.insert(
+        data.action_id.clone(),
+        LifecycleActionProjection {
+          action_id: data.action_id.clone(),
+          attempt: data.attempt,
+          status: LifecycleActionStatus::Started,
+          failure: None,
+        },
+      );
+      hook.status = LifecycleHookStatus::Running;
+    }
+    RunEventPayload::LifecycleActionSucceeded(data) => {
+      let hook = execution
+        .lifecycle_hooks
+        .get_mut(&data.hook_invocation_id)
+        .ok_or_else(|| {
+          FoldError::InvalidHistory("Unknown iteration lifecycle hook.".to_string())
+        })?;
+      let action = hook.actions.get_mut(&data.action_id).ok_or_else(|| {
+        FoldError::InvalidHistory("Iteration lifecycle action has no start.".to_string())
+      })?;
+      if action.status != LifecycleActionStatus::Started || action.attempt != data.attempt {
+        return Err(FoldError::InvalidHistory(
+          "Iteration lifecycle success does not close its action.".to_string(),
+        ));
+      }
+      action.status = LifecycleActionStatus::Succeeded;
+    }
+    RunEventPayload::LifecycleActionFailed(data) => {
+      let hook = execution
+        .lifecycle_hooks
+        .get_mut(&data.hook_invocation_id)
+        .ok_or_else(|| {
+          FoldError::InvalidHistory("Unknown iteration lifecycle hook.".to_string())
+        })?;
+      let action = hook.actions.get_mut(&data.action_id).ok_or_else(|| {
+        FoldError::InvalidHistory("Iteration lifecycle action has no start.".to_string())
+      })?;
+      if action.status != LifecycleActionStatus::Started || action.attempt != data.attempt {
+        return Err(FoldError::InvalidHistory(
+          "Iteration lifecycle failure does not close its action.".to_string(),
+        ));
+      }
+      action.status = LifecycleActionStatus::Failed;
+      action.failure = Some(data.failure.clone());
+      hook.failed_actions += 1;
+    }
+    RunEventPayload::LifecycleHookCompleted(data) => {
+      let hook = execution
+        .lifecycle_hooks
+        .get_mut(&data.hook_invocation_id)
+        .ok_or_else(|| {
+          FoldError::InvalidHistory("Unknown iteration lifecycle hook.".to_string())
+        })?;
+      if hook
+        .actions
+        .values()
+        .any(|action| action.status == LifecycleActionStatus::Started)
+        || hook.failed_actions != data.failed_actions
+      {
+        return Err(FoldError::InvalidHistory(
+          "Iteration lifecycle completion does not match its actions.".to_string(),
+        ));
+      }
+      hook.status = match data.status {
+        LifecycleHookCompletionStatus::Completed => LifecycleHookStatus::Completed,
+        LifecycleHookCompletionStatus::CompletedWithWarnings => {
+          LifecycleHookStatus::CompletedWithWarnings
+        }
+      };
+    }
+    RunEventPayload::ReusableLifecycleRequested(data) => {
+      let key = format!("{}:{:?}", data.invocation_id, data.hook);
+      if execution.reusable_lifecycle_hooks.contains_key(&key) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration reusable lifecycle hook was requested more than once.".to_string(),
+        ));
+      }
+      execution.reusable_lifecycle_hooks.insert(
+        key,
+        ReusableLifecycleProjection {
+          invocation_id: data.invocation_id.clone(),
+          definition_digest: data.definition_digest.clone(),
+          hook: data.hook,
+          status: ReusableLifecycleStatus::Requested,
+          active_action_id: None,
+          completed_action_ids: Vec::new(),
+          warning_codes: Vec::new(),
+        },
+      );
+    }
+    RunEventPayload::ReusableLifecycleActionStarted(data) => {
+      let key = format!("{}:{:?}", data.invocation_id, data.hook);
+      let hook = execution
+        .reusable_lifecycle_hooks
+        .get_mut(&key)
+        .ok_or_else(|| FoldError::InvalidHistory("Unknown iteration reusable hook.".to_string()))?;
+      if hook.active_action_id.is_some() || hook.completed_action_ids.contains(&data.action_id) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration reusable lifecycle action is duplicated.".to_string(),
+        ));
+      }
+      hook.active_action_id = Some(data.action_id.clone());
+      hook.status = ReusableLifecycleStatus::Running;
+    }
+    RunEventPayload::ReusableLifecycleActionSucceeded(data) => {
+      let key = format!("{}:{:?}", data.invocation_id, data.hook);
+      let hook = execution
+        .reusable_lifecycle_hooks
+        .get_mut(&key)
+        .ok_or_else(|| FoldError::InvalidHistory("Unknown iteration reusable hook.".to_string()))?;
+      if hook.active_action_id.as_deref() != Some(data.action_id.as_str()) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration reusable lifecycle success has no active action.".to_string(),
+        ));
+      }
+      hook.active_action_id = None;
+      hook.completed_action_ids.push(data.action_id.clone());
+    }
+    RunEventPayload::ReusableLifecycleActionFailed(data) => {
+      let key = format!("{}:{:?}", data.invocation_id, data.hook);
+      let hook = execution
+        .reusable_lifecycle_hooks
+        .get_mut(&key)
+        .ok_or_else(|| FoldError::InvalidHistory("Unknown iteration reusable hook.".to_string()))?;
+      if hook.active_action_id.as_deref() != Some(data.action_id.as_str()) {
+        return Err(FoldError::InvalidHistory(
+          "Iteration reusable lifecycle failure has no active action.".to_string(),
+        ));
+      }
+      hook.active_action_id = None;
+      hook.completed_action_ids.push(data.action_id.clone());
+      hook.warning_codes.push(data.warning_code.clone());
+    }
+    RunEventPayload::ReusableLifecycleCompleted(data) => {
+      let key = format!("{}:{:?}", data.invocation_id, data.hook);
+      let hook = execution
+        .reusable_lifecycle_hooks
+        .get_mut(&key)
+        .ok_or_else(|| FoldError::InvalidHistory("Unknown iteration reusable hook.".to_string()))?;
+      if hook.active_action_id.is_some() {
+        return Err(FoldError::InvalidHistory(
+          "Iteration reusable lifecycle completed with an active action.".to_string(),
+        ));
+      }
+      hook.status = if data.outcome == crate::ReusableLifecycleOutcome::CompletedWithWarnings {
+        ReusableLifecycleStatus::CompletedWithWarnings
+      } else {
+        ReusableLifecycleStatus::Completed
+      };
+    }
+    _ => {
+      return Err(FoldError::InvalidHistory(
+        "Payload is not valid iteration-scoped work.".to_string(),
+      ))
+    }
+  }
+  Ok(())
+}
+
 pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
   let mut projection = RunProjection::default();
   let mut event_ids = HashSet::new();
@@ -519,6 +1061,19 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
       return Err(FoldError::InvalidHistory(
         "A terminal run event must be the final event.".to_string(),
       ));
+    }
+
+    let scoped_loop_event = matches!(
+      event.payload,
+      RunEventPayload::ForEachIterationStarted(_)
+        | RunEventPayload::ForEachIterationSucceeded(_)
+        | RunEventPayload::ForEachIterationFailed(_)
+        | RunEventPayload::ForEachIterationSkipped(_)
+    );
+    if event.iteration.is_some() && !scoped_loop_event {
+      apply_iteration_scoped_event(&mut projection, event, events.get(index.wrapping_sub(1)))?;
+      projection.last_sequence = event.sequence;
+      continue;
     }
 
     match &event.payload {
@@ -863,6 +1418,280 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
           ForkJoinOutcome::Cancelled => ForkJoinStatus::Cancelled,
         };
         fork.blocking_branch_id = data.blocking_branch_id.clone();
+      }
+      RunEventPayload::ForEachOpened(data) => {
+        require_running(&projection)?;
+        if projection.for_each.contains_key(&data.for_each_id) {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each {:?} was opened more than once.",
+            data.for_each_id
+          )));
+        }
+        projection.for_each.insert(
+          data.for_each_id.clone(),
+          ForEachProjection {
+            for_each_id: data.for_each_id.clone(),
+            total: data.total,
+            items_digest: data.items_digest.clone(),
+            concurrency: data.concurrency,
+            status: ForEachStatus::Open,
+            iterations: BTreeMap::new(),
+            executions: BTreeMap::new(),
+          },
+        );
+      }
+      RunEventPayload::ForEachIterationStarted(data) => {
+        require_running(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} started before its loop opened.",
+              data.for_each_id, scope.index
+            ))
+          })?;
+        if loop_state.status != ForEachStatus::Open
+          || scope.index >= loop_state.total
+          || loop_state.iterations.contains_key(&scope.index)
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each iteration {:?}:{} cannot start in its current state.",
+            data.for_each_id, scope.index
+          )));
+        }
+        loop_state
+          .iterations
+          .insert(scope.index, ForEachIterationStatus::Started);
+        loop_state.executions.insert(
+          scope.index,
+          ForEachIterationExecutionProjection {
+            context: projection.context.clone(),
+            ..ForEachIterationExecutionProjection::default()
+          },
+        );
+      }
+      RunEventPayload::ForEachIterationSucceeded(data) => {
+        require_running(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        if let (Some(result), Some(expected_digest)) = (&data.result, &data.result_digest) {
+          if projection_digest(result)? != *expected_digest {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} result digest does not match its value.",
+              data.for_each_id, scope.index
+            )));
+          }
+        }
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each iteration succeeded before opening.".to_string())
+          })?;
+        match loop_state.iterations.get_mut(&scope.index) {
+          Some(status @ ForEachIterationStatus::Started) => {
+            *status = ForEachIterationStatus::Succeeded {
+              result: data.result.clone(),
+            };
+          }
+          _ => {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} succeeded without one active start.",
+              data.for_each_id, scope.index
+            )));
+          }
+        }
+      }
+      RunEventPayload::ForEachIterationFailed(data) => {
+        require_running_or_cancelling(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each iteration failed before opening.".to_string())
+          })?;
+        match loop_state.iterations.get_mut(&scope.index) {
+          Some(status @ ForEachIterationStatus::Started) => {
+            *status = ForEachIterationStatus::Failed {
+              failed_node_id: data.failed_node_id.clone(),
+            };
+            if let Some(execution) = loop_state.executions.get_mut(&scope.index) {
+              execution.pending_retries.clear();
+            }
+          }
+          _ => {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each iteration {:?}:{} failed without one active start.",
+              data.for_each_id, scope.index
+            )));
+          }
+        }
+      }
+      RunEventPayload::ForEachIterationSkipped(data) => {
+        require_running_or_cancelling(&projection)?;
+        let scope = event.iteration.as_ref().expect("validated iteration scope");
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each iteration skipped before opening.".to_string())
+          })?;
+        if loop_state.status != ForEachStatus::Open
+          || scope.index >= loop_state.total
+          || loop_state.iterations.contains_key(&scope.index)
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each iteration {:?}:{} cannot be skipped in its current state.",
+            data.for_each_id, scope.index
+          )));
+        }
+        loop_state
+          .iterations
+          .insert(scope.index, ForEachIterationStatus::Skipped);
+      }
+      RunEventPayload::ForEachSucceeded(data)
+      | RunEventPayload::ForEachFailed(data)
+      | RunEventPayload::ForEachCancelled(data) => {
+        require_running_or_cancelling(&projection)?;
+        let is_success = matches!(&event.payload, RunEventPayload::ForEachSucceeded(_));
+        let is_cancelled = matches!(&event.payload, RunEventPayload::ForEachCancelled(_));
+        let loop_state = projection
+          .for_each
+          .get_mut(&data.for_each_id)
+          .ok_or_else(|| {
+            FoldError::InvalidHistory("For-each settled before opening.".to_string())
+          })?;
+        let succeeded = loop_state
+          .iterations
+          .values()
+          .filter(|status| matches!(status, ForEachIterationStatus::Succeeded { .. }))
+          .count() as u32;
+        let failed = loop_state
+          .iterations
+          .values()
+          .filter(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
+          .count() as u32;
+        let skipped = loop_state
+          .iterations
+          .values()
+          .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
+          .count() as u32;
+        let pending_retry_count = loop_state
+          .executions
+          .values()
+          .map(|execution| execution.pending_retries.len())
+          .sum::<usize>();
+        let active_attempt_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| &execution.attempts)
+          .filter(|attempt| attempt.status == AttemptStatus::Started)
+          .count();
+        let active_attempts = loop_state
+          .executions
+          .iter()
+          .flat_map(|(index, execution)| {
+            execution.attempts.iter().filter_map(move |attempt| {
+              (attempt.status == AttemptStatus::Started).then(|| {
+                format!(
+                  "{}:{}:{}:{}",
+                  index,
+                  attempt.identity.node_id,
+                  attempt.identity.attempt,
+                  attempt.identity.invocation_id
+                )
+              })
+            })
+          })
+          .collect::<Vec<_>>();
+        let active_operation_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.operations.values())
+          .filter(|operation| operation.status == OperationStatus::Started)
+          .count();
+        let active_lifecycle_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.lifecycle_hooks.values())
+          .filter(|hook| {
+            matches!(
+              hook.status,
+              LifecycleHookStatus::Requested | LifecycleHookStatus::Running
+            )
+          })
+          .count();
+        let active_reusable_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.reusable_lifecycle_hooks.values())
+          .filter(|hook| {
+            matches!(
+              hook.status,
+              ReusableLifecycleStatus::Requested | ReusableLifecycleStatus::Running
+            )
+          })
+          .count();
+        let active_parallel_count = loop_state
+          .executions
+          .values()
+          .flat_map(|execution| execution.parallel_groups.values())
+          .filter(|group| group.status == ParallelGroupStatus::Started)
+          .count();
+        let owns_active_work = pending_retry_count != 0
+          || active_attempt_count != 0
+          || active_operation_count != 0
+          || active_lifecycle_count != 0
+          || active_reusable_count != 0
+          || active_parallel_count != 0;
+        if loop_state.status != ForEachStatus::Open
+          || data.total != loop_state.total
+          || (data.succeeded, data.failed, data.skipped) != (succeeded, failed, skipped)
+          || succeeded + failed + skipped != loop_state.total
+          || (is_success && (failed != 0 || skipped != 0))
+          || owns_active_work
+        {
+          return Err(FoldError::InvalidHistory(format!(
+            "For-each {:?} settlement does not match its folded iterations: event=({},{},{}), folded=({succeeded},{failed},{skipped}), total={}, activeWork={owns_active_work} (retries={pending_retry_count}, attempts={active_attempt_count} {active_attempts:?}, operations={active_operation_count}, lifecycle={active_lifecycle_count}, reusable={active_reusable_count}, parallel={active_parallel_count}).",
+            data.for_each_id, data.succeeded, data.failed, data.skipped, loop_state.total
+          )));
+        }
+        loop_state.status = if is_success {
+          ForEachStatus::Succeeded
+        } else if is_cancelled {
+          ForEachStatus::Cancelled
+        } else {
+          ForEachStatus::Failed
+        };
+        if is_success {
+          let ordered_results = (0..loop_state.total)
+            .filter_map(|index| match loop_state.iterations.get(&index) {
+              Some(ForEachIterationStatus::Succeeded {
+                result: Some(result),
+              }) => Some(result.clone()),
+              _ => None,
+            })
+            .collect::<Vec<_>>();
+          let mut output = Map::new();
+          output.insert("total".to_string(), Value::from(loop_state.total));
+          output.insert("succeeded".to_string(), Value::from(succeeded));
+          if !ordered_results.is_empty() {
+            output.insert("results".to_string(), Value::Array(ordered_results));
+          }
+          let output = Value::Object(output);
+          if projection_digest(&output)? != data.aggregate_digest {
+            return Err(FoldError::InvalidHistory(format!(
+              "For-each {:?} aggregate digest does not match its public output.",
+              data.for_each_id
+            )));
+          }
+          projection
+            .context
+            .steps
+            .insert(data.for_each_id.clone(), output);
+        }
       }
       RunEventPayload::ParallelGroupStarted(data) => {
         require_running(&projection)?;
@@ -1956,6 +2785,13 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
     projection.last_sequence = event.sequence;
   }
   Ok(projection)
+}
+
+fn projection_digest(value: &Value) -> Result<String, FoldError> {
+  let bytes = serde_json_canonicalizer::to_vec(value).map_err(|error| {
+    FoldError::InvalidHistory(format!("A durable JSON value is not canonical: {error}"))
+  })?;
+  Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 fn require_failed_attempt(

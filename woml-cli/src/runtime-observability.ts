@@ -91,6 +91,19 @@ interface StreamSubscriber {
   readonly controller: ReadableStreamDefaultController<Uint8Array>;
 }
 
+interface ObservedForEachProgress {
+  readonly runId: string;
+  readonly forEachId: string;
+  readonly status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+  readonly total: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  readonly skipped: number;
+  readonly active: number;
+  readonly pending: number;
+  readonly concurrency: number;
+}
+
 const STREAM_BUFFER_SIZE = 1024;
 const MAX_STREAM_CLIENTS = 8;
 const MAX_ALERTS = 200;
@@ -104,6 +117,12 @@ function bounded(value: unknown, fallback: string, maximum = 320): string {
 
 function safeCode(value: unknown): string | undefined {
   return typeof value === 'string' && SAFE_CODE.test(value) ? value : undefined;
+}
+
+function nonNegativeInteger(value: unknown, maximum = 10_000): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= maximum
+    ? value
+    : undefined;
 }
 
 function publicStatus(status: string):
@@ -155,6 +174,7 @@ function progressId(value: Record<string, unknown>, fallback: string): string {
 }
 
 export class RuntimeObservability implements RuntimeObservabilitySurface {
+  static readonly MAX_OBSERVED_FOR_EACH = 10_000;
   readonly #runtimeInstanceId: string;
   readonly #deploymentId: string;
   readonly #startedAt: number;
@@ -176,6 +196,7 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
   readonly #counters = new Map<string, number>();
   readonly #currentNodes = new Map<string, string>();
   readonly #parentRuns = new Map<string, string>();
+  readonly #forEachProgress = new Map<string, ObservedForEachProgress>();
   #nextSubscriberId = 1;
   #sequence = 0;
   #lifecycle: RuntimeLifecycle = 'starting';
@@ -269,7 +290,9 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
         ? value.stepId
         : typeof value.parentNodeId === 'string'
           ? value.parentNodeId
-          : undefined;
+          : typeof value.forEachId === 'string'
+            ? value.forEachId
+            : undefined;
     if (runId !== undefined && nodeId !== undefined) {
       this.#remember(this.#currentNodes, bounded(runId, 'run_unknown'), bounded(nodeId, 'node_unknown'));
     }
@@ -279,6 +302,52 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
         bounded(value.childRunId, 'run_unknown'),
         bounded(value.parentRunId, 'run_unknown')
       );
+    }
+    if (
+      value.type === 'for_each_progress' &&
+      typeof value.runId === 'string' &&
+      typeof value.forEachId === 'string' &&
+      ['running', 'succeeded', 'failed', 'cancelled'].includes(String(value.status)) &&
+      nonNegativeInteger(value.total) !== undefined &&
+      nonNegativeInteger(value.succeeded) !== undefined &&
+      nonNegativeInteger(value.failed) !== undefined &&
+      nonNegativeInteger(value.skipped) !== undefined &&
+      nonNegativeInteger(value.active) !== undefined &&
+      nonNegativeInteger(value.pending) !== undefined &&
+      nonNegativeInteger(value.concurrency, 64) !== undefined &&
+      Number(value.concurrency) >= 1 &&
+      Number(value.succeeded) + Number(value.failed) + Number(value.skipped) +
+        Number(value.active) + Number(value.pending) === Number(value.total)
+    ) {
+      const progress: ObservedForEachProgress = {
+        runId: bounded(value.runId, 'run_unknown'),
+        forEachId: bounded(value.forEachId, 'for_each_unknown'),
+        status: String(value.status) as ObservedForEachProgress['status'],
+        total: Number(value.total),
+        succeeded: Number(value.succeeded),
+        failed: Number(value.failed),
+        skipped: Number(value.skipped),
+        active: Number(value.active),
+        pending: Number(value.pending),
+        concurrency: Number(value.concurrency),
+      };
+      const progressKey = `${progress.runId}:${progress.forEachId}`;
+      const previous = this.#forEachProgress.get(progressKey);
+      const completed = progress.succeeded + progress.failed + progress.skipped;
+      const previousCompleted = previous === undefined
+        ? 0
+        : previous.succeeded + previous.failed + previous.skipped;
+      this.#counters.set(
+        'for_each:completed',
+        (this.#counters.get('for_each:completed') ?? 0) +
+          Math.max(0, completed - previousCompleted)
+      );
+      this.#forEachProgress.set(progressKey, progress);
+      while (this.#forEachProgress.size > RuntimeObservability.MAX_OBSERVED_FOR_EACH) {
+        const oldest = this.#forEachProgress.keys().next().value;
+        if (oldest === undefined) break;
+        this.#forEachProgress.delete(oldest);
+      }
     }
     const kind = progressKind(value);
     const status = progressStatus(value);
@@ -417,6 +486,13 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
         ...(this.#parentRuns.get(run.runId) === undefined
           ? {}
           : { parentRunId: this.#parentRuns.get(run.runId)! }),
+        ...(() => {
+          const loops = [...this.#forEachProgress.values()]
+            .filter(progress => progress.runId === run.runId)
+            .sort((left, right) => left.forEachId.localeCompare(right.forEachId))
+            .slice(0, 100);
+          return loops.length === 0 ? {} : { forEach: loops };
+        })(),
       };
     });
     const workflows = this.#workflows.map(workflow => {
@@ -497,6 +573,12 @@ export class RuntimeObservability implements RuntimeObservabilitySurface {
       metric('woml_approvals_waiting', 'gauge', durable?.approvalWaitingRunIds.length ?? this.#counters.get('approval:waiting') ?? 0),
       metric('woml_workflow_calls_active', 'gauge', durable?.workflowCallsActive ?? this.#counterPrefix('workflow_call:')),
       metric('woml_worker_restarts_total', 'counter', this.#counters.get('provider:restarted') ?? 0, { provider: 'script_host' })
+    );
+    const loops = [...this.#forEachProgress.values()];
+    results.push(
+      metric('woml_for_each_iterations_active', 'gauge', loops.reduce((sum, loop) => sum + loop.active, 0)),
+      metric('woml_for_each_iterations_pending', 'gauge', loops.reduce((sum, loop) => sum + loop.pending, 0)),
+      metric('woml_for_each_iterations_completed_total', 'counter', this.#counters.get('for_each:completed') ?? 0)
     );
     for (const [operation, status] of [
       ['backup', 'completed'],

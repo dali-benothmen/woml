@@ -18,6 +18,7 @@ import type {
   ExecuteMessageV6,
   ExecuteMessageV7,
   ExecuteMessageV8,
+  ExecuteMessageV9,
   FetchObservationMessage,
   JsonValue,
   ScriptAttempt,
@@ -2617,6 +2618,75 @@ describe('Reusable custom-step Script Host v8', () => {
       error: { kind: 'invalid_script_result' },
     });
     expect(JSON.stringify(result.messages)).not.toContain(secret);
+  });
+});
+
+describe('For-each Script Host v9', () => {
+  test('exposes deeply read-only item and stable iteration bindings', async () => {
+    const message: ExecuteMessageV9 = {
+      ...executeStepV7(
+        'inv_for_each_binding',
+        `
+          let mutationBlocked = false;
+          try { context.item.name = 'changed'; } catch { mutationBlocked = true; }
+          try { context.iteration.index = 99; } catch { mutationBlocked = true; }
+          return {
+            name: context.item.name,
+            index: context.iteration.index,
+            total: context.iteration.total,
+            frozen: Object.isFrozen(context.item) && Object.isFrozen(context.iteration),
+            mutationBlocked,
+          };
+        `
+      ),
+      protocolVersion: 9,
+      context: {
+        trigger: {},
+        steps: {},
+        item: { name: 'alpha' },
+        iteration: { index: 0, total: 3 },
+      },
+    };
+    const result = await runHost([message], {
+      WOML_SCRIPT_HOST_PROTOCOL_VERSION: '9',
+    });
+    expect(
+      byInvocation(result.messages).get(message.invocationId)?.outcome
+    ).toEqual({
+      kind: 'success',
+      value: {
+        name: 'alpha',
+        index: 0,
+        total: 3,
+        frozen: true,
+        mutationBlocked: true,
+      },
+    });
+  });
+
+  test('rejects partial and out-of-range iteration envelopes', () => {
+    const valid: ExecuteMessageV9 = {
+      ...executeStepV7('inv_for_each_invalid', 'return null;'),
+      protocolVersion: 9,
+      context: {
+        trigger: {},
+        steps: {},
+        item: null,
+        iteration: { index: 0, total: 1 },
+      },
+    };
+    expect(isScriptHostMessage(valid)).toBe(true);
+    expect(
+      isScriptHostMessage({ ...valid, context: { trigger: {}, steps: {}, item: null } })
+    ).toBe(false);
+    expect(
+      isScriptHostMessage({
+        ...valid,
+        context: {
+          trigger: {}, steps: {}, item: null, iteration: { index: 1, total: 1 },
+        },
+      })
+    ).toBe(false);
   });
 });
 

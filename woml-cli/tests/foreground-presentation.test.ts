@@ -162,6 +162,35 @@ describe('foreground workflow presentation', () => {
     expect(stderr).not.toContain('[woml:verbose]');
   });
 
+  test('shows bounded live for-each progress without dumping item payloads', () => {
+    let stderr = '';
+    const presenter = new ForegroundPresentation({
+      io: { stdout: () => {}, stderr: text => { stderr += text; } },
+      render: { format: 'plain', color: 'never' },
+      verbose: false,
+      inspectRun: () => settled,
+    });
+    presenter.execution({
+      contract: 'woml.execution-progress',
+      version: 1,
+      type: 'for_each_progress',
+      runId: settled.runId,
+      forEachId: 'organize',
+      status: 'running',
+      total: 42,
+      succeeded: 18,
+      failed: 0,
+      skipped: 0,
+      active: 4,
+      pending: 20,
+      concurrency: 4,
+    });
+
+    expect(stderr).toContain('For each organize · 18/42 completed · 4 active');
+    expect(stderr).not.toContain('context');
+    expect(stderr).not.toContain('items');
+  });
+
   test('writes strict newline-delimited records to stdout in JSON mode', () => {
     let stdout = '';
     let stderr = '';

@@ -282,6 +282,7 @@ Every example below is checked against the current WOML compiler.
 | Build                                                           | What it demonstrates                                                  | Run                                               |
 | --------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
 | [Durable run counter](./examples/durableStateWorkflow.woml)     | State that survives future runs and process restarts                  | `woml run examples/durableStateWorkflow.woml`     |
+| [Personalize a customer list](./examples/forEachWorkflow.woml)  | Durable per-item execution, bounded concurrency, and ordered results   | `woml run examples/forEachWorkflow.woml`          |
 | [Social distribution](./examples/forkDistributionWorkflow.woml) | Several independent multi-step branches with an explicit join         | `woml run examples/forkDistributionWorkflow.woml` |
 | [Telegram approval](./examples/telegramApprovalWorkflow.woml)   | Human approval, interactive notification buttons, and durable waiting | `woml run examples/telegramApprovalWorkflow.woml` |
 | [Workflow composition](./examples/workflowCallManual/)          | One workflow calling another and using its returned result            | `woml run examples/workflowCallManual`            |
@@ -294,7 +295,7 @@ Provider examples require their documented credentials. Browse the [complete exa
 - **Readable workflow files** — author automation with semantic, HTML-inspired markup.
 - **Embedded JavaScript** — use `context.payload`, `context.steps`, `attempt`, `services`, and explicitly referenced `secrets` inside scripts.
 - **Production triggers** — manual, webhook, schedule, interval, internal event, Slack, Telegram, Discord, and WhatsApp.
-- **Structured control flow** — sequential steps, parallel groups, choices, switches, and concurrent multi-step forks with explicit joins.
+- **Structured control flow** — sequential steps, durable bounded item loops, parallel groups, choices, switches, and concurrent multi-step forks with explicit joins.
 - **Retries and idempotency** — declare retry behavior with the `retry` attribute while preserving durable attempt and operation identities.
 - **Human-in-the-loop** — pause durably for approval and continue through approved or rejected routes.
 - **Managed capabilities** — use supervised HTTP, SQLite/PostgreSQL, storage, cache, state, events, workflow calls, and communication services.

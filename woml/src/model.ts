@@ -318,6 +318,30 @@ export interface CompiledWorkflowSettlementV1 {
   readonly ownedBranchTerminalNodeIds: readonly string[];
 }
 
+export interface CompiledForEachBodyV1 {
+  readonly entryNodeIds: readonly [string];
+  readonly nodes: readonly CompiledWorkflowNode[];
+  readonly edges: readonly CompiledWorkflowEdge[];
+  readonly choices: readonly CompiledControlChoiceV1[];
+  readonly contextVisibility: readonly CompiledContextVisibilityV1[];
+  readonly terminalNodeId: string;
+}
+
+export interface CompiledForEachV1 {
+  readonly forEachId: string;
+  readonly openNodeId: string;
+  readonly resultNodeId: string;
+  readonly metadata?: Readonly<{
+    readonly name?: string;
+    readonly description?: string;
+  }>;
+  readonly items: ContextReferenceExpression;
+  readonly concurrency: number;
+  readonly outerStepIds: readonly string[];
+  readonly body: CompiledForEachBodyV1;
+  readonly result?: ContextReferenceExpression;
+}
+
 export interface CompiledWorkflowGraph {
   readonly entryNodeIds: readonly string[];
   readonly nodes: readonly CompiledWorkflowNode[];
@@ -333,6 +357,10 @@ export interface CompiledWorkflowGraphV13 extends CompiledWorkflowGraph {
   readonly choices: readonly CompiledControlChoiceV1[];
   readonly contextVisibility: readonly CompiledContextVisibilityV1[];
   readonly settlement: CompiledWorkflowSettlementV1;
+}
+
+export interface CompiledWorkflowGraphV16 extends CompiledWorkflowGraphV13 {
+  readonly forEach: readonly CompiledForEachV1[];
 }
 
 interface CompiledWorkflowDefinitionBase {
@@ -451,6 +479,17 @@ export interface CompiledWorkflowDefinitionV15
   readonly communication: CompiledCommunicationRequirementsV1;
 }
 
+/**
+ * Model v16 adds immutable runtime-sized for-each body templates. Communication
+ * remains present only when the workflow actually uses a built-in provider.
+ */
+export interface CompiledWorkflowDefinitionV16
+  extends Omit<CompiledWorkflowDefinitionV14, 'schemaVersion' | 'graph'> {
+  readonly schemaVersion: 16;
+  readonly graph: CompiledWorkflowGraphV16;
+  readonly communication?: CompiledCommunicationRequirementsV1;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -466,7 +505,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV12
   | CompiledWorkflowDefinitionV13
   | CompiledWorkflowDefinitionV14
-  | CompiledWorkflowDefinitionV15;
+  | CompiledWorkflowDefinitionV15
+  | CompiledWorkflowDefinitionV16;
 
 export interface CompiledGraphIssue {
   readonly code:
@@ -487,7 +527,8 @@ export interface CompiledGraphIssue {
     | 'INVALID_FORK_GRAPH'
     | 'INVALID_CONTROL_CHOICE'
     | 'INVALID_CONTEXT_VISIBILITY'
-    | 'INVALID_WORKFLOW_SETTLEMENT';
+    | 'INVALID_WORKFLOW_SETTLEMENT'
+    | 'INVALID_FOR_EACH';
   readonly message: string;
 }
 

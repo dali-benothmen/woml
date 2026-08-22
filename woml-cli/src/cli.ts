@@ -32,6 +32,7 @@ import {
   isWomlElement,
   parseWoml,
   resolveWomlReusableDefinitionGraph,
+  validateWoml,
   validateResolvedReusableWorkflow,
   WOML_WHATSAPP_CALLBACK_PATH,
   WomlDiagnosticError,
@@ -49,6 +50,7 @@ import {
   type WomlDefinitionPackageV7,
   type WomlDefinitionPackageV9,
   type WomlDefinitionPackageV10,
+  type WomlDefinitionPackageV11,
 } from '@woml/compiler';
 import {
   compiledDefinitionHash,
@@ -780,6 +782,19 @@ function formatRunInspection(inspection: RustRunInspectionV2): string {
       lines.push(`Workflow timeout at: ${inspection.policy.timeoutAt}`);
     }
   }
+  if (inspection.forEach !== undefined && inspection.forEach.items.length > 0) {
+    lines.push('For each:');
+    for (const loop of inspection.forEach.items) {
+      const completed = loop.succeeded + loop.failed + loop.skipped;
+      const progress = `${completed}/${loop.total} completed, ${loop.active} active, ${loop.pending} pending`;
+      const failure = loop.failedIndex === undefined
+        ? ''
+        : `, failed item ${loop.failedIndex + 1} (index ${loop.failedIndex})${loop.failedNodeId === undefined ? '' : ` at ${loop.failedNodeId}`}`;
+      lines.push(
+        `  ${loop.forEachId}: ${loop.status} (${progress}, concurrency ${loop.concurrency}${failure})`
+      );
+    }
+  }
   if (inspection.hooks.length > 0) {
     lines.push('Lifecycle hooks:');
     for (const hook of inspection.hooks) {
@@ -843,6 +858,10 @@ export function formatExecutionProgress(progress: ExecutionProgressV1): string {
     const subject =
       progress.stepId === undefined ? '' : ` for step ${progress.stepId}`;
     return `Lifecycle ${progress.hookId}${subject} ${status}${progress.code === undefined ? '.' : `: ${progress.code}`}`;
+  }
+  if (progress.type === 'for_each_progress') {
+    const completed = progress.succeeded + progress.failed + progress.skipped;
+    return `For each ${progress.forEachId}: ${completed}/${progress.total} completed, ${progress.active} active, ${progress.pending} pending (${progress.status}).`;
   }
   if (progress.type === 'step_attempt_failed') {
     return `Step ${progress.nodeId} failed (attempt ${progress.attempt}/${progress.maxAttempts}): ${progress.failureCode}`;
@@ -1343,7 +1362,8 @@ function promoteForLifecycleAuthority(
     workflow.schemaVersion === 12 ||
     workflow.schemaVersion === 13 ||
     workflow.schemaVersion === 14 ||
-    workflow.schemaVersion === 15
+    workflow.schemaVersion === 15 ||
+    workflow.schemaVersion === 16
   ) {
     return workflow;
   }
@@ -1424,6 +1444,7 @@ function runtimeModulesFromPackage(
     | WomlDefinitionPackageV7
     | WomlDefinitionPackageV9
     | WomlDefinitionPackageV10
+    | WomlDefinitionPackageV11
 ): readonly RustRuntimeModuleArtifact[] {
   const modules = definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
@@ -1448,7 +1469,8 @@ function runtimeModulesFromPackage(
   });
   if (
     definitionPackage.schemaVersion !== 9 &&
-    definitionPackage.schemaVersion !== 10
+    definitionPackage.schemaVersion !== 10 &&
+    definitionPackage.schemaVersion !== 11
   ) return modules;
   const seen = new Set<string>();
   const reusableArtifacts = (definitionPackage.workflow.model.reusableDefinitions ?? [])
@@ -1880,6 +1902,12 @@ async function runSingleCheckCommand(
       sourcePath: filePath,
       projectRoot,
     });
+    const declaresForEach = (element: WomlSourceElement): boolean =>
+      element.name === 'for-each' ||
+      element.children.some(
+        child => child.kind === 'element' && declaresForEach(child)
+      );
+    const hasForEach = declaresForEach(document.root);
     if (
       reusableGraph.root.kind !== 'workflow' ||
       reusableGraph.definitions.length > 0
@@ -1931,7 +1959,9 @@ async function runSingleCheckCommand(
         );
       }
       io.stdout(
-        reusablePackage?.schemaVersion === 10 &&
+        reusablePackage?.schemaVersion === 11
+          ? `Compiled Model v16 package: ${reusablePackage.rootHash}\nExecution: <for-each>, modules, and reusable steps are runnable together.\n`
+          : reusablePackage?.schemaVersion === 10 &&
           reusablePackage.workflow.model.communication.providers.some(
             provider => provider.provider === 'discord'
           )
@@ -1943,6 +1973,43 @@ async function runSingleCheckCommand(
               : reusableGraph.root.kind === 'workflow'
                 ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
                 : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
+      );
+      return 0;
+    }
+    if (hasForEach) {
+      const compiled = compileWoml(document);
+      if (compiled.schemaVersion !== 16) {
+        throw new CliInputError(
+          'WOML_FOR_EACH_MODEL_INVALID',
+          '<for-each> did not lower to the frozen compiled Model v16 contract.'
+        );
+      }
+      const workflowElement = document.root.children.find(
+        (child): child is WomlSourceElement =>
+          child.kind === 'element' && child.name === 'workflow'
+      );
+      if (options[0] === '--json') {
+        io.stdout(
+          `${JSON.stringify(
+            {
+              profile: 'woml.model-validation/v1',
+              valid: true,
+              workflowId: workflowElement?.attributes.id?.value,
+              feature: 'for-each',
+              executable: true,
+              modelVersion: compiled.schemaVersion,
+            },
+            null,
+            2
+          )}\n`
+        );
+        return 0;
+      }
+      io.stdout(
+        `WOML check passed for workflow "${workflowElement?.attributes.id?.value ?? filePath}".\n`
+      );
+      io.stdout(
+        'Compiled Model v16 passed frontend validation and supports bounded concurrent Rust execution.\n'
       );
       return 0;
     }
@@ -2479,8 +2546,20 @@ function workflowSecretReferences(
       references.push({ kind: 'secretReference', name });
     }
   }
+  if (workflow.schemaVersion === 16) {
+    for (const descriptor of workflow.graph.forEach) {
+      for (const node of descriptor.body.nodes) {
+        collectSecretReferences(node.inputs, references);
+        for (const name of node.scriptRuntime?.requiredSecrets ?? []) {
+          references.push({ kind: 'secretReference', name });
+        }
+      }
+    }
+  }
   for (const definition of
-    workflow.schemaVersion === 14 || workflow.schemaVersion === 15
+    workflow.schemaVersion === 14 ||
+    workflow.schemaVersion === 15 ||
+    workflow.schemaVersion === 16
       ? (workflow.reusableDefinitions ?? [])
       : []) {
     for (const prop of definition.props) {
@@ -2880,7 +2959,8 @@ async function executeOneShot(
     workflow.schemaVersion !== 12 &&
     workflow.schemaVersion !== 13 &&
     workflow.schemaVersion !== 14 &&
-    workflow.schemaVersion !== 15
+    workflow.schemaVersion !== 15 &&
+    workflow.schemaVersion !== 16
   ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_DURABLE_WORKFLOW',
@@ -2909,7 +2989,8 @@ async function executeOneShot(
     workflow.schemaVersion === 12 ||
     workflow.schemaVersion === 13 ||
     workflow.schemaVersion === 14 ||
-    workflow.schemaVersion === 15
+    workflow.schemaVersion === 15 ||
+    workflow.schemaVersion === 16
   ) {
     await mkdir(dirname(args.statePath), { recursive: true });
     const onProgress = durableRetryProgress(io, args);

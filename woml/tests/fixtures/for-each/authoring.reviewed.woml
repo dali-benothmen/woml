@@ -1,0 +1,76 @@
+<woml>
+  <workflow
+    id="organize-files"
+    name="Organize files"
+    description="Classify every file and report its destination."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="scan" name="Scan files">
+        <script>
+          return {
+            files: context.payload.files ?? [
+              { name: "photo.jpg", category: "image" },
+              { name: "notes.txt", category: "document" },
+              { name: "backup.zip", category: "archive" }
+            ]
+          };
+        </script>
+      </step>
+
+      <for-each
+        id="organize"
+        name="Organize files"
+        description="Choose one destination for every file."
+        items="{{context.steps.scan.files}}"
+        concurrency="2"
+      >
+        <switch id="destination" value="{{context.item.category}}">
+          <case value="image">
+            <step id="imageDestination">
+              <script>
+                return {
+                  file: context.item.name,
+                  index: context.iteration.index,
+                  total: context.iteration.total,
+                  folder: "Images"
+                };
+              </script>
+            </step>
+            <result value="{{context.steps.imageDestination}}" />
+          </case>
+
+          <case value="document">
+            <step id="documentDestination">
+              <script>
+                return { file: context.item.name, folder: "Docs" };
+              </script>
+            </step>
+            <result value="{{context.steps.documentDestination}}" />
+          </case>
+
+          <default>
+            <step id="otherDestination">
+              <script>
+                return { file: context.item.name, folder: "Misc" };
+              </script>
+            </step>
+            <result value="{{context.steps.otherDestination}}" />
+          </default>
+        </switch>
+
+        <result value="{{context.steps.destination}}" />
+      </for-each>
+
+      <step id="summary" name="Build summary">
+        <script>
+          return { message: "The loop result becomes available in FE3." };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cronflow.dev/schemas/execution-progress/v1",
   "title": "WOML Execution Progress v1",
-  "description": "Secret-safe Rust-to-CLI progress messages for step retries.",
+  "description": "Secret-safe Rust-to-CLI progress messages for retries and bounded for-each execution.",
   "x-status": "retry-profile-frozen",
   "x-forbiddenFields": ["context", "source", "output", "secrets", "capabilities", "providerPayload"],
   "oneOf": [
+    { "$ref": "#/$defs/forEachProgress" },
     { "$ref": "#/$defs/attemptFailed" },
     { "$ref": "#/$defs/retryScheduled" },
     { "$ref": "#/$defs/attemptSucceeded" }
@@ -15,6 +16,22 @@
     "attemptFields": {
       "type": "object",
       "required": ["contract", "version", "runId", "nodeId", "attempt", "maxAttempts"]
+    },
+    "forEachProgress": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract", "version", "type", "runId", "forEachId", "status", "total", "succeeded", "failed", "skipped", "active", "pending", "concurrency"],
+      "properties": {
+        "contract": { "const": "woml.execution-progress" }, "version": { "const": 1 },
+        "type": { "const": "for_each_progress" }, "runId": { "$ref": "#/$defs/id" }, "forEachId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["running", "succeeded", "failed", "cancelled"] },
+        "total": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "succeeded": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "failed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "skipped": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "active": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "pending": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
     },
     "attemptFailed": {
       "type": "object", "additionalProperties": false,

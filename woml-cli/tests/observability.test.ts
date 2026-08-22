@@ -127,6 +127,22 @@ describe('Frozen observability artifacts', () => {
       payload: { token: 'secret-must-not-appear' },
       message: 'secret-must-not-appear',
     });
+    observed.recordProgress({
+      contract: 'woml.execution-progress',
+      version: 1,
+      type: 'for_each_progress',
+      runId: 'run_active',
+      forEachId: 'organize',
+      status: 'running',
+      total: 42,
+      succeeded: 18,
+      failed: 0,
+      skipped: 0,
+      active: 4,
+      pending: 20,
+      concurrency: 4,
+      item: { token: 'secret-must-not-appear' },
+    });
     observed.log('info', 'WOML_RUNTIME_READY', 'Runtime is ready.', {
       workflowId: 'orders',
     });
@@ -139,6 +155,12 @@ describe('Frozen observability artifacts', () => {
       ready: true,
       workflows: [{ workflowId: 'orders', active: 1, waiting: 1 }],
     });
+    expect((snapshot as { runs: { runId: string; forEach?: unknown }[] }).runs
+      .find(run => run.runId === 'run_active')).toMatchObject({
+        forEach: [{
+          forEachId: 'organize', total: 42, succeeded: 18, active: 4, pending: 20,
+        }],
+      });
 
     expect(validate.health(observed.minimalHealth('liveness'))).toBe(true);
     expect(validate.health(observed.minimalHealth('readiness'))).toBe(true);
@@ -159,7 +181,43 @@ describe('Frozen observability artifacts', () => {
     }
     const prometheus = await observed.prometheusMetrics();
     expect(prometheus).toContain('# TYPE woml_runtime_ready gauge');
+    expect(prometheus).toContain('woml_for_each_iterations_active 4');
+    expect(prometheus).toContain('woml_for_each_iterations_pending 20');
+    expect(prometheus).toContain('woml_for_each_iterations_completed_total 18');
     expect(prometheus).not.toContain('run_active');
+    observed.recordProgress({
+      contract: 'woml.execution-progress',
+      version: 1,
+      type: 'for_each_progress',
+      runId: 'run_active',
+      forEachId: 'organize',
+      status: 'running',
+      total: 42,
+      succeeded: 19,
+      failed: 0,
+      skipped: 0,
+      active: 4,
+      pending: 19,
+      concurrency: 4,
+    });
+    observed.recordProgress({
+      contract: 'woml.execution-progress',
+      version: 1,
+      type: 'for_each_progress',
+      runId: 'run_active',
+      forEachId: 'organize',
+      status: 'running',
+      total: 42,
+      succeeded: 19,
+      failed: 0,
+      skipped: 0,
+      active: 4,
+      pending: 19,
+      concurrency: 4,
+    });
+    expect(await observed.prometheusMetrics()).toContain(
+      'woml_for_each_iterations_completed_total 19'
+    );
   });
 
   test('assigns monotonic sequence numbers and requires snapshot resync after a gap', async () => {

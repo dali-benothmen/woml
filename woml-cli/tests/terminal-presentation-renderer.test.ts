@@ -178,6 +178,57 @@ describe('terminal presentation renderer', () => {
     expect(stripAnsi(colored)).toBe(output);
   });
 
+  test('renders concise loop progress while preserving bounded per-item JSON detail', async () => {
+    const fixture = await success();
+    const loop: RunPresentationV1 = {
+      ...structuredClone(fixture),
+      status: 'running',
+      completedAt: undefined,
+      steps: [{
+        id: 'organize',
+        name: 'Organize files',
+        description: 'Classify every discovered file.',
+        kind: 'for_each',
+        status: 'running',
+        depth: 0,
+        attempts: 1,
+        detail: '18/42 completed · 4 active · concurrency 4',
+        forEach: {
+          total: 42,
+          succeeded: 18,
+          failed: 0,
+          skipped: 0,
+          active: 4,
+          pending: 20,
+          concurrency: 4,
+          iterations: [
+            { index: 0, itemNumber: 1, status: 'succeeded' },
+            { index: 18, itemNumber: 19, status: 'running' },
+          ],
+          iterationsTruncated: true,
+        },
+      }],
+      summary: { succeeded: 0, failed: 0, skipped: 0, cancelled: 0, total: 1 },
+    };
+
+    const human = renderRunPresentation(loop, {
+      format: 'plain', width: 88, unicode: true, timeZone: 'UTC',
+    });
+    expect(human).toContain('Organize files');
+    expect(human).toContain('For each · 18/42 completed · 4 active · concurrency 4');
+    expect(human).not.toContain('itemNumber');
+
+    const machine = JSON.parse(renderRunPresentation(loop, { format: 'json' }));
+    expect(machine.steps[0].forEach).toMatchObject({
+      total: 42,
+      succeeded: 18,
+      active: 4,
+      pending: 20,
+      iterationsTruncated: true,
+    });
+    expect(machine.steps[0].forEach.iterations).toHaveLength(2);
+  });
+
   test('shows a ready prompt only for manual workflows and never in JSON', async () => {
     const fixture = await success();
     expect(renderReadyPrompt(fixture.workflow, { format: 'plain', unicode: true })).toBe('● Ready · Press Enter to run again\n');

@@ -153,6 +153,19 @@ export class ForegroundPresentation {
       }
       return;
     }
+    if (progress.type === 'for_each_progress') {
+      const completed = progress.succeeded + progress.failed + progress.skipped;
+      const message = progress.status === 'running'
+        ? `For each ${progress.forEachId} · ${completed}/${progress.total} completed · ${progress.active} active`
+        : `For each ${progress.forEachId} · ${progress.succeeded} succeeded · ${progress.failed} failed · ${progress.skipped} skipped`;
+      if (this.#render.format === 'json') this.#snapshot(progress.runId);
+      else this.#notice(
+        progress.runId,
+        progress.status === 'running' ? 'running' : progress.status,
+        message
+      );
+      return;
+    }
     if (progress.type === 'step_retry_scheduled') {
       this.#notice(
         progress.runId,
@@ -187,7 +200,7 @@ export class ForegroundPresentation {
 
   #notice(
     runId: string,
-    status: 'queued' | 'waiting' | 'retrying' | 'finalizing',
+    status: 'queued' | 'running' | 'waiting' | 'retrying' | 'finalizing' | 'succeeded' | 'failed' | 'cancelled',
     message: string
   ): void {
     const identity = `${runId}:${status}:${message}`;

@@ -16,6 +16,7 @@ import scriptHostProtocolV5Schema from '../../../docs/schemas/script-host-protoc
 import scriptHostProtocolV6Schema from '../../../docs/schemas/script-host-protocol.v6.schema.json';
 import scriptHostProtocolV7Schema from '../../../docs/schemas/script-host-protocol.v7.schema.json';
 import scriptHostProtocolV8Schema from '../../../docs/schemas/script-host-protocol.v8.schema.json';
+import scriptHostProtocolV9Schema from '../../../docs/schemas/script-host-protocol.v9.schema.json';
 import lifecycleBindingV1Schema from '../../../docs/schemas/lifecycle-binding.v1.schema.json';
 import type {
   CancelMessage,
@@ -38,6 +39,7 @@ const validateV5 = ajv.compile(scriptHostProtocolV5Schema) as ValidateFunction;
 const validateV6 = ajv.compile(scriptHostProtocolV6Schema) as ValidateFunction;
 const validateV7 = ajv.compile(scriptHostProtocolV7Schema) as ValidateFunction;
 const validateV8Schema = ajv.compile(scriptHostProtocolV8Schema) as ValidateFunction;
+const validateV9Schema = ajv.compile(scriptHostProtocolV9Schema) as ValidateFunction;
 
 function exactKeys(
   value: Record<string, unknown>,
@@ -117,7 +119,10 @@ function validReusableLifecycle(value: unknown): boolean {
   );
 }
 
-function validExecuteV8Base(record: Record<string, unknown>): boolean {
+function validExecuteBase(
+  record: Record<string, unknown>,
+  protocolVersion: 8 | 9
+): boolean {
   const attempt = record.attempt as Record<string, unknown> | undefined;
   const context = record.context as Record<string, unknown> | undefined;
   const bindings = record.bindings as Record<string, unknown> | undefined;
@@ -133,7 +138,7 @@ function validExecuteV8Base(record: Record<string, unknown>): boolean {
       ['lifecycle', 'reusable', 'reusableLifecycle']
     ) &&
     record.protocol === 'woml.script-host' &&
-    record.protocolVersion === 8 &&
+    record.protocolVersion === protocolVersion &&
     record.messageType === 'execute' &&
     [record.invocationId, record.runId, record.nodeId].every(
       value => typeof value === 'string' && value.length > 0 && value.length <= 256
@@ -149,7 +154,11 @@ function validExecuteV8Base(record: Record<string, unknown>): boolean {
     Number(record.timeoutMs) <= 86_400_000 &&
     typeof record.source === 'string' &&
     typeof context === 'object' && context !== null && !Array.isArray(context) &&
-    exactKeys(context, ['trigger', 'steps']) &&
+    exactKeys(
+      context,
+      ['trigger', 'steps'],
+      protocolVersion === 9 ? ['item', 'iteration'] : []
+    ) &&
     typeof context.trigger === 'object' && context.trigger !== null &&
     typeof context.steps === 'object' && context.steps !== null &&
     typeof bindings === 'object' && bindings !== null && !Array.isArray(bindings) &&
@@ -169,6 +178,28 @@ function validExecuteV8Base(record: Record<string, unknown>): boolean {
   );
 }
 
+function validIterationContext(record: Record<string, unknown>): boolean {
+  const context = record.context as Record<string, unknown>;
+  const hasItem = Object.hasOwn(context, 'item');
+  const hasIteration = Object.hasOwn(context, 'iteration');
+  if (hasItem !== hasIteration) return false;
+  if (!hasIteration) return true;
+  const iteration = context.iteration;
+  if (typeof iteration !== 'object' || iteration === null || Array.isArray(iteration)) {
+    return false;
+  }
+  const binding = iteration as Record<string, unknown>;
+  return (
+    exactKeys(binding, ['index', 'total']) &&
+    Number.isInteger(binding.index) &&
+    Number.isInteger(binding.total) &&
+    Number(binding.total) >= 1 &&
+    Number(binding.total) <= 10_000 &&
+    Number(binding.index) >= 0 &&
+    Number(binding.index) < Number(binding.total)
+  );
+}
+
 function validateV8(message: unknown): boolean {
   if (typeof message !== 'object' || message === null || Array.isArray(message)) {
     return false;
@@ -177,7 +208,7 @@ function validateV8(message: unknown): boolean {
   if (record.protocolVersion !== 8) return false;
   if (!validateV8Schema(message)) return false;
   if (record.messageType === 'execute') {
-    if (!validExecuteV8Base(record)) return false;
+    if (!validExecuteBase(record, 8)) return false;
     if (record.reusable === undefined) {
       return record.reusableLifecycle === undefined;
     }
@@ -190,6 +221,25 @@ function validateV8(message: unknown): boolean {
   delete normalized.reusableLifecycle;
   if (!validateV7(normalized)) return false;
   return record.reusable === undefined && record.reusableLifecycle === undefined;
+}
+
+function validateV9(message: unknown): boolean {
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  if (record.protocolVersion !== 9 || !validateV9Schema(message)) return false;
+  if (record.messageType === 'execute') {
+    if (!validExecuteBase(record, 9) || !validIterationContext(record)) return false;
+    if (record.reusable === undefined) {
+      return record.reusableLifecycle === undefined;
+    }
+    if (!validReusableBinding(record.reusable)) return false;
+    if (record.reusableLifecycle === undefined) return record.mode === 'step';
+    return record.mode === 'lifecycle' && validReusableLifecycle(record.reusableLifecycle);
+  }
+  const normalized: Record<string, unknown> = { ...record, protocolVersion: 8 };
+  return validateV8(normalized);
 }
 
 export class MessageProtocolError extends Error {
@@ -208,13 +258,15 @@ export function isScriptHostMessage(message: unknown): boolean {
     validateV5(message) ||
     validateV6(message) ||
     validateV7(message) ||
-    validateV8(message)
+    validateV8(message) ||
+    validateV9(message)
   );
 }
 
 function validatorFor(message: unknown): ValidateFunction {
   if (typeof message !== 'object' || message === null) return validateV1;
   if (!('protocolVersion' in message)) return validateV1;
+  if (message.protocolVersion === 9) return validateV7;
   if (message.protocolVersion === 8) return validateV7;
   if (message.protocolVersion === 7) return validateV7;
   if (message.protocolVersion === 6) return validateV6;
@@ -232,7 +284,8 @@ function validateAttemptSemantics(message: ExecuteMessage): void {
       message.protocolVersion === 5 ||
       message.protocolVersion === 6 ||
       message.protocolVersion === 7 ||
-      message.protocolVersion === 8) &&
+      message.protocolVersion === 8 ||
+      message.protocolVersion === 9) &&
     message.attempt.number > message.attempt.maxAttempts
   ) {
     throw new MessageProtocolError(
@@ -257,14 +310,17 @@ export function assertExecuteMessage(
   message: unknown
 ): asserts message is ExecuteMessage {
   const validator = validatorFor(message);
-  const version8 =
+  const modernVersion =
     typeof message === 'object' &&
     message !== null &&
     'protocolVersion' in message &&
-    message.protocolVersion === 8;
-  if (!(version8 ? validateV8(message) : validator(message))) {
+    (message.protocolVersion === 8 || message.protocolVersion === 9);
+  const modernValid =
+    typeof message === 'object' && message !== null && 'protocolVersion' in message &&
+    message.protocolVersion === 9 ? validateV9(message) : validateV8(message);
+  if (!(modernVersion ? modernValid : validator(message))) {
     throw new MessageProtocolError(
-      `Message does not match a supported script-host protocol: ${describeErrors(version8 ? validateV8Schema.errors : validator.errors)}.`
+      `Message does not match a supported script-host protocol: ${describeErrors(modernVersion ? (typeof message === 'object' && message !== null && 'protocolVersion' in message && message.protocolVersion === 9 ? validateV9Schema.errors : validateV8Schema.errors) : validator.errors)}.`
     );
   }
   if (
@@ -290,7 +346,9 @@ export function assertInboundMessage(
   | import('./types').CapabilityResultMessage
   | import('./types').FetchObservationAckMessage {
   const validator =
-    protocolVersion === 8
+    protocolVersion === 9
+      ? validateV7
+      : protocolVersion === 8
       ? validateV7
       : protocolVersion === 7
       ? validateV7
@@ -305,9 +363,10 @@ export function assertInboundMessage(
               : protocolVersion === 2
                 ? validateV2
                 : validateV1;
-  if (!(protocolVersion === 8 ? validateV8(message) : validator(message))) {
+  const modernValid = protocolVersion === 9 ? validateV9(message) : validateV8(message);
+  if (!(protocolVersion >= 8 ? modernValid : validator(message))) {
     throw new MessageProtocolError(
-      `Message does not match script-host protocol v${protocolVersion}: ${describeErrors(protocolVersion === 8 ? validateV8Schema.errors : validator.errors)}.`
+      `Message does not match script-host protocol v${protocolVersion}: ${describeErrors(protocolVersion >= 8 ? (protocolVersion === 9 ? validateV9Schema.errors : validateV8Schema.errors) : validator.errors)}.`
     );
   }
   if (

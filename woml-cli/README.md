@@ -184,7 +184,7 @@ flowchart TD
 ## Key Features
 
 - Manual, webhook, schedule, interval, internal-event, Slack, Telegram, Discord, and WhatsApp triggers.
-- Sequential steps, retries, parallel groups, choices, switches, and multi-step forks with explicit joins.
+- Sequential steps, retries, durable bounded item loops, parallel groups, choices, switches, and multi-step forks with explicit joins.
 - Durable human approvals with Slack, Telegram, Discord, WhatsApp, or custom notification providers.
 - Workflow and step lifecycle hooks with scripts and notifications.
 - Managed HTTP, SQLite/PostgreSQL, storage, cache, state, events, workflow-call, and communication capabilities.
@@ -229,9 +229,10 @@ flowchart TD
 | `<step>` | Defines one named executable operation; its return value becomes `context.steps.<id>`. |
 | `<script>` | Runs JavaScript with the current `context`, `services`, `secrets`, and `attempt` bindings. |
 | `<parallel>` | Runs its direct child steps concurrently and waits for them to finish. |
+| `<for-each>` | Runs its body once per array item with durable identity, bounded concurrency, and ordered aggregate results. |
 | `<choose>` | Selects the first true `<when>` route or its final `<otherwise>` route. |
 | `<when>` / `<otherwise>` | Define the conditional routes inside `<choose>`. |
-| `<result>` | Publishes one stable result from a selected choice, switch, or approval route. |
+| `<result>` | Publishes one stable result from a for-each iteration or selected choice, switch, or approval route. |
 | `<switch>` | Selects one exact-string `<case>` or its `<default>` route. |
 | `<fork>` | Starts several independent, concurrent multi-step branches and joins the selected branches. |
 | `<branch>` | Defines one sequential route inside a `<fork>` and may contain several flow items. |
@@ -261,6 +262,9 @@ flowchart TD
 | --- | --- |
 | `context.payload` | The validated input supplied by the trigger or calling workflow. Manual runs currently receive `{}`. |
 | `context.steps.<id>` | The JSON-compatible result returned by a completed step or result-producing control item. |
+| `context.item` | The current item while a script is running inside `<for-each>`; unavailable outside that loop. |
+| `context.iteration.index` | The current `<for-each>` item's stable, zero-based input index. |
+| `context.iteration.total` | The total number of items captured by the current `<for-each>`. |
 
 Return only data that later steps genuinely need. Step results become durable workflow context, while local variables and mutations to `context` do not persist.
 

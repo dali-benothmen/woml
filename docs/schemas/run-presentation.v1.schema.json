@@ -95,6 +95,7 @@
         "step",
         "script",
         "custom_step",
+        "for_each",
         "switch",
         "choose",
         "parallel",
@@ -158,10 +159,49 @@
         "retryable": { "type": "boolean" }
       }
     },
+    "forEachIteration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "itemNumber", "status"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0, "maximum": 9999 },
+        "itemNumber": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "status": { "$ref": "#/$defs/stepStatus" },
+        "failedNodeId": { "$ref": "#/$defs/id" },
+        "failure": { "$ref": "#/$defs/failure" }
+      }
+    },
+    "forEach": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "succeeded", "failed", "skipped", "active", "pending", "concurrency", "iterations"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "succeeded": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "failed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "skipped": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "active": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "pending": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "iterations": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/forEachIteration" }
+        },
+        "iterationsTruncated": { "type": "boolean" }
+      }
+    },
     "step": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "kind", "status", "depth", "attempts"],
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "for_each" } }, "required": ["kind"] },
+          "then": { "required": ["forEach"] },
+          "else": { "not": { "required": ["forEach"] } }
+        }
+      ],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "name": { "$ref": "#/$defs/shortText" },
@@ -176,7 +216,8 @@
         "detail": { "$ref": "#/$defs/message" },
         "result": { "$ref": "#/$defs/jsonValue" },
         "resultTruncated": { "type": "boolean" },
-        "failure": { "$ref": "#/$defs/failure" }
+        "failure": { "$ref": "#/$defs/failure" },
+        "forEach": { "$ref": "#/$defs/forEach" }
       }
     },
     "lifecycle": {

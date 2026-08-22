@@ -38,7 +38,7 @@ describe('fork and branch clean package', () => {
     const executed = Bun.spawnSync(
       [
         process.execPath,
-        join(consumer, 'node_modules/woml/dist/cli.js'),
+        join(consumer, 'node_modules/woml-cli/dist/cli.js'),
         'test',
         workflowPath,
         '--state',

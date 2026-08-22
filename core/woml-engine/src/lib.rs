@@ -77,22 +77,24 @@ pub use durable::{
   derive_lifecycle_hook_invocation_id, ApprovalDecisionOutcome, ApprovalDecisionOutcomeStatus,
   ApprovalTimeoutSettlement, ApprovalTimeoutSettlementStatus, ApprovalTokenBinding,
   DurableDagEngine, DurableEngineError, DurableEventStore, DurableStoreError, ForkRecoveryBranchV1,
-  ForkRecoveryWorkV1, InspectedBusinessOutcome, InspectedForkJoinModeV4, InspectedForkStatusV4,
-  InspectedReusableKindV5, InspectedReusableLifecycleStatusV5, InspectedReusableStatusV5,
-  InternalEventAdmissionOutcome, InternalEventAdmissionRequest, IntervalCursor,
-  IntervalCursorRegistration, IntervalCursorRegistrationOutcome, IssuedApprovalToken,
-  NotificationDeliveryWork, NotificationDispatchReport, NotificationProviderAdapter,
-  NotificationProviderDeliveryResult, NotificationProviderUpdateResult, NotificationUpdateWork,
-  PolicyClaimWaitReason, PolicyExecutionClaimResult, PolicyWaitingFor, PublicRunStatus,
-  RecoveryReport, RunCancellationCode, RunCancellationResult, RunCancellationStatus,
-  RunDefinitionBinding, RunInspectionCancellationV2, RunInspectionForkCountsV4,
-  RunInspectionForkJoinV4, RunInspectionForkV4, RunInspectionForksV4, RunInspectionHookV2,
-  RunInspectionPolicyV3, RunInspectionReusableCountsV5, RunInspectionReusableDefinitionsV5,
-  RunInspectionReusableItemV5, RunInspectionV2, RunInspectionV3, RunInspectionV4, RunInspectionV5,
-  RunListV1, RunListV2, RunSummaryV1, RunSummaryV2, RunTimeoutSettlement, RuntimeObservationV1,
-  RuntimeOwnerLease, ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome,
-  SchedulerClaimV1, StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome,
-  TriggerAdmissionRequest, TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
+  ForkRecoveryWorkV1, InspectedBusinessOutcome, InspectedForEachStatusV6, InspectedForkJoinModeV4,
+  InspectedForkStatusV4, InspectedReusableKindV5, InspectedReusableLifecycleStatusV5,
+  InspectedReusableStatusV5, InternalEventAdmissionOutcome, InternalEventAdmissionRequest,
+  IntervalCursor, IntervalCursorRegistration, IntervalCursorRegistrationOutcome,
+  IssuedApprovalToken, NotificationDeliveryWork, NotificationDispatchReport,
+  NotificationProviderAdapter, NotificationProviderDeliveryResult,
+  NotificationProviderUpdateResult, NotificationUpdateWork, PolicyClaimWaitReason,
+  PolicyExecutionClaimResult, PolicyWaitingFor, PublicRunStatus, RecoveryReport,
+  RunCancellationCode, RunCancellationResult, RunCancellationStatus, RunDefinitionBinding,
+  RunInspectionCancellationV2, RunInspectionForEachCountsV6, RunInspectionForEachItemV6,
+  RunInspectionForEachV6, RunInspectionForkCountsV4, RunInspectionForkJoinV4, RunInspectionForkV4,
+  RunInspectionForksV4, RunInspectionHookV2, RunInspectionPolicyV3, RunInspectionReusableCountsV5,
+  RunInspectionReusableDefinitionsV5, RunInspectionReusableItemV5, RunInspectionV2,
+  RunInspectionV3, RunInspectionV4, RunInspectionV5, RunInspectionV6, RunListV1, RunListV2,
+  RunSummaryV1, RunSummaryV2, RunTimeoutSettlement, RuntimeObservationV1, RuntimeOwnerLease,
+  ScheduleCursor, ScheduleCursorRegistration, ScheduleCursorRegistrationOutcome, SchedulerClaimV1,
+  StepFailureCommit, StepFailureDisposition, TriggerAdmissionOutcome, TriggerAdmissionRequest,
+  TriggerOccurrence, TriggerRecoveryWork, DURABLE_STORE_SCHEMA_VERSION,
   RUNTIME_POLICY_QUEUE_CEILING,
 };
 pub use durable_state::{
@@ -165,13 +167,14 @@ pub use notification_runtime::{
 };
 pub use presentation::{
   project_run_presentation_v1, recent_run_presentations_from_store_v1,
-  run_presentation_from_store_v1, LifecyclePresentationV1, PresentationFailureV1,
-  PresentationLifecycleHook, PresentationRunStatus, PresentationStepKind, PresentationStepStatus,
-  PresentationTriggerType, RunPresentationError, RunPresentationListV1, RunPresentationSummaryV1,
-  RunPresentationTriggerV1, RunPresentationV1, StepPresentationV1, TriggerPresentationV1,
-  WorkflowPresentationV1, RUN_PRESENTATION_LIST_PROFILE, RUN_PRESENTATION_MAX_BYTES,
-  RUN_PRESENTATION_MAX_EVENTS, RUN_PRESENTATION_MAX_LIFECYCLE, RUN_PRESENTATION_MAX_STEPS,
-  RUN_PRESENTATION_MAX_WARNINGS, RUN_PRESENTATION_PROFILE, RUN_PRESENTATION_RECENT_LIMIT,
+  run_presentation_from_store_v1, ForEachIterationPresentationV1, ForEachPresentationV1,
+  LifecyclePresentationV1, PresentationFailureV1, PresentationLifecycleHook, PresentationRunStatus,
+  PresentationStepKind, PresentationStepStatus, PresentationTriggerType, RunPresentationError,
+  RunPresentationListV1, RunPresentationSummaryV1, RunPresentationTriggerV1, RunPresentationV1,
+  StepPresentationV1, TriggerPresentationV1, WorkflowPresentationV1, RUN_PRESENTATION_LIST_PROFILE,
+  RUN_PRESENTATION_MAX_BYTES, RUN_PRESENTATION_MAX_EVENTS, RUN_PRESENTATION_MAX_ITERATIONS,
+  RUN_PRESENTATION_MAX_LIFECYCLE, RUN_PRESENTATION_MAX_STEPS, RUN_PRESENTATION_MAX_WARNINGS,
+  RUN_PRESENTATION_PROFILE, RUN_PRESENTATION_RECENT_LIMIT,
 };
 pub use projection::{
   fold_events, ApprovalRequestProjection, ApprovalRequestStatus, FoldError, ForkBranchProjection,
@@ -243,7 +246,8 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V12: u32 = 12;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V13: u32 = 13;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V14: u32 = 14;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V15: u32 = 15;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V15;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V16: u32 = 16;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V16;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
@@ -258,10 +262,13 @@ pub const RUN_EVENT_SCHEMA_VERSION_V11: u32 = 11;
 pub const RUN_EVENT_SCHEMA_VERSION_V12: u32 = 12;
 pub const RUN_EVENT_SCHEMA_VERSION_V13: u32 = 13;
 pub const RUN_EVENT_SCHEMA_VERSION_V14: u32 = 14;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V14;
+pub const RUN_EVENT_SCHEMA_VERSION_V15: u32 = 15;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V15;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V15 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V16 {
+    RUN_EVENT_SCHEMA_VERSION_V15
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V15 {
     RUN_EVENT_SCHEMA_VERSION_V14
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V14 {
     RUN_EVENT_SCHEMA_VERSION_V13

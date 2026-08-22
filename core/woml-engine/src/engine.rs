@@ -95,6 +95,7 @@ impl InMemoryDagEngine {
       run_id: run_id.into(),
       sequence: 1,
       occurred_at,
+      iteration: None,
       payload: RunEventPayload::RunStarted(RunStartedData {
         workflow_id: self.workflow.workflow_id.clone(),
         definition_hash: self.definition_hash.clone(),
@@ -400,6 +401,27 @@ pub(crate) fn node_is_complete(
   node: &crate::model::CompiledWorkflowNode,
   projection: &RunProjection,
 ) -> bool {
+  if node.handler == "engine.for-each-open" {
+    return workflow
+      .graph
+      .for_each
+      .as_deref()
+      .unwrap_or_default()
+      .iter()
+      .find(|descriptor| descriptor.open_node_id == node.id)
+      .and_then(|descriptor| projection.for_each.get(&descriptor.for_each_id))
+      .is_some_and(|loop_state| {
+        matches!(
+          loop_state.status,
+          crate::projection::ForEachStatus::Succeeded
+            | crate::projection::ForEachStatus::Failed
+            | crate::projection::ForEachStatus::Cancelled
+        )
+      });
+  }
+  if node.handler == "engine.for-each-result" {
+    return projection.context.steps.contains_key(&node.id);
+  }
   if node.handler == "engine.choice-select" {
     return workflow
       .graph
@@ -769,6 +791,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || data.definition_hash != definition_hash
         || workflow.runtime_policy_hash().as_deref() != Some(data.policy_hash.as_str())
         || workflow.runtime_policy_queue_name().as_deref() != Some(data.queue.name.as_str())
@@ -799,6 +822,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -824,6 +848,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -1265,6 +1290,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Lifecycle and run-control events require compiled Model v11+.".to_string());
       }
@@ -1277,6 +1303,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) {
         return Err("Lifecycle hook events require compiled Model v11+.".to_string());
       }
@@ -1313,6 +1340,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || !action_exists
       {
         return Err("Lifecycle action event references an unknown Model v11+ action.".to_string());
@@ -1333,6 +1361,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || !action_exists
       {
         return Err(
@@ -1348,6 +1377,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
       ) || workflow.lifecycle.is_none()
         || !crate::event::is_definition_hash(&data.hook_invocation_id)
       {
@@ -1519,9 +1549,246 @@ pub(crate) fn validate_payload_against_definition(
         }
       }
     }
+    RunEventPayload::ForEachOpened(data) => validate_for_each_id(workflow, &data.for_each_id)?,
+    RunEventPayload::ForEachIterationStarted(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachIterationSucceeded(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachIterationFailed(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachIterationSkipped(data) => {
+      validate_for_each_id(workflow, &data.for_each_id)?
+    }
+    RunEventPayload::ForEachSucceeded(data)
+    | RunEventPayload::ForEachFailed(data)
+    | RunEventPayload::ForEachCancelled(data) => validate_for_each_id(workflow, &data.for_each_id)?,
   }
 
   Ok(())
+}
+
+pub(crate) fn validate_scoped_payload_against_definition(
+  workflow: &CompiledWorkflowDefinition,
+  definition_hash: &str,
+  run_id: &str,
+  scope: &crate::event::ForEachIterationScope,
+  payload: &RunEventPayload,
+) -> Result<(), String> {
+  let descriptor = workflow
+    .graph
+    .for_each
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .find(|descriptor| descriptor.for_each_id == scope.for_each_id)
+    .ok_or_else(|| format!("Unknown for-each scope {:?}.", scope.for_each_id))?;
+  let body_node = |node_id: &str| descriptor.body.nodes.iter().find(|node| node.id == node_id);
+  match payload {
+    RunEventPayload::StepAttemptStarted(data) => {
+      let node = body_node(&data.node_id).ok_or_else(|| {
+        format!(
+          "Iteration attempt references unknown node {:?}.",
+          data.node_id
+        )
+      })?;
+      let maximum = node
+        .retry_policy
+        .as_ref()
+        .map_or(1, |policy| policy.max_attempts);
+      if data.handler != node.handler || data.attempt == 0 || data.attempt > maximum {
+        return Err(format!(
+          "Iteration attempt for node {:?} does not match its compiled handler and retry policy.",
+          data.node_id
+        ));
+      }
+      Ok(())
+    }
+    RunEventPayload::StepAttemptSucceeded(data) => {
+      body_node(&data.node_id).map(|_| ()).ok_or_else(|| {
+        format!(
+          "Iteration attempt references unknown node {:?}.",
+          data.node_id
+        )
+      })
+    }
+    RunEventPayload::StepAttemptFailed(data) => {
+      body_node(&data.node_id).map(|_| ()).ok_or_else(|| {
+        format!(
+          "Iteration attempt references unknown node {:?}.",
+          data.node_id
+        )
+      })
+    }
+    RunEventPayload::StepRetryScheduled(data) => {
+      let node = body_node(&data.node_id).ok_or_else(|| {
+        format!(
+          "Iteration retry references unknown node {:?}.",
+          data.node_id
+        )
+      })?;
+      let policy = node
+        .retry_policy
+        .as_ref()
+        .ok_or_else(|| format!("Iteration node {:?} has no retry policy.", data.node_id))?;
+      if data.next_attempt != data.failed_attempt + 1 || data.next_attempt > policy.max_attempts {
+        return Err(format!(
+          "Iteration retry for node {:?} exceeds its compiled policy.",
+          data.node_id
+        ));
+      }
+      Ok(())
+    }
+    RunEventPayload::ChoiceSelected(data) => {
+      let choice = descriptor
+        .body
+        .choices
+        .iter()
+        .find(|choice| choice.choice_id == data.choice_id)
+        .ok_or_else(|| format!("Unknown iteration choice {:?}.", data.choice_id))?;
+      if choice.arm_ids.contains(&data.arm_id) {
+        Ok(())
+      } else {
+        Err(format!(
+          "Arm {:?} is not selectable for iteration choice {:?}.",
+          data.arm_id, data.choice_id
+        ))
+      }
+    }
+    RunEventPayload::BranchSelected(data) => {
+      let selector_id = format!("__woml_branch__{}__select", data.branch_id);
+      let selector = body_node(&selector_id)
+        .ok_or_else(|| format!("Unknown iteration conditional branch {:?}.", data.branch_id))?;
+      let valid_arm = selector.handler == "engine.branch-select"
+        && descriptor.body.edges.iter().any(|edge| {
+          edge.from == selector_id
+            && edge.id == data.arm_id
+            && edge.branch_id.as_deref() == Some(data.branch_id.as_str())
+        });
+      if valid_arm {
+        Ok(())
+      } else {
+        Err(format!(
+          "Arm {:?} is not selectable for iteration branch {:?}.",
+          data.arm_id, data.branch_id
+        ))
+      }
+    }
+    RunEventPayload::ParallelGroupStarted(data) => {
+      let start = format!("__woml_parallel__{}__start", data.parallel_id);
+      if body_node(&start).is_some()
+        && body_node(&data.parallel_id).is_some_and(|node| node.handler == "engine.parallel-join")
+      {
+        Ok(())
+      } else {
+        Err(format!(
+          "Unknown iteration parallel group {:?}.",
+          data.parallel_id
+        ))
+      }
+    }
+    RunEventPayload::ParallelGroupCompleted(data) => {
+      let start = format!("__woml_parallel__{}__start", data.parallel_id);
+      if body_node(&start).is_some()
+        && body_node(&data.parallel_id).is_some_and(|node| node.handler == "engine.parallel-join")
+      {
+        Ok(())
+      } else {
+        Err(format!(
+          "Unknown iteration parallel group {:?}.",
+          data.parallel_id
+        ))
+      }
+    }
+    RunEventPayload::OperationStarted(data) => {
+      body_node(&data.node_id).map(|_| ()).ok_or_else(|| {
+        format!(
+          "Iteration operation references unknown node {:?}.",
+          data.node_id
+        )
+      })
+    }
+    RunEventPayload::OperationSucceeded(data) => {
+      body_node(&data.node_id).map(|_| ()).ok_or_else(|| {
+        format!(
+          "Iteration operation references unknown node {:?}.",
+          data.node_id
+        )
+      })
+    }
+    RunEventPayload::OperationFailed(data) => {
+      body_node(&data.node_id).map(|_| ()).ok_or_else(|| {
+        format!(
+          "Iteration operation references unknown node {:?}.",
+          data.node_id
+        )
+      })
+    }
+    RunEventPayload::LifecycleHookRequested(data) => {
+      let prefix = format!("{}[{}].", scope.for_each_id, scope.index);
+      let node_id = data.subject.id.strip_prefix(&prefix).ok_or_else(|| {
+        "Iteration lifecycle subject does not match its durable scope.".to_string()
+      })?;
+      let hook = workflow
+        .lifecycle_hook_for_step_event(data.event, node_id)
+        .ok_or_else(|| {
+          "Iteration lifecycle request does not match a compiled step hook.".to_string()
+        })?;
+      let expected_invocation_id = crate::derive_lifecycle_hook_invocation_id(
+        run_id,
+        &data.hook_id,
+        data.subject.kind,
+        &data.subject.id,
+      );
+      if data.subject.kind != crate::LifecycleSubjectKind::Step
+        || hook.hook_id != data.hook_id
+        || expected_invocation_id != data.hook_invocation_id
+      {
+        return Err("Iteration lifecycle request does not match its compiled binding.".to_string());
+      }
+      Ok(())
+    }
+    RunEventPayload::LifecycleActionAttemptStarted(data)
+    | RunEventPayload::LifecycleActionSucceeded(data) => {
+      let action_exists = workflow.lifecycle.as_ref().is_some_and(|lifecycle| {
+        lifecycle
+          .hooks
+          .iter()
+          .flat_map(|hook| &hook.actions)
+          .any(|action| action.action_id == data.action_id)
+      });
+      if !action_exists || data.attempt == 0 {
+        Err("Iteration lifecycle action does not match its compiled binding.".to_string())
+      } else {
+        Ok(())
+      }
+    }
+    RunEventPayload::LifecycleActionFailed(data) => {
+      let action_exists = workflow.lifecycle.as_ref().is_some_and(|lifecycle| {
+        lifecycle
+          .hooks
+          .iter()
+          .flat_map(|hook| &hook.actions)
+          .any(|action| action.action_id == data.action_id)
+      });
+      if !action_exists || data.attempt == 0 {
+        Err("Iteration lifecycle action does not match its compiled binding.".to_string())
+      } else {
+        Ok(())
+      }
+    }
+    RunEventPayload::LifecycleHookCompleted(_) => Ok(()),
+    RunEventPayload::ReusableLifecycleRequested(_)
+    | RunEventPayload::ReusableLifecycleActionStarted(_)
+    | RunEventPayload::ReusableLifecycleActionSucceeded(_)
+    | RunEventPayload::ReusableLifecycleActionFailed(_)
+    | RunEventPayload::ReusableLifecycleCompleted(_) => {
+      validate_payload_against_definition(workflow, definition_hash, payload)
+    }
+    _ => validate_payload_against_definition(workflow, definition_hash, payload),
+  }
 }
 
 pub fn step_effect_idempotency_key(run_id: &str, definition_hash: &str, node_id: &str) -> String {
@@ -1552,7 +1819,26 @@ pub(crate) fn validate_event_history_against_definition(
   let mut child_states: HashMap<String, ParallelChildState> = HashMap::new();
 
   for (index, event) in events.iter().enumerate() {
-    validate_payload_against_definition(workflow, definition_hash, &event.payload)?;
+    if let Some(scope) = &event.iteration {
+      validate_scoped_payload_against_definition(
+        workflow,
+        definition_hash,
+        &event.run_id,
+        scope,
+        &event.payload,
+      )?;
+      if !matches!(
+        event.payload,
+        RunEventPayload::ForEachIterationStarted(_)
+          | RunEventPayload::ForEachIterationSucceeded(_)
+          | RunEventPayload::ForEachIterationFailed(_)
+          | RunEventPayload::ForEachIterationSkipped(_)
+      ) {
+        continue;
+      }
+    } else {
+      validate_payload_against_definition(workflow, definition_hash, &event.payload)?;
+    }
     match &event.payload {
       RunEventPayload::ChoiceSelected(data) => {
         let choice = workflow
@@ -2032,11 +2318,39 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::ReusableLifecycleActionSucceeded(_)
       | RunEventPayload::ReusableLifecycleActionFailed(_)
       | RunEventPayload::ReusableLifecycleCompleted(_)
+      | RunEventPayload::ForEachOpened(_)
+      | RunEventPayload::ForEachIterationStarted(_)
+      | RunEventPayload::ForEachIterationSucceeded(_)
+      | RunEventPayload::ForEachIterationFailed(_)
+      | RunEventPayload::ForEachIterationSkipped(_)
+      | RunEventPayload::ForEachSucceeded(_)
+      | RunEventPayload::ForEachFailed(_)
+      | RunEventPayload::ForEachCancelled(_)
       | RunEventPayload::RunFinalized(_)
       | RunEventPayload::RunFailed(_) => {}
     }
   }
   Ok(())
+}
+
+fn validate_for_each_id(
+  workflow: &CompiledWorkflowDefinition,
+  for_each_id: &str,
+) -> Result<(), String> {
+  if workflow
+    .graph
+    .for_each
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .any(|descriptor| descriptor.for_each_id == for_each_id)
+  {
+    Ok(())
+  } else {
+    Err(format!(
+      "For-each event references unknown loop {for_each_id:?}."
+    ))
+  }
 }
 
 fn validate_reusable_lifecycle_binding(
@@ -2047,7 +2361,9 @@ fn validate_reusable_lifecycle_binding(
 ) -> Result<(), String> {
   if !matches!(
     workflow.schema_version,
-    crate::COMPILED_MODEL_SCHEMA_VERSION_V14 | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+    crate::COMPILED_MODEL_SCHEMA_VERSION_V14
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
   ) {
     return Err("Reusable lifecycle events require compiled Model v14 or later.".to_string());
   }

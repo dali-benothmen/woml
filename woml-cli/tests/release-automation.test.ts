@@ -85,6 +85,9 @@ describe('WOML release automation', () => {
       "command('--version')",
       "command('--help')",
       "command('check', 'hello.woml')",
+      "command('check', 'for-each.woml')",
+      "join(directory, 'for-each-state.sqlite')",
+      'context.iteration.index',
       "'test',",
       'install();',
       'The portable woml package contains a native binary',
@@ -111,6 +114,7 @@ describe('WOML release automation', () => {
     });
     expect(source).not.toContain('NPM_TOKEN');
     expect(source).not.toContain('NODE_AUTH_TOKEN');
+    expect(source).toContain('bun run test:for-each-contracts');
     expect(source).toContain('npm publish "${archive}" --access public --provenance');
     expect(source).toContain('bun run test:final-review');
     expect(source).toContain('bun audit --cwd woml-cli');

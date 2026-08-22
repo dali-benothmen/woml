@@ -38,3 +38,9 @@ woml_approvals_waiting 0
 woml_workflow_calls_active 0
 # TYPE woml_worker_restarts_total counter
 woml_worker_restarts_total{provider="script_host"} 0
+# TYPE woml_for_each_iterations_active gauge
+woml_for_each_iterations_active 0
+# TYPE woml_for_each_iterations_pending gauge
+woml_for_each_iterations_pending 0
+# TYPE woml_for_each_iterations_completed_total counter
+woml_for_each_iterations_completed_total 0

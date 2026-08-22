@@ -48,6 +48,18 @@ export interface InspectorRunV1 {
   readonly durationMs: number;
   readonly currentNodeId?: string;
   readonly parentRunId?: string;
+  readonly forEach?: readonly {
+    readonly runId: string;
+    readonly forEachId: string;
+    readonly status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+    readonly total: number;
+    readonly succeeded: number;
+    readonly failed: number;
+    readonly skipped: number;
+    readonly active: number;
+    readonly pending: number;
+    readonly concurrency: number;
+  }[];
 }
 
 export interface InspectorComponentV1 {
@@ -249,8 +261,12 @@ function runLines(
   }
   for (const [index, run] of runs.entries()) {
     const marker = index === Math.min(state.selected, runs.length - 1) ? '›' : ' ';
+    const loop = run.forEach?.find(item => item.status === 'running') ?? run.forEach?.at(-1);
+    const work = loop === undefined
+      ? run.currentNodeId ?? '—'
+      : `${loop.forEachId} ${loop.succeeded + loop.failed + loop.skipped}/${loop.total}`;
     lines.push(
-      `${marker}${pad(run.status, 10)} ${pad(run.workflowId, workflowWidth)} ${pad(run.runId, idWidth)} ${pad(run.currentNodeId ?? '—', 16)} ${duration(run.durationMs)}`
+      `${marker}${pad(run.status, 10)} ${pad(run.workflowId, workflowWidth)} ${pad(run.runId, idWidth)} ${pad(work, 16)} ${duration(run.durationMs)}`
     );
     colors.push(index === Math.min(state.selected, runs.length - 1) ? 'inverse' : statusColor(run.status));
   }
@@ -266,6 +282,12 @@ function runLines(
       if (run.parentRunId !== undefined) {
         lines.push(`Called by: ${run.parentRunId}`);
         colors.push('dim');
+      }
+      for (const loop of run.forEach ?? []) {
+        lines.push(
+          `For each ${loop.forEachId}: ${loop.succeeded + loop.failed + loop.skipped}/${loop.total} completed · ${loop.active} active · ${loop.pending} pending · concurrency ${loop.concurrency}`
+        );
+        colors.push(statusColor(loop.status));
       }
     }
   }

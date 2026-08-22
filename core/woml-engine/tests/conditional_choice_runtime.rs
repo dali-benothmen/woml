@@ -429,6 +429,7 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
     choices: None,
     context_visibility: None,
     settlement: None,
+    for_each: None,
   };
   workflow.validate_for_execution().unwrap();
   workflow

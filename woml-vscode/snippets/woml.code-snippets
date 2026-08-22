@@ -31,6 +31,21 @@
       "</step>"
     ]
   },
+  "WOML for each": {
+    "prefix": "woml-for-each",
+    "description": "Process every item from an earlier step with iteration-local context.",
+    "body": [
+      "<for-each id=\"${1:processItems}\" name=\"${2:Process items}\" items=\"{{context.steps.${3:loadItems}.${4:items}}}\" concurrency=\"${5:1}\">",
+      "  <step id=\"${6:processItem}\" name=\"${7:Process item}\">",
+      "    <script>",
+      "      return { item: context.item, index: context.iteration.index };",
+      "    </script>",
+      "  </step>",
+      "",
+      "  <result value=\"{{context.steps.${6:processItem}}}\" />",
+      "</for-each>"
+    ]
+  },
   "WOML Telegram trigger": {
     "prefix": "woml-telegram-trigger",
     "description": "Create a Telegram message trigger.",

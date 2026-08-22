@@ -802,9 +802,10 @@ fn prepare_state(
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V13
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V14
         | crate::COMPILED_MODEL_SCHEMA_VERSION_V15
+        | crate::COMPILED_MODEL_SCHEMA_VERSION_V16
     ) {
       return Err(WebhookRuntimeError::InvalidRegistration(format!(
-        "workflow {:?} must use a supported compiled Model v7 through v15",
+        "workflow {:?} must use a supported compiled Model v7 through v16",
         registration.workflow.workflow_id
       )));
     }

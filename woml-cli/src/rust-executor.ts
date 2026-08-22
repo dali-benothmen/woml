@@ -29,11 +29,18 @@ export interface RustRunEvent {
     | 9
     | 10
     | 11
-    | 12;
+    | 12
+    | 13
+    | 14
+    | 15;
   readonly eventId: string;
   readonly runId: string;
   readonly sequence: number;
   readonly occurredAt: string;
+  readonly iteration?: {
+    readonly forEachId: string;
+    readonly index: number;
+  };
   readonly type: string;
   readonly data: unknown;
 }
@@ -72,6 +79,21 @@ export interface RustRuntimeModuleArtifact {
 }
 
 export type ExecutionProgressV1 =
+  | {
+      readonly contract: 'woml.execution-progress';
+      readonly version: 1;
+      readonly type: 'for_each_progress';
+      readonly runId: string;
+      readonly forEachId: string;
+      readonly status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+      readonly total: number;
+      readonly succeeded: number;
+      readonly failed: number;
+      readonly skipped: number;
+      readonly active: number;
+      readonly pending: number;
+      readonly concurrency: number;
+    }
   | {
       readonly contract: 'woml.execution-progress';
       readonly version: 1;
@@ -545,7 +567,8 @@ export interface RustRunInspectionV2 {
     | 'woml.run-inspection/v2'
     | 'woml.run-inspection/v3'
     | 'woml.run-inspection/v4'
-    | 'woml.run-inspection/v5';
+    | 'woml.run-inspection/v5'
+    | 'woml.run-inspection/v6';
   readonly runId: string;
   readonly workflowId: string;
   readonly status: PublicRunStatus;
@@ -595,6 +618,28 @@ export interface RustRunInspectionV2 {
       readonly kind: 'step' | 'notification-provider';
       readonly status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
       readonly lifecycleStatus: 'idle' | 'running' | 'completed' | 'completed_with_warnings';
+    }[];
+  };
+  readonly forEach?: {
+    readonly counts: {
+      readonly opened: number;
+      readonly active: number;
+      readonly succeeded: number;
+      readonly failed: number;
+      readonly cancelled: number;
+    };
+    readonly items: readonly {
+      readonly forEachId: string;
+      readonly status: 'active' | 'succeeded' | 'failed' | 'cancelled';
+      readonly total: number;
+      readonly succeeded: number;
+      readonly failed: number;
+      readonly skipped: number;
+      readonly active: number;
+      readonly pending: number;
+      readonly concurrency: number;
+      readonly failedIndex?: number;
+      readonly failedNodeId?: string;
     }[];
   };
 }
@@ -1291,6 +1336,31 @@ export function parseExecutionProgress(json: string): ExecutionProgressV1 {
     (value.stepId === undefined || typeof value.stepId === 'string') &&
     (value.code === undefined ||
       (typeof value.code === 'string' && /^WOML_[A-Z0-9_]+$/.test(value.code)))
+  ) {
+    return value as ExecutionProgressV1;
+  }
+  if (
+    record(value) &&
+    value.contract === 'woml.execution-progress' &&
+    value.version === 1 &&
+    value.type === 'for_each_progress' &&
+    exactKeys(value, [
+      'contract', 'version', 'type', 'runId', 'forEachId', 'status', 'total',
+      'succeeded', 'failed', 'skipped', 'active', 'pending', 'concurrency',
+    ]) &&
+    typeof value.runId === 'string' &&
+    value.runId.length > 0 &&
+    typeof value.forEachId === 'string' &&
+    value.forEachId.length > 0 &&
+    ['running', 'succeeded', 'failed', 'cancelled'].includes(String(value.status)) &&
+    ['total', 'succeeded', 'failed', 'skipped', 'active', 'pending'].every(
+      key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 10_000
+    ) &&
+    Number(value.succeeded) + Number(value.failed) + Number(value.skipped) +
+      Number(value.active) + Number(value.pending) === Number(value.total) &&
+    Number.isSafeInteger(value.concurrency) &&
+    Number(value.concurrency) >= 1 &&
+    Number(value.concurrency) <= 64
   ) {
     return value as ExecutionProgressV1;
   }
@@ -3392,6 +3462,54 @@ export function inspectRunV2WithRust(
         String(item.lifecycleStatus)
       )
     );
+  const forEach = (candidate: unknown): boolean => {
+    if (
+      !record(candidate) ||
+      !exactKeys(candidate, ['counts', 'items']) ||
+      !record(candidate.counts) ||
+      !exactKeys(candidate.counts, [
+        'opened', 'active', 'succeeded', 'failed', 'cancelled',
+      ]) ||
+      !Object.values(candidate.counts).every(
+        count => Number.isSafeInteger(count) && Number(count) >= 0 && Number(count) <= 10_000
+      ) ||
+      !Array.isArray(candidate.items) ||
+      candidate.items.length > 10_000
+    ) return false;
+    const validItems = candidate.items.every(item => {
+      if (
+        !record(item) ||
+        !exactKeys(
+          item,
+          [
+            'forEachId', 'status', 'total', 'succeeded', 'failed', 'skipped',
+            'active', 'pending', 'concurrency',
+          ],
+          ['failedIndex', 'failedNodeId']
+        ) ||
+        typeof item.forEachId !== 'string' ||
+        !['active', 'succeeded', 'failed', 'cancelled'].includes(String(item.status)) ||
+        !['total', 'succeeded', 'failed', 'skipped', 'active', 'pending'].every(
+          field => Number.isSafeInteger(item[field]) && Number(item[field]) >= 0 && Number(item[field]) <= 10_000
+        ) ||
+        !Number.isSafeInteger(item.concurrency) ||
+        Number(item.concurrency) < 1 ||
+        Number(item.concurrency) > 64 ||
+        Number(item.succeeded) + Number(item.failed) + Number(item.skipped) +
+          Number(item.active) + Number(item.pending) !== Number(item.total) ||
+        (item.failedIndex !== undefined &&
+          (!Number.isSafeInteger(item.failedIndex) || Number(item.failedIndex) < 0 || Number(item.failedIndex) >= Number(item.total))) ||
+        (item.failedNodeId !== undefined && typeof item.failedNodeId !== 'string')
+      ) return false;
+      return true;
+    });
+    if (!validItems || Number(candidate.counts.opened) !== candidate.items.length) return false;
+    for (const status of ['active', 'succeeded', 'failed', 'cancelled'] as const) {
+      if (Number(candidate.counts[status]) !== candidate.items.filter(item => item.status === status).length)
+        return false;
+    }
+    return true;
+  };
   if (
     !record(value) ||
     !exactKeys(
@@ -3407,11 +3525,12 @@ export function inspectRunV2WithRust(
         'warnings',
         'cancellation',
       ],
-      ['policy', 'forks', 'reusableDefinitions']
+      ['policy', 'forks', 'reusableDefinitions', 'forEach']
     ) ||
     ![
       'woml.run-inspection/v2', 'woml.run-inspection/v3',
       'woml.run-inspection/v4', 'woml.run-inspection/v5',
+      'woml.run-inspection/v6',
     ].includes(
       String(value.profile)
     ) ||
@@ -3456,11 +3575,14 @@ export function inspectRunV2WithRust(
         (value.policy.timeoutAt !== undefined &&
           !dateTime(value.policy.timeoutAt)))) ||
     (value.profile === 'woml.run-inspection/v2' && value.policy !== undefined) ||
-    (['woml.run-inspection/v4', 'woml.run-inspection/v5'].includes(String(value.profile)) &&
+    (['woml.run-inspection/v4', 'woml.run-inspection/v5', 'woml.run-inspection/v6'].includes(String(value.profile)) &&
       !record(value.forks)) ||
-    (value.profile === 'woml.run-inspection/v5' &&
+    (['woml.run-inspection/v5', 'woml.run-inspection/v6'].includes(String(value.profile)) &&
       !reusableDefinitions(value.reusableDefinitions)) ||
-    (value.profile !== 'woml.run-inspection/v5' && value.reusableDefinitions !== undefined)
+    (!['woml.run-inspection/v5', 'woml.run-inspection/v6'].includes(String(value.profile)) &&
+      value.reusableDefinitions !== undefined) ||
+    (value.profile === 'woml.run-inspection/v6' && !forEach(value.forEach)) ||
+    (value.profile !== 'woml.run-inspection/v6' && value.forEach !== undefined)
   ) {
     throw new Error('The native core returned invalid run-inspection data.');
   }

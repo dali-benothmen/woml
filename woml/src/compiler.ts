@@ -15,6 +15,7 @@ import {
   type CompiledControlChoiceV1,
   type CompiledContextVisibilityV1,
   type CompiledForkV1,
+  type CompiledForEachV1,
   type CompiledWorkflowDefinition,
   type CompiledWorkflowDefinitionV9,
   type CompiledWorkflowDefinitionV10,
@@ -23,9 +24,11 @@ import {
   type CompiledWorkflowDefinitionV13,
   type CompiledWorkflowDefinitionV14,
   type CompiledWorkflowDefinitionV15,
+  type CompiledWorkflowDefinitionV16,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowGraphV13,
+  type CompiledWorkflowGraphV16,
   type CompiledWorkflowMetadata,
   type CompiledWorkflowNode,
   type ContextReferenceExpression,
@@ -149,6 +152,17 @@ interface ValidatedParallel {
   readonly children: readonly ValidatedStep[];
 }
 
+interface ValidatedForEach {
+  readonly kind: 'forEach';
+  readonly id: string;
+  readonly element: WomlSourceElement;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+  readonly itemsReference: ValidatedReference;
+  readonly concurrency: number;
+  readonly items: readonly ValidatedFlowItem[];
+  readonly result?: ValidatedReference;
+}
+
 interface ValidatedApproval {
   readonly kind: 'approval';
   readonly id: string;
@@ -223,6 +237,7 @@ type ValidatedFlowItem =
   | ValidatedControlChoice
   | ValidatedSwitch
   | ValidatedParallel
+  | ValidatedForEach
   | ValidatedApproval
   | ValidatedFork;
 
@@ -235,15 +250,18 @@ interface ValidatedFlow {
   readonly firstFork?: WomlSourceElement;
   readonly firstControlChoice?: WomlSourceElement;
   readonly firstSwitch?: WomlSourceElement;
+  readonly firstForEach?: WomlSourceElement;
 }
 
 interface FlowValidationContext {
   readonly insideForkBranch: boolean;
+  readonly insideForEach: boolean;
   readonly shadowedServices: readonly string[];
 }
 
 const rootFlowValidationContext: FlowValidationContext = {
   insideForkBranch: false,
+  insideForEach: false,
   shadowedServices: [],
 };
 
@@ -402,6 +420,7 @@ interface LoweredV13FlowFragment extends LoweredFlowFragment {
 interface V13LoweringState {
   readonly forks: CompiledForkV1[];
   readonly choices: CompiledControlChoiceV1[];
+  readonly forEach: CompiledForEachV1[];
   readonly contextVisibility: CompiledContextVisibilityV1[];
   readonly ownedBranchTerminalNodeIds: string[];
 }
@@ -436,6 +455,7 @@ const supportedElements = new Set([
   'default',
   'fork',
   'parallel',
+  'for-each',
   'when',
   'otherwise',
   'result',
@@ -508,6 +528,15 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
       'description',
       'concurrency',
       'on-error',
+    ]),
+  },
+  'for-each': {
+    attributes: new Set([
+      'id',
+      'name',
+      'description',
+      'items',
+      'concurrency',
     ]),
   },
   when: { attributes: new Set(['test']) },
@@ -692,13 +721,15 @@ function visitProfile(
               ? 'WOML_SLACK_UNKNOWN_ATTRIBUTE'
               : element.name === 'telegram'
                 ? 'WOML_TELEGRAM_UNKNOWN_ATTRIBUTE'
-              : element.name === 'discord'
+                : element.name === 'discord'
                   ? 'WOML_DISCORD_UNKNOWN_ATTRIBUTE'
                   : element.name === 'whatsapp'
                     ? 'WOML_WHATSAPP_UNKNOWN_ATTRIBUTE'
-                  : element.name === 'config'
-                    ? 'WOML_CONFIG_ATTRIBUTE_UNKNOWN'
-                    : 'WOML_UNKNOWN_ATTRIBUTE',
+                    : element.name === 'for-each'
+                      ? 'WOML_FOR_EACH_ATTRIBUTE_UNKNOWN'
+                      : element.name === 'config'
+                        ? 'WOML_CONFIG_ATTRIBUTE_UNKNOWN'
+                        : 'WOML_UNKNOWN_ATTRIBUTE',
         isLifecycleStepFilterMisuse
           ? 'Attribute "steps" is valid only on step lifecycle hooks.'
           : attribute.name === 'retry' || attribute.name.startsWith('retry-')
@@ -850,6 +881,7 @@ function validateJavaScriptSafeId(
     | 'switch'
     | 'fork'
     | 'parallel'
+    | 'for-each'
     | 'approval'
 ): string {
   if (
@@ -859,7 +891,7 @@ function validateJavaScriptSafeId(
     failValidation(
       document,
       'WOML_INVALID_ID',
-      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'choose' ? 'Choice' : role === 'switch' ? 'Switch' : role === 'fork' ? 'Fork' : role === 'parallel' ? 'Parallel' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
+      `${role === 'trigger' ? 'Trigger' : role === 'branch' ? 'Branch' : role === 'choose' ? 'Choice' : role === 'switch' ? 'Switch' : role === 'fork' ? 'Fork' : role === 'parallel' ? 'Parallel' : role === 'for-each' ? 'For-each' : role === 'approval' ? 'Approval' : 'Step'} ID "${attribute.value}" must be a JavaScript-safe lower-camel identifier.`,
       attribute.valueSpan,
       'Use letters and numbers, start with a lowercase letter, and do not use hyphens.'
     );
@@ -1634,19 +1666,43 @@ function referenceSpan(
 
 function parseExactReference(
   document: WomlSourceDocument,
-  attribute: WomlSourceAttribute
+  attribute: WomlSourceAttribute,
+  options: {
+    readonly allowIteration?: boolean;
+    readonly invalidCode?: string;
+    readonly invalidMessage?: string;
+    readonly invalidHint?: string;
+  } = {}
 ): ValidatedReference {
   const match =
-    /^\{\{(context\.(?:(?:payload|trigger)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\.([a-z][A-Za-z0-9]*)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*))\}\}$/.exec(
+    /^\{\{(context\.(?:(?:payload|trigger)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|steps\.([a-z][A-Za-z0-9]*)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|item(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|iteration\.(?:index|total)))\}\}$/.exec(
       attribute.value
     );
   if (match === null) {
     failValidation(
       document,
-      'WOML_INVALID_REFERENCE',
-      `Attribute "${attribute.name}" must contain exactly one WOML context reference.`,
+      options.invalidCode ?? 'WOML_INVALID_REFERENCE',
+      options.invalidMessage ??
+        `Attribute "${attribute.name}" must contain exactly one WOML context reference.`,
       attribute.valueSpan,
-      'Example: {{context.steps.checkContent.needsReview}}'
+      options.invalidHint ??
+        'Example: {{context.steps.checkContent.needsReview}}'
+    );
+  }
+
+  const path = match[1].split('.').slice(1);
+  if (
+    options.allowIteration !== true &&
+    (path[0] === 'item' || path[0] === 'iteration')
+  ) {
+    failValidation(
+      document,
+      options.invalidCode ?? 'WOML_ITERATION_REFERENCE_OUTSIDE_FOR_EACH',
+      options.invalidMessage ??
+        `Reference "${attribute.value}" is available only inside a <for-each> body.`,
+      attribute.valueSpan,
+      options.invalidHint ??
+        'Use context.payload or an earlier context.steps output outside the loop.'
     );
   }
 
@@ -1656,9 +1712,7 @@ function parseExactReference(
       ? attribute.valueSpan
       : referenceSpan(document, attribute, structuralId);
   return {
-    path: match[1]
-      .split('.')
-      .slice(1)
+    path: path
       .map((segment, index) =>
         index === 0 && segment === 'payload' ? 'trigger' : segment
       ),
@@ -1678,6 +1732,7 @@ function registerStructuralId(
     | 'switch'
     | 'fork'
     | 'parallel'
+    | 'for-each'
     | 'approval'
 ): string {
   const id = validateJavaScriptSafeId(document, attribute, role);
@@ -1685,7 +1740,7 @@ function registerStructuralId(
     failValidation(
       document,
       'WOML_DUPLICATE_ID',
-      `Structural ID "${id}" is duplicated across workflow steps, choices, forks, parallel groups, and approvals.`,
+      `Structural ID "${id}" is duplicated across workflow steps, choices, loops, forks, parallel groups, and approvals.`,
       attribute.valueSpan
     );
   }
@@ -3393,6 +3448,10 @@ function collectScriptAnalyses(
       }
       continue;
     }
+    if (item.kind === 'forEach') {
+      collectScriptAnalyses(item.items, analyses);
+      continue;
+    }
     if (item.kind === 'branch') {
       for (const arm of item.arms) collectScriptAnalyses(arm.items, analyses);
       continue;
@@ -3435,6 +3494,8 @@ function collectValidatedSteps(
       steps.push(item);
     } else if (item.kind === 'parallel') {
       steps.push(...item.children);
+    } else if (item.kind === 'forEach') {
+      collectValidatedSteps(item.items, steps);
     } else if (item.kind === 'branch') {
       for (const arm of item.arms) collectValidatedSteps(arm.items, steps);
     } else if (item.kind === 'controlChoice' || item.kind === 'switch') {
@@ -3460,6 +3521,8 @@ function collectValidatedNotifications(
       deliveries.push(...item.notifications);
       collectValidatedNotifications(item.approvedItems, deliveries);
       collectValidatedNotifications(item.rejectedItems, deliveries);
+    } else if (item.kind === 'forEach') {
+      collectValidatedNotifications(item.items, deliveries);
     } else if (
       item.kind === 'branch' ||
       item.kind === 'controlChoice' ||
@@ -3668,7 +3731,9 @@ function validateBranchArm(
     sourceElementName === 'choose' ? 'WOML_CHOOSE' : 'WOML_BRANCH';
   const testReference =
     arm.name === 'when'
-      ? parseExactReference(document, requiredAttribute(document, arm, 'test'))
+      ? parseExactReference(document, requiredAttribute(document, arm, 'test'), {
+          allowIteration: context.insideForEach,
+        })
       : undefined;
   const children = elementChildren(document, arm);
   const results = children.filter(child => child.name === 'result');
@@ -3707,7 +3772,8 @@ function validateBranchArm(
   );
   const resultReference = parseExactReference(
     document,
-    requiredAttribute(document, result, 'value')
+    requiredAttribute(document, result, 'value'),
+    { allowIteration: context.insideForEach }
   );
 
   if (arm.name === 'when') {
@@ -3815,7 +3881,9 @@ function validateControlChoiceArm(
 ): ValidatedControlChoiceArm {
   const testReference =
     arm.name === 'when'
-      ? parseExactReference(document, requiredAttribute(document, arm, 'test'))
+      ? parseExactReference(document, requiredAttribute(document, arm, 'test'), {
+          allowIteration: context.insideForEach,
+        })
       : undefined;
   const children = elementChildren(document, arm);
   const result = children.find(child => child.name === 'result');
@@ -3956,7 +4024,8 @@ function validateSwitchArm(
     ensureEmptyElement(document, results[0]);
     result = parseExactReference(
       document,
-      requiredAttribute(document, results[0], 'value')
+      requiredAttribute(document, results[0], 'value'),
+      { allowIteration: context.insideForEach }
     );
     flowChildren = children.slice(0, -1);
   } else if (results.length > 0) {
@@ -4027,7 +4096,8 @@ function validateSwitch(
   }
   const selector = parseExactReference(
     document,
-    requiredAttribute(document, element, 'value')
+    requiredAttribute(document, element, 'value'),
+    { allowIteration: context.insideForEach }
   );
   const children = elementChildren(document, element);
   const caseCount = children.filter(child => child.name === 'case').length;
@@ -4376,6 +4446,161 @@ function validateParallel(
   };
 }
 
+function validateForEach(
+  document: WomlSourceDocument,
+  element: WomlSourceElement,
+  registry: Set<string>,
+  context: FlowValidationContext
+): ValidatedForEach {
+  const idAttribute = element.attributes.id;
+  if (idAttribute === undefined) {
+    failValidation(
+      document,
+      'WOML_FOR_EACH_ID_REQUIRED',
+      '<for-each> requires the "id" attribute.',
+      element.openTagSpan,
+      'Example: <for-each id="processItems" items="{{context.payload.items}}">'
+    );
+  }
+  const itemsAttribute = element.attributes.items;
+  if (itemsAttribute === undefined) {
+    failValidation(
+      document,
+      'WOML_FOR_EACH_ITEMS_REQUIRED',
+      '<for-each> requires the "items" attribute.',
+      element.openTagSpan,
+      'Reference an array, for example items="{{context.steps.load.items}}".'
+    );
+  }
+
+  const id = registerStructuralId(
+    document,
+    registry,
+    idAttribute,
+    'for-each'
+  );
+  const itemsReference = parseExactReference(document, itemsAttribute, {
+    invalidCode: 'WOML_FOR_EACH_ITEMS_INVALID',
+    invalidMessage:
+      'Attribute "items" on <for-each> must contain exactly one context.payload or context.steps reference.',
+    invalidHint: 'Example: items="{{context.steps.load.items}}"',
+  });
+  if (/^\{\{context\.trigger(?:\.|\}\})/.test(itemsAttribute.value)) {
+    failValidation(
+      document,
+      'WOML_FOR_EACH_ITEMS_INVALID',
+      'Attribute "items" on <for-each> uses the retired context.trigger spelling.',
+      itemsAttribute.valueSpan,
+      'Use context.payload for trigger data, for example items="{{context.payload.items}}".'
+    );
+  }
+
+  const concurrencyAttribute = element.attributes.concurrency;
+  let concurrency = 1;
+  if (concurrencyAttribute !== undefined) {
+    if (!/^[1-9][0-9]*$/.test(concurrencyAttribute.value)) {
+      failValidation(
+        document,
+        'WOML_FOR_EACH_CONCURRENCY_INVALID',
+        `For-each concurrency "${concurrencyAttribute.value}" must be an integer from 1 through 64.`,
+        concurrencyAttribute.valueSpan
+      );
+    }
+    concurrency = Number(concurrencyAttribute.value);
+    if (!Number.isSafeInteger(concurrency) || concurrency > 64) {
+      failValidation(
+        document,
+        'WOML_FOR_EACH_CONCURRENCY_INVALID',
+        'For-each concurrency must be an integer from 1 through 64.',
+        concurrencyAttribute.valueSpan
+      );
+    }
+  }
+
+  const children = elementChildren(document, element);
+  const results = children.filter(child => child.name === 'result');
+  if (results.length > 1) {
+    failValidation(
+      document,
+      'WOML_FOR_EACH_RESULT_INVALID',
+      '<for-each> accepts at most one <result>.',
+      results[1].openTagSpan
+    );
+  }
+  const resultElement = results[0];
+  if (resultElement !== undefined && children.at(-1) !== resultElement) {
+    failValidation(
+      document,
+      'WOML_FOR_EACH_RESULT_ORDER',
+      '<result> must be the final child of <for-each>.',
+      resultElement.openTagSpan
+    );
+  }
+  if (resultElement !== undefined) {
+    ensureEmptyElement(document, resultElement);
+    if (resultElement.attributes.value === undefined) {
+      failValidation(
+        document,
+        'WOML_FOR_EACH_RESULT_INVALID',
+        '<result> inside <for-each> requires the "value" attribute.',
+        resultElement.openTagSpan,
+        'Example: <result value="{{context.steps.buildItemResult}}" />'
+      );
+    }
+  }
+
+  const flowChildren =
+    resultElement === undefined ? children : children.slice(0, -1);
+  if (flowChildren.length === 0) {
+    failValidation(
+      document,
+      'WOML_FOR_EACH_EMPTY',
+      `<for-each id="${id}"> must contain at least one flow item.`,
+      element.openTagSpan
+    );
+  }
+
+  const loopContext: FlowValidationContext = {
+    ...context,
+    insideForEach: true,
+  };
+  const items = flowChildren.map(child =>
+    validateFlowItem(
+      document,
+      child,
+      registry,
+      `<for-each id="${id}">`,
+      loopContext
+    )
+  );
+  const result =
+    resultElement === undefined
+      ? undefined
+      : parseExactReference(
+          document,
+          requiredAttribute(document, resultElement, 'value'),
+          {
+            allowIteration: true,
+            invalidCode: 'WOML_FOR_EACH_RESULT_INVALID',
+            invalidMessage:
+              '<for-each> result must contain exactly one iteration-visible context reference.',
+            invalidHint:
+              'Example: <result value="{{context.steps.buildItemResult}}" />',
+          }
+        );
+
+  return {
+    kind: 'forEach',
+    id,
+    element,
+    metadata: flowItemMetadata(document, element),
+    itemsReference,
+    concurrency,
+    items,
+    ...(result === undefined ? {} : { result }),
+  };
+}
+
 function validateFlowItem(
   document: WomlSourceDocument,
   element: WomlSourceElement,
@@ -4432,6 +4657,15 @@ function validateFlowItem(
     );
   }
   if (element.name === 'fork') {
+    if (context.insideForEach) {
+      failValidation(
+        document,
+        'WOML_FOR_EACH_NESTING_UNSUPPORTED',
+        '<fork> is not supported inside <for-each> in the first iteration profile.',
+        element.openTagSpan,
+        'Move the fork outside the loop; loop-owned fork settlement is reserved for a later reviewed profile.'
+      );
+    }
     if (context.insideForkBranch) {
       failValidation(
         document,
@@ -4446,7 +4680,28 @@ function validateFlowItem(
   if (element.name === 'parallel') {
     return validateParallel(document, element, registry, context);
   }
+  if (element.name === 'for-each') {
+    if (context.insideForEach) {
+      failValidation(
+        document,
+        'WOML_FOR_EACH_NESTING_UNSUPPORTED',
+        'Nested <for-each> is not supported in the first iteration profile.',
+        element.openTagSpan,
+        'Flatten the input before this loop or move the nested iteration into a later workflow.'
+      );
+    }
+    return validateForEach(document, element, registry, context);
+  }
   if (element.name === 'approval') {
+    if (context.insideForEach) {
+      failValidation(
+        document,
+        'WOML_FOR_EACH_NESTING_UNSUPPORTED',
+        '<approval> is not supported inside <for-each> in the first iteration profile.',
+        element.openTagSpan,
+        'Collect the iteration results and request approval after the loop.'
+      );
+    }
     return validateApproval(document, element, registry, context);
   }
   if (element.name === 'when-approved' || element.name === 'when-rejected') {
@@ -4525,6 +4780,9 @@ function collectFlowOutputIds(
       output.add(item.id);
     } else if (item.kind === 'parallel') {
       for (const child of item.children) output.add(child.id);
+    } else if (item.kind === 'forEach') {
+      output.add(item.id);
+      collectFlowOutputIds(item.items, output);
     } else if (item.kind === 'branch') {
       output.add(item.id);
       for (const arm of item.arms) collectFlowOutputIds(arm.items, output);
@@ -4561,6 +4819,47 @@ function validateReferenceAvailability(
 
     if (item.kind === 'parallel') {
       for (const child of item.children) available.add(child.id);
+      continue;
+    }
+
+    if (item.kind === 'forEach') {
+      const referencedId = item.itemsReference.structuralId;
+      if (referencedId !== undefined) {
+        if (!allIds.has(referencedId)) {
+          failCompile(
+            document,
+            'WOML_UNKNOWN_REFERENCE',
+            `For-each items reference names unknown structural ID "${referencedId}".`,
+            item.itemsReference.span
+          );
+        }
+        if (!available.has(referencedId)) {
+          failCompile(
+            document,
+            'WOML_FOR_EACH_ITEMS_NOT_VISIBLE',
+            `For-each items reference "${referencedId}" is not guaranteed before this loop.`,
+            item.itemsReference.span,
+            'Reference context.payload or a step output that succeeds before <for-each>.'
+          );
+        }
+      }
+      const iterationAvailable = validateReferenceAvailability(
+        document,
+        item.items,
+        allIds,
+        new Set(available),
+        new Set(invisible)
+      );
+      if (item.result !== undefined) {
+        assertReferenceAvailable(
+          document,
+          item.result,
+          allIds,
+          iterationAvailable,
+          invisible
+        );
+      }
+      available.add(item.id);
       continue;
     }
 
@@ -4780,6 +5079,10 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
+      if (item.kind === 'forEach') {
+        const nested = findFirstBranch(item.items);
+        if (nested !== undefined) return nested;
+      }
       if (item.kind === 'fork') {
         for (const branch of item.branches) {
           const nested = findFirstBranch(branch.items);
@@ -4811,6 +5114,10 @@ function validateSteps(
           const nested = findFirstParallel(arm.items);
           if (nested !== undefined) return nested;
         }
+      }
+      if (item.kind === 'forEach') {
+        const nested = findFirstParallel(item.items);
+        if (nested !== undefined) return nested;
       }
       if (item.kind === 'fork') {
         for (const branch of item.branches) {
@@ -4844,6 +5151,10 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
+      if (item.kind === 'forEach') {
+        const nested = findFirstApproval(item.items);
+        if (nested !== undefined) return nested;
+      }
       if (item.kind === 'fork') {
         for (const branch of item.branches) {
           const nested = findFirstApproval(branch.items);
@@ -4869,6 +5180,10 @@ function validateSteps(
           if (nested !== undefined) return nested;
         }
       }
+      if (item.kind === 'forEach') {
+        const nested = findFirstNotification(item.items);
+        if (nested !== undefined) return nested;
+      }
       if (item.kind === 'fork') {
         for (const branch of item.branches) {
           const nested = findFirstNotification(branch.items);
@@ -4891,7 +5206,7 @@ function validateSteps(
   const firstNotification = findFirstNotification(items);
   const findFirstKind = (
     flowItems: readonly ValidatedFlowItem[],
-    kind: 'fork' | 'controlChoice' | 'switch'
+    kind: 'fork' | 'controlChoice' | 'switch' | 'forEach'
   ): WomlSourceElement | undefined => {
     for (const item of flowItems) {
       if (item.kind === kind) return item.element;
@@ -4904,6 +5219,9 @@ function validateSteps(
           const nested = findFirstKind(arm.items, kind);
           if (nested !== undefined) return nested;
         }
+      } else if (item.kind === 'forEach') {
+        const nested = findFirstKind(item.items, kind);
+        if (nested !== undefined) return nested;
       } else if (item.kind === 'approval') {
         const approved = findFirstKind(item.approvedItems, kind);
         if (approved !== undefined) return approved;
@@ -4921,6 +5239,7 @@ function validateSteps(
   const firstFork = findFirstKind(items, 'fork');
   const firstControlChoice = findFirstKind(items, 'controlChoice');
   const firstSwitch = findFirstKind(items, 'switch');
+  const firstForEach = findFirstKind(items, 'forEach');
 
   return {
     items,
@@ -4931,6 +5250,7 @@ function validateSteps(
     ...(firstFork === undefined ? {} : { firstFork }),
     ...(firstControlChoice === undefined ? {} : { firstControlChoice }),
     ...(firstSwitch === undefined ? {} : { firstSwitch }),
+    ...(firstForEach === undefined ? {} : { firstForEach }),
   };
 }
 
@@ -5680,6 +6000,73 @@ function lowerForkV13(
   };
 }
 
+function lowerForEachV16(
+  loop: ValidatedForEach,
+  visibleBefore: ReadonlySet<string>,
+  path: string,
+  state: V13LoweringState
+): LoweredV13FlowFragment {
+  const openNodeId = `__woml_for_each__${loop.id}__open`;
+  const bodyState: V13LoweringState = {
+    forks: [],
+    choices: [],
+    forEach: [],
+    contextVisibility: [],
+    ownedBranchTerminalNodeIds: [],
+  };
+  const body = lowerFlowItemsV13(
+    loop.items,
+    new Set(),
+    `${path}_for_each_${loop.id}`,
+    bodyState
+  );
+  if (
+    bodyState.forks.length > 0 ||
+    bodyState.forEach.length > 0 ||
+    bodyState.ownedBranchTerminalNodeIds.length > 0
+  ) {
+    throw new Error('Model v16 for-each body contains a forbidden nested owner.');
+  }
+  state.forEach.push({
+    forEachId: loop.id,
+    openNodeId,
+    resultNodeId: loop.id,
+    ...(loop.metadata === undefined ? {} : { metadata: loop.metadata }),
+    items: referenceExpression(loop.itemsReference),
+    concurrency: loop.concurrency,
+    outerStepIds: [...visibleBefore],
+    body: {
+      entryNodeIds: [body.entryId],
+      nodes: body.nodes,
+      edges: body.edges,
+      choices: bodyState.choices,
+      contextVisibility: bodyState.contextVisibility,
+      terminalNodeId: body.exitId,
+    },
+    ...(loop.result === undefined
+      ? {}
+      : { result: referenceExpression(loop.result) }),
+  });
+
+  const resultNode: CompiledWorkflowNode = {
+    id: loop.id,
+    handler: 'engine.for-each-result',
+    inputs: { kind: 'object', fields: {} },
+    ...(loop.metadata === undefined ? {} : { metadata: loop.metadata }),
+  };
+  return {
+    entryId: openNodeId,
+    exitId: loop.id,
+    nodes: [
+      v13EmptyEngineNode(openNodeId, 'engine.for-each-open'),
+      resultNode,
+    ],
+    edges: [alwaysEdge(openNodeId, loop.id)],
+    visibleAfter: new Set([...visibleBefore, loop.id]),
+    lastResultNodeId: loop.id,
+  };
+}
+
 function lowerFlowItemV13(
   item: ValidatedFlowItem,
   visibleBefore: ReadonlySet<string>,
@@ -5697,6 +6084,8 @@ function lowerFlowItemV13(
     return lowerSwitchV14(item, visibleBefore, path, state);
   if (item.kind === 'approval')
     return lowerApprovalV13(item, visibleBefore, path, state);
+  if (item.kind === 'forEach')
+    return lowerForEachV16(item, visibleBefore, path, state);
   return lowerForkV13(item, visibleBefore, path, state);
 }
 
@@ -5743,10 +6132,12 @@ function lowerFlowItemsV13(
 function lowerWorkflowV13(items: readonly ValidatedFlowItem[]): {
   readonly fragment: LoweredV13FlowFragment;
   readonly graph: CompiledWorkflowGraphV13;
+  readonly forEach: readonly CompiledForEachV1[];
 } {
   const state: V13LoweringState = {
     forks: [],
     choices: [],
+    forEach: [],
     contextVisibility: [],
     ownedBranchTerminalNodeIds: [],
   };
@@ -5773,6 +6164,7 @@ function lowerWorkflowV13(items: readonly ValidatedFlowItem[]): {
   ];
   return {
     fragment,
+    forEach: state.forEach,
     graph: {
       entryNodeIds: [fragment.entryId],
       nodes: [
@@ -6926,8 +7318,12 @@ function compileValidatedWoml(
     usesTelegramMessaging ||
     usesDiscordMessaging ||
     usesWhatsAppMessaging;
+  const usesModelV16 = flow.firstForEach !== undefined;
   const usesModelV14 =
-    usesModelV15 || forceModelV14 || flow.firstSwitch !== undefined;
+    usesModelV16 ||
+    usesModelV15 ||
+    forceModelV14 ||
+    flow.firstSwitch !== undefined;
   const usesStructuredGraph =
     usesModelV14 ||
     flow.firstFork !== undefined ||
@@ -7007,15 +7403,19 @@ function compileValidatedWoml(
       item =>
         item.kind === 'step' ||
         item.kind === 'branch' ||
-        item.kind === 'approval'
+        item.kind === 'approval' ||
+        item.kind === 'forEach'
     )
   ) {
     const source =
-      flow.firstFork ?? flow.firstControlChoice ?? flow.firstSwitch!;
+      flow.firstFork ??
+      flow.firstControlChoice ??
+      flow.firstSwitch ??
+      flow.firstForEach!;
     failCompile(
       document,
       'WOML_WORKFLOW_RESULT_REQUIRED',
-      `This Model v${usesModelV15 ? '15' : usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
+      `This Model v${usesModelV16 ? '16' : usesModelV15 ? '15' : usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
       source.openTagSpan,
       'Add a main-route <step>, result-producing <choose id="..."> or <switch id="...">, or <approval> before the terminal control structure.'
     );
@@ -7083,13 +7483,31 @@ function compileValidatedWoml(
           nodes,
           edges: lowered.edges,
         } satisfies CompiledWorkflowGraph)
-      : ({
-          ...loweredV13.graph,
-          nodes: withScriptRuntimeBindings(
-            loweredV13.graph.nodes,
-            scriptAnalyses
-          ),
-        } satisfies CompiledWorkflowGraphV13);
+      : usesModelV16
+        ? ({
+            ...loweredV13.graph,
+            nodes: withScriptRuntimeBindings(
+              loweredV13.graph.nodes,
+              scriptAnalyses
+            ),
+            forEach: loweredV13.forEach.map(loop => ({
+              ...loop,
+              body: {
+                ...loop.body,
+                nodes: withScriptRuntimeBindings(
+                  loop.body.nodes,
+                  scriptAnalyses
+                ),
+              },
+            })),
+          } satisfies CompiledWorkflowGraphV16)
+        : ({
+            ...loweredV13.graph,
+            nodes: withScriptRuntimeBindings(
+              loweredV13.graph.nodes,
+              scriptAnalyses
+            ),
+          } satisfies CompiledWorkflowGraphV13);
   const communication = usesModelV15
     ? {
         profileVersion: 1 as const,
@@ -7233,7 +7651,18 @@ function compileValidatedWoml(
       : { runtimePolicy: runtimePolicy.value }),
   };
   const compiled: CompiledWorkflowDefinition = usesStructuredGraph
-    ? usesModelV15
+    ? usesModelV16
+      ? ({
+          schemaVersion: 16,
+          ...definition,
+          graph: baseGraph as CompiledWorkflowGraphV16,
+          runtimePolicy: runtimePolicy?.value ?? {
+            profileVersion: 1,
+            concurrency: 1,
+          },
+          ...(communication === undefined ? {} : { communication }),
+        } satisfies CompiledWorkflowDefinitionV16)
+      : usesModelV15
       ? ({
           schemaVersion: 15,
           ...definition,
@@ -7313,19 +7742,28 @@ function compileValidatedWoml(
 export function compilePreparedReusableWorkflow(
   prepared: PreparedReusableWorkflow,
   moduleRuntime?: CompiledModuleRuntimeV1
-): CompiledWorkflowDefinitionV14 | CompiledWorkflowDefinitionV15 {
+):
+  | CompiledWorkflowDefinitionV14
+  | CompiledWorkflowDefinitionV15
+  | CompiledWorkflowDefinitionV16 {
   const compiled = compileValidatedWoml(
     prepared.document,
     moduleRuntime,
     true
   );
-  if (compiled.schemaVersion !== 14 && compiled.schemaVersion !== 15) {
-    throw new Error('reusable-step lowering did not produce Model v14 or v15');
+  if (
+    compiled.schemaVersion !== 14 &&
+    compiled.schemaVersion !== 15 &&
+    compiled.schemaVersion !== 16
+  ) {
+    throw new Error(
+      'reusable-step lowering did not produce Model v14, v15, or v16'
+    );
   }
   const invocationsByNode = new Map(
     prepared.invocations.map(invocation => [invocation.nodeId, invocation])
   );
-  const nodes = compiled.graph.nodes.map(node => {
+  const patchReusableNode = (node: CompiledWorkflowNode): CompiledWorkflowNode => {
     const invocation = invocationsByNode.get(node.id);
     if (invocation === undefined) return node;
     const requiredSecrets = invocation.props
@@ -7350,17 +7788,37 @@ export function compilePreparedReusableWorkflow(
         },
       },
     };
-  });
+  };
+  const nodes = compiled.graph.nodes.map(patchReusableNode);
+  const compiledForEach =
+    compiled.schemaVersion === 16 ? compiled.graph.forEach : undefined;
+  const forEach = compiledForEach?.map(loop => ({
+    ...loop,
+    body: {
+      ...loop.body,
+      nodes: loop.body.nodes.map(patchReusableNode),
+    },
+  }));
   const visibility = new Map(
     (compiled.graph.contextVisibility ?? []).map(item => [item.nodeId, item.stepIds])
   );
+  for (const loop of compiledForEach ?? []) {
+    for (const item of loop.body.contextVisibility) {
+      visibility.set(item.nodeId, [...loop.outerStepIds, ...item.stepIds]);
+    }
+  }
   const providerById = new Map(
     prepared.providerInvocations.map(invocation => [invocation.providerId, invocation])
   );
   const deliveryById = new Map(
     prepared.providerDeliveries.map(delivery => [delivery.providerId, delivery])
   );
-  const nodeById = new Map(compiled.graph.nodes.map(node => [node.id, node]));
+  const nodeById = new Map([
+    ...compiled.graph.nodes.map(node => [node.id, node] as const),
+    ...(compiledForEach ?? []).flatMap(loop =>
+      loop.body.nodes.map(node => [node.id, node] as const)
+    ),
+  ]);
   const visibilityMemo = new Map<string, ReadonlySet<string>>();
   const visibleBeforeNode = (nodeId: string): ReadonlySet<string> => {
     const explicit = visibility.get(nodeId);
@@ -7501,15 +7959,23 @@ export function compilePreparedReusableWorkflow(
           })),
         })),
       };
-  return {
+  const patched = {
     ...compiled,
-    graph: { ...compiled.graph, nodes: patchedNodes },
+    graph: {
+      ...compiled.graph,
+      nodes: patchedNodes,
+      ...(forEach === undefined ? {} : { forEach }),
+    },
     ...(patchedLifecycle === undefined ? {} : { lifecycle: patchedLifecycle }),
     reusableDefinitions: [
       ...prepared.invocations,
       ...prepared.providerInvocations,
     ],
   };
+  return patched as
+    | CompiledWorkflowDefinitionV14
+    | CompiledWorkflowDefinitionV15
+    | CompiledWorkflowDefinitionV16;
 }
 
 export function compileWoml(
@@ -7536,7 +8002,8 @@ export function compileWomlWithModules(
   | CompiledWorkflowDefinitionV12
   | CompiledWorkflowDefinitionV13
   | CompiledWorkflowDefinitionV14
-  | CompiledWorkflowDefinitionV15 {
+  | CompiledWorkflowDefinitionV15
+  | CompiledWorkflowDefinitionV16 {
   const compiled = compileValidatedWoml(
     document,
     moduleRuntime,
@@ -7551,10 +8018,11 @@ export function compileWomlWithModules(
     compiled.schemaVersion !== 12 &&
     compiled.schemaVersion !== 13 &&
     compiled.schemaVersion !== 14 &&
-    compiled.schemaVersion !== 15
+    compiled.schemaVersion !== 15 &&
+    compiled.schemaVersion !== 16
   ) {
     throw new Error(
-      'module compilation did not produce Model v9, v10, v11, v12, v13, v14, or v15'
+      'module compilation did not produce Model v9, v10, v11, v12, v13, v14, v15, or v16'
     );
   }
   return compiled;

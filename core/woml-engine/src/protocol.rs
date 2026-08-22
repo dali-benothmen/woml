@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub const SCRIPT_HOST_PROTOCOL: &str = "woml.script-host";
-pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 8;
+pub const SCRIPT_HOST_PROTOCOL_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,7 +28,7 @@ impl ReadyMessage {
       || self.host_instance_id.is_empty()
       || self.host_instance_id.chars().count() > 256
     {
-      return Err("The child did not send a valid script-host v8 ready message.".to_string());
+      return Err("The child did not send a valid script-host v9 ready message.".to_string());
     }
     Ok(())
   }
@@ -80,7 +80,7 @@ pub struct ExecuteMessage<'a> {
   pub handler: &'static str,
   pub timeout_ms: u64,
   pub source: &'a str,
-  pub context: &'a WorkflowContext,
+  pub context: ScriptExecutionContext<'a>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub lifecycle: Option<&'a LifecycleBindingV1>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,6 +89,44 @@ pub struct ExecuteMessage<'a> {
   pub reusable_lifecycle: Option<&'a ReusableLifecycleBindingV1>,
   pub bindings: ScriptBindings<'a>,
   pub modules: &'a [RuntimeModuleBinding],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptExecutionContext<'a> {
+  pub trigger: &'a serde_json::Map<String, Value>,
+  pub steps: &'a serde_json::Map<String, Value>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub item: Option<&'a Value>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub iteration: Option<ScriptIterationBinding>,
+}
+
+impl<'a> ScriptExecutionContext<'a> {
+  fn root(context: &'a WorkflowContext) -> Self {
+    Self {
+      trigger: &context.trigger,
+      steps: &context.steps,
+      item: None,
+      iteration: None,
+    }
+  }
+
+  fn iteration(context: &'a WorkflowContext, item: &'a Value, index: u32, total: u32) -> Self {
+    Self {
+      trigger: &context.trigger,
+      steps: &context.steps,
+      item: Some(item),
+      iteration: Some(ScriptIterationBinding { index, total }),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptIterationBinding {
+  pub index: u32,
+  pub total: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,7 +311,7 @@ impl ModuleRegisteredMessage {
     if envelope && outcome {
       Ok(())
     } else {
-      Err("The child sent an invalid script-host v8 module registration response.".to_string())
+      Err("The child sent an invalid script-host v9 module registration response.".to_string())
     }
   }
 }
@@ -383,7 +421,7 @@ impl<'a> ExecuteMessage<'a> {
       handler: "runtime.script",
       timeout_ms,
       source,
-      context,
+      context: ScriptExecutionContext::root(context),
       lifecycle: None,
       reusable: None,
       reusable_lifecycle: None,
@@ -421,7 +459,7 @@ impl<'a> ExecuteMessage<'a> {
       handler: "runtime.lifecycle-script",
       timeout_ms,
       source,
-      context,
+      context: ScriptExecutionContext::root(context),
       lifecycle: Some(lifecycle),
       reusable: None,
       reusable_lifecycle: None,
@@ -432,6 +470,189 @@ impl<'a> ExecuteMessage<'a> {
       },
       modules,
     }
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn lifecycle_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    action_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    lifecycle: &'a LifecycleBindingV1,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+  ) -> Result<Self, String> {
+    if total == 0 || total > 10_000 || index >= total {
+      return Err("Script iteration bindings require index < total <= 10000.".to_string());
+    }
+    Ok(Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id: action_id,
+      attempt,
+      mode: ScriptExecutionMode::Lifecycle,
+      handler: "runtime.lifecycle-script",
+      timeout_ms,
+      source,
+      context: ScriptExecutionContext::iteration(context, item, index, total),
+      lifecycle: Some(lifecycle),
+      reusable: None,
+      reusable_lifecycle: None,
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    })
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn runtime_script_with_iteration(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+  ) -> Result<Self, String> {
+    Self::runtime_script_with_iteration_modules(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      item,
+      index,
+      total,
+      secrets,
+      &[],
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn runtime_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+  ) -> Result<Self, String> {
+    Self::script_with_iteration_modules_and_reusable(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      item,
+      index,
+      total,
+      secrets,
+      modules,
+      None,
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn reusable_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: &'a ReusableScriptBindingV3,
+  ) -> Result<Self, String> {
+    Self::script_with_iteration_modules_and_reusable(
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      timeout_ms,
+      source,
+      context,
+      item,
+      index,
+      total,
+      secrets,
+      modules,
+      Some(reusable),
+    )
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  fn script_with_iteration_modules_and_reusable(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    node_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: Option<&'a ReusableScriptBindingV3>,
+  ) -> Result<Self, String> {
+    if total == 0 || total > 10_000 || index >= total {
+      return Err("Script iteration bindings require index < total <= 10000.".to_string());
+    }
+    Ok(Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id,
+      attempt,
+      mode: ScriptExecutionMode::Step,
+      handler: "runtime.script",
+      timeout_ms,
+      source,
+      context: ScriptExecutionContext::iteration(context, item, index, total),
+      lifecycle: None,
+      reusable,
+      reusable_lifecycle: None,
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    })
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -459,7 +680,7 @@ impl<'a> ExecuteMessage<'a> {
       handler: "runtime.script",
       timeout_ms,
       source,
-      context,
+      context: ScriptExecutionContext::root(context),
       lifecycle: None,
       reusable: Some(reusable),
       reusable_lifecycle: None,
@@ -498,7 +719,7 @@ impl<'a> ExecuteMessage<'a> {
       handler: "runtime.lifecycle-script",
       timeout_ms,
       source,
-      context,
+      context: ScriptExecutionContext::root(context),
       lifecycle: None,
       reusable: Some(reusable),
       reusable_lifecycle: Some(reusable_lifecycle),
@@ -509,6 +730,51 @@ impl<'a> ExecuteMessage<'a> {
       },
       modules,
     }
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn reusable_lifecycle_script_with_iteration_modules(
+    invocation_id: &'a str,
+    run_id: &'a str,
+    action_id: &'a str,
+    attempt: ScriptAttempt<'a>,
+    timeout_ms: u64,
+    source: &'a str,
+    context: &'a WorkflowContext,
+    item: &'a Value,
+    index: u32,
+    total: u32,
+    secrets: &'a BTreeMap<String, String>,
+    modules: &'a [RuntimeModuleBinding],
+    reusable: &'a ReusableScriptBindingV3,
+    reusable_lifecycle: &'a ReusableLifecycleBindingV1,
+  ) -> Result<Self, String> {
+    if total == 0 || total > 10_000 || index >= total {
+      return Err("Script iteration bindings require index < total <= 10000.".to_string());
+    }
+    Ok(Self {
+      protocol: SCRIPT_HOST_PROTOCOL,
+      protocol_version: SCRIPT_HOST_PROTOCOL_VERSION,
+      message_type: "execute",
+      invocation_id,
+      run_id,
+      node_id: action_id,
+      attempt,
+      mode: ScriptExecutionMode::Lifecycle,
+      handler: "runtime.lifecycle-script",
+      timeout_ms,
+      source,
+      context: ScriptExecutionContext::iteration(context, item, index, total),
+      lifecycle: None,
+      reusable: Some(reusable),
+      reusable_lifecycle: Some(reusable_lifecycle),
+      bindings: ScriptBindings {
+        binding_version: 1,
+        services_version: 1,
+        secrets,
+      },
+      modules,
+    })
   }
 }
 
@@ -533,7 +799,7 @@ impl CompletedMessage {
       || !self.duration_ms.is_finite()
       || self.duration_ms < 0.0
     {
-      return Err("The child sent an invalid script-host v8 completion envelope.".to_string());
+      return Err("The child sent an invalid script-host v9 completion envelope.".to_string());
     }
     if let HostOutcome::Failure { error } = &self.outcome {
       error.validate()?;

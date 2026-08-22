@@ -7,7 +7,12 @@ import { resolve } from 'node:path';
 
 import { runCli, type CliIo } from '../src/cli';
 import type { ManualLineInput } from '../src/manual-input';
-import { inspectRunWithRust, listRunsWithRust } from '../src/rust-executor';
+import {
+  inspectRunPresentationWithRust,
+  inspectRunV2WithRust,
+  inspectRunWithRust,
+  listRunsWithRust,
+} from '../src/rust-executor';
 
 const workflowPath = resolve(
   import.meta.dir,
@@ -233,6 +238,7 @@ describe('Module runtime CLI', () => {
           },
           nativeDependencies()
         );
+        if (exitCode !== 0) throw new Error(stderr);
         expect(exitCode).toBe(0);
         expect(stderr).toBe('WOML modules ready: services.customer.\n');
         expect(JSON.parse(stdout)).toEqual({ customer: 'Ada' });
@@ -673,4 +679,233 @@ describe('Local module authoring DX', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+describe('For-each composition', () => {
+  nativeTest(
+    'runs control flow, reusable steps, retries, modules, Fetch, services, and lifecycle per item',
+    async () => {
+      const directory = await mkdtemp(resolve(tmpdir(), 'woml-for-each-composition-'));
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch: request => {
+          const value = Number(new URL(request.url).searchParams.get('value'));
+          return Response.json({ value: value * 10 });
+        },
+      });
+      const womlPath = resolve(directory, 'workflow.woml');
+      const statePath = resolve(directory, 'state.sqlite');
+      await writeFile(
+        resolve(directory, 'transform.ts'),
+        `export async function normalize(key, value) {
+  const response = await fetch(${JSON.stringify(server.url.toString())} + '?value=' + value);
+  const remote = await response.json();
+  const result = { key, value: remote.value, kind: 'active' };
+  await services.cache.set('fe4:' + key, result, { ttl: '1m' });
+  return result;
+}
+`
+      );
+      await writeFile(
+        resolve(directory, 'normalize-item.woml'),
+        `<woml>
+  <imports><module name="transform" from="./transform.ts" /></imports>
+  <props>
+    <prop name="item-key" required="true" />
+    <prop name="value" required="true" />
+  </props>
+  <step name="Normalize item">
+    <script>
+      if (props.value === 2 && attempt.number === 1) throw new Error('retry once');
+      return await services.transform.normalize(props.itemKey, props.value);
+    </script>
+  </step>
+  <lifecycle>
+    <on-success><script>console.log('normalized ' + props.itemKey);</script></on-success>
+    <on-complete><script>console.log('completed ' + props.itemKey);</script></on-complete>
+  </lifecycle>
+</woml>
+`
+      );
+      await writeFile(
+        womlPath,
+        `<woml>
+  <imports><module name="normalize-item" from="./normalize-item.woml" /></imports>
+  <workflow id="for-each-composition" version="1.0.0">
+    <lifecycle>
+      <on-step-success steps="normalized">
+        <script>
+          await services.cache.set('fe4:lifecycle:' + context.iteration.index, { ok: true });
+        </script>
+      </on-step-success>
+    </lifecycle>
+    <triggers><manual id="start" /></triggers>
+    <steps>
+      <step id="load"><script>
+        return { items: [
+          { key: 'a', value: 1, enabled: true },
+          { key: 'b', value: 2, enabled: true },
+          { key: 'c', value: 3, enabled: false }
+        ] };
+      </script></step>
+      <for-each id="processItems" items="{{context.steps.load.items}}" concurrency="2">
+        <choose id="routed">
+          <when test="{{context.item.enabled}}">
+            <normalize-item
+              id="normalized"
+              item-key="{{context.item.key}}"
+              value="{{context.item.value}}"
+              retry="2"
+              retry-delay="1ms"
+            />
+            <result value="{{context.steps.normalized}}" />
+          </when>
+          <otherwise>
+            <step id="disabled"><script>
+              return { key: context.item.key, value: 0, kind: 'disabled' };
+            </script></step>
+            <result value="{{context.steps.disabled}}" />
+          </otherwise>
+        </choose>
+        <switch id="label" value="{{context.steps.routed.kind}}">
+          <case value="active">
+            <step id="activeLabel"><script>return { label: 'processed' };</script></step>
+            <result value="{{context.steps.activeLabel}}" />
+          </case>
+          <default>
+            <step id="disabledLabel"><script>return { label: 'skipped' };</script></step>
+            <result value="{{context.steps.disabledLabel}}" />
+          </default>
+        </switch>
+        <parallel id="inspectItem" concurrency="2" on-error="wait-all">
+          <step id="cacheRead"><script>
+            const cached = await services.cache.get('fe4:' + context.item.key);
+            return { key: context.item.key, cached: cached.hit, label: context.steps.label.label };
+          </script></step>
+          <step id="mirror"><script>
+            return { key: context.item.key, index: context.iteration.index };
+          </script></step>
+        </parallel>
+        <result value="{{context.steps.cacheRead}}" />
+      </for-each>
+      <step id="summary"><script>
+        return { results: context.steps.processItems.results };
+      </script></step>
+    </steps>
+  </workflow>
+</woml>
+`
+      );
+      let stdout = '';
+      let stderr = '';
+      try {
+        const exitCode = await runCli(
+          ['test', womlPath, '--state', statePath],
+          {
+            stdout: text => {
+              stdout += text;
+            },
+            stderr: text => {
+              stderr += text;
+            },
+          },
+          nativeDependencies()
+        );
+        if (exitCode !== 0) throw new Error(stderr);
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(stdout)).toEqual({
+          results: [
+            { key: 'a', cached: true, label: 'processed' },
+            { key: 'b', cached: true, label: 'processed' },
+            { key: 'c', cached: false, label: 'skipped' },
+          ],
+        });
+        expect(stderr).not.toContain('WOML_FOR_EACH');
+        const run = listRunsWithRust(statePath, { limit: 1 }, { nativeCorePath }).runs[0]!;
+        const inspected = inspectRunWithRust(statePath, run.runId, { nativeCorePath });
+        expect(inspected.status).toBe('succeeded');
+        const presentation = inspectRunPresentationWithRust(
+          statePath,
+          run.runId,
+          { nativeCorePath }
+        );
+        expect(presentation.steps.find(step => step.id === 'processItems')).toMatchObject({
+          kind: 'for_each',
+          status: 'succeeded',
+          detail: '3 items · 3 succeeded · concurrency 2',
+          forEach: {
+            total: 3,
+            succeeded: 3,
+            failed: 0,
+            skipped: 0,
+            active: 0,
+            pending: 0,
+            concurrency: 2,
+          },
+        });
+        const durableInspection = inspectRunV2WithRust(
+          statePath,
+          run.runId,
+          { nativeCorePath }
+        );
+        expect(durableInspection).toMatchObject({
+          profile: 'woml.run-inspection/v6',
+          forEach: {
+            counts: { opened: 1, succeeded: 1 },
+            items: [{
+              forEachId: 'processItems',
+              status: 'succeeded',
+              total: 3,
+              succeeded: 3,
+            }],
+          },
+        });
+        expect(JSON.stringify(durableInspection)).not.toContain('processed');
+        let getJson = '';
+        expect(await runCli(
+          ['get', run.runId, '--state', statePath, '--json'],
+          { stdout: text => { getJson += text; }, stderr: () => {} },
+          nativeDependencies()
+        )).toBe(0);
+        expect(JSON.parse(getJson)).toMatchObject({
+          profile: 'woml.run-inspection/v6',
+          forEach: { items: [{ forEachId: 'processItems', succeeded: 3 }] },
+        });
+        let getHuman = '';
+        expect(await runCli(
+          ['get', run.runId, '--state', statePath],
+          { stdout: text => { getHuman += text; }, stderr: () => {} },
+          nativeDependencies()
+        )).toBe(0);
+        expect(getHuman).toContain('For each:');
+        expect(getHuman).toContain(
+          'processItems: succeeded (3/3 completed, 0 active, 0 pending, concurrency 2)'
+        );
+        const database = new Database(statePath, { readonly: true });
+        const rows = database
+          .query(
+            'SELECT event_json AS eventJson FROM woml_run_events WHERE run_id = ? ORDER BY sequence'
+          )
+          .all(run.runId) as { eventJson: string }[];
+        database.close();
+        const history = rows.map(row => row.eventJson).join('\n');
+        expect(history).toContain('branch_selected');
+        expect(history).toContain('choice_selected');
+        expect(history).toContain('parallel_group_started');
+        expect(history).toContain('step_retry_scheduled');
+        expect(history).toContain('reusable_lifecycle_requested');
+        expect(history).toContain('lifecycle_hook_requested');
+        expect(history).toContain('"executionMode":"observed"');
+        expect(history).toContain('"executionMode":"managed"');
+        expect(history).toContain(
+          '"iteration":{"forEachId":"processItems","index":1}'
+        );
+      } finally {
+        server.stop(true);
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    20_000
+  );
 });
