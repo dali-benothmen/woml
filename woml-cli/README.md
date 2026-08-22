@@ -317,6 +317,25 @@ woml prune --before 30d --dry-run        # Preview retention cleanup
 
 Read the complete [CLI reference](https://github.com/dali-benothmen/woml/blob/master/docs/cli-reference.md) for every command and option.
 
+## Build Workflows with AI
+
+The WOML Skill teaches compatible AI coding agents the released language, services, providers, modules, reliability rules, and CLI. Describe the automation you want and the agent can create the `.woml` file, identify required secrets, validate it, and provide the exact command needed to run it.
+
+```text
+$woml Build an order-processing workflow that starts from a webhook, checks
+inventory and fraud risk concurrently, and asks for approval when risk is high.
+```
+
+Install it for Claude Code in the current project:
+
+```bash
+mkdir -p .claude/skills/woml
+curl -fsSL https://github.com/dali-benothmen/woml/releases/latest/download/woml-skill.tar.gz \
+  | tar -xz -C .claude/skills/woml
+```
+
+For Codex and other Agent Skills-compatible tools, copy the repository's complete [`skills/woml`](https://github.com/dali-benothmen/woml/tree/master/skills/woml) directory into `.agents/skills/woml`. Review generated scripts, service calls, and filesystem access before running them, and never place real secret values in prompts or workflow files.
+
 ## Documentation
 
 - [Getting started](https://github.com/dali-benothmen/woml/blob/master/docs/getting-started.md)

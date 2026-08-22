@@ -317,6 +317,9 @@ jobs:
           else
             npm publish "${archive}" --access public --provenance
           fi
+      - name: Package the WOML Skill
+        shell: bash
+        run: tar -czf woml-skill.tar.gz -C skills/woml .
       - name: Create the GitHub release after npm succeeds
         env:
           GH_TOKEN: ${{ github.token }}
@@ -324,6 +327,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --generate-notes
+          gh release upload "${GITHUB_REF_NAME}" woml-skill.tar.gz --clobber
       - name: Failure diagnostics
         if: failure()
         run: |

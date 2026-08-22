@@ -138,6 +138,10 @@ describe('WOML release automation', () => {
     expect(`${source}\n${artifactSource}`).toContain('artifact-sha256.json');
     expect(`${source}\n${artifactSource}`).toContain('native-load-test.json');
     expect(source).toContain('Create the GitHub release after npm succeeds');
+    expect(source).toContain('tar -czf woml-skill.tar.gz -C skills/woml .');
+    expect(source).toContain(
+      'gh release upload "${GITHUB_REF_NAME}" woml-skill.tar.gz --clobber',
+    );
     expect(source.indexOf('Publish woml last')).toBeLessThan(
       source.indexOf('Create the GitHub release after npm succeeds'),
     );

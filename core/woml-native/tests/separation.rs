@@ -30,7 +30,7 @@ fn native_manifest_has_only_the_woml_engine_as_a_local_dependency() {
 
   assert_eq!(
     local_dependencies,
-    vec!["woml-engine = { version = \"1.0.6\", path = \"../woml-engine\" }"],
+    vec!["woml-engine = { version = \"1.0.7\", path = \"../woml-engine\" }"],
     "The WOML native crate must not acquire another local dependency."
   );
   assert!(
