@@ -357,6 +357,16 @@ from a webhook, checks inventory and risk concurrently, and routes the result.
 
 Install it once in your project or personal agent skills directory, then ask for workflows naturally or invoke `$woml` explicitly.
 
+For Claude Code, install the complete skill in the current project:
+
+```bash
+mkdir -p .claude/skills/woml
+curl -fsSL https://github.com/dali-benothmen/woml/releases/latest/download/woml-skill.tar.gz \
+  | tar -xz -C .claude/skills/woml
+```
+
+For Codex and other clients that use the Agent Skills project convention:
+
 ```bash
 mkdir -p .agents/skills
 cp -R skills/woml .agents/skills/woml
