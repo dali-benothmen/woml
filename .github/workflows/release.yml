@@ -115,7 +115,7 @@ jobs:
           bun woml-cli/scripts/release-artifact.ts pack --root release/main
           bun woml-cli/scripts/release-artifact.ts seal --root release/main --kind main
           bun woml-cli/scripts/release-artifact.ts verify --root release/main
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: woml-main
           path: release/main
@@ -207,7 +207,7 @@ jobs:
           --main-root release/main
           --native-root release/native
           --target ${{ matrix.package }}
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.package }}
           path: release/native
@@ -247,7 +247,7 @@ jobs:
           --main release/collected/main
           --platforms release/collected/platforms
           --tag "${{ needs.validate.outputs.release-tag }}"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: woml-release-family
           path: release/collected

@@ -211,7 +211,7 @@ jobs:
           bun woml-cli/scripts/release-artifact.ts pack --root release/main
           bun woml-cli/scripts/release-artifact.ts seal --root release/main --kind main
           bun woml-cli/scripts/release-artifact.ts verify --root release/main
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: ci-woml-main
           path: release/main
