@@ -36,6 +36,18 @@ const snapshot: InspectorSnapshotV1 = {
       status: 'running',
       durationMs: 1800,
       currentNodeId: 'chargeCustomer',
+      forEach: [{
+        runId: 'run_running',
+        forEachId: 'organize',
+        status: 'running',
+        total: 42,
+        succeeded: 18,
+        failed: 0,
+        skipped: 0,
+        active: 4,
+        pending: 20,
+        concurrency: 4,
+      }],
     },
     {
       runId: 'run_waiting',
@@ -167,7 +179,7 @@ describe('WOML terminal inspector', () => {
   test('renders every operations view in narrow and normal terminals', () => {
     const expected: Record<string, string> = {
       overview: 'order-processing',
-      runs: 'chargeCustomer',
+      runs: 'organize 18/42',
       triggers: 'webhook, slack',
       approvals: 'run_waiting',
       queues: 'run_retrying',
@@ -185,6 +197,23 @@ describe('WOML terminal inspector', () => {
       expect(frame).toContain('WOML INSPECT');
       expect(frame).toContain(marker);
     }
+  });
+
+  test('shows concise loop work and bounded detail for the selected run', () => {
+    const compact = renderInspectorFrame(snapshot, {
+      ...baseState,
+      view: 'runs',
+    }, 100, 24, false);
+    expect(compact).toContain('organize 18/42');
+
+    const expanded = renderInspectorFrame(snapshot, {
+      ...baseState,
+      view: 'runs',
+      expanded: true,
+    }, 100, 24, false);
+    expect(expanded).toContain(
+      'For each organize: 18/42 completed · 4 active · 20 pending · concurrency 4'
+    );
   });
 
   test('uses htop-style status colors while keeping a completely color-free mode', () => {

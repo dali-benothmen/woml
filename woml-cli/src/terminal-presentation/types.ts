@@ -72,6 +72,7 @@ export type StepPresentationKind =
   | 'step'
   | 'script'
   | 'custom_step'
+  | 'for_each'
   | 'switch'
   | 'choose'
   | 'parallel'
@@ -86,6 +87,26 @@ export interface PresentationFailureV1 {
   readonly message: string;
   readonly kind?: string;
   readonly retryable?: boolean;
+}
+
+export interface ForEachIterationPresentationV1 {
+  readonly index: number;
+  readonly itemNumber: number;
+  readonly status: StepPresentationStatus;
+  readonly failedNodeId?: string;
+  readonly failure?: PresentationFailureV1;
+}
+
+export interface ForEachPresentationV1 {
+  readonly total: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  readonly skipped: number;
+  readonly active: number;
+  readonly pending: number;
+  readonly concurrency: number;
+  readonly iterations: readonly ForEachIterationPresentationV1[];
+  readonly iterationsTruncated?: boolean;
 }
 
 export interface StepPresentationV1 {
@@ -103,6 +124,7 @@ export interface StepPresentationV1 {
   readonly result?: JsonValue;
   readonly resultTruncated?: boolean;
   readonly failure?: PresentationFailureV1;
+  readonly forEach?: ForEachPresentationV1;
 }
 
 export type LifecycleHookPresentation =

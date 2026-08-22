@@ -1,0 +1,15 @@
+{
+  "contract": "woml.execution-progress",
+  "version": 1,
+  "type": "for_each_progress",
+  "runId": "run_for_each_progress",
+  "forEachId": "organize",
+  "status": "running",
+  "total": 42,
+  "succeeded": 16,
+  "failed": 0,
+  "skipped": 0,
+  "active": 4,
+  "pending": 22,
+  "concurrency": 4
+}

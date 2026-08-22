@@ -7,7 +7,12 @@ import { resolve } from 'node:path';
 
 import { runCli, type CliIo } from '../src/cli';
 import type { ManualLineInput } from '../src/manual-input';
-import { inspectRunWithRust, listRunsWithRust } from '../src/rust-executor';
+import {
+  inspectRunPresentationWithRust,
+  inspectRunV2WithRust,
+  inspectRunWithRust,
+  listRunsWithRust,
+} from '../src/rust-executor';
 
 const workflowPath = resolve(
   import.meta.dir,
@@ -820,6 +825,63 @@ describe('For-each composition', () => {
         const run = listRunsWithRust(statePath, { limit: 1 }, { nativeCorePath }).runs[0]!;
         const inspected = inspectRunWithRust(statePath, run.runId, { nativeCorePath });
         expect(inspected.status).toBe('succeeded');
+        const presentation = inspectRunPresentationWithRust(
+          statePath,
+          run.runId,
+          { nativeCorePath }
+        );
+        expect(presentation.steps.find(step => step.id === 'processItems')).toMatchObject({
+          kind: 'for_each',
+          status: 'succeeded',
+          detail: '3 items · 3 succeeded · concurrency 2',
+          forEach: {
+            total: 3,
+            succeeded: 3,
+            failed: 0,
+            skipped: 0,
+            active: 0,
+            pending: 0,
+            concurrency: 2,
+          },
+        });
+        const durableInspection = inspectRunV2WithRust(
+          statePath,
+          run.runId,
+          { nativeCorePath }
+        );
+        expect(durableInspection).toMatchObject({
+          profile: 'woml.run-inspection/v6',
+          forEach: {
+            counts: { opened: 1, succeeded: 1 },
+            items: [{
+              forEachId: 'processItems',
+              status: 'succeeded',
+              total: 3,
+              succeeded: 3,
+            }],
+          },
+        });
+        expect(JSON.stringify(durableInspection)).not.toContain('processed');
+        let getJson = '';
+        expect(await runCli(
+          ['get', run.runId, '--state', statePath, '--json'],
+          { stdout: text => { getJson += text; }, stderr: () => {} },
+          nativeDependencies()
+        )).toBe(0);
+        expect(JSON.parse(getJson)).toMatchObject({
+          profile: 'woml.run-inspection/v6',
+          forEach: { items: [{ forEachId: 'processItems', succeeded: 3 }] },
+        });
+        let getHuman = '';
+        expect(await runCli(
+          ['get', run.runId, '--state', statePath],
+          { stdout: text => { getHuman += text; }, stderr: () => {} },
+          nativeDependencies()
+        )).toBe(0);
+        expect(getHuman).toContain('For each:');
+        expect(getHuman).toContain(
+          'processItems: succeeded (3/3 completed, 0 active, 0 pending, concurrency 2)'
+        );
         const database = new Database(statePath, { readonly: true });
         const rows = database
           .query(

@@ -1,6 +1,6 @@
 # WOML `<for-each>` Implementation Plan
 
-- Status: FE0 through FE6 completed; FE7 is next
+- Status: FE0 through FE7 completed; FE8 is next
 - Target language surface: WOML after v1.0
 - Target compiled model: Model v16
 - Target run events: Event v15
@@ -661,6 +661,27 @@ output concise while permitting bounded per-item detail.
 
 **Result:** users can understand the loop, its progress, failed item, duration,
 and result without reading engine events.
+
+Completed in FE7:
+
+- Run Presentation v1 exposes `<for-each>` as one authored workflow step with
+  its name, description, status, duration, aggregate result, concurrency, and
+  concise durable counts rather than leaking internal loop nodes;
+- foreground execution and background presentation receive live count-only
+  `for_each_progress` updates while terminal output stays concise;
+- failed loop presentation identifies the human item number, zero-based index,
+  failed nested step, and safe failure code/message;
+- machine presentation includes at most 100 per-index status summaries and
+  marks truncation, while item values and secrets never enter the operations
+  snapshot or safe run inspection;
+- `woml get` uses Run Inspection v6 for Model v16 runs and reports durable loop
+  counts in both human and JSON formats;
+- `woml inspect` shows the current loop and completed/active/pending counts;
+- Prometheus output includes active, pending, and completed iteration metrics;
+  and
+- focused Rust and CLI integration tests prove successful and failed
+  presentation, strict decoding, redaction, real workflow execution, and
+  consistent retrieval through the native boundary.
 
 ### FE8 — Harden, document, benchmark, and release
 

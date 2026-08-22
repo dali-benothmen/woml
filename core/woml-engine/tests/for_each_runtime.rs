@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 use woml_engine::{
-  execute_workflow_durable, CompiledWorkflowDefinition, DurableEventStore, RunEventPayload,
+  execute_workflow_durable, run_presentation_from_store_v1, CompiledWorkflowDefinition,
+  DurableEventStore, PresentationStepKind, PresentationStepStatus, RunEventPayload,
   RuntimeExecutionOptions, ScriptHostProcessOptions,
 };
 
@@ -243,14 +244,41 @@ async fn sequential_iterations_publish_ordered_results_for_later_steps() {
       RunEventPayload::ForEachIterationStarted(_) | RunEventPayload::ForEachIterationSucceeded(_)
     ) || event.iteration.is_some()
   }));
-  let reopened = DurableEventStore::open(database.path())
-    .unwrap()
-    .projection(&result.run_id)
-    .unwrap();
+  let reopened = DurableEventStore::open(database.path()).unwrap();
+  let projection = reopened.projection(&result.run_id).unwrap();
   assert_eq!(
-    reopened.context.steps["organize"],
+    projection.context.steps["organize"],
     result.context.steps["organize"]
   );
+
+  let presentation = run_presentation_from_store_v1(&reopened, &result.run_id).unwrap();
+  let loop_step = presentation
+    .steps
+    .iter()
+    .find(|step| step.id == "organize")
+    .unwrap();
+  assert_eq!(loop_step.kind, PresentationStepKind::ForEach);
+  assert_eq!(loop_step.status, PresentationStepStatus::Succeeded);
+  assert_eq!(
+    loop_step.detail.as_deref(),
+    Some("3 items · 3 succeeded · concurrency 1")
+  );
+  let loop_summary = loop_step.for_each.as_ref().unwrap();
+  assert_eq!(loop_summary.total, 3);
+  assert_eq!(loop_summary.succeeded, 3);
+  assert_eq!(loop_summary.active, 0);
+  assert_eq!(loop_summary.pending, 0);
+  assert_eq!(loop_summary.iterations.len(), 3);
+
+  let inspection = reopened.inspect_run_v6(&result.run_id).unwrap();
+  assert_eq!(inspection.profile, "woml.run-inspection/v6");
+  assert_eq!(inspection.for_each.counts.succeeded, 1);
+  assert_eq!(inspection.for_each.items[0].for_each_id, "organize");
+  assert_eq!(inspection.for_each.items[0].succeeded, 3);
+  let inspection_json = serde_json::to_string(&inspection).unwrap();
+  assert!(!inspection_json.contains("alpha"));
+  assert!(!inspection_json.contains("beta"));
+  assert!(!inspection_json.contains("gamma"));
 }
 
 #[tokio::test]
@@ -471,11 +499,35 @@ async fn failure_settles_active_and_pending_iterations_before_the_run_fails() {
     1
   );
   let run_id = events[0].run_id.clone();
-  let reopened = DurableEventStore::open(database.path())
-    .unwrap()
-    .projection(&run_id)
+  let reopened = DurableEventStore::open(database.path()).unwrap();
+  let projection = reopened.projection(&run_id).unwrap();
+  assert_eq!(projection.status, woml_engine::RunStatus::Failed);
+  let presentation = run_presentation_from_store_v1(&reopened, &run_id).unwrap();
+  let loop_step = presentation
+    .steps
+    .iter()
+    .find(|step| step.id == "organize")
     .unwrap();
-  assert_eq!(reopened.status, woml_engine::RunStatus::Failed);
+  assert_eq!(loop_step.kind, PresentationStepKind::ForEach);
+  assert_eq!(loop_step.status, PresentationStepStatus::Failed);
+  assert!(loop_step.detail.as_deref().unwrap().contains("Item 1 of 4"));
+  assert!(loop_step.detail.as_deref().unwrap().contains("index 0"));
+  assert!(loop_step
+    .detail
+    .as_deref()
+    .unwrap()
+    .contains("step \"normalize\""));
+  let loop_summary = loop_step.for_each.as_ref().unwrap();
+  assert_eq!(loop_summary.total, 4);
+  assert_eq!(loop_summary.failed, 2);
+  assert_eq!(loop_summary.skipped, 2);
+  let inspection = reopened.inspect_run_v6(&run_id).unwrap();
+  assert_eq!(inspection.for_each.counts.failed, 1);
+  assert_eq!(inspection.for_each.items[0].failed_index, Some(0));
+  assert_eq!(
+    inspection.for_each.items[0].failed_node_id.as_deref(),
+    Some("normalize")
+  );
 }
 
 #[tokio::test]

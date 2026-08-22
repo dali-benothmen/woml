@@ -7,7 +7,7 @@
   "required": ["profile", "name", "type", "value", "labels"],
   "properties": {
     "profile": { "const": "woml.runtime-metrics/v1" },
-    "name": { "enum": ["woml_runtime_ready", "woml_runtime_uptime_seconds", "woml_workflows_loaded", "woml_runs_total", "woml_runs_active", "woml_runs_queued", "woml_runs_waiting", "woml_run_duration_seconds", "woml_triggers_total", "woml_retries_total", "woml_approvals_waiting", "woml_workflow_calls_active", "woml_worker_restarts_total", "woml_store_size_bytes", "woml_backup_total", "woml_retention_total"] },
+    "name": { "enum": ["woml_runtime_ready", "woml_runtime_uptime_seconds", "woml_workflows_loaded", "woml_runs_total", "woml_runs_active", "woml_runs_queued", "woml_runs_waiting", "woml_run_duration_seconds", "woml_triggers_total", "woml_retries_total", "woml_approvals_waiting", "woml_workflow_calls_active", "woml_worker_restarts_total", "woml_store_size_bytes", "woml_backup_total", "woml_retention_total", "woml_for_each_iterations_active", "woml_for_each_iterations_pending", "woml_for_each_iterations_completed_total"] },
     "type": { "enum": ["gauge", "counter", "histogram"] }, "value": { "type": "number" },
     "labels": {
       "type": "object", "additionalProperties": false,

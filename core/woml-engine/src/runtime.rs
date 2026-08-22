@@ -86,6 +86,22 @@ pub const EXECUTION_PROGRESS_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExecutionProgress {
+  ForEachProgress {
+    contract: &'static str,
+    version: u32,
+    #[serde(rename = "runId")]
+    run_id: String,
+    #[serde(rename = "forEachId")]
+    for_each_id: String,
+    status: &'static str,
+    total: u32,
+    succeeded: u32,
+    failed: u32,
+    skipped: u32,
+    active: u32,
+    pending: u32,
+    concurrency: u32,
+  },
   StepAttemptFailed {
     contract: &'static str,
     version: u32,
@@ -621,6 +637,62 @@ fn report_attempt_succeeded<E: RuntimeDagEngine>(
       max_attempts,
     });
   }
+}
+
+fn report_for_each_progress<E: RuntimeDagEngine>(
+  engine: &E,
+  options: &RuntimeExecutionOptions,
+  run_id: &str,
+  for_each_id: &str,
+) -> Result<(), RuntimeExecutionError> {
+  let projection = engine.projection(run_id)?;
+  let Some(state) = projection.for_each.get(for_each_id) else {
+    return Ok(());
+  };
+  let succeeded = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Succeeded { .. }))
+    .count() as u32;
+  let failed = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
+    .count() as u32;
+  let skipped = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
+    .count() as u32;
+  let active = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Started))
+    .count() as u32;
+  let pending = state
+    .total
+    .saturating_sub(succeeded + failed + skipped + active);
+  let status = match state.status {
+    ForEachStatus::Open => "running",
+    ForEachStatus::Succeeded => "succeeded",
+    ForEachStatus::Failed => "failed",
+    ForEachStatus::Cancelled => "cancelled",
+  };
+  options.report(ExecutionProgress::ForEachProgress {
+    contract: EXECUTION_PROGRESS_CONTRACT,
+    version: EXECUTION_PROGRESS_VERSION,
+    run_id: run_id.to_string(),
+    for_each_id: for_each_id.to_string(),
+    status,
+    total: state.total,
+    succeeded,
+    failed,
+    skipped,
+    active,
+    pending,
+    concurrency: state.concurrency,
+  });
+  Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -7764,6 +7836,7 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
       )));
     }
   }
+  report_for_each_progress(&shared_engine, options, run_id, &descriptor.for_each_id)?;
 
   let active_invocations = Arc::new(tokio::sync::Mutex::new(HashSet::new()));
   let mut aggregate_results = vec![None; items.len()];
@@ -7895,6 +7968,12 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
             }
           }
         }
+        report_for_each_progress(
+          &shared_engine,
+          options,
+          run_id,
+          &descriptor.for_each_id,
+        )?;
       }
       _ = tokio::time::sleep(CANCELLATION_POLL_INTERVAL), if !stop_admission => {
         settle_workflow_timeout_if_due(
@@ -7920,6 +7999,7 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
       descriptor,
       ForEachTerminalDisposition::Cancelled,
     )?;
+    report_for_each_progress(&shared_engine, options, run_id, &descriptor.for_each_id)?;
     return Err(cancelled_run_error(&shared_engine, run_id)?);
   }
   if projection.timeout_reached_at.is_some() {
@@ -7956,6 +8036,7 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
       descriptor,
       ForEachTerminalDisposition::Failed,
     )?;
+    report_for_each_progress(&shared_engine, options, run_id, &descriptor.for_each_id)?;
     if shared_engine.projection(run_id)?.business_outcome.is_none() {
       shared_engine.decide_run_failed(
         run_id,
@@ -7999,6 +8080,7 @@ async fn execute_bounded_for_each<E: RuntimeDagEngine>(
       aggregate_digest: for_each_digest(&Value::Object(public_output))?,
     }),
   )?;
+  report_for_each_progress(&shared_engine, options, run_id, &descriptor.for_each_id)?;
   Ok(())
 }
 

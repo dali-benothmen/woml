@@ -1183,6 +1183,68 @@ pub struct RunInspectionV5 {
   pub reusable_definitions: RunInspectionReusableDefinitionsV5,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectedForEachStatusV6 {
+  Active,
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionForEachCountsV6 {
+  pub opened: u32,
+  pub active: u32,
+  pub succeeded: u32,
+  pub failed: u32,
+  pub cancelled: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionForEachItemV6 {
+  pub for_each_id: String,
+  pub status: InspectedForEachStatusV6,
+  pub total: u32,
+  pub succeeded: u32,
+  pub failed: u32,
+  pub skipped: u32,
+  pub active: u32,
+  pub pending: u32,
+  pub concurrency: u32,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub failed_index: Option<u32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub failed_node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionForEachV6 {
+  pub counts: RunInspectionForEachCountsV6,
+  pub items: Vec<RunInspectionForEachItemV6>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInspectionV6 {
+  pub profile: &'static str,
+  pub run_id: String,
+  pub workflow_id: String,
+  pub status: PublicRunStatus,
+  pub business_outcome: InspectedBusinessOutcome,
+  pub lifecycle_status: crate::projection::LifecycleStatus,
+  pub hooks: Vec<RunInspectionHookV2>,
+  pub warnings: Vec<crate::event::LifecycleWarning>,
+  pub cancellation: RunInspectionCancellationV2,
+  pub policy: RunInspectionPolicyV3,
+  pub forks: RunInspectionForksV4,
+  pub reusable_definitions: RunInspectionReusableDefinitionsV5,
+  pub for_each: RunInspectionForEachV6,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForkRecoveryBranchV1 {
@@ -4797,6 +4859,102 @@ impl DurableEventStore {
       policy: base.policy,
       forks: base.forks,
       reusable_definitions: RunInspectionReusableDefinitionsV5 { counts, items },
+    })
+  }
+
+  pub fn inspect_run_v6(&self, run_id: &str) -> Result<RunInspectionV6, DurableStoreError> {
+    let base = self.inspect_run_v5(run_id)?;
+    let binding = self.run_binding(run_id)?;
+    let workflow = self.definition(&binding.definition_hash)?;
+    if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V16 {
+      return Err(DurableStoreError::Contract(
+        "Run Inspection v6 is available only for compiled Model v16 or later runs.".to_string(),
+      ));
+    }
+    let projection = self.projection(run_id)?;
+    let mut items = Vec::new();
+    for descriptor in workflow.graph.for_each.as_deref().unwrap_or_default() {
+      let Some(state) = projection.for_each.get(&descriptor.for_each_id) else {
+        continue;
+      };
+      let succeeded = state
+        .iterations
+        .values()
+        .filter(|status| matches!(status, ForEachIterationStatus::Succeeded { .. }))
+        .count() as u32;
+      let failed = state
+        .iterations
+        .values()
+        .filter(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
+        .count() as u32;
+      let skipped = state
+        .iterations
+        .values()
+        .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
+        .count() as u32;
+      let active = state
+        .iterations
+        .values()
+        .filter(|status| matches!(status, ForEachIterationStatus::Started))
+        .count() as u32;
+      let pending = state
+        .total
+        .saturating_sub(succeeded + failed + skipped + active);
+      let (failed_index, failed_node_id) = state
+        .iterations
+        .iter()
+        .find_map(|(index, status)| match status {
+          ForEachIterationStatus::Failed { failed_node_id } => {
+            Some((Some(*index), Some(failed_node_id.clone())))
+          }
+          _ => None,
+        })
+        .unwrap_or((None, None));
+      items.push(RunInspectionForEachItemV6 {
+        for_each_id: descriptor.for_each_id.clone(),
+        status: match state.status {
+          ForEachStatus::Open => InspectedForEachStatusV6::Active,
+          ForEachStatus::Succeeded => InspectedForEachStatusV6::Succeeded,
+          ForEachStatus::Failed => InspectedForEachStatusV6::Failed,
+          ForEachStatus::Cancelled => InspectedForEachStatusV6::Cancelled,
+        },
+        total: state.total,
+        succeeded,
+        failed,
+        skipped,
+        active,
+        pending,
+        concurrency: state.concurrency,
+        failed_index,
+        failed_node_id,
+      });
+    }
+    let mut counts = RunInspectionForEachCountsV6 {
+      opened: u32::try_from(items.len()).unwrap_or(u32::MAX),
+      ..RunInspectionForEachCountsV6::default()
+    };
+    for item in &items {
+      match item.status {
+        InspectedForEachStatusV6::Active => counts.active += 1,
+        InspectedForEachStatusV6::Succeeded => counts.succeeded += 1,
+        InspectedForEachStatusV6::Failed => counts.failed += 1,
+        InspectedForEachStatusV6::Cancelled => counts.cancelled += 1,
+      }
+    }
+    Ok(RunInspectionV6 {
+      profile: "woml.run-inspection/v6",
+      run_id: base.run_id,
+      workflow_id: base.workflow_id,
+      status: base.status,
+      business_outcome: base.business_outcome,
+      lifecycle_status: base.lifecycle_status,
+      hooks: base.hooks,
+      warnings: base.warnings,
+      cancellation: base.cancellation,
+      policy: base.policy,
+      forks: base.forks,
+      reusable_definitions: base.reusable_definitions,
+      for_each: RunInspectionForEachV6 { counts, items },
     })
   }
 

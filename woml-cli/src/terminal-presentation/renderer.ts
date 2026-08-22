@@ -215,6 +215,16 @@ export function sanitizePresentation(presentation: RunPresentationV1): RunPresen
       detail: cleanString(step.detail),
       ...(step.result === undefined ? {} : { result: safeJson(step.result) }),
       ...(step.failure === undefined ? {} : { failure: cleanFailure(step.failure) }),
+      ...(step.forEach === undefined ? {} : {
+        forEach: {
+          ...step.forEach,
+          iterations: step.forEach.iterations.map(iteration => ({
+            ...iteration,
+            failedNodeId: cleanString(iteration.failedNodeId),
+            ...(iteration.failure === undefined ? {} : { failure: cleanFailure(iteration.failure) }),
+          })),
+        },
+      }),
     })),
     lifecycle: copy.lifecycle.map(item => ({
       ...item,
@@ -365,6 +375,7 @@ function stepKind(kind: StepPresentationKind): string {
     step: 'Step',
     script: 'Script',
     custom_step: 'Reusable step',
+    for_each: 'For each',
     switch: 'Switch',
     choose: 'Choose',
     parallel: 'Parallel',
@@ -707,7 +718,7 @@ export function renderRunAdmission(
 
 export function renderRunNotice(
   runId: string,
-  status: 'queued' | 'waiting' | 'retrying' | 'finalizing',
+  status: 'queued' | 'running' | 'waiting' | 'retrying' | 'finalizing' | 'succeeded' | 'failed' | 'cancelled',
   message: string,
   renderOptions: PresentationRenderOptions = {}
 ): string {
@@ -715,8 +726,9 @@ export function renderRunNotice(
   const safeRunId = sanitizeTerminalText(runId);
   const safeMessage = sanitizePresentationDiagnostic(message);
   if (options.format === 'json') return '';
-  const glyph = status === 'finalizing' ? (options.unicode ? '◇' : '*') : (options.unicode ? '○' : '*');
-  return `  ${paint(glyph, 'yellow', options.color)} ${paint(safeRunId, 'cyan', options.color)} · ${paint(status, 'yellow', options.color)} · ${safeMessage}\n`;
+  const tone = statusColor(status);
+  const glyph = statusGlyph(status, options.unicode);
+  return `  ${paint(glyph, tone, options.color)} ${paint(safeRunId, 'cyan', options.color)} · ${paint(status, tone, options.color)} · ${safeMessage}\n`;
 }
 
 export function renderPresentationWarning(

@@ -33,7 +33,23 @@
         "runId": { "$ref": "#/$defs/id" }, "workflowId": { "$ref": "#/$defs/id" },
         "status": { "enum": ["queued", "running", "waiting", "retrying", "succeeded", "failed", "cancelled"] },
         "currentNodeId": { "$ref": "#/$defs/id" }, "parentRunId": { "$ref": "#/$defs/id" },
+        "forEach": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/forEachProgress" } },
         "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "forEachProgress": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runId", "forEachId", "status", "total", "succeeded", "failed", "skipped", "active", "pending", "concurrency"],
+      "properties": {
+        "runId": { "$ref": "#/$defs/id" }, "forEachId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["running", "succeeded", "failed", "cancelled"] },
+        "total": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "succeeded": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "failed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "skipped": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "active": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "pending": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 64 }
       }
     },
     "component": {

@@ -13,8 +13,8 @@ use crate::{
     ValueExpression,
   },
   projection::{
-    fold_events, FoldError, LifecycleActionStatus, LifecycleHookStatus, RunFailure, RunProjection,
-    RunStatus,
+    fold_events, FoldError, ForEachIterationStatus, ForEachStatus, LifecycleActionStatus,
+    LifecycleHookStatus, RunFailure, RunProjection, RunStatus,
   },
 };
 
@@ -26,6 +26,7 @@ pub const RUN_PRESENTATION_MAX_LIFECYCLE: usize = 1_000;
 pub const RUN_PRESENTATION_MAX_WARNINGS: usize = 1_000;
 pub const RUN_PRESENTATION_RECENT_LIMIT: usize = 10;
 pub const RUN_PRESENTATION_MAX_EVENTS: usize = 100_000;
+pub const RUN_PRESENTATION_MAX_ITERATIONS: usize = 100;
 
 const MAX_SHORT_TEXT: usize = 2_048;
 const MAX_MESSAGE: usize = 8_192;
@@ -125,6 +126,7 @@ pub enum PresentationStepKind {
   Step,
   Script,
   CustomStep,
+  ForEach,
   Switch,
   Choose,
   Parallel,
@@ -144,6 +146,33 @@ pub struct PresentationFailureV1 {
   pub kind: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub retryable: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForEachIterationPresentationV1 {
+  pub index: u32,
+  pub item_number: u32,
+  pub status: PresentationStepStatus,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub failed_node_id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub failure: Option<PresentationFailureV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForEachPresentationV1 {
+  pub total: u32,
+  pub succeeded: u32,
+  pub failed: u32,
+  pub skipped: u32,
+  pub active: u32,
+  pub pending: u32,
+  pub concurrency: u32,
+  pub iterations: Vec<ForEachIterationPresentationV1>,
+  #[serde(skip_serializing_if = "std::ops::Not::not")]
+  pub iterations_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -172,6 +201,8 @@ pub struct StepPresentationV1 {
   pub result_truncated: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub failure: Option<PresentationFailureV1>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub for_each: Option<ForEachPresentationV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1464,6 +1495,245 @@ fn step_status(
   }
 }
 
+fn for_each_timeline(events: &[RunEvent], for_each_id: &str) -> ControlTimeline {
+  let mut timeline = ControlTimeline::default();
+  for event in events {
+    match &event.payload {
+      RunEventPayload::ForEachOpened(data) if data.for_each_id == for_each_id => {
+        timeline.started_at = Some(event.occurred_at);
+      }
+      RunEventPayload::ForEachSucceeded(data)
+      | RunEventPayload::ForEachFailed(data)
+      | RunEventPayload::ForEachCancelled(data)
+        if data.for_each_id == for_each_id =>
+      {
+        timeline.completed_at = Some(event.occurred_at);
+      }
+      _ => {}
+    }
+  }
+  timeline
+}
+
+fn for_each_attempt_failure(
+  execution: &crate::projection::ForEachIterationExecutionProjection,
+) -> Option<AttemptFailure> {
+  execution
+    .attempts
+    .iter()
+    .rev()
+    .filter_map(|attempt| match &attempt.status {
+      crate::projection::AttemptStatus::Failed { failure } => Some(failure.clone()),
+      _ => None,
+    })
+    .min_by_key(|failure| failure.kind == AttemptFailureKind::InvocationCancelled)
+}
+
+fn for_each_status(
+  projection: &RunProjection,
+  state: Option<&crate::projection::ForEachProjection>,
+) -> PresentationStepStatus {
+  let Some(state) = state else {
+    return inactive_status(projection);
+  };
+  match state.status {
+    ForEachStatus::Open
+      if state
+        .executions
+        .values()
+        .any(|execution| !execution.pending_retries.is_empty()) =>
+    {
+      PresentationStepStatus::Retrying
+    }
+    ForEachStatus::Open => PresentationStepStatus::Running,
+    ForEachStatus::Succeeded => PresentationStepStatus::Succeeded,
+    ForEachStatus::Failed => PresentationStepStatus::Failed,
+    ForEachStatus::Cancelled => PresentationStepStatus::Cancelled,
+  }
+}
+
+fn for_each_iteration_status(
+  status: Option<&ForEachIterationStatus>,
+  execution: Option<&crate::projection::ForEachIterationExecutionProjection>,
+) -> PresentationStepStatus {
+  match status {
+    None => PresentationStepStatus::Queued,
+    Some(ForEachIterationStatus::Started)
+      if execution.is_some_and(|execution| !execution.pending_retries.is_empty()) =>
+    {
+      PresentationStepStatus::Retrying
+    }
+    Some(ForEachIterationStatus::Started) => PresentationStepStatus::Running,
+    Some(ForEachIterationStatus::Succeeded { .. }) => PresentationStepStatus::Succeeded,
+    Some(ForEachIterationStatus::Skipped) => PresentationStepStatus::Skipped,
+    Some(ForEachIterationStatus::Failed { .. }) => match execution
+      .and_then(for_each_attempt_failure)
+      .map(|failure| failure.kind)
+    {
+      Some(AttemptFailureKind::ScriptTimedOut) => PresentationStepStatus::TimedOut,
+      Some(AttemptFailureKind::InvocationCancelled) => PresentationStepStatus::Cancelled,
+      _ => PresentationStepStatus::Failed,
+    },
+  }
+}
+
+fn for_each_counts(state: &crate::projection::ForEachProjection) -> (u32, u32, u32, u32, u32) {
+  let succeeded = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Succeeded { .. }))
+    .count() as u32;
+  let failed = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Failed { .. }))
+    .count() as u32;
+  let skipped = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Skipped))
+    .count() as u32;
+  let active = state
+    .iterations
+    .values()
+    .filter(|status| matches!(status, ForEachIterationStatus::Started))
+    .count() as u32;
+  let pending = state
+    .total
+    .saturating_sub(succeeded + failed + skipped + active);
+  (succeeded, failed, skipped, active, pending)
+}
+
+fn for_each_step(
+  descriptor: &crate::model::CompiledForEach,
+  projection: &RunProjection,
+  events: &[RunEvent],
+) -> StepPresentationV1 {
+  let state = projection.for_each.get(&descriptor.for_each_id);
+  let status = for_each_status(projection, state);
+  let timeline = for_each_timeline(events, &descriptor.for_each_id);
+  let (succeeded, failed, skipped, active, pending) =
+    state.map(for_each_counts).unwrap_or((0, 0, 0, 0, 0));
+  let total = state.map_or(0, |state| state.total);
+  let failed_iteration = state.and_then(|state| {
+    state
+      .iterations
+      .iter()
+      .find_map(|(index, status)| match status {
+        ForEachIterationStatus::Failed { failed_node_id } => Some((
+          *index,
+          failed_node_id.clone(),
+          state
+            .executions
+            .get(index)
+            .and_then(for_each_attempt_failure),
+        )),
+        _ => None,
+      })
+  });
+  let detail = match (state, failed_iteration.as_ref()) {
+    (None, _) => format!("concurrency {}", descriptor.concurrency),
+    (Some(_), Some((index, failed_node_id, _))) => format!(
+      "Item {} of {total} · index {index} · step \"{}\"",
+      index + 1,
+      bounded(failed_node_id, 256)
+    ),
+    (Some(state), _) if state.status == ForEachStatus::Succeeded => format!(
+      "{total} items · {succeeded} succeeded · concurrency {}",
+      state.concurrency
+    ),
+    (Some(state), _) if state.status == ForEachStatus::Cancelled => {
+      format!("{total} items · {succeeded} succeeded · {skipped} skipped · cancelled")
+    }
+    (Some(state), _) => format!(
+      "{}/{} completed · {active} active · concurrency {}",
+      succeeded + failed + skipped,
+      state.total,
+      state.concurrency
+    ),
+  };
+  let failure = failed_iteration
+    .as_ref()
+    .and_then(|(_, _, failure)| failure.as_ref())
+    .map(attempt_failure)
+    .or_else(|| {
+      failed_iteration
+        .as_ref()
+        .map(|(index, failed_node_id, _)| PresentationFailureV1 {
+          code: "WOML_FOR_EACH_ITERATION_FAILED".to_string(),
+          message: format!(
+            "Item {} (index {index}) failed in step {:?}.",
+            index + 1,
+            bounded(failed_node_id, 256)
+          ),
+          kind: Some("for_each_iteration".to_string()),
+          retryable: Some(false),
+        })
+    });
+  let (result, result_truncated) = projection
+    .context
+    .steps
+    .get(&descriptor.result_node_id)
+    .map(bounded_json)
+    .map_or((None, None), |(value, truncated)| {
+      (Some(value), truncated.then_some(true))
+    });
+  let iterations = state
+    .map(|state| {
+      (0..state.total.min(RUN_PRESENTATION_MAX_ITERATIONS as u32))
+        .map(|index| {
+          let projected = state.iterations.get(&index);
+          let execution = state.executions.get(&index);
+          let failed_node_id = match projected {
+            Some(ForEachIterationStatus::Failed { failed_node_id }) => {
+              Some(bounded(failed_node_id, 256))
+            }
+            _ => None,
+          };
+          ForEachIterationPresentationV1 {
+            index,
+            item_number: index + 1,
+            status: for_each_iteration_status(projected, execution),
+            failed_node_id,
+            failure: execution
+              .and_then(for_each_attempt_failure)
+              .as_ref()
+              .map(attempt_failure),
+          }
+        })
+        .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+  let metadata = descriptor.metadata.as_ref();
+  StepPresentationV1 {
+    id: bounded(&descriptor.for_each_id, 256),
+    name: metadata_string(metadata, "name", MAX_SHORT_TEXT),
+    description: metadata_string(metadata, "description", MAX_MESSAGE),
+    kind: PresentationStepKind::ForEach,
+    status,
+    depth: 0,
+    started_at: timeline.started_at,
+    completed_at: timeline.completed_at,
+    duration_ms: duration_between(timeline.started_at, timeline.completed_at),
+    attempts: 1,
+    detail: Some(bounded(&detail, MAX_MESSAGE)),
+    result,
+    result_truncated,
+    failure,
+    for_each: Some(ForEachPresentationV1 {
+      total,
+      succeeded,
+      failed,
+      skipped,
+      active,
+      pending,
+      concurrency: state.map_or(descriptor.concurrency, |state| state.concurrency),
+      iterations,
+      iterations_truncated: total > RUN_PRESENTATION_MAX_ITERATIONS as u32,
+    }),
+  }
+}
+
 fn steps(
   workflow: &CompiledWorkflowDefinition,
   projection: &RunProjection,
@@ -1475,6 +1745,23 @@ fn steps(
   let cancelled = cancelled_nodes(projection);
   let mut steps = Vec::new();
   for node in &workflow.graph.nodes {
+    if node.handler == "engine.for-each-open" {
+      let Some(descriptor) = workflow
+        .graph
+        .for_each
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|descriptor| descriptor.open_node_id == node.id)
+      else {
+        continue;
+      };
+      if steps.len() >= RUN_PRESENTATION_MAX_STEPS {
+        return Err(RunPresentationError::TooMany("steps"));
+      }
+      steps.push(for_each_step(descriptor, projection, events));
+      continue;
+    }
     if node.handler == "engine.parallel-start" {
       let Some(parallel_id) = node
         .id
@@ -1533,6 +1820,7 @@ fn steps(
         result,
         result_truncated,
         failure: parallel_failure(parallel_id, projection),
+        for_each: None,
       });
       continue;
     }
@@ -1574,6 +1862,7 @@ fn steps(
         result: None,
         result_truncated: None,
         failure: fork_failure(&fork.fork_id, projection),
+        for_each: None,
       });
       continue;
     }
@@ -1620,6 +1909,7 @@ fn steps(
           result: None,
           result_truncated: None,
           failure: None,
+          for_each: None,
         });
       }
     }
@@ -1721,6 +2011,7 @@ fn steps(
       result,
       result_truncated,
       failure,
+      for_each: None,
     });
   }
   Ok(steps)

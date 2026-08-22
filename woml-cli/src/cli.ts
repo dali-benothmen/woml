@@ -782,6 +782,19 @@ function formatRunInspection(inspection: RustRunInspectionV2): string {
       lines.push(`Workflow timeout at: ${inspection.policy.timeoutAt}`);
     }
   }
+  if (inspection.forEach !== undefined && inspection.forEach.items.length > 0) {
+    lines.push('For each:');
+    for (const loop of inspection.forEach.items) {
+      const completed = loop.succeeded + loop.failed + loop.skipped;
+      const progress = `${completed}/${loop.total} completed, ${loop.active} active, ${loop.pending} pending`;
+      const failure = loop.failedIndex === undefined
+        ? ''
+        : `, failed item ${loop.failedIndex + 1} (index ${loop.failedIndex})${loop.failedNodeId === undefined ? '' : ` at ${loop.failedNodeId}`}`;
+      lines.push(
+        `  ${loop.forEachId}: ${loop.status} (${progress}, concurrency ${loop.concurrency}${failure})`
+      );
+    }
+  }
   if (inspection.hooks.length > 0) {
     lines.push('Lifecycle hooks:');
     for (const hook of inspection.hooks) {
@@ -845,6 +858,10 @@ export function formatExecutionProgress(progress: ExecutionProgressV1): string {
     const subject =
       progress.stepId === undefined ? '' : ` for step ${progress.stepId}`;
     return `Lifecycle ${progress.hookId}${subject} ${status}${progress.code === undefined ? '.' : `: ${progress.code}`}`;
+  }
+  if (progress.type === 'for_each_progress') {
+    const completed = progress.succeeded + progress.failed + progress.skipped;
+    return `For each ${progress.forEachId}: ${completed}/${progress.total} completed, ${progress.active} active, ${progress.pending} pending (${progress.status}).`;
   }
   if (progress.type === 'step_attempt_failed') {
     return `Step ${progress.nodeId} failed (attempt ${progress.attempt}/${progress.maxAttempts}): ${progress.failureCode}`;
