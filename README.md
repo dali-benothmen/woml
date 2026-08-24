@@ -15,21 +15,64 @@
 
 ## What is WOML?
 
-WOML is an HTML-inspired language for building and running workflow automation. Triggers, steps, control flow, approvals, lifecycle hooks, and runtime policies live together in a document that can be read from top to bottom, reviewed in a pull request, and kept in Git.
+WOML is an open, executable format for durable workflow applications. It lets you describe a workflow with readable, HTML-inspired markup, implement custom logic with JavaScript, and run the result through a cross-platform, Rust-powered runtime.
 
-When a step needs logic, write JavaScript directly inside `<script>`. WOML handles everything around that code: execution order, durable history, retries, concurrency, external capabilities, human approval, recovery, and production operation.
+WOML is three things working together:
+
+- **A language** for expressing triggers, steps, data flow, loops, decisions, parallel work, approvals, lifecycle hooks, and runtime policies.
+- **A durable engine** for supervising attempts, retries, state, events, workflow calls, recovery, and execution history.
+- **An operational runtime** for running, inspecting, cancelling, backing up, and managing automations from the command line.
+
+A `.woml` file is more than configuration. It is the program, the architecture diagram, the execution policy, and the human-readable documentation for an automation—all in one source-controlled document.
+
+When a step needs logic, write JavaScript directly inside `<script>`. WOML handles everything around that code: execution order, durable history, concurrency, external capabilities, human approval, recovery, and production operation.
+
+> **The idea:** an automation should not have to be abandoned and rewritten as a backend service when it becomes important. With WOML, it can begin as a small workflow and grow into durable software without changing its fundamental model.
 
 ## Why WOML?
 
-Visual workflow builders are excellent for getting started, but large automations can become difficult to review, reuse, and maintain. Traditional code-first engines are powerful, but their workflow structure is often hidden inside framework APIs.
+Visual workflow builders are excellent for getting started, but large automations can become difficult to review, reuse, and maintain. Traditional orchestration frameworks are powerful, but their workflow structure is often hidden inside application code and framework APIs.
 
-WOML makes the workflow itself the source code:
+WOML occupies the space between them: readable like a document, expressive like code, and operated like a durable system.
 
-- **Readable** — semantic markup makes the automation's structure immediately visible.
-- **Programmable** — JavaScript handles the logic that does not belong in configuration.
-- **Version controlled** — workflows are ordinary files with meaningful diffs and code review.
-- **Durable** — the runtime records what happened instead of relying on one mutable in-memory object.
-- **Self-hosted** — run WOML on your own machine, server, container, or infrastructure.
+- **Understandable** — semantic markup makes the complete automation visible from top to bottom.
+- **Programmable** — JavaScript, TypeScript modules, and managed services handle logic beyond markup.
+- **Version controlled** — workflows are ordinary files with meaningful diffs, pull requests, and CI validation.
+- **Durable** — the event-sourced runtime records decisions, attempts, waits, results, and failures.
+- **Composable** — workflows can call or start other workflows and reuse project-owned modules, steps, and providers.
+- **AI-friendly** — coding agents can generate WOML, validate it with the real compiler, and leave a workflow humans can review.
+- **Self-hosted** — run the same workflow on your machine, server, container, or infrastructure without per-step platform billing.
+
+## What WOML Unlocks
+
+### For developers
+
+Workflows become real software artifacts. You can write them in VS Code, keep them in Git, review them in pull requests, validate them in CI, compose them with JavaScript or TypeScript modules, and run them without opening a visual editor. An automation can grow in complexity without forcing a rewrite into a separate backend application.
+
+### For automation
+
+WOML goes beyond connecting one application to another. It can coordinate long-running business processes, concurrent work, data pipelines, human decisions, reusable child workflows, and event-driven systems while preserving durable history and operational control.
+
+Runtime policies live beside the workflow: retries, concurrency, rate limits, queues, timeouts, lifecycle hooks, cancellation, and recovery are part of the executable contract rather than instructions someone must remember later.
+
+### For AI agents
+
+WOML gives people and agents a shared language. Tags constrain the workflow structure, JavaScript provides familiar implementation power, `woml check` catches invalid output, and Git exposes exactly what the agent changed.
+
+WOML can also orchestrate AI systems themselves. An LLM or tool call can run as a supervised step, specialist agents can become child workflows, durable state can preserve knowledge between runs, events can coordinate independent agents, and human approval can guard sensitive actions.
+
+## What Can You Build?
+
+| Area | Examples |
+| --- | --- |
+| **Business processes** | Customer onboarding, order fulfillment, invoice processing, compliance review |
+| **AI agents** | Support agents, research agents, content systems, human-supervised autonomous operations |
+| **Data workflows** | Import, validate, transform, classify, iterate over, and store data |
+| **Backend automation** | Webhook processing, scheduled jobs, event-driven services, workflow APIs |
+| **Human operations** | Approval chains, moderation, escalation, incident response |
+| **Communication systems** | Telegram, Discord, Slack, and WhatsApp-driven workflows |
+| **Developer automation** | Deployment checks, backups, reports, repository and filesystem operations |
+| **Automation products** | Domain-specific workflow platforms built on the WOML language and runtime |
 
 ## Installation
 
