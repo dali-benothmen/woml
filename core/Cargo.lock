@@ -3161,7 +3161,7 @@ dependencies = [
  "chrono-tz",
  "fs2",
  "futures-util",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "hex",
  "hmac 0.12.1",
  "jsonschema",
