@@ -17,6 +17,9 @@ import {
   type TriggerPresentationType,
   type WorkflowPresentationV1,
 } from './terminal-presentation';
+import { profileSync } from './performance-profiler';
+
+const textEncoder = new TextEncoder();
 
 interface PresentationOutput {
   readonly stdout: (text: string) => void;
@@ -60,12 +63,33 @@ export class ForegroundPresentation {
   }
 
   #write(text: string): void {
-    if (this.#render.format === 'json') this.#io.stdout(text);
-    else this.#io.stderr(text);
+    profileSync('presentation', 'presentation.output_write', measurements => {
+      if (measurements !== undefined) {
+        measurements.counts.writes = 1;
+        measurements.counts.json = this.#render.format === 'json' ? 1 : 0;
+        measurements.bytes.output = textEncoder.encode(text).byteLength;
+      }
+      if (this.#render.format === 'json') this.#io.stdout(text);
+      else this.#io.stderr(text);
+    });
   }
 
   startup(workflow: WorkflowPresentationV1): void {
-    this.#write(renderWorkflowStartup(workflow, this.#render));
+    profileSync('presentation', 'presentation.handle_startup', measurements => {
+      if (measurements !== undefined) measurements.counts.workflows = 1;
+      const rendered = profileSync(
+        'presentation',
+        'presentation.render_startup',
+        renderMeasurements => {
+          const text = renderWorkflowStartup(workflow, this.#render);
+          if (renderMeasurements !== undefined) {
+            renderMeasurements.bytes.output = textEncoder.encode(text).byteLength;
+          }
+          return text;
+        }
+      );
+      this.#write(rendered);
+    });
   }
 
   verbose(message: string): void {
@@ -84,6 +108,16 @@ export class ForegroundPresentation {
   }
 
   trigger(progress: TriggerProgressV1): void {
+    profileSync('presentation', 'presentation.handle_progress', measurements => {
+      if (measurements !== undefined) {
+        measurements.counts.progress_events = 1;
+        if ('runId' in progress) measurements.identity.runId = progress.runId;
+      }
+      this.#trigger(progress);
+    });
+  }
+
+  #trigger(progress: TriggerProgressV1): void {
     if (progress.type === 'occurrence_accepted') {
       if (progress.duplicate) {
         this.warning(
@@ -115,11 +149,37 @@ export class ForegroundPresentation {
     if (progress.type === 'run_terminal') {
       if (this.#settled.has(progress.runId)) return;
       try {
-        const presentation = this.#inspectRun(progress.runId);
-        this.#settled.add(progress.runId);
-        // One write is deliberate: concurrent runs never interleave rows.
-        const rendered = renderRunPresentation(presentation, this.#render);
-        this.#write(this.#render.format === 'json' ? rendered : `\n${rendered}`);
+        profileSync('presentation', 'presentation.present_terminal_result', measurements => {
+          if (measurements !== undefined) measurements.identity.runId = progress.runId;
+          const presentation = profileSync(
+            'presentation',
+            'presentation.inspect_durable_run',
+            inspectMeasurements => {
+              if (inspectMeasurements !== undefined) {
+                inspectMeasurements.identity.runId = progress.runId;
+              }
+              return this.#inspectRun(progress.runId);
+            }
+          );
+          this.#settled.add(progress.runId);
+          // One write is deliberate: concurrent runs never interleave rows.
+          const rendered = profileSync(
+            'presentation',
+            'presentation.render_final',
+            renderMeasurements => {
+              if (renderMeasurements !== undefined) {
+                renderMeasurements.identity.runId = progress.runId;
+                renderMeasurements.counts.steps = presentation.steps.length;
+              }
+              const text = renderRunPresentation(presentation, this.#render);
+              if (renderMeasurements !== undefined) {
+                renderMeasurements.bytes.output = textEncoder.encode(text).byteLength;
+              }
+              return text;
+            }
+          );
+          this.#write(this.#render.format === 'json' ? rendered : `\n${rendered}`);
+        });
       } catch (error) {
         this.warning(
           'WOML_RUN_PRESENTATION_UNAVAILABLE',
@@ -212,7 +272,30 @@ export class ForegroundPresentation {
 
   #snapshot(runId: string): void {
     try {
-      this.#write(renderRunPresentation(this.#inspectRun(runId), this.#render));
+      const presentation = profileSync(
+        'presentation',
+        'presentation.inspect_durable_run',
+        measurements => {
+          if (measurements !== undefined) measurements.identity.runId = runId;
+          return this.#inspectRun(runId);
+        }
+      );
+      const rendered = profileSync(
+        'presentation',
+        'presentation.render_snapshot',
+        measurements => {
+          if (measurements !== undefined) {
+            measurements.identity.runId = runId;
+            measurements.counts.steps = presentation.steps.length;
+          }
+          const text = renderRunPresentation(presentation, this.#render);
+          if (measurements !== undefined) {
+            measurements.bytes.output = textEncoder.encode(text).byteLength;
+          }
+          return text;
+        }
+      );
+      this.#write(rendered);
     } catch (error) {
       this.warning(
         'WOML_RUN_PRESENTATION_UNAVAILABLE',

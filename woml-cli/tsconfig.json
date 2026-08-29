@@ -20,6 +20,9 @@
     "scripts/release-check.ts",
     "scripts/release-contract.ts",
     "scripts/release-package.ts",
-    "scripts/run-cli-test-shards.ts"
+    "scripts/run-cli-test-shards.ts",
+    "scripts/measure-workflow.ts",
+    "scripts/performance-measurement.ts",
+    "scripts/performance-runtime-child.ts"
   ]
 }

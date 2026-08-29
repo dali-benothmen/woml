@@ -261,6 +261,7 @@ pub struct RuntimeExecutionOptions {
   pub resolved_secrets: Arc<BTreeMap<String, String>>,
   pub capability_registry: Arc<CapabilityRegistry>,
   pub runtime_modules: Arc<Vec<RuntimeModuleArtifact>>,
+  shared_script_hosts: Option<Arc<SharedScriptHostPool>>,
   capability_authority: Option<Arc<DurableCapabilityAuthority>>,
   managed_database_pool: Option<Arc<crate::ManagedDatabasePool>>,
   managed_storage_store: Option<Arc<crate::ManagedStorageStore>>,
@@ -269,6 +270,19 @@ pub struct RuntimeExecutionOptions {
   policy_execution: Option<Arc<PolicyExecutionCoordinator>>,
   policy_execution_registry: PolicyExecutionRegistry,
 }
+
+#[derive(Debug)]
+struct IdleScriptHost {
+  options: ScriptHostProcessOptions,
+  client: ScriptHostClient,
+}
+
+#[derive(Debug, Default)]
+struct SharedScriptHostPool {
+  idle: tokio::sync::Mutex<Vec<IdleScriptHost>>,
+}
+
+const MAX_IDLE_SCRIPT_HOSTS: usize = 4;
 
 impl std::fmt::Debug for RuntimeExecutionOptions {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -287,6 +301,10 @@ impl std::fmt::Debug for RuntimeExecutionOptions {
       .field("resolved_secret_count", &self.resolved_secrets.len())
       .field("capability_registry", &"CapabilityRegistry")
       .field("runtime_module_count", &self.runtime_modules.len())
+      .field(
+        "shared_script_hosts",
+        &self.shared_script_hosts.as_ref().map(|_| "enabled"),
+      )
       .field(
         "progress_reporter",
         &self.progress_reporter.as_ref().map(|_| "configured"),
@@ -403,6 +421,7 @@ impl RuntimeExecutionOptions {
       resolved_secrets: Arc::new(BTreeMap::new()),
       capability_registry,
       runtime_modules: Arc::new(Vec::new()),
+      shared_script_hosts: None,
       capability_authority: None,
       managed_database_pool: Some(managed_database_pool),
       managed_storage_store: Some(managed_storage_store),
@@ -457,6 +476,77 @@ impl RuntimeExecutionOptions {
       .collect();
     self.runtime_modules = Arc::new(modules);
     self
+  }
+
+  pub fn with_shared_script_hosts(mut self) -> Self {
+    self.shared_script_hosts = Some(Arc::new(SharedScriptHostPool::default()));
+    self
+  }
+
+  async fn acquire_script_host(&self) -> Result<ScriptHostClient, ScriptHostClientError> {
+    let Some(pool) = &self.shared_script_hosts else {
+      return ScriptHostClient::spawn_with_authority(
+        self.script_host.clone(),
+        self.capability_authority.clone(),
+      )
+      .await;
+    };
+    loop {
+      let candidate = {
+        let mut idle = pool.idle.lock().await;
+        idle
+          .iter()
+          .position(|host| host.options == self.script_host)
+          .map(|index| idle.swap_remove(index).client)
+      };
+      let Some(mut client) = candidate else {
+        return ScriptHostClient::spawn_with_authority(
+          self.script_host.clone(),
+          self.capability_authority.clone(),
+        )
+        .await;
+      };
+      if client.is_healthy().await {
+        client.set_default_authority(self.capability_authority.clone());
+        return Ok(client);
+      }
+      client.shutdown().await;
+    }
+  }
+
+  async fn release_script_host(&self, mut client: ScriptHostClient) {
+    let Some(pool) = &self.shared_script_hosts else {
+      client.shutdown().await;
+      return;
+    };
+    if !client.is_healthy().await {
+      client.shutdown().await;
+      return;
+    }
+    client.set_default_authority(None);
+    let mut idle = pool.idle.lock().await;
+    if idle.len() < MAX_IDLE_SCRIPT_HOSTS {
+      idle.push(IdleScriptHost {
+        options: self.script_host.clone(),
+        client,
+      });
+      return;
+    }
+    drop(idle);
+    client.shutdown().await;
+  }
+
+  pub async fn shutdown_shared_script_hosts(&self) {
+    let Some(pool) = &self.shared_script_hosts else {
+      return;
+    };
+    let clients = {
+      let mut idle = pool.idle.lock().await;
+      std::mem::take(&mut *idle)
+    };
+    for host in clients {
+      host.client.shutdown().await;
+    }
   }
 
   pub fn with_capability_registry(mut self, registry: Arc<CapabilityRegistry>) -> Self {
@@ -1074,6 +1164,21 @@ async fn acquire_policy_execution_lease(
   run_id: &str,
   options: &RuntimeExecutionOptions,
 ) -> Result<PolicyClaimAcquisition, RuntimeExecutionError> {
+  let mut span =
+    crate::performance::PerformanceSpan::new("runtime", "runtime.acquire_policy_lease");
+  span.run_id(run_id.to_string());
+  let result = acquire_policy_execution_lease_unprofiled(database_path, run_id, options).await;
+  if result.is_ok() {
+    span.succeed();
+  }
+  result
+}
+
+async fn acquire_policy_execution_lease_unprofiled(
+  database_path: &std::path::Path,
+  run_id: &str,
+  options: &RuntimeExecutionOptions,
+) -> Result<PolicyClaimAcquisition, RuntimeExecutionError> {
   let owner_id = format!("scheduler_{}", Uuid::new_v4().simple());
   let mut reported_wait = false;
   loop {
@@ -1270,6 +1375,20 @@ async fn execute_policy_run_durable(
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.execute_policy_run");
+  span.run_id(run_id.to_string());
+  let result = execute_policy_run_durable_unprofiled(database_path, run_id, options).await;
+  if result.is_ok() {
+    span.succeed();
+  }
+  result
+}
+
+async fn execute_policy_run_durable_unprofiled(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   {
     let store = DurableEventStore::open(database_path.clone())?;
     let binding = store.run_binding(run_id)?;
@@ -1395,6 +1514,31 @@ async fn execute_workflow_durable_internal(
   options: RuntimeExecutionOptions,
   database_path: PathBuf,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.execute_durable");
+  span.count("nodes", workflow.graph.nodes.len());
+  span.count("modules", options.runtime_modules.len());
+  let result = execute_workflow_durable_internal_unprofiled(
+    workflow,
+    definition_hash,
+    trigger,
+    options,
+    database_path,
+  )
+  .await;
+  if let Ok(outcome) = &result {
+    span.run_id(runtime_outcome_run_id(outcome).to_string());
+    span.succeed();
+  }
+  result
+}
+
+async fn execute_workflow_durable_internal_unprofiled(
+  workflow: CompiledWorkflowDefinition,
+  definition_hash: String,
+  trigger: Map<String, Value>,
+  options: RuntimeExecutionOptions,
+  database_path: PathBuf,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let options = attach_durable_capability_authority(options, &database_path)?;
   let mut store = DurableEventStore::open(database_path.clone())?;
   if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
@@ -1466,6 +1610,22 @@ pub async fn resume_workflow_durable_any_outcome(
 /// executing concurrently, and their active attempts must not be mistaken for
 /// leftovers from a dead process.
 pub async fn execute_admitted_trigger_run_durable(
+  database_path: PathBuf,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let mut span =
+    crate::performance::PerformanceSpan::new("runtime", "runtime.execute_admitted_run");
+  span.run_id(run_id.to_string());
+  let result =
+    execute_admitted_trigger_run_durable_unprofiled(database_path, run_id, options).await;
+  if result.is_ok() {
+    span.succeed();
+  }
+  result
+}
+
+async fn execute_admitted_trigger_run_durable_unprofiled(
   database_path: PathBuf,
   run_id: &str,
   options: RuntimeExecutionOptions,
@@ -1602,11 +1762,7 @@ pub async fn execute_reusable_provider_lifecycle_durable(
   if !descriptor_has_lifecycle {
     return Ok(());
   }
-  let host = ScriptHostClient::spawn_with_authority(
-    options.script_host.clone(),
-    options.capability_authority.clone(),
-  )
-  .await?;
+  let host = options.acquire_script_host().await?;
   let lifecycle = drive_reusable_provider_lifecycle(
     &mut engine,
     run_id,
@@ -1618,7 +1774,7 @@ pub async fn execute_reusable_provider_lifecycle_durable(
     &host,
   )
   .await;
-  host.shutdown().await;
+  options.release_script_host(host).await;
   lifecycle
 }
 
@@ -1754,6 +1910,21 @@ pub fn settle_approval_timeout_durable(
 }
 
 async fn execute_with_engine<E: RuntimeDagEngine>(
+  engine: E,
+  trigger: Map<String, Value>,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.run_engine");
+  span.count("nodes", engine.workflow().graph.nodes.len());
+  let result = execute_with_engine_unprofiled(engine, trigger, options).await;
+  if let Ok(outcome) = &result {
+    span.run_id(runtime_outcome_run_id(outcome).to_string());
+    span.succeed();
+  }
+  result
+}
+
+async fn execute_with_engine_unprofiled<E: RuntimeDagEngine>(
   mut engine: E,
   trigger: Map<String, Value>,
   options: RuntimeExecutionOptions,
@@ -1987,6 +2158,28 @@ fn validate_runtime_modules(
 }
 
 async fn resume_with_engine<E: RuntimeDagEngine>(
+  engine: E,
+  run_id: &str,
+  options: RuntimeExecutionOptions,
+) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
+  let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.resume_engine");
+  span.run_id(run_id.to_string());
+  span.count("nodes", engine.workflow().graph.nodes.len());
+  let result = resume_with_engine_unprofiled(engine, run_id, options).await;
+  if result.is_ok() {
+    span.succeed();
+  }
+  result
+}
+
+fn runtime_outcome_run_id(outcome: &WorkflowRuntimeOutcome) -> &str {
+  match outcome {
+    WorkflowRuntimeOutcome::Succeeded { execution, .. } => &execution.run_id,
+    WorkflowRuntimeOutcome::Waiting { run_id, .. } => run_id,
+  }
+}
+
+async fn resume_with_engine_unprofiled<E: RuntimeDagEngine>(
   mut engine: E,
   run_id: &str,
   options: RuntimeExecutionOptions,
@@ -2016,7 +2209,7 @@ async fn resume_with_engine<E: RuntimeDagEngine>(
       drive_pending_reusable_step_lifecycles(&mut engine, run_id, &options, &mut host).await?;
       drive_workflow_lifecycle(&mut engine, run_id, &options, &mut host).await?;
       if let Some(host) = host {
-        host.shutdown().await;
+        options.release_script_host(host).await;
       }
       let projection = engine.projection(run_id)?;
       return match projection.status {
@@ -2101,7 +2294,7 @@ async fn continue_runtime<E: RuntimeDagEngine>(
   }
   let lifecycle = drive_workflow_lifecycle(engine, run_id, options, &mut host).await;
   if let Some(host) = host {
-    host.shutdown().await;
+    options.release_script_host(host).await;
   }
   lifecycle?;
   match execution {
@@ -2927,13 +3120,7 @@ async fn drive_pending_reusable_step_lifecycles<E: RuntimeDagEngine>(
       ),
     };
     if host.is_none() {
-      *host = Some(
-        ScriptHostClient::spawn_with_authority(
-          options.script_host.clone(),
-          options.capability_authority.clone(),
-        )
-        .await?,
-      );
+      *host = Some(options.acquire_script_host().await?);
     }
     drive_reusable_step_lifecycle(
       engine,
@@ -3764,18 +3951,13 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
             })?;
           if let Some(descriptor) = custom_descriptor.as_ref() {
             if reusable_lifecycle_host.is_none() {
-              reusable_lifecycle_host = Some(
-                ScriptHostClient::spawn_with_authority(
-                  options.script_host.clone(),
-                  options.capability_authority.clone(),
-                )
-                .await
-                .map_err(|error| LifecycleFailure {
+              reusable_lifecycle_host = Some(options.acquire_script_host().await.map_err(
+                |error| LifecycleFailure {
                   kind: LifecycleFailureKind::HostCrashed,
                   code: "WOML_REUSABLE_LIFECYCLE_HOST_CRASHED".to_string(),
                   message: error.to_string(),
-                })?,
-              );
+                },
+              )?);
             }
             drive_reusable_lifecycle(
               engine,
@@ -3838,18 +4020,13 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
           }
           if let Some(descriptor) = custom_descriptor.as_ref() {
             if reusable_lifecycle_host.is_none() {
-              reusable_lifecycle_host = Some(
-                ScriptHostClient::spawn_with_authority(
-                  options.script_host.clone(),
-                  options.capability_authority.clone(),
-                )
-                .await
-                .map_err(|error| LifecycleFailure {
+              reusable_lifecycle_host = Some(options.acquire_script_host().await.map_err(
+                |error| LifecycleFailure {
                   kind: LifecycleFailureKind::HostCrashed,
                   code: "WOML_REUSABLE_LIFECYCLE_HOST_CRASHED".to_string(),
                   message: error.to_string(),
-                })?,
-              );
+                },
+              )?);
             }
             drive_reusable_lifecycle(
               engine,
@@ -3893,7 +4070,7 @@ async fn execute_lifecycle_notification<E: RuntimeDagEngine>(
     host.shutdown().await;
   }
   if let Some(host) = reusable_lifecycle_host {
-    host.shutdown().await;
+    options.release_script_host(host).await;
   }
   if failures.is_empty() {
     Ok(())
@@ -4266,12 +4443,7 @@ async fn drive_workflow_lifecycle<E: RuntimeDagEngine>(
     })?;
     let secrets = resolved_lifecycle_secrets(&action, options)?;
     if host.is_none() {
-      match ScriptHostClient::spawn_with_authority(
-        options.script_host.clone(),
-        options.capability_authority.clone(),
-      )
-      .await
-      {
+      match options.acquire_script_host().await {
         Ok(client) => *host = Some(client),
         Err(error) => {
           engine.append_payload(
@@ -4445,13 +4617,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
     if ready.is_empty() {
       if let Some(fork) = ready_fork(engine.workflow(), &current, &ready) {
         if host.is_none() {
-          *host = Some(
-            ScriptHostClient::spawn_with_authority(
-              options.script_host.clone(),
-              options.capability_authority.clone(),
-            )
-            .await?,
-          );
+          *host = Some(options.acquire_script_host().await?);
         }
         let fork_progress = execute_fork(
           engine,
@@ -4535,13 +4701,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         )));
       }
       if host.is_none() {
-        *host = Some(
-          ScriptHostClient::spawn_with_authority(
-            options.script_host.clone(),
-            options.capability_authority.clone(),
-          )
-          .await?,
-        );
+        *host = Some(options.acquire_script_host().await?);
       }
       let completed = execute_parallel_group(
         engine,
@@ -4556,13 +4716,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
     }
     if let Some(fork) = ready_fork(engine.workflow(), &current, &ready) {
       if host.is_none() {
-        *host = Some(
-          ScriptHostClient::spawn_with_authority(
-            options.script_host.clone(),
-            options.capability_authority.clone(),
-          )
-          .await?,
-        );
+        *host = Some(options.acquire_script_host().await?);
       }
       let fork_progress = execute_fork(
         engine,
@@ -4637,13 +4791,7 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
             ))
           })?;
         if host.is_none() {
-          *host = Some(
-            ScriptHostClient::spawn_with_authority(
-              options.script_host.clone(),
-              options.capability_authority.clone(),
-            )
-            .await?,
-          );
+          *host = Some(options.acquire_script_host().await?);
         }
         execute_bounded_for_each(
           engine,
@@ -8694,12 +8842,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   }
 
   if host.is_none() {
-    match ScriptHostClient::spawn_with_authority(
-      options.script_host.clone(),
-      options.capability_authority.clone(),
-    )
-    .await
-    {
+    match options.acquire_script_host().await {
       Ok(client) => *host = Some(client),
       Err(error) => {
         return settle_script_attempt_failure(
@@ -9358,13 +9501,7 @@ async fn settle_script_attempt_failure<E: RuntimeDagEngine>(
     StepFailureDisposition::RunFailed => {}
   }
   if reusable_step_descriptor(engine.workflow(), node_id).is_some() && host.is_none() {
-    *host = Some(
-      ScriptHostClient::spawn_with_authority(
-        options.script_host.clone(),
-        options.capability_authority.clone(),
-      )
-      .await?,
-    );
+    *host = Some(options.acquire_script_host().await?);
   }
   if let Some(host) = host.as_ref() {
     drive_reusable_step_lifecycle(

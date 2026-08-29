@@ -198,6 +198,20 @@ impl WomlWebhookServer {
     config: WomlWebhookServerConfig,
     external_ingress: Option<ExternalTriggerAdmissionReceiver>,
   ) -> Result<Self, WebhookRuntimeError> {
+    let mut span =
+      crate::performance::PerformanceSpan::new("runtime", "runtime.prepare_trigger_host");
+    span.count("workflows", config.registrations.len());
+    let result = Self::prepare_with_external_ingress_unprofiled(config, external_ingress).await;
+    if result.is_ok() {
+      span.succeed();
+    }
+    result
+  }
+
+  async fn prepare_with_external_ingress_unprofiled(
+    config: WomlWebhookServerConfig,
+    external_ingress: Option<ExternalTriggerAdmissionReceiver>,
+  ) -> Result<Self, WebhookRuntimeError> {
     let (state, recovery_runs, startup_manual_runs, internal_event_dispatch) =
       prepare_state(config)?;
     let listener = if state.routes.is_empty()
@@ -268,6 +282,16 @@ impl WomlWebhookServer {
   }
 
   pub async fn activate(&mut self) -> Result<(), WebhookRuntimeError> {
+    let mut span =
+      crate::performance::PerformanceSpan::new("runtime", "runtime.activate_trigger_host");
+    let result = self.activate_unprofiled().await;
+    if result.is_ok() {
+      span.succeed();
+    }
+    result
+  }
+
+  async fn activate_unprofiled(&mut self) -> Result<(), WebhookRuntimeError> {
     let Some(pending) = self.pending_activation.take() else {
       return Ok(());
     };
@@ -376,6 +400,11 @@ impl WomlWebhookServer {
     }
     self.internal_handle.stop(true).await;
     wait_for_active_runs(&self.runtime_state, deadline).await;
+    self
+      .runtime_state
+      .execution
+      .shutdown_shared_script_hosts()
+      .await;
     let _ = DurableEventStore::open_ready(&self.database_path).and_then(|mut store| {
       store
         .unregister_workflow_runtime_routes(&self.workflow_runtime_id)
@@ -3126,6 +3155,7 @@ async fn run_external_ingress(
 ) {
   while let Some(command) = receiver.recv().await {
     let request = command.request;
+    let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.admit_trigger");
     let workflow_id = request.workflow_id.clone();
     let trigger_id = request.trigger_id.clone();
     let trigger_handler = request.trigger_handler.clone();
@@ -3137,7 +3167,12 @@ async fn run_external_ingress(
     .await;
 
     let outcome = match admitted {
-      Ok(Ok(outcome)) => outcome,
+      Ok(Ok(outcome)) => {
+        span.run_id(outcome.run_id.clone());
+        span.count("duplicate", usize::from(outcome.duplicate));
+        span.succeed();
+        outcome
+      }
       Ok(Err(error)) => {
         let manual = trigger_handler == "trigger.manual";
         let (code, message) = match &error {
@@ -3258,9 +3293,14 @@ fn dispatch_run(state: &WebhookRuntimeState, identity: RunProgressIdentity) {
   let active_runs_changed = Arc::clone(&state.active_runs_changed);
   active_runs.fetch_add(1, Ordering::AcqRel);
   actix_web::rt::spawn(async move {
+    let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.dispatch_run");
+    span.run_id(identity.run_id.clone());
     let result =
       execute_trigger_run_with_builtin_notifications(database_path, &identity.run_id, execution)
         .await;
+    if result.is_ok() {
+      span.succeed();
+    }
     let progress = match result {
       Ok(crate::WorkflowRuntimeOutcome::Succeeded { .. }) => Some(TriggerProgress::RunTerminal {
         contract: TRIGGER_PROGRESS_CONTRACT,

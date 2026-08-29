@@ -24,6 +24,8 @@ pub mod model;
 pub mod notification_host;
 pub mod notification_protocol;
 pub mod notification_runtime;
+#[doc(hidden)]
+pub mod performance;
 pub mod presentation;
 pub mod projection;
 pub mod protocol;

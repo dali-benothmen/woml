@@ -1,0 +1,23 @@
+<woml>
+  <workflow
+    id="performance-eight-step"
+    name="Performance eight-step baseline"
+    description="Measures how isolated-worker cost grows with eight tiny sequential scripts."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="step1"><script>return { value: 1 };</script></step>
+      <step id="step2"><script>return { value: context.steps.step1.value + 1 };</script></step>
+      <step id="step3"><script>return { value: context.steps.step2.value + 1 };</script></step>
+      <step id="step4"><script>return { value: context.steps.step3.value + 1 };</script></step>
+      <step id="step5"><script>return { value: context.steps.step4.value + 1 };</script></step>
+      <step id="step6"><script>return { value: context.steps.step5.value + 1 };</script></step>
+      <step id="step7"><script>return { value: context.steps.step6.value + 1 };</script></step>
+      <step id="step8"><script>return { value: context.steps.step7.value + 1 };</script></step>
+    </steps>
+  </workflow>
+</woml>

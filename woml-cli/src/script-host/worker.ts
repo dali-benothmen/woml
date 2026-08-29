@@ -1,3 +1,9 @@
+import {
+  flushPerformanceProfile,
+  profileAsync,
+  profileSync,
+  type PerformanceMeasurements,
+} from '../performance-profiler';
 import { deepFreezeJson, findJsonViolation } from './json';
 import type {
   CapabilityCallRequest,
@@ -2132,41 +2138,80 @@ async function loadRuntimeModules(
   return activeServices;
 }
 
-async function execute(request: ScriptWorkerRequest): Promise<void> {
+function identifyInvocation(
+  measurements: PerformanceMeasurements | undefined,
+  request: ScriptWorkerRequest
+): void {
+  if (measurements === undefined) return;
+  measurements.identity.invocationId = request.invocationId;
+  measurements.identity.runId = request.runId;
+}
+
+async function executeScript(
+  request: ScriptWorkerRequest
+): Promise<ScriptWorkerResponse> {
   let secretValues: readonly string[] = [];
   try {
-    const executionDeadline = performance.now() + request.timeoutMs;
-    operationSequences.clear();
-    automaticEffectfulCalls.clear();
-    workflowTargetIdentityModes.clear();
-    const context = deepFreezeJson({
-      ...request.context,
-      payload: request.context.trigger,
+    const prepared = profileSync('worker', 'worker.prepare_context', measurements => {
+      identifyInvocation(measurements, request);
+      if (measurements !== undefined) {
+        measurements.bytes.context = Buffer.byteLength(
+          JSON.stringify(request.context),
+          'utf8'
+        );
+      }
+      const executionDeadline = performance.now() + request.timeoutMs;
+      operationSequences.clear();
+      automaticEffectfulCalls.clear();
+      workflowTargetIdentityModes.clear();
+      const context = deepFreezeJson({
+        ...request.context,
+        payload: request.context.trigger,
+      });
+      const attempt =
+        request.attempt === undefined
+          ? undefined
+          : deepFreezeJson(request.attempt);
+      const secrets = deepFreezeJson(request.bindings?.secrets ?? {});
+      const lifecycle =
+        request.lifecycle === undefined
+          ? undefined
+          : (deepFreezeJson(
+              request.lifecycle as unknown as JsonValue
+            ) as unknown as LifecycleBindingV1);
+      const reusable =
+        request.reusable === undefined
+          ? undefined
+          : (deepFreezeJson(
+              request.reusable as unknown as JsonValue
+            ) as unknown as ReusableScriptBindingV3);
+      const reusableLifecycle =
+        request.reusableLifecycle === undefined
+          ? undefined
+          : (deepFreezeJson(
+              request.reusableLifecycle as unknown as JsonValue
+            ) as unknown as ReusableLifecycleBindingV1);
+      return {
+        executionDeadline,
+        context,
+        attempt,
+        secrets,
+        lifecycle,
+        reusable,
+        reusableLifecycle,
+        secretValues: Object.values(request.bindings?.secrets ?? {}),
+      };
     });
-    const attempt =
-      request.attempt === undefined
-        ? undefined
-        : deepFreezeJson(request.attempt);
-    const secrets = deepFreezeJson(request.bindings?.secrets ?? {});
-    const lifecycle =
-      request.lifecycle === undefined
-        ? undefined
-        : (deepFreezeJson(
-            request.lifecycle as unknown as JsonValue
-          ) as unknown as LifecycleBindingV1);
-    const reusable =
-      request.reusable === undefined
-        ? undefined
-        : (deepFreezeJson(
-            request.reusable as unknown as JsonValue
-          ) as unknown as ReusableScriptBindingV3);
-    const reusableLifecycle =
-      request.reusableLifecycle === undefined
-        ? undefined
-        : (deepFreezeJson(
-            request.reusableLifecycle as unknown as JsonValue
-          ) as unknown as ReusableLifecycleBindingV1);
-    secretValues = Object.values(request.bindings?.secrets ?? {});
+    const {
+      executionDeadline,
+      context,
+      attempt,
+      secrets,
+      lifecycle,
+      reusable,
+      reusableLifecycle,
+    } = prepared;
+    secretValues = prepared.secretValues;
     const safeConsole = Object.freeze({
       log: (...values: unknown[]) =>
         globalThis.console.error(
@@ -2202,10 +2247,26 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
       executionDeadline
     );
     const nativeFetch = trackedNativeFetch(request);
-    const services =
-      request.modules === undefined
-        ? builtInServices
-        : await loadRuntimeModules(request, builtInServices, nativeFetch);
+    const services = await profileAsync(
+      'worker',
+      'worker.load_modules',
+      async measurements => {
+        identifyInvocation(measurements, request);
+        if (measurements !== undefined) {
+          measurements.counts.modules = request.modules?.length ?? 0;
+          measurements.bytes.modules = (request.modules ?? []).reduce(
+            (total, module) =>
+              total +
+              Buffer.byteLength(module.bundle, 'utf8') +
+              Buffer.byteLength(module.sourceMap ?? '', 'utf8'),
+            0
+          );
+        }
+        return request.modules === undefined
+          ? builtInServices
+          : await loadRuntimeModules(request, builtInServices, nativeFetch);
+      }
+    );
     if (request.bindings !== undefined && request.modules === undefined) {
       Object.defineProperty(globalThis, 'fetch', {
         configurable: false,
@@ -2216,8 +2277,12 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
     }
     const safeNodeId = request.nodeId.replace(/[^A-Za-z0-9_-]/g, '_');
     const body = `"use strict";\n${request.source}\n//# sourceURL=woml-${request.mode === 'lifecycle' ? 'lifecycle' : 'step'}-${safeNodeId}.js`;
-    const script =
-      request.bindings === undefined
+    const script = profileSync('worker', 'worker.compile_script', measurements => {
+      identifyInvocation(measurements, request);
+      if (measurements !== undefined) {
+        measurements.bytes.source = Buffer.byteLength(request.source, 'utf8');
+      }
+      return request.bindings === undefined
         ? new AsyncFunction('context', 'attempt', 'console', body)
         : reusable !== undefined && reusableLifecycle !== undefined
           ? reusable.definition.kind === 'step'
@@ -2248,104 +2313,144 @@ async function execute(request: ScriptWorkerRequest): Promise<void> {
                 'console',
                 body
               )
-        : request.mode === 'lifecycle'
-          ? new AsyncFunction(
-              'context',
-              'lifecycle',
-              'attempt',
-              'services',
-              'secrets',
-              'fetch',
-              'console',
-              body
-            )
-          : new AsyncFunction(
-              'context',
-              'attempt',
-              'services',
-              'secrets',
-              'fetch',
-              'console',
-              body
-            );
-    let result =
-      request.bindings === undefined
-        ? await script(context, attempt, safeConsole)
-        : reusable !== undefined && reusableLifecycle !== undefined
-          ? reusable.definition.kind === 'step'
-            ? await script(
-                reusable.props,
-                context,
-                reusableLifecycle,
-                services,
-                nativeFetch,
-                safeConsole
-              )
-            : await script(
-                reusable.props,
-                reusableLifecycle,
-                services,
-                nativeFetch,
-                safeConsole
-              )
-          : reusable !== undefined
-            ? await script(
-                reusable.props,
-                context,
-                attempt,
-                services,
-                nativeFetch,
-                safeConsole
-              )
-        : request.mode === 'lifecycle'
-          ? await script(
-              context,
-              lifecycle,
-              attempt,
-              services,
-              secrets,
-              nativeFetch,
-              safeConsole
-            )
-          : await script(
-              context,
-              attempt,
-              services,
-              secrets,
-              nativeFetch,
-              safeConsole
-            );
+            : request.mode === 'lifecycle'
+              ? new AsyncFunction(
+                  'context',
+                  'lifecycle',
+                  'attempt',
+                  'services',
+                  'secrets',
+                  'fetch',
+                  'console',
+                  body
+                )
+              : new AsyncFunction(
+                  'context',
+                  'attempt',
+                  'services',
+                  'secrets',
+                  'fetch',
+                  'console',
+                  body
+                );
+    });
+    let result = await profileAsync(
+      'worker',
+      'worker.execute_user_code',
+      async measurements => {
+        identifyInvocation(measurements, request);
+        return request.bindings === undefined
+          ? await script(context, attempt, safeConsole)
+          : reusable !== undefined && reusableLifecycle !== undefined
+            ? reusable.definition.kind === 'step'
+              ? await script(
+                  reusable.props,
+                  context,
+                  reusableLifecycle,
+                  services,
+                  nativeFetch,
+                  safeConsole
+                )
+              : await script(
+                  reusable.props,
+                  reusableLifecycle,
+                  services,
+                  nativeFetch,
+                  safeConsole
+                )
+            : reusable !== undefined
+              ? await script(
+                  reusable.props,
+                  context,
+                  attempt,
+                  services,
+                  nativeFetch,
+                  safeConsole
+                )
+              : request.mode === 'lifecycle'
+                ? await script(
+                    context,
+                    lifecycle,
+                    attempt,
+                    services,
+                    secrets,
+                    nativeFetch,
+                    safeConsole
+                  )
+                : await script(
+                    context,
+                    attempt,
+                    services,
+                    secrets,
+                    nativeFetch,
+                    safeConsole
+                  );
+      }
+    );
     if (
       (request.mode === 'lifecycle' || reusableLifecycle !== undefined) &&
       result === undefined
     ) {
       result = null;
     }
-    const violation = findJsonViolation(result);
+    const violation = profileSync('worker', 'worker.validate_result', measurements => {
+      identifyInvocation(measurements, request);
+      const violation = findJsonViolation(result);
+      if (measurements !== undefined && violation === undefined) {
+        measurements.bytes.result = Buffer.byteLength(
+          JSON.stringify(result),
+          'utf8'
+        );
+      }
+      return violation;
+    });
     if (violation !== undefined) {
-      self.postMessage({
-        messageType: 'completed',
-        response: {
-          ok: false,
-          error: {
-            kind: 'non-json',
-            name: 'NonJsonResult',
-            message: `${violation.path}: ${violation.reason}`,
-          },
+      return {
+        ok: false,
+        error: {
+          kind: 'non-json',
+          name: 'NonJsonResult',
+          message: `${violation.path}: ${violation.reason}`,
         },
-      } satisfies ScriptWorkerOutbound);
-      return;
+      };
     }
-    self.postMessage({
-      messageType: 'completed',
-      response: { ok: true, result: result as JsonValue },
-    } satisfies ScriptWorkerOutbound);
+    return { ok: true, result: result as JsonValue };
   } catch (error) {
-    self.postMessage({
-      messageType: 'completed',
-      response: serializeError(error, secretValues, request.modules),
-    } satisfies ScriptWorkerOutbound);
+    return serializeError(error, secretValues, request.modules);
   }
+}
+
+async function execute(request: ScriptWorkerRequest): Promise<void> {
+  const response = await profileAsync(
+    'worker',
+    'worker.execute_invocation',
+    async measurements => {
+      identifyInvocation(measurements, request);
+      if (measurements !== undefined) {
+        measurements.bytes.context = Buffer.byteLength(
+          JSON.stringify(request.context),
+          'utf8'
+        );
+        measurements.bytes.source = Buffer.byteLength(request.source, 'utf8');
+        measurements.counts.modules = request.modules?.length ?? 0;
+      }
+      return await executeScript(request);
+    }
+  );
+  profileSync('worker', 'worker.prepare_result_transfer', measurements => {
+    identifyInvocation(measurements, request);
+    if (measurements !== undefined) {
+      measurements.bytes.result = Buffer.byteLength(
+        JSON.stringify(response),
+        'utf8'
+      );
+    }
+  });
+  await flushPerformanceProfile();
+  self.postMessage({
+    messageType: 'completed',
+    response,
+  } satisfies ScriptWorkerOutbound);
 }
 
 self.onmessage = (event: MessageEvent<ScriptWorkerInbound>) => {

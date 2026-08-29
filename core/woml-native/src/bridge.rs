@@ -855,6 +855,17 @@ pub async fn execute_woml_workflow_durable(
   resolved_secrets_json: String,
   runtime_modules_json: Option<String>,
 ) -> napi::Result<String> {
+  let mut decode_span = woml_engine::performance::PerformanceSpan::new_for_process(
+    "native",
+    "napi",
+    "napi.decode_durable_request",
+  );
+  decode_span.bytes("model", compiled_model_json.len());
+  decode_span.bytes("trigger", trigger_json.len());
+  decode_span.bytes(
+    "modules",
+    runtime_modules_json.as_deref().unwrap_or("[]").len(),
+  );
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
       napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
@@ -868,6 +879,15 @@ pub async fn execute_woml_workflow_durable(
     resolved_secrets_json,
     runtime_modules_json,
   )?;
+  decode_span.count("nodes", workflow.graph.nodes.len());
+  decode_span.count("modules", options.runtime_modules.len());
+  decode_span.succeed();
+  drop(decode_span);
+  let mut execute_span = woml_engine::performance::PerformanceSpan::new_for_process(
+    "native",
+    "napi",
+    "napi.execute_durable",
+  );
   let result = execute_workflow_durable(
     workflow,
     definition_hash,
@@ -877,8 +897,20 @@ pub async fn execute_woml_workflow_durable(
   )
   .await
   .map_err(native_execution_error)?;
-  serde_json::to_string(&result)
-    .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))
+  execute_span.run_id(result.run_id.clone());
+  execute_span.succeed();
+  drop(execute_span);
+  let mut encode_span = woml_engine::performance::PerformanceSpan::new_for_process(
+    "native",
+    "napi",
+    "napi.encode_durable_result",
+  );
+  encode_span.run_id(result.run_id.clone());
+  let encoded = serde_json::to_string(&result)
+    .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))?;
+  encode_span.bytes("result", encoded.len());
+  encode_span.succeed();
+  Ok(encoded)
 }
 
 #[napi(ts_return_type = "Promise<string>")]
@@ -895,6 +927,17 @@ pub fn execute_woml_workflow_durable_with_progress(
   resolved_secrets_json: String,
   runtime_modules_json: Option<String>,
 ) -> napi::Result<JsObject> {
+  let mut decode_span = woml_engine::performance::PerformanceSpan::new_for_process(
+    "native",
+    "napi",
+    "napi.decode_durable_request",
+  );
+  decode_span.bytes("model", compiled_model_json.len());
+  decode_span.bytes("trigger", trigger_json.len());
+  decode_span.bytes(
+    "modules",
+    runtime_modules_json.as_deref().unwrap_or("[]").len(),
+  );
   let workflow: CompiledWorkflowDefinition =
     serde_json::from_str(&compiled_model_json).map_err(|error| {
       napi::Error::from_reason(format!("Invalid compiled workflow JSON: {error}"))
@@ -914,7 +957,16 @@ pub fn execute_woml_workflow_durable_with_progress(
       napi::Error::from_reason(format!("Invalid runtime modules JSON: {error}"))
     })?;
   let options = options.with_runtime_modules(modules);
+  decode_span.count("nodes", workflow.graph.nodes.len());
+  decode_span.count("modules", options.runtime_modules.len());
+  decode_span.succeed();
+  drop(decode_span);
   env.spawn_future(async move {
+    let mut execute_span = woml_engine::performance::PerformanceSpan::new_for_process(
+      "native",
+      "napi",
+      "napi.execute_durable",
+    );
     let result = execute_workflow_durable(
       workflow,
       definition_hash,
@@ -924,8 +976,21 @@ pub fn execute_woml_workflow_durable_with_progress(
     )
     .await
     .map_err(native_execution_error)?;
-    serde_json::to_string(&result)
-      .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML result: {error}")))
+    execute_span.run_id(result.run_id.clone());
+    execute_span.succeed();
+    drop(execute_span);
+    let mut encode_span = woml_engine::performance::PerformanceSpan::new_for_process(
+      "native",
+      "napi",
+      "napi.encode_durable_result",
+    );
+    encode_span.run_id(result.run_id.clone());
+    let encoded = serde_json::to_string(&result).map_err(|error| {
+      napi::Error::from_reason(format!("Could not encode WOML result: {error}"))
+    })?;
+    encode_span.bytes("result", encoded.len());
+    encode_span.succeed();
+    Ok(encoded)
   })
 }
 
@@ -1379,6 +1444,13 @@ pub fn start_woml_webhook_runtime(
   start_suspended: bool,
   progress_callback: JsFunction,
 ) -> napi::Result<JsObject> {
+  let mut decode_span = woml_engine::performance::PerformanceSpan::new_for_process(
+    "native",
+    "napi",
+    "napi.decode_runtime_registration",
+  );
+  decode_span.bytes("registrations", registrations_json.len());
+  decode_span.bytes("manual_triggers", startup_manual_triggers_json.len());
   let registrations: Vec<NativeWebhookRegistration> = serde_json::from_str(&registrations_json)
     .map_err(|error| {
       napi::Error::from_reason(format!("Invalid webhook registration JSON: {error}"))
@@ -1439,6 +1511,7 @@ pub fn start_woml_webhook_runtime(
         })
     })
     .collect::<BTreeMap<_, _>>();
+  decode_span.count("workflows", registrations.len());
   let registrations = registrations
     .into_iter()
     .map(|registration| WebhookDefinitionRegistration {
@@ -1448,21 +1521,30 @@ pub fn start_woml_webhook_runtime(
       runtime_modules: registration.runtime_modules,
     })
     .collect();
+  let execution = runtime_options(bun_executable, script_host_path, script_timeout_ms)
+    .with_resolved_secrets(runtime_secrets)
+    .with_schedule_progress_reporter(schedule_progress_reporter)
+    .with_interval_progress_reporter(interval_progress_reporter)
+    .with_workflow_call_progress_reporter(workflow_call_progress_reporter)
+    .with_runtime_policy_progress_reporter(runtime_policy_progress_reporter)
+    .with_shared_script_hosts();
   let config = WomlWebhookServerConfig {
     bind_address,
     database_path: PathBuf::from(event_store_path),
     registrations,
     startup_manual_triggers,
-    execution: runtime_options(bun_executable, script_host_path, script_timeout_ms)
-      .with_resolved_secrets(runtime_secrets)
-      .with_schedule_progress_reporter(schedule_progress_reporter)
-      .with_interval_progress_reporter(interval_progress_reporter)
-      .with_workflow_call_progress_reporter(workflow_call_progress_reporter)
-      .with_runtime_policy_progress_reporter(runtime_policy_progress_reporter),
+    execution,
     progress_reporter: Some(progress_reporter),
   };
+  decode_span.succeed();
+  drop(decode_span);
 
   env.spawn_future(async move {
+    let mut start_span = woml_engine::performance::PerformanceSpan::new_for_process(
+      "native",
+      "napi",
+      "napi.start_trigger_runtime",
+    );
     let started_at = Utc::now();
     let shutdown_deadline = std::time::Duration::from_millis(u64::from(shutdown_timeout_ms));
     let runtime_id = format!("runtime_{}", uuid::Uuid::new_v4().simple());
@@ -1615,19 +1697,27 @@ pub fn start_woml_webhook_runtime(
           join,
         },
       );
-    serde_json::to_string(&NativeWebhookRuntimeStarted {
+    let encoded = serde_json::to_string(&NativeWebhookRuntimeStarted {
       runtime_id,
       host: address.ip().to_string(),
       port: address.port(),
     })
     .map_err(|error| {
       napi::Error::from_reason(format!("Could not encode webhook runtime startup: {error}"))
-    })
+    })?;
+    start_span.bytes("result", encoded.len());
+    start_span.succeed();
+    Ok(encoded)
   })
 }
 
 #[napi(ts_return_type = "Promise<void>")]
 pub async fn activate_woml_webhook_runtime(runtime_id: String) -> napi::Result<()> {
+  let mut span = woml_engine::performance::PerformanceSpan::new_for_process(
+    "native",
+    "napi",
+    "napi.activate_trigger_runtime",
+  );
   let control = webhook_runtimes()
     .lock()
     .map_err(|_| napi::Error::from_reason("Webhook runtime registry is unavailable.".to_string()))?
@@ -1642,7 +1732,9 @@ pub async fn activate_woml_webhook_runtime(runtime_id: String) -> napi::Result<(
     .await
     .map_err(|error| napi::Error::from_reason(format!("Runtime activation task failed: {error}")))?
     .map_err(|_| napi::Error::from_reason("Runtime activation response was lost.".to_string()))?;
-  result.map_err(trigger_runtime_napi_error)
+  result.map_err(trigger_runtime_napi_error)?;
+  span.succeed();
+  Ok(())
 }
 
 #[napi(ts_return_type = "Promise<string>")]
@@ -1778,6 +1870,12 @@ pub async fn submit_woml_manual_trigger(
   runtime_id: String,
   request_json: String,
 ) -> napi::Result<String> {
+  let mut span = woml_engine::performance::PerformanceSpan::new_for_process(
+    "native",
+    "napi",
+    "napi.submit_manual_trigger",
+  );
+  span.bytes("request", request_json.len());
   let request: NativeManualAdmissionRequest = serde_json::from_str(&request_json)
     .map_err(|error| napi::Error::from_reason(format!("Invalid manual admission JSON: {error}")))?;
   if request.profile != "woml.manual-trigger-admission/v1"
@@ -1796,6 +1894,7 @@ pub async fn submit_woml_manual_trigger(
   }
 
   let request_id = request.request_id;
+  span.invocation_id(request_id.clone());
   let target_key = (request.workflow_id.clone(), request.trigger_id.clone());
   let runtime = webhook_runtimes()
     .lock()
@@ -1855,7 +1954,10 @@ pub async fn submit_woml_manual_trigger(
       );
     }
   };
-  match outcome {
+  if let Ok(admitted) = &outcome {
+    span.run_id(admitted.run_id.clone());
+  }
+  let encoded = match outcome {
     Ok(outcome) => serde_json::to_string(&NativeManualAdmissionAccepted {
       profile: "woml.manual-trigger-admission/v1",
       message_type: "accepted",
@@ -1879,7 +1981,11 @@ pub async fn submit_woml_manual_trigger(
       "WOML_MANUAL_TRIGGER_ADMISSION_CLOSED",
       "The durable runtime cannot accept this manual trigger right now.",
     ),
+  };
+  if encoded.is_ok() {
+    span.succeed();
   }
+  encoded
 }
 
 #[napi(ts_return_type = "Promise<void>")]

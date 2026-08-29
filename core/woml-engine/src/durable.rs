@@ -2313,8 +2313,22 @@ fn runtime_policy_indexes_need_rebuild(connection: &Connection) -> Result<bool, 
 
 impl DurableEventStore {
   pub fn open(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
-    let connection = Connection::open(path)?;
-    Self::initialize(connection)
+    let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.open_initialize");
+    let path = path.as_ref();
+    let result = (|| {
+      let connection = Connection::open(path)?;
+      Self::initialize(connection)
+    })();
+    if result.is_ok() {
+      if let Ok(metadata) = std::fs::metadata(path) {
+        span.bytes(
+          "database",
+          usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+        );
+      }
+      span.succeed();
+    }
+    result
   }
 
   /// Opens a store that the runtime has already initialized and validated.
@@ -2323,6 +2337,8 @@ impl DurableEventStore {
   /// so can turn a short, recoverable SQLite writer conflict into a lock-upgrade
   /// deadlock. Runtime startup remains the sole schema/migration authority.
   pub(crate) fn open_ready(path: impl AsRef<Path>) -> Result<Self, DurableStoreError> {
+    let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.open_ready");
+    let path = path.as_ref();
     let connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -2334,6 +2350,13 @@ impl DurableEventStore {
     if version != STORE_SCHEMA_VERSION_V14 {
       return Err(DurableStoreError::UnsupportedStoreVersion(version));
     }
+    if let Ok(metadata) = std::fs::metadata(path) {
+      span.bytes(
+        "database",
+        usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+      );
+    }
+    span.succeed();
     Ok(Self { connection })
   }
 
@@ -3293,6 +3316,10 @@ impl DurableEventStore {
     definition_hash: &str,
     artifacts: &[RuntimeModuleArtifact],
   ) -> Result<(), DurableStoreError> {
+    let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.register_definition");
+    span.count("nodes", workflow.graph.nodes.len());
+    span.count("modules", artifacts.len());
+    span.count("transactions", 2);
     self.register_definition(workflow, definition_hash)?;
     validate_definition_module_artifacts(workflow, artifacts)?;
 
@@ -3340,6 +3367,7 @@ impl DurableEventStore {
         }
       }
       transaction.commit()?;
+      span.succeed();
       return Ok(());
     }
 
@@ -3362,6 +3390,7 @@ impl DurableEventStore {
       )?;
     }
     transaction.commit()?;
+    span.succeed();
     Ok(())
   }
 
@@ -3460,12 +3489,17 @@ impl DurableEventStore {
     &mut self,
     request: TriggerAdmissionRequest,
   ) -> Result<TriggerAdmissionOutcome, DurableStoreError> {
+    let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.admit_trigger");
+    span.count("transactions", 1);
     validate_trigger_admission_request(&request)?;
     let transaction = self
       .connection
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcome = admit_trigger_occurrence_in_transaction(&transaction, &request)?;
     transaction.commit()?;
+    span.run_id(outcome.run_id.clone());
+    span.count("duplicate", usize::from(outcome.duplicate));
+    span.succeed();
     Ok(outcome)
   }
 
@@ -3983,6 +4017,9 @@ impl DurableEventStore {
   ) -> Result<(RunEvent, RunProjection), DurableStoreError> {
     let run_id = run_id.into();
     let event_id = event_id.into();
+    let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.append_events");
+    span.run_id(run_id.clone());
+    span.count("transactions", 1);
     let transaction = self
       .connection
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -4088,6 +4125,7 @@ impl DurableEventStore {
     };
 
     let mut events = load_events(&transaction, &run_id)?;
+    let existing_event_count = events.len();
     let workflow = definition_for_run(&transaction, &run_id)?;
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
     let payloads = if iteration.is_some() {
@@ -4160,6 +4198,8 @@ impl DurableEventStore {
       .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
     transaction.commit()?;
+    span.count("events", events.len().saturating_sub(existing_event_count));
+    span.succeed();
     Ok((first_event.unwrap(), projection))
   }
 
@@ -4168,6 +4208,10 @@ impl DurableEventStore {
     run_id: &str,
     payloads: Vec<(String, DateTime<Utc>, RunEventPayload)>,
   ) -> Result<RunProjection, DurableStoreError> {
+    let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.append_event_batch");
+    span.run_id(run_id.to_string());
+    span.count("events", payloads.len());
+    span.count("transactions", 1);
     if payloads.is_empty() {
       return Err(DurableStoreError::Contract(
         "An atomic event batch must not be empty.".to_string(),
@@ -4224,6 +4268,7 @@ impl DurableEventStore {
       .map_err(DurableStoreError::Contract)?;
     let projection = fold_events(&events)?;
     transaction.commit()?;
+    span.succeed();
     Ok(projection)
   }
 
@@ -4246,7 +4291,10 @@ impl DurableEventStore {
   }
 
   pub fn projection(&self, run_id: &str) -> Result<RunProjection, DurableStoreError> {
+    let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.project_run");
+    span.run_id(run_id.to_string());
     let events = self.events(run_id)?;
+    span.count("events", events.len());
     let binding = self.run_binding(run_id)?;
     let workflow = self.definition(&binding.definition_hash)?;
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
@@ -4259,6 +4307,7 @@ impl DurableEventStore {
     {
       projection.workflow_id = Some(binding.workflow_id);
     }
+    span.succeed();
     Ok(projection)
   }
 

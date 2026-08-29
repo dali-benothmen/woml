@@ -26,7 +26,7 @@ use crate::{
 const HEADER_PREFIX: &str = "Content-Length: ";
 const MAX_HEADER_BYTES: usize = 128;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptHostProcessOptions {
   pub bun_executable: PathBuf,
   pub host_script_path: PathBuf,
@@ -69,10 +69,20 @@ pub enum ScriptHostClientError {
 
 type PendingResult = Result<CompletedMessage, ScriptHostClientError>;
 
-#[derive(Debug)]
 struct PendingInvocation {
   sender: oneshot::Sender<PendingResult>,
   identity: NativeFetchInvocationIdentity,
+  authority: Option<Arc<DurableCapabilityAuthority>>,
+}
+
+impl std::fmt::Debug for PendingInvocation {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter
+      .debug_struct("PendingInvocation")
+      .field("identity", &self.identity)
+      .field("authority", &self.authority.as_ref().map(|_| "configured"))
+      .finish_non_exhaustive()
+  }
 }
 
 #[derive(Debug, Default)]
@@ -82,14 +92,27 @@ struct SharedState {
   terminal_error: Option<ScriptHostClientError>,
 }
 
-#[derive(Debug)]
 pub struct ScriptHostClient {
   child: Child,
   stdin: Arc<Mutex<Option<ChildStdin>>>,
   shared: Arc<Mutex<SharedState>>,
   reader_task: JoinHandle<()>,
   shutdown_timeout: Duration,
+  default_authority: Option<Arc<DurableCapabilityAuthority>>,
   pub host_instance_id: String,
+}
+
+impl std::fmt::Debug for ScriptHostClient {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter
+      .debug_struct("ScriptHostClient")
+      .field("host_instance_id", &self.host_instance_id)
+      .field(
+        "default_authority",
+        &self.default_authority.as_ref().map(|_| "configured"),
+      )
+      .finish_non_exhaustive()
+  }
 }
 
 impl ScriptHostClient {
@@ -101,6 +124,8 @@ impl ScriptHostClient {
     options: ScriptHostProcessOptions,
     authority: Option<Arc<DurableCapabilityAuthority>>,
   ) -> Result<Self, ScriptHostClientError> {
+    let mut spawn_span = crate::performance::PerformanceSpan::new("host", "host.spawn_process");
+    spawn_span.count("modules", options.module_artifacts.len());
     let mut command = Command::new(&options.bun_executable);
     command.arg(&options.host_script_path).env(
       "WOML_SCRIPT_HOST_PROTOCOL_VERSION",
@@ -108,6 +133,9 @@ impl ScriptHostClient {
     );
     if let Some(limit) = options.max_frame_bytes {
       command.env("WOML_SCRIPT_HOST_MAX_FRAME_BYTES", limit.to_string());
+    }
+    if crate::performance::enabled() {
+      command.env("WOML_PROFILE_PROCESS", "host");
     }
     let mut child = command
       .stdin(Stdio::piped())
@@ -151,6 +179,21 @@ impl ScriptHostClient {
     };
     ready.validate().map_err(ScriptHostClientError::Protocol)?;
 
+    let mut module_span = crate::performance::PerformanceSpan::new("host", "host.register_modules");
+    module_span.count("modules", options.module_artifacts.len());
+    module_span.bytes(
+      "modules",
+      options
+        .module_artifacts
+        .iter()
+        .map(|artifact| {
+          artifact
+            .bundle
+            .len()
+            .saturating_add(artifact.source_map.len())
+        })
+        .sum(),
+    );
     for artifact in &options.module_artifacts {
       write_json_frame(
         &mut stdin,
@@ -187,6 +230,7 @@ impl ScriptHostClient {
         return Err(ScriptHostClientError::Startup(message));
       }
     }
+    module_span.succeed();
 
     let stdin = Arc::new(Mutex::new(Some(stdin)));
     let shared = Arc::new(Mutex::new(SharedState::default()));
@@ -194,30 +238,48 @@ impl ScriptHostClient {
     let reader_stdin = Arc::clone(&stdin);
     let max_frame_bytes = options.max_frame_bytes;
     let reader_task = tokio::spawn(async move {
-      host_message_reader(
-        reader,
-        reader_stdin,
-        reader_shared,
-        authority,
-        max_frame_bytes,
-      )
-      .await;
+      host_message_reader(reader, reader_stdin, reader_shared, max_frame_bytes).await;
     });
 
-    Ok(Self {
+    let client = Self {
       child,
       stdin,
       shared,
       reader_task,
       shutdown_timeout: options.shutdown_timeout,
+      default_authority: authority,
       host_instance_id: ready.host_instance_id,
-    })
+    };
+    spawn_span.succeed();
+    Ok(client)
   }
 
   pub async fn execute(
     &self,
     message: &ExecuteMessage<'_>,
   ) -> Result<CompletedMessage, ScriptHostClientError> {
+    self
+      .execute_with_authority(message, self.default_authority.clone())
+      .await
+  }
+
+  pub async fn execute_with_authority(
+    &self,
+    message: &ExecuteMessage<'_>,
+    authority: Option<Arc<DurableCapabilityAuthority>>,
+  ) -> Result<CompletedMessage, ScriptHostClientError> {
+    let mut span = crate::performance::PerformanceSpan::new("host", "host.execute_invocation");
+    span.run_id(message.run_id.to_string());
+    span.invocation_id(message.invocation_id.to_string());
+    if crate::performance::enabled() {
+      if let Ok(encoded) = serde_json::to_vec(message) {
+        span.bytes("request", encoded.len());
+      }
+      if let Ok(context) = serde_json::to_vec(&message.context) {
+        span.bytes("context", context.len());
+      }
+      span.bytes("source", message.source.len());
+    }
     let invocation_id = message.invocation_id.to_string();
     let (sender, receiver) = oneshot::channel();
     {
@@ -241,6 +303,7 @@ impl ScriptHostClient {
             invocation_id: invocation_id.clone(),
             step_idempotency_key: message.attempt.idempotency_key.to_string(),
           },
+          authority,
         },
       );
     }
@@ -250,11 +313,23 @@ impl ScriptHostClient {
       return Err(error);
     }
 
-    receiver.await.unwrap_or_else(|_| {
+    let result = receiver.await.unwrap_or_else(|_| {
       Err(ScriptHostClientError::HostCrashed(
         "the completion channel closed without a response".to_string(),
       ))
-    })
+    });
+    if result.is_ok() {
+      span.succeed();
+    }
+    result
+  }
+
+  pub async fn is_healthy(&self) -> bool {
+    self.shared.lock().await.terminal_error.is_none()
+  }
+
+  pub fn set_default_authority(&mut self, authority: Option<Arc<DurableCapabilityAuthority>>) {
+    self.default_authority = authority;
   }
 
   pub async fn cancel(&self, invocation_id: &str) -> Result<(), ScriptHostClientError> {
@@ -283,8 +358,11 @@ impl ScriptHostClient {
   }
 
   async fn write_message<T: Serialize>(&self, message: &T) -> Result<(), ScriptHostClientError> {
+    let mut span = crate::performance::PerformanceSpan::new("host", "host.write_frame");
     let body = serde_json::to_vec(message)
       .map_err(|error| ScriptHostClientError::Protocol(error.to_string()))?;
+    span.bytes("body", body.len());
+    span.count("frames", 1);
     let header = format!("Content-Length: {}\r\n\r\n", body.len());
     let mut stdin = self.stdin.lock().await;
     let writer = stdin.as_mut().ok_or_else(|| {
@@ -301,10 +379,13 @@ impl ScriptHostClient {
     writer
       .flush()
       .await
-      .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))
+      .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
+    span.succeed();
+    Ok(())
   }
 
   pub async fn shutdown(mut self) {
+    let mut span = crate::performance::PerformanceSpan::new("host", "host.shutdown_process");
     self.stdin.lock().await.take();
     if timeout(self.shutdown_timeout, self.child.wait())
       .await
@@ -314,6 +395,7 @@ impl ScriptHostClient {
       let _ = self.child.wait().await;
     }
     let _ = self.reader_task.await;
+    span.succeed();
   }
 }
 
@@ -321,8 +403,11 @@ async fn write_json_frame<W: AsyncWrite + Unpin, T: Serialize>(
   writer: &mut W,
   message: &T,
 ) -> Result<(), ScriptHostClientError> {
+  let mut span = crate::performance::PerformanceSpan::new("host", "host.write_frame");
   let body = serde_json::to_vec(message)
     .map_err(|error| ScriptHostClientError::Protocol(error.to_string()))?;
+  span.bytes("body", body.len());
+  span.count("frames", 1);
   let header = format!("Content-Length: {}\r\n\r\n", body.len());
   writer
     .write_all(header.as_bytes())
@@ -335,14 +420,15 @@ async fn write_json_frame<W: AsyncWrite + Unpin, T: Serialize>(
   writer
     .flush()
     .await
-    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
+  span.succeed();
+  Ok(())
 }
 
 async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
   mut reader: BufReader<R>,
   stdin: Arc<Mutex<Option<ChildStdin>>>,
   shared: Arc<Mutex<SharedState>>,
-  authority: Option<Arc<DurableCapabilityAuthority>>,
   max_frame_bytes: Option<usize>,
 ) {
   loop {
@@ -378,14 +464,14 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
           fail_all(&shared, ScriptHostClientError::Protocol(message_error)).await;
           return;
         }
-        let identity = {
+        let pending = {
           let state = shared.lock().await;
           state
             .pending
             .get(&message.invocation_id)
-            .map(|pending| pending.identity.clone())
+            .map(|pending| (pending.identity.clone(), pending.authority.clone()))
         };
-        let Some(identity) = identity else {
+        let Some((identity, authority)) = pending else {
           fail_all(
             &shared,
             ScriptHostClientError::Protocol(format!(
@@ -444,9 +530,13 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
         }
         let key = (message.invocation_id.clone(), message.call_id.clone());
         let cancellation = CapabilityCancellationToken::default();
-        {
+        let call_authority = {
           let mut state = shared.lock().await;
-          if !state.pending.contains_key(&message.invocation_id) {
+          let Some(authority) = state
+            .pending
+            .get(&message.invocation_id)
+            .map(|pending| pending.authority.clone())
+          else {
             drop(state);
             fail_all(
               &shared,
@@ -457,7 +547,7 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
             )
             .await;
             return;
-          }
+          };
           if state
             .active_calls
             .insert(key.clone(), cancellation.clone())
@@ -474,11 +564,11 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
             .await;
             return;
           }
-        }
+          authority
+        };
         let call = message.call;
         let call_shared = Arc::clone(&shared);
         let call_stdin = Arc::clone(&stdin);
-        let call_authority = authority.clone();
         tokio::spawn(async move {
           let result = match call_authority {
             Some(authority) => authority
@@ -523,14 +613,14 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
           fail_all(&shared, ScriptHostClientError::Protocol(error)).await;
           return;
         }
-        let identity = {
+        let pending = {
           let state = shared.lock().await;
           state
             .pending
             .get(&message.invocation_id)
-            .map(|pending| pending.identity.clone())
+            .map(|pending| (pending.identity.clone(), pending.authority.clone()))
         };
-        let Some(identity) = identity else {
+        let Some((identity, observation_authority)) = pending else {
           fail_all(
             &shared,
             ScriptHostClientError::Protocol(format!(
@@ -543,7 +633,6 @@ async fn host_message_reader<R: AsyncRead + Unpin + Send + 'static>(
         };
         let observation_shared = Arc::clone(&shared);
         let observation_stdin = Arc::clone(&stdin);
-        let observation_authority = authority.clone();
         tokio::spawn(async move {
           let error = match observation_authority {
             Some(authority) => authority
@@ -605,8 +694,11 @@ async fn write_serialized_message<T: Serialize>(
   stdin: &Arc<Mutex<Option<ChildStdin>>>,
   message: &T,
 ) -> Result<(), ScriptHostClientError> {
+  let mut span = crate::performance::PerformanceSpan::new("host", "host.write_frame");
   let body = serde_json::to_vec(message)
     .map_err(|error| ScriptHostClientError::Protocol(error.to_string()))?;
+  span.bytes("body", body.len());
+  span.count("frames", 1);
   let header = format!("Content-Length: {}\r\n\r\n", body.len());
   let mut stdin = stdin.lock().await;
   let writer = stdin.as_mut().ok_or_else(|| {
@@ -623,7 +715,9 @@ async fn write_serialized_message<T: Serialize>(
   writer
     .flush()
     .await
-    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))
+    .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
+  span.succeed();
+  Ok(())
 }
 
 async fn fail_all(shared: &Arc<Mutex<SharedState>>, error: ScriptHostClientError) {
@@ -705,12 +799,14 @@ where
   R: AsyncRead + Unpin,
   T: DeserializeOwned,
 {
+  let mut span = crate::performance::PerformanceSpan::new("host", "host.read_frame");
   let mut header = Vec::new();
   let read = reader
     .read_until(b'\n', &mut header)
     .await
     .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
   if read == 0 {
+    span.succeed();
     return Ok(None);
   }
   if header.len() > MAX_HEADER_BYTES || !header.ends_with(b"\r\n") {
@@ -731,6 +827,8 @@ where
   let content_length = length_text.parse::<usize>().map_err(|_| {
     ScriptHostClientError::Protocol("Content-Length does not fit this platform".to_string())
   })?;
+  span.bytes("body", content_length);
+  span.count("frames", 1);
   if max_frame_bytes.is_some_and(|limit| content_length > limit) {
     return Err(ScriptHostClientError::Protocol(format!(
       "frame declares {content_length} bytes and exceeds the configured limit"
@@ -753,7 +851,9 @@ where
     .read_exact(&mut body)
     .await
     .map_err(|error| ScriptHostClientError::HostCrashed(error.to_string()))?;
-  serde_json::from_slice(&body)
+  let decoded = serde_json::from_slice(&body)
     .map(Some)
-    .map_err(|error| ScriptHostClientError::Protocol(error.to_string()))
+    .map_err(|error| ScriptHostClientError::Protocol(error.to_string()))?;
+  span.succeed();
+  Ok(decoded)
 }

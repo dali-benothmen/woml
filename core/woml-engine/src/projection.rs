@@ -1019,6 +1019,19 @@ fn apply_iteration_scoped_event(
 }
 
 pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
+  let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.fold_events");
+  span.count("events", events.len());
+  if let Some(run_id) = events.first().map(|event| event.run_id.clone()) {
+    span.run_id(run_id);
+  }
+  let result = fold_events_unprofiled(events);
+  if result.is_ok() {
+    span.succeed();
+  }
+  result
+}
+
+fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
   let mut projection = RunProjection::default();
   let mut event_ids = HashSet::new();
   let mut attempt_indexes: HashMap<AttemptIdentity, usize> = HashMap::new();

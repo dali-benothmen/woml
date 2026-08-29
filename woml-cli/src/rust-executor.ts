@@ -15,6 +15,7 @@ import {
   nativePackageName,
   nativeTargetForRuntime,
 } from './native-platform';
+import { profileAsync, profileSync } from './performance-profiler';
 
 export interface RustRunEvent {
   readonly eventSchemaVersion:
@@ -1187,10 +1188,16 @@ function canonicalizeJson(value: unknown): string {
 export function compiledDefinitionHash(
   workflow: CompiledWorkflowDefinition
 ): string {
-  const hexadecimal = new Bun.CryptoHasher('sha256')
-    .update(canonicalizeJson(workflow))
-    .digest('hex');
-  return `sha256:${hexadecimal}`;
+  return profileSync('compiler', 'compiler.hash_definition', measurements => {
+    const canonical = canonicalizeJson(workflow);
+    if (measurements !== undefined) {
+      measurements.bytes.definition = Buffer.byteLength(canonical);
+    }
+    const hexadecimal = new Bun.CryptoHasher('sha256')
+      .update(canonical)
+      .digest('hex');
+    return `sha256:${hexadecimal}`;
+  });
 }
 
 function defaultNativeCorePath(): string {
@@ -1243,14 +1250,16 @@ function defaultCustomNotificationHostPath(): string {
 }
 
 function loadNativeCore(path: string): NativeCore {
-  const require = createRequire(import.meta.url);
-  const loaded = require(path) as Partial<NativeCore>;
-  if (typeof loaded.executeWomlWorkflow !== 'function') {
-    throw new Error(
-      `Native core at "${path}" does not expose executeWomlWorkflow; rebuild the Rust addon.`
-    );
-  }
-  return loaded as NativeCore;
+  return profileSync('napi', 'napi.load_native_addon', () => {
+    const require = createRequire(import.meta.url);
+    const loaded = require(path) as Partial<NativeCore>;
+    if (typeof loaded.executeWomlWorkflow !== 'function') {
+      throw new Error(
+        `Native core at "${path}" does not expose executeWomlWorkflow; rebuild the Rust addon.`
+      );
+    }
+    return loaded as NativeCore;
+  });
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -2087,32 +2096,69 @@ export async function executeWorkflowWithRustDurable(
       `Native core at "${nativePath}" does not expose executeWomlWorkflowDurableWithProgress; rebuild the Rust addon.`
     );
   }
-  const arguments_ = [
-    JSON.stringify(workflow),
-    compiledDefinitionHash(workflow),
-    JSON.stringify(options.trigger ?? {}),
-    options.bunExecutable ?? process.execPath,
-    options.scriptHostPath ?? defaultScriptHostPath(),
-    timeoutMs,
-    eventStorePath,
-  ] as const;
-  const secretsJson = JSON.stringify(options.resolvedSecrets ?? {});
-  const runtimeModulesJson = JSON.stringify(options.runtimeModules ?? []);
-  const resultJson = await (
-    options.onProgress === undefined
-      ? native.executeWomlWorkflowDurable(
-          ...arguments_,
-          secretsJson,
-          runtimeModulesJson
-        )
-      : native.executeWomlWorkflowDurableWithProgress(
-          ...arguments_,
-          progressCallback,
-          secretsJson,
-          runtimeModulesJson
-        )
-  ).catch(decodeNativeExecutionError);
-  return JSON.parse(resultJson) as RustWorkflowExecutionResult;
+  const request = profileSync('napi', 'napi.serialize_durable_request', measurements => {
+    const modelJson = JSON.stringify(workflow);
+    const triggerJson = JSON.stringify(options.trigger ?? {});
+    const secretsJson = JSON.stringify(options.resolvedSecrets ?? {});
+    const runtimeModulesJson = JSON.stringify(options.runtimeModules ?? []);
+    if (measurements !== undefined) {
+      measurements.bytes.model = Buffer.byteLength(modelJson);
+      measurements.bytes.trigger = Buffer.byteLength(triggerJson);
+      measurements.bytes.modules = Buffer.byteLength(runtimeModulesJson);
+      measurements.counts.nodes = workflow.graph.nodes.length;
+      measurements.counts.modules = options.runtimeModules?.length ?? 0;
+    }
+    return {
+      arguments: [
+        modelJson,
+        compiledDefinitionHash(workflow),
+        triggerJson,
+        options.bunExecutable ?? process.execPath,
+        options.scriptHostPath ?? defaultScriptHostPath(),
+        timeoutMs,
+        eventStorePath,
+      ] as const,
+      secretsJson,
+      runtimeModulesJson,
+    };
+  });
+  const resultJson = await profileAsync(
+    'napi',
+    'napi.execute_durable',
+    async measurements => {
+      const result = await (
+        options.onProgress === undefined
+          ? native.executeWomlWorkflowDurable(
+              ...request.arguments,
+              request.secretsJson,
+              request.runtimeModulesJson
+            )
+          : native.executeWomlWorkflowDurableWithProgress(
+              ...request.arguments,
+              progressCallback,
+              request.secretsJson,
+              request.runtimeModulesJson
+            )
+      ).catch(decodeNativeExecutionError);
+      if (measurements !== undefined) {
+        measurements.bytes.result = Buffer.byteLength(result);
+        const decoded: unknown = JSON.parse(result);
+        if (record(decoded) && typeof decoded.runId === 'string') {
+          measurements.identity.runId = decoded.runId;
+        }
+      }
+      return result;
+    }
+  );
+  return profileSync('napi', 'napi.decode_durable_result', measurements => {
+    const result = JSON.parse(resultJson) as RustWorkflowExecutionResult;
+    if (measurements !== undefined) {
+      measurements.bytes.result = Buffer.byteLength(resultJson);
+      measurements.identity.runId = result.runId;
+      measurements.counts.events = result.events.length;
+    }
+    return result;
+  });
 }
 
 export async function resumeWorkflowWithRustDurable(
@@ -2420,10 +2466,24 @@ export async function startWebhookRuntimeWithRust(
       `Native core at "${nativePath}" does not expose the T4 webhook runtime; rebuild the Rust addon.`
     );
   }
-  const resultJson = await native
-    .startWomlWebhookRuntime(
-      JSON.stringify(registrations),
-      JSON.stringify(options.startupManualTriggers ?? {}),
+  const serialized = profileSync('napi', 'napi.serialize_runtime_registration', measurements => {
+    const registrationsJson = JSON.stringify(registrations);
+    const manualTriggersJson = JSON.stringify(options.startupManualTriggers ?? {});
+    if (measurements !== undefined) {
+      measurements.bytes.registrations = Buffer.byteLength(registrationsJson);
+      measurements.bytes.manual_triggers = Buffer.byteLength(manualTriggersJson);
+      measurements.counts.workflows = registrations.length;
+      measurements.counts.nodes = registrations.reduce(
+        (total, registration) => total + registration.workflow.graph.nodes.length,
+        0
+      );
+    }
+    return { registrationsJson, manualTriggersJson };
+  });
+  const resultJson = await profileAsync('napi', 'napi.start_trigger_runtime', async measurements => {
+    const result = await native.startWomlWebhookRuntime(
+      serialized.registrationsJson,
+      serialized.manualTriggersJson,
       `${options.host ?? '127.0.0.1'}:${port}`,
       eventStorePath,
       options.bunExecutable ?? process.execPath,
@@ -2489,9 +2549,14 @@ export async function startWebhookRuntimeWithRust(
         }
         options.onTriggerProgress?.(parseTriggerProgress(message));
       }
-    )
-    .catch(decodeTriggerRuntimeError);
-  const value: unknown = JSON.parse(resultJson);
+    ).catch(decodeTriggerRuntimeError);
+    if (measurements !== undefined) measurements.bytes.result = Buffer.byteLength(result);
+    return result;
+  });
+  const value: unknown = profileSync('napi', 'napi.decode_runtime_start', measurements => {
+    if (measurements !== undefined) measurements.bytes.result = Buffer.byteLength(resultJson);
+    return JSON.parse(resultJson);
+  });
   if (
     !record(value) ||
     !exactKeys(value, ['runtimeId', 'host', 'port']) ||
@@ -2522,9 +2587,11 @@ export async function activateWebhookRuntimeWithRust(
       `Native core at "${nativePath}" does not expose atomic runtime activation; rebuild the Rust addon.`
     );
   }
-  await native
-    .activateWomlWebhookRuntime(runtimeId)
-    .catch(decodeTriggerRuntimeError);
+  await profileAsync('napi', 'napi.activate_trigger_runtime', async () => {
+    await native
+      .activateWomlWebhookRuntime(runtimeId)
+      .catch(decodeTriggerRuntimeError);
+  });
 }
 
 export async function submitTriggerOccurrenceWithRust(
@@ -2618,10 +2685,33 @@ export async function submitManualTriggerWithRust(
       `Native core at "${nativePath}" does not expose manual trigger admission; rebuild the Rust addon.`
     );
   }
-  const resultJson = await native
-    .submitWomlManualTrigger(runtimeId, JSON.stringify(request))
-    .catch(decodeTriggerRuntimeError);
-  const value: unknown = JSON.parse(resultJson);
+  const requestJson = profileSync('napi', 'napi.serialize_manual_trigger', measurements => {
+    const json = JSON.stringify(request);
+    if (measurements !== undefined) {
+      measurements.bytes.request = Buffer.byteLength(json);
+      measurements.identity.invocationId = request.requestId;
+    }
+    return json;
+  });
+  const resultJson = await profileAsync('napi', 'napi.submit_manual_trigger', async measurements => {
+    if (measurements !== undefined) measurements.identity.invocationId = request.requestId;
+    const result = await native
+      .submitWomlManualTrigger(runtimeId, requestJson)
+      .catch(decodeTriggerRuntimeError);
+    if (measurements !== undefined) measurements.bytes.result = Buffer.byteLength(result);
+    return result;
+  });
+  const value: unknown = profileSync('napi', 'napi.decode_manual_trigger', measurements => {
+    const decoded: unknown = JSON.parse(resultJson);
+    if (measurements !== undefined) {
+      measurements.bytes.result = Buffer.byteLength(resultJson);
+      measurements.identity.invocationId = request.requestId;
+      if (record(decoded) && typeof decoded.runId === 'string') {
+        measurements.identity.runId = decoded.runId;
+      }
+    }
+    return decoded;
+  });
   if (
     !record(value) ||
     value.profile !== 'woml.manual-trigger-admission/v1' ||
@@ -2800,10 +2890,19 @@ export function inspectRunPresentationWithRust(
       `Native core at "${nativePath}" does not expose Run Presentation v1; rebuild the Rust addon.`
     );
   }
-  const value = callRunManagementNative(() =>
-    native.inspectWomlRunPresentation(eventStorePath, runId)
-  );
-  return decodeRunPresentationV1(JSON.stringify(value));
+  const value = profileSync('napi', 'napi.inspect_run_presentation', measurements => {
+    if (measurements !== undefined) measurements.identity.runId = runId;
+    const inspected = callRunManagementNative(() =>
+      native.inspectWomlRunPresentation(eventStorePath, runId)
+    );
+    return inspected;
+  });
+  return profileSync('presentation', 'presentation.decode_run_presentation', measurements => {
+    if (measurements !== undefined) measurements.identity.runId = runId;
+    const encoded = JSON.stringify(value);
+    if (measurements !== undefined) measurements.bytes.presentation = Buffer.byteLength(encoded);
+    return decodeRunPresentationV1(encoded);
+  });
 }
 
 export function listRunPresentationsWithRust(

@@ -12,6 +12,7 @@ use crate::{
     CompiledReusableInvocation, CompiledTrigger, CompiledWorkflowDefinition, LifecycleEventName,
     ValueExpression,
   },
+  performance::PerformanceSpan,
   projection::{
     fold_events, FoldError, ForEachIterationStatus, ForEachStatus, LifecycleActionStatus,
     LifecycleHookStatus, RunFailure, RunProjection, RunStatus,
@@ -2243,6 +2244,8 @@ fn lifecycle(
 }
 
 fn summary(steps: &[StepPresentationV1]) -> RunPresentationSummaryV1 {
+  let mut performance = PerformanceSpan::new("presentation", "presentation.summarize_result");
+  performance.count("steps", steps.len());
   let mut value = RunPresentationSummaryV1 {
     succeeded: 0,
     failed: 0,
@@ -2259,6 +2262,7 @@ fn summary(steps: &[StepPresentationV1]) -> RunPresentationSummaryV1 {
       _ => {}
     }
   }
+  performance.succeed();
   value
 }
 
@@ -2267,6 +2271,11 @@ pub fn project_run_presentation_v1(
   definition_hash: &str,
   events: &[RunEvent],
 ) -> Result<RunPresentationV1, RunPresentationError> {
+  let mut performance = PerformanceSpan::new("presentation", "presentation.project_run");
+  performance.count("events", events.len());
+  if let Some(first) = events.first() {
+    performance.run_id(first.run_id.clone());
+  }
   if events.len() > RUN_PRESENTATION_MAX_EVENTS {
     return Err(RunPresentationError::TooMany("events"));
   }
@@ -2384,9 +2393,13 @@ pub fn project_run_presentation_v1(
     failure,
     warnings,
   };
-  if serde_json::to_vec(&presentation)?.len() > RUN_PRESENTATION_MAX_BYTES {
+  let encoded_bytes = serde_json::to_vec(&presentation)?.len();
+  performance.count("steps", presentation.steps.len());
+  performance.bytes("presentation", encoded_bytes);
+  if encoded_bytes > RUN_PRESENTATION_MAX_BYTES {
     return Err(RunPresentationError::TooLarge);
   }
+  performance.succeed();
   Ok(presentation)
 }
 
@@ -2394,13 +2407,18 @@ pub fn run_presentation_from_store_v1(
   store: &DurableEventStore,
   run_id: &str,
 ) -> Result<RunPresentationV1, RunPresentationError> {
+  let mut performance = PerformanceSpan::new("presentation", "presentation.inspect_store");
+  performance.run_id(run_id.to_string());
   if store.event_count(run_id)? > RUN_PRESENTATION_MAX_EVENTS {
     return Err(RunPresentationError::TooMany("events"));
   }
   let binding = store.run_binding(run_id)?;
   let workflow = store.definition(&binding.definition_hash)?;
   let events = store.events(run_id)?;
-  project_run_presentation_v1(&workflow, &binding.definition_hash, &events)
+  let presentation = project_run_presentation_v1(&workflow, &binding.definition_hash, &events)?;
+  performance.count("events", events.len());
+  performance.succeed();
+  Ok(presentation)
 }
 
 pub fn recent_run_presentations_from_store_v1(

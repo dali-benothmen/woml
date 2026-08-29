@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/performance-measurement.v1.schema.json",
+  "title": "WOML Performance Measurement v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "createdAt", "fixture", "environment", "parameters", "metrics"],
+  "properties": {
+    "profile": { "const": "woml.performance-measurement/v1" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "architecture", "bunVersion", "cpuModel", "logicalCpuCount", "memoryBytes", "nativeBuild", "cliArtifact"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "bunVersion": { "type": "string", "minLength": 1 },
+        "cpuModel": { "type": "string", "minLength": 1 },
+        "logicalCpuCount": { "type": "integer", "minimum": 1 },
+        "memoryBytes": { "type": "integer", "minimum": 1 },
+        "nativeBuild": { "enum": ["release", "debug", "unknown"] },
+        "cliArtifact": { "enum": ["built", "source"] }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "warmups", "iterations"],
+      "properties": {
+        "mode": { "enum": ["manual", "engine", "all"] },
+        "warmups": { "type": "integer", "minimum": 0 },
+        "iterations": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/metric" }
+    }
+  },
+  "$defs": {
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "minimumMs", "medianMs", "p95Ms", "maximumMs", "madMs"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 },
+        "minimumMs": { "type": "number", "minimum": 0 },
+        "medianMs": { "type": "number", "minimum": 0 },
+        "p95Ms": { "type": "number", "minimum": 0 },
+        "maximumMs": { "type": "number", "minimum": 0 },
+        "madMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "temperature", "unit", "boundary", "samples", "summary"],
+      "properties": {
+        "name": { "enum": ["harness.process", "activation.cold", "manual.visible", "engine.durable"] },
+        "temperature": { "enum": ["cold", "warm", "calibration"] },
+        "unit": { "const": "ms" },
+        "boundary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "type": "string", "minLength": 1 },
+            "end": { "type": "string", "minLength": 1 }
+          }
+        },
+        "samples": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": 0 }
+        },
+        "summary": { "$ref": "#/$defs/summary" }
+      }
+    }
+  }
+}
+

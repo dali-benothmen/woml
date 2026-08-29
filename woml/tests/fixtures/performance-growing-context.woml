@@ -1,0 +1,20 @@
+<woml>
+  <workflow
+    id="performance-growing-context"
+    name="Performance growing-context baseline"
+    description="Measures context transfer as sequential step outputs accumulate."
+    version="1.0.0"
+  >
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="chunk1"><script>return { blob: "a".repeat(32768) };</script></step>
+      <step id="chunk2"><script>return { blob: "b".repeat(32768), previous: context.steps.chunk1.blob.length };</script></step>
+      <step id="chunk3"><script>return { blob: "c".repeat(32768), previous: context.steps.chunk2.blob.length };</script></step>
+      <step id="chunk4"><script>return { blob: "d".repeat(32768), previous: context.steps.chunk3.blob.length };</script></step>
+      <step id="chunk5"><script>return { blob: "e".repeat(32768), previous: context.steps.chunk4.blob.length };</script></step>
+    </steps>
+  </workflow>
+</woml>

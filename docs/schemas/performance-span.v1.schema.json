@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/performance-span.v1.schema.json",
+  "title": "WOML Performance Span v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "traceId", "spanId", "process", "layer", "name", "startOffsetMs", "durationMs", "status"],
+  "properties": {
+    "profile": { "const": "woml.performance-span/v1" },
+    "traceId": { "type": "string", "minLength": 1 },
+    "spanId": { "type": "string", "minLength": 1 },
+    "parentSpanId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "invocationId": { "type": "string", "minLength": 1 },
+    "process": { "enum": ["cli", "native", "rust", "host", "worker"] },
+    "layer": { "enum": ["cli", "compiler", "napi", "runtime", "sqlite", "host", "worker", "presentation"] },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$" },
+    "startOffsetMs": { "type": "number", "minimum": 0 },
+    "durationMs": { "type": "number", "minimum": 0 },
+    "status": { "enum": ["succeeded", "failed", "cancelled"] },
+    "counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "bytes": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    }
+  }
+}

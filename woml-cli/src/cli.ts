@@ -180,6 +180,11 @@ import {
   type WorkflowPresentationV1,
 } from './terminal-presentation';
 import {
+  flushPerformanceProfile,
+  profileAsync,
+  profileSync,
+} from './performance-profiler';
+import {
   inspectUsage,
   parseInspectArguments,
   runRuntimeInspector,
@@ -1241,7 +1246,7 @@ function printNotificationWarnings(
   );
 }
 
-async function readWorkflow(filePath: string): Promise<string> {
+async function readWorkflowUnprofiled(filePath: string): Promise<string> {
   if (extname(filePath) !== '.woml') {
     throw new CliInputError(
       'WOML_INVALID_FILE_EXTENSION',
@@ -1270,6 +1275,17 @@ async function readWorkflow(filePath: string): Promise<string> {
   }
 
   return await Bun.file(filePath).text();
+}
+
+async function readWorkflow(filePath: string): Promise<string> {
+  return await profileAsync('compiler', 'compiler.read_source', async measurements => {
+    const source = await readWorkflowUnprofiled(filePath);
+    if (measurements !== undefined) {
+      measurements.counts.files = 1;
+      measurements.bytes.source = Buffer.byteLength(source);
+    }
+    return source;
+  });
 }
 
 interface CompiledWorkflowSource {
@@ -1306,7 +1322,7 @@ function samePackageSources(
   );
 }
 
-export async function assertStableSourceSnapshot(
+async function assertStableSourceSnapshotUnprofiled(
   sources: readonly {
     readonly sourceSnapshot: readonly SourceSnapshotEntry[];
   }[]
@@ -1332,7 +1348,23 @@ export async function assertStableSourceSnapshot(
   }
 }
 
-async function assertStableWorkflowInputSet(
+export async function assertStableSourceSnapshot(
+  sources: readonly {
+    readonly sourceSnapshot: readonly SourceSnapshotEntry[];
+  }[]
+): Promise<void> {
+  await profileAsync('compiler', 'compiler.verify_source_snapshot', async measurements => {
+    await assertStableSourceSnapshotUnprofiled(sources);
+    if (measurements !== undefined) {
+      measurements.counts.sources = sources.reduce(
+        (total, source) => total + source.sourceSnapshot.length,
+        0
+      );
+    }
+  });
+}
+
+async function assertStableWorkflowInputSetUnprofiled(
   inputPaths: readonly string[],
   expectedPaths: readonly string[]
 ): Promise<void> {
@@ -1352,6 +1384,19 @@ async function assertStableWorkflowInputSet(
       'the workflow input set changed while the deployment was activating; run the command again.'
     );
   }
+}
+
+async function assertStableWorkflowInputSet(
+  inputPaths: readonly string[],
+  expectedPaths: readonly string[]
+): Promise<void> {
+  await profileAsync('compiler', 'compiler.verify_input_set', async measurements => {
+    await assertStableWorkflowInputSetUnprofiled(inputPaths, expectedPaths);
+    if (measurements !== undefined) {
+      measurements.counts.inputs = inputPaths.length;
+      measurements.counts.files = expectedPaths.length;
+    }
+  });
 }
 
 function promoteForLifecycleAuthority(
@@ -1529,7 +1574,7 @@ function runtimeModulesFromPackage(
   );
 }
 
-async function workflowFilePaths(
+async function workflowFilePathsUnprofiled(
   inputPath: string
 ): Promise<readonly string[]> {
   let entry;
@@ -1564,7 +1609,17 @@ async function workflowFilePaths(
   return paths;
 }
 
-async function compileWorkflowSources(
+async function workflowFilePaths(
+  inputPath: string
+): Promise<readonly string[]> {
+  return await profileAsync('compiler', 'compiler.discover_input', async measurements => {
+    const paths = await workflowFilePathsUnprofiled(inputPath);
+    if (measurements !== undefined) measurements.counts.files = paths.length;
+    return paths;
+  });
+}
+
+async function compileWorkflowSourcesUnprofiled(
   inputPath: string,
   skipReusableDefinitions = false,
   io?: CliIo
@@ -1572,60 +1627,107 @@ async function compileWorkflowSources(
   const compiled: CompiledWorkflowSource[] = [];
   for (const filePath of await workflowFilePaths(inputPath)) {
     const source = await readWorkflow(filePath);
-    const document = parseWoml(source, { file: filePath });
+    const document = profileSync('compiler', 'compiler.parse_markup', measurements => {
+      if (measurements !== undefined) measurements.bytes.source = Buffer.byteLength(source);
+      return parseWoml(source, { file: filePath });
+    });
     const projectRoot = moduleProjectRoot(filePath);
-    const reusableGraph = resolveWomlReusableDefinitionGraph(document, {
-      sourcePath: filePath,
-      projectRoot,
+    const reusableGraph = profileSync('compiler', 'compiler.resolve_reusable_graph', measurements => {
+      const graph = resolveWomlReusableDefinitionGraph(document, {
+        sourcePath: filePath,
+        projectRoot,
+      });
+      if (measurements !== undefined) {
+        measurements.counts.definitions = graph.definitions.length;
+        measurements.counts.sources = graph.sources.length;
+      }
+      return graph;
     });
     if (reusableGraph.root.kind !== 'workflow') {
-      await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
+      await profileAsync('compiler', 'compiler.validate_module_entrypoints', async measurements => {
+        await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
+        if (measurements !== undefined) {
+          measurements.counts.sources = reusableGraph.sources.length;
+        }
+      });
       if (io !== undefined) {
-        await refreshReusableEditorData(
-          filePath,
-          generateWomlReusableCustomData(reusableGraph),
-          io
-        );
+        await profileAsync('compiler', 'compiler.refresh_reusable_editor_data', async measurements => {
+          const content = generateWomlReusableCustomData(reusableGraph);
+          if (measurements !== undefined) measurements.bytes.output = Buffer.byteLength(content);
+          await refreshReusableEditorData(filePath, content, io);
+        });
       }
       if (skipReusableDefinitions) continue;
       assertWomlDocumentRunnable(document);
     }
     if (reusableGraph.definitions.length > 0) {
       if (io !== undefined) {
-        await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
-        validateResolvedReusableWorkflow(document, reusableGraph);
-        await refreshReusableEditorData(
-          filePath,
-          generateWomlReusableCustomData(reusableGraph),
-          io
+        await profileAsync('compiler', 'compiler.validate_module_entrypoints', async measurements => {
+          await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
+          if (measurements !== undefined) {
+            measurements.counts.sources = reusableGraph.sources.length;
+          }
+        });
+        profileSync('compiler', 'compiler.validate_reusable_workflow', () =>
+          validateResolvedReusableWorkflow(document, reusableGraph)
         );
+        await profileAsync('compiler', 'compiler.refresh_reusable_editor_data', async measurements => {
+          const content = generateWomlReusableCustomData(reusableGraph);
+          if (measurements !== undefined) measurements.bytes.output = Buffer.byteLength(content);
+          await refreshReusableEditorData(filePath, content, io);
+        });
       }
     }
     const inspected =
       reusableGraph.definitions.length === 0
-        ? buildWomlDefinitionPackage(document, {
-            sourcePath: filePath,
-            projectRoot,
+        ? profileSync('compiler', 'compiler.build_definition_package', measurements => {
+            const definitionPackage = buildWomlDefinitionPackage(document, {
+              sourcePath: filePath,
+              projectRoot,
+            });
+            if (measurements !== undefined) {
+              measurements.counts.modules = definitionPackage.modules.length;
+              measurements.counts.sources = definitionPackage.sources.length;
+            }
+            return definitionPackage;
           })
         : undefined;
     if (inspected !== undefined && inspected.modules.length > 0) {
-      inspectWomlModuleServiceUsage(document, {
-        sourcePath: filePath,
-        projectRoot,
-      });
+      profileSync('compiler', 'compiler.inspect_module_services', () =>
+        inspectWomlModuleServiceUsage(document, {
+          sourcePath: filePath,
+          projectRoot,
+        })
+      );
     }
     const reusablePackage =
       reusableGraph.definitions.length > 0
-        ? await buildWomlReusableDefinitionPackage(document, reusableGraph, {
-            sourcePath: filePath,
-            projectRoot,
+        ? await profileAsync('compiler', 'compiler.build_reusable_package', async measurements => {
+            const definitionPackage = await buildWomlReusableDefinitionPackage(
+              document,
+              reusableGraph,
+              { sourcePath: filePath, projectRoot }
+            );
+            if (measurements !== undefined) {
+              measurements.counts.sources = definitionPackage.sources.length;
+              measurements.counts.artifacts = definitionPackage.artifacts.length;
+            }
+            return definitionPackage;
           })
         : undefined;
     const executablePackage =
       reusablePackage ?? (inspected!.modules.length > 0
-        ? await buildWomlExecutableDefinitionPackage(document, {
-            sourcePath: filePath,
-            projectRoot,
+        ? await profileAsync('compiler', 'compiler.build_executable_package', async measurements => {
+            const definitionPackage = await buildWomlExecutableDefinitionPackage(document, {
+              sourcePath: filePath,
+              projectRoot,
+            });
+            if (measurements !== undefined) {
+              measurements.counts.modules = definitionPackage.modules.length;
+              measurements.counts.sources = definitionPackage.sources.length;
+              measurements.counts.artifacts = definitionPackage.artifacts.length;
+            }
+            return definitionPackage;
           })
         : undefined);
     // Definition Package v7 is the frozen Model v12 compilation identity. RP6
@@ -1637,9 +1739,17 @@ async function compileWorkflowSources(
         : executablePackage?.schemaVersion === 7
         ? executablePackage
         : inspected!.modules.length > 0
-          ? await buildWomlRuntimeDefinitionPackage(document, {
-              sourcePath: filePath,
-              projectRoot,
+          ? await profileAsync('compiler', 'compiler.build_runtime_package', async measurements => {
+              const definitionPackage = await buildWomlRuntimeDefinitionPackage(document, {
+                sourcePath: filePath,
+                projectRoot,
+              });
+              if (measurements !== undefined) {
+                measurements.counts.modules = definitionPackage.modules.length;
+                measurements.counts.sources = definitionPackage.sources.length;
+                measurements.counts.artifacts = definitionPackage.artifacts.length;
+              }
+              return definitionPackage;
             })
           : undefined;
     const packageSources = runtimePackage?.sources ?? inspected!.sources;
@@ -1653,19 +1763,46 @@ async function compileWorkflowSources(
         `workflow or module source changed while "${filePath}" was being compiled; run the command again.`
       );
     }
-    const frontendWorkflow = runtimePackage?.workflow.model ?? compileWoml(document);
-    const workflow = promoteForLifecycleAuthority(frontendWorkflow);
+    const frontendWorkflow = runtimePackage?.workflow.model ?? profileSync(
+      'compiler',
+      'compiler.lower_model',
+      measurements => {
+        const lowered = compileWoml(document);
+        if (measurements !== undefined) {
+          measurements.counts.nodes = lowered.graph.nodes.length;
+          measurements.counts.edges = lowered.graph.edges.length;
+        }
+        return lowered;
+      }
+    );
+    const workflow = profileSync('compiler', 'compiler.promote_model', () =>
+      promoteForLifecycleAuthority(frontendWorkflow)
+    );
     const definitionHash = compiledDefinitionHash(workflow);
+    const runtimeModules = runtimePackage === undefined
+      ? []
+      : profileSync('compiler', 'compiler.materialize_runtime_modules', measurements => {
+          const modules = runtimeModulesFromPackage(runtimePackage);
+          if (measurements !== undefined) {
+            measurements.counts.modules = modules.length;
+            measurements.bytes.bundles = modules.reduce(
+              (total, module) => total + Buffer.byteLength(module.bundle),
+              0
+            );
+            measurements.bytes.source_maps = modules.reduce(
+              (total, module) => total + Buffer.byteLength(module.sourceMap),
+              0
+            );
+          }
+          return modules;
+        });
     compiled.push({
       filePath,
       activationInputPaths: [resolve(filePath)],
       document,
       workflow,
       definitionHash,
-      runtimeModules:
-        runtimePackage === undefined
-          ? []
-          : runtimeModulesFromPackage(runtimePackage),
+      runtimeModules,
       sourceSnapshot: packageSources.map(item => ({
         path: resolve(projectRoot, item.path),
         digest: item.digest,
@@ -1689,7 +1826,33 @@ async function compileWorkflowSources(
   return compiled;
 }
 
-async function compileWorkflowInputs(
+async function compileWorkflowSources(
+  inputPath: string,
+  skipReusableDefinitions = false,
+  io?: CliIo
+): Promise<readonly CompiledWorkflowSource[]> {
+  return await profileAsync('compiler', 'compiler.compile_source', async measurements => {
+    const compiled = await compileWorkflowSourcesUnprofiled(
+      inputPath,
+      skipReusableDefinitions,
+      io
+    );
+    if (measurements !== undefined) {
+      measurements.counts.workflows = compiled.length;
+      measurements.counts.nodes = compiled.reduce(
+        (total, source) => total + source.workflow.graph.nodes.length,
+        0
+      );
+      measurements.counts.modules = compiled.reduce(
+        (total, source) => total + source.runtimeModules.length,
+        0
+      );
+    }
+    return compiled;
+  });
+}
+
+async function compileWorkflowInputsUnprofiled(
   inputPaths: readonly string[],
   io?: CliIo
 ): Promise<readonly CompiledWorkflowSource[]> {
@@ -1701,70 +1864,113 @@ async function compileWorkflowInputs(
     readonly files: readonly string[];
     readonly directory: boolean;
   }> = [];
-  for (const inputPath of inputPaths) {
-    const resolvedFiles = (await workflowFilePaths(inputPath)).map(path =>
-      resolve(path)
-    );
-    const directory = (await stat(inputPath)).isDirectory();
-    inputSnapshots.push({ inputPath, files: resolvedFiles, directory });
-    for (const filePath of resolvedFiles) {
-      const absolutePath = resolve(filePath);
-      if (seenFiles.has(absolutePath)) continue;
-      seenFiles.add(absolutePath);
-      filePaths.push(absolutePath);
+  await profileAsync('compiler', 'compiler.snapshot_inputs', async measurements => {
+    for (const inputPath of inputPaths) {
+      const resolvedFiles = (await workflowFilePaths(inputPath)).map(path =>
+        resolve(path)
+      );
+      const directory = (await stat(inputPath)).isDirectory();
+      inputSnapshots.push({ inputPath, files: resolvedFiles, directory });
+      for (const filePath of resolvedFiles) {
+        const absolutePath = resolve(filePath);
+        if (seenFiles.has(absolutePath)) continue;
+        seenFiles.add(absolutePath);
+        filePaths.push(absolutePath);
+      }
     }
-  }
-  filePaths.sort((left, right) => left.localeCompare(right));
-  for (const filePath of filePaths) {
-    const explicitFile = inputSnapshots.some(
-      snapshot => !snapshot.directory && snapshot.files.includes(filePath)
-    );
-    for (const source of await compileWorkflowSources(
-      filePath,
-      !explicitFile,
-      io
-    )) {
-      compiled.push(source);
+    filePaths.sort((left, right) => left.localeCompare(right));
+    if (measurements !== undefined) {
+      measurements.counts.inputs = inputPaths.length;
+      measurements.counts.files = filePaths.length;
     }
-  }
-  if (compiled.length === 0) {
-    throw new CliInputError(
-      'WOML_RUNNABLE_WORKFLOW_REQUIRED',
-      'input contains reusable definitions but no runnable workflow document.'
-    );
-  }
-  const workflowIds = new Set<string>();
-  for (const source of compiled) {
-    if (workflowIds.has(source.workflow.workflowId)) {
+  });
+  await profileAsync('compiler', 'compiler.compile_files', async measurements => {
+    for (const filePath of filePaths) {
+      const explicitFile = inputSnapshots.some(
+        snapshot => !snapshot.directory && snapshot.files.includes(filePath)
+      );
+      for (const source of await compileWorkflowSources(
+        filePath,
+        !explicitFile,
+        io
+      )) {
+        compiled.push(source);
+      }
+    }
+    if (measurements !== undefined) measurements.counts.workflows = compiled.length;
+  });
+  profileSync('compiler', 'compiler.validate_workflow_set', measurements => {
+    if (compiled.length === 0) {
       throw new CliInputError(
-        'WOML_WORKFLOW_ID_DUPLICATE',
-        `workflow ID "${source.workflow.workflowId}" is declared more than once.`
+        'WOML_RUNNABLE_WORKFLOW_REQUIRED',
+        'input contains reusable definitions but no runnable workflow document.'
       );
     }
-    workflowIds.add(source.workflow.workflowId);
-  }
+    const workflowIds = new Set<string>();
+    for (const source of compiled) {
+      if (workflowIds.has(source.workflow.workflowId)) {
+        throw new CliInputError(
+          'WOML_WORKFLOW_ID_DUPLICATE',
+          `workflow ID "${source.workflow.workflowId}" is declared more than once.`
+        );
+      }
+      workflowIds.add(source.workflow.workflowId);
+    }
+    if (measurements !== undefined) measurements.counts.workflows = workflowIds.size;
+  });
   await assertStableSourceSnapshot(compiled);
-  for (const snapshot of inputSnapshots) {
-    if (!snapshot.directory) continue;
-    const current = (await workflowFilePaths(snapshot.inputPath)).map(path =>
-      resolve(path)
-    );
-    if (
-      current.length !== snapshot.files.length ||
-      current.some((path, index) => path !== snapshot.files[index])
-    ) {
-      throw new CliInputError(
-        'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
-        `workflow directory "${snapshot.inputPath}" changed while the deployment was being compiled; run the command again.`
+  await profileAsync('compiler', 'compiler.verify_directory_snapshots', async measurements => {
+    let directories = 0;
+    for (const snapshot of inputSnapshots) {
+      if (!snapshot.directory) continue;
+      directories += 1;
+      const current = (await workflowFilePaths(snapshot.inputPath)).map(path =>
+        resolve(path)
+      );
+      if (
+        current.length !== snapshot.files.length ||
+        current.some((path, index) => path !== snapshot.files[index])
+      ) {
+        throw new CliInputError(
+          'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
+          `workflow directory "${snapshot.inputPath}" changed while the deployment was being compiled; run the command again.`
+        );
+      }
+    }
+    if (measurements !== undefined) measurements.counts.directories = directories;
+  });
+  const activationInputPaths = profileSync(
+    'compiler',
+    'compiler.materialize_activation_inputs',
+    measurements => {
+      const paths = inputSnapshots
+        .flatMap(snapshot => snapshot.files)
+        .map(path => resolve(path))
+        .filter((path, index, values) => values.indexOf(path) === index)
+        .sort((left, right) => left.localeCompare(right));
+      if (measurements !== undefined) measurements.counts.files = paths.length;
+      return paths;
+    }
+  );
+  return compiled.map(source => ({ ...source, activationInputPaths }));
+}
+
+async function compileWorkflowInputs(
+  inputPaths: readonly string[],
+  io?: CliIo
+): Promise<readonly CompiledWorkflowSource[]> {
+  return await profileAsync('compiler', 'compiler.compile_inputs', async measurements => {
+    const compiled = await compileWorkflowInputsUnprofiled(inputPaths, io);
+    if (measurements !== undefined) {
+      measurements.counts.inputs = inputPaths.length;
+      measurements.counts.workflows = compiled.length;
+      measurements.counts.nodes = compiled.reduce(
+        (total, source) => total + source.workflow.graph.nodes.length,
+        0
       );
     }
-  }
-  const activationInputPaths = inputSnapshots
-    .flatMap(snapshot => snapshot.files)
-    .map(path => resolve(path))
-    .filter((path, index, paths) => paths.indexOf(path) === index)
-    .sort((left, right) => left.localeCompare(right));
-  return compiled.map(source => ({ ...source, activationInputPaths }));
+    return compiled;
+  });
 }
 
 export function activationIdentity(
@@ -1805,7 +2011,7 @@ function editorTypesPath(inputPath: string, inputIsDirectory: boolean): string {
   );
 }
 
-async function refreshEditorTypes(
+async function refreshEditorTypesUnprofiled(
   inputPath: string,
   modules: readonly {
     readonly name: string;
@@ -1830,6 +2036,20 @@ async function refreshEditorTypes(
       `Warning [WOML_EDITOR_TYPES_WRITE_FAILED]: Could not refresh ${outputPath}: ${reason}\nWorkflow execution can continue; use woml types <workflow> --output <path> to choose a writable location.\n`
     );
   }
+}
+
+async function refreshEditorTypes(
+  inputPath: string,
+  modules: readonly {
+    readonly name: string;
+    readonly exports: readonly string[];
+  }[],
+  io: CliIo
+): Promise<void> {
+  await profileAsync('compiler', 'compiler.refresh_editor_types', async measurements => {
+    await refreshEditorTypesUnprofiled(inputPath, modules, io);
+    if (measurements !== undefined) measurements.counts.modules = modules.length;
+  });
 }
 
 async function refreshReusableEditorData(
@@ -3808,13 +4028,22 @@ async function activateWorkflows(
       const eventRoutes = productionSources
         .flatMap(source => eventRouteSummaries(source.workflow))
         .filter(route => route.publicEndpoint);
-      const registrations = await Promise.all(
-        productionSources.map(async source => ({
-          workflow: source.workflow,
-          definitionHash: source.definitionHash,
-          resolvedSecrets: await resolvedSecrets(source.workflow, store),
-          runtimeModules: source.runtimeModules,
-        }))
+      const registrations = await profileAsync(
+        'runtime',
+        'runtime.resolve_registrations',
+        async measurements => {
+          if (measurements !== undefined) {
+            measurements.counts.workflows = productionSources.length;
+          }
+          return await Promise.all(
+            productionSources.map(async source => ({
+              workflow: source.workflow,
+              definitionHash: source.definitionHash,
+              resolvedSecrets: await resolvedSecrets(source.workflow, store),
+              runtimeModules: source.runtimeModules,
+            }))
+          );
+        }
       );
       const routes = productionSources.flatMap(source =>
         webhookRouteSummaries(source.workflow)
@@ -3887,10 +4116,18 @@ async function activateWorkflows(
         routes.length > 0 || uniqueEventRoutes.length > 0 || hasWhatsAppEndpoint;
       const currentActivationId = activationIdentity(productionSources);
       const currentDeploymentId = deploymentIdentity(args.statePath);
-      const runtime = await startWebhookRuntimeWithRust(
-        registrations,
-        args.statePath,
-        {
+      const runtime = await profileAsync(
+        'runtime',
+        'runtime.start_core_services',
+        async measurements => {
+          if (measurements !== undefined) {
+            measurements.counts.workflows = registrations.length;
+            measurements.counts.http_endpoints = hasHttpEndpoint ? 1 : 0;
+          }
+          return await startWebhookRuntimeWithRust(
+            registrations,
+            args.statePath,
+            {
           nativeCorePath: dependencies.nativeCorePath,
           host: hasHttpEndpoint ? args.host : '127.0.0.1',
           port: hasHttpEndpoint ? args.port : 0,
@@ -3954,10 +4191,16 @@ async function activateWorkflows(
               resolveRuntimeUnavailable();
             }
           },
+            }
+          );
         }
       );
       runtimeId = runtime.runtimeId;
-      {
+      profileSync('runtime', 'runtime.initialize_observability', measurements => {
+        if (measurements !== undefined) {
+          measurements.counts.workflows = productionSources.length;
+          measurements.counts.pending_progress = pendingObservabilityProgress.length;
+        }
         const componentRecords = [
           {
             name: 'sqlite',
@@ -4056,8 +4299,11 @@ async function activateWorkflows(
         for (const progress of pendingObservabilityProgress)
           observability.recordProgress(progress);
         pendingObservabilityProgress.length = 0;
-      }
-      runtimeControl = await startRuntimeControl({
+      });
+      runtimeControl = await profileAsync(
+        'runtime',
+        'runtime.start_control',
+        async () => await startRuntimeControl({
         runtimeInstanceId: runtime.runtimeId,
         deploymentId: currentDeploymentId,
         host: args.adminHost,
@@ -4100,7 +4346,8 @@ async function activateWorkflows(
             return result.code;
           },
         },
-      });
+        })
+      );
 
       const communicationProviders = new CommunicationProviderRegistry();
       if (slackRegistrations.length > 0) {
@@ -4284,7 +4531,10 @@ async function activateWorkflows(
           adapter: discordHost,
         });
       }
-      if (communicationProviders.providers('trigger').length > 0) {
+      await profileAsync('runtime', 'runtime.start_provider_hosts', async measurements => {
+        const providerCount = communicationProviders.providers('trigger').length;
+        if (measurements !== undefined) measurements.counts.providers = providerCount;
+        if (providerCount > 0) {
         communicationTriggerHost = new CommunicationTriggerHost(
           communicationProviders.triggerAdapters()
         );
@@ -4311,14 +4561,20 @@ async function activateWorkflows(
                 : slackFailure;
           throw new CliInputError(failure.code, failure.message);
         }
-      }
+        }
+      });
 
       // Provider startup may take long enough for an editor or generator to
       // rewrite a source. Never open admission for a mixed activation.
-      await assertStableSourceSnapshot(productionSources);
-      await assertStableWorkflowInputSet(args.inputPaths, activationInputPaths);
-      await activateWebhookRuntimeWithRust(runtime.runtimeId, {
-        nativeCorePath: dependencies.nativeCorePath,
+      await profileAsync('runtime', 'runtime.final_source_revalidation', async measurements => {
+        if (measurements !== undefined) measurements.counts.inputs = activationInputPaths.length;
+        await assertStableSourceSnapshot(productionSources);
+        await assertStableWorkflowInputSet(args.inputPaths, activationInputPaths);
+      });
+      await profileAsync('runtime', 'runtime.open_admission', async () => {
+        await activateWebhookRuntimeWithRust(runtime.runtimeId, {
+          nativeCorePath: dependencies.nativeCorePath,
+        });
       });
       observability?.setLifecycle('ready');
       observability?.log(
@@ -4329,7 +4585,11 @@ async function activateWorkflows(
       foregroundPresentation.verbose(
         `Deployment activation ${currentActivationId.slice(7, 19)} is ready with ${productionSources.length} workflow(s).`
       );
-      automaticRetention = startAutomaticRetention({
+      automaticRetention = profileSync('runtime', 'runtime.schedule_retention', measurements => {
+        if (measurements !== undefined) {
+          measurements.counts.enabled = args.retention?.enabled === true ? 1 : 0;
+        }
+        return startAutomaticRetention({
         statePath: args.statePath,
         configuration: args.retention,
         nativeCorePath: dependencies.nativeCorePath,
@@ -4358,6 +4618,7 @@ async function activateWorkflows(
           observability?.alert(code, formatError(error));
           foregroundPresentation.warning(code, formatError(error));
         },
+        });
       });
       if (automaticRetention.nextRunAt !== undefined) {
         foregroundPresentation.verbose(
@@ -4365,14 +4626,19 @@ async function activateWorkflows(
         );
       }
       descriptorPath = runtimeDescriptorPath(args.statePath);
-      await runtimeControl.publishDescriptor(descriptorPath);
+      await profileAsync('runtime', 'runtime.publish_descriptor', async () => {
+        await runtimeControl!.publishDescriptor(descriptorPath!);
+      });
       foregroundPresentation.verbose(
         `Inspect live runtime with woml inspect --state ${JSON.stringify(args.statePath)}.`
       );
-      await dependencies.onRuntimeReady?.({
-        runtimeInstanceId: runtime.runtimeId,
-        descriptorPath,
-        workflowCount: productionSources.length,
+      await profileAsync('runtime', 'runtime.report_ready', async measurements => {
+        if (measurements !== undefined) measurements.counts.workflows = productionSources.length;
+        await dependencies.onRuntimeReady?.({
+          runtimeInstanceId: runtime.runtimeId,
+          descriptorPath: descriptorPath!,
+          workflowCount: productionSources.length,
+        });
       });
       for (const source of productionSources) {
         foregroundPresentation.startup(
@@ -4985,7 +5251,7 @@ async function runInBackground(
   }
 }
 
-export async function runCli(
+async function runCliUnprofiled(
   args: readonly string[],
   io: CliIo = processIo,
   dependencies: CliDependencies = defaultDependencies
@@ -5340,7 +5606,10 @@ export async function runCli(
 
   let runArguments: RunArguments;
   try {
-    runArguments = parseRunArguments(args);
+    runArguments = profileSync('cli', 'cli.parse_run_arguments', measurements => {
+      if (measurements !== undefined) measurements.counts.arguments = args.length;
+      return parseRunArguments(args);
+    });
   } catch (error) {
     const commandUsage = args[0] === 'test' ? testUsage() : runUsage();
     if (error instanceof CliInputError && error.message !== commandUsage) {
@@ -5350,7 +5619,11 @@ export async function runCli(
     return 2;
   }
   try {
-    runArguments = await resolveRunArgumentsConfiguration(runArguments);
+    runArguments = await profileAsync(
+      'cli',
+      'cli.resolve_runtime_configuration',
+      async () => await resolveRunArgumentsConfiguration(runArguments)
+    );
   } catch (error) {
     io.stderr(`${formatError(error)}\n`);
     return 1;
@@ -5424,6 +5697,21 @@ export async function runCli(
       `${formatError(error, source?.filePath ?? filePath, source?.document)}\n`
     );
     return 1;
+  }
+}
+
+export async function runCli(
+  args: readonly string[],
+  io: CliIo = processIo,
+  dependencies: CliDependencies = defaultDependencies
+): Promise<number> {
+  try {
+    return await profileAsync('cli', 'cli.run_command', async measurements => {
+      if (measurements !== undefined) measurements.counts.arguments = args.length;
+      return await runCliUnprofiled(args, io, dependencies);
+    });
+  } finally {
+    await flushPerformanceProfile();
   }
 }
 

@@ -1,3 +1,9 @@
+import {
+  flushPerformanceProfile,
+  profileAsync,
+  profileSync,
+  type PerformanceMeasurements,
+} from '../performance-profiler';
 import { findJsonViolation } from './json';
 import { assertInboundMessage, MessageProtocolError } from './protocol';
 import type {
@@ -121,6 +127,32 @@ function successMessage(
 
 function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function moduleCount(request: ExecuteMessage): number {
+  return 'modules' in request ? request.modules.length : 0;
+}
+
+function identifyInvocation(
+  measurements: PerformanceMeasurements | undefined,
+  request: Pick<ExecuteMessage, 'invocationId' | 'runId'>
+): void {
+  if (measurements === undefined) return;
+  measurements.identity.invocationId = request.invocationId;
+  measurements.identity.runId = request.runId;
+}
+
+function workerEnvironment(): Readonly<Record<string, string>> {
+  if (process.env.WOML_PROFILE !== '1') return {};
+  const output = process.env.WOML_PROFILE_OUTPUT;
+  const trace = process.env.WOML_PROFILE_TRACE_ID;
+  if (output === undefined || trace === undefined) return {};
+  return {
+    WOML_PROFILE: '1',
+    WOML_PROFILE_OUTPUT: output,
+    WOML_PROFILE_TRACE_ID: trace,
+    WOML_PROFILE_PROCESS: 'worker',
+  };
 }
 
 export class ScriptHost {
@@ -367,8 +399,29 @@ export class ScriptHost {
   }
 
   async #execute(request: ExecuteMessage): Promise<void> {
+    try {
+      await profileAsync('host', 'host.execute_invocation', async measurements => {
+        identifyInvocation(measurements, request);
+        if (measurements !== undefined) {
+          measurements.bytes.context = byteLength(request.context);
+          measurements.bytes.source = Buffer.byteLength(request.source, 'utf8');
+          measurements.counts.modules = moduleCount(request);
+        }
+        await this.#executeUnprofiled(request);
+      });
+    } finally {
+      await flushPerformanceProfile();
+    }
+  }
+
+  async #executeUnprofiled(request: ExecuteMessage): Promise<void> {
     const startedAt = performance.now();
-    const contextBytes = byteLength(request.context);
+    const contextBytes = profileSync('host', 'host.measure_context', measurements => {
+      identifyInvocation(measurements, request);
+      const bytes = byteLength(request.context);
+      if (measurements !== undefined) measurements.bytes.context = bytes;
+      return bytes;
+    });
     if (
       this.#limits.maxContextBytes !== undefined &&
       contextBytes > this.#limits.maxContextBytes
@@ -465,7 +518,25 @@ export class ScriptHost {
       return;
     }
 
-    const violation = findJsonViolation(response.result);
+    const validation = profileSync('host', 'host.validate_result', measurements => {
+      identifyInvocation(measurements, request);
+      const violation = findJsonViolation(response.result);
+      const includesSecret =
+        (request.protocolVersion === 4 ||
+          request.protocolVersion === 5 ||
+          request.protocolVersion === 6 ||
+          request.protocolVersion === 7 ||
+          request.protocolVersion === 8 ||
+          request.protocolVersion === 9) &&
+        containsKnownSecret(
+          response.result,
+          Object.values(request.bindings.secrets)
+        );
+      const resultBytes = byteLength(response.result);
+      if (measurements !== undefined) measurements.bytes.result = resultBytes;
+      return { violation, includesSecret, resultBytes };
+    });
+    const { violation, includesSecret, resultBytes } = validation;
     if (violation !== undefined) {
       await this.#send(
         failureMessage(request, startedAt, {
@@ -484,10 +555,7 @@ export class ScriptHost {
         request.protocolVersion === 7 ||
         request.protocolVersion === 8 ||
         request.protocolVersion === 9) &&
-      containsKnownSecret(
-        response.result,
-        Object.values(request.bindings.secrets)
-      )
+      includesSecret
     ) {
       await this.#send(
         failureMessage(request, startedAt, {
@@ -499,7 +567,6 @@ export class ScriptHost {
       return;
     }
 
-    const resultBytes = byteLength(response.result);
     if (
       this.#limits.maxResultBytes !== undefined &&
       resultBytes > this.#limits.maxResultBytes
@@ -524,13 +591,28 @@ export class ScriptHost {
   }
 
   #invokeWorker(request: ExecuteMessage): Promise<WorkerOutcome> {
+    return profileAsync('host', 'host.invoke_worker', async measurements => {
+      identifyInvocation(measurements, request);
+      if (measurements !== undefined) {
+        measurements.bytes.context = byteLength(request.context);
+        measurements.bytes.source = Buffer.byteLength(request.source, 'utf8');
+        measurements.counts.modules = moduleCount(request);
+      }
+      return await this.#invokeWorkerUnprofiled(request);
+    });
+  }
+
+  #invokeWorkerUnprofiled(request: ExecuteMessage): Promise<WorkerOutcome> {
     let worker: Worker;
     try {
-      worker = new Worker(this.#workerUrl, {
-        type: 'module',
-        ref: true,
-        smol: true,
-        env: {},
+      worker = profileSync('host', 'host.create_worker', measurements => {
+        identifyInvocation(measurements, request);
+        return new Worker(this.#workerUrl, {
+          type: 'module',
+          ref: true,
+          smol: true,
+          env: workerEnvironment(),
+        });
       });
     } catch {
       return Promise.resolve({
@@ -570,7 +652,10 @@ export class ScriptHost {
         this.#pendingCalls.delete(request.invocationId);
         this.#pendingFetchAcks.delete(request.invocationId);
         this.#activeFetches.delete(request.invocationId);
-        worker.terminate();
+        profileSync('host', 'host.terminate_worker', measurements => {
+          identifyInvocation(measurements, request);
+          worker.terminate();
+        });
         resolve(outcome);
       };
       const timeout = setTimeout(
@@ -586,6 +671,18 @@ export class ScriptHost {
       this.#activeFetches.set(request.invocationId, new Set());
       worker.onmessage = (event: MessageEvent<ScriptWorkerOutbound>) => {
         const message = event.data;
+        profileSync(
+          'host',
+          message.messageType === 'completed'
+            ? 'host.receive_worker_result'
+            : 'host.receive_worker_message',
+          measurements => {
+            identifyInvocation(measurements, request);
+            if (measurements !== undefined) {
+              measurements.bytes.message = byteLength(message);
+            }
+          }
+        );
         if (message.messageType === 'completed') {
           if (
             (this.#pendingFetchAcks.get(request.invocationId)?.size ?? 0) > 0 ||
@@ -727,9 +824,16 @@ export class ScriptHost {
           request.protocolVersion === 9
             ? request.attempt
             : undefined;
-        worker.postMessage({
-          messageType: 'execute',
-          request: {
+        profileSync('host', 'host.post_worker_request', measurements => {
+          identifyInvocation(measurements, request);
+          if (measurements !== undefined) {
+            measurements.bytes.context = byteLength(request.context);
+            measurements.bytes.source = Buffer.byteLength(request.source, 'utf8');
+            measurements.counts.modules = moduleCount(request);
+          }
+          worker.postMessage({
+            messageType: 'execute',
+            request: {
             invocationId: request.invocationId,
             runId: request.runId,
             nodeId: request.nodeId,
@@ -795,8 +899,9 @@ export class ScriptHost {
                   }),
                 }
               : {}),
-          } satisfies ScriptWorkerRequest,
-        } satisfies ScriptWorkerInbound);
+            } satisfies ScriptWorkerRequest,
+          } satisfies ScriptWorkerInbound);
+        });
       } catch {
         finish({
           kind: 'crashed',

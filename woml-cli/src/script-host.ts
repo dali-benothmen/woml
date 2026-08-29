@@ -2,6 +2,12 @@
 
 import { randomUUID } from 'node:crypto';
 
+import {
+  flushPerformanceProfile,
+  profileAsync,
+  profileSync,
+  type PerformanceMeasurements,
+} from './performance-profiler';
 import { FrameDecoder, SerializedFrameWriter } from './script-host/framing';
 import { ScriptHost } from './script-host/host';
 import type {
@@ -57,6 +63,24 @@ async function writeStdout(frame: Uint8Array): Promise<void> {
   });
 }
 
+function measureMessage(
+  measurements: PerformanceMeasurements | undefined,
+  message: unknown
+): void {
+  if (measurements === undefined) return;
+  const value = message as {
+    readonly invocationId?: unknown;
+    readonly runId?: unknown;
+  };
+  if (typeof value.invocationId === 'string') {
+    measurements.identity.invocationId = value.invocationId;
+  }
+  if (typeof value.runId === 'string') {
+    measurements.identity.runId = value.runId;
+  }
+  measurements.bytes.message = Buffer.byteLength(JSON.stringify(message));
+}
+
 export async function runScriptHost(): Promise<void> {
   const limits = limitsFromEnvironment();
   const protocolVersion = protocolVersionFromEnvironment();
@@ -69,7 +93,10 @@ export async function runScriptHost(): Promise<void> {
     workerUrl: new URL(workerEntry, import.meta.url),
     limits,
     protocolVersion,
-    send: message => writer.send(message),
+    send: message => profileAsync('host', 'host.write_frame', async measurements => {
+      measureMessage(measurements, message);
+      await writer.send(message);
+    }),
   });
   const ready: ReadyMessage = {
     protocol: 'woml.script-host',
@@ -79,18 +106,36 @@ export async function runScriptHost(): Promise<void> {
   };
 
   try {
-    await writer.send(ready);
+    await profileAsync('host', 'host.ready', async measurements => {
+      measureMessage(measurements, ready);
+      await writer.send(ready);
+    });
     const reader = Bun.stdin.stream().getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      for (const message of decoder.push(value)) host.accept(message);
+      const messages = profileSync('host', 'host.decode_frames', measurements => {
+        const decoded = decoder.push(value);
+        if (measurements !== undefined) {
+          measurements.bytes.input = value.byteLength;
+          measurements.counts.messages = decoded.length;
+        }
+        return decoded;
+      });
+      for (const message of messages) {
+        profileSync('host', 'host.accept_message', measurements => {
+          measureMessage(measurements, message);
+          host.accept(message);
+        });
+      }
     }
     decoder.finish();
     await host.drain();
     await writer.drain();
+    await flushPerformanceProfile();
   } catch (error) {
     host.abort();
+    await flushPerformanceProfile();
     const message =
       error instanceof Error
         ? `${error.name}: ${error.message}`
