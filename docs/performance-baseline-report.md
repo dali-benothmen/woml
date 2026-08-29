@@ -1,6 +1,6 @@
-# PERF6 Baseline and PERF7 Optimization Decisions
+# PERF6 Baseline, PERF7 Optimization Decisions, and PERF8 Gates
 
-Status: PERF7 completed on 2026-08-29.
+Status: PERF8 completed on 2026-08-29.
 
 This report answers where WOML currently spends time. It ranks optimization work; it is not a promise that every machine will reproduce the same absolute latency.
 
@@ -160,4 +160,20 @@ The regular-worker prototype preserved per-invocation isolation and improved the
 
 ### Correctness gates
 
-The adopted host lifecycle is protected by a release-artifact regression test proving that three manual runs use one supervised host but six distinct isolated workers. Existing script-host protocol, durable-store, capability-authority, compiler, runtime, lifecycle, cancellation, recovery, and terminal-presentation tests remain the correctness authority. PERF8 will turn the stable component-level expectations into regression budgets and keep variable end-to-end measurements informational where shared CI runners are too noisy for hard limits.
+The adopted host lifecycle is protected by a release-artifact regression test proving that three manual runs use one supervised host but six distinct isolated workers. Existing script-host protocol, durable-store, capability-authority, compiler, runtime, lifecycle, cancellation, recovery, and terminal-presentation tests remain the correctness authority.
+
+## PERF8 regression protection
+
+PERF8 freezes `woml.performance-regression-budgets/v1` with named compiler, runtime, presentation, and CI owners. Hard gates now cover the canonical graph shape, supervised-host process count, isolated-worker count, host shutdown, schema validity, compiler median/p95, and disabled-profiler overhead. They execute after the release-shaped runtime is built and fail CI on a real contract or component regression.
+
+End-to-end journeys remain advisory. CI measures the canonical two-step workflow, eight sequential steps, and a parallel workflow, retains their raw versioned measurements for 30 days, and adds a readable table to the GitHub job summary. A target miss is marked for review but cannot fail CI solely because a shared runner was slow. Artifact upload is also non-blocking because network failure must not invalidate otherwise successful runtime tests.
+
+The reviewed local PERF8 report produced:
+
+| Journey | Cold activation | Warm median | Warm p95 | Advisory |
+| --- | ---: | ---: | ---: | --- |
+| Canonical two-step | 598.35 ms | 110.19 ms | 271.98 ms | within targets |
+| Eight sequential steps | 574.06 ms | 327.92 ms | 547.86 ms | within targets |
+| Parallel workflow | 627.58 ms | 330.66 ms | 449.59 ms | within targets |
+
+The policy and approval requirements are documented in `docs/performance-regression-policy.md`. Local artifacts remain ignored because they contain machine-specific evidence, not source-controlled promises.

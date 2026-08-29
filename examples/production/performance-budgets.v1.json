@@ -1,5 +1,6 @@
 {
   "profile": "woml.production-performance-budgets/v1",
+  "regressionPolicy": "woml.performance-regression-budgets/v1",
   "cliVersionMs": 1000,
   "startupMs": 15000,
   "recoveryMs": 15000,

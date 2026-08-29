@@ -1,5 +1,6 @@
 {
   "profile": "woml.terminal-performance-budgets/v1",
+  "regressionPolicy": "woml.performance-regression-budgets/v1",
   "rendererAverageMsMax": 10,
   "projectionAverageMsMax": 25,
   "retainedAttachAverageMsMax": 20,

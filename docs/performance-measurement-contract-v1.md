@@ -122,3 +122,19 @@ The baseline is machine-specific evidence rather than a public performance promi
 ## Historical Cronflow comparison
 
 The remembered Cronflow latency of roughly 20 ms is a product reference, not a valid baseline until the same semantic workflow and the same timing boundary are reproduced from a historical revision. Historical comparisons must run from an isolated checkout and must not restore legacy execution code to WOML.
+
+## PERF8 regression protection
+
+After building the release-shaped runtime, run the deterministic contracts with:
+
+```bash
+bun run test:performance-regression
+```
+
+Generate the advisory canonical, eight-step, and parallel report with:
+
+```bash
+bun run report:performance-regression
+```
+
+The hard gates read `docs/performance-regression-budgets.v1.json`. The advisory report writes `.woml/performance/regression-v1.json` and intentionally exits successfully when only a machine-sensitive timing target is missed. See `docs/performance-regression-policy.md` for ownership and the reviewed budget-change process.

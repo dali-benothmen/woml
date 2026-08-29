@@ -35,6 +35,8 @@
     "profile:presentation:modes": "bun run --cwd woml-cli profile:presentation:modes",
     "benchmark:performance-baseline": "bun run --cwd woml-cli benchmark:performance-baseline",
     "benchmark:performance-baseline:quick": "bun run --cwd woml-cli benchmark:performance-baseline:quick",
+    "test:performance-regression": "bun run --cwd woml-cli test:performance-regression",
+    "report:performance-regression": "bun run --cwd woml-cli report:performance-regression",
     "release:check": "bun woml-cli/scripts/release-check.ts",
     "test:release": "bun run release:check"
   },

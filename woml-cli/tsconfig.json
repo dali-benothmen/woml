@@ -23,6 +23,8 @@
     "scripts/run-cli-test-shards.ts",
     "scripts/measure-workflow.ts",
     "scripts/performance-measurement.ts",
-    "scripts/performance-runtime-child.ts"
+    "scripts/performance-regression.ts",
+    "scripts/performance-runtime-child.ts",
+    "scripts/run-performance-regression.ts"
   ]
 }

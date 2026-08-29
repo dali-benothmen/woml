@@ -63,6 +63,9 @@ jobs:
       - name: Build the local runtime once
         working-directory: woml-cli
         run: bun run build
+      - name: Enforce deterministic performance contracts
+        working-directory: woml-cli
+        run: bun run test:performance-regression
       - name: Test portable CLI contracts
         working-directory: woml-cli
         run: bun run test:cli:contracts
@@ -77,6 +80,17 @@ jobs:
         run: >-
           bun test tests/for-each-presentation-hardening.test.ts
           tests/for-each-packaged-release.test.ts --max-concurrency=1
+      - name: Record informational end-to-end performance
+        working-directory: woml-cli
+        run: bun run report:performance-regression
+      - name: Upload informational performance report
+        uses: actions/upload-artifact@v6
+        continue-on-error: true
+        with:
+          name: ci-woml-performance-${{ github.run_attempt }}
+          path: woml-cli/.woml/performance/regression-v1.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Failure diagnostics
         if: failure()
         run: |

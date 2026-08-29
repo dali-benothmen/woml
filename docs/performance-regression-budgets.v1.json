@@ -1,0 +1,49 @@
+{
+  "profile": "woml.performance-regression-budgets/v1",
+  "owners": {
+    "compiler": "WOML language frontend maintainers",
+    "runtime": "WOML Rust runtime maintainers",
+    "presentation": "WOML CLI maintainers",
+    "ci": "WOML release maintainers"
+  },
+  "rationale": {
+    "hard": "Hard gates cover deterministic architecture and component boundaries with enough timing headroom to reject algorithmic regressions without policing shared-runner noise.",
+    "informational": "End-to-end targets identify material regressions for review but never fail CI solely because a shared runner was slow."
+  },
+  "hard": {
+    "canonicalWorkflowId": "performance-two-step",
+    "canonicalNodes": 2,
+    "canonicalEdges": 1,
+    "measuredRuns": 3,
+    "maxScriptHostSpawns": 1,
+    "maxScriptHostShutdowns": 1,
+    "isolatedWorkersPerScript": 1,
+    "compilerMedianMsMax": 50,
+    "compilerP95MsMax": 100,
+    "profilerDisabledOverheadNsMax": 500
+  },
+  "informational": {
+    "activationColdMedianMsMax": 3000,
+    "journeys": {
+      "canonical": {
+        "fixture": "woml/tests/fixtures/performance-two-step-manual.woml",
+        "manualMedianMsMax": 750,
+        "manualP95MsMax": 1500
+      },
+      "eightStep": {
+        "fixture": "woml/tests/fixtures/performance-eight-step-manual.woml",
+        "manualMedianMsMax": 1500,
+        "manualP95MsMax": 2500
+      },
+      "parallel": {
+        "fixture": "woml/tests/fixtures/parallel.woml",
+        "manualMedianMsMax": 1500,
+        "manualP95MsMax": 2500
+      }
+    }
+  },
+  "existingContracts": {
+    "terminal": "woml.terminal-performance-budgets/v1",
+    "production": "woml.production-performance-budgets/v1"
+  }
+}

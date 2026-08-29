@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/performance-regression-budgets.v1.schema.json",
+  "title": "WOML Performance Regression Budgets v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "owners",
+    "rationale",
+    "hard",
+    "informational",
+    "existingContracts"
+  ],
+  "properties": {
+    "profile": { "const": "woml.performance-regression-budgets/v1" },
+    "owners": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compiler", "runtime", "presentation", "ci"],
+      "properties": {
+        "compiler": { "$ref": "#/$defs/text" },
+        "runtime": { "$ref": "#/$defs/text" },
+        "presentation": { "$ref": "#/$defs/text" },
+        "ci": { "$ref": "#/$defs/text" }
+      }
+    },
+    "rationale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hard", "informational"],
+      "properties": {
+        "hard": { "$ref": "#/$defs/text" },
+        "informational": { "$ref": "#/$defs/text" }
+      }
+    },
+    "hard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalWorkflowId",
+        "canonicalNodes",
+        "canonicalEdges",
+        "measuredRuns",
+        "maxScriptHostSpawns",
+        "maxScriptHostShutdowns",
+        "isolatedWorkersPerScript",
+        "compilerMedianMsMax",
+        "compilerP95MsMax",
+        "profilerDisabledOverheadNsMax"
+      ],
+      "properties": {
+        "canonicalWorkflowId": { "$ref": "#/$defs/text" },
+        "canonicalNodes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "canonicalEdges": { "$ref": "#/$defs/nonNegativeInteger" },
+        "measuredRuns": { "type": "integer", "minimum": 2 },
+        "maxScriptHostSpawns": { "type": "integer", "minimum": 1 },
+        "maxScriptHostShutdowns": { "type": "integer", "minimum": 1 },
+        "isolatedWorkersPerScript": { "const": 1 },
+        "compilerMedianMsMax": { "$ref": "#/$defs/positiveNumber" },
+        "compilerP95MsMax": { "$ref": "#/$defs/positiveNumber" },
+        "profilerDisabledOverheadNsMax": { "$ref": "#/$defs/positiveNumber" }
+      }
+    },
+    "informational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activationColdMedianMsMax", "journeys"],
+      "properties": {
+        "activationColdMedianMsMax": { "$ref": "#/$defs/positiveNumber" },
+        "journeys": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/journey" }
+        }
+      }
+    },
+    "existingContracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal", "production"],
+      "properties": {
+        "terminal": { "const": "woml.terminal-performance-budgets/v1" },
+        "production": { "const": "woml.production-performance-budgets/v1" }
+      }
+    }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "nonNegativeInteger": { "type": "integer", "minimum": 0 },
+    "positiveNumber": { "type": "number", "exclusiveMinimum": 0 },
+    "journey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture", "manualMedianMsMax", "manualP95MsMax"],
+      "properties": {
+        "fixture": { "$ref": "#/$defs/text" },
+        "manualMedianMsMax": { "$ref": "#/$defs/positiveNumber" },
+        "manualP95MsMax": { "$ref": "#/$defs/positiveNumber" }
+      }
+    }
+  }
+}

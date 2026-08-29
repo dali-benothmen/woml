@@ -14,6 +14,7 @@ import {
   performanceMetric,
   summarizeSamples,
 } from '../scripts/performance-measurement';
+import { decodePerformanceRegressionBudgets } from '../scripts/performance-regression';
 
 const projectRoot = resolve(import.meta.dir, '../..');
 const fixture = resolve(
@@ -32,6 +33,14 @@ const nativeCore = resolve(
   import.meta.dir,
   '../dist',
   `woml-core.${process.platform}-${process.arch}.node`
+);
+const regressionBudgets = decodePerformanceRegressionBudgets(
+  JSON.parse(
+    readFileSync(
+      resolve(projectRoot, 'docs/performance-regression-budgets.v1.json'),
+      'utf8'
+    )
+  )
 );
 const builtTest = existsSync(nativeCore) ? test : test.skip;
 
@@ -78,12 +87,19 @@ describe('performance measurement contract v1', () => {
   test('keeps the canonical fixture intentionally small and valid', async () => {
     const source = await Bun.file(fixture).text();
     const workflow = compileWoml(parseWoml(source, { file: fixture }));
-    expect(workflow.workflowId).toBe('performance-two-step');
+    expect(workflow.workflowId).toBe(
+      regressionBudgets.hard.canonicalWorkflowId
+    );
     expect(workflow.graph.nodes.map(node => node.id)).toEqual([
       'prepare',
       'result',
     ]);
-    expect(workflow.graph.edges).toHaveLength(1);
+    expect(workflow.graph.nodes).toHaveLength(
+      regressionBudgets.hard.canonicalNodes
+    );
+    expect(workflow.graph.edges).toHaveLength(
+      regressionBudgets.hard.canonicalEdges
+    );
   });
 
   test('keeps the PERF4 scaling fixtures valid and intentionally shaped', async () => {
@@ -428,7 +444,7 @@ describe('performance measurement contract v1', () => {
             '--warmups',
             '1',
             '--iterations',
-            '2',
+            String(regressionBudgets.hard.measuredRuns - 1),
             '--profile-output',
             tracePath,
             '--json',
@@ -463,10 +479,22 @@ describe('performance measurement contract v1', () => {
             span.name === 'worker.execute_invocation'
         );
 
-        expect(rustHostSpawns).toHaveLength(1);
-        expect(rustHostShutdowns).toHaveLength(1);
-        expect(workerInvocations).toHaveLength(6);
-        expect(new Set(workerInvocations.map(span => span.runId)).size).toBe(3);
+        expect(rustHostSpawns.length).toBeGreaterThan(0);
+        expect(rustHostSpawns.length).toBeLessThanOrEqual(
+          regressionBudgets.hard.maxScriptHostSpawns
+        );
+        expect(rustHostShutdowns.length).toBeGreaterThan(0);
+        expect(rustHostShutdowns.length).toBeLessThanOrEqual(
+          regressionBudgets.hard.maxScriptHostShutdowns
+        );
+        expect(workerInvocations).toHaveLength(
+          regressionBudgets.hard.measuredRuns *
+            regressionBudgets.hard.canonicalNodes *
+            regressionBudgets.hard.isolatedWorkersPerScript
+        );
+        expect(new Set(workerInvocations.map(span => span.runId)).size).toBe(
+          regressionBudgets.hard.measuredRuns
+        );
       } finally {
         rmSync(directory, { recursive: true, force: true });
       }

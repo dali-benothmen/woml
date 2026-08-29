@@ -164,6 +164,8 @@
     "benchmark:performance-baseline": "bun scripts/run-performance-baseline.ts",
     "benchmark:performance-baseline:quick": "bun scripts/run-performance-baseline.ts --quick",
     "test:performance-measurement": "bun test tests/performance-measurement.test.ts --max-concurrency=1 && bun run typecheck",
+    "test:performance-regression": "bun test tests/performance-regression.test.ts tests/performance-measurement.test.ts --max-concurrency=1 && bun scripts/run-performance-regression.ts --mode hard && bun run typecheck",
+    "report:performance-regression": "bun scripts/run-performance-regression.ts --mode report",
     "test:rust-executor": "bun test tests/rust-executor.test.ts",
     "test:terminal-contracts": "bun test tests/terminal-presentation-contracts.test.ts",
     "test:terminal-renderer": "bun test tests/terminal-presentation-renderer.test.ts",
