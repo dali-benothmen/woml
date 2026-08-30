@@ -223,6 +223,7 @@ function buildEditPlan(repoRoot: string, from: string, to: string, dryRun: boole
   addPackageJson('woml-cli/package.json', 'public woml-cli version');
   addPackageJson('woml/package.json', 'private @woml/compiler version');
   addPackageJson('package.json', 'private woml-repository version');
+  addReplaceAll('package-lock.json', 'root npm lockfile identity');
   addPackageJson('woml-vscode/package.json', 'private woml-language version');
   addCargoToml('core/woml-engine/Cargo.toml', 'woml-engine crate version', false);
   addCargoToml('core/woml-native/Cargo.toml', 'woml-native crate version + woml-engine dep', true);

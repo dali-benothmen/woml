@@ -28,6 +28,8 @@ woml --version
 
 Native engines are installed automatically for supported macOS, Linux, and Windows systems. You do not need to install `@woml-org/*` packages directly or configure an external database.
 
+Linux packages require glibc 2.31 or newer.
+
 ## Quick Start: Route an Order
 
 Save this as `order-router.woml`:

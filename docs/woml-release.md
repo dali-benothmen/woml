@@ -16,6 +16,10 @@ dependencies and the WOML loader selects the exact runtime package.
 | Linux x64 glibc | `@woml-org/cli-linux-x64-gnu` |
 | Linux ARM64 glibc | `@woml-org/cli-linux-arm64-gnu` |
 
+Linux GNU packages are built against glibc 2.31 and run on glibc 2.31 or
+newer. The release workflow inspects every produced Linux binary and rejects
+it if any required `GLIBC_*` symbol exceeds that compatibility ceiling.
+
 The native packages contain only one `.node` binary, package metadata, README,
 and Apache-2.0 license. The main package contains the CLI, script hosts,
 communication-provider host, and built-in Slack/Telegram/Discord/WhatsApp
@@ -100,9 +104,11 @@ verifies the release family without publishing.
 
 The release builds only `core/woml-native`, which depends locally only on
 `woml-engine`. It never restores the retired combined Rust package. Cargo uses
-the committed workspace lockfile and one build job per runner. macOS, Windows,
-and Linux glibc artifacts are tested on matching runtime families
-before publication.
+the committed workspace lockfile and one build job per runner. Linux builds run
+inside the pinned multi-architecture `rust:1.88-bullseye` compatibility image,
+while their resulting packages are still load-tested on matching x64 and ARM64
+GitHub runners. macOS, Windows, and Linux artifacts all pass their matching
+runtime tests before publication.
 
 ## CI and artifact retention
 

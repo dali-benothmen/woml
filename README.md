@@ -97,6 +97,8 @@ woml --version
 
 Native engines are selected automatically for supported macOS, Linux, and Windows systems. You do not need to install the platform packages or configure a database manually.
 
+Linux packages require glibc 2.31 or newer.
+
 ## Quick Start: Build an Order Router
 
 Create a file named `order-router.woml`:

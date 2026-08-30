@@ -58,12 +58,18 @@ describe('WOML release automation', () => {
   });
 
   test('builds every frozen native target on its matching runner', async () => {
-    const { document } = await workflow('release');
+    const { document, source } = await workflow('release');
     const matrix = document.jobs?.['build-native']?.strategy?.matrix?.include ?? [];
     const targets = matrix.map(entry => entry.package).sort();
     expect(targets).toEqual([...womlNativeTargets].sort());
     expect(new Set(matrix.map(entry => entry.rust)).size).toBe(6);
     expect(matrix.every(entry => typeof entry.runner === 'string')).toBe(true);
+    const linux = matrix.filter(entry => String(entry.package).startsWith('linux-'));
+    expect(linux).toHaveLength(2);
+    expect(linux.every(entry => entry.linuxContainer === 'rust:1.88-bullseye')).toBe(true);
+    expect(linux.every(entry => entry.glibcMax === '2.31')).toBe(true);
+    expect(source).toContain('Enforce the Linux glibc compatibility ceiling');
+    expect(source).toContain("grep -oE 'GLIBC_[0-9]+(\\.[0-9]+)*'");
   });
 
   test('clean-installs and executes every platform candidate before collection', async () => {

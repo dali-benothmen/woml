@@ -150,10 +150,14 @@ jobs:
             runner: ubuntu-24.04
             rust: x86_64-unknown-linux-gnu
             library: libwoml_core.so
+            linuxContainer: rust:1.88-bullseye
+            glibcMax: '2.31'
           - package: linux-arm64-gnu
             runner: ubuntu-24.04-arm
             rust: aarch64-unknown-linux-gnu
             library: libwoml_core.so
+            linuxContainer: rust:1.88-bullseye
+            glibcMax: '2.31'
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -172,11 +176,46 @@ jobs:
         with:
           targets: ${{ matrix.rust }}
       - name: Build the isolated WOML native adapter
+        if: ${{ !startsWith(matrix.package, 'linux-') }}
         shell: bash
         run: >-
           cargo build -j 1 --release --locked
           --manifest-path core/woml-native/Cargo.toml
           --target ${{ matrix.rust }}
+      - name: Build the Linux adapter against the compatibility baseline
+        if: ${{ startsWith(matrix.package, 'linux-') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            --env CARGO_BUILD_JOBS=1 \
+            --env CARGO_TERM_COLOR=always \
+            "${{ matrix.linuxContainer }}" \
+            cargo build -j 1 --release --locked \
+              --manifest-path core/woml-native/Cargo.toml \
+              --target "${{ matrix.rust }}"
+      - name: Enforce the Linux glibc compatibility ceiling
+        if: ${{ startsWith(matrix.package, 'linux-') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="dist/target/${{ matrix.rust }}/release/${{ matrix.library }}"
+          highest=$(readelf --version-info "${artifact}" \
+            | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)*' \
+            | sort -Vu \
+            | tail -n 1)
+          ceiling="GLIBC_${{ matrix.glibcMax }}"
+          if [[ -z "${highest}" ]]; then
+            echo "Unable to determine the glibc requirement for ${artifact}." >&2
+            exit 1
+          fi
+          if [[ "$(printf '%s\n' "${ceiling}" "${highest}" | sort -V | tail -n 1)" != "${ceiling}" ]]; then
+            echo "${artifact} requires ${highest}, above the supported ${ceiling} ceiling." >&2
+            exit 1
+          fi
+          echo "${artifact} requires at most ${highest}; supported ceiling is ${ceiling}."
       - name: Create the target-specific npm package
         shell: bash
         run: >-
