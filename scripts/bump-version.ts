@@ -10,8 +10,8 @@
  * and stay as deliberate human actions.
  *
  * Usage:
- *   bun automations/bump-version.ts --from 1.0.4 --to 1.0.5
- *   bun automations/bump-version.ts --from 1.0.4 --to 1.0.5 --dry-run
+ *   bun scripts/bump-version.ts --from 1.0.4 --to 1.0.5
+ *   bun scripts/bump-version.ts --from 1.0.4 --to 1.0.5 --dry-run
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -88,7 +88,14 @@ async function findRepoRoot(startDir: string): Promise<string> {
   throw new Error(`Could not find woml-repository root after 16 levels. Run from inside the repo.`);
 }
 
-async function runCommand(cmd: readonly string[], cwd: string): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> {
+async function runCommand(
+  cmd: readonly string[],
+  cwd: string,
+): Promise<{
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}> {
   const result = Bun.spawnSync({
     cmd: [...cmd],
     cwd,
@@ -108,18 +115,11 @@ async function checkCleanTree(repoRoot: string): Promise<void> {
     throw new Error(`git status failed (exit ${exitCode}): ${stdout}`);
   }
   if (stdout.trim().length > 0) {
-    throw new Error(
-      `Git tree is dirty. Commit or stash unrelated changes before bumping.\n${stdout}`,
-    );
+    throw new Error(`Git tree is dirty. Commit or stash unrelated changes before bumping.\n${stdout}`);
   }
 }
 
-function buildEditPlan(
-  repoRoot: string,
-  from: string,
-  to: string,
-  dryRun: boolean,
-): readonly EditPlan[] {
+function buildEditPlan(repoRoot: string, from: string, to: string, dryRun: boolean): readonly EditPlan[] {
   const plans: EditPlan[] = [];
 
   const addPackageJson = (relativePath: string, description: string): void => {
@@ -259,17 +259,18 @@ async function regenerateCargoLock(repoRoot: string, dryRun: boolean): Promise<v
     process.stdout.write('  [skip] cargo update --workspace (dry-run)\n');
     return;
   }
-  const result = await runCommand(
-    ['cargo', 'update', '--workspace', '--manifest-path', 'core/Cargo.toml'],
-    repoRoot,
-  );
+  const result = await runCommand(['cargo', 'update', '--workspace', '--manifest-path', 'core/Cargo.toml'], repoRoot);
   if (result.exitCode !== 0) {
     throw new Error(`cargo update failed (exit ${result.exitCode}):\n${result.stderr}`);
   }
 }
 
 async function runValidation(repoRoot: string): Promise<void> {
-  const checks: ReadonlyArray<{ readonly label: string; readonly cmd: readonly string[]; readonly cwd: string }> = [
+  const checks: ReadonlyArray<{
+    readonly label: string;
+    readonly cmd: readonly string[];
+    readonly cwd: string;
+  }> = [
     {
       label: 'release-identity + native-platform-release',
       cmd: [
@@ -340,16 +341,13 @@ function printNextSteps(to: string): void {
       '',
       '  git add -A',
       `  git commit -m "chore: bump to ${to}"`,
-      `  git tag v${to}`,
       '  git push origin master',
-      `  git push --force origin v${to}`,
+      `  git tag -a v${to} -m "WOML v${to}"`,
+      `  git push origin v${to}`,
       '',
-      'After CI uploads the woml-release-family artifact, publish manually:',
-      '',
-      '  for dir in woml-release-family/release/platforms/native-*; do',
-      '    (cd "$dir" && npm publish --access public)',
-      '  done',
-      '  (cd woml-release-family/release/main && npm publish --access public)',
+      `Pushing v${to} starts the verified release workflow. After every package`,
+      'passes its matching-platform load test, GitHub publishes the native',
+      'packages first and woml-cli last through the protected npm environment.',
       '',
       'This tool does NOT run those commands. They are irreversible.',
       '',

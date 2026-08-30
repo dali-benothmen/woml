@@ -40,21 +40,21 @@ hash before the package is accepted.
 
 1. Own or create the `@woml-org` npm scope.
 2. Own or create `woml-cli` and every `@woml-org/cli-*` package.
-3. Configure npm trusted publishing for `.github/workflows/release.yml` in this
-   repository for every package in the family.
-4. Create the protected GitHub environment `npm-production` and require an
+3. Create one granular npm access token with read/write access to `woml-cli`
+   and every `@woml-org/cli-*` package. Enable bypass 2FA for package
+   publication when required by the npm account/package policy, then store it
+   as the GitHub Actions secret `NPM_TOKEN`.
+4. Create the protected GitHub environment `npm-production` and optionally require an
    owner review before deployment.
-5. After those controls are verified in V1R9, set the repository variable
-   `WOML_NPM_PUBLISH_ENABLED=true` as the final publication safety latch.
-6. Keep GitHub Actions enabled for candidate builds and allow the approved
+5. Keep GitHub Actions enabled for release builds and allow the protected
    publish job to create GitHub releases.
 
-The publish job uses GitHub OIDC (`id-token: write`) with npm provenance. It
-does not read `NPM_TOKEN`, `NODE_AUTH_TOKEN`, or another long-lived registry
-credential. Trusted-publisher ownership and the protected environment are
-external V1R9 setup gates; do not invoke publication until both are verified.
-The release workflow also fails before building publication intent unless the
-V1R9 safety-latch variable is enabled.
+The token is exposed as `NODE_AUTH_TOKEN` only to the credential check and the
+two npm publication steps. Build, test, collection, and artifact-verification
+jobs cannot read it. The publish job retains `id-token: write` and
+`--provenance`, so public packages carry verifiable GitHub build provenance.
+The workflow fails with an explicit error before publishing when `NPM_TOKEN`
+is missing.
 
 ## Release procedure
 
@@ -83,23 +83,18 @@ git push origin v1.0.0
 The tag workflow rejects a tag that differs from the package version. It builds
 and load-tests all six native targets on matching runtime families, packs and
 seals each package, verifies the complete collected family, and uploads a
-30-day release-candidate artifact. **A tag push does not publish anything.**
+30-day release artifact. After every required job succeeds, the same run
+publishes the six native packages first and `woml-cli` last. It creates the
+GitHub release only after npm succeeds.
 
-After V1R7 and V1R8 pass, and only after the V1R9 npm/environment setup is
-complete, an owner starts the same workflow manually from the exact tag:
+If `npm-production` requires reviewers, GitHub pauses immediately before the
+publish job and waits for an owner approval; no `.tgz` download or local
+`npm publish` command is needed. A rerun safely skips package versions already
+present on npm and continues with any missing family member.
 
-```bash
-gh workflow run release.yml --ref v1.0.0 -f publish_to_npm=true
-```
-
-The `npm-production` approval is the final human gate. The job downloads and
-reverifies the already-tested candidate rather than rebuilding it, publishes
-the six native packages first and `woml-cli` last, then creates the GitHub release
-only after npm succeeds. A rerun safely skips package versions already present
-on npm.
-
-Running the workflow manually with `publish_to_npm=false`, or pushing the exact
-tag normally, is always non-publishing and is safe for release-candidate proof.
+For recovery, an owner may manually run `release.yml` from the exact tag with
+`publish_to_npm=true`. Running it with `publish_to_npm=false` rebuilds and
+verifies the release family without publishing.
 
 ## Supported build boundary
 

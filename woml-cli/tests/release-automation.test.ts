@@ -32,10 +32,7 @@ async function workflow(name: string): Promise<{
   readonly source: string;
   readonly document: WorkflowDocument;
 }> {
-  const source = await readFile(
-    resolve(repositoryRoot, `.github/workflows/${name}.yml`),
-    'utf8',
-  );
+  const source = await readFile(resolve(repositoryRoot, `.github/workflows/${name}.yml`), 'utf8');
   return {
     source,
     document: Bun.YAML.parse(source) as WorkflowDocument,
@@ -71,14 +68,8 @@ describe('WOML release automation', () => {
 
   test('clean-installs and executes every platform candidate before collection', async () => {
     const { document, source } = await workflow('release');
-    const smoke = await readFile(
-      resolve(repositoryRoot, 'woml-cli/scripts/smoke-release-candidate.ts'),
-      'utf8',
-    );
-    expect(document.jobs?.['build-native']?.needs).toEqual([
-      'validate',
-      'build-main',
-    ]);
+    const smoke = await readFile(resolve(repositoryRoot, 'woml-cli/scripts/smoke-release-candidate.ts'), 'utf8');
+    expect(document.jobs?.['build-native']?.needs).toEqual(['validate', 'build-main']);
     expect(source).toContain('name: woml-main');
     expect(source.match(/scripts\/smoke-release-candidate\.ts/gu)).toHaveLength(1);
     for (const marker of [
@@ -96,24 +87,23 @@ describe('WOML release automation', () => {
     }
   });
 
-  test('makes tags non-publishing and requires an approved exact-tag dispatch', async () => {
+  test('publishes verified exact tags through the protected npm environment', async () => {
     const { document, source } = await workflow('release');
     const publish = document.jobs?.publish;
     expect(document.on).toHaveProperty('push');
     expect(document.on).toHaveProperty('workflow_dispatch');
     expect(publish?.environment).toBe('npm-production');
+    expect(String(publish?.if)).toContain("github.event_name == 'push'");
     expect(String(publish?.if)).toContain("github.event_name == 'workflow_dispatch'");
     expect(String(publish?.if)).toContain('inputs.publish_to_npm == true');
     expect(String(publish?.if)).toContain("github.ref_type == 'tag'");
-    expect(String(publish?.if)).toContain(
-      "vars.WOML_NPM_PUBLISH_ENABLED == 'true'",
-    );
     expect(publish?.permissions).toEqual({
       contents: 'write',
       'id-token': 'write',
     });
-    expect(source).not.toContain('NPM_TOKEN');
-    expect(source).not.toContain('NODE_AUTH_TOKEN');
+    expect(source).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}');
+    expect(source).toContain('NPM_TOKEN is missing.');
+    expect(source).not.toContain('WOML_NPM_PUBLISH_ENABLED');
     expect(source).toContain('bun run test:for-each-contracts');
     expect(source).toContain('npm publish "${archive}" --access public --provenance');
     expect(source).toContain('bun run test:final-review');
@@ -124,24 +114,15 @@ describe('WOML release automation', () => {
 
   test('publishes only the immutable family that the collection job verified', async () => {
     const { document, source } = await workflow('release');
-    const artifactSource = await readFile(
-      resolve(repositoryRoot, 'woml-cli/scripts/release-artifact.ts'),
-      'utf8',
-    );
-    expect(document.jobs?.collect?.needs).toEqual([
-      'validate',
-      'build-main',
-      'build-native',
-    ]);
+    const artifactSource = await readFile(resolve(repositoryRoot, 'woml-cli/scripts/release-artifact.ts'), 'utf8');
+    expect(document.jobs?.collect?.needs).toEqual(['validate', 'build-main', 'build-native']);
     expect(document.jobs?.publish?.needs).toEqual(['validate', 'collect']);
     expect(source).toContain('name: woml-release-family');
     expect(`${source}\n${artifactSource}`).toContain('artifact-sha256.json');
     expect(`${source}\n${artifactSource}`).toContain('native-load-test.json');
     expect(source).toContain('Create the GitHub release after npm succeeds');
     expect(source).toContain('tar -czf woml-skill.tar.gz -C skills/woml .');
-    expect(source).toContain(
-      'gh release upload "${GITHUB_REF_NAME}" woml-skill.tar.gz --clobber',
-    );
+    expect(source).toContain('gh release upload "${GITHUB_REF_NAME}" woml-skill.tar.gz --clobber');
     expect(source.indexOf('Publish woml last')).toBeLessThan(
       source.indexOf('Create the GitHub release after npm succeeds'),
     );

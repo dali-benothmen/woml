@@ -1,4 +1,4 @@
-name: WOML Release Candidate
+name: WOML Release
 
 on:
   push:
@@ -61,10 +61,6 @@ jobs:
           fi
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_to_npm }}" == "true" && "${GITHUB_REF_TYPE}" != "tag" ]]; then
             echo 'Publishing requires manually running this workflow from the exact release tag.' >&2
-            exit 1
-          fi
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_to_npm }}" == "true" && "${{ vars.WOML_NPM_PUBLISH_ENABLED }}" != "true" ]]; then
-            echo 'Publishing remains disabled until the V1R9 owner setup enables WOML_NPM_PUBLISH_ENABLED.' >&2
             exit 1
           fi
           echo "release-tag=${release_tag}" >> "${GITHUB_OUTPUT}"
@@ -258,8 +254,8 @@ jobs:
         run: find release/collected -maxdepth 5 -type f -print 2>/dev/null || true
 
   publish:
-    name: Publish approved npm release
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_npm == true && github.ref_type == 'tag' && vars.WOML_NPM_PUBLISH_ENABLED == 'true' }}
+    name: Publish npm release
+    if: ${{ github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_npm == true)) }}
     runs-on: ubuntu-24.04
     needs: [validate, collect]
     environment: npm-production
@@ -286,13 +282,25 @@ jobs:
           --main release/collected/main
           --platforms release/collected/platforms
           --tag "${GITHUB_REF_NAME}"
-      - name: Verify trusted-publishing client
+      - name: Verify npm publishing client
         shell: bash
         run: |
           set -euo pipefail
           npm --version
           node -e "const { execFileSync } = require('node:child_process'); const [major, minor] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number); if (major < 11 || (major === 11 && minor < 5)) process.exit(1)"
+      - name: Verify npm publication credential
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
+            echo 'NPM_TOKEN is missing. Add it as a GitHub Actions repository or npm-production environment secret.' >&2
+            exit 1
+          fi
       - name: Publish native platform packages first
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -307,6 +315,8 @@ jobs:
             fi
           done
       - name: Publish woml last
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
