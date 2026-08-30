@@ -1,6 +1,6 @@
 {
   "name": "@woml/compiler",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "description": "The private WOML parser and compiler bundled into the public CLI",
   "author": "Mohamed Ali Ben Othmen",
