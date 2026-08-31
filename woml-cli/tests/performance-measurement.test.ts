@@ -226,6 +226,10 @@ describe('performance measurement contract v1', () => {
           ],
           {
             cwd: resolve(projectRoot, 'woml-cli'),
+            env: {
+              ...process.env,
+              WOML_DISABLE_COMPILED_CACHE: '1',
+            },
             stdout: 'pipe',
             stderr: 'pipe',
             timeout: 60_000,

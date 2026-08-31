@@ -214,6 +214,11 @@ import {
   providerDoctorUsage,
   runProviderDoctor,
 } from './provider-doctor';
+import {
+  readCompiledWorkflowCache,
+  writeCompiledWorkflowCache,
+  type CompiledWorkflowCacheOptions,
+} from './compiled-workflow-cache';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -230,6 +235,8 @@ const processIo: CliIo = {
 };
 
 const WOML_CLI_VERSION = packageMetadata.version;
+const COMPILED_WORKFLOW_CACHE_COMPILER_IDENTITY =
+  `woml-cli@${WOML_CLI_VERSION}:cache-v1:model-v16:definition-package-v11`;
 
 class CliInputError extends Error {
   readonly code: string;
@@ -1632,6 +1639,74 @@ async function compileWorkflowSourcesUnprofiled(
       return parseWoml(source, { file: filePath });
     });
     const projectRoot = moduleProjectRoot(filePath);
+    const cacheOptions: CompiledWorkflowCacheOptions = {
+      sourcePath: resolve(filePath),
+      projectRoot: resolve(projectRoot),
+      compilerIdentity: COMPILED_WORKFLOW_CACHE_COMPILER_IDENTITY,
+    };
+    const cached =
+      process.env.WOML_DISABLE_COMPILED_CACHE === '1'
+        ? undefined
+        : await profileAsync(
+            'compiler',
+            'compiler.cache_lookup',
+            async measurements => {
+              const candidate = await readCompiledWorkflowCache(cacheOptions);
+              if (candidate === undefined) {
+                if (measurements !== undefined) measurements.counts.misses = 1;
+                return undefined;
+              }
+              try {
+                if (
+                  compiledDefinitionHash(candidate.workflow) !==
+                  candidate.definitionHash
+                ) {
+                  if (measurements !== undefined) measurements.counts.misses = 1;
+                  return undefined;
+                }
+              } catch {
+                if (measurements !== undefined) measurements.counts.misses = 1;
+                return undefined;
+              }
+              if (measurements !== undefined) {
+                measurements.counts.hits = 1;
+                measurements.counts.sources = candidate.sourceSnapshot.length;
+                measurements.counts.modules = candidate.runtimeModules.length;
+              }
+              return candidate;
+            }
+          );
+    if (cached !== undefined) {
+      if (io !== undefined && cached.reusableEditorData !== undefined) {
+        await profileAsync(
+          'compiler',
+          'compiler.refresh_reusable_editor_data',
+          async measurements => {
+            if (measurements !== undefined) {
+              measurements.bytes.output = Buffer.byteLength(
+                cached.reusableEditorData!
+              );
+            }
+            await refreshReusableEditorData(
+              filePath,
+              cached.reusableEditorData!,
+              io
+            );
+          }
+        );
+      }
+      compiled.push({
+        filePath,
+        activationInputPaths: [resolve(filePath)],
+        document,
+        workflow: cached.workflow,
+        definitionHash: cached.definitionHash,
+        runtimeModules: cached.runtimeModules,
+        sourceSnapshot: cached.sourceSnapshot,
+        migrationDiagnostics: cached.migrationDiagnostics,
+      });
+      continue;
+    }
     const reusableGraph = profileSync('compiler', 'compiler.resolve_reusable_graph', measurements => {
       const graph = resolveWomlReusableDefinitionGraph(document, {
         sourcePath: filePath,
@@ -1660,6 +1735,10 @@ async function compileWorkflowSourcesUnprofiled(
       if (skipReusableDefinitions) continue;
       assertWomlDocumentRunnable(document);
     }
+    const reusableEditorData =
+      reusableGraph.definitions.length === 0
+        ? undefined
+        : generateWomlReusableCustomData(reusableGraph);
     if (reusableGraph.definitions.length > 0) {
       if (io !== undefined) {
         await profileAsync('compiler', 'compiler.validate_module_entrypoints', async measurements => {
@@ -1672,9 +1751,10 @@ async function compileWorkflowSourcesUnprofiled(
           validateResolvedReusableWorkflow(document, reusableGraph)
         );
         await profileAsync('compiler', 'compiler.refresh_reusable_editor_data', async measurements => {
-          const content = generateWomlReusableCustomData(reusableGraph);
-          if (measurements !== undefined) measurements.bytes.output = Buffer.byteLength(content);
-          await refreshReusableEditorData(filePath, content, io);
+          if (measurements !== undefined) {
+            measurements.bytes.output = Buffer.byteLength(reusableEditorData!);
+          }
+          await refreshReusableEditorData(filePath, reusableEditorData!, io);
         });
       }
     }
@@ -1796,7 +1876,7 @@ async function compileWorkflowSourcesUnprofiled(
           }
           return modules;
         });
-    compiled.push({
+    const compiledSource: CompiledWorkflowSource = {
       filePath,
       activationInputPaths: [resolve(filePath)],
       document,
@@ -1811,7 +1891,31 @@ async function compileWorkflowSourcesUnprofiled(
         reusableGraph.definitions.length === 0
           ? inspectWomlMigrationDiagnostics(document)
           : reusableCommunicationAliasDiagnostics(document, reusableGraph),
-    });
+    };
+    compiled.push(compiledSource);
+    if (process.env.WOML_DISABLE_COMPILED_CACHE !== '1') {
+      await profileAsync(
+        'compiler',
+        'compiler.cache_store',
+        async measurements => {
+          const stored = await writeCompiledWorkflowCache(cacheOptions, {
+            workflow: compiledSource.workflow,
+            definitionHash: compiledSource.definitionHash,
+            runtimeModules: compiledSource.runtimeModules,
+            sourceSnapshot: compiledSource.sourceSnapshot,
+            migrationDiagnostics: compiledSource.migrationDiagnostics,
+            ...(reusableEditorData === undefined
+              ? {}
+              : { reusableEditorData }),
+          });
+          if (measurements !== undefined) {
+            measurements.counts.stored = stored ? 1 : 0;
+            measurements.counts.sources = compiledSource.sourceSnapshot.length;
+            measurements.counts.modules = compiledSource.runtimeModules.length;
+          }
+        }
+      );
+    }
   }
   const workflowIds = new Set<string>();
   for (const item of compiled) {
@@ -1955,7 +2059,7 @@ async function compileWorkflowInputsUnprofiled(
   return compiled.map(source => ({ ...source, activationInputPaths }));
 }
 
-async function compileWorkflowInputs(
+export async function compileWorkflowInputs(
   inputPaths: readonly string[],
   io?: CliIo
 ): Promise<readonly CompiledWorkflowSource[]> {
