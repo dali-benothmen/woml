@@ -29,7 +29,7 @@ async function sourceFilesBelow(path: string): Promise<string[]> {
 }
 
 describe('WOML v1 release identity', () => {
-  test('pins one public package and one private compiler at 1.0.9', async () => {
+  test('pins one public package and one private compiler at 1.0.10', async () => {
     await expect(verifySourceReleaseIdentity()).resolves.toBeUndefined();
 
     const root = await json('package.json');
@@ -39,35 +39,35 @@ describe('WOML v1 release identity', () => {
 
     expect(root).toMatchObject({
       name: 'woml-repository',
-      version: '1.0.9',
+      version: '1.0.10',
       private: true,
     });
     expect(compiler).toMatchObject({
       name: '@woml/compiler',
-      version: '1.0.9',
+      version: '1.0.10',
       private: true,
     });
     expect(runtime).toMatchObject({
       name: 'woml-cli',
-      version: '1.0.9',
+      version: '1.0.10',
       private: false,
       bin: { woml: './dist/cli.js' },
       devDependencies: { '@woml/compiler': 'file:../woml' },
     });
     expect(extension).toMatchObject({
       name: 'woml-language',
-      version: '1.0.9',
+      version: '1.0.10',
       publisher: 'WOML',
     });
   });
 
   test('accepts only the exact release tag', () => {
-    expect(() => verifyReleaseTag('1.0.9', 'v1.0.9')).not.toThrow();
-    expect(() => verifyReleaseTag('1.0.9', 'v1.0.1')).toThrow(
-      'must exactly match woml version v1.0.9',
+    expect(() => verifyReleaseTag('1.0.10', 'v1.0.10')).not.toThrow();
+    expect(() => verifyReleaseTag('1.0.10', 'v1.0.1')).toThrow(
+      'must exactly match woml version v1.0.10',
     );
-    expect(() => verifyReleaseTag('1.0.9', '1.0.9')).toThrow(
-      'must exactly match woml version v1.0.9',
+    expect(() => verifyReleaseTag('1.0.10', '1.0.10')).toThrow(
+      'must exactly match woml version v1.0.10',
     );
   });
 
