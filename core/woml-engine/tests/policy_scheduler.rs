@@ -194,7 +194,7 @@ fn shared_queue_skips_an_older_run_blocked_by_its_workflow_limit() {
 #[test]
 fn separate_processes_cannot_oversubscribe_one_workflow() {
   let database = Arc::new(TestDatabase::new());
-  let now = Utc.with_ymd_and_hms(2026, 8, 12, 12, 0, 0).unwrap();
+  let now = Utc::now();
   let hash = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
   let workflow = policy_model("single-slot", 1, "single-slot");
   let (first, second) = {

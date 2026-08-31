@@ -227,6 +227,50 @@ fn invalid_append_rolls_back_without_consuming_a_sequence_number() {
 }
 
 #[test]
+fn cached_projection_replays_when_another_store_appends_to_the_run() {
+  let database = TemporaryDatabase::new("projection-cache-refresh");
+  let mut first = DurableEventStore::open(database.path()).unwrap();
+  first
+    .register_definition(&hello_model(), HELLO_HASH)
+    .unwrap();
+  first
+    .start_run(
+      "evt_cache_1",
+      "run_cache_refresh",
+      Utc::now(),
+      "hello",
+      HELLO_HASH,
+      Map::new(),
+    )
+    .unwrap();
+  assert_eq!(
+    first.projection("run_cache_refresh").unwrap().last_sequence,
+    1
+  );
+
+  let mut second = DurableEventStore::open(database.path()).unwrap();
+  second
+    .append_payload(
+      "run_cache_refresh",
+      "evt_cache_2",
+      Utc::now(),
+      RunEventPayload::StepAttemptStarted(StepAttemptStartedData {
+        node_id: "a".to_string(),
+        attempt: 1,
+        invocation_id: "inv_cache_a".to_string(),
+        handler: "runtime.script".to_string(),
+        idempotency_key: None,
+      }),
+    )
+    .unwrap();
+
+  let refreshed = first.projection("run_cache_refresh").unwrap();
+  assert_eq!(refreshed.last_sequence, 2);
+  assert_eq!(refreshed.attempts.len(), 1);
+  assert_eq!(refreshed.attempts[0].identity.invocation_id, "inv_cache_a");
+}
+
+#[test]
 fn run_and_definition_bindings_are_immutable() {
   let mut store = DurableEventStore::open_in_memory().unwrap();
   let workflow = hello_model();

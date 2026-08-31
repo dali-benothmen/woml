@@ -1031,12 +1031,46 @@ pub fn fold_events(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
   result
 }
 
-fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
-  let mut projection = RunProjection::default();
-  let mut event_ids = HashSet::new();
-  let mut attempt_indexes: HashMap<AttemptIdentity, usize> = HashMap::new();
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProjectionFoldState {
+  projection: RunProjection,
+  event_ids: HashSet<String>,
+  attempt_indexes: HashMap<AttemptIdentity, usize>,
+  previous_event: Option<RunEvent>,
+}
 
-  for (index, event) in events.iter().enumerate() {
+impl ProjectionFoldState {
+  pub(crate) fn from_events(events: &[RunEvent]) -> Result<Self, FoldError> {
+    let mut state = Self::default();
+    for event in events {
+      state.apply(event)?;
+    }
+    Ok(state)
+  }
+
+  pub(crate) fn projection(&self) -> &RunProjection {
+    &self.projection
+  }
+
+  pub(crate) fn into_projection(self) -> RunProjection {
+    self.projection
+  }
+
+  pub(crate) fn last_event_id(&self) -> Option<&str> {
+    self
+      .previous_event
+      .as_ref()
+      .map(|event| event.event_id.as_str())
+  }
+
+  pub(crate) fn apply(&mut self, event: &RunEvent) -> Result<(), FoldError> {
+    let Self {
+      projection,
+      event_ids,
+      attempt_indexes,
+      previous_event,
+    } = self;
+    let index = projection.last_sequence as usize;
     event.validate()?;
     let expected_sequence = index as u64 + 1;
     if event.sequence != expected_sequence {
@@ -1045,7 +1079,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         event.sequence
       )));
     }
-    if !event_ids.insert(event.event_id.as_str()) {
+    if !event_ids.insert(event.event_id.clone()) {
       return Err(FoldError::InvalidHistory(format!(
         "Event ID {:?} appears more than once.",
         event.event_id
@@ -1084,9 +1118,10 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         | RunEventPayload::ForEachIterationSkipped(_)
     );
     if event.iteration.is_some() && !scoped_loop_event {
-      apply_iteration_scoped_event(&mut projection, event, events.get(index.wrapping_sub(1)))?;
+      apply_iteration_scoped_event(projection, event, previous_event.as_ref())?;
       projection.last_sequence = event.sequence;
-      continue;
+      *previous_event = Some(event.clone());
+      return Ok(());
     }
 
     match &event.payload {
@@ -1148,7 +1183,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         projection.status = RunStatus::Running;
       }
       RunEventPayload::StepAttemptStarted(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if projection
           .attempts
           .iter()
@@ -1224,7 +1259,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         attempt_indexes.insert(key, attempt_index);
       }
       RunEventPayload::StepAttemptSucceeded(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if !projection
           .active_managed_operations(&data.invocation_id)
           .is_empty()
@@ -1263,7 +1298,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
           .insert(data.node_id.clone(), data.output.clone());
       }
       RunEventPayload::StepAttemptFailed(data) => {
-        require_running_or_cancelling(&projection)?;
+        require_running_or_cancelling(projection)?;
         if !projection
           .active_managed_operations(&data.invocation_id)
           .is_empty()
@@ -1292,9 +1327,8 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         };
       }
       RunEventPayload::StepRetryScheduled(data) => {
-        require_running(&projection)?;
-        let previous_event = events.get(index.wrapping_sub(1));
-        let closes_previous_failure = previous_event.is_some_and(|previous| {
+        require_running(projection)?;
+        let closes_previous_failure = previous_event.as_ref().is_some_and(|previous| {
           matches!(
             &previous.payload,
             RunEventPayload::StepAttemptFailed(failed)
@@ -1330,7 +1364,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         );
       }
       RunEventPayload::BranchSelected(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if let Some(selected_arm) = projection.branch_selections.get(&data.branch_id) {
           return Err(FoldError::InvalidHistory(format!(
             "Branch {:?} was already selected as arm {:?}.",
@@ -1342,7 +1376,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
           .insert(data.branch_id.clone(), data.arm_id.clone());
       }
       RunEventPayload::ChoiceSelected(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if projection.choice_selections.contains_key(&data.choice_id) {
           return Err(FoldError::InvalidHistory(format!(
             "Choice {:?} was selected more than once.",
@@ -1354,7 +1388,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
           .insert(data.choice_id.clone(), data.arm_id.clone());
       }
       RunEventPayload::ForkOpened(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if projection.forks.contains_key(&data.fork_id) {
           return Err(FoldError::InvalidHistory(format!(
             "Fork {:?} was opened more than once.",
@@ -1372,7 +1406,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         );
       }
       RunEventPayload::ForkBranchSettled(data) => {
-        require_running_or_cancelling(&projection)?;
+        require_running_or_cancelling(projection)?;
         let fork = projection.forks.get_mut(&data.fork_id).ok_or_else(|| {
           FoldError::InvalidHistory(format!(
             "Fork branch {:?}.{:?} settled before its fork opened.",
@@ -1395,7 +1429,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         );
       }
       RunEventPayload::ForkJoinSettled(data) => {
-        require_running_or_cancelling(&projection)?;
+        require_running_or_cancelling(projection)?;
         let fork = projection.forks.get_mut(&data.fork_id).ok_or_else(|| {
           FoldError::InvalidHistory(format!(
             "Fork {:?} join settled before its fork opened.",
@@ -1433,7 +1467,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         fork.blocking_branch_id = data.blocking_branch_id.clone();
       }
       RunEventPayload::ForEachOpened(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if projection.for_each.contains_key(&data.for_each_id) {
           return Err(FoldError::InvalidHistory(format!(
             "For-each {:?} was opened more than once.",
@@ -1454,7 +1488,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         );
       }
       RunEventPayload::ForEachIterationStarted(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         let scope = event.iteration.as_ref().expect("validated iteration scope");
         let loop_state = projection
           .for_each
@@ -1486,7 +1520,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         );
       }
       RunEventPayload::ForEachIterationSucceeded(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         let scope = event.iteration.as_ref().expect("validated iteration scope");
         if let (Some(result), Some(expected_digest)) = (&data.result, &data.result_digest) {
           if projection_digest(result)? != *expected_digest {
@@ -1517,7 +1551,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         }
       }
       RunEventPayload::ForEachIterationFailed(data) => {
-        require_running_or_cancelling(&projection)?;
+        require_running_or_cancelling(projection)?;
         let scope = event.iteration.as_ref().expect("validated iteration scope");
         let loop_state = projection
           .for_each
@@ -1543,7 +1577,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         }
       }
       RunEventPayload::ForEachIterationSkipped(data) => {
-        require_running_or_cancelling(&projection)?;
+        require_running_or_cancelling(projection)?;
         let scope = event.iteration.as_ref().expect("validated iteration scope");
         let loop_state = projection
           .for_each
@@ -1567,7 +1601,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
       RunEventPayload::ForEachSucceeded(data)
       | RunEventPayload::ForEachFailed(data)
       | RunEventPayload::ForEachCancelled(data) => {
-        require_running_or_cancelling(&projection)?;
+        require_running_or_cancelling(projection)?;
         let is_success = matches!(&event.payload, RunEventPayload::ForEachSucceeded(_));
         let is_cancelled = matches!(&event.payload, RunEventPayload::ForEachCancelled(_));
         let loop_state = projection
@@ -1709,7 +1743,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         }
       }
       RunEventPayload::ParallelGroupStarted(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if projection.parallel_groups.contains_key(&data.parallel_id) {
           return Err(FoldError::InvalidHistory(format!(
             "Parallel group {:?} was started more than once.",
@@ -1726,7 +1760,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         );
       }
       RunEventPayload::ParallelGroupCompleted(data) => {
-        require_running_or_cancelling(&projection)?;
+        require_running_or_cancelling(projection)?;
         let group = projection
           .parallel_groups
           .get_mut(&data.parallel_id)
@@ -1749,7 +1783,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         };
       }
       RunEventPayload::ApprovalRequested(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if projection.approval_requests.contains_key(&data.approval_id) {
           return Err(FoldError::InvalidHistory(format!(
             "Approval {:?} was requested more than once.",
@@ -2118,7 +2152,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         };
       }
       RunEventPayload::OperationStarted(data) => {
-        require_operation_runtime(&projection)?;
+        require_operation_runtime(projection)?;
         let attempt_active = projection.attempts.iter().any(|attempt| {
           attempt.identity.node_id == data.node_id
             && attempt.identity.attempt == data.attempt_number
@@ -2170,9 +2204,9 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         );
       }
       RunEventPayload::OperationSucceeded(data) => {
-        require_operation_runtime(&projection)?;
+        require_operation_runtime(projection)?;
         require_active_operation_attempt(
-          &projection,
+          projection,
           &data.node_id,
           data.attempt_number,
           &data.invocation_id,
@@ -2201,9 +2235,9 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         };
       }
       RunEventPayload::OperationFailed(data) => {
-        require_operation_settlement(&projection)?;
+        require_operation_settlement(projection)?;
         require_active_operation_attempt(
-          &projection,
+          projection,
           &data.node_id,
           data.attempt_number,
           &data.invocation_id,
@@ -2585,7 +2619,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
         };
       }
       RunEventPayload::RunSucceeded(data) => {
-        require_running(&projection)?;
+        require_running(projection)?;
         if projection.operations.values().any(|operation| {
           operation.execution_mode == OperationExecutionMode::Managed
             && operation.status == OperationStatus::Started
@@ -2636,7 +2670,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
             ));
           }
         } else {
-          require_running(&projection)?;
+          require_running(projection)?;
         }
         let failure = match data {
           RunFailedData::V5(RunFailedDataV5::Notification {
@@ -2694,13 +2728,7 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
             if let (Some(node_id), Some(attempt), Some(invocation_id)) =
               (&data.node_id, data.attempt, &data.invocation_id)
             {
-              require_failed_attempt(
-                &projection,
-                &attempt_indexes,
-                node_id,
-                attempt,
-                invocation_id,
-              )?;
+              require_failed_attempt(projection, attempt_indexes, node_id, attempt, invocation_id)?;
             }
             RunFailure::Attempt(data.failure.clone())
           }
@@ -2711,8 +2739,8 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
             failure,
           }) => {
             require_failed_attempt(
-              &projection,
-              &attempt_indexes,
+              projection,
+              attempt_indexes,
               node_id,
               *attempt,
               invocation_id,
@@ -2798,8 +2826,13 @@ fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldErro
       }
     }
     projection.last_sequence = event.sequence;
+    *previous_event = Some(event.clone());
+    Ok(())
   }
-  Ok(projection)
+}
+
+fn fold_events_unprofiled(events: &[RunEvent]) -> Result<RunProjection, FoldError> {
+  ProjectionFoldState::from_events(events).map(ProjectionFoldState::into_projection)
 }
 
 fn projection_digest(value: &Value) -> Result<String, FoldError> {

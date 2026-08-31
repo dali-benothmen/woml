@@ -614,13 +614,16 @@ impl RuntimeExecutionOptions {
     }
   }
 
-  async fn release_policy_execution_slot(&self) -> Result<(), RuntimeExecutionError> {
+  async fn release_policy_execution_slot(
+    &self,
+    store: &mut DurableEventStore,
+  ) -> Result<(), RuntimeExecutionError> {
     let Some(coordinator) = &self.policy_execution else {
       return Ok(());
     };
     let lease = coordinator.lease.lock().await.take();
     if let Some(lease) = lease {
-      lease.release().await?;
+      lease.release(store).await?;
     }
     Ok(())
   }
@@ -967,8 +970,8 @@ pub async fn execute_workflow(
   trigger: Map<String, Value>,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowExecutionResult, RuntimeExecutionError> {
-  let engine = InMemoryDagEngine::new(workflow, definition_hash)?;
-  succeeded_execution(execute_with_engine(engine, trigger, options).await?)
+  let mut engine = InMemoryDagEngine::new(workflow, definition_hash)?;
+  succeeded_execution(execute_with_engine(&mut engine, trigger, options).await?)
 }
 
 const POLICY_CLAIM_LEASE: Duration = Duration::from_secs(15);
@@ -1132,12 +1135,11 @@ impl PolicyExecutionLease {
     Ok(())
   }
 
-  async fn release(mut self) -> Result<(), RuntimeExecutionError> {
+  async fn release(mut self, store: &mut DurableEventStore) -> Result<(), RuntimeExecutionError> {
     if let Some(stop) = self.stop.take() {
       let _ = stop.send(());
     }
     let _ = self.heartbeat.await;
-    let mut store = DurableEventStore::open(self.database_path.clone())?;
     let released = store.release_policy_claim(
       &self.claim.run_id,
       &self.claim.owner_id,
@@ -1164,10 +1166,21 @@ async fn acquire_policy_execution_lease(
   run_id: &str,
   options: &RuntimeExecutionOptions,
 ) -> Result<PolicyClaimAcquisition, RuntimeExecutionError> {
+  let mut store = DurableEventStore::open(database_path.to_path_buf())?;
+  acquire_policy_execution_lease_with_store(database_path, run_id, options, &mut store).await
+}
+
+async fn acquire_policy_execution_lease_with_store(
+  database_path: &std::path::Path,
+  run_id: &str,
+  options: &RuntimeExecutionOptions,
+  store: &mut DurableEventStore,
+) -> Result<PolicyClaimAcquisition, RuntimeExecutionError> {
   let mut span =
     crate::performance::PerformanceSpan::new("runtime", "runtime.acquire_policy_lease");
   span.run_id(run_id.to_string());
-  let result = acquire_policy_execution_lease_unprofiled(database_path, run_id, options).await;
+  let result =
+    acquire_policy_execution_lease_unprofiled(database_path, run_id, options, store).await;
   if result.is_ok() {
     span.succeed();
   }
@@ -1178,13 +1191,13 @@ async fn acquire_policy_execution_lease_unprofiled(
   database_path: &std::path::Path,
   run_id: &str,
   options: &RuntimeExecutionOptions,
+  store: &mut DurableEventStore,
 ) -> Result<PolicyClaimAcquisition, RuntimeExecutionError> {
   let owner_id = format!("scheduler_{}", Uuid::new_v4().simple());
   let mut reported_wait = false;
   loop {
     let lease_now = chrono::Utc::now();
     let policy_now = options.clock.now();
-    let mut store = DurableEventStore::open(database_path.to_path_buf())?;
     let rate_eligible_at = match store.try_claim_policy_run_at(
       run_id,
       &owner_id,
@@ -1336,14 +1349,15 @@ async fn finish_timed_out_policy_lifecycle(
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<(), RuntimeExecutionError> {
-  let acquisition = acquire_policy_execution_lease(&database_path, run_id, &options).await?;
-  let store = DurableEventStore::open(database_path.clone())?;
+  let mut store = DurableEventStore::open(database_path.clone())?;
+  let acquisition =
+    acquire_policy_execution_lease_with_store(&database_path, run_id, &options, &mut store).await?;
   let binding = store.run_binding(run_id)?;
   let mut options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
-  let engine = DurableDagEngine::resume(store, run_id)?;
+  let mut engine = DurableDagEngine::resume(store, run_id)?;
   match acquisition {
     PolicyClaimAcquisition::Recovered => {
-      let _ = resume_with_engine(engine, run_id, options).await;
+      let _ = resume_with_engine(&mut engine, run_id, options).await;
     }
     PolicyClaimAcquisition::Claimed(lease) => {
       let coordinator = Arc::new(PolicyExecutionCoordinator {
@@ -1357,8 +1371,9 @@ async fn finish_timed_out_policy_lifecycle(
         .write()
         .await
         .insert(run_id.to_string(), Arc::downgrade(&coordinator));
-      let _ = resume_with_engine(engine, run_id, options.clone()).await;
-      let released = options.release_policy_execution_slot().await;
+      let _ = resume_with_engine(&mut engine, run_id, options.clone()).await;
+      let mut store = engine.into_store();
+      let released = options.release_policy_execution_slot(&mut store).await;
       options
         .policy_execution_registry
         .write()
@@ -1374,10 +1389,11 @@ async fn execute_policy_run_durable(
   database_path: PathBuf,
   run_id: &str,
   options: RuntimeExecutionOptions,
+  store: DurableEventStore,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   let mut span = crate::performance::PerformanceSpan::new("runtime", "runtime.execute_policy_run");
   span.run_id(run_id.to_string());
-  let result = execute_policy_run_durable_unprofiled(database_path, run_id, options).await;
+  let result = execute_policy_run_durable_unprofiled(database_path, run_id, options, store).await;
   if result.is_ok() {
     span.succeed();
   }
@@ -1388,9 +1404,9 @@ async fn execute_policy_run_durable_unprofiled(
   database_path: PathBuf,
   run_id: &str,
   options: RuntimeExecutionOptions,
+  mut store: DurableEventStore,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
   {
-    let store = DurableEventStore::open(database_path.clone())?;
     let binding = store.run_binding(run_id)?;
     let workflow = store.definition(&binding.definition_hash)?;
     let policy = workflow.runtime_policy.as_ref().ok_or_else(|| {
@@ -1418,12 +1434,12 @@ async fn execute_policy_run_durable_unprofiled(
     ) {
       let binding = store.run_binding(run_id)?;
       let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
-      let engine = DurableDagEngine::resume(store, run_id)?;
-      return resume_with_engine(engine, run_id, options).await;
+      let mut engine = DurableDagEngine::resume(store, run_id)?;
+      return resume_with_engine(&mut engine, run_id, options).await;
     }
   }
-  let acquisition = acquire_policy_execution_lease(&database_path, run_id, &options).await?;
-  let store = DurableEventStore::open(database_path.clone())?;
+  let acquisition =
+    acquire_policy_execution_lease_with_store(&database_path, run_id, &options, &mut store).await?;
   let binding = store.run_binding(run_id)?;
   let mut options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
   let workflow = store.definition(&binding.definition_hash)?;
@@ -1442,9 +1458,9 @@ async fn execute_policy_run_durable_unprofiled(
       options.clone(),
     );
   }
-  let engine = DurableDagEngine::resume(store, run_id)?;
+  let mut engine = DurableDagEngine::resume(store, run_id)?;
   match acquisition {
-    PolicyClaimAcquisition::Recovered => resume_with_engine(engine, run_id, options).await,
+    PolicyClaimAcquisition::Recovered => resume_with_engine(&mut engine, run_id, options).await,
     PolicyClaimAcquisition::Claimed(lease) => {
       let coordinator = Arc::new(PolicyExecutionCoordinator {
         database_path: database_path.clone(),
@@ -1457,8 +1473,9 @@ async fn execute_policy_run_durable_unprofiled(
         .write()
         .await
         .insert(run_id.to_string(), Arc::downgrade(&coordinator));
-      let outcome = resume_with_engine(engine, run_id, options.clone()).await;
-      let released = options.release_policy_execution_slot().await;
+      let outcome = resume_with_engine(&mut engine, run_id, options.clone()).await;
+      let mut store = engine.into_store();
+      let released = options.release_policy_execution_slot(&mut store).await;
       options
         .policy_execution_registry
         .write()
@@ -1565,8 +1582,7 @@ async fn execute_workflow_durable_internal_unprofiled(
       payload: trigger,
       received_at: options.clock.now(),
     })?;
-    drop(store);
-    return execute_policy_run_durable(database_path, &admission.run_id, options).await;
+    return execute_policy_run_durable(database_path, &admission.run_id, options, store).await;
   }
   store.recover_interrupted_runs()?;
   store.register_definition_module_artifacts(
@@ -1574,8 +1590,8 @@ async fn execute_workflow_durable_internal_unprofiled(
     &definition_hash,
     options.runtime_modules.as_ref(),
   )?;
-  let engine = DurableDagEngine::new(workflow, definition_hash, store)?;
-  execute_with_engine(engine, trigger, options).await
+  let mut engine = DurableDagEngine::new(workflow, definition_hash, store)?;
+  execute_with_engine(&mut engine, trigger, options).await
 }
 
 pub async fn resume_workflow_durable(
@@ -1635,12 +1651,11 @@ async fn execute_admitted_trigger_run_durable_unprofiled(
   let binding = store.run_binding(run_id)?;
   let workflow = store.definition(&binding.definition_hash)?;
   if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
-    drop(store);
-    return execute_policy_run_durable(database_path, run_id, options).await;
+    return execute_policy_run_durable(database_path, run_id, options, store).await;
   }
   let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
-  let engine = DurableDagEngine::resume(store, run_id)?;
-  resume_with_engine(engine, run_id, options).await
+  let mut engine = DurableDagEngine::resume(store, run_id)?;
+  resume_with_engine(&mut engine, run_id, options).await
 }
 
 async fn resume_workflow_durable_internal(
@@ -1665,13 +1680,12 @@ async fn resume_workflow_durable_internal(
     ));
   }
   if workflow.schema_version >= crate::COMPILED_MODEL_SCHEMA_VERSION_V12 {
-    drop(store);
-    return execute_policy_run_durable(database_path, run_id, options).await;
+    return execute_policy_run_durable(database_path, run_id, options, store).await;
   }
   store.recover_interrupted_runs()?;
   let options = runtime_modules_from_store(options, &store, &binding.definition_hash)?;
-  let engine = DurableDagEngine::resume(store, run_id)?;
-  resume_with_engine(engine, run_id, options).await
+  let mut engine = DurableDagEngine::resume(store, run_id)?;
+  resume_with_engine(&mut engine, run_id, options).await
 }
 
 fn attach_durable_capability_authority(
@@ -1910,7 +1924,7 @@ pub fn settle_approval_timeout_durable(
 }
 
 async fn execute_with_engine<E: RuntimeDagEngine>(
-  engine: E,
+  engine: &mut E,
   trigger: Map<String, Value>,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
@@ -1925,7 +1939,7 @@ async fn execute_with_engine<E: RuntimeDagEngine>(
 }
 
 async fn execute_with_engine_unprofiled<E: RuntimeDagEngine>(
-  mut engine: E,
+  engine: &mut E,
   trigger: Map<String, Value>,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
@@ -1936,7 +1950,7 @@ async fn execute_with_engine_unprofiled<E: RuntimeDagEngine>(
   }
   validate_runtime_modules(engine.workflow(), &options)?;
 
-  execute_runtime(&mut engine, trigger, &options).await
+  execute_runtime(engine, trigger, &options).await
 }
 
 fn sha256_identity(content: &str) -> String {
@@ -2158,7 +2172,7 @@ fn validate_runtime_modules(
 }
 
 async fn resume_with_engine<E: RuntimeDagEngine>(
-  engine: E,
+  engine: &mut E,
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
@@ -2180,7 +2194,7 @@ fn runtime_outcome_run_id(outcome: &WorkflowRuntimeOutcome) -> &str {
 }
 
 async fn resume_with_engine_unprofiled<E: RuntimeDagEngine>(
-  mut engine: E,
+  engine: &mut E,
   run_id: &str,
   options: RuntimeExecutionOptions,
 ) -> Result<WorkflowRuntimeOutcome, RuntimeExecutionError> {
@@ -2195,31 +2209,31 @@ async fn resume_with_engine_unprofiled<E: RuntimeDagEngine>(
   match projection.status {
     RunStatus::Succeeded => {
       return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
-        &engine,
+        engine,
         run_id,
         execution_order,
       )?));
     }
-    RunStatus::Failed => return Err(resumed_failure(&engine, run_id, projection)?),
+    RunStatus::Failed => return Err(resumed_failure(engine, run_id, projection)?),
     RunStatus::Cancelled => {
-      return Err(cancelled_run_error(&engine, run_id)?);
+      return Err(cancelled_run_error(engine, run_id)?);
     }
     RunStatus::Finalizing => {
       let mut host = None;
-      drive_pending_reusable_step_lifecycles(&mut engine, run_id, &options, &mut host).await?;
-      drive_workflow_lifecycle(&mut engine, run_id, &options, &mut host).await?;
+      drive_pending_reusable_step_lifecycles(engine, run_id, &options, &mut host).await?;
+      drive_workflow_lifecycle(engine, run_id, &options, &mut host).await?;
       if let Some(host) = host {
         options.release_script_host(host).await;
       }
       let projection = engine.projection(run_id)?;
       return match projection.status {
         RunStatus::Succeeded => Ok(WorkflowRuntimeOutcome::succeeded(final_result(
-          &engine,
+          engine,
           run_id,
           execution_order,
         )?)),
-        RunStatus::Failed => Err(resumed_failure(&engine, run_id, projection)?),
-        RunStatus::Cancelled => Err(cancelled_run_error(&engine, run_id)?),
+        RunStatus::Failed => Err(resumed_failure(engine, run_id, projection)?),
+        RunStatus::Cancelled => Err(cancelled_run_error(engine, run_id)?),
         _ => Err(RuntimeExecutionError::Stalled(
           "stored run did not finish lifecycle continuation".to_string(),
         )),
@@ -2238,14 +2252,7 @@ async fn resume_with_engine_unprofiled<E: RuntimeDagEngine>(
   let terminal_node_id = runtime_result_node_id(engine.workflow())
     .ok_or_else(|| RuntimeExecutionError::Stalled("no terminal node exists".to_string()))?
     .to_string();
-  continue_runtime(
-    &mut engine,
-    run_id,
-    terminal_node_id,
-    execution_order,
-    &options,
-  )
-  .await
+  continue_runtime(engine, run_id, terminal_node_id, execution_order, &options).await
 }
 
 async fn execute_runtime<E: RuntimeDagEngine>(
@@ -4988,9 +4995,30 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         let source = source.ok_or_else(|| {
           RuntimeExecutionError::Stalled(format!("node {node_id:?} has no script source"))
         })?;
-        let outcome = execute_script_node(engine, run_id, node_id, &source, options, host).await?;
-        let ScriptNodeOutcome::Succeeded(output) = outcome else {
-          continue;
+        let publish_terminal_success = node_id == &terminal_node_id
+          && engine.workflow().graph.settlement.is_none()
+          && reusable_step_descriptor(engine.workflow(), node_id).is_none();
+        let outcome = execute_script_node(
+          engine,
+          run_id,
+          node_id,
+          &source,
+          publish_terminal_success,
+          options,
+          host,
+        )
+        .await?;
+        let output = match outcome {
+          ScriptNodeOutcome::Succeeded(output) => output,
+          ScriptNodeOutcome::WorkflowSucceeded => {
+            execution_order.push(node_id.clone());
+            return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+              engine,
+              run_id,
+              execution_order.clone(),
+            )?));
+          }
+          ScriptNodeOutcome::RetryScheduled | ScriptNodeOutcome::Cancelled => continue,
         };
         execution_order.push(node_id.clone());
         // In Model v13 this is only the main route's value source. The
@@ -8774,6 +8802,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   run_id: &str,
   node_id: &str,
   source: &str,
+  publish_terminal_success: bool,
   options: &RuntimeExecutionOptions,
   host: &mut Option<ScriptHostClient>,
 ) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
@@ -8979,15 +9008,27 @@ async fn execute_script_node<E: RuntimeDagEngine>(
 
   match outcome {
     HostOutcome::Success { value } => {
-      engine.append_payload(
-        run_id,
-        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
-          node_id: node_id.to_string(),
-          attempt: attempt_number,
-          invocation_id,
-          output: value.clone(),
-        }),
-      )?;
+      let succeeded = RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+        node_id: node_id.to_string(),
+        attempt: attempt_number,
+        invocation_id,
+        output: value.clone(),
+      });
+      if publish_terminal_success {
+        engine.append_payloads(
+          run_id,
+          vec![
+            succeeded,
+            RunEventPayload::RunSucceeded(RunSucceededData {
+              terminal_node_id: node_id.to_string(),
+              result: value.clone(),
+            }),
+          ],
+        )?;
+        report_attempt_succeeded(engine, options, run_id, node_id, attempt_number);
+        return Ok(ScriptNodeOutcome::WorkflowSucceeded);
+      }
+      engine.append_payload(run_id, succeeded)?;
       drive_reusable_step_lifecycle(
         engine,
         run_id,
@@ -9020,6 +9061,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
 
 enum ScriptNodeOutcome {
   Succeeded(Value),
+  WorkflowSucceeded,
   RetryScheduled,
   Cancelled,
 }

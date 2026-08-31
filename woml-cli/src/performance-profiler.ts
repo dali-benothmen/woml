@@ -1,7 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-
 export type PerformanceProcessV1 =
   | 'cli'
   | 'native'
@@ -46,6 +42,7 @@ interface PerformanceSpanV1 {
 
 interface ProfilerState {
   readonly outputPath: string;
+  readonly workingDirectory: string;
   readonly traceId: string;
   readonly process: PerformanceProcessV1;
   readonly spans: PerformanceSpanV1[];
@@ -74,9 +71,10 @@ function configuredState(): ProfilerState | undefined {
   const traceId =
     configuredTrace !== undefined && /^[A-Za-z0-9_.:-]{1,128}$/u.test(configuredTrace)
       ? configuredTrace
-      : `trace_${randomUUID().replaceAll('-', '')}`;
+      : `trace_${crypto.randomUUID().replaceAll('-', '')}`;
   return {
-    outputPath: resolve(output),
+    outputPath: output,
+    workingDirectory: process.cwd(),
     traceId,
     process: processName,
     spans: [],
@@ -197,9 +195,14 @@ export async function profileAsync<T>(
 export async function flushPerformanceProfile(): Promise<void> {
   if (state === undefined || state.writtenSpans >= state.spans.length) return;
   const unwritten = state.spans.slice(state.writtenSpans);
-  await mkdir(dirname(state.outputPath), { recursive: true });
+  const [{ appendFile, mkdir }, { dirname, resolve }] = await Promise.all([
+    import('node:fs/promises'),
+    import('node:path'),
+  ]);
+  const outputPath = resolve(state.workingDirectory, state.outputPath);
+  await mkdir(dirname(outputPath), { recursive: true });
   await appendFile(
-    state.outputPath,
+    outputPath,
     `${unwritten.map(span => JSON.stringify(span)).join('\n')}\n`,
     { encoding: 'utf8', mode: 0o600 }
   );
