@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const RUNTIME_POLICY_QUEUE_CEILING: i64 = 10_000;
+const MAX_ACTIVE_PROJECTION_CACHE_ENTRIES: usize = 256;
 
 use crate::engine::{
   ready_node_ids_for_projection, ready_node_ids_for_projection_at, step_effect_idempotency_key,
@@ -39,7 +41,7 @@ use crate::event::{
 use crate::projection::{
   ApprovalRequestStatus, AttemptStatus, ForEachIterationStatus, ForEachStatus,
   NotificationDeliveryStatus, NotificationMessageUpdateStatus, OperationProjection,
-  ParallelGroupStatus,
+  ParallelGroupStatus, ProjectionFoldState,
 };
 use crate::runtime::RuntimeModuleArtifact;
 use crate::workflow_calls::{
@@ -1447,6 +1449,7 @@ pub enum DurableStoreError {
 #[derive(Debug)]
 pub struct DurableEventStore {
   connection: Connection,
+  projection_cache: RefCell<HashMap<String, ProjectionFoldState>>,
 }
 
 enum RunRecovery {
@@ -2357,7 +2360,10 @@ impl DurableEventStore {
       );
     }
     span.succeed();
-    Ok(Self { connection })
+    Ok(Self {
+      connection,
+      projection_cache: RefCell::new(HashMap::new()),
+    })
   }
 
   pub fn open_in_memory() -> Result<Self, DurableStoreError> {
@@ -2515,7 +2521,10 @@ impl DurableEventStore {
       "DELETE FROM woml_scheduler_claims WHERE expires_at <= ?1",
       [Utc::now().to_rfc3339()],
     )?;
-    Ok(Self { connection })
+    Ok(Self {
+      connection,
+      projection_cache: RefCell::new(HashMap::new()),
+    })
   }
 
   pub fn register_definition(
@@ -4125,6 +4134,8 @@ impl DurableEventStore {
     };
 
     let mut events = load_events(&transaction, &run_id)?;
+    let mut projection_state =
+      projection_state_for_events(&self.projection_cache, &run_id, &events)?;
     let existing_event_count = events.len();
     let workflow = definition_for_run(&transaction, &run_id)?;
     let binding = run_binding_in_transaction(&transaction, &run_id)?;
@@ -4160,7 +4171,7 @@ impl DurableEventStore {
       }
       if iteration.is_none() {
         if let RunEventPayload::BranchSelected(data) = &payload {
-          let projection = fold_events(&events)?;
+          let projection = projection_state.projection();
           if projection.branch_selections.contains_key(&data.branch_id) {
             return Err(DurableStoreError::Contract(format!(
               "Branch {:?} already has an immutable selection.",
@@ -4169,7 +4180,7 @@ impl DurableEventStore {
           }
           let selector_id = format!("__woml_branch__{}__select", data.branch_id);
           let ready =
-            ready_node_ids_for_projection(&workflow, &binding.definition_hash, &projection)
+            ready_node_ids_for_projection(&workflow, &binding.definition_hash, projection)
               .map_err(DurableStoreError::Contract)?;
           if !ready.iter().any(|node_id| node_id == &selector_id) {
             return Err(DurableStoreError::Contract(format!(
@@ -4178,9 +4189,10 @@ impl DurableEventStore {
           }
         }
       }
-      let event = append_to_history_scoped(
+      let event = append_to_history_scoped_incremental(
         &transaction,
         &mut events,
+        &mut projection_state,
         &run_id,
         if index == 0 {
           event_id.clone()
@@ -4196,8 +4208,9 @@ impl DurableEventStore {
     }
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
-    let projection = fold_events(&events)?;
+    let projection = projection_state.projection().clone();
     transaction.commit()?;
+    cache_projection_state(&self.projection_cache, &run_id, projection_state);
     span.count("events", events.len().saturating_sub(existing_event_count));
     span.succeed();
     Ok((first_event.unwrap(), projection))
@@ -4222,6 +4235,8 @@ impl DurableEventStore {
       .transaction_with_behavior(TransactionBehavior::Immediate)?;
     ensure_run_exists(&transaction, run_id)?;
     let mut events = load_events(&transaction, run_id)?;
+    let mut projection_state =
+      projection_state_for_events(&self.projection_cache, run_id, &events)?;
     let event_schema_version = events
       .first()
       .map(|event| event.event_schema_version)
@@ -4249,9 +4264,10 @@ impl DurableEventStore {
       for (index, payload) in translated.into_iter().enumerate() {
         validate_payload_against_definition(&workflow, &binding.definition_hash, &payload)
           .map_err(DurableStoreError::Contract)?;
-        append_to_history(
+        append_to_history_scoped_incremental(
           &transaction,
           &mut events,
+          &mut projection_state,
           run_id,
           if index == 0 {
             event_id.clone()
@@ -4260,14 +4276,16 @@ impl DurableEventStore {
           },
           occurred_at,
           event_schema_version,
+          None,
           payload,
         )?;
       }
     }
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
-    let projection = fold_events(&events)?;
+    let projection = projection_state.projection().clone();
     transaction.commit()?;
+    cache_projection_state(&self.projection_cache, run_id, projection_state);
     span.succeed();
     Ok(projection)
   }
@@ -4293,13 +4311,43 @@ impl DurableEventStore {
   pub fn projection(&self, run_id: &str) -> Result<RunProjection, DurableStoreError> {
     let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.project_run");
     span.run_id(run_id.to_string());
-    let events = self.events(run_id)?;
-    span.count("events", events.len());
     let binding = self.run_binding(run_id)?;
+    let (event_count, last_event_id): (i64, Option<String>) = self.connection.query_row(
+      "SELECT COUNT(*), (
+         SELECT event_id FROM woml_run_events
+         WHERE run_id = ?1 ORDER BY sequence DESC LIMIT 1
+       )
+       FROM woml_run_events WHERE run_id = ?1",
+      [run_id],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let event_count = u64::try_from(event_count)
+      .map_err(|_| DurableStoreError::Contract("run event count is invalid".to_string()))?;
+    span.count("events", event_count as usize);
+    if let Some(cached) = self.projection_cache.borrow().get(run_id) {
+      if cached.projection().last_sequence == event_count
+        && cached.last_event_id() == last_event_id.as_deref()
+      {
+        span.count("projection_cache_hits", 1);
+        let mut projection = cached.projection().clone();
+        if projection
+          .event_schema_version
+          .is_some_and(|version| version >= RUN_EVENT_SCHEMA_VERSION_V11)
+          && projection.workflow_id.is_none()
+        {
+          projection.workflow_id = Some(binding.workflow_id);
+        }
+        span.succeed();
+        return Ok(projection);
+      }
+    }
+    span.count("projection_cache_misses", 1);
+    let events = load_events(&self.connection, run_id)?;
     let workflow = self.definition(&binding.definition_hash)?;
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
-    let mut projection = fold_events(&events)?;
+    let state = ProjectionFoldState::from_events(&events)?;
+    let mut projection = state.projection().clone();
     if projection
       .event_schema_version
       .is_some_and(|version| version >= RUN_EVENT_SCHEMA_VERSION_V11)
@@ -4307,6 +4355,7 @@ impl DurableEventStore {
     {
       projection.workflow_id = Some(binding.workflow_id);
     }
+    cache_projection_state(&self.projection_cache, run_id, state);
     span.succeed();
     Ok(projection)
   }
@@ -10000,12 +10049,25 @@ fn write_run_summary(
     return Ok(());
   };
   let projection = fold_events(events)?;
+  write_run_summary_from_projection(
+    connection,
+    first,
+    events.last().unwrap().occurred_at,
+    &projection,
+  )
+}
+
+fn write_run_summary_from_projection(
+  connection: &Connection,
+  first: &RunEvent,
+  updated_at: DateTime<Utc>,
+  projection: &RunProjection,
+) -> Result<(), DurableStoreError> {
   let workflow_id: String = connection.query_row(
     "SELECT workflow_id FROM woml_runs WHERE run_id = ?1",
     [&first.run_id],
     |row| row.get(0),
   )?;
-  let updated_at = events.last().unwrap().occurred_at;
   connection.execute(
     "INSERT INTO woml_run_summaries(
        run_id, workflow_id, status, admitted_at, started_at, updated_at,
@@ -10043,6 +10105,16 @@ fn write_runtime_policy_indexes_for_run(
   else {
     return Ok(());
   };
+  let projection = fold_events(events)?;
+  write_runtime_policy_indexes_from_projection(connection, run_id, admission, &projection)
+}
+
+fn write_runtime_policy_indexes_from_projection(
+  connection: &Connection,
+  run_id: &str,
+  admission: &RunAdmittedData,
+  projection: &RunProjection,
+) -> Result<(), DurableStoreError> {
   let workflow_id: String = connection.query_row(
     "SELECT workflow_id FROM woml_runs WHERE run_id = ?1",
     [run_id],
@@ -10081,7 +10153,6 @@ fn write_runtime_policy_indexes_for_run(
     "DELETE FROM woml_runtime_policy_starts WHERE run_id = ?1",
     [run_id],
   )?;
-  let projection = fold_events(events)?;
   if projection.status == RunStatus::Queued {
     connection.execute(
       "INSERT INTO woml_runtime_policy_queue(
@@ -10138,6 +10209,151 @@ fn rebuild_run_summary_index(connection: &Connection) -> Result<(), DurableStore
     write_run_summary(connection, &events)?;
   }
   Ok(())
+}
+
+fn projection_state_for_events(
+  cache: &RefCell<HashMap<String, ProjectionFoldState>>,
+  run_id: &str,
+  events: &[RunEvent],
+) -> Result<ProjectionFoldState, DurableStoreError> {
+  let cached = cache.borrow_mut().remove(run_id);
+  if let Some(cached) = cached {
+    let sequence_matches = cached.projection().last_sequence == events.len() as u64;
+    let event_matches =
+      cached.last_event_id() == events.last().map(|event| event.event_id.as_str());
+    if sequence_matches && event_matches {
+      return Ok(cached);
+    }
+  }
+  Ok(ProjectionFoldState::from_events(events)?)
+}
+
+fn cache_projection_state(
+  cache: &RefCell<HashMap<String, ProjectionFoldState>>,
+  run_id: &str,
+  state: ProjectionFoldState,
+) {
+  let mut cache = cache.borrow_mut();
+  if matches!(
+    state.projection().status,
+    RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled
+  ) {
+    cache.remove(run_id);
+    return;
+  }
+  if !cache.contains_key(run_id) && cache.len() >= MAX_ACTIVE_PROJECTION_CACHE_ENTRIES {
+    if let Some(evicted) = cache.keys().next().cloned() {
+      cache.remove(&evicted);
+    }
+  }
+  cache.insert(run_id.to_string(), state);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_to_history_scoped_incremental(
+  transaction: &Transaction<'_>,
+  events: &mut Vec<RunEvent>,
+  state: &mut ProjectionFoldState,
+  run_id: &str,
+  event_id: String,
+  occurred_at: DateTime<Utc>,
+  event_schema_version: u32,
+  iteration: Option<crate::event::ForEachIterationScope>,
+  payload: RunEventPayload,
+) -> Result<RunEvent, DurableStoreError> {
+  let payloads = if matches!(
+    event_schema_version,
+    crate::RUN_EVENT_SCHEMA_VERSION_V10
+      | crate::RUN_EVENT_SCHEMA_VERSION_V11
+      | crate::RUN_EVENT_SCHEMA_VERSION_V12
+      | crate::RUN_EVENT_SCHEMA_VERSION_V13
+      | crate::RUN_EVENT_SCHEMA_VERSION_V14
+      | crate::RUN_EVENT_SCHEMA_VERSION_V15
+  ) && matches!(
+    payload,
+    RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
+  ) {
+    expand_model_v11_payload(&definition_for_run(transaction, run_id)?, run_id, payload)?
+  } else {
+    vec![payload]
+  };
+  let mut first = None;
+  for (index, payload) in payloads.into_iter().enumerate() {
+    let event = append_single_to_history_incremental(
+      transaction,
+      events,
+      state,
+      run_id,
+      if index == 0 {
+        event_id.clone()
+      } else {
+        generated_event_id()
+      },
+      occurred_at,
+      event_schema_version,
+      iteration.clone(),
+      payload,
+    )?;
+    first.get_or_insert(event);
+  }
+  Ok(first.unwrap())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_single_to_history_incremental(
+  transaction: &Transaction<'_>,
+  events: &mut Vec<RunEvent>,
+  state: &mut ProjectionFoldState,
+  run_id: &str,
+  event_id: String,
+  occurred_at: DateTime<Utc>,
+  event_schema_version: u32,
+  iteration: Option<crate::event::ForEachIterationScope>,
+  payload: RunEventPayload,
+) -> Result<RunEvent, DurableStoreError> {
+  let sequence = events.len() as u64 + 1;
+  let event = RunEvent {
+    event_schema_version,
+    event_id,
+    run_id: run_id.to_string(),
+    sequence,
+    occurred_at,
+    iteration,
+    payload,
+  };
+  state.apply(&event)?;
+  let event_json = serde_json::to_string(&event)?;
+  let stored_sequence = i64::try_from(sequence).map_err(|_| {
+    DurableStoreError::Contract("event sequence exceeds SQLite integer range".to_string())
+  })?;
+  transaction.execute(
+    "INSERT INTO woml_run_events(
+       run_id, sequence, event_id, event_schema_version, event_json
+     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+    params![
+      run_id,
+      stored_sequence,
+      event.event_id,
+      i64::from(event.event_schema_version),
+      event_json,
+    ],
+  )?;
+  events.push(event.clone());
+  write_run_summary_from_projection(
+    transaction,
+    events.first().unwrap(),
+    event.occurred_at,
+    state.projection(),
+  )?;
+  if let RunEventPayload::RunAdmitted(admission) = &events.first().unwrap().payload {
+    write_runtime_policy_indexes_from_projection(
+      transaction,
+      run_id,
+      admission,
+      state.projection(),
+    )?;
+  }
+  Ok(event)
 }
 
 fn append_to_history(
