@@ -219,6 +219,7 @@ import {
   writeCompiledWorkflowCache,
   type CompiledWorkflowCacheOptions,
 } from './compiled-workflow-cache';
+import { runtimeActivationRequirements } from './runtime-activation';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -4149,6 +4150,29 @@ async function activateWorkflows(
           );
         }
       );
+      const activationRequirements = profileSync(
+        'runtime',
+        'runtime.resolve_activation_requirements',
+        measurements => {
+          const requirements = runtimeActivationRequirements(
+            productionSources.map(source => source.workflow)
+          );
+          if (measurements !== undefined) {
+            measurements.counts.provider_hosts =
+              Number(requirements.triggerHandlers.includes('trigger.slack')) +
+              Number(requirements.providers.telegram.inbound) +
+              Number(requirements.providers.discord.inbound);
+            measurements.counts.public_http = Number(requirements.publicHttp);
+            measurements.counts.script_execution = Number(
+              requirements.scriptExecution
+            );
+            measurements.counts.runtime_modules = Number(
+              requirements.runtimeModules
+            );
+          }
+          return requirements;
+        }
+      );
       const routes = productionSources.flatMap(source =>
         webhookRouteSummaries(source.workflow)
       );
@@ -4161,36 +4185,14 @@ async function activateWorkflows(
       const discordRegistrations = productionSources.flatMap(source =>
         discordTriggerRegistrations(source.workflow, source.definitionHash)
       );
-      const telegramPollingCredentials = [
-        ...new Set(
-          productionSources.flatMap(source =>
-            source.workflow.schemaVersion === 15
-              ? source.workflow.communication.providers.flatMap(provider =>
-                  provider.provider === 'telegram' &&
-                  (provider.triggerIds.length > 0 ||
-                    provider.notificationDeliveryIds.length > 0)
-                    ? provider.credentialNames
-                    : []
-                )
-              : []
-          )
-        ),
-      ];
-      const discordGatewayCredentials = [
-        ...new Set(
-          productionSources.flatMap(source =>
-            source.workflow.schemaVersion === 15
-              ? source.workflow.communication.providers.flatMap(provider =>
-                  provider.provider === 'discord' &&
-                  (provider.triggerIds.length > 0 ||
-                    provider.notificationDeliveryIds.length > 0)
-                    ? provider.credentialNames
-                    : []
-                )
-              : []
-          )
-        ),
-      ];
+      const telegramPollingCredentials = activationRequirements.providers
+        .telegram.inbound
+        ? activationRequirements.providers.telegram.inboundCredentialNames
+        : [];
+      const discordGatewayCredentials = activationRequirements.providers
+        .discord.inbound
+        ? activationRequirements.providers.discord.inboundCredentialNames
+        : [];
       const uniqueEventRoutes: EventRouteSummary[] = [];
       const seenEventNames = new Set<string>();
       for (const route of eventRoutes) {
@@ -4210,14 +4212,13 @@ async function activateWorkflows(
         }
         seenRoutes.set(route.path, route);
       }
-      const hasWhatsAppEndpoint = productionSources.some(source =>
-        source.workflow.schemaVersion === 15 &&
-        source.workflow.communication.providers.some(
-          provider => provider.provider === 'whatsapp'
-        )
-      );
+      const hasWhatsAppEndpoint =
+        activationRequirements.providers.whatsapp.inbound;
       const hasHttpEndpoint =
-        routes.length > 0 || uniqueEventRoutes.length > 0 || hasWhatsAppEndpoint;
+        activationRequirements.publicHttp ||
+        routes.length > 0 ||
+        uniqueEventRoutes.length > 0 ||
+        hasWhatsAppEndpoint;
       const currentActivationId = activationIdentity(productionSources);
       const currentDeploymentId = deploymentIdentity(args.statePath);
       const runtime = await profileAsync(
