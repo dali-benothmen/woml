@@ -2579,13 +2579,11 @@ impl DurableEventStore {
     &self,
     definition_hash: &str,
   ) -> Result<CompiledWorkflowDefinition, DurableStoreError> {
-    let model_json: String = self
+    let mut statement = self
       .connection
-      .query_row(
-        "SELECT model_json FROM woml_definitions WHERE definition_hash = ?1",
-        [definition_hash],
-        |row| row.get(0),
-      )
+      .prepare_cached("SELECT model_json FROM woml_definitions WHERE definition_hash = ?1")?;
+    let model_json: String = statement
+      .query_row([definition_hash], |row| row.get(0))
       .optional()?
       .ok_or_else(|| DurableStoreError::DefinitionNotFound(definition_hash.to_string()))?;
     let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
@@ -3466,19 +3464,17 @@ impl DurableEventStore {
   }
 
   pub fn run_binding(&self, run_id: &str) -> Result<RunDefinitionBinding, DurableStoreError> {
-    self
+    let mut statement = self
       .connection
-      .query_row(
-        "SELECT workflow_id, definition_hash FROM woml_runs WHERE run_id = ?1",
-        [run_id],
-        |row| {
-          Ok(RunDefinitionBinding {
-            run_id: run_id.to_string(),
-            workflow_id: row.get(0)?,
-            definition_hash: row.get(1)?,
-          })
-        },
-      )
+      .prepare_cached("SELECT workflow_id, definition_hash FROM woml_runs WHERE run_id = ?1")?;
+    statement
+      .query_row([run_id], |row| {
+        Ok(RunDefinitionBinding {
+          run_id: run_id.to_string(),
+          workflow_id: row.get(0)?,
+          definition_hash: row.get(1)?,
+        })
+      })
       .optional()?
       .ok_or_else(|| DurableStoreError::RunNotFound(run_id.to_string()))
   }
@@ -4299,11 +4295,10 @@ impl DurableEventStore {
   /// Read models use this to reject pathological histories before projection.
   pub fn event_count(&self, run_id: &str) -> Result<usize, DurableStoreError> {
     self.run_binding(run_id)?;
-    let count: i64 = self.connection.query_row(
-      "SELECT COUNT(*) FROM woml_run_events WHERE run_id = ?1",
-      [run_id],
-      |row| row.get(0),
-    )?;
+    let mut statement = self
+      .connection
+      .prepare_cached("SELECT COUNT(*) FROM woml_run_events WHERE run_id = ?1")?;
+    let count: i64 = statement.query_row([run_id], |row| row.get(0))?;
     usize::try_from(count)
       .map_err(|_| DurableStoreError::Contract("run event count is invalid".to_string()))
   }
@@ -4312,15 +4307,15 @@ impl DurableEventStore {
     let mut span = crate::performance::PerformanceSpan::new("sqlite", "sqlite.project_run");
     span.run_id(run_id.to_string());
     let binding = self.run_binding(run_id)?;
-    let (event_count, last_event_id): (i64, Option<String>) = self.connection.query_row(
+    let mut statement = self.connection.prepare_cached(
       "SELECT COUNT(*), (
          SELECT event_id FROM woml_run_events
          WHERE run_id = ?1 ORDER BY sequence DESC LIMIT 1
        )
        FROM woml_run_events WHERE run_id = ?1",
-      [run_id],
-      |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
+    let (event_count, last_event_id): (i64, Option<String>) =
+      statement.query_row([run_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
     let event_count = u64::try_from(event_count)
       .map_err(|_| DurableStoreError::Contract("run event count is invalid".to_string()))?;
     span.count("events", event_count as usize);
@@ -9719,18 +9714,16 @@ fn run_binding_in_transaction(
   connection: &Connection,
   run_id: &str,
 ) -> Result<RunDefinitionBinding, DurableStoreError> {
-  connection
-    .query_row(
-      "SELECT workflow_id, definition_hash FROM woml_runs WHERE run_id = ?1",
-      [run_id],
-      |row| {
-        Ok(RunDefinitionBinding {
-          run_id: run_id.to_string(),
-          workflow_id: row.get(0)?,
-          definition_hash: row.get(1)?,
-        })
-      },
-    )
+  let mut statement = connection
+    .prepare_cached("SELECT workflow_id, definition_hash FROM woml_runs WHERE run_id = ?1")?;
+  statement
+    .query_row([run_id], |row| {
+      Ok(RunDefinitionBinding {
+        run_id: run_id.to_string(),
+        workflow_id: row.get(0)?,
+        definition_hash: row.get(1)?,
+      })
+    })
     .optional()?
     .ok_or_else(|| DurableStoreError::RunNotFound(run_id.to_string()))
 }
@@ -9739,16 +9732,15 @@ fn definition_for_run(
   connection: &Connection,
   run_id: &str,
 ) -> Result<CompiledWorkflowDefinition, DurableStoreError> {
-  let model_json: String = connection
-    .query_row(
-      "SELECT definitions.model_json
-       FROM woml_runs AS runs
-       JOIN woml_definitions AS definitions
-         ON definitions.definition_hash = runs.definition_hash
-       WHERE runs.run_id = ?1",
-      [run_id],
-      |row| row.get(0),
-    )
+  let mut statement = connection.prepare_cached(
+    "SELECT definitions.model_json
+     FROM woml_runs AS runs
+     JOIN woml_definitions AS definitions
+       ON definitions.definition_hash = runs.definition_hash
+     WHERE runs.run_id = ?1",
+  )?;
+  let model_json: String = statement
+    .query_row([run_id], |row| row.get(0))
     .optional()?
     .ok_or_else(|| DurableStoreError::RunNotFound(run_id.to_string()))?;
   let workflow: CompiledWorkflowDefinition = serde_json::from_str(&model_json)?;
@@ -9757,7 +9749,7 @@ fn definition_for_run(
 }
 
 fn load_events(connection: &Connection, run_id: &str) -> Result<Vec<RunEvent>, DurableStoreError> {
-  let mut statement = connection.prepare(
+  let mut statement = connection.prepare_cached(
     "SELECT sequence, event_schema_version, event_json
      FROM woml_run_events WHERE run_id = ?1 ORDER BY sequence",
   )?;
