@@ -4199,6 +4199,7 @@ impl DurableEventStore {
         event_schema_version,
         iteration.clone(),
         payload,
+        true,
       )?;
       first_event.get_or_insert(event);
     }
@@ -4274,12 +4275,32 @@ impl DurableEventStore {
           event_schema_version,
           None,
           payload,
+          false,
         )?;
       }
     }
     validate_event_history_against_definition(&workflow, &binding.definition_hash, &events)
       .map_err(DurableStoreError::Contract)?;
     let projection = projection_state.projection().clone();
+    let last_occurred_at = events
+      .last()
+      .expect("an atomic event batch preserves a non-empty history")
+      .occurred_at;
+    write_run_summary_from_projection(
+      &transaction,
+      events
+        .first()
+        .expect("an atomic event batch preserves a non-empty history"),
+      last_occurred_at,
+      &projection,
+    )?;
+    if let RunEventPayload::RunAdmitted(admission) = &events
+      .first()
+      .expect("an atomic event batch preserves a non-empty history")
+      .payload
+    {
+      write_runtime_policy_indexes_from_projection(&transaction, run_id, admission, &projection)?;
+    }
     transaction.commit()?;
     cache_projection_state(&self.projection_cache, run_id, projection_state);
     span.succeed();
@@ -10252,6 +10273,7 @@ fn append_to_history_scoped_incremental(
   event_schema_version: u32,
   iteration: Option<crate::event::ForEachIterationScope>,
   payload: RunEventPayload,
+  update_read_models: bool,
 ) -> Result<RunEvent, DurableStoreError> {
   let payloads = if matches!(
     event_schema_version,
@@ -10285,6 +10307,7 @@ fn append_to_history_scoped_incremental(
       event_schema_version,
       iteration.clone(),
       payload,
+      update_read_models,
     )?;
     first.get_or_insert(event);
   }
@@ -10302,6 +10325,7 @@ fn append_single_to_history_incremental(
   event_schema_version: u32,
   iteration: Option<crate::event::ForEachIterationScope>,
   payload: RunEventPayload,
+  update_read_models: bool,
 ) -> Result<RunEvent, DurableStoreError> {
   let sequence = events.len() as u64 + 1;
   let event = RunEvent {
@@ -10331,19 +10355,21 @@ fn append_single_to_history_incremental(
     ],
   )?;
   events.push(event.clone());
-  write_run_summary_from_projection(
-    transaction,
-    events.first().unwrap(),
-    event.occurred_at,
-    state.projection(),
-  )?;
-  if let RunEventPayload::RunAdmitted(admission) = &events.first().unwrap().payload {
-    write_runtime_policy_indexes_from_projection(
+  if update_read_models {
+    write_run_summary_from_projection(
       transaction,
-      run_id,
-      admission,
+      events.first().unwrap(),
+      event.occurred_at,
       state.projection(),
     )?;
+    if let RunEventPayload::RunAdmitted(admission) = &events.first().unwrap().payload {
+      write_runtime_policy_indexes_from_projection(
+        transaction,
+        run_id,
+        admission,
+        state.projection(),
+      )?;
+    }
   }
   Ok(event)
 }

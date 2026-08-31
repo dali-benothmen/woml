@@ -4995,9 +4995,30 @@ async fn continue_runtime_loop<E: RuntimeDagEngine>(
         let source = source.ok_or_else(|| {
           RuntimeExecutionError::Stalled(format!("node {node_id:?} has no script source"))
         })?;
-        let outcome = execute_script_node(engine, run_id, node_id, &source, options, host).await?;
-        let ScriptNodeOutcome::Succeeded(output) = outcome else {
-          continue;
+        let publish_terminal_success = node_id == &terminal_node_id
+          && engine.workflow().graph.settlement.is_none()
+          && reusable_step_descriptor(engine.workflow(), node_id).is_none();
+        let outcome = execute_script_node(
+          engine,
+          run_id,
+          node_id,
+          &source,
+          publish_terminal_success,
+          options,
+          host,
+        )
+        .await?;
+        let output = match outcome {
+          ScriptNodeOutcome::Succeeded(output) => output,
+          ScriptNodeOutcome::WorkflowSucceeded => {
+            execution_order.push(node_id.clone());
+            return Ok(WorkflowRuntimeOutcome::succeeded(final_result(
+              engine,
+              run_id,
+              execution_order.clone(),
+            )?));
+          }
+          ScriptNodeOutcome::RetryScheduled | ScriptNodeOutcome::Cancelled => continue,
         };
         execution_order.push(node_id.clone());
         // In Model v13 this is only the main route's value source. The
@@ -8781,6 +8802,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   run_id: &str,
   node_id: &str,
   source: &str,
+  publish_terminal_success: bool,
   options: &RuntimeExecutionOptions,
   host: &mut Option<ScriptHostClient>,
 ) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
@@ -8986,15 +9008,27 @@ async fn execute_script_node<E: RuntimeDagEngine>(
 
   match outcome {
     HostOutcome::Success { value } => {
-      engine.append_payload(
-        run_id,
-        RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
-          node_id: node_id.to_string(),
-          attempt: attempt_number,
-          invocation_id,
-          output: value.clone(),
-        }),
-      )?;
+      let succeeded = RunEventPayload::StepAttemptSucceeded(StepAttemptSucceededData {
+        node_id: node_id.to_string(),
+        attempt: attempt_number,
+        invocation_id,
+        output: value.clone(),
+      });
+      if publish_terminal_success {
+        engine.append_payloads(
+          run_id,
+          vec![
+            succeeded,
+            RunEventPayload::RunSucceeded(RunSucceededData {
+              terminal_node_id: node_id.to_string(),
+              result: value.clone(),
+            }),
+          ],
+        )?;
+        report_attempt_succeeded(engine, options, run_id, node_id, attempt_number);
+        return Ok(ScriptNodeOutcome::WorkflowSucceeded);
+      }
+      engine.append_payload(run_id, succeeded)?;
       drive_reusable_step_lifecycle(
         engine,
         run_id,
@@ -9027,6 +9061,7 @@ async fn execute_script_node<E: RuntimeDagEngine>(
 
 enum ScriptNodeOutcome {
   Succeeded(Value),
+  WorkflowSucceeded,
   RetryScheduled,
   Cancelled,
 }

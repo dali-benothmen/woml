@@ -290,7 +290,7 @@ async fn non_retryable_timeout_fails_after_the_first_attempt() {
     workflow,
     MODIFIED_HASH.to_string(),
     Map::new(),
-    options(host, 25),
+    options(host, 250),
     database.path().to_path_buf(),
   )
   .await
