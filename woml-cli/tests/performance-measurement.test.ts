@@ -45,6 +45,24 @@ const regressionBudgets = decodePerformanceRegressionBudgets(
 const builtTest = existsSync(nativeCore) ? test : test.skip;
 
 describe('performance measurement contract v1', () => {
+  test('keeps disabled worker profiling free of eager diagnostic dependencies', () => {
+    const source = readFileSync(
+      resolve(projectRoot, 'woml-cli/src/performance-profiler.ts'),
+      'utf8'
+    );
+    const flushStart = source.indexOf(
+      'export async function flushPerformanceProfile'
+    );
+    expect(flushStart).toBeGreaterThan(0);
+    const bootstrap = source.slice(0, flushStart);
+    const flush = source.slice(flushStart);
+    expect(bootstrap).not.toContain("from 'node:crypto'");
+    expect(bootstrap).not.toContain("from 'node:fs/promises'");
+    expect(bootstrap).not.toContain("from 'node:path'");
+    expect(flush).toContain("import('node:fs/promises')");
+    expect(flush).toContain("import('node:path')");
+  });
+
   test('summarizes raw samples without hiding their distribution', () => {
     expect(summarizeSamples([4, 1, 3, 2])).toEqual({
       count: 4,
