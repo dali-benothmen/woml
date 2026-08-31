@@ -16,7 +16,7 @@ napi-build = "2.0"
 [dependencies]
 actix-web = "4.11"
 chrono = { version = "0.4", features = ["serde"] }
-napi = { version = "2.15", default-features = false, features = ["napi4", "tokio_rt"] }
+napi = { version = "3.12", default-features = false, features = ["napi4", "tokio_rt"] }
 napi-derive = "2.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
