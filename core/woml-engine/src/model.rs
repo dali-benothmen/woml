@@ -13,10 +13,11 @@ use crate::{
   COMPILED_MODEL_SCHEMA_VERSION_V15, COMPILED_MODEL_SCHEMA_VERSION_V16,
   COMPILED_MODEL_SCHEMA_VERSION_V17, COMPILED_MODEL_SCHEMA_VERSION_V18,
   COMPILED_MODEL_SCHEMA_VERSION_V19, COMPILED_MODEL_SCHEMA_VERSION_V2,
-  COMPILED_MODEL_SCHEMA_VERSION_V20, COMPILED_MODEL_SCHEMA_VERSION_V3,
-  COMPILED_MODEL_SCHEMA_VERSION_V4, COMPILED_MODEL_SCHEMA_VERSION_V5,
-  COMPILED_MODEL_SCHEMA_VERSION_V6, COMPILED_MODEL_SCHEMA_VERSION_V7,
-  COMPILED_MODEL_SCHEMA_VERSION_V8, COMPILED_MODEL_SCHEMA_VERSION_V9,
+  COMPILED_MODEL_SCHEMA_VERSION_V20, COMPILED_MODEL_SCHEMA_VERSION_V21,
+  COMPILED_MODEL_SCHEMA_VERSION_V3, COMPILED_MODEL_SCHEMA_VERSION_V4,
+  COMPILED_MODEL_SCHEMA_VERSION_V5, COMPILED_MODEL_SCHEMA_VERSION_V6,
+  COMPILED_MODEL_SCHEMA_VERSION_V7, COMPILED_MODEL_SCHEMA_VERSION_V8,
+  COMPILED_MODEL_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -428,7 +429,17 @@ pub struct CompiledWorkflowNode {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub script_runtime: Option<ScriptRuntimeBindings>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub execution: Option<CompiledExecutionPlacement>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub metadata: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledExecutionPlacement {
+  pub profile_version: u32,
+  pub target: String,
+  pub required_capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -705,6 +716,8 @@ pub enum ModelIssueCode {
   InvalidSaga,
   UnsupportedSagaExecution,
   UnsupportedRichApprovalExecution,
+  InvalidExecutionPlacement,
+  UnsupportedRemoteExecution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -883,6 +896,7 @@ fn inspect_reusable_contract(
       | COMPILED_MODEL_SCHEMA_VERSION_V18
       | COMPILED_MODEL_SCHEMA_VERSION_V19
       | COMPILED_MODEL_SCHEMA_VERSION_V20
+      | COMPILED_MODEL_SCHEMA_VERSION_V21
   ) || definitions.is_empty()
     || definitions.len() > 256
   {
@@ -1878,6 +1892,7 @@ fn inspect_lifecycle_contract(workflow: &CompiledWorkflowDefinition, issues: &mu
       | COMPILED_MODEL_SCHEMA_VERSION_V18
       | COMPILED_MODEL_SCHEMA_VERSION_V19
       | COMPILED_MODEL_SCHEMA_VERSION_V20
+      | COMPILED_MODEL_SCHEMA_VERSION_V21
   ) {
     issues.push(issue(
       ModelIssueCode::InvalidLifecycle,
@@ -2017,7 +2032,8 @@ fn inspect_runtime_policy_contract(
       | COMPILED_MODEL_SCHEMA_VERSION_V17
       | COMPILED_MODEL_SCHEMA_VERSION_V18
       | COMPILED_MODEL_SCHEMA_VERSION_V19
-      | COMPILED_MODEL_SCHEMA_VERSION_V20,
+      | COMPILED_MODEL_SCHEMA_VERSION_V20
+      | COMPILED_MODEL_SCHEMA_VERSION_V21,
       Some(policy),
     ) => {
       let has_policy = policy.concurrency.is_some()
@@ -2061,7 +2077,8 @@ fn inspect_runtime_policy_contract(
       | COMPILED_MODEL_SCHEMA_VERSION_V17
       | COMPILED_MODEL_SCHEMA_VERSION_V18
       | COMPILED_MODEL_SCHEMA_VERSION_V19
-      | COMPILED_MODEL_SCHEMA_VERSION_V20,
+      | COMPILED_MODEL_SCHEMA_VERSION_V20
+      | COMPILED_MODEL_SCHEMA_VERSION_V21,
       None,
     ) => issues.push(issue(
       ModelIssueCode::InvalidRuntimePolicy,
@@ -2536,7 +2553,10 @@ fn approval_wait_inputs(
     + usize::from(fields.contains_key("requiredRoles"));
   let valid_rich_review = rich_count == 0
     || rich_count == 3
-      && schema_version == COMPILED_MODEL_SCHEMA_VERSION_V20
+      && matches!(
+        schema_version,
+        COMPILED_MODEL_SCHEMA_VERSION_V20 | COMPILED_MODEL_SCHEMA_VERSION_V21
+      )
       && matches!(
         fields.get("review"),
         Some(ValueExpression::ContextReference { path })
@@ -3791,6 +3811,127 @@ fn inspect_saga_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec
   }
 }
 
+fn valid_execution_target(target: &str) -> bool {
+  if target.is_empty() || target.len() > 128 {
+    return false;
+  }
+  let bytes = target.as_bytes();
+  bytes[0].is_ascii_lowercase()
+    && bytes
+      .last()
+      .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    && !target.contains("--")
+    && bytes
+      .iter()
+      .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+fn valid_execution_capability(capability: &str) -> bool {
+  if capability.is_empty() || capability.len() > 128 {
+    return false;
+  }
+  let mut previous_separator = true;
+  for byte in capability.bytes() {
+    if byte == b'.' || byte == b'-' {
+      if previous_separator {
+        return false;
+      }
+      previous_separator = true;
+    } else if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+      previous_separator = false;
+    } else {
+      return false;
+    }
+  }
+  !previous_separator
+}
+
+fn inspect_execution_placement_contract(
+  workflow: &CompiledWorkflowDefinition,
+  issues: &mut Vec<ModelIssue>,
+) {
+  let mut forward_nodes = HashMap::new();
+  let mut nodes = Vec::new();
+  for node in &workflow.graph.nodes {
+    forward_nodes.insert(node.id.as_str(), node);
+    nodes.push(node);
+  }
+  for descriptor in workflow.graph.for_each.iter().flatten() {
+    for node in &descriptor.body.nodes {
+      forward_nodes.insert(node.id.as_str(), node);
+      nodes.push(node);
+    }
+  }
+  for saga in workflow.graph.sagas.iter().flatten() {
+    nodes.extend(saga.compensations.iter().map(|action| &action.node));
+    nodes.extend(saga.cleanup.iter().map(|action| &action.node));
+  }
+
+  let placed = nodes.iter().filter(|node| node.execution.is_some()).count();
+  if workflow.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V21 && placed == 0 {
+    issues.push(issue(
+      ModelIssueCode::InvalidExecutionPlacement,
+      "Compiled Model v21 requires at least one explicit execution placement.",
+    ));
+  }
+
+  for node in nodes {
+    let Some(execution) = &node.execution else {
+      continue;
+    };
+    if workflow.schema_version != COMPILED_MODEL_SCHEMA_VERSION_V21
+      || node.handler != "runtime.script"
+      || execution.profile_version != 1
+      || !valid_execution_target(&execution.target)
+      || execution.required_capabilities.is_empty()
+      || execution.required_capabilities.len() > 128
+      || execution.required_capabilities[0] != "runtime.script"
+      || execution
+        .required_capabilities
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+      || execution
+        .required_capabilities
+        .iter()
+        .any(|capability| !valid_execution_capability(capability))
+    {
+      issues.push(issue(
+        ModelIssueCode::InvalidExecutionPlacement,
+        format!(
+          "Node {:?} does not match the Model v21 Execution Placement v1 contract.",
+          node.id
+        ),
+      ));
+    }
+  }
+
+  for saga in workflow.graph.sagas.iter().flatten() {
+    for compensation in &saga.compensations {
+      if compensation
+        .for_step_id
+        .as_deref()
+        .and_then(|for_step_id| forward_nodes.get(for_step_id))
+        .is_none_or(|forward| {
+          compensation
+            .node
+            .execution
+            .as_ref()
+            .map(|value| &value.target)
+            != forward.execution.as_ref().map(|value| &value.target)
+        })
+      {
+        issues.push(issue(
+          ModelIssueCode::InvalidExecutionPlacement,
+          format!(
+            "Compensation {:?} must inherit the execution placement of forward step {:?}.",
+            compensation.action_id, compensation.for_step_id
+          ),
+        ));
+      }
+    }
+  }
+}
+
 fn inspect_fork_contract(workflow: &CompiledWorkflowDefinition, issues: &mut Vec<ModelIssue>) {
   let descriptors = (
     &workflow.graph.forks,
@@ -4526,6 +4667,7 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V18
         | COMPILED_MODEL_SCHEMA_VERSION_V19
         | COMPILED_MODEL_SCHEMA_VERSION_V20
+        | COMPILED_MODEL_SCHEMA_VERSION_V21
     ) {
       issues.push(issue(
         ModelIssueCode::UnsupportedSchemaVersion,
@@ -4569,7 +4711,8 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V17
         | COMPILED_MODEL_SCHEMA_VERSION_V18
         | COMPILED_MODEL_SCHEMA_VERSION_V19
-        | COMPILED_MODEL_SCHEMA_VERSION_V20,
+        | COMPILED_MODEL_SCHEMA_VERSION_V20
+        | COMPILED_MODEL_SCHEMA_VERSION_V21,
         Some(runtime),
       ) => {
         let reserved = [
@@ -4638,6 +4781,7 @@ impl CompiledWorkflowDefinition {
           | COMPILED_MODEL_SCHEMA_VERSION_V18
           | COMPILED_MODEL_SCHEMA_VERSION_V19
           | COMPILED_MODEL_SCHEMA_VERSION_V20
+          | COMPILED_MODEL_SCHEMA_VERSION_V21
       )
     {
       issues.push(issue(
@@ -4660,7 +4804,8 @@ impl CompiledWorkflowDefinition {
         | COMPILED_MODEL_SCHEMA_VERSION_V17
         | COMPILED_MODEL_SCHEMA_VERSION_V18
         | COMPILED_MODEL_SCHEMA_VERSION_V19
-        | COMPILED_MODEL_SCHEMA_VERSION_V20,
+        | COMPILED_MODEL_SCHEMA_VERSION_V20
+        | COMPILED_MODEL_SCHEMA_VERSION_V21,
         Some(communication),
       ) => {
         let valid = communication.profile_version == 1
@@ -5050,6 +5195,7 @@ impl CompiledWorkflowDefinition {
     inspect_durable_wait_contract(self, &mut issues);
     inspect_lock_contract(self, &mut issues);
     inspect_saga_contract(self, &mut issues);
+    inspect_execution_placement_contract(self, &mut issues);
     issues
   }
 
@@ -5060,6 +5206,12 @@ impl CompiledWorkflowDefinition {
     allow_retry: bool,
     durable: bool,
   ) {
+    if self.schema_version == COMPILED_MODEL_SCHEMA_VERSION_V21 {
+      issues.push(issue(
+        ModelIssueCode::UnsupportedRemoteExecution,
+        "Compiled Model v21 remote execution is staged until the durable dispatch authority is enabled.",
+      ));
+    }
     if self.schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V13 {
       if !durable {
         issues.push(issue(

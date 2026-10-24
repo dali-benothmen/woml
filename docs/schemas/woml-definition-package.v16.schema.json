@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/woml-definition-package.v16.schema.json",
+  "title": "WOML Remote Execution Definition Package v16",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile", "executable", "runtimeReady", "workflow", "modules", "sources", "artifacts", "compiler", "permissions", "rootHash"],
+  "properties": {
+    "schemaVersion": { "const": 16 },
+    "profile": { "const": "woml.definition-package/v16" },
+    "executable": { "const": true },
+    "runtimeReady": { "const": false },
+    "workflow": { "type": "object", "additionalProperties": false, "required": ["id", "source", "modelDigest", "model"], "properties": { "id": { "type": "string" }, "source": { "type": "string" }, "modelDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }, "model": { "$ref": "https://woml.dev/schemas/compiled-workflow-model/v21" } } },
+    "definitions": { "type": "array", "maxItems": 256 },
+    "modules": { "type": "array", "maxItems": 64 },
+    "sources": { "type": "array", "minItems": 1, "maxItems": 769 },
+    "artifacts": { "type": "array", "maxItems": 450 },
+    "compiler": { "type": "object" },
+    "permissions": { "type": "object" },
+    "rootHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

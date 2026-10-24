@@ -35,18 +35,79 @@ pub mod presentation;
 pub mod process;
 pub mod projection;
 pub mod protocol;
+pub mod remote_coordinator;
+pub mod remote_coordinator_server;
+pub mod remote_dispatch;
+pub mod remote_execution;
+pub mod remote_protocol;
+pub mod remote_worker;
+pub mod remote_worker_journal;
 pub mod retention;
 pub mod rich_approval;
 pub mod runtime;
 pub mod schedule;
 pub mod storage;
 pub mod store;
+pub mod target_registry;
 pub mod telegram;
 pub mod telemetry;
 pub mod telemetry_propagation;
 pub mod webhook;
 pub mod whatsapp;
 pub mod workflow_calls;
+
+pub use remote_coordinator::{
+  remote_transport_profile, RemoteCoordinatorError, RemoteSessionAuthorityV1,
+  RemoteSessionRecordV1, RemoteWorkerHealthStatusV1, RemoteWorkerHealthV1, TrustedWorkerIdentityV1,
+  REMOTE_MAX_REPLAY_IDS, REMOTE_MAX_SESSIONS, REMOTE_MESSAGE_CLOCK_SKEW_SECONDS,
+  REMOTE_SESSION_LIFETIME_SECONDS,
+};
+pub use remote_coordinator_server::{
+  RemoteCoordinatorServerError, RemoteCoordinatorServerV1, RemoteCoordinatorTlsOptionsV1,
+  REMOTE_COORDINATOR_IO_TIMEOUT_SECONDS, REMOTE_COORDINATOR_MAX_CONNECTIONS,
+  REMOTE_COORDINATOR_MAX_HEADER_BYTES,
+};
+pub use remote_dispatch::{
+  derive_remote_dispatch_id, RemoteDispatchError, RemoteDispatchInspectionV1,
+  RemoteDispatchRecordV1, RemoteDispatchRequestV1, RemoteDispatchResolutionV1,
+  RemoteDispatchStateV1, RemoteOutputBindingV1, REMOTE_DISPATCH_HEARTBEAT_MAX_BYTES,
+  REMOTE_DISPATCH_RECOVERY_BATCH_LIMIT,
+};
+pub use remote_execution::{
+  ingest_remote_output_batch, RemoteExecutionError, RemoteOutputIngestReportV1,
+};
+pub use remote_protocol::{
+  decode_remote_dispatch_package, decode_worker_hello, decode_worker_output_batch,
+  decode_worker_poll, decode_worker_shutdown, RemoteArtifactGrantV1, RemoteArtifactOperationV1,
+  RemoteCoordinatorAuthorityV1, RemoteDispatchPackageV1, RemoteEffectiveAuthorityV1,
+  RemoteOperationalRecordV1, RemoteProtocolError, WorkerArchitectureV1, WorkerCapabilityV1,
+  WorkerHelloV1, WorkerOperatingSystemV1, WorkerOutputBatchV1, WorkerPlatformV1,
+  WorkerPollResultV1, WorkerPollV1, WorkerSessionV1, WorkerShutdownV1,
+  REMOTE_DISPATCH_PACKAGE_PROFILE, REMOTE_DISPATCH_PACKAGE_VERSION,
+  REMOTE_OUTPUT_BATCH_MAX_RECORDS, REMOTE_TERMINAL_RESULT_MAX_BYTES,
+  WORKER_PROTOCOL_MAX_CAPABILITIES, WORKER_PROTOCOL_MAX_CAPACITY,
+  WORKER_PROTOCOL_MAX_MESSAGE_BYTES, WORKER_PROTOCOL_MAX_TARGETS, WORKER_PROTOCOL_PROFILE,
+  WORKER_PROTOCOL_VERSION,
+};
+pub use remote_worker::{
+  parse_worker_configuration, prepare_worker_configuration, PreparedWorkerConfigurationV1,
+  RemoteWorkerConfigurationError, WorkerConfigurationV1, WorkerSecretProviderV1,
+  WorkerTlsReferencesV1, WORKER_CONFIGURATION_MAX_BYTES, WORKER_CONFIGURATION_PROFILE,
+  WORKER_CONFIGURATION_VERSION,
+};
+pub use remote_worker_journal::{
+  prepare_remote_dispatch, verify_remote_artifact_transfer, EnvironmentRemoteSecretProvider,
+  PreparedRemoteDispatchV1, RemoteSecretProvider, RemoteWorkerAttemptRuntimeV1,
+  RemoteWorkerAuthorityV1, RemoteWorkerCancellationTokenV1, RemoteWorkerError,
+  RemoteWorkerTerminalV1, WorkerAttemptRecordV1, WorkerAttemptStateV1, WorkerJournalV1,
+  REMOTE_CANCELLATION_CONFIRMATION_TIMEOUT_MS, WORKER_JOURNAL_RECOVERY_LIMIT,
+  WORKER_JOURNAL_SCHEMA_VERSION,
+};
+pub use target_registry::{
+  parse_target_registry, prepare_target_registry, PreparedTargetRegistryV1, TargetRegistryEntryV1,
+  TargetRegistryError, TargetRegistryV1, TARGET_REGISTRY_MAX_BYTES, TARGET_REGISTRY_MAX_TARGETS,
+  TARGET_REGISTRY_PROFILE, TARGET_REGISTRY_VERSION,
+};
 
 pub use artifacts::{
   export_artifact, export_artifact_backup, inspect_artifact, inspect_run_artifacts,
@@ -168,16 +229,17 @@ pub use event::{
   NotificationRunFailure, NotificationSafeFailure, OperationExecutionMode, OperationFailedData,
   OperationStartedData, OperationSucceededData, ParallelFailure, ParallelFailurePolicy,
   ParallelGroupCompletedData, ParallelGroupOutcome, ParallelGroupStartedData,
-  ProviderMessageIdentity, ReusableLifecycleActionFailedData, ReusableLifecycleActionStartedData,
-  ReusableLifecycleActionSucceededData, ReusableLifecycleCompletedData, ReusableLifecycleHook,
-  ReusableLifecycleOutcome, ReusableLifecycleRequestedData, RichApprovalResolutionReason,
-  RunAdmissionQueue, RunAdmissionTrigger, RunAdmittedData, RunCancellationRequestedData, RunEvent,
-  RunEventPayload, RunExecutionStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2,
-  RunFailedDataV3, RunFailedDataV4, RunFailedDataV5, RunFinalizedData, RunIngress,
-  RunOutcomeDecidedData, RunStartedData, RunSucceededData, RunTimeoutReachedData,
-  SagaCorrectionReason, SagaCorrectionStartedData, SagaIdentityData, SlackProviderMessageIdentity,
-  StepAttemptFailedData, StepAttemptStartedData, StepAttemptSucceededData, StepRetryScheduledData,
-  WaitCancelledData, WaitRegisteredData, WaitSatisfiedData, WaitTimedOutData,
+  ProviderMessageIdentity, RemoteDispatchTransitionedData, ReusableLifecycleActionFailedData,
+  ReusableLifecycleActionStartedData, ReusableLifecycleActionSucceededData,
+  ReusableLifecycleCompletedData, ReusableLifecycleHook, ReusableLifecycleOutcome,
+  ReusableLifecycleRequestedData, RichApprovalResolutionReason, RunAdmissionQueue,
+  RunAdmissionTrigger, RunAdmittedData, RunCancellationRequestedData, RunEvent, RunEventPayload,
+  RunExecutionStartedData, RunFailedData, RunFailedDataV1, RunFailedDataV2, RunFailedDataV3,
+  RunFailedDataV4, RunFailedDataV5, RunFinalizedData, RunIngress, RunOutcomeDecidedData,
+  RunStartedData, RunSucceededData, RunTimeoutReachedData, SagaCorrectionReason,
+  SagaCorrectionStartedData, SagaIdentityData, SlackProviderMessageIdentity, StepAttemptFailedData,
+  StepAttemptStartedData, StepAttemptSucceededData, StepRetryScheduledData, WaitCancelledData,
+  WaitRegisteredData, WaitSatisfiedData, WaitTimedOutData,
 };
 pub use events_service::{
   EventServiceAcceptedRun, EventServiceRunDispatcher, EventServiceSubscriber, ManagedEventsHandler,
@@ -222,9 +284,9 @@ pub use model::{
   CompiledLifecycleDefinition, CompiledLifecycleHook, CompiledLock, CompiledModuleBinding,
   CompiledModuleRuntime, CompiledQueuePolicy, CompiledRateLimitPolicy, CompiledReusableInvocation,
   CompiledRuntimePolicy, CompiledSaga, CompiledWait, CompiledWaitSignal,
-  CompiledWorkflowDefinition, LifecycleEventName, ModelIssue, ModelIssueCode, ModelValidationError,
-  NotificationDefinition, QueueDiscipline, RateLimitAlgorithm, ScriptRuntimeBindings,
-  ValueExpression,
+  CompiledWorkflowDefinition, CompiledWorkflowNode, LifecycleEventName, ModelIssue, ModelIssueCode,
+  ModelValidationError, NotificationDefinition, QueueDiscipline, RateLimitAlgorithm,
+  ScriptRuntimeBindings, ValueExpression,
 };
 pub use notification_host::{
   NotificationHostClient, NotificationHostClientError, NotificationHostProcessOptions,
@@ -252,11 +314,12 @@ pub use operational_output::{
   OperationalOutputStore, OperationalOutputStoreInspectionV1, OperationalPageV1,
   OperationalProgressSnapshotV1, OperationalProgressStatusV1, OperationalRecordDraftV1,
   OperationalRecordV1, OperationalSourceV1, OperationalStreamEventV1,
-  DEFAULT_OPERATIONAL_INLINE_RUN_BYTES, DEFAULT_OPERATIONAL_RETENTION_MS,
-  DEFAULT_OPERATIONAL_STORE_BYTES, MAX_OPERATIONAL_CHUNK_BYTES, MAX_OPERATIONAL_FOLLOWERS,
-  MAX_OPERATIONAL_INLINE_RUN_BYTES, MAX_OPERATIONAL_PAGE_BYTES, MAX_OPERATIONAL_PAGE_RECORDS,
-  MAX_OPERATIONAL_TEXT_BYTES, OPERATIONAL_OUTPUT_STORE_SCHEMA_VERSION, OPERATIONAL_PAGE_PROFILE,
-  OPERATIONAL_RECORD_PROFILE, OPERATIONAL_STREAM_PROFILE,
+  RemoteOperationalAppendOutcomeV1, DEFAULT_OPERATIONAL_INLINE_RUN_BYTES,
+  DEFAULT_OPERATIONAL_RETENTION_MS, DEFAULT_OPERATIONAL_STORE_BYTES, MAX_OPERATIONAL_CHUNK_BYTES,
+  MAX_OPERATIONAL_FOLLOWERS, MAX_OPERATIONAL_INLINE_RUN_BYTES, MAX_OPERATIONAL_PAGE_BYTES,
+  MAX_OPERATIONAL_PAGE_RECORDS, MAX_OPERATIONAL_TEXT_BYTES,
+  OPERATIONAL_OUTPUT_STORE_SCHEMA_VERSION, OPERATIONAL_PAGE_PROFILE, OPERATIONAL_RECORD_PROFILE,
+  OPERATIONAL_STREAM_PROFILE,
 };
 pub use presentation::{
   project_run_presentation_v1, recent_run_presentations_from_store_v1,
@@ -378,7 +441,8 @@ pub const COMPILED_MODEL_SCHEMA_VERSION_V17: u32 = 17;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V18: u32 = 18;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V19: u32 = 19;
 pub const COMPILED_MODEL_SCHEMA_VERSION_V20: u32 = 20;
-pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V20;
+pub const COMPILED_MODEL_SCHEMA_VERSION_V21: u32 = 21;
+pub const COMPILED_MODEL_SCHEMA_VERSION: u32 = COMPILED_MODEL_SCHEMA_VERSION_V21;
 pub const RUN_EVENT_SCHEMA_VERSION_V1: u32 = 1;
 pub const RUN_EVENT_SCHEMA_VERSION_V2: u32 = 2;
 pub const RUN_EVENT_SCHEMA_VERSION_V3: u32 = 3;
@@ -398,10 +462,13 @@ pub const RUN_EVENT_SCHEMA_VERSION_V16: u32 = 16;
 pub const RUN_EVENT_SCHEMA_VERSION_V17: u32 = 17;
 pub const RUN_EVENT_SCHEMA_VERSION_V18: u32 = 18;
 pub const RUN_EVENT_SCHEMA_VERSION_V19: u32 = 19;
-pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V19;
+pub const RUN_EVENT_SCHEMA_VERSION_V20: u32 = 20;
+pub const RUN_EVENT_SCHEMA_VERSION: u32 = RUN_EVENT_SCHEMA_VERSION_V20;
 
 pub const fn run_event_schema_version_for_model(model_schema_version: u32) -> u32 {
-  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V20 {
+  if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V21 {
+    RUN_EVENT_SCHEMA_VERSION_V20
+  } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V20 {
     RUN_EVENT_SCHEMA_VERSION_V19
   } else if model_schema_version >= COMPILED_MODEL_SCHEMA_VERSION_V19 {
     RUN_EVENT_SCHEMA_VERSION_V18

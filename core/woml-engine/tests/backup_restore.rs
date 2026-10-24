@@ -10,8 +10,9 @@ use uuid::Uuid;
 use woml_engine::{
   create_online_backup, inspect_backup_store, prepare_restored_store, record_verified_backup,
   run_presentation_from_store_v1, ApprovalRequestedData, ApprovalTimeoutPolicy, BackupError,
-  CompiledWorkflowDefinition, DurableDagEngine, DurableEventStore, RunStatus,
-  DURABLE_STORE_SCHEMA_VERSION, RUN_PRESENTATION_PROFILE,
+  CompiledWorkflowDefinition, DurableDagEngine, DurableEventStore, RemoteDispatchRequestV1,
+  RemoteDispatchStateV1, RunStatus, TriggerAdmissionRequest, DURABLE_STORE_SCHEMA_VERSION,
+  RUN_PRESENTATION_PROFILE,
 };
 
 const HELLO_MODEL: &str = include_str!("../../../woml/tests/fixtures/hello.compiled.v1.json");
@@ -22,6 +23,9 @@ const MODULE_HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const APPROVAL_MODEL: &str = include_str!("../../../woml/tests/fixtures/approval.compiled.v4.json");
 const APPROVAL_HASH: &str =
   "sha256:c85377270773c4abb178ba2811109843be53df66c91fedea04bb37d586901aa9";
+const REMOTE_MODEL: &str =
+  include_str!("../../../woml/tests/fixtures/remote-execution-targets/model.v21.reviewed.json");
+const REMOTE_HASH: &str = "sha256:2121212121212121212121212121212121212121212121212121212121212121";
 
 struct TestDirectory(PathBuf);
 
@@ -58,6 +62,24 @@ fn seed(path: &Path) {
   drop(engine);
 }
 
+fn seed_remote(path: &Path) -> String {
+  let workflow: CompiledWorkflowDefinition = serde_json::from_str(REMOTE_MODEL).unwrap();
+  let mut store = DurableEventStore::open(path).unwrap();
+  store.register_definition(&workflow, REMOTE_HASH).unwrap();
+  store
+    .admit_trigger_occurrence(TriggerAdmissionRequest {
+      workflow_id: workflow.workflow_id,
+      definition_hash: REMOTE_HASH.to_string(),
+      trigger_id: "start".to_string(),
+      trigger_handler: "trigger.manual".to_string(),
+      source_identity: "remote-backup-test".to_string(),
+      payload: Map::new(),
+      received_at: Utc::now(),
+    })
+    .unwrap()
+    .run_id
+}
+
 fn approval_first_model() -> CompiledWorkflowDefinition {
   let mut workflow: CompiledWorkflowDefinition = serde_json::from_str(APPROVAL_MODEL).unwrap();
   workflow.graph.entry_node_ids = vec!["editorApproval".to_string()];
@@ -70,6 +92,94 @@ fn approval_first_model() -> CompiledWorkflowDefinition {
     .edges
     .retain(|edge| edge.id != "prepareArticle-to-editorApproval");
   workflow
+}
+
+#[test]
+fn backup_and_restore_preserve_an_unresolved_remote_dispatch_without_replaying_it() {
+  let directory = TestDirectory::new("remote-dispatch");
+  let source = directory.join("source.sqlite");
+  let backup = directory.join("backup.sqlite");
+  let restored = directory.join("restored.sqlite");
+  let remote_run_id = seed_remote(&source);
+  let now = Utc::now();
+  let dispatch_id = {
+    let mut store = DurableEventStore::open(&source).unwrap();
+    let dispatch = store
+      .request_remote_dispatch(&RemoteDispatchRequestV1 {
+        run_id: remote_run_id,
+        node_id: "applyRelease".to_string(),
+        iteration_identity: String::new(),
+        attempt: 1,
+        invocation_id: "inv_remote_backup_01".to_string(),
+        target: "production-private".to_string(),
+        target_digest: format!("sha256:{}", "a".repeat(64)),
+        package_digest: format!("sha256:{}", "b".repeat(64)),
+        requested_at: now,
+      })
+      .unwrap();
+    store
+      .offer_remote_dispatch(
+        &dispatch.dispatch_id,
+        "production-runner-01",
+        "session_01",
+        "offer_01",
+        now + Duration::seconds(5),
+        now,
+      )
+      .unwrap();
+    store
+      .accept_remote_dispatch(
+        &dispatch.dispatch_id,
+        "production-runner-01",
+        "session_01",
+        "offer_01",
+        now + Duration::seconds(1),
+      )
+      .unwrap();
+    let lost = store
+      .mark_lost_remote_dispatches(now + Duration::seconds(2), now + Duration::seconds(10), 100)
+      .unwrap();
+    assert_eq!(lost[0].state, RemoteDispatchStateV1::Ambiguous);
+    dispatch.dispatch_id
+  };
+
+  create_online_backup(
+    &source,
+    &backup,
+    "lease_remote_dispatch",
+    "test_remote_dispatch",
+    "deployment_remote_dispatch",
+  )
+  .unwrap();
+  assert_eq!(
+    DurableEventStore::open(&backup)
+      .unwrap()
+      .inspect_remote_dispatch(&dispatch_id)
+      .unwrap()
+      .state,
+    "ambiguous"
+  );
+
+  fs::copy(&backup, &restored).unwrap();
+  prepare_restored_store(
+    &restored,
+    &[REMOTE_HASH.to_string()],
+    "backup_remote_dispatch",
+    now + Duration::seconds(20),
+  )
+  .unwrap();
+  let restored_store = DurableEventStore::open(&restored).unwrap();
+  assert_eq!(
+    restored_store
+      .inspect_remote_dispatch(&dispatch_id)
+      .unwrap()
+      .state,
+    "ambiguous"
+  );
+  assert_eq!(
+    restored_store.recover_remote_dispatches(100).unwrap().len(),
+    1
+  );
 }
 
 #[test]

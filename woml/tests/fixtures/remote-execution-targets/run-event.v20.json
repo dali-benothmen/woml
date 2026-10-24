@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 20,
+  "type": "remote_dispatch_transitioned",
+  "runId": "run_remote_01",
+  "sequence": 3,
+  "at": "2026-10-24T12:00:02Z",
+  "data": {
+    "dispatchId": "dispatch_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "nodeId": "applyRelease",
+    "attempt": 1,
+    "invocationId": "inv_remote_01",
+    "target": "production-private",
+    "state": "started",
+    "workerId": "production-runner-01"
+  }
+}

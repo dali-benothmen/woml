@@ -136,6 +136,39 @@ export function metricFactsForTelemetrySignal(
       });
     }
   }
+  if (signal.kind === 'remote_dispatch') {
+    const phase = signal.attributes['remote.phase'];
+    const outcome = typeof signal.attributes['remote.outcome'] === 'string'
+      ? signal.attributes['remote.outcome']
+      : signal.status;
+    if (phase === 'queue' && duration !== undefined) {
+      facts.push({
+        name: 'woml.runtime.remote.dispatch.queue_delay',
+        instrument: 'histogram', value: duration, unit: 'ms', attributes: {},
+      });
+    } else if (phase === 'execution') {
+      facts.push({
+        name: 'woml.runtime.remote.dispatches',
+        instrument: 'counter', value: 1, unit: '1', attributes: { outcome },
+      });
+      if (duration !== undefined) {
+        facts.push({
+          name: 'woml.runtime.remote.execution.duration',
+          instrument: 'histogram', value: duration, unit: 'ms', attributes: { outcome },
+        });
+      }
+      if (outcome === 'ambiguous') {
+        facts.push({
+          name: 'woml.runtime.remote.ambiguities',
+          instrument: 'counter', value: 1, unit: '1', attributes: {},
+        });
+        facts.push({
+          name: 'woml.runtime.remote.losses',
+          instrument: 'counter', value: 1, unit: '1', attributes: {},
+        });
+      }
+    }
+  }
   return facts;
 }
 

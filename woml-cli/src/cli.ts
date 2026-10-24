@@ -8,6 +8,7 @@ import {
   open,
   readFile,
   readdir,
+  rename,
   stat,
   unlink,
   writeFile,
@@ -55,6 +56,7 @@ import {
   type WomlDefinitionPackageV13,
   type WomlDefinitionPackageV14,
   type WomlDefinitionPackageV15,
+  type WomlDefinitionPackageV16,
 } from '@woml/compiler';
 import {
   compiledDefinitionHash,
@@ -78,6 +80,8 @@ import {
   inspectWaitsV1WithRust,
   inspectLocksV1WithRust,
   inspectCorrectionV1WithRust,
+  inspectRemoteDispatchWithRust,
+  reconcileRemoteDispatchWithRust,
   recoverCorrectionWithRust,
   listRunPresentationsWithRust,
   hasWorkflowDefinitionWithRust,
@@ -298,10 +302,25 @@ import {
 } from './provider-doctor';
 import {
   readCompiledWorkflowCache,
+  sourceSnapshotDigest,
   writeCompiledWorkflowCache,
   type CompiledWorkflowCacheOptions,
 } from './compiled-workflow-cache';
 import { runtimeActivationRequirements } from './runtime-activation';
+import {
+  checkWorkerConfiguration,
+  RemoteWorkerError,
+  startWorker,
+} from './remote-worker';
+import {
+  inspectTarget,
+  loadTargetRegistry,
+  preflightRemoteTargets,
+  remoteTargetRequirements,
+  TargetRegistryError,
+  type PreparedTargetRegistryV1,
+  type TargetPreflightV1,
+} from './target-registry';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -331,11 +350,11 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml|directory>... [--config <path>] [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--json] [--verbose] [--color=auto|always|never] [--background|-d]';
+  return 'Usage: woml run <workflow.woml|directory>... [--config <path>] [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--json] [--verbose] [--color=auto|always|never] [--background|-d]';
 }
 
 function testUsage(): string {
-  return 'Usage: woml test <workflow.woml> [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+  return 'Usage: woml test <workflow.woml> [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
 }
 
 function policyUsage(): string {
@@ -399,7 +418,549 @@ function signalUsage(): string {
 }
 
 function checkUsage(): string {
-  return 'Usage: woml check <workflow.woml|directory>... [--config <path>] [--policy <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>] [--artifact-policy <path>] [--json]';
+  return 'Usage: woml check <workflow.woml|directory>... [--config <path>] [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>] [--artifact-policy <path>] [--json]';
+}
+
+function targetUsage(): string {
+  return [
+    'Usage:',
+    '  woml target list [--registry <path>] [--trust <path>] [--json]',
+    '  woml target check <target> [--registry <path>] [--trust <path>] [--json]',
+    '  woml target inspect <target> [--registry <path>] [--trust <path>] --json',
+    '  woml target drain <target-or-worker> [--registry <path>] [--trust <path>] [--state <path>] [--json]',
+  ].join('\n');
+}
+
+function workerUsage(): string {
+  return [
+    'Usage:',
+    '  woml worker check --config <path> [--json]',
+    '  woml worker start --config <path> [--json]',
+  ].join('\n');
+}
+
+function dispatchUsage(): string {
+  return [
+    'Usage:',
+    '  woml dispatch inspect <dispatchId> [--state <path>] [--json]',
+    '  woml dispatch reconcile <dispatchId> --action <record-failure|authorize-possible-duplicate-retry> --request-id <id> [--reason <text>] [--state <path>] [--json]',
+  ].join('\n');
+}
+
+interface RemoteDrainEntryV1 {
+  readonly kind: 'target' | 'worker';
+  readonly id: string;
+  readonly drainedAt: string;
+}
+
+interface RemoteDrainStateV1 {
+  readonly profile: 'woml.remote-drain/v1';
+  readonly version: 1;
+  readonly entries: readonly RemoteDrainEntryV1[];
+}
+
+function isCanonicalDrainTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const timestamp = new Date(value);
+  return !Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value;
+}
+
+async function readRemoteDrainState(path: string): Promise<RemoteDrainStateV1> {
+  if (!existsSync(path)) {
+    return { profile: 'woml.remote-drain/v1', version: 1, entries: [] };
+  }
+  const source = await readFile(path, 'utf8');
+  if (Buffer.byteLength(source) > 256 * 1024) {
+    throw new TargetRegistryError('WOML_TARGET_INVALID', 'The remote drain state exceeds 256 KiB.');
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    throw new TargetRegistryError('WOML_TARGET_INVALID', 'The remote drain state is malformed.');
+  }
+  if (
+    value === null || typeof value !== 'object' || Array.isArray(value) ||
+    Object.keys(value).sort().join(',') !== 'entries,profile,version' ||
+    (value as { profile?: unknown }).profile !== 'woml.remote-drain/v1' ||
+    (value as { version?: unknown }).version !== 1 ||
+    !Array.isArray((value as { entries?: unknown }).entries)
+  ) {
+    throw new TargetRegistryError('WOML_TARGET_INVALID', 'The remote drain state violates v1.');
+  }
+  const entries = (value as { entries: unknown[] }).entries;
+  if (entries.length > 1_024 || !entries.every(entry => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const record = entry as Record<string, unknown>;
+    return Object.keys(record).sort().join(',') === 'drainedAt,id,kind' &&
+      (record.kind === 'target' || record.kind === 'worker') &&
+      typeof record.id === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(record.id) &&
+      isCanonicalDrainTimestamp(record.drainedAt);
+  })) {
+    throw new TargetRegistryError('WOML_TARGET_INVALID', 'The remote drain entries violate v1.');
+  }
+  return value as RemoteDrainStateV1;
+}
+
+async function persistRemoteDrain(
+  path: string,
+  state: RemoteDrainStateV1,
+  entry: RemoteDrainEntryV1
+): Promise<{ readonly profile: 'woml.remote-drain-result/v1'; readonly status: 'draining'; readonly kind: 'target' | 'worker'; readonly id: string; readonly statePath: string }> {
+  const entries = [
+    ...state.entries.filter(existing => !(existing.kind === entry.kind && existing.id === entry.id)),
+    entry,
+  ].sort((left, right) => `${left.kind}:${left.id}`.localeCompare(`${right.kind}:${right.id}`));
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify({ profile: 'woml.remote-drain/v1', version: 1, entries })}\n`, {
+      encoding: 'utf8', mode: 0o600, flag: 'wx',
+    });
+    await rename(temporary, path);
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
+  return {
+    profile: 'woml.remote-drain-result/v1',
+    status: 'draining',
+    kind: entry.kind,
+    id: entry.id,
+    statePath: path,
+  };
+}
+
+function remoteDrainHealth(
+  state: RemoteDrainStateV1,
+  target: string,
+  workers: readonly string[],
+  fallback: { readonly status: 'not_observed'; readonly reason: 'worker-transport-not-active' }
+): { readonly status: 'draining'; readonly reason: 'operator-drain'; readonly workers: readonly string[] } | typeof fallback {
+  const targetDrain = state.entries.some(entry => entry.kind === 'target' && entry.id === target);
+  const drainedWorkers = state.entries
+    .filter(entry => entry.kind === 'worker' && workers.includes(entry.id))
+    .map(entry => entry.id)
+    .sort();
+  return targetDrain || drainedWorkers.length > 0
+    ? { status: 'draining', reason: 'operator-drain', workers: drainedWorkers }
+    : fallback;
+}
+
+async function runDispatchCommand(
+  args: readonly string[],
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<number> {
+  const operation = args[1];
+  const dispatchId = args[2];
+  if ((operation !== 'inspect' && operation !== 'reconcile') || dispatchId === undefined || !/^dispatch_[a-f0-9]{64}$/u.test(dispatchId)) {
+    io.stderr(`${dispatchUsage()}\n`);
+    return 2;
+  }
+  let statePath = resolve('.woml/state.sqlite');
+  let action: 'record-failure' | 'authorize-possible-duplicate-retry' | undefined;
+  let requestId: string | undefined;
+  let reason: string | undefined;
+  let json = false;
+  for (let index = 3; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--json' && !json) {
+      json = true;
+      continue;
+    }
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith('--')) {
+      io.stderr(`${dispatchUsage()}\n`);
+      return 2;
+    }
+    if (argument === '--state') statePath = value;
+    else if (argument === '--action' && ['record-failure', 'authorize-possible-duplicate-retry'].includes(value)) action = value as typeof action;
+    else if (argument === '--request-id' && /^[A-Za-z0-9_-]{1,256}$/u.test(value)) requestId = value;
+    else if (argument === '--reason' && value.length <= 1024) reason = value;
+    else {
+      io.stderr(`${dispatchUsage()}\n`);
+      return 2;
+    }
+    index += 1;
+  }
+  if (operation === 'reconcile' && (action === undefined || requestId === undefined)) {
+    io.stderr(`${dispatchUsage()}\n`);
+    return 2;
+  }
+  try {
+    const evidenceDigest = `sha256:${createHash('sha256').update(JSON.stringify({
+      profile: 'woml.remote-dispatch-reconciliation/v1', dispatchId, action,
+      requestId, ...(reason === undefined ? {} : { reason }),
+    })).digest('hex')}`;
+    const result = operation === 'inspect'
+      ? inspectRemoteDispatchWithRust(statePath, dispatchId, { nativeCorePath: dependencies.nativeCorePath })
+      : reconcileRemoteDispatchWithRust(statePath, dispatchId, action!, requestId!, evidenceDigest, { nativeCorePath: dependencies.nativeCorePath });
+    io.stdout(
+      json
+        ? `${JSON.stringify(result)}\n`
+        : operation === 'inspect'
+          ? [
+              'WOML remote dispatch',
+              `Dispatch: ${dispatchId}`,
+              `State: ${String((result as { state: string }).state)}`,
+              `Target: ${String((result as { target: string }).target)}`,
+              `Worker: ${String((result as { workerId?: string }).workerId ?? 'unassigned')}`,
+              `Last heartbeat: ${String((result as { lastHeartbeatAt?: string }).lastHeartbeatAt ?? 'none')}`,
+              `Output cursor: ${String((result as { outputSequence: number }).outputSequence)}`,
+              `Ambiguous: ${String((result as { ambiguous: boolean }).ambiguous)}`,
+            ].join('\n') + '\n'
+          : [
+              'WOML remote dispatch reconciled.',
+              `Dispatch: ${dispatchId}`,
+              `State: ${String((result as { state: string }).state)}`,
+              `Action: ${action}`,
+              `Request: ${requestId}`,
+            ].join('\n') + '\n'
+    );
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
+    return 1;
+  }
+}
+
+async function runWorkerCommand(
+  args: readonly string[],
+  io: CliIo,
+  dependencies: CliDependencies
+): Promise<number> {
+  const operation = args[1];
+  let configPath: string | undefined;
+  let json = false;
+  for (let index = 2; index < args.length; index += 1) {
+    if (args[index] === '--json' && !json) {
+      json = true;
+    } else if (
+      args[index] === '--config' &&
+      configPath === undefined &&
+      args[index + 1] !== undefined
+    ) {
+      configPath = args[++index];
+    } else {
+      io.stderr(`${workerUsage()}\n`);
+      return 2;
+    }
+  }
+  if ((operation !== 'check' && operation !== 'start') || configPath === undefined) {
+    io.stderr(`${workerUsage()}\n`);
+    return 2;
+  }
+  try {
+    if (operation === 'check') {
+      const result = await checkWorkerConfiguration(configPath);
+      io.stdout(
+        json
+          ? `${JSON.stringify(result)}\n`
+          : [
+              'WOML worker configuration is valid.',
+              `Worker: ${result.workerId}`,
+              `Coordinator: ${result.coordinator}`,
+              `Targets: ${result.targets.join(', ')}`,
+              `Capacity: ${result.capacity}`,
+              'Transport: mutual TLS',
+              'Dispatch activation: coordinator-owned; configuration check opens no session',
+            ].join('\n') + '\n'
+      );
+      return 0;
+    }
+    await startWorker(
+      configPath,
+      WOML_CLI_VERSION,
+      dependencies.waitForShutdown ?? waitForShutdownSignal,
+      session =>
+        io.stdout(
+          json
+            ? `${JSON.stringify(session)}\n`
+            : [
+                'WOML remote worker session established.',
+                `Worker: ${String(session.workerId)}`,
+                `Session: ${String(session.sessionId)}`,
+                'Status: authenticated and polling',
+              ].join('\n') + '\n'
+        )
+    );
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
+    return 1;
+  }
+}
+
+interface TargetCommandArguments {
+  readonly operation: 'list' | 'check' | 'inspect' | 'drain';
+  readonly target?: string;
+  readonly registryPath?: string;
+  readonly trustPath?: string;
+  readonly statePath: string;
+  readonly json: boolean;
+}
+
+function parseTargetCommandArguments(
+  args: readonly string[]
+): TargetCommandArguments {
+  const operation = args[1];
+  if (operation !== 'list' && operation !== 'check' && operation !== 'inspect' && operation !== 'drain') {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', targetUsage());
+  }
+  let index = 2;
+  let target: string | undefined;
+  if (operation !== 'list') {
+    target = args[index];
+    if (
+      target === undefined ||
+      !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(target) ||
+      target.length > 128
+    ) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', targetUsage());
+    }
+    index += 1;
+  }
+  let registryPath: string | undefined;
+  let trustPath: string | undefined;
+  let statePath = resolve('.woml/remote-drain.json');
+  let json = false;
+  for (; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === '--json') {
+      if (json) throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', targetUsage());
+      json = true;
+      continue;
+    }
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith('--')) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', targetUsage());
+    }
+    if (argument === '--registry' && registryPath === undefined) {
+      registryPath = value;
+    } else if (argument === '--trust' && trustPath === undefined) {
+      trustPath = value;
+    } else if (argument === '--state') {
+      statePath = resolve(value);
+    } else {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', targetUsage());
+    }
+    index += 1;
+  }
+  if (
+    (operation === 'inspect' && !json)
+  ) {
+    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', targetUsage());
+  }
+  return {
+    operation,
+    ...(target === undefined ? {} : { target }),
+    ...(registryPath === undefined ? {} : { registryPath }),
+    ...(trustPath === undefined ? {} : { trustPath }),
+    statePath,
+    json,
+  };
+}
+
+async function runTargetCommand(
+  args: readonly string[],
+  io: CliIo
+): Promise<number> {
+  let parsed: TargetCommandArguments;
+  try {
+    parsed = parseTargetCommandArguments(args);
+  } catch (error) {
+    io.stderr(`${error instanceof Error && error.message !== targetUsage() ? `${error.message}\n` : ''}${targetUsage()}\n`);
+    return 2;
+  }
+  try {
+    const defaultRegistry = resolve('.woml/targets.json');
+    const defaultTrust = resolve('.woml/target-trust.json');
+    const registryPath =
+      parsed.registryPath ??
+      (existsSync(defaultRegistry) ? defaultRegistry : undefined);
+    const trustPath =
+      parsed.trustPath ?? (existsSync(defaultTrust) ? defaultTrust : undefined);
+    const localInspection = {
+      profile: 'woml.target-inspection/v1' as const,
+      target: 'local',
+      source: 'built-in' as const,
+      kind: 'local' as const,
+      requiredCapabilities: [] as readonly string[],
+      allowedWorkers: ['coordinator'] as readonly string[],
+      eligibleWorkers: ['coordinator'] as readonly string[],
+      minimumWorkerVersion: WOML_CLI_VERSION,
+      maximumInFlight: null,
+      health: { status: 'ready' as const, reason: 'coordinator-local' as const },
+    };
+    const localListEntry = {
+      id: 'local',
+      source: 'built-in' as const,
+      kind: 'local' as const,
+      requiredCapabilities: [] as readonly string[],
+      eligibleWorkers: 1,
+      maximumInFlight: null,
+      health: localInspection.health,
+    };
+    if (parsed.target === 'local') {
+      if (parsed.operation === 'drain') {
+        throw new TargetRegistryError(
+          'WOML_TARGET_INVALID',
+          'The built-in local coordinator target cannot be drained through remote worker controls.'
+        );
+      }
+      const result =
+        parsed.operation === 'check'
+          ? {
+              ...localInspection,
+              profile: 'woml.target-check/v1' as const,
+              status: 'passed' as const,
+            }
+          : localInspection;
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(result)}\n`
+          : 'Target local passed built-in coordinator preflight.\n'
+      );
+      return 0;
+    }
+    if (registryPath === undefined) {
+      if (parsed.operation !== 'list') {
+        throw new TargetRegistryError(
+          'WOML_TARGET_UNKNOWN',
+          'No target registry was provided and .woml/targets.json does not exist.'
+        );
+      }
+      const result = {
+        profile: 'woml.target-list/v1' as const,
+        registryPath: null,
+        registryDigest: null,
+        trustStatus: 'not_configured' as const,
+        targets: [localListEntry],
+      };
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(result)}\n`
+          : 'local · built-in coordinator · ready\n'
+      );
+      return 0;
+    }
+    const prepared = await loadTargetRegistry(registryPath, trustPath);
+    const drainState = await readRemoteDrainState(parsed.statePath);
+    if (parsed.operation === 'drain') {
+      const target = prepared.registry.targets.find(entry => entry.id === parsed.target);
+      const worker = prepared.registry.targets
+        .flatMap(entry => entry.allowedWorkerIdentities)
+        .includes(parsed.target!);
+      if (target === undefined && !worker) {
+        throw new TargetRegistryError(
+          'WOML_TARGET_UNKNOWN',
+          `Neither a target nor worker named ${JSON.stringify(parsed.target)} exists in the registry.`
+        );
+      }
+      const kind = target === undefined ? 'worker' as const : 'target' as const;
+      const result = await persistRemoteDrain(parsed.statePath, drainState, {
+        kind,
+        id: parsed.target!,
+        drainedAt: new Date().toISOString(),
+      });
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(result)}\n`
+          : `${kind === 'target' ? 'Target' : 'Worker'} ${parsed.target} is draining; accepted work may finish and new dispatch admission is disabled.\n`
+      );
+      return 0;
+    }
+    if (parsed.operation === 'list') {
+      const result = {
+        profile: 'woml.target-list/v1' as const,
+        registryPath: prepared.path,
+        registryDigest: prepared.digest,
+        trustStatus: prepared.trust === undefined ? 'not_configured' : 'verified',
+        targets: [
+          localListEntry,
+          ...prepared.registry.targets.map(target => {
+            const inspected = inspectTarget(prepared, target.id);
+            return {
+              id: target.id,
+              source: 'operator-registry' as const,
+              kind: target.kind,
+              requiredCapabilities: target.requiredCapabilities,
+              eligibleWorkers: inspected.eligibleWorkers.length,
+              minimumWorkerVersion: target.minimumWorkerVersion,
+              maximumInFlight: target.maximumInFlight,
+              health: remoteDrainHealth(drainState, target.id, target.allowedWorkerIdentities, inspected.health),
+            };
+          }),
+        ],
+      };
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(result)}\n`
+          : result.targets.length === 0
+            ? `No remote targets are configured in ${result.registryPath}.\n`
+            : [
+                `Target registry ${result.registryDigest} · trust ${result.trustStatus}`,
+                ...result.targets.map(target =>
+                  target.id === 'local'
+                    ? 'local · built-in coordinator · ready'
+                    : `${target.id} · operator registry · ${target.requiredCapabilities.join(', ')} · ${target.eligibleWorkers} eligible worker${target.eligibleWorkers === 1 ? '' : 's'} · health not observed`
+                ),
+              ].join('\n') + '\n'
+      );
+      return 0;
+    }
+    const baseInspection = inspectTarget(prepared, parsed.target!);
+    const targetEntry = prepared.registry.targets.find(target => target.id === parsed.target)!;
+    const inspection = {
+      ...baseInspection,
+      health: remoteDrainHealth(
+        drainState,
+        parsed.target!,
+        targetEntry.allowedWorkerIdentities,
+        baseInspection.health
+      ),
+    };
+    if (parsed.operation === 'check') {
+      if (inspection.eligibleWorkers.length === 0) {
+        throw new TargetRegistryError(
+          'WOML_TARGET_UNAUTHORIZED',
+          `Target ${JSON.stringify(inspection.target)} has no worker identity anchored by the target trust file.`
+        );
+      }
+      const result = {
+        ...inspection,
+        profile: 'woml.target-check/v1' as const,
+        status: 'passed' as const,
+      };
+      io.stdout(
+        parsed.json
+          ? `${JSON.stringify(result)}\n`
+          : `Target ${inspection.target} passed registry and trust preflight · ${inspection.eligibleWorkers.length} eligible worker${inspection.eligibleWorkers.length === 1 ? '' : 's'} · health not observed.\n`
+      );
+      return 0;
+    }
+    io.stdout(`${JSON.stringify(inspection)}\n`);
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
+    return 1;
+  }
+}
+
+async function loadDefaultTargetRegistryForRemoteWorkflows(
+  workflows: readonly CompiledWorkflowDefinition[],
+  prepared: PreparedTargetRegistryV1 | undefined
+): Promise<PreparedTargetRegistryV1 | undefined> {
+  if (prepared !== undefined || remoteTargetRequirements(workflows).length === 0) {
+    return prepared;
+  }
+  const registryPath = resolve('.woml/targets.json');
+  if (!existsSync(registryPath)) return undefined;
+  const trustPath = resolve('.woml/target-trust.json');
+  return await loadTargetRegistry(
+    registryPath,
+    existsSync(trustPath) ? trustPath : undefined
+  );
 }
 
 function typesUsage(): string {
@@ -407,7 +968,7 @@ function typesUsage(): string {
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${logFollowUsage}\n${checkUsage()}\n${policyUsage()}\n${typesUsage()}\n${inspectUsage}\n${artifactsUsage()}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${recoverUsage()}\n${stopUsage()}\n${emitUsage()}\n${signalUsage()}\n${secretsUsage()}\n${providerDoctorUsage()}`;
+  return `${runUsage()}\n${testUsage()}\n${logFollowUsage}\n${checkUsage()}\n${targetUsage()}\n${workerUsage()}\n${dispatchUsage()}\n${policyUsage()}\n${typesUsage()}\n${inspectUsage}\n${artifactsUsage()}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${recoverUsage()}\n${stopUsage()}\n${emitUsage()}\n${signalUsage()}\n${secretsUsage()}\n${providerDoctorUsage()}`;
 }
 
 interface RunArguments {
@@ -424,6 +985,10 @@ interface RunArguments {
   readonly processPolicyPath?: string;
   readonly artifactPolicyPath?: string;
   readonly reviewerDirectoryPath?: string;
+  readonly targetRegistryPath?: string;
+  readonly targetTrustPath?: string;
+  readonly targetRegistry?: PreparedTargetRegistryV1;
+  readonly targetPreflight?: TargetPreflightV1;
   readonly infrastructurePolicyReference?: string;
   readonly emergencyDenyReference?: string;
   readonly infrastructurePolicyTrustPath?: string;
@@ -480,6 +1045,8 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   let processPolicyPath: string | undefined;
   let artifactPolicyPath: string | undefined;
   let reviewerDirectoryPath: string | undefined;
+  let targetRegistryPath: string | undefined;
+  let targetTrustPath: string | undefined;
   let infrastructurePolicyReference: string | undefined;
   let emergencyDenyReference: string | undefined;
   let infrastructurePolicyTrustPath: string | undefined;
@@ -529,6 +1096,8 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         option !== '--process-policy' &&
         option !== '--artifact-policy' &&
         option !== '--reviewer-directory' &&
+        option !== '--target-registry' &&
+        option !== '--target-trust' &&
         option !== '--policy' &&
         option !== '--emergency-deny' &&
         option !== '--policy-trust' &&
@@ -586,6 +1155,22 @@ function parseRunArguments(args: readonly string[]): RunArguments {
         );
       }
       reviewerDirectoryPath = value;
+    } else if (option === '--target-registry') {
+      if (value.length === 0) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--target-registry requires a non-empty JSON file path.'
+        );
+      }
+      targetRegistryPath = value;
+    } else if (option === '--target-trust') {
+      if (value.length === 0) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--target-trust requires a non-empty JSON file path.'
+        );
+      }
+      targetTrustPath = value;
     } else if (option === '--policy') {
       if (value.length === 0) {
         throw new CliInputError(
@@ -688,6 +1273,12 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       'Use either --process-policy or --allow-process, not both.'
     );
   }
+  if (targetRegistryPath === undefined && targetTrustPath !== undefined) {
+    throw new CliInputError(
+      'WOML_TARGET_REGISTRY_REQUIRED',
+      '--target-trust requires --target-registry.'
+    );
+  }
   if (
     emergencyDenyReference !== undefined &&
     infrastructurePolicyReference === undefined
@@ -721,6 +1312,8 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     ...(processPolicyPath === undefined ? {} : { processPolicyPath }),
     ...(artifactPolicyPath === undefined ? {} : { artifactPolicyPath }),
     ...(reviewerDirectoryPath === undefined ? {} : { reviewerDirectoryPath }),
+    ...(targetRegistryPath === undefined ? {} : { targetRegistryPath }),
+    ...(targetTrustPath === undefined ? {} : { targetTrustPath }),
     ...(infrastructurePolicyReference === undefined
       ? {}
       : { infrastructurePolicyReference }),
@@ -778,6 +1371,16 @@ async function resolveRunArgumentsConfiguration(
     args.reviewerDirectoryPath === undefined
       ? undefined
       : await loadReviewerDirectory(args.reviewerDirectoryPath);
+  const targetRegistry =
+    args.targetRegistryPath === undefined
+      ? undefined
+      : await loadTargetRegistry(
+          args.targetRegistryPath,
+          args.targetTrustPath ??
+            (existsSync(resolve('.woml/target-trust.json'))
+              ? resolve('.woml/target-trust.json')
+              : undefined)
+        );
   const infrastructurePolicy =
     args.infrastructurePolicyReference === undefined
       ? undefined
@@ -819,6 +1422,7 @@ async function resolveRunArgumentsConfiguration(
   if (args.command !== 'run') {
     return {
       ...args,
+      ...(targetRegistry === undefined ? {} : { targetRegistry }),
       ...(runtimeCapabilities === undefined ? {} : { runtimeCapabilities }),
     };
   }
@@ -832,6 +1436,7 @@ async function resolveRunArgumentsConfiguration(
   }
   return {
     ...args,
+    ...(targetRegistry === undefined ? {} : { targetRegistry }),
     statePath: configuration.statePath,
     host: configuration.public.host,
     port: configuration.public.port,
@@ -1880,6 +2485,12 @@ function formatError(
   if (error instanceof InfrastructurePolicyError) {
     return `WOML infrastructure policy error [${error.code}]: ${error.message}`;
   }
+  if (error instanceof TargetRegistryError) {
+    return `WOML target error [${error.code}]: ${error.message}`;
+  }
+  if (error instanceof RemoteWorkerError) {
+    return `WOML worker error [${error.code}]: ${error.message}`;
+  }
   if (error instanceof ReviewerDirectoryLoadError) {
     return `WOML approval authority error [${error.code}]: ${error.message}`;
   }
@@ -2125,7 +2736,7 @@ async function assertStableSourceSnapshotUnprofiled(
           `source "${snapshot.path}" changed or became unreadable during activation.`
         );
       }
-      if (sourceDigest(content) !== snapshot.digest) {
+      if (sourceSnapshotDigest(snapshot.path, content) !== snapshot.digest) {
         throw new CliInputError(
           'WOML_SOURCE_CHANGED_DURING_ACTIVATION',
           `source "${snapshot.path}" changed while the deployment was being compiled; run the command again.`
@@ -2209,7 +2820,8 @@ function promoteForLifecycleAuthority(
     workflow.schemaVersion === 17 ||
     workflow.schemaVersion === 18 ||
     workflow.schemaVersion === 19 ||
-    workflow.schemaVersion === 20
+    workflow.schemaVersion === 20 ||
+    workflow.schemaVersion === 21
   ) {
     return workflow;
   }
@@ -2293,6 +2905,7 @@ function runtimeModulesFromPackage(
     | WomlDefinitionPackageV13
     | WomlDefinitionPackageV14
     | WomlDefinitionPackageV15
+    | WomlDefinitionPackageV16
 ): readonly RustRuntimeModuleArtifact[] {
   const modules = definitionPackage.modules.map(module => {
     const bundle = definitionPackage.artifacts.find(
@@ -2322,7 +2935,8 @@ function runtimeModulesFromPackage(
     definitionPackage.schemaVersion !== 12 &&
     definitionPackage.schemaVersion !== 13 &&
     definitionPackage.schemaVersion !== 14 &&
-    definitionPackage.schemaVersion !== 15
+    definitionPackage.schemaVersion !== 15 &&
+    definitionPackage.schemaVersion !== 16
   )
     return modules;
   const seen = new Set<string>();
@@ -3167,9 +3781,16 @@ async function runSingleCheckCommand(
         child => child.kind === 'element' && declaresSaga(child)
       );
     const hasSaga = declaresSaga(document.root);
+    const declaresRemoteTarget = (element: WomlSourceElement): boolean =>
+      (element.name === 'step' && element.attributes.target !== undefined) ||
+      element.children.some(
+        child => child.kind === 'element' && declaresRemoteTarget(child)
+      );
+    const hasRemoteTarget = declaresRemoteTarget(document.root);
     if (
-      reusableGraph.root.kind !== 'workflow' ||
-      reusableGraph.definitions.length > 0
+      !hasRemoteTarget &&
+      (reusableGraph.root.kind !== 'workflow' ||
+        reusableGraph.definitions.length > 0)
     ) {
       await validateReusableModuleEntrypoints(reusableGraph, projectRoot);
       validateResolvedReusableWorkflow(document, reusableGraph);
@@ -3217,7 +3838,9 @@ async function runSingleCheckCommand(
         );
       }
       io.stdout(
-        reusablePackage?.schemaVersion === 14
+        reusablePackage?.schemaVersion === 16
+          ? `Compiled Model v21 package: ${reusablePackage.rootHash}\nExecution: remote placement, authenticated sessions, durable dispatch authority, and the worker attempt runtime are validated; live dispatch transport completes in RET7.\n`
+          : reusablePackage?.schemaVersion === 14
           ? `Compiled Model v19 package: ${reusablePackage.rootHash}\nExecution: compensation and cleanup authoring is validated; durable correction execution begins in CC2–CC4.\n`
           : reusablePackage?.schemaVersion === 13
             ? `Compiled Model v18 package: ${reusablePackage.rootHash}\nExecution: lock authoring and lowering are validated; the durable lock runtime begins in LL2–LL4.\n`
@@ -3235,6 +3858,80 @@ async function runSingleCheckCommand(
                     : reusableGraph.root.kind === 'workflow'
                       ? 'Execution: reusable provider source is validated; custom notification providers begin in SCP5.\n'
                       : 'Execution: reusable definitions are imported by workflows and are not independently runnable.\n'
+      );
+      return 0;
+    }
+    if (hasRemoteTarget) {
+      const inspectionPackage = buildWomlDefinitionPackage(document, {
+        sourcePath: filePath,
+        projectRoot,
+      });
+      const executablePackage =
+        inspectionPackage.modules.length === 0
+          ? undefined
+          : await buildWomlExecutableDefinitionPackage(document, {
+              sourcePath: filePath,
+              projectRoot,
+            });
+      const compiled =
+        executablePackage?.workflow.model ?? compileWoml(document);
+      if (compiled.schemaVersion !== 21) {
+        throw new CliInputError(
+          'WOML_REMOTE_EXECUTION_MODEL_INVALID',
+          'A targeted <step> did not lower to the frozen compiled Model v21 contract.'
+        );
+      }
+      if (executablePackage !== undefined) {
+        await refreshEditorTypes(filePath, executablePackage.modules, io);
+      }
+      const placedNodes = [
+        ...compiled.graph.nodes,
+        ...compiled.graph.forEach.flatMap(loop => loop.body.nodes),
+        ...compiled.graph.sagas.flatMap(saga => [
+          ...saga.compensations.map(action => action.node),
+          ...saga.cleanup.map(action => action.node),
+        ]),
+      ]
+        .filter(node => node.execution !== undefined)
+        .map(node => ({
+          stepId: node.id,
+          target: node.execution!.target,
+        }));
+      const workflowElement = document.root.children.find(
+        (child): child is WomlSourceElement =>
+          child.kind === 'element' && child.name === 'workflow'
+      );
+      if (options[0] === '--json') {
+        io.stdout(
+          `${JSON.stringify(
+            {
+              profile: 'woml.model-validation/v1',
+              valid: true,
+              workflowId: workflowElement?.attributes.id?.value,
+              feature: 'remote-execution-targets',
+              executable: false,
+              modelVersion: compiled.schemaVersion,
+              packageVersion: executablePackage?.schemaVersion,
+              runtimePhase: 'RET1',
+              placements: placedNodes,
+            },
+            null,
+            2
+          )}\n`
+        );
+        return 0;
+      }
+      io.stdout(
+        `WOML check passed for workflow "${workflowElement?.attributes.id?.value ?? filePath}".\n`
+      );
+      io.stdout(
+        'Compiled Model v21 passed Remote Execution Targets frontend validation.\n'
+      );
+      for (const placement of placedNodes) {
+        io.stdout(`Target: ${placement.stepId} -> ${placement.target}\n`);
+      }
+      io.stdout(
+        'Execution: authenticated sessions, durable dispatch authority, and the worker attempt runtime are available; live dispatch transport completes in RET7.\n'
       );
       return 0;
     }
@@ -3581,6 +4278,8 @@ interface CheckArguments {
   readonly configPath?: string;
   readonly processPolicyPath?: string;
   readonly artifactPolicyPath?: string;
+  readonly targetRegistryPath?: string;
+  readonly targetTrustPath?: string;
   readonly infrastructurePolicyReference?: string;
   readonly infrastructurePolicyTrustPath?: string;
   readonly requireInfrastructurePolicySignature: boolean;
@@ -3595,6 +4294,8 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
   let configPath: string | undefined;
   let processPolicyPath: string | undefined;
   let artifactPolicyPath: string | undefined;
+  let targetRegistryPath: string | undefined;
+  let targetTrustPath: string | undefined;
   let infrastructurePolicyReference: string | undefined;
   let infrastructurePolicyTrustPath: string | undefined;
   let requireInfrastructurePolicySignature = false;
@@ -3652,6 +4353,32 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
       index += 1;
       continue;
     }
+    if (argument === '--target-registry') {
+      const value = args[index + 1];
+      if (
+        targetRegistryPath !== undefined ||
+        value === undefined ||
+        value.startsWith('--')
+      ) {
+        throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+      }
+      targetRegistryPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument === '--target-trust') {
+      const value = args[index + 1];
+      if (
+        targetTrustPath !== undefined ||
+        value === undefined ||
+        value.startsWith('--')
+      ) {
+        throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+      }
+      targetTrustPath = value;
+      index += 1;
+      continue;
+    }
     if (argument === '--policy') {
       const value = args[index + 1];
       if (
@@ -3696,11 +4423,19 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
       '--require-policy-signature and --policy-trust require a base --policy.'
     );
   }
+  if (targetRegistryPath === undefined && targetTrustPath !== undefined) {
+    throw new CliInputError(
+      'WOML_TARGET_REGISTRY_REQUIRED',
+      '--target-trust requires --target-registry.'
+    );
+  }
   return {
     inputPaths,
     ...(configPath === undefined ? {} : { configPath }),
     ...(processPolicyPath === undefined ? {} : { processPolicyPath }),
     ...(artifactPolicyPath === undefined ? {} : { artifactPolicyPath }),
+    ...(targetRegistryPath === undefined ? {} : { targetRegistryPath }),
+    ...(targetTrustPath === undefined ? {} : { targetTrustPath }),
     ...(infrastructurePolicyReference === undefined
       ? {}
       : { infrastructurePolicyReference }),
@@ -3754,6 +4489,7 @@ interface ProductionPreflightReport {
       typeof analyzeInfrastructurePolicySource
     >[number][];
   };
+  readonly remoteTargets?: TargetPreflightV1;
   readonly workflows: readonly {
     readonly workflowId: string;
     readonly sourcePath: string;
@@ -3800,6 +4536,25 @@ async function runDeploymentCheckCommand(
               requireSignature: parsed.requireInfrastructurePolicySignature,
             }
           );
+    const explicitlyConfiguredTargetRegistry =
+      parsed.targetRegistryPath === undefined
+        ? undefined
+        : await loadTargetRegistry(
+            parsed.targetRegistryPath,
+            parsed.targetTrustPath ??
+              (existsSync(resolve('.woml/target-trust.json'))
+                ? resolve('.woml/target-trust.json')
+                : undefined)
+          );
+    const targetRegistry = await loadDefaultTargetRegistryForRemoteWorkflows(
+      sources.map(source => source.workflow),
+      explicitlyConfiguredTargetRegistry
+    );
+    const remoteTargets = preflightRemoteTargets(
+      sources.map(source => source.workflow),
+      targetRegistry,
+      infrastructurePolicy?.prepared.bundle
+    );
     if (processUsage.length > 0 && parsed.processPolicyPath === undefined) {
       io.stderr(
         'WOML check: services.process is valid but disabled at runtime unless --allow-process or --process-policy is provided to woml run.\n'
@@ -3866,6 +4621,7 @@ async function runDeploymentCheckCommand(
               ).flat(),
             },
           }),
+      ...(remoteTargets === undefined ? {} : { remoteTargets }),
       workflows: sources.map(source => ({
         workflowId: source.workflow.workflowId,
         sourcePath: source.filePath,
@@ -3902,6 +4658,12 @@ async function runDeploymentCheckCommand(
           `  ${decision.workflowId} ${decision.capability}.${decision.operation}: ${decision.status.replaceAll('_', ' ')}.\n`
         );
       }
+    }
+    if (report.remoteTargets !== undefined) {
+      io.stdout(
+        `Remote targets: ${report.remoteTargets.targets.map(target => `${target.id} (${target.eligibleWorkers.length} trusted worker${target.eligibleWorkers.length === 1 ? '' : 's'})`).join(', ')}.\n`
+      );
+      io.stdout(`Target registry: ${report.remoteTargets.registryDigest}.\n`);
     }
     if (configuration !== undefined && environment !== undefined) {
       io.stdout(`Deployment: ${configuration.deploymentName}.\n`);
@@ -3953,6 +4715,8 @@ async function runCheckCommand(
     parsed.configPath === undefined &&
     parsed.processPolicyPath === undefined &&
     parsed.artifactPolicyPath === undefined &&
+    parsed.targetRegistryPath === undefined &&
+    parsed.targetTrustPath === undefined &&
     parsed.infrastructurePolicyReference === undefined &&
     onlyInputIsFile
   ) {
@@ -5923,6 +6687,15 @@ async function activateWorkflows(
           return requirements;
         }
       );
+      if (
+        activationRequirements.remoteExecution !== undefined &&
+        args.targetPreflight === undefined
+      ) {
+        throw new CliInputError(
+          'WOML_TARGET_UNAUTHORIZED',
+          'atomic runtime activation refused to open admission because remote target preflight was not completed.'
+        );
+      }
       const routes = productionSources.flatMap(source =>
         webhookRouteSummaries(source.workflow)
       );
@@ -7463,6 +8236,9 @@ async function runCliUnprofiled(
     'run',
     'test',
     'check',
+    'target',
+    'worker',
+    'dispatch',
     'policy',
     'types',
     'secrets',
@@ -7514,6 +8290,18 @@ async function runCliUnprofiled(
 
   if (args[0] === 'check') {
     return await runCheckCommand(args, io, dependencies);
+  }
+
+  if (args[0] === 'target') {
+    return await runTargetCommand(args, io);
+  }
+
+  if (args[0] === 'worker') {
+    return await runWorkerCommand(args, io, dependencies);
+  }
+
+  if (args[0] === 'dispatch') {
+    return await runDispatchCommand(args, io, dependencies);
   }
 
   if (args[0] === 'policy') {
@@ -8154,6 +8942,24 @@ async function runCliUnprofiled(
     );
     const activeInfrastructurePolicy =
       runArguments.runtimeCapabilities?.infrastructurePolicy;
+    const compiledWorkflows = sources.map(source => source.workflow);
+    const targetRegistry = await loadDefaultTargetRegistryForRemoteWorkflows(
+      compiledWorkflows,
+      runArguments.targetRegistry
+    );
+    const targetPreflight = preflightRemoteTargets(
+      compiledWorkflows,
+      targetRegistry,
+      activeInfrastructurePolicy?.policy
+    );
+    if (targetPreflight !== undefined) {
+      runArguments = { ...runArguments, targetRegistry, targetPreflight };
+      if (!runArguments.json) {
+        io.stdout(
+          `Remote targets ready: ${targetPreflight.targets.map(target => target.id).join(', ')} · ${targetPreflight.registryDigest}.\n`
+        );
+      }
+    }
     if (activeInfrastructurePolicy !== undefined && !runArguments.json) {
       io.stdout(
         `Policy ${activeInfrastructurePolicy.policy.id}@${activeInfrastructurePolicy.policy.version} · ${activeInfrastructurePolicy.policy.environment}` +

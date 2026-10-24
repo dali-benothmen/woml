@@ -1,0 +1,45 @@
+[
+  {
+    "profile": "woml.worker-protocol/v1",
+    "protocolVersion": 1,
+    "messageId": "message_hello_01",
+    "messageType": "hello",
+    "workerId": "production-runner-01",
+    "sentAt": "2026-10-24T12:00:00Z",
+    "workerVersion": "1.1.0",
+    "platform": { "os": "linux", "arch": "x64" },
+    "targets": ["production-private"],
+    "capacity": 4,
+    "capabilities": [
+      { "id": "runtime.script", "version": 1 },
+      { "id": "services.artifacts", "version": 1 },
+      { "id": "services.process", "version": 2 }
+    ]
+  },
+  {
+    "profile": "woml.worker-protocol/v1",
+    "protocolVersion": 1,
+    "messageId": "message_started_01",
+    "messageType": "started",
+    "workerId": "production-runner-01",
+    "sessionId": "session_01",
+    "sentAt": "2026-10-24T12:00:02Z",
+    "target": "production-private",
+    "dispatchId": "dispatch_01"
+  },
+  {
+    "profile": "woml.worker-protocol/v1",
+    "protocolVersion": 1,
+    "messageId": "message_terminal_01",
+    "messageType": "terminal",
+    "workerId": "production-runner-01",
+    "sessionId": "session_01",
+    "sentAt": "2026-10-24T12:00:05Z",
+    "target": "production-private",
+    "dispatchId": "dispatch_01",
+    "outcome": "succeeded",
+    "result": { "ok": true },
+    "finalOutputSequence": 4,
+    "journalDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }
+]

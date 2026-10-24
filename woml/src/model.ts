@@ -117,6 +117,12 @@ export interface CompiledTrigger {
   readonly config: ValueExpression;
 }
 
+export interface CompiledExecutionPlacementV1 {
+  readonly profileVersion: 1;
+  readonly target: string;
+  readonly requiredCapabilities: readonly string[];
+}
+
 export interface CompiledWorkflowNode {
   readonly id: string;
   readonly handler: string;
@@ -124,6 +130,7 @@ export interface CompiledWorkflowNode {
   readonly timeoutMs?: number;
   readonly retryPolicy?: RetryPolicy;
   readonly scriptRuntime?: ScriptRuntimeBindingsV1 | ScriptRuntimeBindingsV3;
+  readonly execution?: CompiledExecutionPlacementV1;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -472,6 +479,9 @@ export interface CompiledWorkflowGraphV19 extends CompiledWorkflowGraphV18 {
  */
 export interface CompiledWorkflowGraphV20 extends CompiledWorkflowGraphV19 {}
 
+/** Model v21 adds explicit per-step execution placement. */
+export interface CompiledWorkflowGraphV21 extends CompiledWorkflowGraphV20 {}
+
 interface CompiledWorkflowDefinitionBase {
   readonly workflowId: string;
   readonly metadata?: CompiledWorkflowMetadata;
@@ -627,6 +637,14 @@ export interface CompiledWorkflowDefinitionV20 extends Omit<
   readonly graph: CompiledWorkflowGraphV20;
 }
 
+export interface CompiledWorkflowDefinitionV21 extends Omit<
+  CompiledWorkflowDefinitionV16,
+  'schemaVersion' | 'graph'
+> {
+  readonly schemaVersion: 21;
+  readonly graph: CompiledWorkflowGraphV21;
+}
+
 export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV1
   | CompiledWorkflowDefinitionV2
@@ -647,7 +665,8 @@ export type CompiledWorkflowDefinition =
   | CompiledWorkflowDefinitionV17
   | CompiledWorkflowDefinitionV18
   | CompiledWorkflowDefinitionV19
-  | CompiledWorkflowDefinitionV20;
+  | CompiledWorkflowDefinitionV20
+  | CompiledWorkflowDefinitionV21;
 
 export interface CompiledGraphIssue {
   readonly code:

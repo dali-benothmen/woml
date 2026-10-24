@@ -223,6 +223,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
       timeout_ms: None,
       retry_policy: None,
       script_runtime: None,
+      execution: None,
       metadata: None,
     },
   );
@@ -250,6 +251,7 @@ fn model_v3_parallel_group_composes_inside_one_branch_route() {
       timeout_ms: None,
       retry_policy: None,
       script_runtime: None,
+      execution: None,
       metadata: None,
     },
   );

@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/dispatch-package/v1",
+  "title": "WOML Dispatch Package v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "version",
+    "dispatchId",
+    "runId",
+    "nodeId",
+    "attempt",
+    "invocationId",
+    "target",
+    "targetRegistryDigest",
+    "definitionPackageRootHash",
+    "node",
+    "context",
+    "requiredCapabilities",
+    "requiredSecrets",
+    "artifactGrants",
+    "deadline",
+    "packageDigest"
+  ],
+  "properties": {
+    "profile": { "const": "woml.dispatch-package/v1" },
+    "version": { "const": 1 },
+    "dispatchId": { "$ref": "#/$defs/id" },
+    "runId": { "$ref": "#/$defs/id" },
+    "nodeId": { "$ref": "#/$defs/id" },
+    "iterationKey": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "invocationId": { "$ref": "#/$defs/id" },
+    "target": { "$ref": "#/$defs/target" },
+    "targetRegistryDigest": { "$ref": "#/$defs/digest" },
+    "infrastructurePolicyDigest": { "$ref": "#/$defs/digest" },
+    "definitionPackageRootHash": { "$ref": "#/$defs/digest" },
+    "node": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "handler", "inputs", "execution"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "handler": { "const": "runtime.script" },
+        "inputs": {},
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profileVersion", "target", "requiredCapabilities"],
+          "properties": {
+            "profileVersion": { "const": 1 },
+            "target": { "$ref": "#/$defs/target" },
+            "requiredCapabilities": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "uniqueItems": true,
+              "prefixItems": [{ "const": "runtime.script" }],
+              "items": { "$ref": "#/$defs/capability" }
+            }
+          }
+        }
+      }
+    },
+    "context": { "type": "object", "maxProperties": 256 },
+    "requiredCapabilities": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "type": "string", "maxLength": 128 }
+    },
+    "requiredSecrets": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]*$",
+        "maxLength": 128
+      }
+    },
+    "artifactGrants": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifactId", "operation", "expiresAt", "digest"],
+        "properties": {
+          "artifactId": { "$ref": "#/$defs/id" },
+          "operation": { "enum": ["read", "write"] },
+          "expiresAt": { "type": "string", "format": "date-time" },
+          "digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "deadline": { "type": "string", "format": "date-time" },
+    "packageDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]*$",
+      "maxLength": 256
+    },
+    "target": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "capability": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$",
+      "maxLength": 128
+    }
+  }
+}

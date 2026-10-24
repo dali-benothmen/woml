@@ -12,7 +12,7 @@ use crate::event::{
   RunOutcomeDecidedData, RunStartedData,
 };
 use crate::{
-  model::{EdgeCondition, ValueExpression},
+  model::{CompiledWorkflowNode, EdgeCondition, ValueExpression},
   run_event_schema_version_for_model, CompiledWorkflowDefinition, EventStoreError, FoldError,
   InMemoryEventStore, ModelValidationError, ParallelGroupStatus, RunEvent, RunProjection,
   RunStatus, WorkflowContext,
@@ -840,6 +840,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) || data.definition_hash != definition_hash
         || workflow.runtime_policy_hash().as_deref() != Some(data.policy_hash.as_str())
         || workflow.runtime_policy_queue_name().as_deref() != Some(data.queue.name.as_str())
@@ -875,6 +876,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -905,6 +907,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) {
         return Err("Event v11+ runtime-policy events require compiled Model v12+.".to_string());
       }
@@ -1206,6 +1209,7 @@ pub(crate) fn validate_payload_against_definition(
         )
       })?;
       if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+        && workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V21
         || approval.review.is_none()
         || approval.required_approvals != Some(data.required)
         || approval.required_roles != data.required_roles
@@ -1217,6 +1221,7 @@ pub(crate) fn validate_payload_against_definition(
     }
     RunEventPayload::ApprovalReviewerDecisionRecorded(data) => {
       if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+        && workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V21
         || workflow
           .approval(&data.approval_id)
           .is_none_or(|approval| approval.review.is_none())
@@ -1231,6 +1236,7 @@ pub(crate) fn validate_payload_against_definition(
         .approval(&data.approval_id)
         .ok_or_else(|| "approval_quorum_progressed references an unknown approval.".to_string())?;
       if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+        && workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V21
         || approval.review.is_none()
         || approval.required_approvals != Some(data.required)
         || approval.required_roles != data.required_roles
@@ -1250,6 +1256,7 @@ pub(crate) fn validate_payload_against_definition(
     }
     RunEventPayload::ApprovalInvalidated(data) => {
       if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+        && workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V21
         || workflow
           .approval(&data.approval_id)
           .is_none_or(|approval| approval.review.is_none())
@@ -1491,6 +1498,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) {
         return Err("Lifecycle and run-control events require compiled Model v11+.".to_string());
       }
@@ -1508,6 +1516,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) {
         return Err("Lifecycle hook events require compiled Model v11+.".to_string());
       }
@@ -1549,6 +1558,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) || !action_exists
       {
         return Err("Lifecycle action event references an unknown Model v11+ action.".to_string());
@@ -1574,6 +1584,7 @@ pub(crate) fn validate_payload_against_definition(
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
           | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+          | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
       ) || !action_exists
       {
         return Err(
@@ -1843,6 +1854,26 @@ pub(crate) fn validate_payload_against_definition(
       validate_correction_action(workflow, &data.saga_id, &data.action_id, data.action_kind)?;
     }
     RunEventPayload::InfrastructurePolicyDecisionRecorded(_) => {}
+    RunEventPayload::RemoteDispatchTransitioned(data) => {
+      let node = workflow.node(&data.node_id).or_else(|| {
+        workflow
+          .graph
+          .sagas
+          .as_deref()
+          .unwrap_or_default()
+          .iter()
+          .flat_map(|saga| saga.compensations.iter().chain(&saga.cleanup))
+          .filter(|action| {
+            matches!(
+              &action.identity,
+              crate::model::CompiledCorrectionIdentity::Static { .. }
+            )
+          })
+          .find(|action| action.node.id == data.node_id)
+          .map(|action| &action.node)
+      });
+      validate_remote_dispatch_placement(workflow, node, data)?;
+    }
   }
 
   Ok(())
@@ -1887,6 +1918,38 @@ fn validate_correction_action(
   if workflow.schema_version < crate::COMPILED_MODEL_SCHEMA_VERSION_V19 || !exists {
     return Err(format!(
       "Correction action {action_id:?} does not match saga {saga_id:?}."
+    ));
+  }
+  Ok(())
+}
+
+fn validate_remote_dispatch_placement(
+  workflow: &CompiledWorkflowDefinition,
+  node: Option<&CompiledWorkflowNode>,
+  data: &crate::RemoteDispatchTransitionedData,
+) -> Result<(), String> {
+  let node = node.ok_or_else(|| {
+    format!(
+      "Remote dispatch references unknown executable node {:?}.",
+      data.node_id
+    )
+  })?;
+  let maximum_attempts = node
+    .retry_policy
+    .as_ref()
+    .map_or(1, |retry| retry.max_attempts);
+  if workflow.schema_version != crate::COMPILED_MODEL_SCHEMA_VERSION_V21
+    || node.handler != "runtime.script"
+    || node
+      .execution
+      .as_ref()
+      .is_none_or(|execution| execution.target == "local" || execution.target != data.target)
+    || data.attempt == 0
+    || data.attempt > maximum_attempts
+  {
+    return Err(format!(
+      "Remote dispatch for node {:?} does not match its Model v21 placement and retry policy.",
+      data.node_id
     ));
   }
   Ok(())
@@ -2127,6 +2190,29 @@ pub(crate) fn validate_scoped_payload_against_definition(
     | RunEventPayload::ReusableLifecycleActionFailed(_)
     | RunEventPayload::ReusableLifecycleCompleted(_) => {
       validate_payload_against_definition(workflow, definition_hash, payload)
+    }
+    RunEventPayload::RemoteDispatchTransitioned(data) => {
+      let corrective_node = workflow
+        .graph
+        .sagas
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|saga| saga.compensations.iter().chain(&saga.cleanup))
+        .filter(|action| {
+          matches!(
+            &action.identity,
+            crate::model::CompiledCorrectionIdentity::ForEachIteration { for_each_id, .. }
+              if for_each_id == &scope.for_each_id
+          )
+        })
+        .find(|action| action.node.id == data.node_id)
+        .map(|action| &action.node);
+      validate_remote_dispatch_placement(
+        workflow,
+        body_node(&data.node_id).or(corrective_node),
+        data,
+      )
     }
     _ => validate_payload_against_definition(workflow, definition_hash, payload),
   }
@@ -2860,6 +2946,7 @@ pub(crate) fn validate_event_history_against_definition(
       | RunEventPayload::CorrectionInterrupted(_)
       | RunEventPayload::ManualRecoveryRequired(_)
       | RunEventPayload::InfrastructurePolicyDecisionRecorded(_)
+      | RunEventPayload::RemoteDispatchTransitioned(_)
       | RunEventPayload::RunFinalized(_)
       | RunEventPayload::RunFailed(_) => {}
     }
@@ -2902,6 +2989,7 @@ fn validate_reusable_lifecycle_binding(
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V18
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V19
       | crate::COMPILED_MODEL_SCHEMA_VERSION_V20
+      | crate::COMPILED_MODEL_SCHEMA_VERSION_V21
   ) {
     return Err("Reusable lifecycle events require compiled Model v14 or later.".to_string());
   }

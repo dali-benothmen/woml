@@ -58,6 +58,7 @@ describe('WOML release automation', () => {
       'operational-output',
       'package',
       'process-containment',
+      'remote-execution-targets',
       'rich-plan-approvals',
       'rust',
     ]);

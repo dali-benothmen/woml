@@ -10,9 +10,9 @@ use crate::{
   RUN_EVENT_SCHEMA_VERSION_V12, RUN_EVENT_SCHEMA_VERSION_V13, RUN_EVENT_SCHEMA_VERSION_V14,
   RUN_EVENT_SCHEMA_VERSION_V15, RUN_EVENT_SCHEMA_VERSION_V16, RUN_EVENT_SCHEMA_VERSION_V17,
   RUN_EVENT_SCHEMA_VERSION_V18, RUN_EVENT_SCHEMA_VERSION_V19, RUN_EVENT_SCHEMA_VERSION_V2,
-  RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4, RUN_EVENT_SCHEMA_VERSION_V5,
-  RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7, RUN_EVENT_SCHEMA_VERSION_V8,
-  RUN_EVENT_SCHEMA_VERSION_V9,
+  RUN_EVENT_SCHEMA_VERSION_V20, RUN_EVENT_SCHEMA_VERSION_V3, RUN_EVENT_SCHEMA_VERSION_V4,
+  RUN_EVENT_SCHEMA_VERSION_V5, RUN_EVENT_SCHEMA_VERSION_V6, RUN_EVENT_SCHEMA_VERSION_V7,
+  RUN_EVENT_SCHEMA_VERSION_V8, RUN_EVENT_SCHEMA_VERSION_V9,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,6 +60,7 @@ pub enum RunEventPayload {
   NotificationMessageUpdated(NotificationMessageUpdatedData),
   NotificationMessageUpdateFailed(NotificationMessageUpdateFailedData),
   InfrastructurePolicyDecisionRecorded(InfrastructurePolicyDecisionRecordedData),
+  RemoteDispatchTransitioned(RemoteDispatchTransitionedData),
   OperationStarted(OperationStartedData),
   OperationSucceeded(OperationSucceededData),
   OperationFailed(OperationFailedData),
@@ -120,6 +121,23 @@ pub struct InfrastructurePolicyDecisionRecordedData {
   pub call_id: String,
   pub operation_key: String,
   pub decision: InfrastructurePolicyDecisionRecordV1,
+}
+
+/// A workflow-visible fact emitted only after the coordinator commits the
+/// corresponding authoritative Store v20 transition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteDispatchTransitionedData {
+  pub dispatch_id: String,
+  pub node_id: String,
+  pub attempt: u32,
+  pub invocation_id: String,
+  pub target: String,
+  pub state: crate::RemoteDispatchStateV1,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub worker_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub terminal_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1451,6 +1469,18 @@ fn valid_public_structural_id(value: &str) -> bool {
     && value.chars().count() <= 256
 }
 
+fn valid_remote_public_id(value: &str) -> bool {
+  let bytes = value.as_bytes();
+  !bytes.is_empty()
+    && bytes.len() <= 128
+    && bytes[0].is_ascii_lowercase()
+    && bytes
+      .iter()
+      .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+    && bytes.last() != Some(&b'-')
+    && !bytes.windows(2).any(|pair| pair == b"--")
+}
+
 fn valid_prefixed_id(value: &str, prefix: &str, minimum: usize) -> bool {
   value.len() >= minimum
     && value.len() <= 256
@@ -1905,6 +1935,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V17
         | RUN_EVENT_SCHEMA_VERSION_V18
         | RUN_EVENT_SCHEMA_VERSION_V19
+        | RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       return Err(EventValidationError::UnsupportedSchemaVersion(
         self.event_schema_version,
@@ -1967,6 +1998,22 @@ impl RunEvent {
       &self.payload,
       RunEventPayload::ApprovalResolved(data) if data.is_rich()
     );
+    let remote_dispatch_event =
+      matches!(self.payload, RunEventPayload::RemoteDispatchTransitioned(_));
+    if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V20 && !remote_dispatch_event {
+      let mut inherited = self.clone();
+      inherited.event_schema_version = RUN_EVENT_SCHEMA_VERSION_V19;
+      return inherited.validate();
+    }
+    if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V20
+      && self.iteration.as_ref().is_some_and(|scope| {
+        !valid_public_structural_id(&scope.for_each_id) || scope.index >= 10_000
+      })
+    {
+      return Err(EventValidationError::Invalid(
+        "Event v20 remote dispatch iteration scope is invalid.".to_string(),
+      ));
+    }
     if self.event_schema_version == RUN_EVENT_SCHEMA_VERSION_V19 && !rich_approval_event {
       let mut inherited = self.clone();
       inherited.event_schema_version = RUN_EVENT_SCHEMA_VERSION_V18;
@@ -2062,6 +2109,7 @@ impl RunEvent {
         | RUN_EVENT_SCHEMA_VERSION_V16
         | RUN_EVENT_SCHEMA_VERSION_V17
         | RUN_EVENT_SCHEMA_VERSION_V18
+        | RUN_EVENT_SCHEMA_VERSION_V20
     ) && self.iteration.is_some()
     {
       return Err(EventValidationError::Invalid(
@@ -2101,6 +2149,41 @@ impl RunEvent {
       return inherited.validate();
     }
     match &self.payload {
+      RunEventPayload::RemoteDispatchTransitioned(data) => {
+        validate_identity(&data.node_id, data.attempt, &data.invocation_id)?;
+        let meaningful = !matches!(data.state, crate::RemoteDispatchStateV1::Offered);
+        let bound = !matches!(data.state, crate::RemoteDispatchStateV1::Requested);
+        let terminal = matches!(
+          data.state,
+          crate::RemoteDispatchStateV1::Succeeded
+            | crate::RemoteDispatchStateV1::Failed
+            | crate::RemoteDispatchStateV1::Cancelled
+        );
+        if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V20
+          || !data.dispatch_id.starts_with("dispatch_")
+          || !meaningful
+          || data.dispatch_id.len() != 73
+          || !data.dispatch_id[9..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+          || !valid_remote_public_id(&data.target)
+          || data.attempt > 10
+          || bound != data.worker_id.is_some()
+          || data
+            .worker_id
+            .as_deref()
+            .is_some_and(|value| !valid_remote_public_id(value))
+          || terminal != data.terminal_digest.is_some()
+          || data
+            .terminal_digest
+            .as_deref()
+            .is_some_and(|value| !valid_sha256(value))
+        {
+          return Err(EventValidationError::Invalid(
+            "remote_dispatch_transitioned does not match the Event v20 contract.".to_string(),
+          ));
+        }
+      }
       RunEventPayload::RunAdmitted(data) => {
         if self.event_schema_version != RUN_EVENT_SCHEMA_VERSION_V11
           || !is_definition_hash(&data.definition_hash)

@@ -1,0 +1,42 @@
+<woml>
+  <workflow id="remote-deployment" name="Remote deployment">
+    <triggers>
+      <manual id="start" />
+    </triggers>
+
+    <steps>
+      <step id="prepare">
+        <script>
+          return { release: "payments-api@42" };
+        </script>
+      </step>
+
+      <saga id="deploy">
+        <step id="applyRelease" target="production-private">
+          <script>
+            return { deployed: context.steps.prepare.release };
+          </script>
+          <compensate retry="2">
+            <script>
+              return { rolledBack: context.steps.applyRelease.deployed };
+            </script>
+          </compensate>
+        </step>
+
+        <cleanup>
+          <step id="removeTemporaryFiles" target="maintenance-runner">
+            <script>
+              return { cleaned: true };
+            </script>
+          </step>
+        </cleanup>
+      </saga>
+
+      <step id="summary">
+        <script>
+          return { release: context.steps.deploy.deployed };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>

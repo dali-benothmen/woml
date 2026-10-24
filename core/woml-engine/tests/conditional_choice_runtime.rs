@@ -301,6 +301,7 @@ fn script_node(id: &str, source: &str) -> CompiledWorkflowNode {
     timeout_ms: None,
     retry_policy: None,
     script_runtime: None,
+    execution: None,
     metadata: None,
   }
 }
@@ -317,6 +318,7 @@ fn engine_node(
     timeout_ms: None,
     retry_policy: None,
     script_runtime: None,
+    execution: None,
     metadata: None,
   }
 }
@@ -431,6 +433,8 @@ fn nested_branch_model() -> CompiledWorkflowDefinition {
     settlement: None,
     for_each: None,
     waits: None,
+    locks: None,
+    sagas: None,
   };
   workflow.validate_for_execution().unwrap();
   workflow

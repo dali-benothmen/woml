@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/target-trust/v1",
+  "title": "WOML Target Trust v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "version", "identities"],
+  "properties": {
+    "profile": { "const": "woml.target-trust/v1" },
+    "version": { "const": 1 },
+    "identities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workerIdentity", "certificatePath"],
+        "properties": {
+          "workerIdentity": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 128 },
+          "certificatePath": { "type": "string", "minLength": 1, "maxLength": 4096 }
+        }
+      }
+    }
+  }
+}

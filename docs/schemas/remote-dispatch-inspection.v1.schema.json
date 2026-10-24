@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/remote-dispatch-inspection/v1",
+  "title": "WOML Remote Dispatch Inspection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "dispatchId", "runId", "nodeId", "attempt", "target", "state", "ambiguous", "outputSequence"],
+  "properties": {
+    "profile": { "const": "woml.remote-dispatch-inspection/v1" },
+    "dispatchId": { "type": "string", "maxLength": 256 },
+    "runId": { "type": "string", "maxLength": 256 },
+    "nodeId": { "type": "string", "maxLength": 256 },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "target": { "type": "string", "maxLength": 128 },
+    "workerId": { "type": "string", "maxLength": 128 },
+    "state": { "enum": ["requested", "offered", "accepted", "started", "succeeded", "failed", "cancelled", "ambiguous", "abandoned"] },
+    "ambiguous": { "type": "boolean" },
+    "lastHeartbeatAt": { "type": "string", "format": "date-time" },
+    "outputSequence": { "type": "integer", "minimum": 0 },
+    "failureCode": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" }
+  }
+}

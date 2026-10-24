@@ -184,4 +184,38 @@ describe('OpenTelemetry Signal v1', () => {
     expect(JSON.stringify(log)).not.toContain(settled.nodeId);
     expect(JSON.stringify(log)).not.toContain(settled.invocationId);
   });
+
+  test('exports bounded remote queue, duration, loss, and ambiguity facts without worker dimensions', async () => {
+    const contracts = await Bun.file(fixture).json();
+    const base = contracts.signal;
+    const queue = parseTelemetrySignal(JSON.stringify({
+      ...base,
+      signalId: 'telemetry_remote_queue',
+      kind: 'remote_dispatch',
+      status: 'started',
+      durationMs: 42,
+      attributes: { 'remote.phase': 'queue' },
+    }));
+    expect(metricFactsForTelemetrySignal(queue)).toEqual([expect.objectContaining({
+      name: 'woml.runtime.remote.dispatch.queue_delay', value: 42, attributes: {},
+    })]);
+    const ambiguous = parseTelemetrySignal(JSON.stringify({
+      ...base,
+      signalId: 'telemetry_remote_ambiguous',
+      kind: 'remote_dispatch',
+      status: 'degraded',
+      code: 'WOML_REMOTE_DISPATCH_AMBIGUOUS',
+      durationMs: 125,
+      attributes: { 'remote.phase': 'execution', 'remote.outcome': 'ambiguous' },
+    }));
+    const facts = metricFactsForTelemetrySignal(ambiguous);
+    expect(facts.map(fact => fact.name)).toEqual([
+      'woml.runtime.remote.dispatches',
+      'woml.runtime.remote.execution.duration',
+      'woml.runtime.remote.ambiguities',
+      'woml.runtime.remote.losses',
+    ]);
+    expect(JSON.stringify(facts)).not.toContain('production-runner');
+    expect(JSON.stringify(facts)).not.toContain('production-private');
+  });
 });

@@ -253,7 +253,9 @@ function decodeManifest(value: unknown): BackupManifestV1 {
     item.deploymentId.length < 1 ||
     item.deploymentId.length > 320 ||
     !isDigest(item.activationId) ||
-    ![13, 14, 15, 16, 17, 18, 19].includes(Number(item.storeVersion)) ||
+    ![13, 14, 15, 16, 17, 18, 19, 20].includes(
+      Number(item.storeVersion)
+    ) ||
     database === null ||
     typeof database !== 'object' ||
     Array.isArray(database) ||

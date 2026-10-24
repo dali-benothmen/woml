@@ -7,7 +7,7 @@ import {
   stat,
   unlink,
 } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   inspectCompiledWorkflowGraph,
@@ -54,6 +54,16 @@ export interface CompiledWorkflowCacheOptions {
 
 function digest(value: string | Uint8Array): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+export function sourceSnapshotDigest(
+  path: string,
+  value: string | Uint8Array
+): string {
+  if (extname(path).toLowerCase() !== '.woml') return digest(value);
+  const source =
+    typeof value === 'string' ? value : Buffer.from(value).toString('utf8');
+  return digest(source.replace(/\r\n?/g, '\n'));
 }
 
 function canonicalize(value: unknown): string {
@@ -304,7 +314,12 @@ export async function readCompiledWorkflowCache(
     });
     if (artifact === undefined) return undefined;
     for (const source of artifact.sourceSnapshot) {
-      if (digest(await readFile(source.path)) !== source.digest) return undefined;
+      if (
+        sourceSnapshotDigest(source.path, await readFile(source.path)) !==
+        source.digest
+      ) {
+        return undefined;
+      }
     }
     return artifact;
   } catch {

@@ -1,0 +1,14 @@
+{
+  "profile": "woml.target-trust/v1",
+  "version": 1,
+  "identities": [
+    {
+      "workerIdentity": "production-runner-01",
+      "certificatePath": "certificates/production-runner-01.pem"
+    },
+    {
+      "workerIdentity": "production-runner-02",
+      "certificatePath": "certificates/production-runner-02.pem"
+    }
+  ]
+}

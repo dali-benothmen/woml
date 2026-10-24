@@ -50,6 +50,7 @@ or schema documents to write and run a workflow.
 | VPS, Docker, proxy, and Kubernetes | [Production deployment](woml-production-deployment.md) |
 | Logs, metrics, and terminal inspection | [Observability](woml-observability.md) |
 | OTLP traces, metrics, and correlated logs | [OpenTelemetry export](woml-opentelemetry.md) |
+| Remote workers, drain, loss, and reconciliation | [Remote execution operations](remote-execution-operations.md) |
 | Streaming output, replay, retention, and operations | [Streaming Output and Progress](woml-streaming-output-and-progress.md) |
 | Streaming wire contracts and cursor semantics | [Streaming Output and Progress v1](protocols/streaming-output-and-progress-v1.md) |
 | Recovery behavior | [Recovery](woml-recovery.md) |

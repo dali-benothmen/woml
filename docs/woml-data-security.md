@@ -106,3 +106,23 @@ and reject older tokens itself. Backup restore preserves fencing high-water and
 clears live owners; activating both the source and restored databases is an
 unsupported split-brain deployment. See the
 [Locks threat model](woml-lock-threat-model.md).
+## Remote execution trust boundary
+
+Remote Execution Targets do not make a worker part of the workflow authority.
+The coordinator remains authoritative for admission, attempts, retries,
+policies, waits, locks, correction, and settlement. Workers receive one
+integrity-bound compiled attempt through mutually authenticated transport.
+
+Target configuration, certificate references, and worker membership remain
+outside WOML source. Dispatches contain symbolic secret names only; values are
+resolved by the worker's local provider after both coordinator and worker
+policy allow the operation. Large values cross through scoped durable-artifact
+grants rather than the JSON dispatch envelope.
+
+If WOML can prove that a worker started an effect but cannot prove its terminal
+outcome, the dispatch becomes ambiguous. It is never retried silently. An
+operator must reconcile a trusted terminal journal record, record failure, or
+explicitly authorize a new attempt with possible-duplicate risk.
+
+The frozen protocol, bounds, threat model, and failure catalog are documented
+in [Remote Execution Targets v1](protocols/remote-execution-targets-v1.md).

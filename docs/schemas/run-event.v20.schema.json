@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/run-event/v20",
+  "title": "WOML Remote Dispatch Run Event v20",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "type", "runId", "sequence", "at", "data"],
+  "properties": {
+    "schemaVersion": { "const": 20 },
+    "type": { "const": "remote_dispatch_transitioned" },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "at": { "type": "string", "format": "date-time" },
+    "iteration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forEachId", "index"],
+      "properties": {
+        "forEachId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "index": { "type": "integer", "minimum": 0, "maximum": 9999 }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dispatchId", "nodeId", "attempt", "invocationId", "target", "state"],
+      "properties": {
+        "dispatchId": { "type": "string", "pattern": "^dispatch_[a-f0-9]{64}$" },
+        "nodeId": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "invocationId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "target": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 128 },
+        "state": { "enum": ["requested", "accepted", "started", "cancel_requested", "succeeded", "failed", "cancelled", "ambiguous", "abandoned"] },
+        "workerId": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 128 },
+        "terminalDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "requested" } }, "required": ["state"] },
+          "then": { "not": { "required": ["workerId"] } },
+          "else": { "required": ["workerId"] }
+        },
+        {
+          "if": { "properties": { "state": { "enum": ["succeeded", "failed", "cancelled"] } }, "required": ["state"] },
+          "then": { "required": ["terminalDigest"] },
+          "else": { "not": { "required": ["terminalDigest"] } }
+        }
+      ]
+    }
+  }
+}

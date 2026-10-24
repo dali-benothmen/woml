@@ -694,6 +694,8 @@ fn delete_batch(
     .execute_batch(DROP_RETENTION_GUARDS)
     .map_err(map_sqlite)?;
   for statement in [
+    "DELETE FROM woml_remote_dispatch_audit WHERE dispatch_id IN (SELECT dispatch_id FROM woml_remote_dispatches WHERE run_id IN (SELECT run_id FROM woml_retention_candidates))",
+    "DELETE FROM woml_remote_dispatches WHERE run_id IN (SELECT run_id FROM woml_retention_candidates)",
     "DELETE FROM woml_correction_manual_recovery WHERE run_id IN (SELECT run_id FROM woml_retention_candidates)",
     "DELETE FROM woml_correction_attempts WHERE run_id IN (SELECT run_id FROM woml_retention_candidates)",
     "DELETE FROM woml_correction_actions WHERE run_id IN (SELECT run_id FROM woml_retention_candidates)",

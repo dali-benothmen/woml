@@ -95,9 +95,11 @@ for (const marker of [
   '"prefix": "woml-saga"',
   '<compensate timeout=',
   '<cleanup>',
+  '"prefix": "woml-remote-step"',
+  'target=\\"${3:production-private}\\"',
 ]) {
   if (!snippets.includes(marker)) {
-    throw new Error(`Compensation and Cleanup snippet marker is missing: ${marker}`);
+    throw new Error(`Required WOML snippet marker is missing: ${marker}`);
   }
 }
 

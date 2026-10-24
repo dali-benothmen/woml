@@ -384,6 +384,11 @@ export async function startOpenTelemetrySdk(
       capabilityCalls: meter.createCounter('woml.runtime.capability.calls', { unit: '1' }),
       capabilityDuration: meter.createHistogram('woml.runtime.capability.duration', { unit: 'ms' }),
       propagationContexts: meter.createCounter('woml.runtime.propagation.contexts', { unit: '1' }),
+      remoteDispatches: meter.createCounter('woml.runtime.remote.dispatches', { unit: '1' }),
+      remoteQueueDelay: meter.createHistogram('woml.runtime.remote.dispatch.queue_delay', { unit: 'ms' }),
+      remoteExecutionDuration: meter.createHistogram('woml.runtime.remote.execution.duration', { unit: 'ms' }),
+      remoteLosses: meter.createCounter('woml.runtime.remote.losses', { unit: '1' }),
+      remoteAmbiguities: meter.createCounter('woml.runtime.remote.ambiguities', { unit: '1' }),
     };
     const active = new TelemetryActiveGaugeState();
     for (const [name, gauge] of [
@@ -408,6 +413,11 @@ export async function startOpenTelemetrySdk(
         else if (fact.name === 'woml.runtime.retries') instruments.retries.add(fact.value, attributes);
         else if (fact.name === 'woml.runtime.capability.calls') instruments.capabilityCalls.add(fact.value, attributes);
         else if (fact.name === 'woml.runtime.capability.duration') instruments.capabilityDuration.record(fact.value, attributes);
+        else if (fact.name === 'woml.runtime.remote.dispatches') instruments.remoteDispatches.add(fact.value, attributes);
+        else if (fact.name === 'woml.runtime.remote.dispatch.queue_delay') instruments.remoteQueueDelay.record(fact.value, attributes);
+        else if (fact.name === 'woml.runtime.remote.execution.duration') instruments.remoteExecutionDuration.record(fact.value, attributes);
+        else if (fact.name === 'woml.runtime.remote.losses') instruments.remoteLosses.add(fact.value, attributes);
+        else if (fact.name === 'woml.runtime.remote.ambiguities') instruments.remoteAmbiguities.add(fact.value, attributes);
       }
       return true;
     };

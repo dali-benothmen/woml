@@ -3656,6 +3656,11 @@ impl ProjectionFoldState {
         projection.terminal_node_id = Some(data.terminal_node_id.clone());
         projection.result = Some(data.result.clone());
       }
+      RunEventPayload::RemoteDispatchTransitioned(_) => {
+        // Store v20 is the authoritative dispatch projection. Event v20 keeps
+        // the committed transition in run history without duplicating that
+        // state machine in the workflow projection.
+      }
       RunEventPayload::RunFailed(data) => {
         if projection.operations.values().any(|operation| {
           operation.execution_mode == OperationExecutionMode::Managed

@@ -17,7 +17,8 @@ export type TelemetrySignalKind =
   | 'workflow_call'
   | 'compensation'
   | 'cleanup'
-  | 'recovery';
+  | 'recovery'
+  | 'remote_dispatch';
 
 export type TelemetrySignalStatus =
   | 'admitted'
@@ -88,6 +89,7 @@ const kinds = new Set<TelemetrySignalKind>([
   'compensation',
   'cleanup',
   'recovery',
+  'remote_dispatch',
 ]);
 const statuses = new Set<TelemetrySignalStatus>([
   'admitted',
@@ -131,6 +133,8 @@ const stringAttributeKeys = new Set([
   'corrective.phase',
   'wait.kind',
   'lock.outcome',
+  'remote.phase',
+  'remote.outcome',
 ]);
 const booleanAttributeKeys = new Set(['retry.scheduled', 'recovered']);
 
@@ -336,6 +340,7 @@ function spanName(kind: TelemetrySignalKind): string {
     compensation: 'woml.compensation',
     cleanup: 'woml.cleanup',
     recovery: 'woml.recovery',
+    remote_dispatch: 'woml.remote.dispatch',
   }[kind];
 }
 

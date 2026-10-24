@@ -62,6 +62,19 @@ pub enum OperationalAppendOutcomeV1 {
   Dropped { marker_sequence: u64 },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteOperationalAppendOutcomeV1 {
+  Appended { local_sequence: u64 },
+  Duplicate { local_sequence: u64 },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RemoteOperationalIdentity<'a> {
+  dispatch_id: &'a str,
+  sequence: u64,
+  digest: &'a str,
+}
+
 impl OperationalAppendOutcomeV1 {
   pub fn sequence(&self) -> u64 {
     match self {
@@ -522,8 +535,52 @@ impl OperationalOutputStore {
 
   pub fn append_bounded(
     &self,
-    mut draft: OperationalRecordDraftV1,
+    draft: OperationalRecordDraftV1,
   ) -> Result<OperationalAppendOutcomeV1, OperationalOutputError> {
+    self
+      .append_bounded_internal(draft, None)
+      .map(|(outcome, _)| outcome)
+  }
+
+  pub fn append_remote_bounded(
+    &self,
+    dispatch_id: &str,
+    remote_sequence: u64,
+    record_digest: &str,
+    draft: OperationalRecordDraftV1,
+  ) -> Result<RemoteOperationalAppendOutcomeV1, OperationalOutputError> {
+    if !valid_remote_dispatch_id(dispatch_id)
+      || remote_sequence == 0
+      || !valid_sha256(record_digest)
+    {
+      return Err(OperationalOutputError::InvalidRecord(
+        "the remote output identity is invalid",
+      ));
+    }
+    let (outcome, duplicate) = self.append_bounded_internal(
+      draft,
+      Some(RemoteOperationalIdentity {
+        dispatch_id,
+        sequence: remote_sequence,
+        digest: record_digest,
+      }),
+    )?;
+    if duplicate {
+      Ok(RemoteOperationalAppendOutcomeV1::Duplicate {
+        local_sequence: outcome.sequence(),
+      })
+    } else {
+      Ok(RemoteOperationalAppendOutcomeV1::Appended {
+        local_sequence: outcome.sequence(),
+      })
+    }
+  }
+
+  fn append_bounded_internal(
+    &self,
+    mut draft: OperationalRecordDraftV1,
+    remote: Option<RemoteOperationalIdentity<'_>>,
+  ) -> Result<(OperationalAppendOutcomeV1, bool), OperationalOutputError> {
     validate_draft(&draft)?;
     let occurred_at = now_string();
     let mut connection = self
@@ -533,6 +590,46 @@ impl OperationalOutputStore {
     let transaction = connection
       .transaction_with_behavior(TransactionBehavior::Immediate)
       .map_err(|_| OperationalOutputError::Unavailable)?;
+    if let Some(remote) = remote {
+      let existing: Option<(String, u64)> = transaction
+        .query_row(
+          "SELECT record_digest, local_sequence FROM woml_operational_remote_sequences
+           WHERE dispatch_id = ?1 AND remote_sequence = ?2",
+          params![remote.dispatch_id, remote.sequence],
+          |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|_| OperationalOutputError::Corrupt)?;
+      if let Some((digest, local_sequence)) = existing {
+        if digest != remote.digest {
+          return Err(OperationalOutputError::InvalidRecord(
+            "the remote output replay conflicts with retained output",
+          ));
+        }
+        transaction
+          .commit()
+          .map_err(|_| OperationalOutputError::Unavailable)?;
+        return Ok((
+          OperationalAppendOutcomeV1::Dropped {
+            marker_sequence: local_sequence,
+          },
+          true,
+        ));
+      }
+      let latest: u64 = transaction
+        .query_row(
+          "SELECT COALESCE(MAX(remote_sequence), 0) FROM woml_operational_remote_sequences
+           WHERE dispatch_id = ?1",
+          [remote.dispatch_id],
+          |row| row.get(0),
+        )
+        .map_err(|_| OperationalOutputError::Corrupt)?;
+      if remote.sequence != latest.saturating_add(1) {
+        return Err(OperationalOutputError::InvalidRecord(
+          "remote output records must be appended in sequence",
+        ));
+      }
+    }
     let sequence = read_metadata_u64(&transaction, "next_sequence")?;
     if sequence == 0 || sequence >= i64::MAX as u64 {
       return Err(OperationalOutputError::Unavailable);
@@ -609,10 +706,29 @@ impl OperationalOutputStore {
           .optional()
           .map_err(|_| OperationalOutputError::Corrupt)?;
         if let Some(marker_sequence) = marker_sequence {
+          if let Some(remote) = remote {
+            transaction
+              .execute(
+                "INSERT INTO woml_operational_remote_sequences(
+                   dispatch_id, remote_sequence, record_digest, local_sequence, run_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                  remote.dispatch_id,
+                  remote.sequence,
+                  remote.digest,
+                  marker_sequence,
+                  draft.identity.run_id,
+                ],
+              )
+              .map_err(|_| OperationalOutputError::Unavailable)?;
+          }
           transaction
             .commit()
             .map_err(|_| OperationalOutputError::Unavailable)?;
-          return Ok(OperationalAppendOutcomeV1::Dropped { marker_sequence });
+          return Ok((
+            OperationalAppendOutcomeV1::Dropped { marker_sequence },
+            false,
+          ));
         }
         draft.body = OperationalBodyV1::Truncated {
           source: *source,
@@ -642,8 +758,9 @@ impl OperationalOutputStore {
       .execute(
         "INSERT INTO woml_operational_records(
            sequence, deployment_id, occurred_at, workflow_id, run_id, node_id, attempt_number,
-           invocation_id, phase, kind, source, accounted_bytes, record_json
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+           invocation_id, phase, kind, source, accounted_bytes, record_json,
+           remote_dispatch_id, remote_sequence, remote_record_digest
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
           sequence,
           self.deployment_id,
@@ -658,9 +775,28 @@ impl OperationalOutputStore {
           source,
           record.body.accounted_bytes(),
           encoded,
+          remote.map(|value| value.dispatch_id),
+          remote.map(|value| value.sequence),
+          remote.map(|value| value.digest),
         ],
       )
       .map_err(|_| OperationalOutputError::Unavailable)?;
+    if let Some(remote) = remote {
+      transaction
+        .execute(
+          "INSERT INTO woml_operational_remote_sequences(
+             dispatch_id, remote_sequence, record_digest, local_sequence, run_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5)",
+          params![
+            remote.dispatch_id,
+            remote.sequence,
+            remote.digest,
+            sequence,
+            record.identity.run_id,
+          ],
+        )
+        .map_err(|_| OperationalOutputError::Unavailable)?;
+    }
     update_run_accounting(&transaction, &record)?;
     update_progress_projection(&transaction, &record)?;
     transaction
@@ -675,11 +811,14 @@ impl OperationalOutputStore {
     if let Some(reporter) = &self.reporter {
       reporter(record.sequence);
     }
-    Ok(if truncated {
-      OperationalAppendOutcomeV1::Truncated(record)
-    } else {
-      OperationalAppendOutcomeV1::Appended(record)
-    })
+    Ok((
+      if truncated {
+        OperationalAppendOutcomeV1::Truncated(record)
+      } else {
+        OperationalAppendOutcomeV1::Appended(record)
+      },
+      false,
+    ))
   }
 
   /// Durably updates an existing latest-progress lane without adding another
@@ -1040,6 +1179,12 @@ impl OperationalOutputStore {
       transaction
         .execute(
           "DELETE FROM woml_operational_progress WHERE run_id = ?1",
+          [run_id],
+        )
+        .map_err(|_| OperationalOutputError::Unavailable)?;
+      transaction
+        .execute(
+          "DELETE FROM woml_operational_remote_sequences WHERE run_id = ?1",
           [run_id],
         )
         .map_err(|_| OperationalOutputError::Unavailable)?;
@@ -1557,7 +1702,15 @@ fn initialize_schema(
          kind TEXT NOT NULL CHECK(kind IN ('output','progress','truncated','artifact','closed')),
          source TEXT CHECK(source IS NULL OR source IN ('stdout','stderr','script','runtime')),
          accounted_bytes INTEGER NOT NULL CHECK(accounted_bytes >= 0),
-         record_json TEXT NOT NULL
+         record_json TEXT NOT NULL,
+         remote_dispatch_id TEXT,
+         remote_sequence INTEGER CHECK(remote_sequence IS NULL OR remote_sequence > 0),
+         remote_record_digest TEXT,
+         CHECK (
+           (remote_dispatch_id IS NULL AND remote_sequence IS NULL AND remote_record_digest IS NULL)
+           OR
+           (remote_dispatch_id IS NOT NULL AND remote_sequence IS NOT NULL AND remote_record_digest IS NOT NULL)
+         )
        );
        CREATE INDEX IF NOT EXISTS woml_operational_records_deployment ON woml_operational_records(deployment_id, sequence);
        CREATE INDEX IF NOT EXISTS woml_operational_records_workflow ON woml_operational_records(workflow_id, sequence);
@@ -1568,6 +1721,16 @@ fn initialize_schema(
        CREATE INDEX IF NOT EXISTS woml_operational_records_source ON woml_operational_records(source, sequence);
        CREATE INDEX IF NOT EXISTS woml_operational_records_kind ON woml_operational_records(kind, sequence);
        CREATE INDEX IF NOT EXISTS woml_operational_records_time ON woml_operational_records(occurred_at, sequence);
+       CREATE TABLE IF NOT EXISTS woml_operational_remote_sequences(
+         dispatch_id TEXT NOT NULL,
+         remote_sequence INTEGER NOT NULL CHECK(remote_sequence > 0),
+         record_digest TEXT NOT NULL,
+         local_sequence INTEGER NOT NULL CHECK(local_sequence > 0),
+         run_id TEXT NOT NULL,
+         PRIMARY KEY(dispatch_id, remote_sequence)
+       );
+       CREATE INDEX IF NOT EXISTS woml_operational_remote_sequences_run
+         ON woml_operational_remote_sequences(run_id);
        CREATE TABLE IF NOT EXISTS woml_operational_progress(
          run_id TEXT NOT NULL,
          node_key TEXT NOT NULL,
@@ -1620,9 +1783,34 @@ fn initialize_schema(
       )
       .map_err(|_| OperationalOutputError::Unavailable)?;
   }
+  let columns = connection
+    .prepare("PRAGMA table_info(woml_operational_records)")
+    .and_then(|mut statement| {
+      statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()
+    })
+    .map_err(|_| OperationalOutputError::Corrupt)?;
+  if !columns.iter().any(|column| column == "remote_dispatch_id") {
+    connection
+      .execute_batch(
+        "ALTER TABLE woml_operational_records ADD COLUMN remote_dispatch_id TEXT;
+         ALTER TABLE woml_operational_records ADD COLUMN remote_sequence INTEGER CHECK(remote_sequence IS NULL OR remote_sequence > 0);
+         ALTER TABLE woml_operational_records ADD COLUMN remote_record_digest TEXT;",
+      )
+      .map_err(|_| OperationalOutputError::Unavailable)?;
+  }
   connection
     .execute(
       "CREATE INDEX IF NOT EXISTS woml_operational_records_phase ON woml_operational_records(phase, sequence)",
+      [],
+    )
+    .map_err(|_| OperationalOutputError::Unavailable)?;
+  connection
+    .execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS woml_operational_records_remote_sequence
+       ON woml_operational_records(remote_dispatch_id, remote_sequence)
+       WHERE remote_dispatch_id IS NOT NULL",
       [],
     )
     .map_err(|_| OperationalOutputError::Unavailable)?;
@@ -1668,6 +1856,7 @@ fn validate_schema(
   }
   for table in [
     "woml_operational_records",
+    "woml_operational_remote_sequences",
     "woml_operational_progress",
     "woml_operational_runs",
     "woml_operational_pruned_runs",
@@ -1709,6 +1898,18 @@ fn read_metadata_u64(connection: &Connection, key: &str) -> Result<u64, Operatio
     )
     .map_err(|_| OperationalOutputError::Corrupt)?;
   value.parse().map_err(|_| OperationalOutputError::Corrupt)
+}
+
+fn valid_remote_dispatch_id(value: &str) -> bool {
+  value.len() == 73
+    && value.starts_with("dispatch_")
+    && value[9..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_sha256(value: &str) -> bool {
+  value.len() == 71
+    && value.starts_with("sha256:")
+    && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn read_metadata_optional(

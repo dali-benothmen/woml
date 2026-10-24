@@ -106,6 +106,32 @@ describe('parseWoml', () => {
     );
   });
 
+  test('normalizes XML line endings before preserving raw scripts and spans', () => {
+    const source = `<workflow id="line-endings">\r
+  <triggers><manual id="start" /></triggers>\r
+  <steps><step id="a"><script>\r
+    return { platform: "independent" };\r
+  </script></step></steps>\r
+</workflow>`;
+
+    const document = parseWoml(source, { file: 'line-endings.woml' });
+    const [, steps] = elementChildren(document.root);
+    const step = elementChildren(steps)[0];
+    const script = elementChildren(step)[0];
+    const raw = script.children[0];
+
+    expect(document.source.includes('\r')).toBe(false);
+    expect(document.span.end.offset).toBe(document.source.length);
+    expect(isWomlRawText(raw)).toBe(true);
+    if (!isWomlRawText(raw)) return;
+    expect(raw.value).toBe(
+      '\n    return { platform: "independent" };\n  '
+    );
+    expect(
+      document.source.slice(raw.span.start.offset, raw.span.end.offset)
+    ).toBe(raw.value);
+  });
+
   test('preserves choice case order, reference values, and source spans', () => {
     const source = readFileSync(
       new URL('./fixtures/branch.woml', import.meta.url),

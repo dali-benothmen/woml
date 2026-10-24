@@ -31,6 +31,17 @@
       "</step>"
     ]
   },
+  "WOML remote step": {
+    "prefix": "woml-remote-step",
+    "description": "Run one script step on an explicitly named remote execution target.",
+    "body": [
+      "<step id=\"${1:remoteStep}\" name=\"${2:Remote step}\" target=\"${3:production-private}\">",
+      "  <script>",
+      "    ${4:return { ok: true };}",
+      "  </script>",
+      "</step>"
+    ]
+  },
   "WOML for each": {
     "prefix": "woml-for-each",
     "description": "Process every item from an earlier step with iteration-local context.",

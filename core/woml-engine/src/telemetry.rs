@@ -35,6 +35,7 @@ pub enum TelemetrySignalKind {
   Compensation,
   Cleanup,
   Recovery,
+  RemoteDispatch,
 }
 
 impl TelemetrySignalKind {
@@ -52,6 +53,7 @@ impl TelemetrySignalKind {
       Self::Compensation => "compensation",
       Self::Cleanup => "cleanup",
       Self::Recovery => "recovery",
+      Self::RemoteDispatch => "remote_dispatch",
     }
   }
 }
@@ -212,6 +214,7 @@ pub fn project_telemetry_signals(
   let mut corrections = HashMap::<String, IntervalIdentity>::new();
   let mut lifecycle_actions = HashMap::<String, IntervalIdentity>::new();
   let mut for_each_groups = HashMap::<String, IntervalIdentity>::new();
+  let mut remote_dispatches = HashMap::<String, IntervalIdentity>::new();
 
   for event in events {
     // Iteration-local events can be arbitrarily high-cardinality. The durable
@@ -231,6 +234,90 @@ pub fn project_telemetry_signals(
       continue;
     }
     match &event.payload {
+      RunEventPayload::RemoteDispatchTransitioned(data) => {
+        use crate::RemoteDispatchStateV1;
+        match data.state {
+          RemoteDispatchStateV1::Requested => {
+            remote_dispatches.insert(
+              data.dispatch_id.clone(),
+              IntervalIdentity {
+                started_at: event.occurred_at,
+                node_id: Some(data.node_id.clone()),
+                attempt: Some(data.attempt),
+                invocation_id: Some(data.invocation_id.clone()),
+                category: Some("queue".to_string()),
+              },
+            );
+          }
+          RemoteDispatchStateV1::Started => {
+            if let Some(queued) = remote_dispatches.remove(&data.dispatch_id) {
+              signals.push(interval_signal(
+                event,
+                workflow_id,
+                context,
+                TelemetrySignalKind::RemoteDispatch,
+                TelemetrySignalStatus::Started,
+                queued,
+                None,
+                [("remote.phase", string_attribute("queue"))],
+              ));
+            }
+            remote_dispatches.insert(
+              data.dispatch_id.clone(),
+              IntervalIdentity {
+                started_at: event.occurred_at,
+                node_id: Some(data.node_id.clone()),
+                attempt: Some(data.attempt),
+                invocation_id: Some(data.invocation_id.clone()),
+                category: Some("execution".to_string()),
+              },
+            );
+          }
+          RemoteDispatchStateV1::Succeeded
+          | RemoteDispatchStateV1::Failed
+          | RemoteDispatchStateV1::Cancelled
+          | RemoteDispatchStateV1::Ambiguous => {
+            if let Some(started) = remote_dispatches.remove(&data.dispatch_id) {
+              let (status, code, outcome) = match data.state {
+                RemoteDispatchStateV1::Succeeded => {
+                  (TelemetrySignalStatus::Succeeded, None, "succeeded")
+                }
+                RemoteDispatchStateV1::Failed => (
+                  TelemetrySignalStatus::Failed,
+                  Some("WOML_REMOTE_EXECUTION_FAILED".to_string()),
+                  "failed",
+                ),
+                RemoteDispatchStateV1::Cancelled => {
+                  (TelemetrySignalStatus::Cancelled, None, "cancelled")
+                }
+                RemoteDispatchStateV1::Ambiguous => (
+                  TelemetrySignalStatus::Degraded,
+                  Some("WOML_REMOTE_DISPATCH_AMBIGUOUS".to_string()),
+                  "ambiguous",
+                ),
+                _ => unreachable!(),
+              };
+              signals.push(interval_signal(
+                event,
+                workflow_id,
+                context,
+                TelemetrySignalKind::RemoteDispatch,
+                status,
+                started,
+                code,
+                [
+                  ("remote.phase", string_attribute("execution")),
+                  ("remote.outcome", string_attribute(outcome)),
+                ],
+              ));
+            }
+          }
+          RemoteDispatchStateV1::Offered
+          | RemoteDispatchStateV1::Accepted
+          | RemoteDispatchStateV1::CancelRequested
+          | RemoteDispatchStateV1::Abandoned => {}
+        }
+      }
       RunEventPayload::RunAdmitted(data) => {
         run_started_at = data.admitted_at;
         run_trigger = Some(data.trigger.handler.clone());
@@ -807,6 +894,7 @@ fn interval_signal<const N: usize>(
       TelemetrySignalKind::Capability => "capability.category",
       TelemetrySignalKind::Wait => "wait.kind",
       TelemetrySignalKind::Compensation | TelemetrySignalKind::Cleanup => "corrective.phase",
+      TelemetrySignalKind::RemoteDispatch => "remote.phase",
       _ => "handler.category",
     };
     attributes.insert(key.to_string(), TelemetryAttributeValue::String(category));
@@ -1000,6 +1088,8 @@ fn safe_attribute(key: &str, value: &TelemetryAttributeValue) -> bool {
     "lock.outcome",
     "retry.scheduled",
     "recovered",
+    "remote.phase",
+    "remote.outcome",
   ];
   KEYS.contains(&key)
     && match value {
@@ -1110,6 +1200,51 @@ mod tests {
     let encoded = serde_json::to_string(&signals).unwrap();
     assert!(!encoded.contains("never-export-this"));
     assert!(!encoded.contains("secret-idempotency-value"));
+  }
+
+  #[test]
+  fn remote_projection_exports_queue_and_ambiguity_without_target_or_worker_dimensions() {
+    let queued_at = "2026-10-24T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let started_at = queued_at + chrono::Duration::milliseconds(40);
+    let lost_at = started_at + chrono::Duration::milliseconds(125);
+    let remote = |sequence, occurred_at, state| RunEvent {
+      event_schema_version: crate::RUN_EVENT_SCHEMA_VERSION_V20,
+      event_id: format!("evt_remote_{sequence}"),
+      run_id: "run_remote_safe".to_string(),
+      sequence,
+      occurred_at,
+      iteration: None,
+      payload: RunEventPayload::RemoteDispatchTransitioned(crate::RemoteDispatchTransitionedData {
+        dispatch_id: format!("dispatch_{}", "a".repeat(64)),
+        node_id: "deploy".to_string(),
+        attempt: 1,
+        invocation_id: "inv_remote_safe".to_string(),
+        target: "production-private".to_string(),
+        state,
+        worker_id: (!matches!(state, crate::RemoteDispatchStateV1::Requested))
+          .then(|| "production-runner-01".to_string()),
+        terminal_digest: None,
+      }),
+    };
+    let signals = project_telemetry_signals(
+      &[
+        remote(1, queued_at, crate::RemoteDispatchStateV1::Requested),
+        remote(2, started_at, crate::RemoteDispatchStateV1::Started),
+        remote(3, lost_at, crate::RemoteDispatchStateV1::Ambiguous),
+      ],
+      "remote-workflow",
+      &TelemetrySignalContext {
+        runtime_instance_id: "runtime_01".to_string(),
+        deployment_id: "deployment_01".to_string(),
+      },
+    );
+    assert_eq!(signals.len(), 2);
+    assert_eq!(signals[0].duration_ms, Some(40.0));
+    assert_eq!(signals[1].duration_ms, Some(125.0));
+    assert_eq!(signals[1].status, TelemetrySignalStatus::Degraded);
+    let encoded = serde_json::to_string(&signals).unwrap();
+    assert!(!encoded.contains("production-private"));
+    assert!(!encoded.contains("production-runner-01"));
   }
 
   #[test]

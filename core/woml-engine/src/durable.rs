@@ -46,6 +46,7 @@ use crate::projection::{
   NotificationDeliveryStatus, NotificationMessageUpdateStatus, OperationProjection,
   ParallelGroupStatus, ProjectionFoldState,
 };
+use crate::remote_dispatch::{validate_remote_dispatch_schema, CREATE_REMOTE_DISPATCH_SCHEMA_V20};
 use crate::runtime::RuntimeModuleArtifact;
 use crate::workflow_calls::{
   WorkflowCallAdmission, WorkflowCallAdmissionOutcome, WorkflowCallAdmissionRequest,
@@ -68,7 +69,7 @@ use crate::{
   ReviewerDirectoryAuthorityV1, ReviewerDirectoryError, ReviewerIdentityClaimV1,
 };
 
-pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 19;
+pub const DURABLE_STORE_SCHEMA_VERSION: u32 = 20;
 const STORE_SCHEMA_VERSION_V1: &str = "1";
 const STORE_SCHEMA_VERSION_V2: &str = "2";
 const STORE_SCHEMA_VERSION_V3: &str = "3";
@@ -88,6 +89,7 @@ const STORE_SCHEMA_VERSION_V16: &str = "16";
 const STORE_SCHEMA_VERSION_V17: &str = "17";
 const STORE_SCHEMA_VERSION_V18: &str = "18";
 const STORE_SCHEMA_VERSION_V19: &str = "19";
+const STORE_SCHEMA_VERSION_V20: &str = "20";
 const DEFAULT_APPROVAL_CREDENTIAL_LIFETIME_HOURS: i64 = 24;
 
 const CREATE_INFRASTRUCTURE_POLICY_SCHEMA_V19: &str = r#"
@@ -2166,7 +2168,7 @@ pub enum DurableStoreError {
 
 #[derive(Debug)]
 pub struct DurableEventStore {
-  connection: Connection,
+  pub(crate) connection: Connection,
   projection_cache: RefCell<HashMap<String, ProjectionFoldState>>,
 }
 
@@ -2430,9 +2432,12 @@ fn append_rich_approval_payloads(
     .first()
     .map(|event| event.event_schema_version)
     .ok_or_else(|| DurableStoreError::Contract("A rich approval requires a started run.".into()))?;
-  if version != crate::RUN_EVENT_SCHEMA_VERSION_V19 {
+  if !matches!(
+    version,
+    crate::RUN_EVENT_SCHEMA_VERSION_V19 | crate::RUN_EVENT_SCHEMA_VERSION_V20
+  ) {
     return Err(DurableStoreError::Contract(
-      "Rich approval persistence requires Event v19.".to_string(),
+      "Rich approval persistence requires Event v19 or later.".to_string(),
     ));
   }
   for payload in payloads {
@@ -3014,6 +3019,23 @@ fn migrate_store_v18_to_v19(connection: &mut Connection) -> Result<(), DurableSt
   if changed != 1 {
     return Err(DurableStoreError::Contract(
       "Store v18-to-v19 migration could not update the schema version atomically.".to_string(),
+    ));
+  }
+  transaction.commit()?;
+  Ok(())
+}
+
+fn migrate_store_v19_to_v20(connection: &mut Connection) -> Result<(), DurableStoreError> {
+  let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+  transaction.execute_batch(CREATE_REMOTE_DISPATCH_SCHEMA_V20)?;
+  validate_remote_dispatch_schema(&transaction)?;
+  let changed = transaction.execute(
+    "UPDATE woml_store_metadata SET value = ?1 WHERE key = 'schema_version' AND value = ?2",
+    [STORE_SCHEMA_VERSION_V20, STORE_SCHEMA_VERSION_V19],
+  )?;
+  if changed != 1 {
+    return Err(DurableStoreError::Contract(
+      "Store v19-to-v20 migration could not update the schema version atomically.".to_string(),
     ));
   }
   transaction.commit()?;
@@ -3894,7 +3916,7 @@ impl DurableEventStore {
       [],
       |row| row.get(0),
     )?;
-    if version != STORE_SCHEMA_VERSION_V19 {
+    if version != STORE_SCHEMA_VERSION_V20 {
       return Err(DurableStoreError::UnsupportedStoreVersion(version));
     }
     if let Ok(metadata) = std::fs::metadata(path) {
@@ -4243,6 +4265,10 @@ impl DurableEventStore {
       )
       .optional()?;
     match version.as_deref() {
+      Some(STORE_SCHEMA_VERSION_V20) => {
+        validate_store_v19_schema(&connection)?;
+        validate_remote_dispatch_schema(&connection)?;
+      }
       Some(STORE_SCHEMA_VERSION_V19) => validate_store_v19_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V18) => validate_store_v18_schema(&connection)?,
       Some(STORE_SCHEMA_VERSION_V17) => validate_store_v17_schema(&connection)?,
@@ -4415,7 +4441,16 @@ impl DurableEventStore {
     if current_version == STORE_SCHEMA_VERSION_V18 {
       migrate_store_v18_to_v19(&mut connection)?;
     }
+    let current_version: String = connection.query_row(
+      "SELECT value FROM woml_store_metadata WHERE key = 'schema_version'",
+      [],
+      |row| row.get(0),
+    )?;
+    if current_version == STORE_SCHEMA_VERSION_V19 {
+      migrate_store_v19_to_v20(&mut connection)?;
+    }
     validate_store_v19_schema(&connection)?;
+    validate_remote_dispatch_schema(&connection)?;
     {
       let recovery = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
       rebuild_correction_indexes(&recovery)?;
@@ -4715,6 +4750,7 @@ impl DurableEventStore {
       )));
     }
     validate_store_v19_schema(&self.connection)?;
+    validate_remote_dispatch_schema(&self.connection)?;
     let mut statement = self
       .connection
       .prepare("SELECT run_id FROM woml_run_infrastructure_policies ORDER BY run_id")?;
@@ -6077,6 +6113,7 @@ impl DurableEventStore {
         | crate::RUN_EVENT_SCHEMA_VERSION_V17
         | crate::RUN_EVENT_SCHEMA_VERSION_V18
         | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       expand_model_v11_payload(&workflow, &run_id, payload)?
     } else {
@@ -6140,7 +6177,9 @@ impl DurableEventStore {
     let projection = projection_state.projection().clone();
     if matches!(
       event_schema_version,
-      crate::RUN_EVENT_SCHEMA_VERSION_V18 | crate::RUN_EVENT_SCHEMA_VERSION_V19
+      crate::RUN_EVENT_SCHEMA_VERSION_V18
+        | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       write_correction_indexes_from_projection(
         &transaction,
@@ -6252,9 +6291,12 @@ impl DurableEventStore {
       .ok_or_else(|| {
         DurableStoreError::Contract("A rich approval requires a started run.".into())
       })?;
-    if event_schema_version != crate::RUN_EVENT_SCHEMA_VERSION_V19 {
+    if !matches!(
+      event_schema_version,
+      crate::RUN_EVENT_SCHEMA_VERSION_V19 | crate::RUN_EVENT_SCHEMA_VERSION_V20
+    ) {
       return Err(DurableStoreError::Contract(
-        "A rich approval request requires Event v19.".to_string(),
+        "A rich approval request requires Event v19 or later.".to_string(),
       ));
     }
     append_to_history_scoped_incremental(
@@ -6698,6 +6740,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V17
           | crate::RUN_EVENT_SCHEMA_VERSION_V18
           | crate::RUN_EVENT_SCHEMA_VERSION_V19
+          | crate::RUN_EVENT_SCHEMA_VERSION_V20
       ) {
         expand_model_v11_payload(&workflow, run_id, payload)?
       } else {
@@ -6773,7 +6816,9 @@ impl DurableEventStore {
     }
     if matches!(
       event_schema_version,
-      crate::RUN_EVENT_SCHEMA_VERSION_V18 | crate::RUN_EVENT_SCHEMA_VERSION_V19
+      crate::RUN_EVENT_SCHEMA_VERSION_V18
+        | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       write_correction_indexes_from_projection(
         &transaction,
@@ -10651,6 +10696,7 @@ impl DurableEventStore {
       crate::RUN_EVENT_SCHEMA_VERSION_V17
         | crate::RUN_EVENT_SCHEMA_VERSION_V18
         | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       return Err(DurableStoreError::Contract(
         "Durable locks require Event v17.".to_string(),
@@ -12667,7 +12713,9 @@ impl DurableEventStore {
     })?;
     if matches!(
       event_schema_version,
-      crate::RUN_EVENT_SCHEMA_VERSION_V18 | crate::RUN_EVENT_SCHEMA_VERSION_V19
+      crate::RUN_EVENT_SCHEMA_VERSION_V18
+        | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       let active_corrections = projection
         .sagas
@@ -12836,6 +12884,7 @@ impl DurableEventStore {
         | crate::RUN_EVENT_SCHEMA_VERSION_V17
         | crate::RUN_EVENT_SCHEMA_VERSION_V18
         | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       let ambiguous_actions = projection
         .lifecycle_hooks
@@ -13209,6 +13258,7 @@ impl DurableEventStore {
             | crate::RUN_EVENT_SCHEMA_VERSION_V17
             | crate::RUN_EVENT_SCHEMA_VERSION_V18
             | crate::RUN_EVENT_SCHEMA_VERSION_V19
+            | crate::RUN_EVENT_SCHEMA_VERSION_V20
         ) {
           expand_model_v11_payload(&workflow, run_id, payload)?
         } else {
@@ -13266,6 +13316,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V17
           | crate::RUN_EVENT_SCHEMA_VERSION_V18
           | crate::RUN_EVENT_SCHEMA_VERSION_V19
+          | crate::RUN_EVENT_SCHEMA_VERSION_V20
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -13487,6 +13538,7 @@ impl DurableEventStore {
           | crate::RUN_EVENT_SCHEMA_VERSION_V17
           | crate::RUN_EVENT_SCHEMA_VERSION_V18
           | crate::RUN_EVENT_SCHEMA_VERSION_V19
+          | crate::RUN_EVENT_SCHEMA_VERSION_V20
       ) {
         expand_model_v11_payload(&workflow, run_id, run_failure)?
       } else {
@@ -15135,6 +15187,7 @@ fn validate_trigger_occurrence_history(
           | crate::RUN_EVENT_SCHEMA_VERSION_V17
           | crate::RUN_EVENT_SCHEMA_VERSION_V18
           | crate::RUN_EVENT_SCHEMA_VERSION_V19
+          | crate::RUN_EVENT_SCHEMA_VERSION_V20
       ) && admission.definition_hash == occurrence.definition_hash
         && admission.trigger.id == occurrence.trigger_id
         && admission.trigger.handler == occurrence.trigger_handler
@@ -15954,7 +16007,9 @@ fn rebuild_correction_indexes(connection: &Connection) -> Result<(), DurableStor
     if events.first().is_some_and(|event| {
       matches!(
         event.event_schema_version,
-        crate::RUN_EVENT_SCHEMA_VERSION_V18 | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        crate::RUN_EVENT_SCHEMA_VERSION_V18
+          | crate::RUN_EVENT_SCHEMA_VERSION_V19
+          | crate::RUN_EVENT_SCHEMA_VERSION_V20
       )
     }) {
       let projection = fold_events(&events)?;
@@ -16048,6 +16103,7 @@ fn append_to_history_scoped_incremental(
       | crate::RUN_EVENT_SCHEMA_VERSION_V17
       | crate::RUN_EVENT_SCHEMA_VERSION_V18
       | crate::RUN_EVENT_SCHEMA_VERSION_V19
+      | crate::RUN_EVENT_SCHEMA_VERSION_V20
   ) && matches!(
     payload,
     RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -16712,6 +16768,7 @@ fn append_to_history_scoped(
       | crate::RUN_EVENT_SCHEMA_VERSION_V17
       | crate::RUN_EVENT_SCHEMA_VERSION_V18
       | crate::RUN_EVENT_SCHEMA_VERSION_V19
+      | crate::RUN_EVENT_SCHEMA_VERSION_V20
   ) && matches!(
     payload,
     RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)
@@ -17342,7 +17399,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V16
     | crate::RUN_EVENT_SCHEMA_VERSION_V17
     | crate::RUN_EVENT_SCHEMA_VERSION_V18
-    | crate::RUN_EVENT_SCHEMA_VERSION_V19 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V19
+    | crate::RUN_EVENT_SCHEMA_VERSION_V20 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id,
       attempt,
       invocation_id,
@@ -17516,6 +17574,7 @@ impl DurableDagEngine {
         | crate::RUN_EVENT_SCHEMA_VERSION_V17
         | crate::RUN_EVENT_SCHEMA_VERSION_V18
         | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) && matches!(
       &payload,
       RunEventPayload::RunSucceeded(_) | RunEventPayload::RunFailed(_)

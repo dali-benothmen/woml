@@ -35,8 +35,8 @@ use woml_engine::{
   IntervalProgress, IntervalProgressReporter, LifecycleProgress, NotificationHostClientError,
   NotificationHostProcessOptions, NotificationJourneyDiagnostics, NotificationJourneyError,
   OperationalOutputReporter, ParallelFailurePolicy, ProcessPolicyV1, ProcessRuntimeMode,
-  RetentionError, RetentionPolicyV1, ReviewerDirectoryAuthorityV1, ReviewerDirectoryV1,
-  ReviewerIdentityClaimV1, ReviewerProviderV1, RichApprovalDecisionStatus,
+  RemoteDispatchResolutionV1, RetentionError, RetentionPolicyV1, ReviewerDirectoryAuthorityV1,
+  ReviewerDirectoryV1, ReviewerIdentityClaimV1, ReviewerProviderV1, RichApprovalDecisionStatus,
   RichApprovalIdentityDecision, RunFailure, RunPresentationError, RunStatus, RuntimeExecutionError,
   RuntimeExecutionOptions, RuntimeModuleArtifact, RuntimePolicyProgress,
   RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
@@ -2445,6 +2445,60 @@ pub fn inspect_woml_run(event_store_path: String, run_id: String) -> napi::Resul
   };
   serde_json::to_string(&inspection)
     .map_err(|error| napi::Error::from_reason(format!("Could not encode WOML run: {error}")))
+}
+
+#[napi]
+pub fn inspect_woml_remote_dispatch(
+  event_store_path: String,
+  dispatch_id: String,
+) -> napi::Result<String> {
+  let store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_management_error("WOML_TARGET_UNAVAILABLE", error))?;
+  let inspection = store
+    .inspect_remote_dispatch(&dispatch_id)
+    .map_err(|error| napi::Error::from_reason(format!("{}: {}", error.code(), error)))?;
+  serde_json::to_string(&inspection).map_err(|error| {
+    napi::Error::from_reason(format!(
+      "Could not encode remote dispatch inspection: {error}"
+    ))
+  })
+}
+
+#[napi]
+pub fn reconcile_woml_remote_dispatch(
+  event_store_path: String,
+  dispatch_id: String,
+  resolution: String,
+  actor: String,
+  evidence_digest: String,
+) -> napi::Result<String> {
+  let resolution = match resolution.as_str() {
+    "record-failure" => RemoteDispatchResolutionV1::RecordFailure,
+    "authorize-possible-duplicate-retry" => {
+      RemoteDispatchResolutionV1::AuthorizePossibleDuplicateRetry
+    }
+    _ => {
+      return Err(napi::Error::from_reason(
+        "WOML_REMOTE_PROTOCOL_INVALID: invalid reconciliation resolution".to_string(),
+      ))
+    }
+  };
+  let mut store = DurableEventStore::open(PathBuf::from(event_store_path))
+    .map_err(|error| native_run_management_error("WOML_TARGET_UNAVAILABLE", error))?;
+  let record = store
+    .reconcile_remote_dispatch(
+      &dispatch_id,
+      resolution,
+      &actor,
+      &evidence_digest,
+      Utc::now(),
+    )
+    .map_err(|error| napi::Error::from_reason(format!("{}: {}", error.code(), error)))?;
+  serde_json::to_string(&record).map_err(|error| {
+    napi::Error::from_reason(format!(
+      "Could not encode remote dispatch reconciliation: {error}"
+    ))
+  })
 }
 
 #[napi]

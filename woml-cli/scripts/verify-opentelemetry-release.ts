@@ -38,9 +38,9 @@ const contracts = JSON.parse(
 );
 const budgets = contracts.performanceBudgets;
 if (
-  budgets.baseline.cliBytes !== 1_096_988 ||
+  budgets.baseline.cliBytes !== 1_149_272 ||
   budgets.baseline.cliMeasurement !==
-    'master@7819469ee49d90c90df31187b9ab036b093c1ae8+fast-uri@3.1.9-clean-install' ||
+    'feature/remote-execution-targets@2ec52d258d0feb2e68ea0e62cef31387703f1f5c+fast-uri@3.1.9-clean-install' ||
   budgets.disabled.activationRegressionMsMax !== 5 ||
   budgets.disabled.shortRunRegressionMsMax !== 2 ||
   budgets.disabled.rssBytesMax !== 2_097_152 ||

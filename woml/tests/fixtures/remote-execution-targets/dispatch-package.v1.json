@@ -1,0 +1,25 @@
+{
+  "profile": "woml.dispatch-package/v1",
+  "version": 1,
+  "dispatchId": "dispatch_01",
+  "runId": "run_01",
+  "nodeId": "deploy",
+  "attempt": 1,
+  "invocationId": "inv_01",
+  "target": "production-private",
+  "targetRegistryDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "infrastructurePolicyDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "definitionPackageRootHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "node": {
+    "id": "deploy",
+    "handler": "runtime.script",
+    "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "return true;" } } },
+    "execution": { "profileVersion": 1, "target": "production-private", "requiredCapabilities": ["runtime.script", "services.process"] }
+  },
+  "context": { "trigger": {}, "steps": {} },
+  "requiredCapabilities": ["runtime.script", "services.process"],
+  "requiredSecrets": ["DATABASE_URL"],
+  "artifactGrants": [],
+  "deadline": "2026-10-24T12:20:00Z",
+  "packageDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+}

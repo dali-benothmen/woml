@@ -29,6 +29,7 @@ import {
   type CompiledWorkflowDefinitionV18,
   type CompiledWorkflowDefinitionV19,
   type CompiledWorkflowDefinitionV20,
+  type CompiledWorkflowDefinitionV21,
   type CompiledWorkflowEdge,
   type CompiledWorkflowGraph,
   type CompiledWorkflowGraphV13,
@@ -37,6 +38,7 @@ import {
   type CompiledWorkflowGraphV18,
   type CompiledWorkflowGraphV19,
   type CompiledWorkflowGraphV20,
+  type CompiledWorkflowGraphV21,
   type CompiledCorrectiveActionV1,
   type CompiledCompensationV1,
   type CompiledSagaV1,
@@ -101,6 +103,11 @@ interface ValidatedStep {
   readonly scriptAnalysis: ScriptAnalysis;
   readonly retryPolicy?: RetryPolicy;
   readonly timeoutMs?: number;
+  readonly execution?: {
+    readonly profileVersion: 1;
+    readonly target: string;
+    readonly requiredCapabilities: readonly string[];
+  };
   readonly compensation?: ValidatedCompensation;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
@@ -622,6 +629,7 @@ const elementProfiles: Readonly<Record<string, ElementProfile>> = {
       'id',
       'name',
       'description',
+      'target',
       'retry',
       'retry-backoff',
       'retry-delay',
@@ -3290,17 +3298,42 @@ function validateStep(
   }
 
   const body = scriptBody(document, scripts[0]);
+  const scriptAnalysis = validateScriptAnalysis(
+    document,
+    body,
+    context.shadowedServices
+  );
+  const targetAttribute = step.attributes.target;
+  const execution =
+    targetAttribute === undefined
+      ? undefined
+      : (() => {
+          if (
+            targetAttribute.value.length > 128 ||
+            !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(targetAttribute.value)
+          ) {
+            failValidation(
+              document,
+              'WOML_TARGET_INVALID',
+              `Execution target "${targetAttribute.value}" must use lowercase kebab-case and contain at most 128 characters.`,
+              targetAttribute.valueSpan,
+              'Use a literal target such as "production-private". Dynamic target expressions are not supported.'
+            );
+          }
+          return {
+            profileVersion: 1 as const,
+            target: targetAttribute.value,
+            requiredCapabilities: remoteCapabilities(scriptAnalysis),
+          };
+        })();
   return {
     kind: 'step',
     id,
     source: body.source,
     scriptSpan: body.span,
-    scriptAnalysis: validateScriptAnalysis(
-      document,
-      body,
-      context.shadowedServices
-    ),
+    scriptAnalysis,
     retryPolicy: stepRetryPolicy(document, step),
+    ...(execution === undefined ? {} : { execution }),
     ...(context.insideCleanup
       ? {
           timeoutMs: correctionTimeoutMs(
@@ -3921,6 +3954,15 @@ const builtInServiceNames = new Set([
   'artifacts',
   'locks',
 ]);
+
+function remoteCapabilities(analysis: ScriptAnalysis): readonly string[] {
+  return [
+    'runtime.script',
+    ...analysis.requiredServices
+      .filter(service => builtInServiceNames.has(service))
+      .map(service => `services.${service}`),
+  ].sort();
+}
 
 function collectValidatedSteps(
   items: readonly ValidatedFlowItem[],
@@ -6641,6 +6683,7 @@ function lowerStep(step: ValidatedStep): LoweredFlowFragment {
     ...(step.retryPolicy === undefined
       ? {}
       : { retryPolicy: step.retryPolicy }),
+    ...(step.execution === undefined ? {} : { execution: step.execution }),
     inputs: {
       kind: 'object',
       fields: {
@@ -7029,6 +7072,16 @@ function lowerStepV13(
         ...(step.compensation.retryPolicy === undefined
           ? {}
           : { retryPolicy: step.compensation.retryPolicy }),
+        ...(step.execution === undefined
+          ? {}
+          : {
+              execution: {
+                ...step.execution,
+                requiredCapabilities: remoteCapabilities(
+                  step.compensation.scriptAnalysis
+                ),
+              },
+            }),
         scriptRuntime: {
           bindingVersion: 1,
           bindings: scriptRuntimeBindings,
@@ -7633,6 +7686,7 @@ function correctiveActionNode(
     ...(step.retryPolicy === undefined
       ? {}
       : { retryPolicy: step.retryPolicy }),
+    ...(step.execution === undefined ? {} : { execution: step.execution }),
     ...(step.metadata === undefined ? {} : { metadata: step.metadata }),
     scriptRuntime: {
       bindingVersion: 1,
@@ -9076,9 +9130,14 @@ function compileValidatedWoml(
     usesTelegramMessaging ||
     usesDiscordMessaging ||
     usesWhatsAppMessaging;
-  const usesModelV20 = collectValidatedApprovals(flow.items).some(
-    approval => approval.review !== undefined
+  const usesModelV21 = collectValidatedSteps(flow.items).some(
+    step => step.execution !== undefined
   );
+  const usesModelV20 =
+    usesModelV21 ||
+    collectValidatedApprovals(flow.items).some(
+      approval => approval.review !== undefined
+    );
   const usesModelV19 = usesModelV20 || flow.firstSaga !== undefined;
   const usesModelV18 = usesModelV19 || flow.firstLock !== undefined;
   const usesModelV17 = usesModelV18 || flow.firstWait !== undefined;
@@ -9191,7 +9250,7 @@ function compileValidatedWoml(
     failCompile(
       document,
       'WOML_WORKFLOW_RESULT_REQUIRED',
-      `This Model v${usesModelV20 ? '20' : usesModelV19 ? '19' : usesModelV18 ? '18' : usesModelV17 ? '17' : usesModelV16 ? '16' : usesModelV15 ? '15' : usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
+      `This Model v${usesModelV21 ? '21' : usesModelV20 ? '20' : usesModelV19 ? '19' : usesModelV18 ? '18' : usesModelV17 ? '17' : usesModelV16 ? '16' : usesModelV15 ? '15' : usesModelV14 ? '14' : '13'} workflow has no deterministic value-producing item on its main route.`,
       source.openTagSpan,
       'Add a main-route <step>, durable wait, result-producing <choose id="..."> or <switch id="...">, or <approval> before the terminal control structure.'
     );
@@ -9265,6 +9324,27 @@ function compileValidatedWoml(
           nodes,
           edges: lowered.edges,
         } satisfies CompiledWorkflowGraph)
+      : usesModelV21
+        ? ({
+            ...loweredV13.graph,
+            nodes: withScriptRuntimeBindings(
+              loweredV13.graph.nodes,
+              scriptAnalyses
+            ),
+            forEach: loweredV13.forEach.map(loop => ({
+              ...loop,
+              body: {
+                ...loop.body,
+                nodes: withScriptRuntimeBindings(
+                  loop.body.nodes,
+                  scriptAnalyses
+                ),
+              },
+            })),
+            waits: loweredV13.waits,
+            locks: loweredV13.locks,
+            sagas: loweredV13.sagas,
+          } satisfies CompiledWorkflowGraphV21)
       : usesModelV20
         ? ({
             ...loweredV13.graph,
@@ -9514,7 +9594,18 @@ function compileValidatedWoml(
       : { runtimePolicy: runtimePolicy.value }),
   };
   const compiled: CompiledWorkflowDefinition = usesStructuredGraph
-    ? usesModelV20
+    ? usesModelV21
+      ? ({
+          schemaVersion: 21,
+          ...definition,
+          graph: baseGraph as CompiledWorkflowGraphV21,
+          runtimePolicy: runtimePolicy?.value ?? {
+            profileVersion: 1,
+            concurrency: 1,
+          },
+          ...(communication === undefined ? {} : { communication }),
+        } satisfies CompiledWorkflowDefinitionV21)
+    : usesModelV20
       ? ({
           schemaVersion: 20,
           ...definition,
@@ -9656,7 +9747,8 @@ export function compilePreparedReusableWorkflow(
   | CompiledWorkflowDefinitionV17
   | CompiledWorkflowDefinitionV18
   | CompiledWorkflowDefinitionV19
-  | CompiledWorkflowDefinitionV20 {
+  | CompiledWorkflowDefinitionV20
+  | CompiledWorkflowDefinitionV21 {
   const compiled = compileValidatedWoml(prepared.document, moduleRuntime, true);
   if (
     compiled.schemaVersion !== 14 &&
@@ -9665,10 +9757,11 @@ export function compilePreparedReusableWorkflow(
     compiled.schemaVersion !== 17 &&
     compiled.schemaVersion !== 18 &&
     compiled.schemaVersion !== 19 &&
-    compiled.schemaVersion !== 20
+    compiled.schemaVersion !== 20 &&
+    compiled.schemaVersion !== 21
   ) {
     throw new Error(
-      'reusable-step lowering did not produce Model v14, v15, v16, v17, v18, v19, or v20'
+      'reusable-step lowering did not produce Model v14, v15, v16, v17, v18, v19, v20, or v21'
     );
   }
   const invocationsByNode = new Map(
@@ -9708,7 +9801,8 @@ export function compilePreparedReusableWorkflow(
     compiled.schemaVersion === 17 ||
     compiled.schemaVersion === 18 ||
     compiled.schemaVersion === 19 ||
-    compiled.schemaVersion === 20
+    compiled.schemaVersion === 20 ||
+    compiled.schemaVersion === 21
       ? compiled.graph.forEach
       : undefined;
   const forEach = compiledForEach?.map(loop => ({
@@ -9915,7 +10009,8 @@ export function compilePreparedReusableWorkflow(
     | CompiledWorkflowDefinitionV17
     | CompiledWorkflowDefinitionV18
     | CompiledWorkflowDefinitionV19
-    | CompiledWorkflowDefinitionV20;
+    | CompiledWorkflowDefinitionV20
+    | CompiledWorkflowDefinitionV21;
 }
 
 export function compileWoml(
@@ -9945,7 +10040,8 @@ export function compileWomlWithModules(
   | CompiledWorkflowDefinitionV17
   | CompiledWorkflowDefinitionV18
   | CompiledWorkflowDefinitionV19
-  | CompiledWorkflowDefinitionV20 {
+  | CompiledWorkflowDefinitionV20
+  | CompiledWorkflowDefinitionV21 {
   const compiled = compileValidatedWoml(
     document,
     moduleRuntime,
@@ -9965,10 +10061,11 @@ export function compileWomlWithModules(
     compiled.schemaVersion !== 17 &&
     compiled.schemaVersion !== 18 &&
     compiled.schemaVersion !== 19 &&
-    compiled.schemaVersion !== 20
+    compiled.schemaVersion !== 20 &&
+    compiled.schemaVersion !== 21
   ) {
     throw new Error(
-      'module compilation did not produce Model v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, or v20'
+      'module compilation did not produce Model v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, or v21'
     );
   }
   return compiled;

@@ -7941,6 +7941,9 @@ async fn execute_fork<E: RuntimeDagEngine>(
           }
         }
       }
+      ensure_local_script_execution(engine.workflow().node(node_id).ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!("fork branch script {node_id:?} is unavailable"))
+      })?)?;
       let source = engine
         .workflow()
         .node(node_id)
@@ -8419,6 +8422,9 @@ async fn execute_parallel_group<E: RuntimeDagEngine>(
       }) else {
         break;
       };
+      ensure_local_script_execution(engine.workflow().node(&node_id).ok_or_else(|| {
+        RuntimeExecutionError::Stalled(format!("parallel child {node_id:?} is unavailable"))
+      })?)?;
       let source = engine
         .workflow()
         .node(&node_id)
@@ -9726,6 +9732,17 @@ async fn execute_for_each_script<E: RuntimeDagEngine>(
   host: &ScriptHostClient,
   active_invocations: &Arc<tokio::sync::Mutex<HashSet<String>>>,
 ) -> Result<Value, AttemptFailure> {
+  if let Err(error) = ensure_local_script_execution(node) {
+    return Err(AttemptFailure {
+      kind: AttemptFailureKind::Interrupted,
+      code: "WOML_REMOTE_DISPATCH_UNAVAILABLE".to_string(),
+      message: error.to_string(),
+      retryable: Some(false),
+      ambiguous: Some(false),
+      details: None,
+      ..AttemptFailure::legacy_defaults()
+    });
+  }
   let workflow = engine.workflow().clone();
   let definition_hash = engine.definition_hash().to_string();
   let source = node.script_source().ok_or_else(|| AttemptFailure {
@@ -11163,6 +11180,21 @@ async fn execute_for_each_iteration<E: RuntimeDagEngine + Clone>(
   Ok(result)
 }
 
+fn ensure_local_script_execution(
+  node: &crate::model::CompiledWorkflowNode,
+) -> Result<(), RuntimeExecutionError> {
+  let Some(execution) = node.execution.as_ref() else {
+    return Ok(());
+  };
+  if execution.target == "local" {
+    return Ok(());
+  }
+  Err(RuntimeExecutionError::Stalled(format!(
+    "remote target {:?} for node {:?} requires an activated remote dispatch coordinator",
+    execution.target, node.id
+  )))
+}
+
 async fn execute_script_node<E: RuntimeDagEngine>(
   engine: &mut E,
   run_id: &str,
@@ -11172,6 +11204,10 @@ async fn execute_script_node<E: RuntimeDagEngine>(
   options: &RuntimeExecutionOptions,
   host: &mut Option<ScriptHostClient>,
 ) -> Result<ScriptNodeOutcome, RuntimeExecutionError> {
+  let node = engine.workflow().node(node_id).ok_or_else(|| {
+    RuntimeExecutionError::Stalled(format!("script node {node_id:?} is unavailable"))
+  })?;
+  ensure_local_script_execution(node)?;
   let secrets = resolved_script_secrets(engine.workflow(), node_id, options)?;
   let invocation_id = generated_id("inv");
   let projection = engine.projection(run_id)?;
@@ -11672,6 +11708,7 @@ async fn execute_corrective_action<E: RuntimeDagEngine>(
   options: &RuntimeExecutionOptions,
   host: &mut Option<ScriptHostClient>,
 ) -> Result<CorrectiveActionOutcome, RuntimeExecutionError> {
+  ensure_local_script_execution(&action.node)?;
   let projected = engine
     .projection(run_id)?
     .sagas
@@ -12871,7 +12908,8 @@ fn attempt_run_failed_data(
     | crate::RUN_EVENT_SCHEMA_VERSION_V16
     | crate::RUN_EVENT_SCHEMA_VERSION_V17
     | crate::RUN_EVENT_SCHEMA_VERSION_V18
-    | crate::RUN_EVENT_SCHEMA_VERSION_V19 => RunFailedData::V2(RunFailedDataV2::Attempt {
+    | crate::RUN_EVENT_SCHEMA_VERSION_V19
+    | crate::RUN_EVENT_SCHEMA_VERSION_V20 => RunFailedData::V2(RunFailedDataV2::Attempt {
       node_id: failure.node_id.clone(),
       attempt: failure.attempt,
       invocation_id: failure.invocation_id.clone(),
@@ -13416,6 +13454,7 @@ impl RuntimeDagEngine for InMemoryDagEngine {
         | crate::RUN_EVENT_SCHEMA_VERSION_V17
         | crate::RUN_EVENT_SCHEMA_VERSION_V18
         | crate::RUN_EVENT_SCHEMA_VERSION_V19
+        | crate::RUN_EVENT_SCHEMA_VERSION_V20
     ) {
       crate::durable::expand_model_v11_payload(self.workflow(), run_id, payload)?
     } else {

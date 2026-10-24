@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +11,7 @@ import {
   runCli,
   type CliIo,
 } from '../src/cli';
+import { sourceSnapshotDigest } from '../src/compiled-workflow-cache';
 import { SharedSlackTransport } from '../src/notification-provider';
 import {
   activateWebhookRuntimeWithRust,
@@ -49,13 +49,19 @@ afterEach(async () => {
 });
 
 describe('Atomic Rust activation gate', () => {
-  test('uses order-independent activation identities and rejects changed source bytes', async () => {
+  test('uses order-independent activation identities and rejects meaningful source changes', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'woml-pro2-source-'));
     temporaryDirectories.push(directory);
     const path = join(directory, 'workflow.woml');
-    await Bun.write(path, '<woml />');
-    const digest = `sha256:${createHash('sha256').update('<woml />').digest('hex')}`;
+    const canonicalSource = '<woml>\n  <workflow id="stable" />\n</woml>\n';
+    await Bun.write(path, canonicalSource.replaceAll('\n', '\r\n'));
+    const digest = sourceSnapshotDigest(path, canonicalSource);
     const sourceSnapshot = [{ path, digest }];
+    await expect(
+      assertStableSourceSnapshot([{ sourceSnapshot }])
+    ).resolves.toBeUndefined();
+
+    await Bun.write(path, canonicalSource);
     await expect(
       assertStableSourceSnapshot([{ sourceSnapshot }])
     ).resolves.toBeUndefined();

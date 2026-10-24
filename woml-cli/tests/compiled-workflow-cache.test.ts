@@ -14,6 +14,7 @@ import { compileWoml, parseWoml } from '@woml/compiler';
 import {
   compiledWorkflowCachePath,
   readCompiledWorkflowCache,
+  sourceSnapshotDigest,
   writeCompiledWorkflowCache,
   type CompiledWorkflowCacheArtifact,
   type CompiledWorkflowCacheOptions,
@@ -78,6 +79,35 @@ describe('compiled workflow cache', () => {
           statSync(compiledWorkflowCachePath(fixture.options)).mode & 0o777
         ).toBe(0o600);
       }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('treats LF and CRLF WOML snapshots as the same canonical source', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'woml-compiled-cache-'));
+    try {
+      const fixture = cacheFixture(root);
+      const canonicalSource = simpleWorkflow();
+      const artifact: CompiledWorkflowCacheArtifact = {
+        ...fixture.artifact,
+        sourceSnapshot: [
+          {
+            path: fixture.sourcePath,
+            digest: sourceSnapshotDigest(fixture.sourcePath, canonicalSource),
+          },
+        ],
+      };
+      writeFileSync(
+        fixture.sourcePath,
+        canonicalSource.replaceAll('\n', '\r\n')
+      );
+      expect(
+        await writeCompiledWorkflowCache(fixture.options, artifact)
+      ).toBe(true);
+      expect(await readCompiledWorkflowCache(fixture.options)).toEqual(
+        artifact
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

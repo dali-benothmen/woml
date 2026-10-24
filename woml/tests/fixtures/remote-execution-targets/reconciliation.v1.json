@@ -1,0 +1,8 @@
+{
+  "profile": "woml.remote-dispatch-reconciliation/v1",
+  "dispatchId": "dispatch_01",
+  "action": "authorize-possible-duplicate-retry",
+  "requestId": "reconcile_01",
+  "requestedAt": "2026-10-24T12:30:00Z",
+  "reason": "The worker journal is unavailable after permanent host loss."
+}

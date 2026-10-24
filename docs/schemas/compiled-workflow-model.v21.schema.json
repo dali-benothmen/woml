@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/compiled-workflow-model/v21",
+  "title": "WOML Remote Execution Compiled Workflow Model v21",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflowId", "triggers", "graph", "runtimePolicy"],
+  "properties": {
+    "schemaVersion": { "const": 21 },
+    "workflowId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "metadata": { "type": "object" },
+    "triggers": { "type": "array" },
+    "runtimePolicy": { "type": "object" },
+    "moduleRuntime": { "type": "object" },
+    "lifecycle": { "type": "object" },
+    "reusableDefinitions": { "type": "array" },
+    "communication": { "type": "object" },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeIds", "nodes", "edges", "forks", "choices", "contextVisibility", "settlement", "forEach", "waits", "locks", "sagas"],
+      "properties": {
+        "entryNodeIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+        "edges": { "type": "array" }, "forks": { "type": "array" }, "choices": { "type": "array" },
+        "contextVisibility": { "type": "array" }, "settlement": { "type": "object" },
+        "forEach": { "type": "array" }, "waits": { "type": "array" }, "locks": { "type": "array" }, "sagas": { "type": "array" }
+      }
+    }
+  },
+  "$defs": {
+    "placement": { "type": "object", "additionalProperties": false, "required": ["profileVersion", "target", "requiredCapabilities"], "properties": { "profileVersion": { "const": 1 }, "target": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 128 }, "requiredCapabilities": { "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "prefixItems": [{ "const": "runtime.script" }], "items": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$", "maxLength": 128 } } } },
+    "node": { "type": "object", "additionalProperties": true, "required": ["id", "handler", "inputs"], "properties": { "id": { "type": "string" }, "handler": { "type": "string" }, "inputs": {}, "execution": { "$ref": "#/$defs/placement" } } }
+  }
+}

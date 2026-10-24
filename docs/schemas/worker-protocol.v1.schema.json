@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/worker-protocol/v1",
+  "title": "WOML Worker Protocol v1",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/poll" },
+    { "$ref": "#/$defs/offer" },
+    { "$ref": "#/$defs/accepted" },
+    { "$ref": "#/$defs/started" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/output" },
+    { "$ref": "#/$defs/cancel" },
+    { "$ref": "#/$defs/terminal" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]*$",
+      "maxLength": 256
+    },
+    "target": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "profile",
+        "protocolVersion",
+        "messageId",
+        "messageType",
+        "workerId",
+        "sentAt"
+      ],
+      "properties": {
+        "profile": { "const": "woml.worker-protocol/v1" },
+        "protocolVersion": { "const": 1 },
+        "messageId": { "$ref": "#/$defs/id" },
+        "messageType": { "type": "string" },
+        "workerId": { "$ref": "#/$defs/id" },
+        "sessionId": { "$ref": "#/$defs/id" },
+        "sentAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "dispatchMessage": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["sessionId", "target", "dispatchId"],
+          "properties": {
+            "sessionId": { "$ref": "#/$defs/id" },
+            "target": { "$ref": "#/$defs/target" },
+            "dispatchId": { "$ref": "#/$defs/id" }
+          }
+        }
+      ]
+    },
+    "hello": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": [
+            "workerVersion",
+            "platform",
+            "targets",
+            "capacity",
+            "capabilities"
+          ],
+          "properties": {
+            "messageType": { "const": "hello" },
+            "workerVersion": { "type": "string", "maxLength": 64 },
+            "platform": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["os", "arch"],
+              "properties": {
+                "os": { "enum": ["linux", "darwin", "windows"] },
+                "arch": { "enum": ["x64", "arm64"] }
+              }
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/target" }
+            },
+            "capacity": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "capabilities": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "version"],
+                "properties": {
+                  "id": { "type": "string", "maxLength": 128 },
+                  "version": { "type": "integer", "minimum": 1, "maximum": 65535 }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "poll": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        { "type": "object", "properties": { "messageType": { "const": "poll" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "offer": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        {
+          "type": "object",
+          "required": ["dispatch"],
+          "properties": {
+            "messageType": { "const": "offer" },
+            "dispatch": { "$ref": "https://woml.dev/schemas/dispatch-package/v1" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "accepted": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        { "type": "object", "properties": { "messageType": { "const": "accepted" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "started": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        { "type": "object", "properties": { "messageType": { "const": "started" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "heartbeat": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        {
+          "type": "object",
+          "required": ["sequence"],
+          "properties": {
+            "messageType": { "const": "heartbeat" },
+            "sequence": { "type": "integer", "minimum": 0 },
+            "progress": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "output": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        {
+          "type": "object",
+          "required": ["firstSequence", "records"],
+          "properties": {
+            "messageType": { "const": "output" },
+            "firstSequence": { "type": "integer", "minimum": 1 },
+            "records": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stream", "text"],
+                "properties": {
+                  "stream": { "enum": ["stdout", "stderr", "log", "progress"] },
+                  "text": { "type": "string", "maxLength": 65536 }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "cancel": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        { "type": "object", "properties": { "messageType": { "const": "cancel" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "terminal": {
+      "allOf": [
+        { "$ref": "#/$defs/dispatchMessage" },
+        {
+          "type": "object",
+          "required": ["outcome", "finalOutputSequence", "journalDigest"],
+          "properties": {
+            "messageType": { "const": "terminal" },
+            "outcome": { "enum": ["succeeded", "failed", "cancelled"] },
+            "result": {},
+            "failure": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "message", "retryable", "ambiguous"],
+              "properties": {
+                "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$" },
+                "message": { "type": "string", "maxLength": 1024 },
+                "retryable": { "type": "boolean" },
+                "ambiguous": { "type": "boolean" }
+              }
+            },
+            "finalOutputSequence": { "type": "integer", "minimum": 0 },
+            "journalDigest": { "$ref": "#/$defs/digest" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

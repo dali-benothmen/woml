@@ -22,6 +22,7 @@
     "test:locks-and-leases-authoring": "bun test tests/locks-and-leases-authoring.test.ts --max-concurrency=1 && bun run typecheck",
     "test:compensation-and-cleanup-authoring": "bun test tests/compensation-and-cleanup-authoring.test.ts --max-concurrency=1 && bun run typecheck",
     "test:rich-plan-approvals-authoring": "bun test tests/rich-plan-approvals-authoring.test.ts tests/rich-plan-approval-binding.test.ts --max-concurrency=1 && bun run typecheck",
+    "test:remote-execution-targets-authoring": "bun test tests/remote-execution-targets-authoring.test.ts --max-concurrency=1 && bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

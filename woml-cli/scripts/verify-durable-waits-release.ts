@@ -74,7 +74,7 @@ for (const marker of [
   'WOML_SIGNAL_PAYLOAD_TOO_LARGE',
   'woml.wait-inspection/v1',
   'woml.run-inspection/v8',
-  'SUPPORTED_BACKUP_STORE_VERSIONS: [u32; 7] = [13, 14, 15, 16, 17, 18, 19]',
+  'SUPPORTED_BACKUP_STORE_VERSIONS: [u32; 8] = [13, 14, 15, 16, 17, 18, 19, 20]',
   'Usage: woml signal <name>',
 ]) {
   if (!joined.includes(marker)) {
@@ -91,5 +91,5 @@ for (const prefix of ['woml-wait', 'woml-wait-until', 'woml-wait-for']) {
 
 console.log(
   `Durable Waits release gate passed: ${required.length} public artifacts, ` +
-    'Store v17 backup compatibility, bounded ingress, payload-free inspection, and editor/agent surfaces verified.'
+    'Store v20 backup compatibility, bounded ingress, payload-free inspection, and editor/agent surfaces verified.'
 );

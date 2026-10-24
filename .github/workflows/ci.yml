@@ -196,6 +196,7 @@ jobs:
           --test rich_plan_approval_model
           --test rich_plan_approval_authority
           --test rich_plan_approval_runtime
+          --test remote_execution_targets_model
           --test infrastructure_policy_contract
           --test infrastructure_policy_authority
           --test operational_output_store
@@ -367,6 +368,50 @@ jobs:
         run: >-
           bun run benchmark:infrastructure-policy &&
           bun scripts/verify-infrastructure-policy-release.ts
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          bun --version
+          rustc --version
+          cargo --version
+          git status --short
+
+  remote-execution-targets:
+    name: Remote Execution Targets (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install locked runtime dependencies
+        working-directory: woml-cli
+        run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
+        run: bun install --frozen-lockfile
+      - name: Test authoring, registry, trust, policy, CLI, and lazy activation
+        working-directory: woml-cli
+        run: >-
+          bun run test:remote-execution-targets-authoring &&
+          bun run test:remote-execution-targets-registry
+      - name: Test Rust Model v21 contract serially
+        working-directory: core
+        run: >-
+          cargo test --config profile.dev.debug=0
+          --config profile.dev.incremental=false -j 1 --locked
+          -p woml-engine --test remote_execution_targets_model --
+          --test-threads=1
+      - name: Test authenticated worker protocol, attempt runtime, journal, and dispatch authority
+        working-directory: woml-cli
+        run: >-
+          bun run test:remote-execution-targets-protocol &&
+          bun run test:remote-execution-targets-dispatch
       - name: Failure diagnostics
         if: failure()
         run: |

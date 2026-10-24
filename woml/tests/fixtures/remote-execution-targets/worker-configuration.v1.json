@@ -1,0 +1,15 @@
+{
+  "profile": "woml.worker/v1",
+  "version": 1,
+  "workerId": "production-runner-01",
+  "coordinatorUrl": "https://woml.internal.example:7443",
+  "targetIds": ["production-private"],
+  "capacity": 4,
+  "tls": {
+    "certificateRef": "file:/etc/woml/worker.crt",
+    "privateKeyRef": "file:/etc/woml/worker.key",
+    "caRef": "file:/etc/woml/coordinator-ca.crt"
+  },
+  "processPolicy": "./process-policy.json",
+  "secretProvider": "environment"
+}

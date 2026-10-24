@@ -311,7 +311,11 @@ export function parseWoml(
   source: string,
   options: ParseWomlOptions = {},
 ): WomlSourceDocument {
-  const file = new SourceFile(options.file ?? '<memory>', source);
+  // XML 1.0 normalizes external line endings before parsing. Apply the same
+  // rule before raw <script> extraction so compiled models and their hashes do
+  // not depend on whether a checkout used LF or CRLF.
+  const normalizedSource = source.replace(/\r\n?/g, '\n');
+  const file = new SourceFile(options.file ?? '<memory>', normalizedSource);
   const masked = maskRawScriptBodies(file);
 
   if (masked.declarationOffsets.length > 0) {
@@ -320,7 +324,7 @@ export function parseWoml(
       'WOML_DECLARATION_NOT_ALLOWED',
       'WOML does not allow XML declarations, doctypes, CDATA, or processing instructions.',
       offset,
-      findTagEnd(source, offset),
+      findTagEnd(normalizedSource, offset),
     );
   }
 
@@ -365,7 +369,11 @@ export function parseWoml(
   }
 
   const rootLocation = locations[0];
-  const leadingOffset = firstTextOutsideRoot(source, 0, rootLocation.start);
+  const leadingOffset = firstTextOutsideRoot(
+    normalizedSource,
+    0,
+    rootLocation.start,
+  );
   if (leadingOffset !== undefined) {
     throw file.parseError(
       'WOML_TEXT_OUTSIDE_ROOT',
@@ -374,9 +382,9 @@ export function parseWoml(
     );
   }
   const trailingOffset = firstTextOutsideRoot(
-    source,
+    normalizedSource,
     rootLocation.end,
-    source.length,
+    normalizedSource.length,
   );
   if (trailingOffset !== undefined) {
     throw file.parseError(
@@ -399,8 +407,8 @@ export function parseWoml(
   return {
     kind: 'document',
     file: file.path,
-    source,
+    source: normalizedSource,
     root,
-    span: file.span(0, source.length),
+    span: file.span(0, normalizedSource.length),
   };
 }

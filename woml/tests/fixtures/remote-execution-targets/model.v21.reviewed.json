@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 21,
+  "workflowId": "remote-deployment",
+  "metadata": { "name": "Remote deployment" },
+  "triggers": [
+    { "id": "start", "handler": "trigger.manual", "config": { "kind": "object", "fields": {} } }
+  ],
+  "graph": {
+    "entryNodeIds": ["prepare"],
+    "nodes": [
+      {
+        "id": "prepare",
+        "handler": "runtime.script",
+        "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n          return { release: \"payments-api@42\" };\n        " } } },
+        "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] }
+      },
+      { "id": "__woml_saga__deploy__open", "handler": "engine.saga-open", "inputs": { "kind": "object", "fields": {} } },
+      {
+        "id": "applyRelease",
+        "handler": "runtime.script",
+        "execution": { "profileVersion": 1, "target": "production-private", "requiredCapabilities": ["runtime.script"] },
+        "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n            return { deployed: context.steps.prepare.release };\n          " } } },
+        "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] }
+      },
+      { "id": "__woml_saga__deploy__commit", "handler": "engine.saga-commit", "inputs": { "kind": "object", "fields": {} } },
+      { "id": "deploy", "handler": "engine.saga-result", "inputs": { "kind": "object", "fields": {} } },
+      {
+        "id": "summary",
+        "handler": "runtime.script",
+        "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n          return { release: context.steps.deploy.deployed };\n        " } } },
+        "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] }
+      },
+      { "id": "__woml_workflow__settlement", "handler": "engine.workflow-settlement", "inputs": { "kind": "object", "fields": {} } }
+    ],
+    "edges": [
+      { "id": "prepare-to-__woml_saga__deploy__open", "from": "prepare", "to": "__woml_saga__deploy__open", "condition": { "kind": "always" } },
+      { "id": "__woml_saga__deploy__open-to-applyRelease", "from": "__woml_saga__deploy__open", "to": "applyRelease", "condition": { "kind": "always" } },
+      { "id": "applyRelease-to-__woml_saga__deploy__commit", "from": "applyRelease", "to": "__woml_saga__deploy__commit", "condition": { "kind": "always" } },
+      { "id": "__woml_saga__deploy__commit-to-deploy", "from": "__woml_saga__deploy__commit", "to": "deploy", "condition": { "kind": "always" } },
+      { "id": "deploy-to-summary", "from": "deploy", "to": "summary", "condition": { "kind": "always" } },
+      { "id": "__woml_workflow__:main:settlement", "from": "summary", "to": "__woml_workflow__settlement", "condition": { "kind": "always" } }
+    ],
+    "forks": [],
+    "choices": [],
+    "contextVisibility": [
+      { "nodeId": "prepare", "stepIds": [] },
+      { "nodeId": "applyRelease", "stepIds": ["prepare"] },
+      { "nodeId": "summary", "stepIds": ["prepare", "deploy"] }
+    ],
+    "settlement": { "nodeId": "__woml_workflow__settlement", "mainResultNodeId": "summary", "ownedBranchTerminalNodeIds": [] },
+    "forEach": [],
+    "waits": [],
+    "locks": [],
+    "sagas": [
+      {
+        "sagaId": "deploy",
+        "openNodeId": "__woml_saga__deploy__open",
+        "commitNodeId": "__woml_saga__deploy__commit",
+        "resultNodeId": "deploy",
+        "bodyEntryNodeId": "applyRelease",
+        "bodyTerminalNodeId": "applyRelease",
+        "bodyResultNodeId": "applyRelease",
+        "outerStepIds": ["prepare"],
+        "compensations": [
+          {
+            "actionId": "deploy:compensate:applyRelease",
+            "forStepId": "applyRelease",
+            "identity": { "kind": "static", "actionId": "deploy:compensate:applyRelease" },
+            "visibleStepIds": ["prepare", "applyRelease"],
+            "node": {
+              "id": "deploy:compensate:applyRelease",
+              "handler": "runtime.script",
+              "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n              return { rolledBack: context.steps.applyRelease.deployed };\n            " } } },
+              "retryPolicy": { "maxAttempts": 2, "backoff": { "kind": "exponential", "initialDelayMs": 1000, "multiplier": 2, "maximumDelayMs": 30000 } },
+              "execution": { "profileVersion": 1, "target": "production-private", "requiredCapabilities": ["runtime.script"] },
+              "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] }
+            }
+          }
+        ],
+        "cleanup": [
+          {
+            "actionId": "deploy:cleanup:removeTemporaryFiles",
+            "identity": { "kind": "static", "actionId": "deploy:cleanup:removeTemporaryFiles" },
+            "visibleStepIds": ["prepare", "applyRelease"],
+            "node": {
+              "id": "deploy:cleanup:removeTemporaryFiles",
+              "handler": "runtime.script",
+              "inputs": { "kind": "object", "fields": { "source": { "kind": "literal", "value": "\n              return { cleaned: true };\n            " } } },
+              "execution": { "profileVersion": 1, "target": "maintenance-runner", "requiredCapabilities": ["runtime.script"] },
+              "scriptRuntime": { "bindingVersion": 1, "bindings": ["context", "attempt", "services", "secrets"], "requiredSecrets": [] }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "runtimePolicy": { "profileVersion": 1, "concurrency": 1 }
+}

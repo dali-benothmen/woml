@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/worker-configuration/v1",
+  "title": "WOML Worker Configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "version", "workerId", "coordinatorUrl", "targetIds", "capacity", "tls", "processPolicy", "secretProvider"],
+  "properties": {
+    "profile": { "const": "woml.worker/v1" },
+    "version": { "const": 1 },
+    "workerId": { "$ref": "#/$defs/id" },
+    "coordinatorUrl": { "type": "string", "pattern": "^https://[^/?#@]+(?::[0-9]{1,5})?$", "maxLength": 512 },
+    "targetIds": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+    "capacity": { "type": "integer", "minimum": 1, "maximum": 64 },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["certificateRef", "privateKeyRef", "caRef"],
+      "properties": {
+        "certificateRef": { "$ref": "#/$defs/fileRef" },
+        "privateKeyRef": { "$ref": "#/$defs/fileRef" },
+        "caRef": { "$ref": "#/$defs/fileRef" }
+      }
+    },
+    "processPolicy": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "secretProvider": { "enum": ["environment", "file", "external"] }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 128 },
+    "fileRef": { "type": "string", "pattern": "^file:[^\\r\\n]+$", "maxLength": 1024 }
+  }
+}

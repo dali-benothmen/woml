@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/remote-dispatch-reconciliation/v1",
+  "title": "WOML Remote Dispatch Reconciliation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "dispatchId", "action", "requestId", "requestedAt"],
+  "properties": {
+    "profile": { "const": "woml.remote-dispatch-reconciliation/v1" },
+    "dispatchId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "action": { "enum": ["record-failure", "authorize-possible-duplicate-retry"] },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "requestedAt": { "type": "string", "format": "date-time" },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
+  }
+}

@@ -31,6 +31,11 @@ export interface RuntimeActivationRequirementsV1 {
   readonly providers: Readonly<
     Record<BuiltInCommunicationProvider, ProviderActivationRequirementV1>
   >;
+  /** Present only when a compiled Model v21 requires a non-local worker. */
+  readonly remoteExecution?: {
+    readonly targets: readonly string[];
+    readonly requiredCapabilities: readonly string[];
+  };
 }
 
 interface CommunicationRequirement {
@@ -58,10 +63,13 @@ function workflowNodes(
     workflow.schemaVersion === 17 ||
     workflow.schemaVersion === 18 ||
     workflow.schemaVersion === 19 ||
-    workflow.schemaVersion === 20
+    workflow.schemaVersion === 20 ||
+    workflow.schemaVersion === 21
       ? [
           ...workflow.graph.forEach.flatMap(descriptor => descriptor.body.nodes),
-          ...(workflow.schemaVersion === 19 || workflow.schemaVersion === 20
+          ...(workflow.schemaVersion === 19 ||
+          workflow.schemaVersion === 20 ||
+          workflow.schemaVersion === 21
             ? workflow.graph.sagas.flatMap(saga => [
                 ...saga.compensations.map(action => action.node),
                 ...saga.cleanup.map(action => action.node),
@@ -226,6 +234,9 @@ export function runtimeActivationRequirements(
   const discord = providerRequirement('discord', workflows);
   const whatsapp = providerRequirement('whatsapp', workflows);
   const nodes = workflows.flatMap(workflow => workflowNodes(workflow));
+  const remoteNodes = nodes.filter(
+    node => node.execution !== undefined && node.execution.target !== 'local'
+  );
   const lifecycleActions = workflows.flatMap(workflow =>
     'lifecycle' in workflow && workflow.lifecycle !== undefined
       ? workflow.lifecycle.hooks.flatMap(hook => hook.actions)
@@ -251,5 +262,21 @@ export function runtimeActivationRequirements(
         workflow.moduleRuntime.modules.length > 0
     ),
     providers: { telegram, discord, whatsapp },
+    ...(remoteNodes.length === 0
+      ? {}
+      : {
+          remoteExecution: {
+            targets: [
+              ...new Set(remoteNodes.map(node => node.execution!.target)),
+            ].sort(),
+            requiredCapabilities: [
+              ...new Set(
+                remoteNodes.flatMap(
+                  node => node.execution!.requiredCapabilities
+                )
+              ),
+            ].sort(),
+          },
+        }),
   };
 }
