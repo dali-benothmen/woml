@@ -1,0 +1,19 @@
+{
+  "profile": "woml.target-registry/v1",
+  "version": 1,
+  "targets": [
+    {
+      "id": "production-private",
+      "kind": "worker-pool",
+      "allowedWorkerIdentities": ["rehearsal-worker-01"],
+      "requiredCapabilities": [
+        "runtime.script",
+        "services.artifacts",
+        "services.process",
+        "services.progress"
+      ],
+      "minimumWorkerVersion": "1.0.10",
+      "maximumInFlight": 1
+    }
+  ]
+}

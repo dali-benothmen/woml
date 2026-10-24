@@ -1,0 +1,10 @@
+{
+  "profile": "woml.target-trust/v1",
+  "version": 1,
+  "identities": [
+    {
+      "workerIdentity": "rehearsal-worker-01",
+      "certificatePath": "certificates/rehearsal-worker-01.pem"
+    }
+  ]
+}

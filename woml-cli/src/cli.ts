@@ -308,6 +308,11 @@ import {
 } from './compiled-workflow-cache';
 import { runtimeActivationRequirements } from './runtime-activation';
 import {
+  createCombinedRunPresentation,
+  createProjectActivationPresentation,
+  renderProjectActivationPresentation,
+} from './combined-run-presentation';
+import {
   checkWorkerConfiguration,
   RemoteWorkerError,
   startWorker,
@@ -2134,12 +2139,22 @@ function formatRunInspection(
     readonly latestSequence?: number;
     readonly activeProgress?: number;
     readonly progressLanes?: number;
-  }
+  },
+  statePath = '.woml/state.sqlite'
 ): string {
+  const combined = createCombinedRunPresentation({
+    inspection,
+    statePath,
+    ...(waitInspection === undefined ? {} : { waits: waitInspection }),
+    ...(locks.length === 0 ? {} : { locks }),
+    ...(correction === undefined ? {} : { correction }),
+    ...(artifacts === undefined ? {} : { artifacts }),
+  });
   const lines = [
     `Run: ${inspection.runId}`,
     `Workflow: ${inspection.workflowId}`,
     `Status: ${inspection.status}`,
+    `Current: ${combined.state.replaceAll('-', ' ')} · ${combined.detail}`,
     `Business outcome: ${inspection.businessOutcome}`,
     `Lifecycle: ${inspection.lifecycleStatus}`,
     `Cancellation requested: ${inspection.cancellation.requested ? 'yes' : 'no'}`,
@@ -2377,6 +2392,8 @@ function formatRunInspection(
       lines.push(`  View: woml logs ${inspection.runId} --no-follow`);
     }
   }
+  lines.push('Next safe actions:');
+  for (const command of combined.nextCommands) lines.push(`  ${command}`);
   return `${lines.join('\n')}\n`;
 }
 
@@ -5198,9 +5215,15 @@ async function runProjectCheckCommand(
     workflow.requiredCapabilities.includes('reviewer.approval')
   );
   const activation = runtimeActivationRequirements(workflows);
-  const signalsRequired = activation.triggerHandlers.some(handler =>
-    ['trigger.event', 'trigger.signal'].includes(handler)
-  );
+  const signalsRequired =
+    activation.triggerHandlers.some(handler =>
+      ['trigger.event', 'trigger.signal'].includes(handler)
+    ) ||
+    workflows.some(
+      workflow =>
+        'waits' in workflow.graph &&
+        workflow.graph.waits.some(wait => wait.kind === 'signal')
+    );
   const outputRequired = processRequired;
 
   try {
@@ -9562,7 +9585,8 @@ async function runCliUnprofiled(
               waitInspection,
               lockInspection,
               correctionInspection,
-              operationalSummary
+              operationalSummary,
+              get.statePath
             )
       );
       return 0;
@@ -9679,10 +9703,7 @@ async function runCliUnprofiled(
   }
   const { filePath, inputPaths } = runArguments;
 
-  if (
-    runArguments.project !== undefined &&
-    (runArguments.verbose || runArguments.json)
-  ) {
+  if (runArguments.project !== undefined && runArguments.json) {
     const selection = {
       profile: 'woml.project-selection/v1' as const,
       project: runArguments.project.name,
@@ -9690,11 +9711,7 @@ async function runCliUnprofiled(
       digest: runArguments.project.digest,
       selectedBy: runArguments.projectSelection ?? 'explicit',
     };
-    if (runArguments.json) io.stdout(`${JSON.stringify(selection)}\n`);
-    else
-      io.stdout(
-        `Project ${selection.project} selected by ${selection.selectedBy} · ${selection.digest}.\n`
-      );
+    io.stdout(`${JSON.stringify(selection)}\n`);
   }
 
   if (
@@ -9757,18 +9774,42 @@ async function runCliUnprofiled(
     );
     if (targetPreflight !== undefined) {
       runArguments = { ...runArguments, targetRegistry, targetPreflight };
-      if (!runArguments.json) {
+      if (!runArguments.json && runArguments.project === undefined) {
         io.stdout(
           `Remote targets ready: ${targetPreflight.targets.map(target => target.id).join(', ')} · ${targetPreflight.registryDigest}.\n`
         );
       }
     }
-    if (activeInfrastructurePolicy !== undefined && !runArguments.json) {
+    if (
+      activeInfrastructurePolicy !== undefined &&
+      !runArguments.json &&
+      runArguments.project === undefined
+    ) {
       io.stdout(
         `Policy ${activeInfrastructurePolicy.policy.id}@${activeInfrastructurePolicy.policy.version} · ${activeInfrastructurePolicy.policy.environment}` +
           (runArguments.runtimeCapabilities?.emergencyDeny === undefined
             ? '\n'
             : ` · emergency deny ${runArguments.runtimeCapabilities.emergencyDeny.policy.id}@${runArguments.runtimeCapabilities.emergencyDeny.policy.version}\n`)
+      );
+    }
+    if (runArguments.project !== undefined && !runArguments.json) {
+      io.stdout(
+        renderProjectActivationPresentation(
+          createProjectActivationPresentation({
+            project: runArguments.project.name,
+            digest: runArguments.project.digest,
+            workflows: sources.map(source => source.workflow.workflowId),
+            statePath: runArguments.statePath,
+            ...(activeInfrastructurePolicy === undefined
+              ? {}
+              : {
+                  policy: `${activeInfrastructurePolicy.policy.id}@${activeInfrastructurePolicy.policy.version}`,
+                }),
+            targets:
+              targetPreflight?.targets.map(target => target.id) ?? [],
+            openTelemetry: runArguments.openTelemetry?.enabled === true,
+          })
+        )
       );
     }
     if (runArguments.command === 'test') {

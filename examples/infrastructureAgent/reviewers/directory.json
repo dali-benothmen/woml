@@ -1,0 +1,28 @@
+{
+  "profile": "woml.reviewer-directory/v1",
+  "version": "infrastructure-agent-rehearsal-1",
+  "principals": [
+    {
+      "id": "person:local-production-owner",
+      "roles": ["production-owner"],
+      "identities": [
+        {
+          "provider": "slack",
+          "accountId": "rehearsal-workspace",
+          "actorId": "local-production-owner"
+        }
+      ]
+    },
+    {
+      "id": "person:local-security-owner",
+      "roles": ["security-owner"],
+      "identities": [
+        {
+          "provider": "slack",
+          "accountId": "rehearsal-workspace",
+          "actorId": "local-security-owner"
+        }
+      ]
+    }
+  ]
+}

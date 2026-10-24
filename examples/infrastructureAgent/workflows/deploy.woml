@@ -1,0 +1,227 @@
+<woml>
+  <workflow
+    id="infrastructure-agent-deployment"
+    name="Infrastructure agent deployment"
+    description="Plan, review, serialize, remotely apply, observe, and safely correct one infrastructure change."
+    version="1.0.0"
+  >
+    <triggers><manual id="start" /></triggers>
+    <steps>
+      <step id="createPlan" name="Create a harmless Terraform plan">
+        <script>
+          await services.progress.report({
+            id: "deployment",
+            current: 1,
+            total: 6,
+            unit: "stages",
+            message: "Creating the reviewed rehearsal plan"
+          });
+          return await services.process.run({
+            executable: "fake-terraform",
+            args: ["plan", "--output=.woml/artifact-input/production.tfplan"],
+            timeout: "30s",
+            stream: true,
+            output: { stdout: "capture", stderr: "capture", maxBytes: 65536 }
+          }, { name: "terraform-plan" });
+        </script>
+      </step>
+
+      <step id="preservePlan" name="Preserve and inspect the exact plan">
+        <script>
+          const artifact = await services.artifacts.put(
+            ".woml/artifact-input/production.tfplan",
+            {
+              name: "production.tfplan",
+              contentType: "application/json",
+              retention: "24h"
+            }
+          );
+          const metadata = await services.artifacts.head(artifact);
+          return { artifact, integrity: metadata.integrity };
+        </script>
+      </step>
+
+      <parallel id="evidence" name="Collect deterministic risk evidence">
+        <step id="queryHealth" name="Read Prometheus health">
+          <script>
+            const result = await services.process.run({
+              executable: "fake-prometheus",
+              args: ["health"],
+              timeout: "10s",
+              output: { stdout: "capture", stderr: "capture", maxBytes: 16384 }
+            }, { name: "prometheus-health" });
+            return JSON.parse(result.stdout);
+          </script>
+        </step>
+        <step id="classifyRisk" name="Classify risk with an optional AI adapter">
+          <script>
+            const result = await services.process.run({
+              executable: "fake-ai-review",
+              args: ["classify"],
+              timeout: "10s",
+              output: { stdout: "capture", stderr: "capture", maxBytes: 16384 }
+            }, { name: "ai-risk-classification" });
+            return JSON.parse(result.stdout);
+          </script>
+        </step>
+      </parallel>
+
+      <step id="buildReview" name="Build the immutable approval payload">
+        <script>
+          return {
+            review: {
+              title: "Apply the reviewed production rehearsal plan",
+              summary: "Apply exactly the preserved plan on the production-private target.",
+              risk: context.steps.classifyRisk.risk,
+              facts: [
+                { label: "Success rate", value: String(context.steps.queryHealth.successRate) + "%" },
+                { label: "Fencing", value: "required before apply" },
+                { label: "AI classifier", value: context.steps.classifyRisk.model }
+              ],
+              changes: [
+                { action: "update", target: "payments infrastructure", summary: "Apply three non-destructive rehearsal changes." }
+              ],
+              checks: [
+                { name: "Terraform plan", status: context.steps.createPlan.exitCode === 0 ? "passed" : "failed" },
+                { name: "Prometheus health", status: context.steps.queryHealth.healthy ? "passed" : "failed" }
+              ],
+              artifacts: [context.steps.preservePlan.artifact]
+            }
+          };
+        </script>
+      </step>
+
+      <approval
+        id="approveDeployment"
+        name="Approve the exact deployment plan"
+        review="{{context.steps.buildReview.review}}"
+        approvals="2"
+        required-roles="production-owner security-owner"
+        timeout="30m"
+        on-timeout="reject"
+      >
+        <when-approved>
+          <lock
+            id="deploymentLease"
+            name="Own the production deployment lease"
+            key="production/payments"
+            acquire-timeout="10m"
+            lease="5m"
+          >
+            <saga id="release" name="Apply and observe the reviewed plan">
+              <step id="applyPlan" name="Apply on the private target" target="production-private">
+                <script>
+                  const planPath = await services.artifacts.materialize(context.steps.preservePlan.artifact);
+                  await services.progress.report({
+                    id: "deployment",
+                    current: 3,
+                    total: 6,
+                    unit: "stages",
+                    message: "Applying with fence " + context.lock.fencingToken
+                  });
+                  const result = await services.process.run({
+                    executable: "fake-terraform",
+                    args: ["apply", planPath, "--fence=" + context.lock.fencingToken],
+                    timeout: "2m",
+                    stream: true,
+                    output: { stdout: "capture", stderr: "capture", maxBytes: 65536 }
+                  }, { name: "terraform-apply" });
+                  return { result, releaseId: "release-rehearsal-42", fencingToken: context.lock.fencingToken };
+                </script>
+                <compensate retry="2">
+                  <script>
+                    return await services.process.run({
+                      executable: "fake-terraform",
+                      args: ["rollback", context.steps.applyPlan.releaseId],
+                      timeout: "30s",
+                      stream: true,
+                      output: { stdout: "capture", stderr: "capture", maxBytes: 32768 }
+                    }, { name: "terraform-rollback" });
+                  </script>
+                </compensate>
+              </step>
+
+              <wait-for
+                id="rolloutSignal"
+                name="Wait for the rollout controller"
+                correlation="{{context.steps.applyPlan.releaseId}}"
+                timeout="15m"
+                on-timeout="fail"
+              >
+                <accept signal="rollout.succeeded">
+                  <schema>{
+                    "type": "object",
+                    "required": ["successRate"],
+                    "properties": { "successRate": { "type": "number" } },
+                    "additionalProperties": false
+                  }</schema>
+                </accept>
+                <accept signal="rollout.failed">
+                  <schema>{
+                    "type": "object",
+                    "required": ["reason"],
+                    "properties": { "reason": { "type": "string" } },
+                    "additionalProperties": false
+                  }</schema>
+                </accept>
+              </wait-for>
+
+              <step id="verifyHealth" name="Verify Prometheus after rollout">
+                <script>
+                  const result = await services.process.run({
+                    executable: "fake-prometheus",
+                    args: ["health"],
+                    timeout: "10s",
+                    stream: true,
+                    output: { stdout: "capture", stderr: "capture", maxBytes: 16384 }
+                  }, { name: "prometheus-post-deploy" });
+                  const health = JSON.parse(result.stdout);
+                  if (!health.healthy) throw new Error("The rehearsal health gate failed");
+                  return { ...health, fencingToken: context.lock.fencingToken };
+                </script>
+              </step>
+
+              <wait id="settleTelemetry" name="Wait for one telemetry export interval" duration="1s" />
+
+              <cleanup>
+                <step id="notifyOperators" name="Publish the rehearsal outcome">
+                  <script>
+                    await services.progress.report({
+                      id: "deployment",
+                      current: 6,
+                      total: 6,
+                      unit: "stages",
+                      message: "Deployment rehearsal complete"
+                    });
+                    return await services.process.run({
+                      executable: "fake-slack",
+                      args: ["notify", "#infrastructure-rehearsal"],
+                      timeout: "10s",
+                      stream: true,
+                      output: { stdout: "capture", stderr: "capture", maxBytes: 16384 }
+                    }, { name: "slack-release-notice" });
+                  </script>
+                </step>
+              </cleanup>
+            </saga>
+          </lock>
+        </when-approved>
+        <when-rejected>
+          <step id="recordRejection" name="Record the safe rejection">
+            <script>return { applied: false, reason: "review-rejected" };</script>
+          </step>
+        </when-rejected>
+      </approval>
+
+      <step id="summary" name="Return the governed outcome">
+        <script>
+          return {
+            plan: context.steps.preservePlan.artifact,
+            approval: context.steps.approveDeployment,
+            target: "production-private"
+          };
+        </script>
+      </step>
+    </steps>
+  </workflow>
+</woml>
