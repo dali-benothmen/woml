@@ -1,0 +1,43 @@
+{
+  "profile": "woml.project-check/v1",
+  "version": 1,
+  "status": "ready",
+  "project": {
+    "name": "payments-operations",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "manifestPath": "/srv/payments-operations/woml.project.json"
+  },
+  "workflows": [
+    {
+      "id": "deploy-payments",
+      "sourcePath": "workflows/deploy-payments.woml",
+      "status": "ready",
+      "requiredCapabilities": [
+        "runtime.script",
+        "services.artifacts",
+        "services.process"
+      ]
+    }
+  ],
+  "subsystems": [
+    {
+      "id": "process",
+      "status": "ready",
+      "required": true,
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "id": "opentelemetry",
+      "status": "degraded",
+      "required": false
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "WOML_OTEL_REACHABILITY_NOT_PROBED",
+      "severity": "warning",
+      "message": "Collector reachability is not probed by project check.",
+      "correctiveAction": "Use the explicit runtime health command when a live collector probe is required."
+    }
+  ]
+}
