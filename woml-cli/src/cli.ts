@@ -321,6 +321,22 @@ import {
   type PreparedTargetRegistryV1,
   type TargetPreflightV1,
 } from './target-registry';
+import {
+  resolveWomlProject,
+  type ResolvedWomlProjectV1,
+  type WomlProjectReferenceKey,
+  WomlProjectError,
+} from './project';
+import {
+  initializeWomlProject,
+  WomlProjectInitializationError,
+} from './project-init';
+import {
+  createWomlProjectCheck,
+  formatWomlProjectCheck,
+  type ProjectCheckDiagnosticV1,
+  type ProjectCheckSubsystemV1,
+} from './project-preflight';
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -350,11 +366,11 @@ class CliInputError extends Error {
 }
 
 function runUsage(): string {
-  return 'Usage: woml run <workflow.woml|directory>... [--config <path>] [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--json] [--verbose] [--color=auto|always|never] [--background|-d]';
+  return 'Usage: woml run [<workflow.woml|directory>...|--project <path>] [--config <path>] [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--json] [--verbose] [--color=auto|always|never] [--background|-d]';
 }
 
 function testUsage(): string {
-  return 'Usage: woml test <workflow.woml> [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
+  return 'Usage: woml test [<workflow.woml>|--project <path>] [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--emergency-deny <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>|--allow-process <aliases>] [--artifact-policy <path>] [--reviewer-directory <path>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>]';
 }
 
 function policyUsage(): string {
@@ -418,7 +434,11 @@ function signalUsage(): string {
 }
 
 function checkUsage(): string {
-  return 'Usage: woml check <workflow.woml|directory>... [--config <path>] [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>] [--artifact-policy <path>] [--json]';
+  return 'Usage: woml check [<workflow.woml|directory>...|--project <path>] [--config <path>] [--target-registry <path>] [--target-trust <path>] [--policy <name|path>] [--policy-trust <path>] [--require-policy-signature] [--process-policy <path>] [--artifact-policy <path>] [--reviewer-directory <path>] [--json]';
+}
+
+function initUsage(): string {
+  return 'Usage: woml init [directory] [--json]';
 }
 
 function targetUsage(): string {
@@ -964,17 +984,20 @@ async function loadDefaultTargetRegistryForRemoteWorkflows(
 }
 
 function typesUsage(): string {
-  return 'Usage: woml types <workflow.woml|directory> [--output <path>]';
+  return 'Usage: woml types [<workflow.woml|directory>|--project <path>] [--output <path>]';
 }
 
 function usage(): string {
-  return `${runUsage()}\n${testUsage()}\n${logFollowUsage}\n${checkUsage()}\n${targetUsage()}\n${workerUsage()}\n${dispatchUsage()}\n${policyUsage()}\n${typesUsage()}\n${inspectUsage}\n${artifactsUsage()}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${recoverUsage()}\n${stopUsage()}\n${emitUsage()}\n${signalUsage()}\n${secretsUsage()}\n${providerDoctorUsage()}`;
+  return `${initUsage()}\n${runUsage()}\n${testUsage()}\n${logFollowUsage}\n${checkUsage()}\n${targetUsage()}\n${workerUsage()}\n${dispatchUsage()}\n${policyUsage()}\n${typesUsage()}\n${inspectUsage}\n${artifactsUsage()}\n${backupUsage}\n${restoreUsage}\n${pruneUsage}\n${listUsage()}\n${getUsage()}\n${cancelUsage()}\n${recoverUsage()}\n${stopUsage()}\n${emitUsage()}\n${signalUsage()}\n${secretsUsage()}\n${providerDoctorUsage()}`;
 }
 
 interface RunArguments {
   readonly command: 'run' | 'test';
   readonly filePath: string;
   readonly inputPaths: readonly string[];
+  readonly projectPath?: string;
+  readonly projectSelection?: 'explicit' | 'current-directory';
+  readonly project?: ResolvedWomlProjectV1;
   readonly statePath: string;
   readonly resumeRunId?: string;
   readonly approvalPort: number;
@@ -1023,12 +1046,11 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   );
   const options =
     firstOption === -1 ? [] : operandsAndOptions.slice(firstOption);
-  const filePath = inputPaths[0];
+  let filePath = inputPaths[0];
   if (
     (command !== 'run' && command !== 'test') ||
-    filePath === undefined ||
-    filePath.startsWith('--') ||
-    (command === 'test' && inputPaths.length !== 1)
+    filePath?.startsWith('--') === true ||
+    (command === 'test' && inputPaths.length > 1)
   ) {
     throw new CliInputError(
       'WOML_CLI_ARGUMENTS_INVALID',
@@ -1041,6 +1063,8 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   let host = '127.0.0.1';
   let port = 3_000;
   let triggerId: string | undefined;
+  let projectPath: string | undefined;
+  let projectSelection: 'explicit' | 'current-directory' | undefined;
   let configPath: string | undefined;
   let processPolicyPath: string | undefined;
   let artifactPolicyPath: string | undefined;
@@ -1092,6 +1116,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     if (
       value === undefined ||
       (option !== '--state' &&
+        option !== '--project' &&
         option !== '--config' &&
         option !== '--process-policy' &&
         option !== '--artifact-policy' &&
@@ -1114,7 +1139,16 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       );
     }
     if (colorAssignment === undefined) index += 1;
-    if (option === '--state') {
+    if (option === '--project') {
+      if (value.length === 0) {
+        throw new CliInputError(
+          'WOML_CLI_ARGUMENTS_INVALID',
+          '--project requires a non-empty manifest path.'
+        );
+      }
+      projectPath = resolve(value);
+      projectSelection = 'explicit';
+    } else if (option === '--state') {
       if (value.length === 0) {
         throw new CliInputError(
           'WOML_CLI_ARGUMENTS_INVALID',
@@ -1261,7 +1295,29 @@ function parseRunArguments(args: readonly string[]): RunArguments {
       triggerId = value;
     }
   }
-  if (resumeRunId !== undefined && inputPaths.length !== 1) {
+  if (inputPaths.length > 0 && projectPath !== undefined) {
+    throw new CliInputError(
+      'WOML_PROJECT_OPTION_CONFLICT',
+      'Use positional workflow inputs or --project, not both.'
+    );
+  }
+  if (filePath === undefined && projectPath === undefined) {
+    const discovered = resolve('woml.project.json');
+    if (!existsSync(discovered)) {
+      throw new CliInputError(
+        'WOML_CLI_ARGUMENTS_INVALID',
+        command === 'test' ? testUsage() : runUsage()
+      );
+    }
+    projectPath = discovered;
+    projectSelection = 'current-directory';
+  }
+  filePath = filePath ?? projectPath!;
+  if (
+    resumeRunId !== undefined &&
+    projectPath === undefined &&
+    inputPaths.length !== 1
+  ) {
     throw new CliInputError(
       'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',
       '--resume requires exactly one workflow file, not multiple inputs.'
@@ -1281,7 +1337,8 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   }
   if (
     emergencyDenyReference !== undefined &&
-    infrastructurePolicyReference === undefined
+    infrastructurePolicyReference === undefined &&
+    projectPath === undefined
   ) {
     throw new CliInputError(
       'WOML_POLICY_REQUIRED',
@@ -1290,6 +1347,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   }
   if (
     infrastructurePolicyReference === undefined &&
+    projectPath === undefined &&
     (requireInfrastructurePolicySignature ||
       infrastructurePolicyTrustPath !== undefined)
   ) {
@@ -1302,6 +1360,8 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     command,
     filePath,
     inputPaths,
+    ...(projectPath === undefined ? {} : { projectPath }),
+    ...(projectSelection === undefined ? {} : { projectSelection }),
     statePath,
     ...(resumeRunId === undefined ? {} : { resumeRunId }),
     approvalPort,
@@ -1339,12 +1399,136 @@ function parseRunArguments(args: readonly string[]): RunArguments {
   };
 }
 
+function explicitProjectReferences(
+  args: Pick<
+    RunArguments,
+    | 'configPath'
+    | 'processPolicyPath'
+    | 'artifactPolicyPath'
+    | 'reviewerDirectoryPath'
+    | 'targetRegistryPath'
+    | 'targetTrustPath'
+    | 'infrastructurePolicyReference'
+    | 'emergencyDenyReference'
+    | 'infrastructurePolicyTrustPath'
+    | 'requireInfrastructurePolicySignature'
+    | 'allowProcess'
+  >
+): Readonly<Partial<Record<WomlProjectReferenceKey, string | true>>> {
+  return {
+    ...(args.configPath === undefined ? {} : { runtime: args.configPath }),
+    ...(args.processPolicyPath === undefined && args.allowProcess === undefined
+      ? {}
+      : { processPolicy: args.processPolicyPath ?? true }),
+    ...(args.artifactPolicyPath === undefined
+      ? {}
+      : { artifactPolicy: args.artifactPolicyPath }),
+    ...(args.reviewerDirectoryPath === undefined
+      ? {}
+      : { reviewerDirectory: args.reviewerDirectoryPath }),
+    ...(args.targetRegistryPath === undefined
+      ? {}
+      : { targetRegistry: args.targetRegistryPath }),
+    ...(args.targetTrustPath === undefined
+      ? {}
+      : { targetTrust: args.targetTrustPath }),
+    ...(args.infrastructurePolicyReference === undefined &&
+    args.emergencyDenyReference === undefined &&
+    args.infrastructurePolicyTrustPath === undefined &&
+    !args.requireInfrastructurePolicySignature
+      ? {}
+      : {
+          infrastructurePolicy:
+            args.infrastructurePolicyReference ?? true,
+        }),
+    ...(args.infrastructurePolicyTrustPath === undefined
+      ? {}
+      : { policyTrust: args.infrastructurePolicyTrustPath }),
+    ...(args.emergencyDenyReference === undefined
+      ? {}
+      : { emergencyDeny: args.emergencyDenyReference }),
+  };
+}
+
+async function resolveRunProjectArguments(
+  args: RunArguments,
+  background: boolean
+): Promise<RunArguments> {
+  if (args.projectPath === undefined) return args;
+  const project = await resolveWomlProject(args.projectPath, {
+    mode: background ? 'background' : 'foreground',
+    explicitReferences: explicitProjectReferences(args),
+  });
+  if (
+    args.infrastructurePolicyReference === undefined &&
+    project.references.infrastructurePolicy === undefined &&
+    (args.emergencyDenyReference !== undefined ||
+      args.infrastructurePolicyTrustPath !== undefined ||
+      args.requireInfrastructurePolicySignature)
+  ) {
+    throw new CliInputError(
+      'WOML_POLICY_REQUIRED',
+      '--emergency-deny, --policy-trust, and --require-policy-signature require a base infrastructure policy.'
+    );
+  }
+  if (args.command === 'test' && project.workflows.length !== 1) {
+    throw new CliInputError(
+      'WOML_TEST_REQUIRES_FILE',
+      'woml test --project requires a project containing exactly one workflow file.'
+    );
+  }
+  if (args.resumeRunId !== undefined && project.workflows.length !== 1) {
+    throw new CliInputError(
+      'WOML_RESUME_REQUIRES_SINGLE_WORKFLOW',
+      '--resume with --project requires a project containing exactly one workflow file.'
+    );
+  }
+  const inputPaths = project.workflows.map(workflow => workflow.path);
+  return {
+    ...args,
+    project,
+    inputPaths,
+    filePath: inputPaths[0]!,
+    ...(project.references.runtime === undefined
+      ? {}
+      : { configPath: project.references.runtime.path }),
+    ...(project.references.processPolicy === undefined
+      ? {}
+      : { processPolicyPath: project.references.processPolicy.path }),
+    ...(project.references.artifactPolicy === undefined
+      ? {}
+      : { artifactPolicyPath: project.references.artifactPolicy.path }),
+    ...(project.references.reviewerDirectory === undefined
+      ? {}
+      : { reviewerDirectoryPath: project.references.reviewerDirectory.path }),
+    ...(project.references.targetRegistry === undefined
+      ? {}
+      : { targetRegistryPath: project.references.targetRegistry.path }),
+    ...(project.references.targetTrust === undefined
+      ? {}
+      : { targetTrustPath: project.references.targetTrust.path }),
+    ...(project.references.infrastructurePolicy === undefined
+      ? {}
+      : {
+          infrastructurePolicyReference:
+            project.references.infrastructurePolicy.path,
+        }),
+    ...(project.references.emergencyDeny === undefined
+      ? {}
+      : { emergencyDenyReference: project.references.emergencyDeny.path }),
+    ...(project.references.policyTrust === undefined
+      ? {}
+      : { infrastructurePolicyTrustPath: project.references.policyTrust.path }),
+  };
+}
+
 async function resolveRunArgumentsConfiguration(
   args: RunArguments,
   backgroundOverride?: boolean
 ): Promise<RunArguments> {
   const background =
     backgroundOverride ?? process.env.WOML_BACKGROUND_HANDOFF !== undefined;
+  args = await resolveRunProjectArguments(args, background);
   if (background && args.allowProcess !== undefined) {
     throw new CliInputError(
       'WOML_PROCESS_FOREGROUND_GRANT_BACKGROUND_DENIED',
@@ -1352,27 +1536,31 @@ async function resolveRunArgumentsConfiguration(
     );
   }
   const processCapabilities =
-    args.processPolicyPath !== undefined
+    args.project?.authorities.process ??
+    (args.processPolicyPath !== undefined
       ? await loadProcessPolicy(
           args.processPolicyPath,
           background ? 'background' : 'foreground'
         )
       : args.allowProcess !== undefined
         ? await createForegroundProcessGrant(args.allowProcess)
-        : undefined;
+        : undefined);
   const artifactCapabilities =
-    args.artifactPolicyPath === undefined
+    args.project?.authorities.artifacts ??
+    (args.artifactPolicyPath === undefined
       ? undefined
       : await loadArtifactPolicy(
           args.artifactPolicyPath,
           background ? 'background' : 'foreground'
-        );
+        ));
   const reviewerCapabilities =
-    args.reviewerDirectoryPath === undefined
+    args.project?.authorities.reviewers ??
+    (args.reviewerDirectoryPath === undefined
       ? undefined
-      : await loadReviewerDirectory(args.reviewerDirectoryPath);
+      : await loadReviewerDirectory(args.reviewerDirectoryPath));
   const targetRegistry =
-    args.targetRegistryPath === undefined
+    args.project?.authorities.targets ??
+    (args.targetRegistryPath === undefined
       ? undefined
       : await loadTargetRegistry(
           args.targetRegistryPath,
@@ -1380,8 +1568,12 @@ async function resolveRunArgumentsConfiguration(
             (existsSync(resolve('.woml/target-trust.json'))
               ? resolve('.woml/target-trust.json')
               : undefined)
-        );
+        ));
+  const projectInfrastructureCapabilities = args.project?.authorities.infrastructure;
   const infrastructurePolicy =
+    projectInfrastructureCapabilities !== undefined
+      ? undefined
+      :
     args.infrastructurePolicyReference === undefined
       ? undefined
       : await resolveInfrastructurePolicy(args.infrastructurePolicyReference, {
@@ -1401,12 +1593,13 @@ async function resolveRunArgumentsConfiguration(
           emergencyDeny: true,
         });
   const infrastructurePolicyCapabilities =
-    infrastructurePolicy === undefined
+    projectInfrastructureCapabilities ??
+    (infrastructurePolicy === undefined
       ? undefined
       : infrastructurePolicyRuntimeAuthority(
           infrastructurePolicy,
           emergencyDeny
-        );
+        ));
   const runtimeCapabilities: RuntimeCapabilitiesV1 | undefined =
     processCapabilities === undefined &&
     artifactCapabilities === undefined &&
@@ -1426,11 +1619,16 @@ async function resolveRunArgumentsConfiguration(
       ...(runtimeCapabilities === undefined ? {} : { runtimeCapabilities }),
     };
   }
-  const configuration = await resolveRuntimeConfiguration(args.configPath, {
-    ...(args.stateExplicit ? { statePath: args.statePath } : {}),
-    ...(args.hostExplicit ? { publicHost: args.host } : {}),
-    ...(args.portExplicit ? { publicPort: args.port } : {}),
-  });
+  const configuration = await resolveRuntimeConfiguration(
+    args.configPath,
+    {
+      ...(args.stateExplicit ? { statePath: args.statePath } : {}),
+      ...(args.hostExplicit ? { publicHost: args.host } : {}),
+      ...(args.portExplicit ? { publicPort: args.port } : {}),
+    },
+    {},
+    args.project?.root
+  );
   if (args.configPath !== undefined) {
     await preflightRuntimeConfiguration(configuration);
   }
@@ -2493,6 +2691,12 @@ function formatError(
   }
   if (error instanceof ReviewerDirectoryLoadError) {
     return `WOML approval authority error [${error.code}]: ${error.message}`;
+  }
+  if (error instanceof WomlProjectError) {
+    return `WOML project error [${error.code}]: ${error.message}`;
+  }
+  if (error instanceof WomlProjectInitializationError) {
+    return `WOML project initialization error [${error.code}]: ${error.message}`;
   }
   if (error instanceof ArtifactOperationError) {
     return `WOML artifact error [${error.code}]: ${error.message}`;
@@ -4275,9 +4479,12 @@ async function runSingleCheckCommand(
 
 interface CheckArguments {
   readonly inputPaths: readonly string[];
+  readonly projectPath?: string;
+  readonly projectSelection?: 'explicit' | 'current-directory';
   readonly configPath?: string;
   readonly processPolicyPath?: string;
   readonly artifactPolicyPath?: string;
+  readonly reviewerDirectoryPath?: string;
   readonly targetRegistryPath?: string;
   readonly targetTrustPath?: string;
   readonly infrastructurePolicyReference?: string;
@@ -4292,8 +4499,11 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
   }
   const inputPaths: string[] = [];
   let configPath: string | undefined;
+  let projectPath: string | undefined;
+  let projectSelection: 'explicit' | 'current-directory' | undefined;
   let processPolicyPath: string | undefined;
   let artifactPolicyPath: string | undefined;
+  let reviewerDirectoryPath: string | undefined;
   let targetRegistryPath: string | undefined;
   let targetTrustPath: string | undefined;
   let infrastructurePolicyReference: string | undefined;
@@ -4312,6 +4522,20 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
       if (requireInfrastructurePolicySignature)
         throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
       requireInfrastructurePolicySignature = true;
+      continue;
+    }
+    if (argument === '--project') {
+      const value = args[index + 1];
+      if (
+        projectPath !== undefined ||
+        value === undefined ||
+        value.startsWith('--')
+      ) {
+        throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+      }
+      projectPath = resolve(value);
+      projectSelection = 'explicit';
+      index += 1;
       continue;
     }
     if (argument === '--config') {
@@ -4350,6 +4574,19 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
         throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
       }
       artifactPolicyPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument === '--reviewer-directory') {
+      const value = args[index + 1];
+      if (
+        reviewerDirectoryPath !== undefined ||
+        value === undefined ||
+        value.startsWith('--')
+      ) {
+        throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+      }
+      reviewerDirectoryPath = value;
       index += 1;
       continue;
     }
@@ -4410,11 +4647,23 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
     }
     inputPaths.push(resolve(argument));
   }
-  if (inputPaths.length === 0) {
-    throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+  if (inputPaths.length > 0 && projectPath !== undefined) {
+    throw new CliInputError(
+      'WOML_PROJECT_OPTION_CONFLICT',
+      'Use positional workflow inputs or --project, not both.'
+    );
+  }
+  if (inputPaths.length === 0 && projectPath === undefined) {
+    const discovered = resolve('woml.project.json');
+    if (!existsSync(discovered)) {
+      throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
+    }
+    projectPath = discovered;
+    projectSelection = 'current-directory';
   }
   if (
     infrastructurePolicyReference === undefined &&
+    projectPath === undefined &&
     (requireInfrastructurePolicySignature ||
       infrastructurePolicyTrustPath !== undefined)
   ) {
@@ -4431,9 +4680,14 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
   }
   return {
     inputPaths,
+    ...(projectPath === undefined ? {} : { projectPath }),
+    ...(projectSelection === undefined ? {} : { projectSelection }),
     ...(configPath === undefined ? {} : { configPath }),
     ...(processPolicyPath === undefined ? {} : { processPolicyPath }),
     ...(artifactPolicyPath === undefined ? {} : { artifactPolicyPath }),
+    ...(reviewerDirectoryPath === undefined
+      ? {}
+      : { reviewerDirectoryPath }),
     ...(targetRegistryPath === undefined ? {} : { targetRegistryPath }),
     ...(targetTrustPath === undefined ? {} : { targetTrustPath }),
     ...(infrastructurePolicyReference === undefined
@@ -4689,6 +4943,444 @@ async function runDeploymentCheckCommand(
   }
 }
 
+function projectCheckExplicitReferences(
+  parsed: CheckArguments
+): Readonly<Partial<Record<WomlProjectReferenceKey, string | true>>> {
+  return {
+    ...(parsed.configPath === undefined ? {} : { runtime: parsed.configPath }),
+    ...(parsed.processPolicyPath === undefined
+      ? {}
+      : { processPolicy: parsed.processPolicyPath }),
+    ...(parsed.artifactPolicyPath === undefined
+      ? {}
+      : { artifactPolicy: parsed.artifactPolicyPath }),
+    ...(parsed.reviewerDirectoryPath === undefined
+      ? {}
+      : { reviewerDirectory: parsed.reviewerDirectoryPath }),
+    ...(parsed.targetRegistryPath === undefined
+      ? {}
+      : { targetRegistry: parsed.targetRegistryPath }),
+    ...(parsed.targetTrustPath === undefined
+      ? {}
+      : { targetTrust: parsed.targetTrustPath }),
+    ...(parsed.infrastructurePolicyReference === undefined &&
+    !parsed.requireInfrastructurePolicySignature
+      ? {}
+      : {
+          infrastructurePolicy:
+            parsed.infrastructurePolicyReference ?? true,
+        }),
+    ...(parsed.infrastructurePolicyTrustPath === undefined
+      ? {}
+      : { policyTrust: parsed.infrastructurePolicyTrustPath }),
+  };
+}
+
+function projectDiagnostic(
+  code: string,
+  message: string,
+  correctiveAction: string
+): ProjectCheckDiagnosticV1 {
+  return {
+    code,
+    severity: 'error',
+    message: message.slice(0, 4096),
+    correctiveAction: correctiveAction.slice(0, 4096),
+  };
+}
+
+function projectDiagnosticFromError(error: unknown): ProjectCheckDiagnosticV1 {
+  if (error instanceof WomlDiagnosticError) {
+    return {
+      code: error.diagnostic.code,
+      severity: 'error',
+      message: error.diagnostic.message.slice(0, 4096),
+      correctiveAction: (
+        error.diagnostic.hint ??
+        'Fix the source-located workflow diagnostic and run woml check again.'
+      ).slice(0, 4096),
+      sourcePath: error.diagnostic.file,
+      line: error.diagnostic.location.start.line,
+      column: error.diagnostic.location.start.column,
+    };
+  }
+  const candidate = error as { code?: unknown; message?: unknown };
+  const message =
+    typeof candidate.message === 'string'
+      ? candidate.message
+      : 'The project workflow set could not be compiled.';
+  return projectDiagnostic(
+    typeof candidate.code === 'string'
+      ? candidate.code
+      : 'WOML_PROJECT_WORKFLOW_INVALID',
+    message.replace(/\s*Corrective action:.*$/su, ''),
+    /Corrective action:\s*(.+)$/su.exec(message)?.[1] ??
+      'Fix the reported workflow source and run woml check again.'
+  );
+}
+
+function workflowRequiredCapabilities(
+  source: CompiledWorkflowSource
+): readonly string[] {
+  const activation = runtimeActivationRequirements([source.workflow]);
+  const usage = inspectWomlModuleUsage(source.document);
+  const capabilities = new Set<string>();
+  if (activation.scriptExecution) capabilities.add('runtime.script');
+  if (activation.runtimeModules) capabilities.add('runtime.modules');
+  for (const service of usage.referencedServices)
+    capabilities.add(`services.${service}`);
+  for (const handler of activation.triggerHandlers)
+    capabilities.add(handler);
+  for (const capability of
+    activation.remoteExecution?.requiredCapabilities ?? [])
+    capabilities.add(capability);
+  if (
+    source.workflow.graph.nodes.some(
+      node =>
+        node.handler === 'engine.approval-wait' &&
+        node.inputs.kind === 'object' &&
+        node.inputs.fields.review !== undefined
+    )
+  ) {
+    capabilities.add('reviewer.approval');
+  }
+  return [...capabilities].sort((left, right) => left.localeCompare(right));
+}
+
+async function runProjectCheckCommand(
+  parsed: CheckArguments,
+  io: CliIo
+): Promise<number> {
+  let project: ResolvedWomlProjectV1;
+  try {
+    project = await resolveWomlProject(parsed.projectPath!, {
+      mode: 'background',
+      explicitReferences: projectCheckExplicitReferences(parsed),
+    });
+    if (
+      parsed.infrastructurePolicyReference === undefined &&
+      project.references.infrastructurePolicy === undefined &&
+      (parsed.infrastructurePolicyTrustPath !== undefined ||
+        parsed.requireInfrastructurePolicySignature)
+    ) {
+      throw new CliInputError(
+        'WOML_POLICY_REQUIRED',
+        '--policy-trust and --require-policy-signature require a base infrastructure policy.'
+      );
+    }
+  } catch (error) {
+    io.stderr(`${formatError(error, parsed.projectPath)}\n`);
+    return 1;
+  }
+
+  const diagnostics: ProjectCheckDiagnosticV1[] = [];
+  const subsystems: ProjectCheckSubsystemV1[] = [];
+  let processAuthority = project.authorities.process;
+  let artifactAuthority = project.authorities.artifacts;
+  let reviewerAuthority = project.authorities.reviewers;
+  let targetRegistry = project.authorities.targets;
+  let infrastructureAuthority = project.authorities.infrastructure;
+  if (processAuthority === undefined && parsed.processPolicyPath !== undefined) {
+    try {
+      processAuthority = await loadProcessPolicy(
+        parsed.processPolicyPath,
+        'background'
+      );
+    } catch (error) {
+      diagnostics.push(projectDiagnosticFromError(error));
+    }
+  }
+  if (
+    artifactAuthority === undefined &&
+    parsed.artifactPolicyPath !== undefined
+  ) {
+    try {
+      artifactAuthority = await loadArtifactPolicy(
+        parsed.artifactPolicyPath,
+        'background'
+      );
+    } catch (error) {
+      diagnostics.push(projectDiagnosticFromError(error));
+    }
+  }
+  if (
+    reviewerAuthority === undefined &&
+    parsed.reviewerDirectoryPath !== undefined
+  ) {
+    try {
+      reviewerAuthority = await loadReviewerDirectory(
+        parsed.reviewerDirectoryPath
+      );
+    } catch (error) {
+      diagnostics.push(projectDiagnosticFromError(error));
+    }
+  }
+  if (targetRegistry === undefined && parsed.targetRegistryPath !== undefined) {
+    try {
+      targetRegistry = await loadTargetRegistry(
+        parsed.targetRegistryPath,
+        parsed.targetTrustPath
+      );
+    } catch (error) {
+      diagnostics.push(projectDiagnosticFromError(error));
+    }
+  }
+  if (
+    infrastructureAuthority === undefined &&
+    parsed.infrastructurePolicyReference !== undefined
+  ) {
+    try {
+      const resolved = await resolveInfrastructurePolicy(
+        parsed.infrastructurePolicyReference,
+        {
+          ...(parsed.infrastructurePolicyTrustPath === undefined
+            ? {}
+            : { trustPath: parsed.infrastructurePolicyTrustPath }),
+          requireSignature: parsed.requireInfrastructurePolicySignature,
+        }
+      );
+      infrastructureAuthority = infrastructurePolicyRuntimeAuthority(resolved);
+    } catch (error) {
+      diagnostics.push(projectDiagnosticFromError(error));
+    }
+  }
+  const compiledSources: CompiledWorkflowSource[] = [];
+  for (const workflow of project.workflows) {
+    try {
+      compiledSources.push(...(await compileWorkflowInputs([workflow.path], io)));
+    } catch (error) {
+      diagnostics.push(projectDiagnosticFromError(error));
+    }
+  }
+  const sources: readonly CompiledWorkflowSource[] = compiledSources;
+  try {
+    validateDeploymentRoutes(sources);
+  } catch (error) {
+    diagnostics.push(projectDiagnosticFromError(error));
+  }
+
+  const workflowReports = sources.map(source => ({
+    id: source.workflow.workflowId,
+    sourcePath:
+      project.workflows.find(workflow => workflow.path === source.filePath)
+        ?.projectPath ?? source.filePath,
+    status: 'ready' as const,
+    requiredCapabilities: workflowRequiredCapabilities(source),
+  }));
+  const workflows = sources.map(source => source.workflow);
+  const usages = sources.map(source => inspectWomlModuleUsage(source.document));
+  if (infrastructureAuthority !== undefined) {
+    for (const source of sources) {
+      const decisions = analyzeInfrastructurePolicySource(
+        infrastructureAuthority.infrastructurePolicy.policy,
+        source.workflow.workflowId,
+        await readFile(source.filePath, 'utf8')
+      );
+      for (const decision of decisions) {
+        if (decision.status !== 'denied') continue;
+        diagnostics.push(
+          projectDiagnostic(
+            'WOML_INFRASTRUCTURE_POLICY_DENIED',
+            `Infrastructure policy denies ${decision.capability}.${decision.operation} in workflow ${decision.workflowId}.`,
+            `Review ${project.references.infrastructurePolicy?.projectPath ?? 'the selected --policy file'} or change the denied workflow operation.`
+          )
+        );
+      }
+    }
+  }
+  const processRequired = usages.some(usage =>
+    usage.referencedServices.includes('process')
+  );
+  const artifactsRequired = usages.some(usage =>
+    usage.referencedServices.includes('artifacts')
+  );
+  const richApprovalRequired = workflowReports.some(workflow =>
+    workflow.requiredCapabilities.includes('reviewer.approval')
+  );
+  const activation = runtimeActivationRequirements(workflows);
+  const signalsRequired = activation.triggerHandlers.some(handler =>
+    ['trigger.event', 'trigger.signal'].includes(handler)
+  );
+  const outputRequired = processRequired;
+
+  try {
+    const configuration = await resolveRuntimeConfiguration(
+      parsed.configPath ?? project.references.runtime?.path,
+      {},
+      {},
+      project.root
+    );
+    await preflightRuntimeConfiguration(configuration);
+    subsystems.push({
+      id: 'runtime',
+      status: 'ready',
+      required: true,
+      ...(project.references.runtime === undefined
+        ? {}
+        : { digest: project.references.runtime.digest }),
+    });
+    const telemetryEnabled =
+      configuration.schemaVersion === 2 &&
+      configuration.observability.openTelemetry.enabled;
+    subsystems.push({
+      id: 'opentelemetry',
+      status: telemetryEnabled ? 'degraded' : 'not-required',
+      required: false,
+      ...(telemetryEnabled && project.references.runtime !== undefined
+        ? { digest: project.references.runtime.digest }
+        : {}),
+    });
+    if (telemetryEnabled) {
+      diagnostics.push({
+        code: 'WOML_OTEL_REACHABILITY_NOT_PROBED',
+        severity: 'warning',
+        message: 'Collector reachability is not probed by project check.',
+        correctiveAction:
+          'Use the explicit runtime health command when a live collector probe is required.',
+      });
+    }
+  } catch (error) {
+    const candidate = error as { code?: unknown; message?: unknown };
+    subsystems.push({ id: 'runtime', status: 'blocked', required: true });
+    subsystems.push({
+      id: 'opentelemetry',
+      status: 'not-required',
+      required: false,
+    });
+    diagnostics.push(
+      projectDiagnostic(
+        typeof candidate.code === 'string'
+          ? candidate.code
+          : 'WOML_DEPLOYMENT_PREFLIGHT_FAILED',
+        String(candidate.message ?? 'Runtime preflight failed.'),
+        'Repair the referenced runtime configuration or local storage permissions and run woml check again.'
+      )
+    );
+  }
+
+  const authoritySubsystem = (
+    id: string,
+    required: boolean,
+    ready: boolean,
+    reference: WomlProjectReferenceKey,
+    code: string,
+    correctiveAction: string
+  ) => {
+    subsystems.push({
+      id,
+      status: required ? (ready ? 'ready' : 'blocked') : 'not-required',
+      required,
+      ...(ready && project.references[reference] !== undefined
+        ? { digest: project.references[reference]!.digest }
+        : {}),
+    });
+    if (required && !ready) {
+      diagnostics.push(
+        projectDiagnostic(
+          code,
+          `${id} authority is required by the compiled project but is not configured.`,
+          correctiveAction
+        )
+      );
+    }
+  };
+  authoritySubsystem(
+    'process',
+    processRequired,
+    processAuthority !== undefined,
+    'processPolicy',
+    'WOML_PROCESS_DISABLED',
+    'Add authority.processPolicy to woml.project.json and reference a reviewed Process Policy v1 file.'
+  );
+  authoritySubsystem(
+    'artifacts',
+    artifactsRequired,
+    artifactAuthority !== undefined,
+    'artifactPolicy',
+    'WOML_ARTIFACT_SERVICE_DISABLED',
+    'Add authority.artifactPolicy to woml.project.json and reference a reviewed Artifact Policy v1 file.'
+  );
+  authoritySubsystem(
+    'approvals',
+    richApprovalRequired,
+    reviewerAuthority !== undefined,
+    'reviewerDirectory',
+    'WOML_REVIEWER_DIRECTORY_REQUIRED',
+    'Add authority.reviewerDirectory to woml.project.json and reference a reviewed Reviewer Directory v1 file.'
+  );
+  const infrastructureRequired =
+    activation.remoteExecution !== undefined ||
+    infrastructureAuthority !== undefined;
+  authoritySubsystem(
+    'infrastructure-policy',
+    infrastructureRequired,
+    infrastructureAuthority !== undefined,
+    'infrastructurePolicy',
+    'WOML_INFRASTRUCTURE_POLICY_REQUIRED',
+    'Add authority.infrastructurePolicy and authority.policyTrust to woml.project.json.'
+  );
+
+  if (activation.remoteExecution === undefined) {
+    subsystems.push({
+      id: 'remote-execution',
+      status: 'not-required',
+      required: false,
+    });
+  } else {
+    try {
+      const preflight = preflightRemoteTargets(
+        workflows,
+        targetRegistry,
+        infrastructureAuthority?.infrastructurePolicy.policy
+      );
+      subsystems.push({
+        id: 'remote-execution',
+        status: 'ready',
+        required: true,
+        ...(preflight === undefined
+          ? {}
+          : { digest: preflight.registryDigest }),
+      });
+    } catch (error) {
+      const candidate = error as { code?: unknown; message?: unknown };
+      subsystems.push({
+        id: 'remote-execution',
+        status: 'blocked',
+        required: true,
+      });
+      diagnostics.push(
+        projectDiagnostic(
+          typeof candidate.code === 'string'
+            ? candidate.code
+            : 'WOML_TARGET_UNAVAILABLE',
+          String(candidate.message ?? 'Remote target preflight failed.'),
+          'Repair remoteExecution.targetRegistry, remoteExecution.targetTrust, and infrastructure policy references, then run woml check again.'
+        )
+      );
+    }
+  }
+  subsystems.push({
+    id: 'external-signals',
+    status: signalsRequired ? 'ready' : 'not-required',
+    required: signalsRequired,
+  });
+  subsystems.push({
+    id: 'streaming-output',
+    status: outputRequired ? 'ready' : 'not-required',
+    required: outputRequired,
+  });
+
+  const report = createWomlProjectCheck(
+    project,
+    workflowReports,
+    subsystems,
+    diagnostics
+  );
+  if (parsed.json) io.stdout(`${JSON.stringify(report, null, 2)}\n`);
+  else io.stdout(formatWomlProjectCheck(report));
+  return report.status === 'blocked' ? 1 : 0;
+}
+
 async function runCheckCommand(
   args: readonly string[],
   io: CliIo,
@@ -4704,6 +5396,10 @@ async function runCheckCommand(
     }
     io.stderr(`${formatError(error)}\n`);
     return 2;
+  }
+
+  if (parsed.projectPath !== undefined) {
+    return await runProjectCheckCommand(parsed, io);
   }
 
   const onlyInput = parsed.inputPaths[0];
@@ -4921,20 +5617,65 @@ async function runTypesCommand(
   args: readonly string[],
   io: CliIo
 ): Promise<number> {
-  const [, rawSourcePath, ...options] = args;
-  if (
-    rawSourcePath === undefined ||
-    rawSourcePath.startsWith('--') ||
-    (options.length !== 0 &&
-      (options.length !== 2 || options[0] !== '--output' || !options[1]))
-  ) {
+  let rawSourcePath: string | undefined;
+  let projectPath: string | undefined;
+  let output: string | undefined;
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === '--project' || argument === '--output') {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        io.stderr(`${typesUsage()}\n`);
+        return 2;
+      }
+      if (argument === '--project') {
+        if (projectPath !== undefined) {
+          io.stderr(`${typesUsage()}\n`);
+          return 2;
+        }
+        projectPath = resolve(value);
+      } else {
+        if (output !== undefined) {
+          io.stderr(`${typesUsage()}\n`);
+          return 2;
+        }
+        output = value;
+      }
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith('--') || rawSourcePath !== undefined) {
+      io.stderr(`${typesUsage()}\n`);
+      return 2;
+    }
+    rawSourcePath = argument;
+  }
+  if (rawSourcePath !== undefined && projectPath !== undefined) {
+    io.stderr('WOML_PROJECT_OPTION_CONFLICT: Use a workflow input or --project, not both.\n');
+    return 2;
+  }
+  if (rawSourcePath === undefined && projectPath === undefined) {
+    const discovered = resolve('woml.project.json');
+    if (existsSync(discovered)) projectPath = discovered;
+  }
+  if (rawSourcePath === undefined && projectPath === undefined) {
     io.stderr(`${typesUsage()}\n`);
     return 2;
   }
-  const sourcePath = resolve(rawSourcePath);
   try {
+    const project =
+      projectPath === undefined
+        ? undefined
+        : await resolveWomlProject(projectPath);
+    const sourcePath =
+      project === undefined ? resolve(rawSourcePath!) : project.root;
     const sourceStat = await stat(sourcePath);
-    const workflows = await compileWorkflowSources(sourcePath);
+    const workflows =
+      project === undefined
+        ? await compileWorkflowSources(sourcePath)
+        : await compileWorkflowInputs(
+            project.workflows.map(workflow => workflow.path)
+          );
     const modules = workflows.flatMap(workflow =>
       'moduleRuntime' in workflow.workflow &&
       workflow.workflow.moduleRuntime !== undefined
@@ -4942,7 +5683,7 @@ async function runTypesCommand(
         : []
     );
     const outputPath = resolve(
-      options[1] ?? editorTypesPath(sourcePath, sourceStat.isDirectory())
+      output ?? editorTypesPath(sourcePath, sourceStat.isDirectory())
     );
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(
@@ -4956,7 +5697,47 @@ async function runTypesCommand(
     );
     return 0;
   } catch (error) {
-    io.stderr(`${formatError(error, sourcePath)}\n`);
+    io.stderr(
+      `${formatError(error, projectPath ?? (rawSourcePath === undefined ? undefined : resolve(rawSourcePath)))}\n`
+    );
+    return 1;
+  }
+}
+
+async function runInitCommand(
+  args: readonly string[],
+  io: CliIo
+): Promise<number> {
+  let directory = '.';
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === '--json') {
+      if (json) {
+        io.stderr(`${initUsage()}\n`);
+        return 2;
+      }
+      json = true;
+      continue;
+    }
+    if (argument.startsWith('--') || directory !== '.') {
+      io.stderr(`${initUsage()}\n`);
+      return 2;
+    }
+    directory = argument;
+  }
+  try {
+    const result = await initializeWomlProject(directory);
+    if (json) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
+    else {
+      io.stdout(`Initialized WOML project in ${result.directory}.\n`);
+      io.stdout(`Manifest  ${result.manifestPath}\n`);
+      io.stdout(`Workflow  ${result.workflowPath}\n`);
+      io.stdout('Next      woml check --project woml.project.json\n');
+    }
+    return 0;
+  } catch (error) {
+    io.stderr(`${formatError(error)}\n`);
     return 1;
   }
 }
@@ -8233,6 +9014,7 @@ async function runCliUnprofiled(
   }
 
   const commands = new Set([
+    'init',
     'run',
     'test',
     'check',
@@ -8259,6 +9041,9 @@ async function runCliUnprofiled(
     'discord',
     'whatsapp',
   ]);
+  if (args[0] === 'init') {
+    return await runInitCommand(args, io);
+  }
   if (
     args[0] === 'logs' ||
     (args.includes('--logs') &&
@@ -8893,6 +9678,24 @@ async function runCliUnprofiled(
     return 1;
   }
   const { filePath, inputPaths } = runArguments;
+
+  if (
+    runArguments.project !== undefined &&
+    (runArguments.verbose || runArguments.json)
+  ) {
+    const selection = {
+      profile: 'woml.project-selection/v1' as const,
+      project: runArguments.project.name,
+      manifestPath: runArguments.project.manifestPath,
+      digest: runArguments.project.digest,
+      selectedBy: runArguments.projectSelection ?? 'explicit',
+    };
+    if (runArguments.json) io.stdout(`${JSON.stringify(selection)}\n`);
+    else
+      io.stdout(
+        `Project ${selection.project} selected by ${selection.selectedBy} · ${selection.digest}.\n`
+      );
+  }
 
   if (
     runArguments.command === 'run' &&

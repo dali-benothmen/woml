@@ -11,7 +11,7 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 import {
   nativePackageBinaryName,
@@ -24,6 +24,7 @@ import {
   packedPackageFiles,
   publicJavaScriptFiles,
   publicPackageFiles,
+  publicProjectFiles,
 } from './release-contract';
 import {
   nativeLoadReceiptName,
@@ -222,6 +223,11 @@ export async function prepareMainPackage(output: string): Promise<void> {
   await cp(resolve(cliRoot, 'slack'), resolve(output, 'slack'), {
     recursive: true,
   });
+  for (const path of publicProjectFiles) {
+    const destination = resolve(output, path);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(resolve(cliRoot, path), destination);
+  }
   await Promise.all([
     copyFile(resolve(cliRoot, 'README.md'), resolve(output, 'README.md')),
     copyFile(resolve(repositoryRoot, 'LICENSE'), resolve(output, 'LICENSE')),

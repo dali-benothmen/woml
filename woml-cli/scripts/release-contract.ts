@@ -18,9 +18,17 @@ export const publicSlackFiles = [
   'slack/manifest.json',
 ] as const;
 
+export const publicProjectFiles = [
+  'schemas/project-check.v1.schema.json',
+  'schemas/woml-project.v1.schema.json',
+  'templates/woml.project.json',
+  'templates/workflows/hello.woml',
+] as const;
+
 export const publicPackageFiles = [
   ...publicJavaScriptFiles,
   ...publicSlackFiles,
+  ...publicProjectFiles,
   'README.md',
   'LICENSE',
   'NOTICE.md',

@@ -121,8 +121,12 @@ export async function verifyMainPackage(root: string): Promise<void> {
     );
   }
 
-  const forbiddenPath = files.find(path =>
-    /(?:^|\/)(?:tests?|\.woml)(?:\/|$)|\.(?:node|db|sqlite|sqlite3|woml|env)$/iu.test(path),
+  const forbiddenPath = files.find(
+    path =>
+      path !== 'templates/workflows/hello.woml' &&
+      /(?:^|\/)(?:tests?|\.woml)(?:\/|$)|\.(?:node|db|sqlite|sqlite3|woml|env)$/iu.test(
+        path,
+      ),
   );
   if (forbiddenPath !== undefined) {
     throw new Error(`The staged package contains forbidden runtime data: ${forbiddenPath}`);

@@ -53,5 +53,29 @@ describe('WOML release package', () => {
 
     const cli = await readFile(resolve(directory, 'dist/cli.js'), 'utf8');
     expect(cli.startsWith('#!/usr/bin/env bun')).toBe(true);
+
+    const projectDirectory = resolve(directory, 'clean-project');
+    const initialized = Bun.spawnSync({
+      cmd: [process.execPath, resolve(directory, 'dist/cli.js'), 'init', projectDirectory],
+      cwd: directory,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(initialized.exitCode, initialized.stderr.toString()).toBe(0);
+    const checked = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        resolve(directory, 'dist/cli.js'),
+        'check',
+        '--project',
+        resolve(projectDirectory, 'woml.project.json'),
+        '--json',
+      ],
+      cwd: projectDirectory,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(checked.exitCode, checked.stderr.toString()).toBe(0);
+    expect(JSON.parse(checked.stdout.toString()).status).toBe('ready');
   });
 });
