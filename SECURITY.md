@@ -49,3 +49,12 @@ is advisory; only the Rust pre-effect authority makes the runtime decision. See
 Please allow maintainers time to confirm the issue and prepare a coordinated
 fix before publishing details. The eventual advisory will credit reporters who
 want attribution and will avoid exposing secrets or unsafe reproduction data.
+# Project and remote-execution boundary
+
+Treat `woml.project.json`, policy files, reviewer directories, target registries,
+and trust files as reviewed configuration. They may contain symbolic secret
+names and certificate references, but must not contain private keys or secret
+values. Remote targets are authenticated and policy-intersected; they are not a
+generic shell. Work with an unknown remote outcome becomes **ambiguous** and is
+blocked from ordinary retry until an operator inspects and reconciles it. See
+the [combined operator runbook](docs/combined-developer-experience-operator-runbook.md).

@@ -2319,3 +2319,11 @@ The engine builds `context.steps` by folding durable run events; scripts never
 receive an authoritative mutable workflow state object. Use `woml test
 hello.woml` when an automated test or CI job needs a one-shot execution that
 exits.
+# Project placement
+
+Workflow language stays independent of deployment configuration. A step may use
+the literal `target="production-private"` placement attribute, while
+`woml.project.json` references the operator-owned target registry and trust
+document. Omitting `target` means `local`. A missing or ineligible remote target
+fails closed and never runs locally. See the
+[project manifest reference](project-manifest.md).

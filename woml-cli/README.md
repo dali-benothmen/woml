@@ -402,3 +402,17 @@ Use [GitHub Discussions](https://github.com/dali-benothmen/woml/discussions) for
 ## License
 
 WOML is released under the [Apache License 2.0](https://github.com/dali-benothmen/woml/blob/master/LICENSE).
+# Project quick start
+
+```bash
+woml init my-automation
+cd my-automation
+woml check
+woml test
+```
+
+The published package includes the project schemas and reviewed templates used
+by `woml init`. `woml.project.json` can reference runtime, authority, reviewer,
+and remote-target configuration without embedding credentials. If a remote
+dispatch becomes ambiguous, use `woml dispatch inspect` and perform an audited
+`woml dispatch reconcile` only after checking the external system.
