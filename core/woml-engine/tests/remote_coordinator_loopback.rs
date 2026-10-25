@@ -153,8 +153,13 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
           std::io::ErrorKind::UnexpectedEof
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::ConnectionReset
-        ) && !response.is_empty() =>
+        ) =>
       {
+        // StreamOwned can observe the transport close while authenticated
+        // plaintext is still buffered in rustls. Drain that plaintext before
+        // treating the peer close as the end of this HTTP/1.1 response. The
+        // parsing below still rejects an empty, partial, or malformed response.
+        let _ = stream.conn.reader().read_to_end(&mut response);
         break;
       }
       Err(error) => panic!("loopback response failed: {error}"),

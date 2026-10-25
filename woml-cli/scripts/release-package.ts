@@ -64,6 +64,10 @@ function sameValues(left: readonly string[], right: readonly string[]): boolean 
   return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 }
 
+export function npmExecutableForPlatform(platform: string): string {
+  return platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
 async function assertNonempty(path: string): Promise<void> {
   if ((await stat(path)).size === 0) throw new Error(`${path} is empty.`);
 }
@@ -178,7 +182,7 @@ async function inspectNpmPack(root: string): Promise<void> {
   const npmCache = resolve(tmpdir(), 'woml-npm-cache');
   await mkdir(npmCache, { recursive: true });
   const result = Bun.spawnSync({
-    cmd: ['npm', 'pack', '--dry-run', '--json', '--ignore-scripts'],
+    cmd: [npmExecutableForPlatform(process.platform), 'pack', '--dry-run', '--json', '--ignore-scripts'],
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -290,7 +294,7 @@ async function pack(output: string, destination: string): Promise<void> {
   const npmCache = resolve(tmpdir(), 'woml-npm-cache');
   await mkdir(npmCache, { recursive: true });
   const result = Bun.spawnSync({
-    cmd: ['npm', 'pack', '--json', '--ignore-scripts', '--pack-destination', destination],
+    cmd: [npmExecutableForPlatform(process.platform), 'pack', '--json', '--ignore-scripts', '--pack-destination', destination],
     cwd: output,
     stdout: 'pipe',
     stderr: 'pipe',

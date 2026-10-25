@@ -8,7 +8,10 @@ import {
   publicPackageFiles,
 } from '../scripts/release-contract';
 import { prepareMainPackage } from '../scripts/native-release';
-import { verifyMainPackage } from '../scripts/release-package';
+import {
+  npmExecutableForPlatform,
+  verifyMainPackage,
+} from '../scripts/release-package';
 
 const cliRoot = resolve(import.meta.dir, '..');
 const temporaryDirectories: string[] = [];
@@ -20,6 +23,12 @@ afterAll(async () => {
 });
 
 describe('WOML release package', () => {
+  test('uses the executable npm shim for each operating system', () => {
+    expect(npmExecutableForPlatform('win32')).toBe('npm.cmd');
+    expect(npmExecutableForPlatform('darwin')).toBe('npm');
+    expect(npmExecutableForPlatform('linux')).toBe('npm');
+  });
+
   test('makes direct source publication fail closed and allowlists every file', async () => {
     const manifest = await Bun.file(resolve(cliRoot, 'package.json')).json() as {
       readonly files?: readonly string[];

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -36,7 +36,9 @@ function lastJson(source: Uint8Array): unknown {
 
 describe('Combined Developer Experience clean release', () => {
   test('initializes, checks, runs, inspects, logs, backs up, and restores a clean project', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'woml-cdx-release-'));
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), 'woml-cdx-release-'))
+    );
     roots.push(root);
     const consumer = join(root, 'consumer');
     const cache = join(root, 'cache');
