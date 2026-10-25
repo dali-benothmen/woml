@@ -467,7 +467,7 @@ woml check
 woml test
 ```
 
-`woml.project.json` keeps workflow discovery and operator-owned configuration
+`workflow.json` keeps workflow discovery and operator-owned configuration
 reviewable while secret values remain outside source control. The same project
 works with local execution, durable artifacts and waits, rich approvals,
 infrastructure policies, streamed output, OpenTelemetry, and authenticated

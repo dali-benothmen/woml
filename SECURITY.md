@@ -51,7 +51,7 @@ fix before publishing details. The eventual advisory will credit reporters who
 want attribution and will avoid exposing secrets or unsafe reproduction data.
 # Project and remote-execution boundary
 
-Treat `woml.project.json`, policy files, reviewer directories, target registries,
+Treat `workflow.json`, policy files, reviewer directories, target registries,
 and trust files as reviewed configuration. They may contain symbolic secret
 names and certificate references, but must not contain private keys or secret
 values. Remote targets are authenticated and policy-intersected; they are not a

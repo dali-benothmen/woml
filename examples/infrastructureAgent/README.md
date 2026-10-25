@@ -28,8 +28,8 @@ example cannot change real infrastructure.
 From the repository root:
 
 ```bash
-woml check --project examples/infrastructureAgent/woml.project.json
-woml run --project examples/infrastructureAgent/woml.project.json
+woml check --project examples/infrastructureAgent/workflow.json
+woml run --project examples/infrastructureAgent/workflow.json
 ```
 
 `woml check` reads and compiles everything without binding ports, contacting the

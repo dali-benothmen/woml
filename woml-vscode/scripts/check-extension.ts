@@ -32,10 +32,10 @@ for (const relativePath of requiredFiles) {
 const manifest = await Bun.file(join(extensionRoot, 'package.json')).json();
 const projectValidation = manifest.contributes?.jsonValidation?.find(
   (candidate: { fileMatch?: string; url?: string }) =>
-    candidate.fileMatch === '**/woml.project.json'
+    candidate.fileMatch === '**/workflow.json'
 );
 if (projectValidation?.url !== './schemas/woml-project.v1.schema.json') {
-  throw new Error('woml.project.json must use the packaged Project v1 schema.');
+  throw new Error('workflow.json must use the packaged Project v1 schema.');
 }
 if (
   await Bun.file(join(extensionRoot, 'schemas/woml-project.v1.schema.json')).text() !==

@@ -117,7 +117,7 @@ OpenTelemetry, and remote placement. Its default adapters are deterministic,
 offline, and harmless.
 
 ```bash
-woml check --project examples/infrastructureAgent/woml.project.json
+woml check --project examples/infrastructureAgent/workflow.json
 ```
 
 To connect WOML to an OpenTelemetry Collector and inspect the same run in

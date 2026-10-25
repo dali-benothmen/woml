@@ -19,7 +19,7 @@ local policy permits.
 
 ## 2. Add the safety boundaries
 
-Reference these operator-owned documents from `woml.project.json` as needed:
+Reference these operator-owned documents from `workflow.json` as needed:
 
 - a process policy for exact executable aliases, arguments, working roots, and
   timeouts;

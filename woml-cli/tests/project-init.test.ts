@@ -33,7 +33,7 @@ describe('WOML project initialization', () => {
       '<workflow id="hello" name="Hello WOML">'
     );
     const guide = await readFile(initialized.authoringGuidePath, 'utf8');
-    expect(guide).toContain('woml check --project woml.project.json');
+    expect(guide).toContain('woml check --project workflow.json');
     expect(guide).toContain('Do not weaken, replace, inline,');
     expect(guide).toContain('Never add secret values');
   });
@@ -43,12 +43,12 @@ describe('WOML project initialization', () => {
     temporary.push(parent);
     const target = join(parent, 'project');
     await initializeWomlProject(target);
-    const before = await readFile(join(target, 'woml.project.json'), 'utf8');
+    const before = await readFile(join(target, 'workflow.json'), 'utf8');
 
     await expect(initializeWomlProject(target)).rejects.toMatchObject({
       code: 'WOML_PROJECT_INIT_COLLISION',
     } satisfies Partial<WomlProjectInitializationError>);
-    expect(await readFile(join(target, 'woml.project.json'), 'utf8')).toBe(
+    expect(await readFile(join(target, 'workflow.json'), 'utf8')).toBe(
       before
     );
   });
@@ -65,7 +65,7 @@ describe('WOML project initialization', () => {
         await readFile(resolve(cliRoot, '../docs/schemas', schema), 'utf8')
       );
     }
-    expect(await readFile(resolve(cliRoot, 'templates/woml.project.json'), 'utf8'))
+    expect(await readFile(resolve(cliRoot, 'templates/workflow.json'), 'utf8'))
       .toContain('"profile": "woml.project/v1"');
     expect(await readFile(resolve(cliRoot, 'templates/AGENTS.md'), 'utf8'))
       .toContain('Keep authority operator-owned');

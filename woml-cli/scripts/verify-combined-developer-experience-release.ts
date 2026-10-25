@@ -20,7 +20,7 @@ const required = [
   'docs/protocols/combined-developer-experience-v1.md',
   'docs/schemas/woml-project.v1.schema.json',
   'docs/schemas/project-check.v1.schema.json',
-  'woml-cli/templates/woml.project.json',
+  'woml-cli/templates/workflow.json',
   'woml-cli/templates/AGENTS.md',
   'woml-cli/templates/workflows/hello.woml',
   'woml-cli/tests/combined-developer-experience.test.ts',
@@ -113,7 +113,7 @@ const docs = [
   await read('woml-cli/README.md'),
 ].join('\n');
 for (const marker of [
-  'woml.project.json',
+  'workflow.json',
   'woml init',
   'woml check',
   'woml dispatch inspect',

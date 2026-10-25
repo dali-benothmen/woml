@@ -21,7 +21,7 @@ export const publicSlackFiles = [
 export const publicProjectFiles = [
   'schemas/project-check.v1.schema.json',
   'schemas/woml-project.v1.schema.json',
-  'templates/woml.project.json',
+  'templates/workflow.json',
   'templates/AGENTS.md',
   'templates/workflows/hello.woml',
 ] as const;

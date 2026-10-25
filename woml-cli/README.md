@@ -41,11 +41,11 @@ woml check
 woml run
 ```
 
-`woml init` creates `woml.project.json` and one local workflow. It never
+`woml init` creates `workflow.json` and one local workflow. It never
 creates credentials, production policies, or remote-worker configuration, and
 it refuses to overwrite either generated file.
 
-When `woml.project.json` is in the current directory, `check`, `run`, `test`,
+When `workflow.json` is in the current directory, `check`, `run`, `test`,
 and `types` select it automatically only when no workflow path was supplied.
 Use `--project <path>` to select one explicitly. Project paths never search
 parent directories.
@@ -412,7 +412,7 @@ woml test
 ```
 
 The published package includes the project schemas and reviewed templates used
-by `woml init`. `woml.project.json` can reference runtime, authority, reviewer,
+by `woml init`. `workflow.json` can reference runtime, authority, reviewer,
 and remote-target configuration without embedding credentials. If a remote
 dispatch becomes ambiguous, use `woml dispatch inspect` and perform an audited
 `woml dispatch reconcile` only after checking the external system.

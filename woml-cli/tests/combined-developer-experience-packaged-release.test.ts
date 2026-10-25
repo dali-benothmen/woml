@@ -58,7 +58,7 @@ describe('Combined Developer Experience clean release', () => {
     for (const path of [
       'schemas/project-check.v1.schema.json',
       'schemas/woml-project.v1.schema.json',
-      'templates/woml.project.json',
+      'templates/workflow.json',
       'templates/AGENTS.md',
       'templates/workflows/hello.woml',
       'dist/opentelemetry-runtime.js',
@@ -86,7 +86,7 @@ describe('Combined Developer Experience clean release', () => {
       profile: 'woml.project-initialization/v1',
       status: 'created',
     });
-    const manifest = join(project, 'woml.project.json');
+    const manifest = join(project, 'workflow.json');
     const checked = invoke(executable, project, 'check', '--project', manifest, '--json');
     expect(checked.exitCode, checked.stderr.toString()).toBe(0);
     expect(JSON.parse(checked.stdout.toString())).toMatchObject({

@@ -1307,7 +1307,7 @@ function parseRunArguments(args: readonly string[]): RunArguments {
     );
   }
   if (filePath === undefined && projectPath === undefined) {
-    const discovered = resolve('woml.project.json');
+    const discovered = resolve('workflow.json');
     if (!existsSync(discovered)) {
       throw new CliInputError(
         'WOML_CLI_ARGUMENTS_INVALID',
@@ -4671,7 +4671,7 @@ function parseCheckArguments(args: readonly string[]): CheckArguments {
     );
   }
   if (inputPaths.length === 0 && projectPath === undefined) {
-    const discovered = resolve('woml.project.json');
+    const discovered = resolve('workflow.json');
     if (!existsSync(discovered)) {
       throw new CliInputError('WOML_CLI_ARGUMENTS_INVALID', checkUsage());
     }
@@ -5313,7 +5313,7 @@ async function runProjectCheckCommand(
     processAuthority !== undefined,
     'processPolicy',
     'WOML_PROCESS_DISABLED',
-    'Add authority.processPolicy to woml.project.json and reference a reviewed Process Policy v1 file.'
+    'Add authority.processPolicy to workflow.json and reference a reviewed Process Policy v1 file.'
   );
   authoritySubsystem(
     'artifacts',
@@ -5321,7 +5321,7 @@ async function runProjectCheckCommand(
     artifactAuthority !== undefined,
     'artifactPolicy',
     'WOML_ARTIFACT_SERVICE_DISABLED',
-    'Add authority.artifactPolicy to woml.project.json and reference a reviewed Artifact Policy v1 file.'
+    'Add authority.artifactPolicy to workflow.json and reference a reviewed Artifact Policy v1 file.'
   );
   authoritySubsystem(
     'approvals',
@@ -5329,7 +5329,7 @@ async function runProjectCheckCommand(
     reviewerAuthority !== undefined,
     'reviewerDirectory',
     'WOML_REVIEWER_DIRECTORY_REQUIRED',
-    'Add authority.reviewerDirectory to woml.project.json and reference a reviewed Reviewer Directory v1 file.'
+    'Add authority.reviewerDirectory to workflow.json and reference a reviewed Reviewer Directory v1 file.'
   );
   const infrastructureRequired =
     activation.remoteExecution !== undefined ||
@@ -5340,7 +5340,7 @@ async function runProjectCheckCommand(
     infrastructureAuthority !== undefined,
     'infrastructurePolicy',
     'WOML_INFRASTRUCTURE_POLICY_REQUIRED',
-    'Add authority.infrastructurePolicy and authority.policyTrust to woml.project.json.'
+    'Add authority.infrastructurePolicy and authority.policyTrust to workflow.json.'
   );
 
   if (activation.remoteExecution === undefined) {
@@ -5678,7 +5678,7 @@ async function runTypesCommand(
     return 2;
   }
   if (rawSourcePath === undefined && projectPath === undefined) {
-    const discovered = resolve('woml.project.json');
+    const discovered = resolve('workflow.json');
     if (existsSync(discovered)) projectPath = discovered;
   }
   if (rawSourcePath === undefined && projectPath === undefined) {
@@ -5757,7 +5757,7 @@ async function runInitCommand(
       io.stdout(`Manifest  ${result.manifestPath}\n`);
       io.stdout(`Workflow  ${result.workflowPath}\n`);
       io.stdout(`Guide     ${result.authoringGuidePath}\n`);
-      io.stdout('Next      woml check --project woml.project.json\n');
+      io.stdout('Next      woml check --project workflow.json\n');
     }
     return 0;
   } catch (error) {

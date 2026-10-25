@@ -1,6 +1,6 @@
 # WOML Project Manifest
 
-`woml.project.json` is the portable entry point for a WOML project. It names the
+`workflow.json` is the portable entry point for a WOML project. It names the
 workflow set and references operator-controlled configuration without copying
 credentials or policy contents into workflow source.
 
@@ -47,7 +47,7 @@ execution environment.
 ## Discovery and precedence
 
 With no workflow argument or `--project`, project-aware commands inspect only
-the current directory for `woml.project.json`. WOML intentionally does not walk
+the current directory for `workflow.json`. WOML intentionally does not walk
 parent directories. Use `--project <path>` when running elsewhere.
 
 An explicit CLI option cannot silently replace authority already declared by a
@@ -57,10 +57,10 @@ project. Conflicting runtime, policy, reviewer, or target inputs fail with
 ## Commands
 
 ```bash
-woml check --project ./woml.project.json --json
-woml types --project ./woml.project.json --output ./generated/woml.d.ts
-woml test --project ./woml.project.json --state ./.woml/state.sqlite
-woml run --project ./woml.project.json
+woml check --project ./workflow.json --json
+woml types --project ./workflow.json --output ./generated/woml.d.ts
+woml test --project ./workflow.json --state ./.woml/state.sqlite
+woml run --project ./workflow.json
 ```
 
 See [Migrating to Projects](migrating-to-projects.md) for converting long CLI

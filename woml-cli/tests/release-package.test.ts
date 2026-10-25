@@ -68,7 +68,7 @@ describe('WOML release package', () => {
         resolve(directory, 'dist/cli.js'),
         'check',
         '--project',
-        resolve(projectDirectory, 'woml.project.json'),
+        resolve(projectDirectory, 'workflow.json'),
         '--json',
       ],
       cwd: projectDirectory,

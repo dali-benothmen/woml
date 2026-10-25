@@ -53,7 +53,7 @@ describe('combined project editor and AI-assisted authoring support', () => {
       await readFile(resolve(repositoryRoot, 'woml-vscode/package.json'), 'utf8')
     );
     expect(extension.contributes.jsonValidation).toContainEqual({
-      fileMatch: '**/woml.project.json',
+      fileMatch: '**/workflow.json',
       url: './schemas/woml-project.v1.schema.json',
     });
   });

@@ -2,8 +2,8 @@
 
 ## Project not found
 
-WOML discovers `woml.project.json` only in the current directory. Change to the
-project root or pass `--project /absolute/path/woml.project.json`.
+WOML discovers `workflow.json` only in the current directory. Change to the
+project root or pass `--project /absolute/path/workflow.json`.
 
 ## `WOML_PROJECT_OPTION_CONFLICT`
 

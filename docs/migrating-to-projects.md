@@ -17,17 +17,17 @@ woml run ./workflows \
   --target-trust ./ops/target-trust.json
 ```
 
-After, record those paths in `woml.project.json`, run `woml check`, and use:
+After, record those paths in `workflow.json`, run `woml check`, and use:
 
 ```bash
-woml run --project ./woml.project.json
+woml run --project ./workflow.json
 ```
 
 ## Safe migration
 
 1. Run `woml init` in a new directory and copy workflow files into `workflows/`.
 2. Add runtime and authority references one at a time.
-3. Run `woml check --project ./woml.project.json --json` after every change.
+3. Run `woml check --project ./workflow.json --json` after every change.
 4. Commit the manifest and policy documents, but never secret values, private
    keys, runtime state, worker journals, or generated capability tokens.
 5. Compare a `woml test` result with the existing explicit-file invocation.

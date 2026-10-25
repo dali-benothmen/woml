@@ -42,7 +42,7 @@ export async function initializeWomlProject(
   directory: string
 ): Promise<InitializedWomlProjectV1> {
   const root = resolve(directory);
-  const manifestPath = resolve(root, 'woml.project.json');
+  const manifestPath = resolve(root, 'workflow.json');
   const workflowsDirectory = resolve(root, 'workflows');
   const workflowPath = resolve(workflowsDirectory, 'hello.woml');
   const authoringGuidePath = resolve(root, 'AGENTS.md');
@@ -69,7 +69,7 @@ export async function initializeWomlProject(
   try {
     await mkdir(workflowsDirectory, { recursive: true, mode: 0o755 });
     const [manifestTemplate, workflowTemplate, authoringGuideTemplate] = await Promise.all([
-      readFile(resolve(TEMPLATE_ROOT, 'woml.project.json'), 'utf8'),
+      readFile(resolve(TEMPLATE_ROOT, 'workflow.json'), 'utf8'),
       readFile(resolve(TEMPLATE_ROOT, 'workflows/hello.woml'), 'utf8'),
       readFile(resolve(TEMPLATE_ROOT, 'AGENTS.md'), 'utf8'),
     ]);

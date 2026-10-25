@@ -5,7 +5,7 @@
   "project": {
     "name": "payments-operations",
     "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "manifestPath": "/srv/payments-operations/woml.project.json"
+    "manifestPath": "/srv/payments-operations/workflow.json"
   },
   "workflows": [
     {

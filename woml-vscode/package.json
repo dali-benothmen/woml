@@ -94,7 +94,7 @@
     ],
     "jsonValidation": [
       {
-        "fileMatch": "**/woml.project.json",
+        "fileMatch": "**/workflow.json",
         "url": "./schemas/woml-project.v1.schema.json"
       }
     ]

@@ -279,7 +279,7 @@ explicit stop.
 The shortest supported project journey is `woml init`, `woml check`, and
 `woml test`. Project-aware `run`, `test`, `check`, and `types` commands accept
 `--project <path>` and otherwise inspect only the current directory for
-`woml.project.json`.
+`workflow.json`.
 
 Remote operations use `woml target list|check|inspect|drain`,
 `woml worker check|start`, and `woml dispatch inspect|reconcile`. An ambiguous

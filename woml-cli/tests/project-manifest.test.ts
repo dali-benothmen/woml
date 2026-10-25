@@ -82,7 +82,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 async function writeManifest(root: string, value: unknown): Promise<string> {
-  const path = join(root, 'woml.project.json');
+  const path = join(root, 'workflow.json');
   await writeJson(path, value);
   return path;
 }

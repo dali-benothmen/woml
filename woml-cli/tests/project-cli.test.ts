@@ -46,7 +46,7 @@ describe('project-aware core commands', () => {
     const checked = output();
     expect(
       await runCli(
-        ['check', '--project', join(target, 'woml.project.json'), '--json'],
+        ['check', '--project', join(target, 'workflow.json'), '--json'],
         checked.io
       )
     ).toBe(0);

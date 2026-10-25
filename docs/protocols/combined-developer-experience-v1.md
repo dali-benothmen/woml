@@ -27,7 +27,7 @@ Any later need to change one of those contracts requires a separate review and v
 
 ## WOML Project v1
 
-The canonical filename is `woml.project.json`. Its profile is `woml.project/v1` and its version is `1`.
+The canonical filename is `workflow.json`. Its profile is `woml.project/v1` and its version is `1`.
 
 The schema is `docs/schemas/woml-project.v1.schema.json`.
 
@@ -69,7 +69,7 @@ The manifest itself grants no capability.
 - A `.woml` symlink found in a referenced directory is checked using the same containment rule.
 - Duplicate authored references, canonical files, and runnable workflow IDs are rejected.
 - Workflow and configuration enumeration uses deterministic lexical order.
-- Project discovery is not part of CDX1. CDX2 may inspect only `./woml.project.json`; it must not search parent directories.
+- Project discovery is not part of CDX1. CDX2 may inspect only `./workflow.json`; it must not search parent directories.
 
 ### Explicit trust dependencies
 
@@ -253,7 +253,7 @@ still required before the combined experience is declared release-ready.
 adapters implement deterministic local substitutes for Terraform, Prometheus,
 Slack, and AI risk classification. The project contains no private key or
 credential, denies infrastructure effects by default, and keeps worker-local
-configuration outside `woml.project.json`. The remote apply never falls back to
+configuration outside `workflow.json`. The remote apply never falls back to
 local execution.
 
 ## CDX5 presentation projection
@@ -267,7 +267,7 @@ versioned object without color or cursor control.
 
 ## CDX6 editor and agent authoring
 
-The VS Code extension associates `woml.project.json` with the frozen Project v1
+The VS Code extension associates `workflow.json` with the frozen Project v1
 schema and exposes snippets for approvals, locks, sagas, waits, artifacts,
 progress, remote targets, and the reviewed safe-deployment pattern. Generated
 environment declarations use the compiler-owned script-host surface. Newly

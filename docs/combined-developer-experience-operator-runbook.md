@@ -2,7 +2,7 @@
 
 ## Before activation
 
-1. Run `woml check --project ./woml.project.json --json`.
+1. Run `woml check --project ./workflow.json --json`.
 2. Review the project digest and every referenced policy, reviewer, target, and
    trust document.
 3. Run `woml target check` for each remote target.

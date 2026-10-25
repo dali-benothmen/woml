@@ -6,7 +6,7 @@ import { runCli, type CliIo } from '../src/cli';
 import { resolveWomlProject } from '../src/project';
 
 const root = resolve(import.meta.dir, '../../examples/infrastructureAgent');
-const manifest = resolve(root, 'woml.project.json');
+const manifest = resolve(root, 'workflow.json');
 
 function output() {
   const stdout: string[] = [];

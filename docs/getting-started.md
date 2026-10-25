@@ -136,7 +136,7 @@ woml check
 woml test
 ```
 
-The generated `woml.project.json`, `workflows/hello.woml`, and `AGENTS.md` are a
+The generated `workflow.json`, `workflows/hello.woml`, and `AGENTS.md` are a
 complete local project. Add reviewed runtime and authority references to the
 manifest as the automation grows; do not put secret values in it. See the
 [project manifest reference](project-manifest.md) and

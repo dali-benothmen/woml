@@ -156,7 +156,7 @@ function projectCorrectiveAction(code: string): string {
     case 'WOML_PROJECT_OPTION_CONFLICT':
       return 'choose either the project reference or the equivalent command-line option, not both.';
     default:
-      return 'repair woml.project.json according to the WOML Project v1 schema.';
+      return 'repair workflow.json according to the WOML Project v1 schema.';
   }
 }
 

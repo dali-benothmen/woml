@@ -2323,7 +2323,7 @@ exits.
 
 Workflow language stays independent of deployment configuration. A step may use
 the literal `target="production-private"` placement attribute, while
-`woml.project.json` references the operator-owned target registry and trust
+`workflow.json` references the operator-owned target registry and trust
 document. Omitting `target` means `local`. A missing or ineligible remote target
 fails closed and never runs locally. See the
 [project manifest reference](project-manifest.md).

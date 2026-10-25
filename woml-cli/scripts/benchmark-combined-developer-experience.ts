@@ -76,7 +76,7 @@ try {
       workflowSource(`benchmark-${index}`)
     );
   }
-  const manifest = join(project, 'woml.project.json');
+  const manifest = join(project, 'workflow.json');
   await writeFile(manifest, JSON.stringify({
     profile: 'woml.project/v1',
     version: 1,
