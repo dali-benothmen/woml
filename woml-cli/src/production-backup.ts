@@ -14,6 +14,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import {
   BackupOperationError,
@@ -188,12 +189,21 @@ async function digestFile(path: string): Promise<{ digest: string; sizeBytes: nu
 }
 
 async function syncFile(path: string): Promise<void> {
-  const handle = await open(path, 'r');
+  // Windows FlushFileBuffers requires a write-capable handle. The backup
+  // files are owned by this operation, so opening without truncation is safe.
+  const handle = await open(path, 'r+');
   try {
     await handle.sync();
   } finally {
     await handle.close();
   }
+}
+
+async function restrictFileToOwner(path: string): Promise<void> {
+  // Windows does not implement POSIX owner/group/other mode bits. Bun may
+  // surface chmod(0600) as EPERM there even though the file was created
+  // successfully and remains governed by the directory ACL.
+  if (process.platform !== 'win32') await chmod(path, 0o600);
 }
 
 async function syncDirectory(path: string): Promise<void> {
@@ -213,6 +223,24 @@ async function syncDirectory(path: string): Promise<void> {
     throw error;
   } finally {
     await handle?.close();
+  }
+}
+
+async function renameAtomically(source: string, destination: string): Promise<void> {
+  const attempts = process.platform === 'win32' ? 6 : 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      const retryable =
+        process.platform === 'win32' &&
+        error instanceof Error &&
+        'code' in error &&
+        ['EACCES', 'EBUSY', 'EPERM'].includes(String(error.code));
+      if (!retryable || attempt + 1 === attempts) throw error;
+      await delay(25 * (attempt + 1));
+    }
   }
 }
 
@@ -433,6 +461,7 @@ export async function createProductionBackup(
   const createdAt = new Date().toISOString();
   await mkdir(temporaryDirectory, { mode: 0o700 });
   const databasePath = join(temporaryDirectory, 'state.sqlite');
+  let stage = 'creating the SQLite snapshot';
   try {
     let inventory: RustBackupStoreInspection;
     try {
@@ -450,8 +479,11 @@ export async function createProductionBackup(
       }
       throw error;
     }
-    await chmod(databasePath, 0o600);
+    stage = 'setting snapshot permissions';
+    await restrictFileToOwner(databasePath);
+    stage = 'hashing the SQLite snapshot';
     const database = await digestFile(databasePath);
+    stage = 'exporting artifact inventory';
     const artifacts = options.artifactAuthority === undefined
       ? undefined
       : exportArtifactBackupWithRust(
@@ -485,23 +517,43 @@ export async function createProductionBackup(
       ...(artifacts === undefined ? {} : { artifacts }),
       verified: true,
     };
+    stage = 'writing the backup manifest';
     await writeFile(
       join(temporaryDirectory, 'manifest.json'),
       `${JSON.stringify(manifest, null, 2)}\n`,
       { encoding: 'utf8', mode: 0o600, flag: 'wx' }
     );
+    stage = 'verifying the backup directory';
     await verifyBackupDirectory(temporaryDirectory, options.nativeCorePath);
+    stage = 'flushing the SQLite snapshot';
     await syncFile(databasePath);
+    stage = 'flushing the backup manifest';
     await syncFile(join(temporaryDirectory, 'manifest.json'));
+    stage = 'flushing the temporary directory';
     await syncDirectory(temporaryDirectory);
-    await rename(temporaryDirectory, args.backupDirectory);
+    stage = 'publishing the backup directory';
+    await renameAtomically(temporaryDirectory, args.backupDirectory);
+    stage = 'flushing the parent directory';
     await syncDirectory(parent);
+    stage = 'recording the verified backup';
     recordVerifiedBackupWithRust(args.statePath, backupId, createdAt, {
       nativeCorePath: options.nativeCorePath,
     });
     return manifest;
   } catch (error) {
     await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => {});
+    if (
+      !(error instanceof ProductionBackupError) &&
+      !(error instanceof BackupOperationError) &&
+      error instanceof Error &&
+      'code' in error
+    ) {
+      throw new ProductionBackupError(
+        'WOML_BACKUP_FILESYSTEM_FAILED',
+        `Backup failed while ${stage} (${String(error.code)}).`,
+        { cause: error }
+      );
+    }
     throw error;
   }
 }
@@ -598,7 +650,7 @@ export async function restoreProductionBackup(
       temporaryPath,
       constants.COPYFILE_EXCL
     );
-    await chmod(temporaryPath, 0o600);
+    await restrictFileToOwner(temporaryPath);
     let prepared: RustBackupStoreInspection;
     try {
       prepared = prepareRestoredStoreWithRust(
@@ -671,7 +723,7 @@ export async function restoreProductionBackup(
       }
       throw error;
     }
-    await chmod(args.statePath, 0o600);
+    await restrictFileToOwner(args.statePath);
     await syncFile(args.statePath);
     await syncDirectory(targetDirectory);
     return {

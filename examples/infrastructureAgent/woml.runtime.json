@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "deploymentName": "infrastructure-agent-rehearsal",
+  "statePath": "./.woml/state.sqlite",
+  "public": { "host": "127.0.0.1", "port": 3310 },
+  "admin": { "host": "127.0.0.1", "port": 3311 },
+  "logging": {
+    "format": "text",
+    "level": "info",
+    "directory": "./.woml/logs"
+  },
+  "workers": 2,
+  "shutdownTimeoutMs": 10000,
+  "observability": {
+    "health": true,
+    "metrics": true,
+    "openTelemetry": {
+      "enabled": true,
+      "protocol": "http/protobuf",
+      "traces": true,
+      "metrics": true,
+      "logs": true,
+      "samplingRatio": 1,
+      "exportIntervalMs": 5000,
+      "exportTimeoutMs": 1000,
+      "shutdownTimeoutMs": 2000,
+      "maxQueueSize": 256,
+      "maxExportBatchSize": 64,
+      "propagation": true
+    }
+  },
+  "retention": { "enabled": false }
+}

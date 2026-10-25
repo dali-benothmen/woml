@@ -40,6 +40,7 @@ pub mod remote_coordinator_server;
 pub mod remote_dispatch;
 pub mod remote_execution;
 pub mod remote_protocol;
+pub mod remote_transport;
 pub mod remote_worker;
 pub mod remote_worker_journal;
 pub mod retention;
@@ -77,17 +78,22 @@ pub use remote_execution::{
   ingest_remote_output_batch, RemoteExecutionError, RemoteOutputIngestReportV1,
 };
 pub use remote_protocol::{
-  decode_remote_dispatch_package, decode_worker_hello, decode_worker_output_batch,
-  decode_worker_poll, decode_worker_shutdown, RemoteArtifactGrantV1, RemoteArtifactOperationV1,
-  RemoteCoordinatorAuthorityV1, RemoteDispatchPackageV1, RemoteEffectiveAuthorityV1,
-  RemoteOperationalRecordV1, RemoteProtocolError, WorkerArchitectureV1, WorkerCapabilityV1,
+  decode_remote_dispatch_package, decode_worker_dispatch_fact, decode_worker_hello,
+  decode_worker_output_batch, decode_worker_poll, decode_worker_shutdown, decode_worker_terminal,
+  RemoteArtifactGrantV1, RemoteArtifactOperationV1, RemoteCoordinatorAuthorityV1,
+  RemoteDispatchPackageV1, RemoteEffectiveAuthorityV1, RemoteOperationalRecordV1,
+  RemoteProtocolError, WorkerArchitectureV1, WorkerCapabilityV1, WorkerDispatchFactV1,
   WorkerHelloV1, WorkerOperatingSystemV1, WorkerOutputBatchV1, WorkerPlatformV1,
-  WorkerPollResultV1, WorkerPollV1, WorkerSessionV1, WorkerShutdownV1,
-  REMOTE_DISPATCH_PACKAGE_PROFILE, REMOTE_DISPATCH_PACKAGE_VERSION,
-  REMOTE_OUTPUT_BATCH_MAX_RECORDS, REMOTE_TERMINAL_RESULT_MAX_BYTES,
-  WORKER_PROTOCOL_MAX_CAPABILITIES, WORKER_PROTOCOL_MAX_CAPACITY,
+  WorkerPollResultV1, WorkerPollV1, WorkerSessionV1, WorkerShutdownV1, WorkerTerminalFailureV1,
+  WorkerTerminalOutcomeV1, WorkerTerminalV1, REMOTE_DISPATCH_PACKAGE_PROFILE,
+  REMOTE_DISPATCH_PACKAGE_VERSION, REMOTE_OUTPUT_BATCH_MAX_RECORDS,
+  REMOTE_TERMINAL_RESULT_MAX_BYTES, WORKER_PROTOCOL_MAX_CAPABILITIES, WORKER_PROTOCOL_MAX_CAPACITY,
   WORKER_PROTOCOL_MAX_MESSAGE_BYTES, WORKER_PROTOCOL_MAX_TARGETS, WORKER_PROTOCOL_PROFILE,
   WORKER_PROTOCOL_VERSION,
+};
+pub use remote_transport::{
+  RemoteDispatchOfferV1, RemoteDispatchTerminalReceiptV1, RemoteDispatchTransportV1,
+  RemoteTransportError, REMOTE_OFFER_LIFETIME_SECONDS, REMOTE_TRANSPORT_MAX_PENDING,
 };
 pub use remote_worker::{
   parse_worker_configuration, prepare_worker_configuration, PreparedWorkerConfigurationV1,
@@ -99,9 +105,9 @@ pub use remote_worker_journal::{
   prepare_remote_dispatch, verify_remote_artifact_transfer, EnvironmentRemoteSecretProvider,
   PreparedRemoteDispatchV1, RemoteSecretProvider, RemoteWorkerAttemptRuntimeV1,
   RemoteWorkerAuthorityV1, RemoteWorkerCancellationTokenV1, RemoteWorkerError,
-  RemoteWorkerTerminalV1, WorkerAttemptRecordV1, WorkerAttemptStateV1, WorkerJournalV1,
-  REMOTE_CANCELLATION_CONFIRMATION_TIMEOUT_MS, WORKER_JOURNAL_RECOVERY_LIMIT,
-  WORKER_JOURNAL_SCHEMA_VERSION,
+  RemoteWorkerTerminalV1, ResolvedRemoteSecretProvider, WorkerAttemptRecordV1,
+  WorkerAttemptStateV1, WorkerJournalV1, REMOTE_CANCELLATION_CONFIRMATION_TIMEOUT_MS,
+  WORKER_JOURNAL_RECOVERY_LIMIT, WORKER_JOURNAL_SCHEMA_VERSION,
 };
 pub use target_registry::{
   parse_target_registry, prepare_target_registry, PreparedTargetRegistryV1, TargetRegistryEntryV1,

@@ -20,11 +20,12 @@ use woml_engine::{
   admit_external_signal_durable, create_online_backup, execute_retention, execute_workflow,
   execute_workflow_durable, execute_workflow_durable_outcome, export_artifact,
   export_artifact_backup, inspect_artifact, inspect_backup_store, inspect_run_artifacts,
-  last_retention_result, maintain_artifacts, observe_artifacts, plan_retention,
-  prepare_emergency_deny_overlay, prepare_infrastructure_policy, prepare_restored_store,
-  recent_run_presentations_from_store_v1, record_verified_backup, recover_durable_runs,
-  resolve_human_approval_durable, resolve_rich_approval_durable, restore_artifact_backup,
-  resume_workflow_durable, resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
+  last_retention_result, maintain_artifacts, observe_artifacts, parse_target_registry,
+  plan_retention, prepare_emergency_deny_overlay, prepare_infrastructure_policy,
+  prepare_remote_dispatch, prepare_restored_store, recent_run_presentations_from_store_v1,
+  record_verified_backup, recover_durable_runs, resolve_human_approval_durable,
+  resolve_rich_approval_durable, restore_artifact_backup, resume_workflow_durable,
+  resume_workflow_durable_any_outcome, resume_workflow_durable_outcome,
   run_notification_provider_journey_with_custom, run_presentation_from_store_v1,
   settle_approval_timeout_durable, verify_artifact_backup, ApprovalDecision,
   ApprovalDecisionOutcome, ArtifactPolicyV1, ArtifactRuntimeMode, BackupError,
@@ -34,16 +35,20 @@ use woml_engine::{
   ExternalTriggerAdmissionCommand, InfrastructurePolicyBundleV1, InfrastructurePolicyTrustV1,
   IntervalProgress, IntervalProgressReporter, LifecycleProgress, NotificationHostClientError,
   NotificationHostProcessOptions, NotificationJourneyDiagnostics, NotificationJourneyError,
-  OperationalOutputReporter, ParallelFailurePolicy, ProcessPolicyV1, ProcessRuntimeMode,
-  RemoteDispatchResolutionV1, RetentionError, RetentionPolicyV1, ReviewerDirectoryAuthorityV1,
-  ReviewerDirectoryV1, ReviewerIdentityClaimV1, ReviewerProviderV1, RichApprovalDecisionStatus,
-  RichApprovalIdentityDecision, RunFailure, RunPresentationError, RunStatus, RuntimeExecutionError,
-  RuntimeExecutionOptions, RuntimeModuleArtifact, RuntimePolicyProgress,
-  RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
+  OperationalOutputReporter, ParallelFailurePolicy, PreparedRemoteDispatchV1, ProcessPolicyV1,
+  ProcessRuntimeMode, RemoteCoordinatorAuthorityV1, RemoteCoordinatorServerV1,
+  RemoteCoordinatorTlsOptionsV1, RemoteDispatchPackageV1, RemoteDispatchResolutionV1,
+  RemoteDispatchTransportV1, RemoteSessionAuthorityV1, RemoteWorkerAttemptRuntimeV1,
+  RemoteWorkerAuthorityV1, ResolvedRemoteSecretProvider, RetentionError, RetentionPolicyV1,
+  ReviewerDirectoryAuthorityV1, ReviewerDirectoryV1, ReviewerIdentityClaimV1, ReviewerProviderV1,
+  RichApprovalDecisionStatus, RichApprovalIdentityDecision, RunFailure, RunPresentationError,
+  RunStatus, RuntimeExecutionError, RuntimeExecutionOptions, RuntimeModuleArtifact,
+  RuntimePolicyProgress, RuntimePolicyProgressReporter, ScheduleProgress, ScheduleProgressReporter,
   ScriptHostProcessOptions, SystemEngineClock, TimerWaitSettlement, TriggerAdmissionRequest,
-  TriggerProgress, TriggerProgressReporter, WebhookDefinitionRegistration, WebhookRuntimeError,
-  WomlWebhookServer, WomlWebhookServerConfig, WorkflowCallProgress, WorkflowCallProgressReporter,
-  WorkflowCallRunRelations, COMPILED_MODEL_SCHEMA_VERSION_V19,
+  TriggerProgress, TriggerProgressReporter, TrustedWorkerIdentityV1, WebhookDefinitionRegistration,
+  WebhookRuntimeError, WomlWebhookServer, WomlWebhookServerConfig, WorkerAttemptStateV1,
+  WorkerJournalV1, WorkflowCallProgress, WorkflowCallProgressReporter, WorkflowCallRunRelations,
+  COMPILED_MODEL_SCHEMA_VERSION_V19,
 };
 
 #[derive(Serialize)]
@@ -559,6 +564,18 @@ static WEBHOOK_RUNTIMES: OnceLock<Mutex<HashMap<String, NativeWebhookRuntimeThre
 
 fn webhook_runtimes() -> &'static Mutex<HashMap<String, NativeWebhookRuntimeThread>> {
   WEBHOOK_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+struct NativeRemoteCoordinatorRuntime {
+  server: RemoteCoordinatorServerV1,
+  transport: RemoteDispatchTransportV1,
+}
+
+static REMOTE_COORDINATORS: OnceLock<Mutex<HashMap<String, NativeRemoteCoordinatorRuntime>>> =
+  OnceLock::new();
+
+fn remote_coordinators() -> &'static Mutex<HashMap<String, NativeRemoteCoordinatorRuntime>> {
+  REMOTE_COORDINATORS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn native_trigger_runtime_error(error: WebhookRuntimeError) -> NativeTriggerRuntimeError {
@@ -2461,6 +2478,318 @@ pub fn inspect_woml_remote_dispatch(
     napi::Error::from_reason(format!(
       "Could not encode remote dispatch inspection: {error}"
     ))
+  })
+}
+
+#[napi]
+#[allow(clippy::too_many_arguments)]
+pub fn start_woml_remote_loopback_coordinator(
+  runtime_id: String,
+  target_registry_json: String,
+  trusted_workers_json: String,
+  supported_capabilities_json: String,
+  event_store_path: String,
+  certificate_path: String,
+  private_key_path: String,
+  client_ca_path: String,
+) -> napi::Result<String> {
+  if runtime_id.is_empty() || runtime_id.len() > 256 {
+    return Err(napi::Error::from_reason(
+      "WOML_REMOTE_PROTOCOL_INVALID: invalid coordinator runtime id".to_string(),
+    ));
+  }
+  let registry = parse_target_registry(target_registry_json.as_bytes())
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  let trust: Vec<TrustedWorkerIdentityV1> =
+    serde_json::from_str(&trusted_workers_json).map_err(|_| {
+      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid worker trust".to_string())
+    })?;
+  let capabilities: BTreeMap<String, u32> = serde_json::from_str(&supported_capabilities_json)
+    .map_err(|_| {
+      napi::Error::from_reason(
+        "WOML_REMOTE_PROTOCOL_INVALID: invalid coordinator capabilities".to_string(),
+      )
+    })?;
+  let authority = RemoteSessionAuthorityV1::new_dispatching(registry, trust, capabilities)
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  let transport = RemoteDispatchTransportV1::new(event_store_path);
+  let server = RemoteCoordinatorServerV1::start_dispatching(
+    authority,
+    transport.clone(),
+    RemoteCoordinatorTlsOptionsV1 {
+      bind_address: "127.0.0.1:0"
+        .parse::<SocketAddr>()
+        .expect("fixed loopback address"),
+      certificate_path: PathBuf::from(certificate_path),
+      private_key_path: PathBuf::from(private_key_path),
+      client_ca_path: PathBuf::from(client_ca_path),
+    },
+  )
+  .map_err(|error| napi::Error::from_reason(format!("WOML_TARGET_UNAVAILABLE: {error}")))?;
+  let local_address = server.local_address();
+  let mut runtimes = remote_coordinators().lock().map_err(|_| {
+    napi::Error::from_reason(
+      "WOML_TARGET_UNAVAILABLE: coordinator registry unavailable".to_string(),
+    )
+  })?;
+  if runtimes.contains_key(&runtime_id) {
+    return Err(napi::Error::from_reason(
+      "WOML_REMOTE_DISPATCH_CONFLICT: coordinator runtime already exists".to_string(),
+    ));
+  }
+  runtimes.insert(
+    runtime_id.clone(),
+    NativeRemoteCoordinatorRuntime { server, transport },
+  );
+  serde_json::to_string(&serde_json::json!({
+    "profile": "woml.remote-loopback-coordinator/v1",
+    "runtimeId": runtime_id,
+    "address": local_address.to_string(),
+    "dispatchEnabled": true
+  }))
+  .map_err(|_| napi::Error::from_reason("Could not encode loopback coordinator startup."))
+}
+
+#[napi]
+pub fn enqueue_woml_remote_dispatch(
+  runtime_id: String,
+  dispatch_package_json: String,
+  coordinator_authority_json: String,
+) -> napi::Result<String> {
+  let package: RemoteDispatchPackageV1 =
+    serde_json::from_str(&dispatch_package_json).map_err(|_| {
+      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid dispatch package")
+    })?;
+  let authority: RemoteCoordinatorAuthorityV1 = serde_json::from_str(&coordinator_authority_json)
+    .map_err(|_| {
+    napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid coordinator authority")
+  })?;
+  let transport = remote_coordinators()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE"))?
+    .get(&runtime_id)
+    .map(|runtime| runtime.transport.clone())
+    .ok_or_else(|| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE: coordinator not found"))?;
+  transport
+    .enqueue(package, authority, Utc::now())
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))
+}
+
+#[napi]
+pub fn maintain_woml_remote_dispatches(runtime_id: String) -> napi::Result<String> {
+  let transport = remote_coordinators()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE"))?
+    .get(&runtime_id)
+    .map(|runtime| runtime.transport.clone())
+    .ok_or_else(|| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE: coordinator not found"))?;
+  let now = Utc::now();
+  let changed = transport
+    .mark_lost(now, now)
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  serde_json::to_string(&changed)
+    .map_err(|_| napi::Error::from_reason("Could not encode remote maintenance result."))
+}
+
+#[napi]
+pub fn read_woml_remote_terminal(
+  runtime_id: String,
+  dispatch_id: String,
+) -> napi::Result<Option<String>> {
+  let transport = remote_coordinators()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE"))?
+    .get(&runtime_id)
+    .map(|runtime| runtime.transport.clone())
+    .ok_or_else(|| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE: coordinator not found"))?;
+  transport
+    .terminal_fact(&dispatch_id)
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?
+    .map(|terminal| {
+      serde_json::to_string(&terminal)
+        .map_err(|_| napi::Error::from_reason("Could not encode remote terminal fact."))
+    })
+    .transpose()
+}
+
+#[napi]
+pub fn stop_woml_remote_loopback_coordinator(runtime_id: String) -> napi::Result<()> {
+  let runtime = remote_coordinators()
+    .lock()
+    .map_err(|_| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE"))?
+    .remove(&runtime_id)
+    .ok_or_else(|| napi::Error::from_reason("WOML_TARGET_UNAVAILABLE: coordinator not found"))?;
+  runtime.server.shutdown();
+  Ok(())
+}
+
+fn native_prepared_remote_dispatch(
+  dispatch_package_json: &str,
+  coordinator_authority_json: &str,
+  worker_authority_json: &str,
+  worker_id: &str,
+  target: &str,
+) -> napi::Result<PreparedRemoteDispatchV1> {
+  let package: RemoteDispatchPackageV1 =
+    serde_json::from_str(dispatch_package_json).map_err(|_| {
+      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid dispatch package")
+    })?;
+  let coordinator: RemoteCoordinatorAuthorityV1 = serde_json::from_str(coordinator_authority_json)
+    .map_err(|_| {
+      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid coordinator authority")
+    })?;
+  let worker: RemoteWorkerAuthorityV1 =
+    serde_json::from_str(worker_authority_json).map_err(|_| {
+      napi::Error::from_reason("WOML_REMOTE_PROTOCOL_INVALID: invalid worker authority")
+    })?;
+  prepare_remote_dispatch(
+    package,
+    &coordinator,
+    worker_id,
+    target,
+    &worker,
+    Utc::now(),
+  )
+  .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))
+}
+
+#[napi]
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_woml_remote_attempt(
+  dispatch_package_json: String,
+  coordinator_authority_json: String,
+  worker_authority_json: String,
+  worker_id: String,
+  session_id: String,
+  target: String,
+  worker_journal_path: String,
+) -> napi::Result<String> {
+  let prepared = native_prepared_remote_dispatch(
+    &dispatch_package_json,
+    &coordinator_authority_json,
+    &worker_authority_json,
+    &worker_id,
+    &target,
+  )?;
+  let journal_path = PathBuf::from(worker_journal_path);
+  let mut journal = WorkerJournalV1::open(&journal_path)
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  let record = journal
+    .accept(&prepared, &worker_id, &session_id, Utc::now())
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  if let Some(terminal) = record.terminal {
+    return serde_json::to_string(&serde_json::json!({
+      "profile": "woml.remote-attempt-preparation/v1",
+      "status": "terminal",
+      "dispatchId": prepared.package.dispatch_id,
+      "terminal": terminal
+    }))
+    .map_err(|_| napi::Error::from_reason("Could not encode remote attempt preparation."));
+  }
+  if record.state != WorkerAttemptStateV1::Accepted {
+    return Err(napi::Error::from_reason(
+      "WOML_REMOTE_DISPATCH_AMBIGUOUS: remote attempt is not safely restartable".to_string(),
+    ));
+  }
+  serde_json::to_string(&serde_json::json!({
+    "profile": "woml.remote-attempt-preparation/v1",
+    "status": "accepted",
+    "dispatchId": prepared.package.dispatch_id,
+    "terminal": null
+  }))
+  .map_err(|_| napi::Error::from_reason("Could not encode remote attempt preparation."))
+}
+
+#[napi]
+pub fn start_woml_remote_attempt(
+  worker_journal_path: String,
+  dispatch_id: String,
+  session_id: String,
+) -> napi::Result<()> {
+  let journal_path = PathBuf::from(worker_journal_path);
+  let mut journal = WorkerJournalV1::open(&journal_path)
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  let record = journal
+    .start(&dispatch_id, &session_id, Utc::now())
+    .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  if record.state != WorkerAttemptStateV1::Started
+    || !journal
+      .was_started_by_session(&dispatch_id, &session_id)
+      .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?
+  {
+    return Err(napi::Error::from_reason(
+      "WOML_REMOTE_DISPATCH_AMBIGUOUS: remote attempt start is not bound to this session"
+        .to_string(),
+    ));
+  }
+  Ok(())
+}
+
+#[napi(ts_return_type = "Promise<string>")]
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_woml_remote_attempt(
+  dispatch_package_json: String,
+  coordinator_authority_json: String,
+  worker_authority_json: String,
+  worker_id: String,
+  session_id: String,
+  target: String,
+  capacity: u32,
+  prestarted: bool,
+  worker_journal_path: String,
+  bun_executable: String,
+  script_host_path: String,
+  script_timeout_ms: u32,
+  resolved_secrets_json: String,
+  runtime_capabilities_json: Option<String>,
+) -> napi::Result<String> {
+  let secrets: BTreeMap<String, String> = serde_json::from_str(&resolved_secrets_json)
+    .map_err(|_| napi::Error::from_reason("WOML_SECRET_UNAVAILABLE: invalid resolved secrets"))?;
+  let prepared = native_prepared_remote_dispatch(
+    &dispatch_package_json,
+    &coordinator_authority_json,
+    &worker_authority_json,
+    &worker_id,
+    &target,
+  )?;
+  let journal_path = PathBuf::from(worker_journal_path);
+  let mut options = runtime_options_with_modules(
+    bun_executable,
+    script_host_path,
+    script_timeout_ms,
+    resolved_secrets_json,
+    None,
+    runtime_capabilities_json,
+  )?;
+  if prepared
+    .effective_authority
+    .capabilities
+    .iter()
+    .any(|capability| capability.id != "runtime.script")
+  {
+    options = options
+      .prepare_remote_worker_capabilities(&journal_path)
+      .map_err(native_execution_error)?;
+  }
+  let mut runtime = RemoteWorkerAttemptRuntimeV1::new(
+    WorkerJournalV1::open(&journal_path)
+      .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?,
+    worker_id,
+    session_id,
+    capacity as usize,
+    options.script_host.clone(),
+    options.remote_worker_capability_authority(),
+    Arc::new(ResolvedRemoteSecretProvider::new(secrets)),
+  )
+  .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  let terminal = if prestarted {
+    runtime.execute_prestarted(&prepared, Utc::now()).await
+  } else {
+    runtime.execute(&prepared, Utc::now()).await
+  }
+  .map_err(|error| napi::Error::from_reason(format!("{}: {error}", error.code())))?;
+  serde_json::to_string(&terminal).map_err(|_| {
+    napi::Error::from_reason("WOML_REMOTE_RESULT_INVALID: terminal fact could not be encoded")
   })
 }
 

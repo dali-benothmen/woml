@@ -186,6 +186,58 @@ pub struct WorkerShutdownV1 {
   pub sent_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDispatchFactV1 {
+  pub profile: String,
+  pub protocol_version: u32,
+  pub message_id: String,
+  pub message_type: String,
+  pub worker_id: String,
+  pub session_id: String,
+  pub sent_at: DateTime<Utc>,
+  pub target: String,
+  pub dispatch_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerTerminalOutcomeV1 {
+  Succeeded,
+  Failed,
+  Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerTerminalFailureV1 {
+  pub code: String,
+  pub message: String,
+  pub retryable: bool,
+  pub ambiguous: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerTerminalV1 {
+  pub profile: String,
+  pub protocol_version: u32,
+  pub message_id: String,
+  pub message_type: String,
+  pub worker_id: String,
+  pub session_id: String,
+  pub sent_at: DateTime<Utc>,
+  pub target: String,
+  pub dispatch_id: String,
+  pub outcome: WorkerTerminalOutcomeV1,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub result: Option<Value>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub failure: Option<WorkerTerminalFailureV1>,
+  pub final_output_sequence: u64,
+  pub journal_digest: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteOperationalRecordV1 {
@@ -344,6 +396,69 @@ pub fn decode_worker_shutdown(source: &[u8]) -> Result<WorkerShutdownV1, RemoteP
   Ok(message)
 }
 
+pub fn decode_worker_dispatch_fact(
+  source: &[u8],
+  expected_type: &str,
+) -> Result<WorkerDispatchFactV1, RemoteProtocolError> {
+  let message: WorkerDispatchFactV1 = decode(source)?;
+  validate_dispatch_base(
+    &message.profile,
+    message.protocol_version,
+    &message.message_id,
+    &message.worker_id,
+    &message.session_id,
+    &message.target,
+    &message.dispatch_id,
+  )?;
+  if message.message_type != expected_type
+    || !matches!(expected_type, "accepted" | "started" | "cancel")
+  {
+    return Err(invalid("dispatch fact type is invalid"));
+  }
+  Ok(message)
+}
+
+pub fn decode_worker_terminal(source: &[u8]) -> Result<WorkerTerminalV1, RemoteProtocolError> {
+  let message: WorkerTerminalV1 = decode(source)?;
+  validate_dispatch_base(
+    &message.profile,
+    message.protocol_version,
+    &message.message_id,
+    &message.worker_id,
+    &message.session_id,
+    &message.target,
+    &message.dispatch_id,
+  )?;
+  if message.message_type != "terminal" || !valid_digest(&message.journal_digest) {
+    return Err(invalid("terminal identity is invalid"));
+  }
+  match message.outcome {
+    WorkerTerminalOutcomeV1::Succeeded => {
+      if message.result.is_none() || message.failure.is_some() {
+        return Err(invalid("a successful terminal fact requires only a result"));
+      }
+    }
+    WorkerTerminalOutcomeV1::Failed | WorkerTerminalOutcomeV1::Cancelled => {
+      let failure = message
+        .failure
+        .as_ref()
+        .ok_or_else(|| invalid("a failed terminal fact requires a failure"))?;
+      if message.result.is_some()
+        || failure.message.len() > 1024
+        || !valid_failure_code(&failure.code)
+        || failure.ambiguous
+      {
+        return Err(invalid("terminal failure is invalid or ambiguous"));
+      }
+    }
+  }
+  let encoded = canonical_json(&message).map_err(|_| invalid("terminal cannot be encoded"))?;
+  if encoded.len() > REMOTE_TERMINAL_RESULT_MAX_BYTES {
+    return Err(RemoteProtocolError::TooLarge);
+  }
+  Ok(message)
+}
+
 pub fn decode_worker_output_batch(
   source: &[u8],
 ) -> Result<WorkerOutputBatchV1, RemoteProtocolError> {
@@ -396,6 +511,25 @@ fn validate_base(
   }
   if !valid_protocol_id(message_id) || !valid_identifier(worker_id, false) {
     return Err(invalid("message or worker identity is invalid"));
+  }
+  Ok(())
+}
+
+fn validate_dispatch_base(
+  profile: &str,
+  version: u32,
+  message_id: &str,
+  worker_id: &str,
+  session_id: &str,
+  target: &str,
+  dispatch_id: &str,
+) -> Result<(), RemoteProtocolError> {
+  validate_base(profile, version, message_id, worker_id)?;
+  if !valid_protocol_id(session_id)
+    || !valid_identifier(target, false)
+    || !valid_dispatch_id(dispatch_id)
+  {
+    return Err(invalid("dispatch identity is invalid"));
   }
   Ok(())
 }
@@ -454,6 +588,22 @@ fn valid_dispatch_id(value: &str) -> bool {
   value.len() == 73
     && value.starts_with("dispatch_")
     && value[9..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_digest(value: &str) -> bool {
+  value.len() == 71
+    && value.starts_with("sha256:")
+    && value[7..]
+      .bytes()
+      .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_failure_code(value: &str) -> bool {
+  value.starts_with("WOML_")
+    && value.len() <= 128
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 pub(crate) fn valid_semver(value: &str) -> bool {

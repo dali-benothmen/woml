@@ -1,0 +1,42 @@
+{
+  "profile": "woml.combined-developer-experience-budgets/v1",
+  "version": 1,
+  "fixture": {
+    "workflowReferences": 50,
+    "workflowFiles": 100,
+    "configurationReferences": 9
+  },
+  "projectResolution": {
+    "p95MillisecondsMax": 750,
+    "heapIncreaseBytesMax": 4194304
+  },
+  "projectPreflight": {
+    "p95MillisecondsMax": 2000
+  },
+  "baseline": {
+    "commit": "681ad9a80009d53bfe8853852a2443f9ee8a4e05",
+    "cliBytes": 1188036,
+    "installedJavaScriptBytes": 2535107
+  },
+  "runtime": {
+    "localColdActivationP95MillisecondsMax": 3000,
+    "localWarmActivationP95MillisecondsMax": 1000,
+    "remoteDispatchP95MillisecondsMax": 500,
+    "streamedOutputOverheadPercentMax": 200,
+    "idleRssIncreaseBytesMax": 16777216
+  },
+  "packaging": {
+    "mainBundleIncreaseBytesMax": 65536,
+    "installedIncreaseBytesMax": 131072
+  },
+  "regression": {
+    "localColdActivationPercentMax": 5,
+    "localWarmActivationPercentMax": 5
+  },
+  "lazyActivation": {
+    "unusedProviderStartsMax": 0,
+    "unusedWorkerStartsMax": 0,
+    "unusedListenerBindsMax": 0,
+    "unusedNetworkRequestsMax": 0
+  }
+}

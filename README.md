@@ -455,3 +455,28 @@ Contributions are welcome, including bug reports, documentation improvements, te
 ## License
 
 WOML is released under the [Apache License 2.0](./LICENSE).
+# Projects: one command from authoring to operations
+
+Start a portable project instead of repeating workflow, policy, reviewer, and
+target flags on every command:
+
+```bash
+woml init my-automation
+cd my-automation
+woml check
+woml test
+```
+
+`workflow.json` keeps workflow discovery and operator-owned configuration
+reviewable while secret values remain outside source control. The same project
+works with local execution, durable artifacts and waits, rich approvals,
+infrastructure policies, streamed output, OpenTelemetry, and authenticated
+remote targets. Remote work never silently falls back to the coordinator.
+
+Read the [project manifest reference](docs/project-manifest.md), follow the
+[infrastructure-agent tutorial](docs/infrastructure-agent-tutorial.md), or use
+the [operator runbook](docs/combined-developer-experience-operator-runbook.md).
+
+An interrupted remote effect may become **ambiguous**. Inspect the real system
+and run `woml dispatch inspect` before recording an audited decision with
+`woml dispatch reconcile`; WOML never retries an uncertain effect automatically.

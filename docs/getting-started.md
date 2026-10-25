@@ -127,3 +127,17 @@ Use authentication before exposing a webhook outside a trusted local network.
 If a command fails, keep the error code and source location when opening an
 issue. The [support guide](../SUPPORT.md) explains what information is safe and
 useful to include.
+# Start with a project
+
+```bash
+woml init hello-woml
+cd hello-woml
+woml check
+woml test
+```
+
+The generated `workflow.json`, `workflows/hello.woml`, and `AGENTS.md` are a
+complete local project. Add reviewed runtime and authority references to the
+manifest as the automation grows; do not put secret values in it. See the
+[project manifest reference](project-manifest.md) and
+[migration guide](migrating-to-projects.md).

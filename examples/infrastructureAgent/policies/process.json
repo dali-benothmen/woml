@@ -1,0 +1,21 @@
+{
+  "contract": "woml.process-policy",
+  "contractVersion": 1,
+  "enabled": true,
+  "modes": { "foreground": true, "background": true },
+  "projectRoot": "..",
+  "executables": [
+    { "alias": "fake-ai-review", "path": "../adapters/ai-review.ts" },
+    { "alias": "fake-prometheus", "path": "../adapters/prometheus.ts" },
+    { "alias": "fake-slack", "path": "../adapters/slack.ts" },
+    { "alias": "fake-terraform", "path": "../adapters/terraform.ts" }
+  ],
+  "workingDirectories": ["."],
+  "environment": { "inherit": ["PATH"], "allow": [] },
+  "limits": {
+    "maxTimeoutMs": 120000,
+    "maxOutputBytes": 131072,
+    "maxStreamBytes": 1048576,
+    "maxConcurrent": 2
+  }
+}

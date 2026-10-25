@@ -30,6 +30,32 @@ Native engines are installed automatically for supported macOS, Linux, and Windo
 
 Linux packages require glibc 2.31 or newer.
 
+## Start a Project
+
+Create a safe local project without copying an example:
+
+```bash
+woml init payments-operations
+cd payments-operations
+woml check
+woml run
+```
+
+`woml init` creates `workflow.json` and one local workflow. It never
+creates credentials, production policies, or remote-worker configuration, and
+it refuses to overwrite either generated file.
+
+When `workflow.json` is in the current directory, `check`, `run`, `test`,
+and `types` select it automatically only when no workflow path was supplied.
+Use `--project <path>` to select one explicitly. Project paths never search
+parent directories.
+
+`woml check --project <path> --json` emits the stable
+`woml.project-check/v1` result. It compiles every workflow and checks local
+storage, policies, reviewer authority, and remote targets without running a
+step, resolving secret values, contacting a provider, binding a listener, or
+dispatching remote work.
+
 ## Quick Start: Route an Order
 
 Save this as `order-router.woml`:
@@ -376,3 +402,17 @@ Use [GitHub Discussions](https://github.com/dali-benothmen/woml/discussions) for
 ## License
 
 WOML is released under the [Apache License 2.0](https://github.com/dali-benothmen/woml/blob/master/LICENSE).
+# Project quick start
+
+```bash
+woml init my-automation
+cd my-automation
+woml check
+woml test
+```
+
+The published package includes the project schemas and reviewed templates used
+by `woml init`. `workflow.json` can reference runtime, authority, reviewer,
+and remote-target configuration without embedding credentials. If a remote
+dispatch becomes ambiguous, use `woml dispatch inspect` and perform an audited
+`woml dispatch reconcile` only after checking the external system.

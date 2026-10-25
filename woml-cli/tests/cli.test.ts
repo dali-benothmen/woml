@@ -657,8 +657,8 @@ describe('woml test one-shot compatibility', () => {
     const result = await runCli('hello.woml');
 
     expect(result.stdout).toBe('');
-    expect(result.stderr).toBe(
-      'Usage: woml run <workflow.woml|directory>... [--config <path>] [--host <address>] [--port <port>] [--state <path>] [--trigger <manualTriggerId>] [--resume <runId>] [--approval-port <port>] [--json] [--verbose] [--color=auto|always|never] [--background|-d]\n'
+    expect(result.stderr).toContain(
+      'Usage: woml run [<workflow.woml|directory>...|--project <path>]'
     );
     expect(result.exitCode).toBe(2);
   });

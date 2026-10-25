@@ -1,0 +1,20 @@
+{
+  "$schema": "https://woml.dev/schemas/woml-project.v1.schema.json",
+  "profile": "woml.project/v1",
+  "version": 1,
+  "name": "payments-operations",
+  "workflows": ["./workflows"],
+  "runtime": "./woml.runtime.json",
+  "authority": {
+    "processPolicy": "./policies/process.json",
+    "artifactPolicy": "./policies/artifacts.json",
+    "infrastructurePolicy": "./policies/production.json",
+    "policyTrust": "./trust/policy-trust.json",
+    "emergencyDeny": "./policies/emergency-deny.json",
+    "reviewerDirectory": "./reviewers.json"
+  },
+  "remoteExecution": {
+    "targetRegistry": "./targets/registry.json",
+    "targetTrust": "./targets/trust.json"
+  }
+}

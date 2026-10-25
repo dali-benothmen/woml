@@ -9,6 +9,7 @@ const requiredFiles = [
   'syntaxes/woml-javascript.injection.tmLanguage.json',
   'syntaxes/woml-references.injection.tmLanguage.json',
   'snippets/woml.code-snippets',
+  'schemas/woml-project.v1.schema.json',
   'icons/woml-file.svg',
   'images/icon.png'
 ] as const;
@@ -29,6 +30,19 @@ for (const relativePath of requiredFiles) {
 }
 
 const manifest = await Bun.file(join(extensionRoot, 'package.json')).json();
+const projectValidation = manifest.contributes?.jsonValidation?.find(
+  (candidate: { fileMatch?: string; url?: string }) =>
+    candidate.fileMatch === '**/workflow.json'
+);
+if (projectValidation?.url !== './schemas/woml-project.v1.schema.json') {
+  throw new Error('workflow.json must use the packaged Project v1 schema.');
+}
+if (
+  await Bun.file(join(extensionRoot, 'schemas/woml-project.v1.schema.json')).text() !==
+  await Bun.file(join(extensionRoot, '../docs/schemas/woml-project.v1.schema.json')).text()
+) {
+  throw new Error('The VS Code Project v1 schema drifted from the public schema.');
+}
 const contributedGrammars = manifest.contributes?.grammars ?? [];
 const language = manifest.contributes?.languages?.find(
   (candidate: { id?: string }) => candidate.id === 'woml'

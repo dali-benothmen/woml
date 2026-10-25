@@ -1110,6 +1110,57 @@ export class RustWorkflowExecutionError extends Error {
 }
 
 interface NativeCore {
+  readonly prepareWomlRemoteAttempt?: (
+    dispatchPackageJson: string,
+    coordinatorAuthorityJson: string,
+    workerAuthorityJson: string,
+    workerId: string,
+    sessionId: string,
+    target: string,
+    workerJournalPath: string
+  ) => string;
+  readonly startWomlRemoteAttempt?: (
+    workerJournalPath: string,
+    dispatchId: string,
+    sessionId: string
+  ) => void;
+  readonly startWomlRemoteLoopbackCoordinator?: (
+    runtimeId: string,
+    targetRegistryJson: string,
+    trustedWorkersJson: string,
+    supportedCapabilitiesJson: string,
+    eventStorePath: string,
+    certificatePath: string,
+    privateKeyPath: string,
+    clientCaPath: string
+  ) => string;
+  readonly enqueueWomlRemoteDispatch?: (
+    runtimeId: string,
+    dispatchPackageJson: string,
+    coordinatorAuthorityJson: string
+  ) => string;
+  readonly maintainWomlRemoteDispatches?: (runtimeId: string) => string;
+  readonly readWomlRemoteTerminal?: (
+    runtimeId: string,
+    dispatchId: string
+  ) => string | null | undefined;
+  readonly stopWomlRemoteLoopbackCoordinator?: (runtimeId: string) => void;
+  readonly executeWomlRemoteAttempt?: (
+    dispatchPackageJson: string,
+    coordinatorAuthorityJson: string,
+    workerAuthorityJson: string,
+    workerId: string,
+    sessionId: string,
+    target: string,
+    capacity: number,
+    prestarted: boolean,
+    workerJournalPath: string,
+    bunExecutable: string,
+    scriptHostPath: string,
+    scriptTimeoutMs: number,
+    resolvedSecretsJson: string,
+    runtimeCapabilitiesJson?: string
+  ) => Promise<string>;
   readonly executeWomlWorkflow: (
     compiledModelJson: string,
     definitionHash: string,
@@ -3792,6 +3843,259 @@ export interface RustRemoteDispatchInspectionV1 {
   readonly lastHeartbeatAt?: string;
   readonly outputSequence: number;
   readonly failureCode?: string;
+}
+
+export interface RustRemoteWorkerTerminalV1 {
+  readonly profile: 'woml.worker-terminal/v1';
+  readonly dispatchId: string;
+  readonly invocationId: string;
+  readonly state: 'succeeded' | 'failed' | 'cancelled';
+  readonly outcome: unknown;
+  readonly completedAt: string;
+  readonly terminalDigest: string;
+}
+
+export type RustRemoteAttemptPreparationV1 =
+  | {
+      readonly profile: 'woml.remote-attempt-preparation/v1';
+      readonly status: 'accepted';
+      readonly dispatchId: string;
+      readonly terminal: null;
+    }
+  | {
+      readonly profile: 'woml.remote-attempt-preparation/v1';
+      readonly status: 'terminal';
+      readonly dispatchId: string;
+      readonly terminal: RustRemoteWorkerTerminalV1;
+    };
+
+export interface RustRemoteLoopbackCoordinatorV1 {
+  readonly profile: 'woml.remote-loopback-coordinator/v1';
+  readonly runtimeId: string;
+  readonly address: string;
+  readonly dispatchEnabled: true;
+}
+
+export function startRemoteLoopbackCoordinatorWithRust(
+  input: {
+    readonly runtimeId: string;
+    readonly targetRegistry: unknown;
+    readonly trustedWorkers: readonly {
+      readonly workerId: string;
+      readonly certificateDigest: string;
+    }[];
+    readonly supportedCapabilities: Readonly<Record<string, number>>;
+    readonly eventStorePath: string;
+    readonly certificatePath: string;
+    readonly privateKeyPath: string;
+    readonly clientCaPath: string;
+  },
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRemoteLoopbackCoordinatorV1 {
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.startWomlRemoteLoopbackCoordinator !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose the loopback remote coordinator; rebuild the Rust addon.`
+    );
+  }
+  const value: unknown = JSON.parse(
+    native.startWomlRemoteLoopbackCoordinator(
+      input.runtimeId,
+      JSON.stringify(input.targetRegistry),
+      JSON.stringify(input.trustedWorkers),
+      JSON.stringify(input.supportedCapabilities),
+      input.eventStorePath,
+      input.certificatePath,
+      input.privateKeyPath,
+      input.clientCaPath
+    )
+  );
+  if (
+    !record(value) ||
+    value.profile !== 'woml.remote-loopback-coordinator/v1' ||
+    value.runtimeId !== input.runtimeId ||
+    typeof value.address !== 'string' ||
+    !value.address.startsWith('127.0.0.1:') ||
+    value.dispatchEnabled !== true
+  ) throw new Error('The native core returned an invalid loopback coordinator result.');
+  return value as unknown as RustRemoteLoopbackCoordinatorV1;
+}
+
+export function enqueueRemoteDispatchWithRust(
+  runtimeId: string,
+  dispatch: unknown,
+  coordinatorAuthority: unknown,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): string {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.enqueueWomlRemoteDispatch !== 'function')
+    throw new Error('The native core does not expose remote dispatch enqueue.');
+  return native.enqueueWomlRemoteDispatch(
+    runtimeId,
+    JSON.stringify(dispatch),
+    JSON.stringify(coordinatorAuthority)
+  );
+}
+
+export function maintainRemoteDispatchesWithRust(
+  runtimeId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): readonly string[] {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.maintainWomlRemoteDispatches !== 'function')
+    throw new Error('The native core does not expose remote dispatch maintenance.');
+  const value: unknown = JSON.parse(native.maintainWomlRemoteDispatches(runtimeId));
+  if (!Array.isArray(value) || !value.every(item => typeof item === 'string'))
+    throw new Error('The native core returned invalid remote maintenance data.');
+  return value;
+}
+
+export function readRemoteTerminalWithRust(
+  runtimeId: string,
+  dispatchId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRemoteWorkerTerminalV1 | undefined {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.readWomlRemoteTerminal !== 'function')
+    throw new Error('The native core does not expose remote terminal replay.');
+  const source = native.readWomlRemoteTerminal(runtimeId, dispatchId);
+  if (source == null) return undefined;
+  const value: unknown = JSON.parse(source);
+  if (!record(value) || value.dispatchId !== dispatchId || value.profile !== 'woml.worker-terminal/v1')
+    throw new Error('The native core returned invalid remote terminal data.');
+  return value as unknown as RustRemoteWorkerTerminalV1;
+}
+
+export function stopRemoteLoopbackCoordinatorWithRust(
+  runtimeId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): void {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.stopWomlRemoteLoopbackCoordinator !== 'function')
+    throw new Error('The native core does not expose loopback coordinator shutdown.');
+  native.stopWomlRemoteLoopbackCoordinator(runtimeId);
+}
+
+export function prepareRemoteAttemptWithRust(
+  offer: {
+    readonly dispatch: Record<string, unknown> & {
+      readonly dispatchId: string;
+      readonly target: string;
+    };
+    readonly coordinatorAuthority: Record<string, unknown>;
+  },
+  worker: {
+    readonly workerId: string;
+    readonly sessionId: string;
+    readonly journalPath: string;
+    readonly authority: Record<string, unknown>;
+  },
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): RustRemoteAttemptPreparationV1 {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.prepareWomlRemoteAttempt !== 'function')
+    throw new Error('The native core does not expose remote attempt preparation.');
+  const value: unknown = JSON.parse(
+    native.prepareWomlRemoteAttempt(
+      JSON.stringify(offer.dispatch),
+      JSON.stringify(offer.coordinatorAuthority),
+      JSON.stringify(worker.authority),
+      worker.workerId,
+      worker.sessionId,
+      offer.dispatch.target,
+      worker.journalPath
+    )
+  );
+  if (
+    !record(value) ||
+    value.profile !== 'woml.remote-attempt-preparation/v1' ||
+    value.dispatchId !== offer.dispatch.dispatchId ||
+    !['accepted', 'terminal'].includes(String(value.status)) ||
+    (value.status === 'accepted' && value.terminal !== null) ||
+    (value.status === 'terminal' && !validRemoteTerminal(value.terminal, value.dispatchId))
+  ) throw new Error('The native core returned invalid remote attempt preparation.');
+  return value as unknown as RustRemoteAttemptPreparationV1;
+}
+
+export function startRemoteAttemptWithRust(
+  journalPath: string,
+  dispatchId: string,
+  sessionId: string,
+  options: Pick<RustExecutorOptions, 'nativeCorePath'> = {}
+): void {
+  const native = loadNativeCore(options.nativeCorePath ?? defaultNativeCorePath());
+  if (typeof native.startWomlRemoteAttempt !== 'function')
+    throw new Error('The native core does not expose remote attempt start.');
+  native.startWomlRemoteAttempt(journalPath, dispatchId, sessionId);
+}
+
+export async function executeRemoteAttemptWithRust(
+  offer: {
+    readonly dispatch: Record<string, unknown> & {
+      readonly target: string;
+    };
+    readonly coordinatorAuthority: Record<string, unknown>;
+  },
+  worker: {
+    readonly workerId: string;
+    readonly sessionId: string;
+    readonly capacity: number;
+    readonly journalPath: string;
+    readonly authority: Record<string, unknown>;
+    readonly resolvedSecrets?: Readonly<Record<string, string>>;
+    readonly runtimeCapabilities?: unknown;
+  },
+  options: Pick<RustExecutorOptions, 'nativeCorePath' | 'bunExecutable'> & {
+    readonly scriptHostPath?: string;
+    readonly scriptTimeoutMs?: number;
+    readonly prestarted?: boolean;
+  } = {}
+): Promise<RustRemoteWorkerTerminalV1> {
+  const nativePath = options.nativeCorePath ?? defaultNativeCorePath();
+  const native = loadNativeCore(nativePath);
+  if (typeof native.executeWomlRemoteAttempt !== 'function') {
+    throw new Error(
+      `Native core at "${nativePath}" does not expose remote worker execution; rebuild the Rust addon.`
+    );
+  }
+  const source = await native.executeWomlRemoteAttempt(
+    JSON.stringify(offer.dispatch),
+    JSON.stringify(offer.coordinatorAuthority),
+    JSON.stringify(worker.authority),
+    worker.workerId,
+    worker.sessionId,
+    offer.dispatch.target,
+    worker.capacity,
+    options.prestarted ?? false,
+    worker.journalPath,
+    options.bunExecutable ?? process.execPath,
+    options.scriptHostPath ?? defaultScriptHostPath(),
+    options.scriptTimeoutMs ?? 30_000,
+    JSON.stringify(worker.resolvedSecrets ?? {}),
+    worker.runtimeCapabilities === undefined
+      ? undefined
+      : JSON.stringify(worker.runtimeCapabilities)
+  );
+  const value: unknown = JSON.parse(source);
+  if (!validRemoteTerminal(value)) {
+    throw new Error('The native core returned an invalid remote terminal fact.');
+  }
+  return value as unknown as RustRemoteWorkerTerminalV1;
+}
+
+function validRemoteTerminal(value: unknown, dispatchId?: unknown): value is RustRemoteWorkerTerminalV1 {
+  return (
+    record(value) &&
+    value.profile === 'woml.worker-terminal/v1' &&
+    typeof value.dispatchId === 'string' &&
+    (dispatchId === undefined || value.dispatchId === dispatchId) &&
+    typeof value.invocationId === 'string' &&
+    ['succeeded', 'failed', 'cancelled'].includes(String(value.state)) &&
+    dateTime(value.completedAt) &&
+    typeof value.terminalDigest === 'string' &&
+    /^sha256:[a-f0-9]{64}$/u.test(value.terminalDigest)
+  );
 }
 
 function remoteDispatchNativeError(error: unknown): RunManagementError {

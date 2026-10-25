@@ -15,6 +15,7 @@ import { basename, join, relative, resolve } from 'node:path';
 
 import { womlNativeTargets, nativePackageName } from '../src/native-platform';
 import { prepareMainPackage } from './native-release';
+import { npmExecutableForPlatform } from './npm-executable';
 import {
   packedPackageFiles,
   publicJavaScriptFiles,
@@ -121,8 +122,12 @@ export async function verifyMainPackage(root: string): Promise<void> {
     );
   }
 
-  const forbiddenPath = files.find(path =>
-    /(?:^|\/)(?:tests?|\.woml)(?:\/|$)|\.(?:node|db|sqlite|sqlite3|woml|env)$/iu.test(path),
+  const forbiddenPath = files.find(
+    path =>
+      path !== 'templates/workflows/hello.woml' &&
+      /(?:^|\/)(?:tests?|\.woml)(?:\/|$)|\.(?:node|db|sqlite|sqlite3|woml|env)$/iu.test(
+        path,
+      ),
   );
   if (forbiddenPath !== undefined) {
     throw new Error(`The staged package contains forbidden runtime data: ${forbiddenPath}`);
@@ -174,7 +179,7 @@ async function inspectNpmPack(root: string): Promise<void> {
   const npmCache = resolve(tmpdir(), 'woml-npm-cache');
   await mkdir(npmCache, { recursive: true });
   const result = Bun.spawnSync({
-    cmd: ['npm', 'pack', '--dry-run', '--json', '--ignore-scripts'],
+    cmd: [npmExecutableForPlatform(process.platform), 'pack', '--dry-run', '--json', '--ignore-scripts'],
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -286,7 +291,7 @@ async function pack(output: string, destination: string): Promise<void> {
   const npmCache = resolve(tmpdir(), 'woml-npm-cache');
   await mkdir(npmCache, { recursive: true });
   const result = Bun.spawnSync({
-    cmd: ['npm', 'pack', '--json', '--ignore-scripts', '--pack-destination', destination],
+    cmd: [npmExecutableForPlatform(process.platform), 'pack', '--json', '--ignore-scripts', '--pack-destination', destination],
     cwd: output,
     stdout: 'pipe',
     stderr: 'pipe',

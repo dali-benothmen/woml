@@ -83,3 +83,10 @@ Versioned documents under [`protocols/`](protocols/) and machine-readable
 contracts under [`schemas/`](schemas/) are implementation and compatibility
 artifacts. They are intentionally retained across product releases even when a
 newer protocol version becomes active.
+# Combined developer experience
+
+- [Project manifest](project-manifest.md)
+- [Migrating long CLI commands](migrating-to-projects.md)
+- [Infrastructure-agent tutorial](infrastructure-agent-tutorial.md)
+- [Troubleshooting](combined-developer-experience-troubleshooting.md)
+- [Operator runbook](combined-developer-experience-operator-runbook.md)

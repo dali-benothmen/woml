@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,9 @@ import { installLocalReleaseCandidate } from './helpers/release-candidate';
 let temporaryDirectory: string;
 
 beforeAll(async () => {
-  temporaryDirectory = await mkdtemp(join(tmpdir(), 'woml-artifact-package-'));
+  temporaryDirectory = await realpath(
+    await mkdtemp(join(tmpdir(), 'woml-artifact-package-'))
+  );
 });
 
 afterAll(async () => {

@@ -37,7 +37,8 @@
     { "name": "step", "description": "A named executable operation.", "attributes": [
       { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "retry" },
       { "name": "retry-delay" }, { "name": "retry-backoff" }, { "name": "retry-max-delay" },
-      { "name": "retry-jitter" }
+      { "name": "retry-jitter" },
+      { "name": "target", "description": "Literal execution target id. Omit it for local execution; remote placement never falls back to local." }
     ] },
     { "name": "script", "description": "JavaScript executed by an isolated Bun worker." },
     { "name": "lifecycle", "description": "Workflow or reusable-definition lifecycle hooks." },
@@ -66,8 +67,37 @@
     { "name": "parallel", "description": "Runs direct child steps concurrently and waits for all.", "attributes": [
       { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "concurrency" }, { "name": "on-error" }
     ] },
-    { "name": "approval", "description": "Pauses durably for a human decision.", "attributes": [
-      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "timeout" }, { "name": "on-timeout" }
-    ] }
+    { "name": "approval", "description": "Pauses durably for a role-bound human decision over an immutable review payload.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" },
+      { "name": "review" }, { "name": "approvals" }, { "name": "required-roles" },
+      { "name": "timeout" }, { "name": "on-timeout" }
+    ] },
+    { "name": "when-approved", "description": "Runs only after an approval reaches its required quorum." },
+    { "name": "when-rejected", "description": "Runs when an approval is rejected or rejects on timeout." },
+    { "name": "lock", "description": "Owns a durable renewable lease and exposes context.lock with its fencing token.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "key" },
+      { "name": "acquire-timeout" }, { "name": "lease" }
+    ] },
+    { "name": "saga", "description": "Groups forward work, reverse-order compensation, and mandatory cleanup.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }
+    ] },
+    { "name": "compensate", "description": "Corrects one completed saga step after failure or cancellation.", "attributes": [
+      { "name": "timeout" }, { "name": "retry" }
+    ] },
+    { "name": "cleanup", "description": "Runs mandatory cleanup after every saga outcome." },
+    { "name": "wait", "description": "Pauses durably for a relative duration.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "duration" }
+    ] },
+    { "name": "wait-until", "description": "Pauses durably until an RFC 3339 instant.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "at" }
+    ] },
+    { "name": "wait-for", "description": "Pauses durably until an authenticated correlated signal arrives.", "attributes": [
+      { "name": "id" }, { "name": "name" }, { "name": "description" }, { "name": "signal" },
+      { "name": "correlation" }, { "name": "timeout" }, { "name": "on-timeout" }
+    ] },
+    { "name": "accept", "description": "Declares one accepted signal and its payload schema.", "attributes": [
+      { "name": "signal" }
+    ] },
+    { "name": "schema", "description": "Contains the JSON Schema used to validate an external signal payload." }
   ]
 }

@@ -22,6 +22,7 @@ import {
   expectedNativeExports,
   verifyNativeExports,
 } from './verify-native-exports';
+import { npmExecutableForPlatform } from './npm-executable';
 
 export const releaseArtifactManifestName = 'artifact-sha256.json';
 export const nativeLoadReceiptName = 'native-load-test.json';
@@ -133,7 +134,7 @@ export async function packReleaseArtifact(root: string): Promise<string> {
   await mkdir(cache, { recursive: true });
   const result = Bun.spawnSync({
     cmd: [
-      'npm',
+      npmExecutableForPlatform(process.platform),
       'pack',
       '--json',
       '--ignore-scripts',

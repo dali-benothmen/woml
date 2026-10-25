@@ -110,6 +110,16 @@ as a production-policy template after replacing its executable paths. Read the
 
 ## 6. Operate a complete deployment
 
+[`infrastructureAgent/`](infrastructureAgent/) is the capstone project: one
+readable workflow composes secure processes, artifacts, waits, locks,
+compensation, rich approval, infrastructure policy, streaming output,
+OpenTelemetry, and remote placement. Its default adapters are deterministic,
+offline, and harmless.
+
+```bash
+woml check --project examples/infrastructureAgent/workflow.json
+```
+
 To connect WOML to an OpenTelemetry Collector and inspect the same run in
 Jaeger, Prometheus, collector logs, and `woml inspect`, use the copy-ready
 [`openTelemetry/`](openTelemetry/) stack and workflow family.
@@ -135,3 +145,12 @@ Examples contain symbolic references such as
 `{{secrets.TELEGRAM_BOT_TOKEN}}`, never real credentials. Configure values with
 `woml secrets set <NAME>` and do not commit `.woml/`, databases, generated
 backups, or local secret files.
+# Try examples as a project
+
+`woml check ./examples --json` validates the complete example collection. For a
+new automation, run `woml init`, copy the closest example beneath the generated
+`workflows/` directory, and run `woml check` again. Examples never contain live
+credentials; resolve symbolic secrets through the local operator environment.
+
+For a complete local-to-remote path, use the
+[infrastructure-agent tutorial](../docs/infrastructure-agent-tutorial.md).

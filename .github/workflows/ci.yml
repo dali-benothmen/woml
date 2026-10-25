@@ -412,6 +412,58 @@ jobs:
         run: >-
           bun run test:remote-execution-targets-protocol &&
           bun run test:remote-execution-targets-dispatch
+      - name: Test the packaged native remote attempt and terminal replay
+        working-directory: woml-cli
+        run: bun run test:remote-execution-targets-package
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          bun --version
+          rustc --version
+          cargo --version
+          git status --short
+
+  combined-developer-experience:
+    name: Combined Developer Experience (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install locked runtime dependencies
+        working-directory: woml-cli
+        run: bun install --frozen-lockfile
+      - name: Install compiler dependencies
+        working-directory: woml
+        run: bun install --frozen-lockfile
+      - name: Build the local native and portable release candidates
+        working-directory: woml-cli
+        run: bun run build && bun run build:release
+      - name: Verify the combined contract and frozen budgets
+        working-directory: woml-cli
+        run: >-
+          bun run test:combined-developer-experience-contracts &&
+          bun scripts/benchmark-combined-developer-experience.ts &&
+          bun scripts/verify-combined-developer-experience-release.ts
+      - name: Test the clean installed project, artifacts, telemetry, coordinator, and worker serially
+        working-directory: woml-cli
+        run: bun run test:combined-developer-experience-package
+      - name: Verify docs, links, and examples with the built CLI
+        working-directory: woml-cli
+        run: bun run test:documentation
+      - name: Verify native exports and TypeScript
+        working-directory: woml-cli
+        run: bun run verify:native-exports && bun run typecheck
       - name: Failure diagnostics
         if: failure()
         run: |
@@ -609,6 +661,9 @@ jobs:
       - name: Test OpenTelemetry Export from the clean release package
         working-directory: woml-cli
         run: bun test tests/opentelemetry-packaged-release.test.ts --max-concurrency=1
+      - name: Test the Combined Developer Experience from the clean release package
+        working-directory: woml-cli
+        run: bun test tests/combined-developer-experience-packaged-release.test.ts --max-concurrency=1
       - name: Pack, seal, and reverify the main artifact
         run: |
           bun woml-cli/scripts/release-artifact.ts pack --root release/main

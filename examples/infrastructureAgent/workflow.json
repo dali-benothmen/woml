@@ -1,0 +1,19 @@
+{
+  "$schema": "https://woml.dev/schemas/woml-project.v1.schema.json",
+  "profile": "woml.project/v1",
+  "version": 1,
+  "name": "infrastructure-agent",
+  "workflows": ["./workflows"],
+  "runtime": "./woml.runtime.json",
+  "authority": {
+    "processPolicy": "./policies/process.json",
+    "artifactPolicy": "./policies/artifacts.json",
+    "infrastructurePolicy": "./policies/infrastructure.json",
+    "policyTrust": "./trust/policy.json",
+    "reviewerDirectory": "./reviewers/directory.json"
+  },
+  "remoteExecution": {
+    "targetRegistry": "./targets/registry.json",
+    "targetTrust": "./targets/trust.json"
+  }
+}

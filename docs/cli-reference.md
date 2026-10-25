@@ -274,3 +274,14 @@ repair hint. Runtime and provider errors use stable codes without printing
 secret values. A non-zero exit indicates that the requested command failed;
 long-lived `run` and log-following commands normally end through Ctrl+C or an
 explicit stop.
+# Project and infrastructure commands
+
+The shortest supported project journey is `woml init`, `woml check`, and
+`woml test`. Project-aware `run`, `test`, `check`, and `types` commands accept
+`--project <path>` and otherwise inspect only the current directory for
+`workflow.json`.
+
+Remote operations use `woml target list|check|inspect|drain`,
+`woml worker check|start`, and `woml dispatch inspect|reconcile`. An ambiguous
+dispatch must be investigated before reconciliation; it is never an automatic
+retry signal. See the [operator runbook](combined-developer-experience-operator-runbook.md).

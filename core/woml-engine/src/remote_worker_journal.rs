@@ -205,7 +205,8 @@ pub struct WorkerAttemptRecordV1 {
   pub terminal: Option<RemoteWorkerTerminalV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteWorkerAuthorityV1 {
   pub policy_digest: String,
   pub allowed_capabilities: BTreeMap<String, u32>,
@@ -276,6 +277,27 @@ pub struct EnvironmentRemoteSecretProvider;
 impl RemoteSecretProvider for EnvironmentRemoteSecretProvider {
   fn resolve(&self, name: &str) -> Result<String, RemoteWorkerError> {
     std::env::var(name).map_err(|_| RemoteWorkerError::SecretUnavailable)
+  }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedRemoteSecretProvider {
+  values: BTreeMap<String, String>,
+}
+
+impl ResolvedRemoteSecretProvider {
+  pub fn new(values: BTreeMap<String, String>) -> Self {
+    Self { values }
+  }
+}
+
+impl RemoteSecretProvider for ResolvedRemoteSecretProvider {
+  fn resolve(&self, name: &str) -> Result<String, RemoteWorkerError> {
+    self
+      .values
+      .get(name)
+      .cloned()
+      .ok_or(RemoteWorkerError::SecretUnavailable)
   }
 }
 
@@ -516,6 +538,20 @@ impl WorkerJournalV1 {
     dispatch_id: &str,
   ) -> Result<Option<RemoteWorkerTerminalV1>, RemoteWorkerError> {
     Ok(self.load(dispatch_id)?.and_then(|record| record.terminal))
+  }
+
+  pub fn was_started_by_session(
+    &self,
+    dispatch_id: &str,
+    session_id: &str,
+  ) -> Result<bool, RemoteWorkerError> {
+    let count: u64 = self.connection.query_row(
+      "SELECT COUNT(*) FROM woml_worker_journal
+       WHERE dispatch_id=?1 AND session_id=?2 AND record_type='started'",
+      params![dispatch_id, session_id],
+      |row| row.get(0),
+    )?;
+    Ok(count == 1)
   }
 
   pub fn pending_or_ambiguous(&self) -> Result<Vec<WorkerAttemptRecordV1>, RemoteWorkerError> {
@@ -910,7 +946,27 @@ impl RemoteWorkerAttemptRuntimeV1 {
     now: DateTime<Utc>,
   ) -> Result<RemoteWorkerTerminalV1, RemoteWorkerError> {
     self
-      .execute_with_cancellation(prepared, now, RemoteWorkerCancellationTokenV1::default())
+      .execute_with_cancellation_mode(
+        prepared,
+        now,
+        RemoteWorkerCancellationTokenV1::default(),
+        false,
+      )
+      .await
+  }
+
+  pub async fn execute_prestarted(
+    &mut self,
+    prepared: &PreparedRemoteDispatchV1,
+    now: DateTime<Utc>,
+  ) -> Result<RemoteWorkerTerminalV1, RemoteWorkerError> {
+    self
+      .execute_with_cancellation_mode(
+        prepared,
+        now,
+        RemoteWorkerCancellationTokenV1::default(),
+        true,
+      )
       .await
   }
 
@@ -919,6 +975,18 @@ impl RemoteWorkerAttemptRuntimeV1 {
     prepared: &PreparedRemoteDispatchV1,
     now: DateTime<Utc>,
     cancellation: RemoteWorkerCancellationTokenV1,
+  ) -> Result<RemoteWorkerTerminalV1, RemoteWorkerError> {
+    self
+      .execute_with_cancellation_mode(prepared, now, cancellation, false)
+      .await
+  }
+
+  async fn execute_with_cancellation_mode(
+    &mut self,
+    prepared: &PreparedRemoteDispatchV1,
+    now: DateTime<Utc>,
+    cancellation: RemoteWorkerCancellationTokenV1,
+    prestarted: bool,
   ) -> Result<RemoteWorkerTerminalV1, RemoteWorkerError> {
     if prepared.worker_id != self.worker_id {
       return Err(RemoteWorkerError::Conflict);
@@ -977,9 +1045,18 @@ impl RemoteWorkerAttemptRuntimeV1 {
     if let Some(terminal) = accepted.terminal {
       return Ok(terminal);
     }
-    if accepted.state == WorkerAttemptStateV1::Ambiguous
-      || accepted.state == WorkerAttemptStateV1::Started
-    {
+    if accepted.state == WorkerAttemptStateV1::Ambiguous {
+      return Err(RemoteWorkerError::Ambiguous);
+    }
+    if prestarted {
+      if accepted.state != WorkerAttemptStateV1::Started
+        || !self
+          .journal
+          .was_started_by_session(&prepared.package.dispatch_id, &self.session_id)?
+      {
+        return Err(RemoteWorkerError::Ambiguous);
+      }
+    } else if accepted.state == WorkerAttemptStateV1::Started {
       return Err(RemoteWorkerError::Ambiguous);
     }
     if cancellation.is_cancelled() {
@@ -1013,12 +1090,14 @@ impl RemoteWorkerAttemptRuntimeV1 {
     // Everything above this point is preflight and may be retried safely. The
     // durable start fact is committed immediately before the first script-host
     // execute frame, which is the boundary after which effects are ambiguous.
-    if let Err(error) = self
-      .journal
-      .start(&prepared.package.dispatch_id, &self.session_id, now)
-    {
-      host.shutdown().await;
-      return Err(error);
+    if !prestarted {
+      if let Err(error) = self
+        .journal
+        .start(&prepared.package.dispatch_id, &self.session_id, now)
+      {
+        host.shutdown().await;
+        return Err(error);
+      }
     }
     let message = ExecuteMessage::runtime_script_with_modules(
       &prepared.package.invocation_id,

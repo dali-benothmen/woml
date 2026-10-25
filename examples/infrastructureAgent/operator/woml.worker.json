@@ -1,0 +1,15 @@
+{
+  "profile": "woml.worker/v1",
+  "version": 1,
+  "workerId": "rehearsal-worker-01",
+  "coordinatorUrl": "https://127.0.0.1:7443",
+  "targetIds": ["production-private"],
+  "capacity": 1,
+  "tls": {
+    "certificateRef": "file:../targets/certificates/rehearsal-worker-01.pem",
+    "privateKeyRef": "file:./private/rehearsal-worker-01.key",
+    "caRef": "file:../targets/certificates/rehearsal-worker-01.pem"
+  },
+  "processPolicy": "../policies/process.json",
+  "secretProvider": "environment"
+}

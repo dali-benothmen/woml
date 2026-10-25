@@ -163,6 +163,8 @@ fn resolve_path(
   reference: &str,
   private: bool,
 ) -> Result<PathBuf, RemoteWorkerConfigurationError> {
+  #[cfg(not(unix))]
+  let _ = private;
   let unresolved = Path::new(reference);
   let candidate = if unresolved.is_absolute() {
     unresolved.to_path_buf()

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woml.dev/schemas/project-check.v1.schema.json",
+  "title": "WOML Project Check v1",
+  "description": "The bounded, redacted machine-readable result of checking a WOML Project v1 project.",
+  "x-status": "combined-developer-experience-cdx0-frozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "version", "status", "project", "workflows", "subsystems", "diagnostics"],
+  "properties": {
+    "profile": { "const": "woml.project-check/v1" },
+    "version": { "const": 1 },
+    "status": { "enum": ["ready", "degraded", "blocked"] },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "digest", "manifestPath"],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "manifestPath": { "$ref": "#/$defs/path" }
+      }
+    },
+    "workflows": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sourcePath", "status", "requiredCapabilities"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "sourcePath": { "$ref": "#/$defs/path" },
+          "status": { "enum": ["ready", "blocked"] },
+          "requiredCapabilities": {
+            "type": "array",
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "subsystems": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "required"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "status": { "enum": ["ready", "degraded", "blocked", "not-required"] },
+          "required": { "type": "boolean" },
+          "digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "message", "correctiveAction"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^WOML_[A-Z0-9_]+$", "maxLength": 128 },
+          "severity": { "enum": ["warning", "error"] },
+          "message": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "correctiveAction": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "sourcePath": { "$ref": "#/$defs/path" },
+          "line": { "type": "integer", "minimum": 1 },
+          "column": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000]+$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "contract": "woml.infrastructure-policy",
+  "contractVersion": 1,
+  "id": "infrastructure-agent-rehearsal",
+  "version": "1",
+  "environment": "rehearsal",
+  "defaults": {
+    "read": "deny",
+    "idempotent-write": "deny",
+    "unsafe-write": "deny"
+  },
+  "rules": [
+    {
+      "id": "preserve-reviewed-plan",
+      "match": {
+        "capabilities": ["artifacts"],
+        "operations": ["put", "head", "materialize"],
+        "workflows": ["infrastructure-agent-deployment"],
+        "executionModes": ["normal", "compensation"]
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "publish-bounded-progress",
+      "match": {
+        "capabilities": ["progress"],
+        "operations": ["report"],
+        "workflows": ["infrastructure-agent-deployment"],
+        "executionModes": ["normal", "compensation", "cleanup"]
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "run-reviewed-local-adapters",
+      "match": {
+        "capabilities": ["process"],
+        "operations": ["run"],
+        "workflows": ["infrastructure-agent-deployment"],
+        "executables": [
+          "fake-ai-review",
+          "fake-prometheus",
+          "fake-slack",
+          "fake-terraform"
+        ],
+        "executionModes": ["normal", "compensation", "cleanup"]
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "own-one-deployment-lease",
+      "match": {
+        "capabilities": ["locks"],
+        "operations": ["acquire", "assert-current", "release"],
+        "workflows": ["infrastructure-agent-deployment"]
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "dispatch-reviewed-production-attempt",
+      "match": {
+        "capabilities": [
+          "runtime.script",
+          "services.artifacts",
+          "services.process",
+          "services.progress"
+        ],
+        "operations": ["dispatch"],
+        "effects": ["unsafe-write"],
+        "workflows": ["infrastructure-agent-deployment"],
+        "targets": ["production-private"],
+        "executionModes": ["normal"]
+      },
+      "decision": "allow"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://woml.dev/schemas/woml-project.v1.schema.json",
+  "profile": "woml.project/v1",
+  "version": 1,
+  "name": "__PROJECT_NAME__",
+  "workflows": [
+    "./workflows"
+  ]
+}
+

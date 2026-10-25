@@ -91,6 +91,12 @@
         "language": "woml",
         "path": "./snippets/woml.code-snippets"
       }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": "**/workflow.json",
+        "url": "./schemas/woml-project.v1.schema.json"
+      }
     ]
   }
 }

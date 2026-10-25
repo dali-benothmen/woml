@@ -133,6 +133,80 @@
       "</saga>"
     ]
   },
+  "WOML rich plan approval": {
+    "prefix": "woml-approval",
+    "description": "Pause for a reviewed, role-bound decision over an immutable plan.",
+    "body": [
+      "<approval",
+      "  id=\"${1:approvePlan}\"",
+      "  name=\"${2:Approve plan}\"",
+      "  review=\"{{context.steps.${3:buildReview}.${4:review}}}\"",
+      "  approvals=\"${5:2}\"",
+      "  required-roles=\"${6:production-owner security-owner}\"",
+      "  timeout=\"${7:30m}\"",
+      "  on-timeout=\"${8:reject}\"",
+      ">",
+      "  <when-approved>",
+      "    ${9:<step id=\"apply\"><script>return { approved: true };</script></step>}",
+      "  </when-approved>",
+      "  <when-rejected>",
+      "    ${10:<step id=\"reject\"><script>return { approved: false };</script></step>}",
+      "  </when-rejected>",
+      "</approval>"
+    ]
+  },
+  "WOML durable artifact": {
+    "prefix": "woml-artifact",
+    "description": "Publish and verify a durable artifact without placing its bytes in workflow history.",
+    "body": [
+      "const artifact = await services.artifacts.put(\"${1:reports/plan.json}\", {",
+      "  name: \"${2:plan.json}\",",
+      "  contentType: \"${3:application/json}\",",
+      "  retention: \"${4:24h}\"",
+      "});",
+      "const metadata = await services.artifacts.head(artifact);",
+      "return { artifact, integrity: metadata.integrity };"
+    ]
+  },
+  "WOML progress report": {
+    "prefix": "woml-progress",
+    "description": "Publish a bounded operational progress snapshot for the current attempt.",
+    "body": [
+      "await services.progress.report({",
+      "  id: \"${1:deployment}\",",
+      "  current: ${2:1},",
+      "  total: ${3:3},",
+      "  unit: \"${4:stages}\",",
+      "  message: \"${5:Preparing deployment}\"",
+      "});"
+    ]
+  },
+  "WOML safe remote deployment": {
+    "prefix": "woml-safe-deployment",
+    "description": "Compose approval, a fenced lease, compensation, cleanup, and explicit remote placement.",
+    "body": [
+      "<approval id=\"${1:approveDeployment}\" review=\"{{context.steps.${2:buildReview}.review}}\" approvals=\"${3:2}\" required-roles=\"${4:production-owner security-owner}\" timeout=\"${5:30m}\" on-timeout=\"reject\">",
+      "  <when-approved>",
+      "    <lock id=\"${6:deploymentLease}\" key=\"${7:production/service}\" acquire-timeout=\"${8:10m}\" lease=\"${9:5m}\">",
+      "      <saga id=\"${10:release}\">",
+      "        <step id=\"${11:applyPlan}\" target=\"${12:production-private}\">",
+      "          <script>",
+      "            ${13:return { fencingToken: context.lock.fencingToken };}",
+      "          </script>",
+      "          <compensate retry=\"${14:2}\"><script>${15:return { rolledBack: true };}</script></compensate>",
+      "        </step>",
+      "        <cleanup>",
+      "          <step id=\"${16:cleanup}\"><script>${17:return { cleaned: true };}</script></step>",
+      "        </cleanup>",
+      "      </saga>",
+      "    </lock>",
+      "  </when-approved>",
+      "  <when-rejected>",
+      "    <step id=\"${18:recordRejection}\"><script>return { applied: false };</script></step>",
+      "  </when-rejected>",
+      "</approval>"
+    ]
+  },
   "WOML Telegram trigger": {
     "prefix": "woml-telegram-trigger",
     "description": "Create a Telegram message trigger.",
