@@ -9,7 +9,7 @@ use std::{
   collections::VecDeque,
   fs::File,
   io::{BufReader, Read, Write},
-  net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+  net::{SocketAddr, TcpListener, TcpStream},
   path::PathBuf,
   sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -500,8 +500,7 @@ fn write_response(
   )?;
   stream.write_all(body)?;
   stream.conn.send_close_notify();
-  stream.flush()?;
-  stream.sock.shutdown(Shutdown::Write)
+  stream.flush()
 }
 
 fn server_configuration(

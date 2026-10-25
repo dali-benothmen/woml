@@ -12,7 +12,7 @@ use rcgen::{
 };
 use rustls::{
   pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
-  ClientConfig, ClientConnection, RootCertStore, StreamOwned,
+  ClientConfig, ClientConnection, RootCertStore,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -113,13 +113,15 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
     .with_root_certificates(tls.roots.clone())
     .with_client_auth_cert(vec![tls.client_certificate_der.clone()], key)
     .unwrap();
-  let connection = ClientConnection::new(
+  let mut connection = ClientConnection::new(
     Arc::new(config),
     ServerName::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST).into()),
   )
   .unwrap();
-  let tcp = TcpStream::connect(address).unwrap();
-  let mut stream = StreamOwned::new(connection, tcp);
+  let mut tcp = TcpStream::connect(address).unwrap();
+  while connection.is_handshaking() {
+    connection.complete_io(&mut tcp).unwrap();
+  }
   let body = serde_json::to_vec(&body).unwrap();
   let mut request = format!(
     "POST {route} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -127,12 +129,9 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
   )
   .into_bytes();
   request.extend_from_slice(&body);
-  stream.write_all(&request).unwrap();
-  if let Err(error) = stream.flush() {
-    assert!(
-      expected_peer_close(&error),
-      "loopback request flush failed: {error}"
-    );
+  connection.writer().write_all(&request).unwrap();
+  while connection.wants_write() {
+    connection.write_tls(&mut tcp).unwrap();
   }
   let mut response = Vec::new();
   let mut buffer = [0_u8; 4096];
@@ -140,28 +139,21 @@ fn post(address: SocketAddr, tls: &TlsFixture, route: &str, body: Value) -> (u16
     if complete_http_response_length(&response).is_some_and(|length| response.len() >= length) {
       break;
     }
-    match stream.read(&mut buffer) {
+    match connection.read_tls(&mut tcp) {
       Ok(0) => break,
-      Ok(read) => response.extend_from_slice(&buffer[..read]),
-      Err(error) if expected_peer_close(&error) => {
+      Ok(_) => {
+        connection.process_new_packets().unwrap();
         loop {
-          match stream.conn.reader().read(&mut buffer) {
+          match connection.reader().read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => response.extend_from_slice(&buffer[..read]),
-            Err(buffered_error)
-              if matches!(
-                buffered_error.kind(),
-                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::WouldBlock
-              ) =>
-            {
-              break;
-            }
-            Err(buffered_error) => panic!("buffered loopback response failed: {buffered_error}"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("loopback response decode failed: {error}"),
           }
         }
-        break;
       }
-      Err(error) => panic!("loopback response failed: {error}"),
+      Err(error) if expected_peer_close(&error) => break,
+      Err(error) => panic!("loopback TLS read failed: {error}"),
     }
   }
   let expected_length = complete_http_response_length(&response)

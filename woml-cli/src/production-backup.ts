@@ -197,6 +197,13 @@ async function syncFile(path: string): Promise<void> {
   }
 }
 
+async function restrictFileToOwner(path: string): Promise<void> {
+  // Windows does not implement POSIX owner/group/other mode bits. Bun may
+  // surface chmod(0600) as EPERM there even though the file was created
+  // successfully and remains governed by the directory ACL.
+  if (process.platform !== 'win32') await chmod(path, 0o600);
+}
+
 async function syncDirectory(path: string): Promise<void> {
   let handle;
   try {
@@ -469,7 +476,7 @@ export async function createProductionBackup(
       }
       throw error;
     }
-    await chmod(databasePath, 0o600);
+    await restrictFileToOwner(databasePath);
     const database = await digestFile(databasePath);
     const artifacts = options.artifactAuthority === undefined
       ? undefined
@@ -617,7 +624,7 @@ export async function restoreProductionBackup(
       temporaryPath,
       constants.COPYFILE_EXCL
     );
-    await chmod(temporaryPath, 0o600);
+    await restrictFileToOwner(temporaryPath);
     let prepared: RustBackupStoreInspection;
     try {
       prepared = prepareRestoredStoreWithRust(
@@ -690,7 +697,7 @@ export async function restoreProductionBackup(
       }
       throw error;
     }
-    await chmod(args.statePath, 0o600);
+    await restrictFileToOwner(args.statePath);
     await syncFile(args.statePath);
     await syncDirectory(targetDirectory);
     return {
